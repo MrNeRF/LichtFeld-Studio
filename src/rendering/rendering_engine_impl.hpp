@@ -7,11 +7,13 @@
 #include "axes_renderer.hpp"
 #include "bbox_renderer.hpp"
 #include "camera_frustum_renderer.hpp"
+#include "cuda_gl_interop.hpp"
 #include "depth_compositor.hpp"
 #include "ellipsoid_renderer.hpp"
 #include "grid_renderer.hpp"
 #include "mesh_renderer.hpp"
 #include "pivot_renderer.hpp"
+#include "render_target_pool.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_pipeline.hpp"
 #include "screen_renderer.hpp"
@@ -38,7 +40,14 @@ namespace lfs::rendering {
             const lfs::core::PointCloud& point_cloud,
             const RenderRequest& request) override;
 
+        Result<GpuFrame> renderPointCloudGpuFrame(
+            const lfs::core::PointCloud& point_cloud,
+            const RenderRequest& request) override;
+
         Result<RenderResult> renderSplitView(
+            const SplitViewRequest& request) override;
+
+        Result<SplitViewFrameResult> renderSplitViewGpuFrame(
             const SplitViewRequest& request) override;
 
         Result<void> renderMesh(
@@ -58,10 +67,26 @@ namespace lfs::rendering {
             const RenderResult& splat_result,
             const glm::ivec2& viewport_size) override;
 
+        Result<GpuFrame> materializeGpuFrame(
+            const RenderResult& result,
+            const glm::ivec2& viewport_size) override;
+
+        Result<std::shared_ptr<lfs::core::Tensor>> readbackGpuFrameColor(
+            const GpuFrame& frame) override;
+
+        Result<void> compositeMeshAndGpuFrame(
+            const GpuFrame& splat_frame,
+            const glm::ivec2& viewport_size) override;
+
         Result<void> presentMeshOnly() override;
 
         Result<void> presentToScreen(
             const RenderResult& result,
+            const glm::ivec2& viewport_pos,
+            const glm::ivec2& viewport_size) override;
+
+        Result<void> presentGpuFrame(
+            const GpuFrame& frame,
             const glm::ivec2& viewport_pos,
             const glm::ivec2& viewport_size) override;
 
@@ -131,10 +156,14 @@ namespace lfs::rendering {
 
     private:
         Result<void> initializeShaders();
+        Result<void> ensureRenderResultUploaded(
+            const RenderResult& result,
+            const glm::ivec2& viewport_size);
         glm::mat4 createProjectionMatrix(const ViewportData& viewport) const;
         glm::mat4 createViewMatrix(const ViewportData& viewport) const;
 
         RenderingPipeline pipeline_;
+        RenderTargetPool render_target_pool_;
         std::shared_ptr<ScreenQuadRenderer> screen_renderer_;
         std::unique_ptr<SplitViewRenderer> split_view_renderer_;
 
@@ -162,6 +191,13 @@ namespace lfs::rendering {
         float last_presented_far_plane_ = 0.0f;
         bool last_presented_orthographic_ = false;
         bool has_present_upload_cache_ = false;
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        std::unique_ptr<CudaGLInteropTexture> gpu_frame_readback_interop_;
+        unsigned int gpu_frame_readback_source_ = 0;
+        glm::ivec2 gpu_frame_readback_size_{0, 0};
+#endif
+        unsigned int gpu_frame_readback_fbo_ = 0;
     };
 
 } // namespace lfs::rendering

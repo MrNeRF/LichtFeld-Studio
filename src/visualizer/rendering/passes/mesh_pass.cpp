@@ -71,8 +71,11 @@ namespace lfs::vis {
             glViewport(ctx.viewport_pos.x, ctx.viewport_pos.y, ctx.render_size.x, ctx.render_size.y);
 
             if (res.splats_presented) {
-                const auto composite_result = engine.compositeMeshAndSplat(
-                    res.cached_result, ctx.render_size);
+                auto composite_result =
+                    (res.cached_gpu_frame && res.cached_gpu_frame->valid() &&
+                     res.cached_gpu_frame->depth.valid())
+                        ? engine.compositeMeshAndGpuFrame(*res.cached_gpu_frame, ctx.render_size)
+                        : engine.compositeMeshAndSplat(res.cached_result, ctx.render_size);
                 if (!composite_result)
                     LOG_ERROR("Failed to composite: {}", composite_result.error());
             } else {

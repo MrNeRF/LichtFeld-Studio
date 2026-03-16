@@ -98,50 +98,59 @@ namespace lfs::rendering {
     Result<void> ScreenQuadRenderer::render(ManagedShader& shader) const {
         LOG_TIMER_TRACE("ScreenQuadRenderer::render");
 
+        return renderTexture(shader, getTextureID(), depth_params_, getTexcoordScale(), getDepthTextureID());
+    }
+
+    Result<void> ScreenQuadRenderer::renderTexture(ManagedShader& shader,
+                                                   const GLuint color_texture,
+                                                   const DepthParams& depth_params,
+                                                   const glm::vec2 texcoord_scale,
+                                                   const GLuint depth_texture) const {
+        LOG_TIMER_TRACE("ScreenQuadRenderer::renderTexture");
+
         GLStateGuard state_guard;
         ShaderScope s(shader);
 
         VAOBinder vao_bind(quadVAO_);
 
         glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, getTextureID());
+        glBindTexture(GL_TEXTURE_2D, color_texture);
         if (auto result = shader.set("screenTexture", 0); !result) {
             return result;
         }
 
-        glm::vec2 texcoord_scale = getTexcoordScale();
         if (auto result = shader.set("texcoord_scale", texcoord_scale); !result) {
             LOG_TRACE("Uniform 'texcoord_scale' not found in shader: {}", result.error());
         }
 
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
+        glBindTexture(GL_TEXTURE_2D, depth_texture);
 
         if (auto result = shader.set("depthTexture", 1); !result) {
             LOG_TRACE("Uniform 'depthTexture' not set: {}", result.error());
         }
 
-        if (auto result = shader.set("has_depth", depth_params_.has_depth); !result) {
+        if (auto result = shader.set("has_depth", depth_params.has_depth); !result) {
             LOG_TRACE("Uniform 'has_depth' not set: {}", result.error());
         }
 
-        if (auto result = shader.set("near_plane", depth_params_.near_plane); !result) {
+        if (auto result = shader.set("near_plane", depth_params.near_plane); !result) {
             LOG_TRACE("Uniform 'near_plane' not set: {}", result.error());
         }
 
-        if (auto result = shader.set("far_plane", depth_params_.far_plane); !result) {
+        if (auto result = shader.set("far_plane", depth_params.far_plane); !result) {
             LOG_TRACE("Uniform 'far_plane' not set: {}", result.error());
         }
 
-        if (auto result = shader.set("orthographic", depth_params_.orthographic); !result) {
+        if (auto result = shader.set("orthographic", depth_params.orthographic); !result) {
             LOG_TRACE("Uniform 'orthographic' not set: {}", result.error());
         }
 
-        if (auto result = shader.set("depth_is_ndc", depth_params_.depth_is_ndc); !result) {
+        if (auto result = shader.set("depth_is_ndc", depth_params.depth_is_ndc); !result) {
             LOG_TRACE("Uniform 'depth_is_ndc' not set: {}", result.error());
         }
 
-        if (depth_params_.has_depth) {
+        if (depth_params.has_depth) {
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_TRUE);
             glDepthFunc(GL_ALWAYS);

@@ -8,9 +8,68 @@
 #include "core/point_cloud.hpp"
 #include "framebuffer_factory.hpp"
 #include "geometry/bounding_box.hpp"
+#include "gl_state_guard.hpp"
 #include "rendering/render_constants.hpp"
+#include <vector>
 
 namespace lfs::rendering {
+
+    namespace {
+        [[nodiscard]] PointCloudCropParams makePointCloudCropParams(const RenderRequest& request) {
+            PointCloudCropParams crop_params;
+            if (request.crop_box.has_value()) {
+                crop_params.enabled = true;
+                crop_params.transform = request.crop_box->transform;
+                crop_params.min = request.crop_box->min;
+                crop_params.max = request.crop_box->max;
+                crop_params.inverse = request.crop_inverse;
+                crop_params.desaturate = request.crop_desaturate;
+            }
+            return crop_params;
+        }
+
+        [[nodiscard]] RenderingPipeline::RenderRequest makePointCloudPipelineRequest(const RenderRequest& request) {
+            return RenderingPipeline::RenderRequest{
+                .view_rotation = request.viewport.rotation,
+                .view_translation = request.viewport.translation,
+                .viewport_size = request.viewport.size,
+                .focal_length_mm = request.viewport.focal_length_mm,
+                .scaling_modifier = request.scaling_modifier,
+                .antialiasing = false,
+                .mip_filter = false,
+                .sh_degree = 0,
+                .render_mode = RenderMode::RGB,
+                .crop_box = nullptr,
+                .background_color = request.background_color,
+                .point_cloud_mode = true,
+                .voxel_size = request.voxel_size,
+                .gut = false,
+                .equirectangular = request.equirectangular,
+                .show_rings = false,
+                .ring_width = 0.0f,
+                .show_center_markers = false,
+                .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
+                .transform_indices = nullptr,
+                .selection_mask = nullptr,
+                .output_screen_positions = false,
+                .brush_active = false,
+                .brush_x = 0.0f,
+                .brush_y = 0.0f,
+                .brush_radius = 0.0f,
+                .brush_add_mode = true,
+                .brush_selection_tensor = nullptr,
+                .brush_saturation_mode = false,
+                .brush_saturation_amount = 0.0f,
+                .selection_mode_rings = false,
+                .hovered_depth_id = nullptr,
+                .highlight_gaussian_id = -1,
+                .far_plane = request.far_plane,
+                .selected_node_mask = {},
+                .orthographic = request.viewport.orthographic,
+                .ortho_scale = request.viewport.ortho_scale,
+                .point_cloud_crop_params = makePointCloudCropParams(request)};
+        }
+    } // namespace
 
     RenderingEngineImpl::RenderingEngineImpl() {
         LOG_DEBUG("Initializing RenderingEngineImpl");
@@ -122,6 +181,16 @@ namespace lfs::rendering {
         last_presented_far_plane_ = 0.0f;
         last_presented_orthographic_ = false;
         has_present_upload_cache_ = false;
+#ifdef CUDA_GL_INTEROP_ENABLED
+        gpu_frame_readback_interop_.reset();
+        gpu_frame_readback_source_ = 0;
+        gpu_frame_readback_size_ = {0, 0};
+#endif
+        if (gpu_frame_readback_fbo_ != 0) {
+            glDeleteFramebuffers(1, &gpu_frame_readback_fbo_);
+            gpu_frame_readback_fbo_ = 0;
+        }
+        render_target_pool_.clear();
         screen_renderer_.reset();
         split_view_renderer_.reset();
         viewport_gizmo_.shutdown();
@@ -320,55 +389,7 @@ namespace lfs::rendering {
 
         LOG_TRACE("Rendering point cloud with viewport {}x{}", request.viewport.size.x, request.viewport.size.y);
 
-        PointCloudCropParams crop_params;
-        if (request.crop_box.has_value()) {
-            crop_params.enabled = true;
-            crop_params.transform = request.crop_box->transform;
-            crop_params.min = request.crop_box->min;
-            crop_params.max = request.crop_box->max;
-            crop_params.inverse = request.crop_inverse;
-            crop_params.desaturate = request.crop_desaturate;
-        }
-
-        RenderingPipeline::RenderRequest pipeline_req{
-            .view_rotation = request.viewport.rotation,
-            .view_translation = request.viewport.translation,
-            .viewport_size = request.viewport.size,
-            .focal_length_mm = request.viewport.focal_length_mm,
-            .scaling_modifier = request.scaling_modifier,
-            .antialiasing = false,
-            .mip_filter = false,
-            .sh_degree = 0,
-            .render_mode = RenderMode::RGB,
-            .crop_box = nullptr,
-            .background_color = request.background_color,
-            .point_cloud_mode = true,
-            .voxel_size = request.voxel_size,
-            .gut = false,
-            .equirectangular = request.equirectangular,
-            .show_rings = false,
-            .ring_width = 0.0f,
-            .show_center_markers = false,
-            .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
-            .transform_indices = nullptr,
-            .selection_mask = nullptr,
-            .output_screen_positions = false,
-            .brush_active = false,
-            .brush_x = 0.0f,
-            .brush_y = 0.0f,
-            .brush_radius = 0.0f,
-            .brush_add_mode = true,
-            .brush_selection_tensor = nullptr,
-            .brush_saturation_mode = false,
-            .brush_saturation_amount = 0.0f,
-            .selection_mode_rings = false,
-            .hovered_depth_id = nullptr,
-            .highlight_gaussian_id = -1,
-            .far_plane = DEFAULT_FAR_PLANE,
-            .selected_node_mask = {},
-            .orthographic = request.viewport.orthographic,
-            .ortho_scale = request.viewport.ortho_scale,
-            .point_cloud_crop_params = crop_params};
+        auto pipeline_req = makePointCloudPipelineRequest(request);
 
         auto pipeline_result = pipeline_.renderRawPointCloud(point_cloud, pipeline_req);
 
@@ -391,6 +412,34 @@ namespace lfs::rendering {
         return result;
     }
 
+    Result<GpuFrame> RenderingEngineImpl::renderPointCloudGpuFrame(
+        const lfs::core::PointCloud& point_cloud,
+        const RenderRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
+            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
+            return std::unexpected("Invalid viewport dimensions");
+        }
+
+        LOG_TRACE("Rendering point cloud GPU frame with viewport {}x{}",
+                  request.viewport.size.x, request.viewport.size.y);
+
+        auto pipeline_req = makePointCloudPipelineRequest(request);
+        auto pipeline_result = pipeline_.renderRawPointCloudGpuFrame(point_cloud, pipeline_req);
+        if (!pipeline_result) {
+            LOG_ERROR("Point cloud GPU-frame render failed: {}", pipeline_result.error());
+            return std::unexpected(pipeline_result.error());
+        }
+
+        return *pipeline_result;
+    }
+
     Result<RenderResult> RenderingEngineImpl::renderSplitView(
         const SplitViewRequest& request) {
 
@@ -406,7 +455,26 @@ namespace lfs::rendering {
 
         LOG_TRACE("Rendering split view with {} panels", request.panels.size());
 
-        return split_view_renderer_->render(request, pipeline_, *screen_renderer_, quad_shader_);
+        return split_view_renderer_->render(request, render_target_pool_, pipeline_, *screen_renderer_, quad_shader_);
+    }
+
+    Result<SplitViewFrameResult> RenderingEngineImpl::renderSplitViewGpuFrame(
+        const SplitViewRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!split_view_renderer_) {
+            LOG_ERROR("Split view renderer not initialized");
+            return std::unexpected("Split view renderer not initialized");
+        }
+
+        LOG_TRACE("Rendering split view GPU frame with {} panels", request.panels.size());
+
+        return split_view_renderer_->renderGpuFrame(
+            request, render_target_pool_, pipeline_, *screen_renderer_, quad_shader_);
     }
 
     Result<void> RenderingEngineImpl::presentToScreen(
@@ -428,6 +496,180 @@ namespace lfs::rendering {
         LOG_TRACE("Presenting to screen at ({}, {}) size {}x{}",
                   viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
 
+        if (auto upload_result = ensureRenderResultUploaded(result, viewport_size); !upload_result) {
+            LOG_ERROR("Failed to upload to screen: {}", upload_result.error());
+            return upload_result;
+        }
+
+        return screen_renderer_->render(quad_shader_);
+    }
+
+    Result<GpuFrame> RenderingEngineImpl::materializeGpuFrame(
+        const RenderResult& result,
+        const glm::ivec2& viewport_size) {
+        LOG_TIMER_TRACE("RenderingEngineImpl::materializeGpuFrame");
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!result.image) {
+            LOG_ERROR("Invalid render result - image is null");
+            return std::unexpected("Invalid render result");
+        }
+
+        if (auto upload_result = ensureRenderResultUploaded(result, viewport_size); !upload_result) {
+            LOG_ERROR("Failed to materialize GPU frame: {}", upload_result.error());
+            return std::unexpected(upload_result.error());
+        }
+
+        const glm::vec2 texcoord_scale = screen_renderer_->getTexcoordScale();
+        const GLuint uploaded_depth_texture =
+            result.external_depth_texture != 0
+                ? result.external_depth_texture
+                : (result.depth ? screen_renderer_->getUploadedDepthTexture() : 0);
+
+        return GpuFrame{
+            .color = {.id = screen_renderer_->getUploadedColorTexture(),
+                      .size = viewport_size,
+                      .texcoord_scale = texcoord_scale},
+            .depth = {.id = uploaded_depth_texture,
+                      .size = viewport_size,
+                      .texcoord_scale = texcoord_scale},
+            .depth_is_ndc = result.depth_is_ndc,
+            .near_plane = result.near_plane,
+            .far_plane = result.far_plane,
+            .orthographic = result.orthographic};
+    }
+
+    Result<std::shared_ptr<Tensor>> RenderingEngineImpl::readbackGpuFrameColor(
+        const GpuFrame& frame) {
+        LOG_TIMER_TRACE("RenderingEngineImpl::readbackGpuFrameColor");
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!frame.valid()) {
+            LOG_ERROR("Invalid GPU frame");
+            return std::unexpected("Invalid GPU frame");
+        }
+
+        const int width = frame.color.size.x;
+        const int height = frame.color.size.y;
+        if (width <= 0 || height <= 0) {
+            LOG_ERROR("Invalid GPU frame size: {}x{}", width, height);
+            return std::unexpected("Invalid GPU frame size");
+        }
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        if (!gpu_frame_readback_interop_) {
+            gpu_frame_readback_interop_ = std::make_unique<CudaGLInteropTexture>();
+        }
+
+        if (gpu_frame_readback_source_ != frame.color.id || gpu_frame_readback_size_ != frame.color.size) {
+            if (auto init_result = gpu_frame_readback_interop_->initForReading(frame.color.id, width, height); init_result) {
+                gpu_frame_readback_source_ = frame.color.id;
+                gpu_frame_readback_size_ = frame.color.size;
+            } else {
+                LOG_WARN("Failed to initialize CUDA-GL viewport readback interop: {}", init_result.error());
+                gpu_frame_readback_interop_.reset();
+                gpu_frame_readback_source_ = 0;
+                gpu_frame_readback_size_ = {0, 0};
+            }
+        }
+
+        if (gpu_frame_readback_interop_ &&
+            gpu_frame_readback_source_ == frame.color.id &&
+            gpu_frame_readback_size_ == frame.color.size) {
+            Tensor image_hwc;
+            if (auto read_result = gpu_frame_readback_interop_->readToTensor(image_hwc, width, height); read_result) {
+                return std::make_shared<Tensor>(image_hwc.permute({2, 0, 1}).contiguous());
+            }
+
+            LOG_WARN("CUDA-GL viewport readback failed, falling back to glReadPixels");
+            gpu_frame_readback_interop_.reset();
+            gpu_frame_readback_source_ = 0;
+            gpu_frame_readback_size_ = {0, 0};
+        }
+#endif
+
+        if (gpu_frame_readback_fbo_ == 0) {
+            glGenFramebuffers(1, &gpu_frame_readback_fbo_);
+        }
+        if (gpu_frame_readback_fbo_ == 0) {
+            LOG_ERROR("Failed to allocate viewport readback framebuffer");
+            return std::unexpected("Failed to allocate viewport readback framebuffer");
+        }
+
+        GLFramebufferGuard framebuffer_guard;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, gpu_frame_readback_fbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, frame.color.id, 0);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Viewport readback framebuffer incomplete");
+            return std::unexpected("Viewport readback framebuffer incomplete");
+        }
+
+        std::vector<float> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
+        glReadPixels(0, 0, width, height, GL_RGB, GL_FLOAT, pixels.data());
+        const GLenum readback_error = glGetError();
+
+        if (readback_error != GL_NO_ERROR) {
+            LOG_ERROR("Viewport readback failed with GL error {}", static_cast<unsigned int>(readback_error));
+            return std::unexpected("Viewport readback failed");
+        }
+
+        auto image_cpu = Tensor::from_vector(
+            pixels,
+            {static_cast<size_t>(height), static_cast<size_t>(width), 3},
+            lfs::core::Device::CPU);
+
+        return std::make_shared<Tensor>(image_cpu.permute({2, 0, 1}).cuda());
+    }
+
+    Result<void> RenderingEngineImpl::presentGpuFrame(
+        const GpuFrame& frame,
+        const glm::ivec2& viewport_pos,
+        const glm::ivec2& viewport_size) {
+        LOG_TIMER_TRACE("RenderingEngineImpl::presentGpuFrame");
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!frame.valid()) {
+            LOG_ERROR("Invalid GPU frame");
+            return std::unexpected("Invalid GPU frame");
+        }
+
+        LOG_TRACE("Presenting GPU frame at ({}, {}) size {}x{}",
+                  viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
+
+        DepthParams params = screen_renderer_->getDepthParams();
+        params.near_plane = frame.near_plane;
+        params.far_plane = frame.far_plane;
+        params.orthographic = frame.orthographic;
+        params.has_depth = frame.depth.valid();
+        params.depth_is_ndc = frame.depth_is_ndc;
+        params.external_depth_texture = frame.depth.valid() ? frame.depth.id : 0;
+
+        return screen_renderer_->renderTexture(
+            quad_shader_,
+            frame.color.id,
+            params,
+            frame.color.texcoord_scale,
+            frame.depth.valid() ? frame.depth.id : 0);
+    }
+
+    Result<void> RenderingEngineImpl::ensureRenderResultUploaded(
+        const RenderResult& result,
+        const glm::ivec2& viewport_size) {
         // Pointer-identity cache: renderGaussians() creates a new shared_ptr per frame,
         // so distinct renders always have distinct pointers. Same pointer == same content.
         const bool same_image_ptr = (last_presented_image_.get() == result.image.get());
@@ -448,37 +690,36 @@ namespace lfs::rendering {
                                   !same_far ||
                                   !same_projection;
 
-        if (needs_upload) {
-            RenderingPipeline::RenderResult internal_result;
-            internal_result.image = *result.image;
-            internal_result.depth = result.depth ? *result.depth : Tensor();
-            internal_result.valid = true;
-            internal_result.depth_is_ndc = result.depth_is_ndc;
-            internal_result.external_depth_texture = result.external_depth_texture;
-            internal_result.near_plane = result.near_plane;
-            internal_result.far_plane = result.far_plane;
-            internal_result.orthographic = result.orthographic;
-
-            if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
-                !upload_result) {
-                has_present_upload_cache_ = false;
-                LOG_ERROR("Failed to upload to screen: {}", upload_result.error());
-                return upload_result;
-            }
-
-            last_presented_image_ = result.image;
-            last_presented_depth_ = result.depth;
-            last_presented_external_depth_texture_ = result.external_depth_texture;
-            last_presented_depth_is_ndc_ = result.depth_is_ndc;
-            last_presented_near_plane_ = result.near_plane;
-            last_presented_far_plane_ = result.far_plane;
-            last_presented_orthographic_ = result.orthographic;
-            has_present_upload_cache_ = true;
-        } else {
+        if (!needs_upload) {
             LOG_TRACE("Skipping screen upload (unchanged frame payload)");
+            return {};
         }
 
-        return screen_renderer_->render(quad_shader_);
+        RenderingPipeline::RenderResult internal_result;
+        internal_result.image = *result.image;
+        internal_result.depth = result.depth ? *result.depth : Tensor();
+        internal_result.valid = true;
+        internal_result.depth_is_ndc = result.depth_is_ndc;
+        internal_result.external_depth_texture = result.external_depth_texture;
+        internal_result.near_plane = result.near_plane;
+        internal_result.far_plane = result.far_plane;
+        internal_result.orthographic = result.orthographic;
+
+        if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
+            !upload_result) {
+            has_present_upload_cache_ = false;
+            return upload_result;
+        }
+
+        last_presented_image_ = result.image;
+        last_presented_depth_ = result.depth;
+        last_presented_external_depth_texture_ = result.external_depth_texture;
+        last_presented_depth_is_ndc_ = result.depth_is_ndc;
+        last_presented_near_plane_ = result.near_plane;
+        last_presented_far_plane_ = result.far_plane;
+        last_presented_orthographic_ = result.orthographic;
+        has_present_upload_cache_ = true;
+        return {};
     }
 
     Result<void> RenderingEngineImpl::renderGrid(
@@ -760,6 +1001,34 @@ namespace lfs::rendering {
             true,
             splat_tc_scale,
             splat_result.depth_is_ndc);
+    }
+
+    Result<void> RenderingEngineImpl::compositeMeshAndGpuFrame(
+        const GpuFrame& splat_frame,
+        const glm::ivec2& viewport_size) {
+
+        if (!depth_compositor_.isInitialized())
+            return std::unexpected("Depth compositor not initialized");
+
+        if (!mesh_rendered_this_frame_)
+            return {};
+
+        if (!splat_frame.valid())
+            return std::unexpected("Invalid GPU frame");
+
+        if (!splat_frame.depth.valid())
+            return std::unexpected("GPU frame missing depth texture");
+
+        return depth_compositor_.composite(
+            splat_frame.color.id,
+            splat_frame.depth.id,
+            mesh_renderer_.getColorTexture(),
+            mesh_renderer_.getDepthTexture(),
+            splat_frame.near_plane,
+            splat_frame.far_plane,
+            true,
+            splat_frame.color.texcoord_scale,
+            splat_frame.depth_is_ndc);
     }
 
     Result<void> RenderingEngineImpl::presentMeshOnly() {

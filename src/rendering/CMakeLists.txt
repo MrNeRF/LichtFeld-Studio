@@ -94,5 +94,6 @@ target_compile_definitions(lfs_rendering PRIVATE
 
 if(NOT BUILD_PORTABLE)
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/rendering.hpp
+                  ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/frame_contract.hpp
             DESTINATION include/rendering)
 endif()

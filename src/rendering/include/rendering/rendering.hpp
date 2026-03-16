@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/tensor.hpp"
+#include "frame_contract.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "render_constants.hpp"
 #include <array>
@@ -32,6 +33,10 @@ namespace lfs::rendering {
     // Error handling with std::expected (C++23)
     template <typename T>
     using Result = std::expected<T, std::string>;
+
+    // Legacy render boundary.
+    // Do not add new editor workflow semantics here during the refactor.
+    // New renderer-facing work should prefer frame_contract.hpp.
 
     enum class SelectionMode {
         Centers,
@@ -135,6 +140,11 @@ namespace lfs::rendering {
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;
         float split_position = -1.0f; // For split view: normalized split position (-1 = not split view)
+    };
+
+    struct SplitViewFrameResult {
+        GpuFrame frame;
+        RenderResult metadata;
     };
 
     // Split view support
@@ -280,8 +290,15 @@ namespace lfs::rendering {
             const lfs::core::PointCloud& point_cloud,
             const RenderRequest& request) = 0;
 
+        virtual Result<GpuFrame> renderPointCloudGpuFrame(
+            const lfs::core::PointCloud& point_cloud,
+            const RenderRequest& request) = 0;
+
         // Split view rendering
         virtual Result<RenderResult> renderSplitView(
+            const SplitViewRequest& request) = 0;
+
+        virtual Result<SplitViewFrameResult> renderSplitViewGpuFrame(
             const SplitViewRequest& request) = 0;
 
         virtual Result<void> renderMesh(
@@ -301,11 +318,27 @@ namespace lfs::rendering {
             const RenderResult& splat_result,
             const glm::ivec2& viewport_size) = 0;
 
+        virtual Result<GpuFrame> materializeGpuFrame(
+            const RenderResult& result,
+            const glm::ivec2& viewport_size) = 0;
+
+        virtual Result<std::shared_ptr<lfs::core::Tensor>> readbackGpuFrameColor(
+            const GpuFrame& frame) = 0;
+
+        virtual Result<void> compositeMeshAndGpuFrame(
+            const GpuFrame& splat_frame,
+            const glm::ivec2& viewport_size) = 0;
+
         virtual Result<void> presentMeshOnly() = 0;
 
         // Present to screen
         virtual Result<void> presentToScreen(
             const RenderResult& result,
+            const glm::ivec2& viewport_pos,
+            const glm::ivec2& viewport_size) = 0;
+
+        virtual Result<void> presentGpuFrame(
+            const GpuFrame& frame,
             const glm::ivec2& viewport_pos,
             const glm::ivec2& viewport_size) = 0;
 

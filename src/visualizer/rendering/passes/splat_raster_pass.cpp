@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "splat_raster_pass.hpp"
+#include "../legacy_render_request_adapter.hpp"
 #include "core/cuda_debug.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
@@ -14,10 +15,8 @@
 #include "training/training_manager.hpp"
 #include <cassert>
 #include <cuda_runtime.h>
-#include <glad/glad.h>
 
 namespace lfs::vis {
-
     namespace {
         lfs::training::PPISPRenderOverrides toRenderOverrides(const PPISPOverrides& ov) {
             lfs::training::PPISPRenderOverrides r;
@@ -81,10 +80,6 @@ namespace lfs::vis {
     } // namespace
 
     SplatRasterPass::~SplatRasterPass() {
-        if (render_fbo_)
-            glDeleteFramebuffers(1, &render_fbo_);
-        if (render_depth_rbo_)
-            glDeleteRenderbuffers(1, &render_depth_rbo_);
         if (d_hovered_depth_id_)
             cudaFree(d_hovered_depth_id_);
         if (h_hovered_depth_id_)
@@ -131,97 +126,7 @@ namespace lfs::vis {
             render_size = res.gt_context->dimensions;
         }
 
-        const glm::ivec2 alloc_size(
-            ((render_size.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
-            ((render_size.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
-
-        if (alloc_size != texture_size_) {
-            glBindTexture(GL_TEXTURE_2D, ctx.cached_render_texture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, alloc_size.x, alloc_size.y,
-                         0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-            LOG_DEBUG("Render texture resize: {}x{} -> {}x{}", texture_size_.x, texture_size_.y, alloc_size.x, alloc_size.y);
-            texture_size_ = alloc_size;
-        }
-
-        if (render_fbo_ == 0) {
-            glGenFramebuffers(1, &render_fbo_);
-            glGenRenderbuffers(1, &render_depth_rbo_);
-        }
-
-        GLint current_fbo;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
-        GLint saved_viewport[4];
-        glGetIntegerv(GL_VIEWPORT, saved_viewport);
-        const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, render_fbo_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx.cached_render_texture, 0);
-        glDisable(GL_SCISSOR_TEST);
-
-        if (alloc_size != depth_buffer_size_) {
-            glBindRenderbuffer(GL_RENDERBUFFER, render_depth_rbo_);
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, alloc_size.x, alloc_size.y);
-            LOG_DEBUG("Depth buffer resize: {}x{}", alloc_size.x, alloc_size.y);
-            depth_buffer_size_ = alloc_size;
-        }
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, render_depth_rbo_);
-
-        const GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (fb_status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("FBO incomplete: 0x{:x}", fb_status);
-            glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
-            res.render_texture_valid = false;
-            return;
-        }
-
-        glViewport(0, 0, render_size.x, render_size.y);
-        glClearColor(settings.background_color.r, settings.background_color.g, settings.background_color.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        auto viewport_data = ctx.makeViewportData();
-        viewport_data.size = render_size;
-
-        const auto& scene_state = ctx.scene_state;
-
-        lfs::rendering::RenderRequest request{
-            .viewport = viewport_data,
-            .scaling_modifier = settings.scaling_modifier,
-            .antialiasing = settings.antialiasing,
-            .mip_filter = settings.mip_filter,
-            .sh_degree = settings.sh_degree,
-            .background_color = settings.background_color,
-            .crop_box = std::nullopt,
-            .point_cloud_mode = settings.point_cloud_mode,
-            .voxel_size = settings.voxel_size,
-            .gut = settings.gut,
-            .equirectangular = settings.equirectangular,
-            .show_rings = settings.show_rings,
-            .ring_width = settings.ring_width,
-            .show_center_markers = settings.show_center_markers,
-            .model_transforms = &scene_state.model_transforms,
-            .transform_indices = scene_state.transform_indices,
-            .selection_mask = scene_state.selection_mask,
-            .output_screen_positions = ctx.brush.output_screen_positions,
-            .brush_active = ctx.brush.active,
-            .brush_x = ctx.brush.x,
-            .brush_y = ctx.brush.y,
-            .brush_radius = ctx.brush.radius,
-            .brush_add_mode = ctx.brush.add_mode,
-            .brush_selection_tensor = ctx.brush.preview_selection ? ctx.brush.preview_selection : ctx.brush.selection_tensor,
-            .brush_saturation_mode = ctx.brush.saturation_mode,
-            .brush_saturation_amount = ctx.brush.saturation_amount,
-            .selection_mode_rings = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings),
-            .selected_node_mask = (settings.desaturate_unselected || ctx.selection_flash_intensity > 0.0f)
-                                      ? scene_state.selected_node_mask
-                                      : std::vector<bool>{},
-            .node_visibility_mask = scene_state.node_visibility_mask,
-            .desaturate_unselected = settings.desaturate_unselected,
-            .selection_flash_intensity = ctx.selection_flash_intensity,
-            .hovered_depth_id = nullptr,
-            .highlight_gaussian_id = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings) ? ctx.hovered_gaussian_id : -1,
-            .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE,
-            .orthographic = settings.orthographic,
-            .ortho_scale = settings.ortho_scale};
+        auto request = buildLegacyGaussianRenderRequest(ctx, render_size);
 
         const bool need_hovered_output = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings) && ctx.brush.active;
         if (need_hovered_output) {
@@ -245,50 +150,6 @@ namespace lfs::vis {
 
             CHECK_CUDA(cudaMemsetAsync(d_hovered_depth_id_, 0xFF, sizeof(unsigned long long)));
             request.hovered_depth_id = d_hovered_depth_id_;
-        }
-
-        if ((settings.use_crop_box || settings.show_crop_box) && ctx.scene_manager) {
-            const auto& cropboxes = scene_state.cropboxes;
-            const size_t idx = (scene_state.selected_cropbox_index >= 0)
-                                   ? static_cast<size_t>(scene_state.selected_cropbox_index)
-                                   : 0;
-
-            if (idx < cropboxes.size() && cropboxes[idx].data) {
-                const auto& cb = cropboxes[idx];
-                request.crop_box = lfs::rendering::BoundingBox{
-                    .min = cb.data->min,
-                    .max = cb.data->max,
-                    .transform = glm::inverse(cb.world_transform)};
-                request.crop_inverse = cb.data->inverse;
-                request.crop_desaturate = settings.show_crop_box && !settings.use_crop_box && settings.desaturate_cropping;
-                request.crop_parent_node_index = ctx.scene_manager->getScene().getVisibleNodeIndex(cb.parent_splat_id);
-            }
-        }
-
-        if ((settings.use_ellipsoid || settings.show_ellipsoid) && ctx.scene_manager) {
-            const auto& scene = ctx.scene_manager->getScene();
-            const auto visible_ellipsoids = scene.getVisibleEllipsoids();
-            const core::NodeId selected_ellipsoid_id = ctx.scene_manager->getSelectedNodeEllipsoidId();
-            for (const auto& el : visible_ellipsoids) {
-                if (!el.data)
-                    continue;
-                if (selected_ellipsoid_id != core::NULL_NODE && el.node_id != selected_ellipsoid_id)
-                    continue;
-                request.ellipsoid = lfs::rendering::Ellipsoid{
-                    .radii = el.data->radii,
-                    .transform = glm::inverse(el.world_transform)};
-                request.ellipsoid_inverse = el.data->inverse;
-                request.ellipsoid_desaturate = settings.show_ellipsoid && !settings.use_ellipsoid && settings.desaturate_cropping;
-                request.ellipsoid_parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id);
-                break;
-            }
-        }
-
-        if (settings.depth_filter_enabled) {
-            request.depth_filter = lfs::rendering::BoundingBox{
-                .min = settings.depth_filter_min,
-                .max = settings.depth_filter_max,
-                .transform = settings.depth_filter_transform.inv().toMat4()};
         }
 
         auto render_lock = acquireRenderLock(ctx);
@@ -336,6 +197,7 @@ namespace lfs::vis {
 
         if (render_result) {
             res.cached_result = *render_result;
+            res.cached_gpu_frame.reset();
 
             if (need_hovered_output) {
                 // Start async readback — result available next frame
@@ -353,23 +215,19 @@ namespace lfs::vis {
             }
 
             res.cached_result_size = render_size;
-
-            if (settings.split_view_mode == SplitViewMode::GTComparison) {
-                const auto present_result = engine.presentToScreen(res.cached_result, glm::ivec2(0), render_size);
-                res.render_texture_valid = present_result.has_value();
+            const auto gpu_frame_result = engine.materializeGpuFrame(res.cached_result, render_size);
+            res.render_texture_valid = gpu_frame_result.has_value();
+            if (gpu_frame_result) {
+                res.cached_gpu_frame = *gpu_frame_result;
             } else {
-                res.render_texture_valid = true;
+                LOG_ERROR("Failed to materialize gaussian GPU frame: {}", gpu_frame_result.error());
             }
         } else {
             LOG_ERROR("Failed to render gaussians: {}", render_result.error());
             res.render_texture_valid = false;
+            res.cached_gpu_frame.reset();
             res.cached_result_size = {0, 0};
         }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
-        glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
-        if (scissor_was_enabled)
-            glEnable(GL_SCISSOR_TEST);
     }
 
 } // namespace lfs::vis

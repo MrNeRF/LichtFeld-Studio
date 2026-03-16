@@ -28,6 +28,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Rendering
         rendering/rendering_manager.cpp
         rendering/render_pass.cpp
+        rendering/legacy_render_request_adapter.cpp
         rendering/framerate_controller.cpp
         rendering/passes/overlay_pass.cpp
         rendering/passes/splat_raster_pass.cpp

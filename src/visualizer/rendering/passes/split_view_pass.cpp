@@ -32,15 +32,18 @@ namespace lfs::vis {
 
         auto render_lock = acquireRenderLock(ctx);
 
-        auto result = engine.renderSplitView(*split_request);
+        auto result = engine.renderSplitViewGpuFrame(*split_request);
         render_lock.reset();
 
         if (result) {
-            res.cached_result = *result;
+            res.cached_result = result->metadata;
+            res.cached_gpu_frame = result->frame;
             res.cached_result_size = ctx.render_size;
             res.split_view_executed = true;
         } else {
             LOG_ERROR("Failed to render split view: {}", result.error());
+            res.cached_result = {};
+            res.cached_gpu_frame.reset();
             res.cached_result_size = {0, 0};
         }
     }
@@ -66,8 +69,12 @@ namespace lfs::vis {
         }
 
         if (settings.split_view_mode == SplitViewMode::GTComparison) {
-            if (!res.gt_context || !res.gt_context->valid() || !res.render_texture_valid)
+            if (!res.gt_context || !res.gt_context->valid() || !res.render_texture_valid ||
+                !res.cached_gpu_frame || !res.cached_gpu_frame->valid())
                 return std::nullopt;
+
+            const unsigned int rendered_texture = res.cached_gpu_frame->color.id;
+            const glm::vec2 rendered_texcoord_scale = res.cached_gpu_frame->color.texcoord_scale;
 
             auto letterbox_viewport = viewport_data;
             letterbox_viewport.size = ctx.render_size;
@@ -77,16 +84,17 @@ namespace lfs::vis {
             std::string gt_label = cam_disabled ? "Ground Truth (Excluded from Training)" : "Ground Truth";
 
             return lfs::rendering::SplitViewRequest{
-                .panels = {{.content_type = lfs::rendering::PanelContentType::Image2D,
-                            .texture_id = res.gt_context->gt_texture_id,
-                            .label = std::move(gt_label),
-                            .start_position = 0.0f,
-                            .end_position = settings.split_position},
-                           {.content_type = lfs::rendering::PanelContentType::CachedRender,
-                            .texture_id = ctx.cached_render_texture,
-                            .label = "Rendered",
-                            .start_position = settings.split_position,
-                            .end_position = 1.0f}},
+                .panels = std::vector<lfs::rendering::SplitViewPanel>{
+                    {.content_type = lfs::rendering::PanelContentType::Image2D,
+                     .texture_id = res.gt_context->gt_texture_id,
+                     .label = std::move(gt_label),
+                     .start_position = 0.0f,
+                     .end_position = settings.split_position},
+                    {.content_type = lfs::rendering::PanelContentType::CachedRender,
+                     .texture_id = rendered_texture,
+                     .label = "Rendered",
+                     .start_position = settings.split_position,
+                     .end_position = 1.0f}},
                 .viewport = letterbox_viewport,
                 .scaling_modifier = settings.scaling_modifier,
                 .antialiasing = settings.antialiasing,
@@ -104,8 +112,9 @@ namespace lfs::vis {
                 .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
                 .show_labels = true,
                 .left_texcoord_scale = res.gt_context->gt_texcoord_scale,
-                .right_texcoord_scale = res.gt_context->render_texcoord_scale,
+                .right_texcoord_scale = rendered_texcoord_scale,
                 .flip_left_y = res.gt_context->gt_needs_flip,
+                .flip_right_y = std::nullopt,
                 .letterbox = true,
                 .content_size = res.gt_context->dimensions};
         }
@@ -161,7 +170,9 @@ namespace lfs::vis {
                 .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
                 .show_labels = true,
                 .left_texcoord_scale = texcoord_scale,
-                .right_texcoord_scale = texcoord_scale};
+                .right_texcoord_scale = texcoord_scale,
+                .flip_left_y = std::nullopt,
+                .flip_right_y = std::nullopt};
         }
 
         return std::nullopt;

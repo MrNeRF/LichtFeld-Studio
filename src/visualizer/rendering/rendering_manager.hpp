@@ -218,6 +218,8 @@ namespace lfs::vis {
         float getDepthAtPixel(int x, int y) const;
         const lfs::rendering::RenderResult& getCachedResult() const { return cached_result_; }
         glm::ivec2 getRenderedSize() const { return cached_result_size_; }
+        std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
+        std::shared_ptr<lfs::core::Tensor> captureViewportImage();
 
         // Screen positions output for brush tool
         void setOutputScreenPositions(bool enable) { output_screen_positions_ = enable; }
@@ -335,6 +337,7 @@ namespace lfs::vis {
 
         void doFullRender(const RenderContext& context, SceneManager* scene_manager,
                           const lfs::core::SplatData* model);
+        void invalidateViewportCapture();
         void setupEventHandlers();
 
         // Core components
@@ -348,8 +351,6 @@ namespace lfs::vis {
         // GT texture cache
         GTTextureCache gt_texture_cache_;
 
-        // Cached render texture for reuse in split view
-        unsigned int cached_render_texture_ = 0;
         std::atomic<bool> render_texture_valid_{false};
 
         // Granular dirty tracking
@@ -358,6 +359,7 @@ namespace lfs::vis {
         std::atomic<bool> pivot_animation_active_{false};
         std::atomic<int64_t> pivot_animation_end_ns_{0};
         lfs::rendering::RenderResult cached_result_;
+        std::optional<lfs::rendering::GpuFrame> cached_gpu_frame_;
 
         // Selection flash animation
         mutable std::atomic<bool> selection_flash_active_{false};
@@ -436,6 +438,9 @@ namespace lfs::vis {
         // Viewport state
         glm::ivec2 last_viewport_size_{0, 0}; // Last requested viewport size
         glm::ivec2 cached_result_size_{0, 0}; // Size at which cached_result_ was actually rendered
+        std::shared_ptr<lfs::core::Tensor> captured_viewport_image_;
+        uint64_t viewport_capture_generation_ = 1;
+        uint64_t captured_viewport_generation_ = 0;
 
         std::optional<GTComparisonContext> gt_context_;
         int gt_context_camera_id_ = -1;
@@ -452,6 +457,7 @@ namespace lfs::vis {
         std::atomic<bool> viewport_resize_active_{false};
         int viewport_resize_debounce_{0};
         bool resize_completed_{false};
+        mutable unsigned int gpu_depth_readback_fbo_ = 0;
     };
 
 } // namespace lfs::vis

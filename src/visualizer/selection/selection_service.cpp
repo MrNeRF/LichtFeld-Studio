@@ -1112,19 +1112,15 @@ namespace lfs::vis {
         const auto pos = gm->getViewportPos();
         const auto size = gm->getViewportSize();
         const auto& viewport = gm->getViewer()->getViewport();
-        const auto& cached = rendering_manager_->getCachedResult();
+        const glm::ivec2 rendered_size = rendering_manager_->getRenderedSize();
 
         ViewportInfo info{
             .x = pos.x,
             .y = pos.y,
             .width = size.x,
             .height = size.y,
-            .render_width = cached.image
-                                ? static_cast<int>(cached.image->size(2))
-                                : static_cast<int>(viewport.windowSize.x),
-            .render_height = cached.image
-                                 ? static_cast<int>(cached.image->size(1))
-                                 : static_cast<int>(viewport.windowSize.y),
+            .render_width = rendered_size.x > 0 ? rendered_size.x : static_cast<int>(viewport.windowSize.x),
+            .render_height = rendered_size.y > 0 ? rendered_size.y : static_cast<int>(viewport.windowSize.y),
         };
         if (!info.valid()) {
             return std::nullopt;

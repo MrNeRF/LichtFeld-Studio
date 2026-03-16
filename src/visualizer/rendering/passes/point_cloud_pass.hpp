@@ -14,7 +14,6 @@ namespace lfs::vis {
     class PointCloudPass final : public RenderPass {
     public:
         PointCloudPass() = default;
-        ~PointCloudPass() override;
 
         [[nodiscard]] const char* name() const override { return "PointCloudPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
@@ -35,7 +34,8 @@ namespace lfs::vis {
                              FrameResources& res,
                              const lfs::core::PointCloud& point_cloud,
                              const std::vector<glm::mat4>& pc_transforms,
-                             const lfs::rendering::RenderRequest& request);
+                             const lfs::rendering::RenderRequest& request,
+                             glm::ivec2 render_size);
 
         std::unique_ptr<lfs::core::PointCloud> cached_filtered_point_cloud_;
         const lfs::core::PointCloud* cached_source_point_cloud_ = nullptr;
@@ -43,10 +43,6 @@ namespace lfs::vis {
         glm::vec3 cached_cropbox_min_{0.0f};
         glm::vec3 cached_cropbox_max_{0.0f};
         bool cached_cropbox_inverse_ = false;
-        unsigned int render_fbo_ = 0;
-        unsigned int render_depth_rbo_ = 0;
-        glm::ivec2 texture_size_{0, 0};
-        glm::ivec2 depth_buffer_size_{0, 0};
     };
 
 } // namespace lfs::vis

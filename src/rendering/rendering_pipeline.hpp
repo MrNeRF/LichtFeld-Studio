@@ -125,6 +125,7 @@ namespace lfs::rendering {
 
         // Render raw point cloud (for pre-training visualization)
         Result<RenderResult> renderRawPointCloud(const lfs::core::PointCloud& point_cloud, const RenderRequest& request);
+        Result<GpuFrame> renderRawPointCloudGpuFrame(const lfs::core::PointCloud& point_cloud, const RenderRequest& request);
 
     private:
         // Apply depth params from RenderResult to ScreenQuadRenderer

@@ -6,6 +6,7 @@
 #include "core/camera.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
+#include "gl_state_guard.hpp"
 #include "gs_rasterizer_tensor.hpp"
 #include "image_layout.hpp"
 
@@ -16,6 +17,29 @@ namespace lfs::rendering {
 
     namespace {
         constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
+
+        [[nodiscard]] GpuFrame buildPersistentGpuFrame(const GLuint color_texture,
+                                                       const GLuint depth_texture,
+                                                       const glm::ivec2 alloc_size,
+                                                       const glm::ivec2 render_size,
+                                                       const float far_plane,
+                                                       const bool orthographic) {
+            return {
+                .color = {.id = color_texture,
+                          .size = alloc_size,
+                          .texcoord_scale = {
+                              alloc_size.x > 0 ? static_cast<float>(render_size.x) / static_cast<float>(alloc_size.x) : 1.0f,
+                              alloc_size.y > 0 ? static_cast<float>(render_size.y) / static_cast<float>(alloc_size.y) : 1.0f}},
+                .depth = {.id = depth_texture,
+                          .size = alloc_size,
+                          .texcoord_scale = {
+                              alloc_size.x > 0 ? static_cast<float>(render_size.x) / static_cast<float>(alloc_size.x) : 1.0f,
+                              alloc_size.y > 0 ? static_cast<float>(render_size.y) / static_cast<float>(alloc_size.y) : 1.0f}},
+                .depth_is_ndc = true,
+                .near_plane = DEFAULT_NEAR_PLANE,
+                .far_plane = far_plane,
+                .orthographic = orthographic};
+        }
     }
 
     RenderingPipeline::RenderingPipeline()
@@ -453,96 +477,17 @@ namespace lfs::rendering {
 
         LOG_TIMER_TRACE("RenderingPipeline::renderRawPointCloud");
 
-        // Initialize point cloud renderer if needed
-        if (!point_cloud_renderer_->isInitialized()) {
-            LOG_DEBUG("Initializing point cloud renderer");
-            if (auto result = point_cloud_renderer_->initialize(); !result) {
-                LOG_ERROR("Failed to initialize point cloud renderer: {}", result.error());
-                return std::unexpected(std::format("Failed to initialize point cloud renderer: {}",
-                                                   result.error()));
-            }
+        auto gpu_frame = renderRawPointCloudGpuFrame(point_cloud, request);
+        if (!gpu_frame) {
+            return std::unexpected(gpu_frame.error());
         }
 
-        // Save GL state for FBO rendering
-        GLint saved_viewport[4];
-        GLint saved_fbo;
-        glGetIntegerv(GL_VIEWPORT, saved_viewport);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-        const GLboolean saved_scissor = glIsEnabled(GL_SCISSOR_TEST);
-        if (saved_scissor)
-            glDisable(GL_SCISSOR_TEST);
-
-        // RAII restore
-        const struct StateGuard {
-            const GLint* vp;
-            const GLint fbo;
-            const GLboolean scissor;
-            ~StateGuard() {
-                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                glViewport(vp[0], vp[1], vp[2], vp[3]);
-                if (scissor)
-                    glEnable(GL_SCISSOR_TEST);
-            }
-        } guard{saved_viewport, saved_fbo, saved_scissor};
-
-        // Create view matrix using the same convention as Viewport::getViewMatrix()
-        glm::mat3 flip_yz = glm::mat3(
-            1, 0, 0,
-            0, -1, 0,
-            0, 0, -1);
-
-        // Convert from camera space (what we get in request) to view space
-        glm::mat3 R_inv = glm::transpose(request.view_rotation); // Inverse of rotation matrix
-        glm::vec3 t_inv = -R_inv * request.view_translation;     // Inverse translation
-
-        // Apply flip
-        R_inv = flip_yz * R_inv;
-        t_inv = flip_yz * t_inv;
-
-        // Build view matrix
-        glm::mat4 view(1.0f);
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                view[i][j] = R_inv[i][j];
-            }
-        }
-        view[3][0] = t_inv.x;
-        view[3][1] = t_inv.y;
-        view[3][2] = t_inv.z;
-        view[3][3] = 1.0f;
-
-        // Apply model transform if provided (for point cloud node transforms)
-        if (!request.model_transforms.empty()) {
-            // model_view = view * model_transform
-            // This transforms points from model space -> world space -> view space
-            view = view * request.model_transforms[0];
-        }
-
-        // Create projection matrix (Y-flipped for OpenGL bottom-left origin)
-        glm::mat4 projection = request.getProjectionMatrix();
-        projection[1][1] *= -1.0f;
-
-        // OPTIMIZATION: Use persistent FBO
-        ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
         if (persistent_fbo_ == 0) {
-            LOG_ERROR("Failed to setup persistent framebuffer");
-            return std::unexpected("Failed to setup persistent framebuffer");
+            LOG_ERROR("Persistent framebuffer missing after point cloud render");
+            return std::unexpected("Persistent framebuffer missing after point cloud render");
         }
 
-        // Set viewport to match the request size
-        glViewport(0, 0, request.viewport_size.x, request.viewport_size.y);
-
-        // Raw point clouds: transform already baked into view matrix
-        {
-            LOG_TIMER_TRACE("point_cloud_renderer_->render(PointCloud)");
-            if (auto result = point_cloud_renderer_->render(point_cloud, view, projection,
-                                                            request.voxel_size, request.background_color,
-                                                            {}, nullptr, request.equirectangular, request.point_cloud_crop_params);
-                !result) {
-                LOG_ERROR("Raw point cloud rendering failed: {}", result.error());
-                return std::unexpected(std::format("Raw point cloud rendering failed: {}", result.error()));
-            }
-        }
+        GLFramebufferGuard framebuffer_guard(persistent_fbo_);
 
         const int width = request.viewport_size.x;
         const int height = request.viewport_size.y;
@@ -630,10 +575,88 @@ namespace lfs::rendering {
             result.valid = true;
         }
 
-        result.orthographic = request.orthographic;
-        result.far_plane = request.far_plane;
+        result.near_plane = gpu_frame->near_plane;
+        result.far_plane = gpu_frame->far_plane;
+        result.orthographic = gpu_frame->orthographic;
         LOG_TRACE("Raw point cloud rendering completed");
         return result;
+    }
+
+    Result<GpuFrame> RenderingPipeline::renderRawPointCloudGpuFrame(
+        const lfs::core::PointCloud& point_cloud,
+        const RenderRequest& request) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderRawPointCloudGpuFrame");
+
+        if (!point_cloud_renderer_->isInitialized()) {
+            LOG_DEBUG("Initializing point cloud renderer");
+            if (auto result = point_cloud_renderer_->initialize(); !result) {
+                LOG_ERROR("Failed to initialize point cloud renderer: {}", result.error());
+                return std::unexpected(std::format("Failed to initialize point cloud renderer: {}",
+                                                   result.error()));
+            }
+        }
+
+        GLFramebufferGuard framebuffer_guard;
+        GLViewportGuard viewport_guard;
+        GLScissorEnableGuard scissor_guard;
+        glDisable(GL_SCISSOR_TEST);
+
+        glm::mat3 flip_yz = glm::mat3(
+            1, 0, 0,
+            0, -1, 0,
+            0, 0, -1);
+
+        glm::mat3 rotation_inv = glm::transpose(request.view_rotation);
+        glm::vec3 translation_inv = -rotation_inv * request.view_translation;
+
+        rotation_inv = flip_yz * rotation_inv;
+        translation_inv = flip_yz * translation_inv;
+
+        glm::mat4 view(1.0f);
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                view[i][j] = rotation_inv[i][j];
+            }
+        }
+        view[3][0] = translation_inv.x;
+        view[3][1] = translation_inv.y;
+        view[3][2] = translation_inv.z;
+        view[3][3] = 1.0f;
+
+        if (!request.model_transforms.empty()) {
+            view = view * request.model_transforms[0];
+        }
+
+        glm::mat4 projection = request.getProjectionMatrix();
+        projection[1][1] *= -1.0f;
+
+        ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
+        if (persistent_fbo_ == 0) {
+            LOG_ERROR("Failed to setup persistent framebuffer");
+            return std::unexpected("Failed to setup persistent framebuffer");
+        }
+
+        glViewport(0, 0, request.viewport_size.x, request.viewport_size.y);
+
+        {
+            LOG_TIMER_TRACE("point_cloud_renderer_->render(PointCloud)");
+            if (auto result = point_cloud_renderer_->render(point_cloud, view, projection,
+                                                            request.voxel_size, request.background_color,
+                                                            {}, nullptr, request.equirectangular, request.point_cloud_crop_params);
+                !result) {
+                LOG_ERROR("Raw point cloud rendering failed: {}", result.error());
+                return std::unexpected(std::format("Raw point cloud rendering failed: {}", result.error()));
+            }
+        }
+
+        return buildPersistentGpuFrame(
+            persistent_color_texture_,
+            persistent_depth_texture_,
+            {persistent_fbo_width_, persistent_fbo_height_},
+            request.viewport_size,
+            request.far_plane,
+            request.orthographic);
     }
 
     void RenderingPipeline::applyDepthParams(

@@ -34,6 +34,7 @@
 #include <cuda_runtime.h>
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string_view>
@@ -41,6 +42,23 @@
 namespace lfs::vis {
 
     namespace {
+
+        void executeTimedPass(RenderPass& pass,
+                              lfs::rendering::RenderingEngine& engine,
+                              const FrameContext& frame_ctx,
+                              FrameResources& resources,
+                              const std::string_view phase = {}) {
+            std::string timer_name = "RenderPass::";
+            timer_name += pass.name();
+            if (!phase.empty()) {
+                timer_name += "[";
+                timer_name += phase;
+                timer_name += "]";
+            }
+
+            lfs::core::ScopedTimer timer(std::move(timer_name));
+            pass.execute(engine, frame_ctx, resources);
+        }
 
         template <typename TRenderable>
         [[nodiscard]] const TRenderable* findRenderableByNodeId(const std::vector<TRenderable>& renderables,
@@ -78,9 +96,65 @@ namespace lfs::vis {
             return effective_params;
         }
 
+        [[nodiscard]] bool hasCachedGpuFrame(const std::optional<lfs::rendering::GpuFrame>& frame) {
+            return frame && frame->valid();
+        }
+
+        [[nodiscard]] bool hasCachedViewportOutput(const lfs::rendering::RenderResult& result,
+                                                   const std::optional<lfs::rendering::GpuFrame>& frame) {
+            return (result.image && result.image->is_valid()) || hasCachedGpuFrame(frame);
+        }
+
+        [[nodiscard]] bool hasCachedOutputArtifacts(const lfs::rendering::RenderResult& result,
+                                                    const std::optional<lfs::rendering::GpuFrame>& frame,
+                                                    const glm::ivec2 rendered_size,
+                                                    const bool render_texture_valid) {
+            return (result.image && result.image->is_valid()) ||
+                   (result.depth && result.depth->is_valid()) ||
+                   (result.depth_right && result.depth_right->is_valid()) ||
+                   (result.screen_positions && result.screen_positions->is_valid()) ||
+                   hasCachedGpuFrame(frame) ||
+                   rendered_size.x > 0 ||
+                   rendered_size.y > 0 ||
+                   render_texture_valid;
+        }
+
+        [[nodiscard]] float linearizeDepthSample(const float depth_sample,
+                                                 const float near_plane,
+                                                 const float far_plane,
+                                                 const bool orthographic,
+                                                 const bool depth_is_ndc) {
+            if (!depth_is_ndc) {
+                return depth_sample < 1e9f ? depth_sample : -1.0f;
+            }
+
+            constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
+            if (depth_sample >= DEPTH_BG_THRESHOLD) {
+                return -1.0f;
+            }
+
+            if (orthographic) {
+                return near_plane + depth_sample * (far_plane - near_plane);
+            }
+
+            const float z_ndc = depth_sample * 2.0f - 1.0f;
+            const float A = (far_plane + near_plane) / (far_plane - near_plane);
+            const float B = (2.0f * far_plane * near_plane) / (far_plane - near_plane);
+            return B / (A - z_ndc);
+        }
+
     } // namespace
 
     using namespace lfs::core::events;
+
+    void RenderingManager::invalidateViewportCapture() {
+        captured_viewport_image_.reset();
+        captured_viewport_generation_ = 0;
+        ++viewport_capture_generation_;
+        if (viewport_capture_generation_ == 0) {
+            viewport_capture_generation_ = 1;
+        }
+    }
 
     GTTextureCache::GTTextureCache() = default;
 
@@ -441,8 +515,8 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
-        if (cached_render_texture_ > 0) {
-            glDeleteTextures(1, &cached_render_texture_);
+        if (gpu_depth_readback_fbo_ > 0) {
+            glDeleteFramebuffers(1, &gpu_depth_readback_fbo_);
         }
     }
 
@@ -458,14 +532,6 @@ namespace lfs::vis {
             LOG_ERROR("Failed to initialize rendering engine: {}", init_result.error());
             throw std::runtime_error("Failed to initialize rendering engine: " + init_result.error());
         }
-
-        // Create cached render texture
-        glGenTextures(1, &cached_render_texture_);
-        glBindTexture(GL_TEXTURE_2D, cached_render_texture_);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
         initialized_ = true;
         LOG_INFO("Rendering engine initialized successfully");
@@ -569,6 +635,8 @@ namespace lfs::vis {
             LOG_DEBUG("Window resized, clearing render cache");
             markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
             cached_result_ = {};
+            cached_gpu_frame_.reset();
+            invalidateViewportCapture();
             last_viewport_size_ = glm::ivec2(0, 0);
             gt_texture_cache_.clear();
         });
@@ -610,6 +678,8 @@ namespace lfs::vis {
 
         state::SceneCleared::when([this](const auto&) {
             cached_result_ = {};
+            cached_gpu_frame_.reset();
+            invalidateViewportCapture();
             if (point_cloud_pass_)
                 point_cloud_pass_->resetCache();
             render_texture_valid_.store(false, std::memory_order_relaxed);
@@ -674,6 +744,8 @@ namespace lfs::vis {
             LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                       event.enabled ? "enabled" : "disabled", event.voxel_size);
             cached_result_ = {};
+            cached_gpu_frame_.reset();
+            invalidateViewportCapture();
             markDirty(DirtyFlag::SPLATS);
         });
     }
@@ -831,6 +903,45 @@ namespace lfs::vis {
         return engine_.get();
     }
 
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::getViewportImageIfAvailable() const {
+        if (cached_result_.image && cached_result_.image->is_valid()) {
+            return cached_result_.image;
+        }
+
+        if (captured_viewport_image_ && captured_viewport_generation_ == viewport_capture_generation_) {
+            return captured_viewport_image_;
+        }
+
+        return {};
+    }
+
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
+        if (auto image = getViewportImageIfAvailable()) {
+            return image;
+        }
+
+        if (!engine_ || !cached_gpu_frame_ || !cached_gpu_frame_->valid()) {
+            return {};
+        }
+
+        std::optional<std::shared_lock<std::shared_mutex>> render_lock;
+        if (const auto* tm = last_scene_manager_ ? last_scene_manager_->getTrainerManager() : nullptr) {
+            if (const auto* trainer = tm->getTrainer()) {
+                render_lock.emplace(trainer->getRenderMutex());
+            }
+        }
+
+        auto readback_result = engine_->readbackGpuFrameColor(*cached_gpu_frame_);
+        if (!readback_result) {
+            LOG_ERROR("Failed to capture viewport image from GPU frame: {}", readback_result.error());
+            return {};
+        }
+
+        captured_viewport_image_ = *readback_result;
+        captured_viewport_generation_ = viewport_capture_generation_;
+        return captured_viewport_image_;
+    }
+
     int RenderingManager::pickCameraFrustum(const glm::vec2& mouse_pos) {
         if (!settings_.show_camera_frustums)
             return -1;
@@ -979,6 +1090,8 @@ namespace lfs::vis {
             markDirty(DirtyFlag::ALL);
             last_model_ptr_ = model_ptr;
             cached_result_ = {};
+            cached_gpu_frame_.reset();
+            invalidateViewportCapture();
         }
 
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
@@ -1055,7 +1168,7 @@ namespace lfs::vis {
             }
         }
 
-        if (!cached_result_.image &&
+        if (!hasCachedViewportOutput(cached_result_, cached_gpu_frame_) &&
             (model || has_visible_point_cloud || settings_.split_view_mode != SplitViewMode::Disabled))
             dirty_mask_.fetch_or(DirtyFlag::ALL, std::memory_order_relaxed);
         if (settings_.split_view_mode != SplitViewMode::Disabled)
@@ -1174,27 +1287,28 @@ namespace lfs::vis {
             .hovered_camera_id = hovered_camera_id_,
             .current_camera_id = current_camera_id_,
             .hovered_gaussian_id = hovered_gaussian_id_,
-            .selection_flash_intensity = getSelectionFlashIntensity(),
-            .cached_render_texture = cached_render_texture_};
+            .selection_flash_intensity = getSelectionFlashIntensity()};
 
         FrameResources resources{
             .cached_result = cached_result_,
+            .cached_gpu_frame = cached_gpu_frame_,
             .cached_result_size = cached_result_size_,
             .render_texture_valid = render_texture_valid_.load(std::memory_order_relaxed),
             .gt_context = gt_context_,
-            .hovered_gaussian_id = hovered_gaussian_id_};
+            .hovered_gaussian_id = hovered_gaussian_id_,
+            .split_info = {},
+            .additional_dirty = 0,
+            .pivot_animation_end = std::nullopt};
 
         if (!has_splats && !has_point_cloud) {
-            const bool had_cached_output =
-                resources.cached_result.image ||
-                resources.cached_result.depth ||
-                resources.cached_result.depth_right ||
-                resources.cached_result.screen_positions ||
-                resources.cached_result_size.x > 0 ||
-                resources.cached_result_size.y > 0 ||
-                resources.render_texture_valid;
+            const bool had_cached_output = hasCachedOutputArtifacts(
+                resources.cached_result,
+                resources.cached_gpu_frame,
+                resources.cached_result_size,
+                resources.render_texture_valid);
             if (had_cached_output) {
                 resources.cached_result = {};
+                resources.cached_gpu_frame.reset();
                 resources.cached_result_size = {0, 0};
                 resources.render_texture_valid = false;
                 resources.hovered_gaussian_id = -1;
@@ -1211,10 +1325,10 @@ namespace lfs::vis {
 
             if (needs_gt_pre_render) {
                 if (has_splats) {
-                    splat_raster_pass_->execute(*engine_, frame_ctx, resources);
+                    executeTimedPass(*splat_raster_pass_, *engine_, frame_ctx, resources, "gt_pre");
                     resources.splat_pre_rendered = true;
                 } else if (has_point_cloud && point_cloud_pass_) {
-                    point_cloud_pass_->execute(*engine_, frame_ctx, resources);
+                    executeTimedPass(*point_cloud_pass_, *engine_, frame_ctx, resources, "gt_pre");
                     resources.splat_pre_rendered = true;
                 }
             }
@@ -1222,7 +1336,7 @@ namespace lfs::vis {
 
         for (auto& pass : passes_) {
             if (pass->shouldExecute(frame_dirty, frame_ctx)) {
-                pass->execute(*engine_, frame_ctx, resources);
+                executeTimedPass(*pass, *engine_, frame_ctx, resources);
             }
         }
 
@@ -1233,10 +1347,18 @@ namespace lfs::vis {
             setPivotAnimationEndTime(*resources.pivot_animation_end);
 
         // Write-back from FrameResources to manager state
+        const bool viewport_output_updated =
+            (frame_dirty & (DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT |
+                            DirtyFlag::SELECTION | DirtyFlag::BACKGROUND | DirtyFlag::PPISP |
+                            DirtyFlag::SPLIT_VIEW)) != 0;
         cached_result_ = resources.cached_result;
+        cached_gpu_frame_ = resources.cached_gpu_frame;
         cached_result_size_ = resources.cached_result_size;
         render_texture_valid_.store(resources.render_texture_valid, std::memory_order_relaxed);
         hovered_gaussian_id_ = resources.hovered_gaussian_id;
+        if (viewport_output_updated) {
+            invalidateViewportCapture();
+        }
 
         {
             std::lock_guard<std::mutex> lock(split_info_mutex_);
@@ -1259,6 +1381,18 @@ namespace lfs::vis {
         }
 
         float splat_depth = -1.0f;
+
+        const float active_near_plane =
+            (cached_gpu_frame_ && cached_gpu_frame_->valid()) ? cached_gpu_frame_->near_plane
+                                                              : (cached_result_.valid ? cached_result_.near_plane
+                                                                                      : lfs::rendering::DEFAULT_NEAR_PLANE);
+        const float active_far_plane =
+            (cached_gpu_frame_ && cached_gpu_frame_->valid()) ? cached_gpu_frame_->far_plane
+                                                              : (cached_result_.valid ? cached_result_.far_plane
+                                                                                      : lfs::rendering::DEFAULT_FAR_PLANE);
+        const bool active_orthographic =
+            (cached_gpu_frame_ && cached_gpu_frame_->valid()) ? cached_gpu_frame_->orthographic
+                                                              : cached_result_.orthographic;
 
         if (cached_result_.valid) {
             const lfs::core::Tensor* depth_ptr = nullptr;
@@ -1291,10 +1425,39 @@ namespace lfs::vis {
                     float d;
                     const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
                     CHECK_CUDA(cudaMemcpy(&d, gpu_ptr, sizeof(float), cudaMemcpyDeviceToHost));
-                    if (d < 1e9f) {
-                        splat_depth = d;
-                    }
+                    splat_depth = linearizeDepthSample(
+                        d, active_near_plane, active_far_plane, active_orthographic, cached_result_.depth_is_ndc);
                 }
+            }
+        }
+
+        if (splat_depth <= 0.0f && cached_gpu_frame_ && cached_gpu_frame_->valid() && cached_gpu_frame_->depth.valid()) {
+            if (gpu_depth_readback_fbo_ == 0) {
+                glGenFramebuffers(1, &gpu_depth_readback_fbo_);
+            }
+
+            if (gpu_depth_readback_fbo_ != 0 && x >= 0 && x < viewport_width && y >= 0 && y < viewport_height) {
+                GLint saved_fbo = 0;
+                glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, gpu_depth_readback_fbo_);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
+                                       cached_gpu_frame_->depth.id, 0);
+                glDrawBuffer(GL_NONE);
+                glReadBuffer(GL_NONE);
+
+                if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                    float d = cached_gpu_frame_->depth_is_ndc ? 1.0f : std::numeric_limits<float>::infinity();
+                    glReadPixels(x, viewport_height - 1 - y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &d);
+                    splat_depth = linearizeDepthSample(
+                        d,
+                        cached_gpu_frame_->near_plane,
+                        cached_gpu_frame_->far_plane,
+                        cached_gpu_frame_->orthographic,
+                        cached_gpu_frame_->depth_is_ndc);
+                }
+
+                glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
             }
         }
 
@@ -1310,12 +1473,8 @@ namespace lfs::vis {
 
                 constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
                 if (ndc_depth < DEPTH_BG_THRESHOLD) {
-                    const float z_near = cached_result_.valid ? cached_result_.near_plane : lfs::rendering::DEFAULT_NEAR_PLANE;
-                    const float z_far = cached_result_.valid ? cached_result_.far_plane : lfs::rendering::DEFAULT_FAR_PLANE;
-                    const float z_ndc = ndc_depth * 2.0f - 1.0f;
-                    const float A = (z_far + z_near) / (z_far - z_near);
-                    const float B = (2.0f * z_far * z_near) / (z_far - z_near);
-                    mesh_depth = B / (A - z_ndc);
+                    mesh_depth = linearizeDepthSample(
+                        ndc_depth, active_near_plane, active_far_plane, active_orthographic, true);
                 }
             }
         }

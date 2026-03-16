@@ -10,6 +10,37 @@
 
 namespace lfs::rendering {
 
+    namespace {
+        [[nodiscard]] RenderResult buildSplitViewMetadata(
+            std::optional<RenderingPipeline::RenderResult>& left_render_result,
+            std::optional<RenderingPipeline::RenderResult>& right_render_result,
+            const float split_position) {
+            RenderResult result{
+                .depth = (left_render_result && left_render_result->depth.is_valid())
+                             ? std::make_shared<lfs::core::Tensor>(std::move(left_render_result->depth))
+                             : nullptr,
+                .depth_right = (right_render_result && right_render_result->depth.is_valid())
+                                   ? std::make_shared<lfs::core::Tensor>(std::move(right_render_result->depth))
+                                   : nullptr,
+                .valid = true,
+                .split_position = split_position};
+
+            if (left_render_result) {
+                result.depth_is_ndc = left_render_result->depth_is_ndc;
+                result.near_plane = left_render_result->near_plane;
+                result.far_plane = left_render_result->far_plane;
+                result.orthographic = left_render_result->orthographic;
+            } else if (right_render_result) {
+                result.depth_is_ndc = right_render_result->depth_is_ndc;
+                result.near_plane = right_render_result->near_plane;
+                result.far_plane = right_render_result->far_plane;
+                result.orthographic = right_render_result->orthographic;
+            }
+
+            return result;
+        }
+    } // namespace
+
     Result<void> SplitViewRenderer::initialize() {
         if (initialized_) {
             return {};
@@ -78,22 +109,29 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<void> SplitViewRenderer::createFramebuffers(const int width, const int height) {
-        if (!left_framebuffer_) {
-            left_framebuffer_ = std::make_unique<FrameBuffer>();
-        }
-        if (!right_framebuffer_) {
-            right_framebuffer_ = std::make_unique<FrameBuffer>();
+    Result<SplitViewRenderer::SplitViewTargets> SplitViewRenderer::acquireTargets(
+        RenderTargetPool& render_target_pool,
+        const glm::ivec2& size) {
+
+        auto left = render_target_pool.acquire("split_view.left", size);
+        if (!left) {
+            return std::unexpected(left.error());
         }
 
-        if (left_framebuffer_->getWidth() != width || left_framebuffer_->getHeight() != height) {
-            left_framebuffer_->resize(width, height);
-        }
-        if (right_framebuffer_->getWidth() != width || right_framebuffer_->getHeight() != height) {
-            right_framebuffer_->resize(width, height);
+        auto right = render_target_pool.acquire("split_view.right", size);
+        if (!right) {
+            return std::unexpected(right.error());
         }
 
-        return {};
+        auto composite = render_target_pool.acquire("split_view.composite", size);
+        if (!composite) {
+            return std::unexpected(composite.error());
+        }
+
+        return SplitViewTargets{
+            .left = std::move(*left),
+            .right = std::move(*right),
+            .composite = std::move(*composite)};
     }
 
     Result<void> SplitViewRenderer::blitTextureToFramebuffer(const GLuint texture_id) {
@@ -125,14 +163,14 @@ namespace lfs::rendering {
     }
 
     Result<std::optional<RenderingPipeline::RenderResult>> SplitViewRenderer::renderPanelContent(
-        FrameBuffer* const framebuffer,
+        FrameBuffer& framebuffer,
         const SplitViewPanel& panel,
         const SplitViewRequest& request,
         RenderingPipeline& pipeline,
         ScreenQuadRenderer& screen_renderer,
         ManagedShader& quad_shader) {
 
-        framebuffer->bind();
+        framebuffer.bind();
 
         const glm::ivec2 render_size = request.viewport.size;
 
@@ -145,7 +183,7 @@ namespace lfs::rendering {
         case PanelContentType::Model3D: {
             if (!panel.model) {
                 LOG_ERROR("Model3D panel has no model");
-                framebuffer->unbind();
+                framebuffer.unbind();
                 return std::unexpected("Model3D panel has no model");
             }
 
@@ -179,7 +217,7 @@ namespace lfs::rendering {
             auto render_result = pipeline.render(*panel.model, base_req);
             if (!render_result) {
                 LOG_ERROR("Failed to render model: {}", render_result.error());
-                framebuffer->unbind();
+                framebuffer.unbind();
                 return std::unexpected(render_result.error());
             }
 
@@ -188,7 +226,7 @@ namespace lfs::rendering {
                 LOG_ERROR("Failed to upload model: {}", upload_result.error());
             } else {
                 // Reset GL state for 2D blit
-                framebuffer->bind();
+                framebuffer.bind();
                 glViewport(0, 0, render_size.x, render_size.y);
                 glDisable(GL_DEPTH_TEST);
                 glDisable(GL_SCISSOR_TEST);
@@ -200,7 +238,7 @@ namespace lfs::rendering {
                 glEnable(GL_DEPTH_TEST);
             }
 
-            framebuffer->unbind();
+            framebuffer.unbind();
             return std::move(*render_result);
         }
 
@@ -208,13 +246,13 @@ namespace lfs::rendering {
         case PanelContentType::CachedRender: {
             if (panel.texture_id == 0) {
                 LOG_ERROR("Panel has invalid texture ID");
-                framebuffer->unbind();
+                framebuffer.unbind();
                 return std::unexpected("Panel has invalid texture ID");
             }
 
             if (auto result = blitTextureToFramebuffer(panel.texture_id); !result) {
                 LOG_ERROR("Failed to blit texture: {}", result.error());
-                framebuffer->unbind();
+                framebuffer.unbind();
                 return std::unexpected(result.error());
             }
             break;
@@ -222,21 +260,37 @@ namespace lfs::rendering {
 
         default:
             LOG_ERROR("Unknown panel content type: {}", static_cast<int>(panel.content_type));
-            framebuffer->unbind();
+            framebuffer.unbind();
             return std::unexpected("Unknown panel content type");
         }
 
-        framebuffer->unbind();
+        framebuffer.unbind();
         return std::nullopt;
     }
 
     Result<RenderResult> SplitViewRenderer::render(
         const SplitViewRequest& request,
+        RenderTargetPool& render_target_pool,
         RenderingPipeline& pipeline,
         ScreenQuadRenderer& screen_renderer,
         ManagedShader& quad_shader) {
 
-        LOG_TIMER_TRACE("SplitViewRenderer::render");
+        auto frame_result = renderGpuFrame(request, render_target_pool, pipeline, screen_renderer, quad_shader);
+        if (!frame_result) {
+            return std::unexpected(frame_result.error());
+        }
+
+        return std::move(frame_result->metadata);
+    }
+
+    Result<SplitViewFrameResult> SplitViewRenderer::renderGpuFrame(
+        const SplitViewRequest& request,
+        RenderTargetPool& render_target_pool,
+        RenderingPipeline& pipeline,
+        ScreenQuadRenderer& screen_renderer,
+        ManagedShader& quad_shader) {
+
+        LOG_TIMER_TRACE("SplitViewRenderer::renderGpuFrame");
 
         if (!initialized_) {
             if (auto result = initialize(); !result) {
@@ -248,18 +302,15 @@ namespace lfs::rendering {
             return std::unexpected("Split view requires exactly 2 panels");
         }
 
-        const int fb_width = request.viewport.size.x;
-        const int fb_height = request.viewport.size.y;
-
-        if (auto result = createFramebuffers(fb_width, fb_height); !result) {
-            LOG_ERROR("Failed to create framebuffers: {}", result.error());
-            return std::unexpected(result.error());
+        auto targets = acquireTargets(render_target_pool, request.viewport.size);
+        if (!targets) {
+            LOG_ERROR("Failed to acquire split-view targets: {}", targets.error());
+            return std::unexpected(targets.error());
         }
 
-        GLint current_viewport[4];
-        glGetIntegerv(GL_VIEWPORT, current_viewport);
-        GLint current_fbo;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
+        GLFramebufferGuard framebuffer_guard;
+        GLViewportGuard viewport_guard;
+        GLScissorEnableGuard scissor_guard;
 
         const bool is_gt_comparison = (request.panels[0].content_type == PanelContentType::Image2D ||
                                        request.panels[0].content_type == PanelContentType::CachedRender ||
@@ -284,18 +335,14 @@ namespace lfs::rendering {
                         return std::unexpected("Invalid texture ID");
                     }
                 } else if (panel.content_type == PanelContentType::Model3D) {
-                    auto* framebuffer = (i == 0) ? left_framebuffer_.get() : right_framebuffer_.get();
-                    if (!framebuffer) {
-                        LOG_ERROR("Framebuffer for panel {} is null", i);
-                        return std::unexpected("Framebuffer not initialized");
-                    }
+                    auto& framebuffer = (i == 0) ? *targets->left : *targets->right;
 
                     auto result = renderPanelContent(framebuffer, panel, request,
                                                      pipeline, screen_renderer, quad_shader);
                     if (!result) {
                         return std::unexpected(result.error());
                     }
-                    *target_texture = framebuffer->getFrameTexture();
+                    *target_texture = framebuffer.getFrameTexture();
 
                     if (result->has_value()) {
                         if (i == 0) {
@@ -307,60 +354,52 @@ namespace lfs::rendering {
                 }
             }
         } else {
-            if (!left_framebuffer_ || !right_framebuffer_) {
-                LOG_ERROR("Framebuffers not initialized");
-                return std::unexpected("Framebuffers not initialized");
-            }
-
-            auto left_panel_result = renderPanelContent(left_framebuffer_.get(), request.panels[0],
+            auto left_panel_result = renderPanelContent(*targets->left, request.panels[0],
                                                         request, pipeline, screen_renderer, quad_shader);
             if (!left_panel_result) {
                 return std::unexpected(left_panel_result.error());
             }
-            left_texture = left_framebuffer_->getFrameTexture();
+            left_texture = targets->left->getFrameTexture();
             if (left_panel_result->has_value()) {
                 left_render_result = std::move(left_panel_result->value());
             }
 
-            auto right_panel_result = renderPanelContent(right_framebuffer_.get(), request.panels[1],
+            auto right_panel_result = renderPanelContent(*targets->right, request.panels[1],
                                                          request, pipeline, screen_renderer, quad_shader);
             if (!right_panel_result) {
                 return std::unexpected(right_panel_result.error());
             }
-            right_texture = right_framebuffer_->getFrameTexture();
+            right_texture = targets->right->getFrameTexture();
             if (right_panel_result->has_value()) {
                 right_render_result = std::move(right_panel_result->value());
             }
         }
 
-        // Composite to screen
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(current_viewport[0], current_viewport[1],
-                   current_viewport[2], current_viewport[3]);
-
+        targets->composite->bind();
+        glViewport(0, 0, request.viewport.size.x, request.viewport.size.y);
         glClearColor(request.background_color.r, request.background_color.g,
                      request.background_color.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        int composite_x = current_viewport[0];
-        int composite_y = current_viewport[1];
-        int composite_w = current_viewport[2];
-        int composite_h = current_viewport[3];
+        int composite_x = 0;
+        int composite_y = 0;
+        int composite_w = request.viewport.size.x;
+        int composite_h = request.viewport.size.y;
 
         if (request.letterbox && request.content_size.x > 0 && request.content_size.y > 0) {
             const float content_aspect = static_cast<float>(request.content_size.x) / request.content_size.y;
-            const float viewport_aspect = static_cast<float>(current_viewport[2]) / current_viewport[3];
+            const float viewport_aspect = static_cast<float>(request.viewport.size.x) / request.viewport.size.y;
 
             if (content_aspect > viewport_aspect) {
-                composite_w = current_viewport[2];
-                composite_h = static_cast<int>(current_viewport[2] / content_aspect);
-                composite_x = current_viewport[0];
-                composite_y = current_viewport[1] + (current_viewport[3] - composite_h) / 2;
+                composite_w = request.viewport.size.x;
+                composite_h = static_cast<int>(request.viewport.size.x / content_aspect);
+                composite_x = 0;
+                composite_y = (request.viewport.size.y - composite_h) / 2;
             } else {
-                composite_h = current_viewport[3];
-                composite_w = static_cast<int>(current_viewport[3] * content_aspect);
-                composite_x = current_viewport[0] + (current_viewport[2] - composite_w) / 2;
-                composite_y = current_viewport[1];
+                composite_h = request.viewport.size.y;
+                composite_w = static_cast<int>(request.viewport.size.y * content_aspect);
+                composite_x = (request.viewport.size.x - composite_w) / 2;
+                composite_y = 0;
             }
             glViewport(composite_x, composite_y, composite_w, composite_h);
         }
@@ -376,28 +415,19 @@ namespace lfs::rendering {
                 flip_left, flip_right);
             !result) {
             LOG_ERROR("Failed to composite split view: {}", result.error());
-            glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
             return std::unexpected(result.error());
         }
 
-        glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
-
-        const auto height = static_cast<size_t>(request.viewport.size.y);
-        const auto width = static_cast<size_t>(request.viewport.size.x);
-
-        auto dummy_image = lfs::core::Tensor::zeros({3, height, width}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        RenderResult result{
-            .image = std::make_shared<lfs::core::Tensor>(std::move(dummy_image)),
-            .depth = left_render_result.has_value()
-                         ? std::make_shared<lfs::core::Tensor>(std::move(left_render_result->depth))
-                         : std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty({0}, lfs::core::Device::CUDA, lfs::core::DataType::Float32)),
-            .depth_right = right_render_result.has_value()
-                               ? std::make_shared<lfs::core::Tensor>(std::move(right_render_result->depth))
-                               : std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::empty({0}, lfs::core::Device::CUDA, lfs::core::DataType::Float32)),
-            .valid = true,
-            .split_position = request.panels[0].end_position};
-
+        SplitViewFrameResult result;
+        result.frame = {
+            .color = {.id = targets->composite->getFrameTexture(), .size = request.viewport.size},
+            .depth = {},
+            .depth_is_ndc = false,
+            .near_plane = DEFAULT_NEAR_PLANE,
+            .far_plane = DEFAULT_FAR_PLANE,
+            .orthographic = request.viewport.orthographic};
+        result.metadata = buildSplitViewMetadata(
+            left_render_result, right_render_result, request.panels[0].end_position);
         return result;
     }
 

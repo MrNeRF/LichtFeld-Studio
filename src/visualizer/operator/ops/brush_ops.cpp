@@ -221,12 +221,12 @@ namespace lfs::vis::op {
             return;
         }
 
-        const auto& viewport = gm->getViewer()->getViewport();
         const auto bounds = getViewportBounds();
-        const auto& cached = rm->getCachedResult();
+        const auto& viewport = gm->getViewer()->getViewport();
+        const glm::ivec2 rendered_size = rm->getRenderedSize();
 
-        const int render_w = cached.image ? static_cast<int>(cached.image->size(2)) : static_cast<int>(viewport.windowSize.x);
-        const int render_h = cached.image ? static_cast<int>(cached.image->size(1)) : static_cast<int>(viewport.windowSize.y);
+        const int render_w = rendered_size.x > 0 ? rendered_size.x : static_cast<int>(viewport.windowSize.x);
+        const int render_h = rendered_size.y > 0 ? rendered_size.y : static_cast<int>(viewport.windowSize.y);
 
         if (bounds.width <= 0 || bounds.height <= 0) {
             return;
@@ -265,12 +265,12 @@ namespace lfs::vis::op {
             return;
         }
 
-        const auto& viewport = gm->getViewer()->getViewport();
         const auto bounds = getViewportBounds();
-        const auto& cached = rm->getCachedResult();
+        const auto& viewport = gm->getViewer()->getViewport();
+        const glm::ivec2 rendered_size = rm->getRenderedSize();
 
-        const int render_w = cached.image ? static_cast<int>(cached.image->size(2)) : static_cast<int>(viewport.windowSize.x);
-        const int render_h = cached.image ? static_cast<int>(cached.image->size(1)) : static_cast<int>(viewport.windowSize.y);
+        const int render_w = rendered_size.x > 0 ? rendered_size.x : static_cast<int>(viewport.windowSize.x);
+        const int render_h = rendered_size.y > 0 ? rendered_size.y : static_cast<int>(viewport.windowSize.y);
 
         if (bounds.width <= 0 || bounds.height <= 0) {
             return;

@@ -623,13 +623,25 @@ namespace lfs::vis {
             if (!rendering_manager_)
                 return std::nullopt;
 
-            const auto& result = rendering_manager_->getCachedResult();
-            if (!result.valid || !result.image)
+            auto image = rendering_manager_->getViewportImageIfAvailable();
+            if (!image)
                 return std::nullopt;
 
-            return vis::ViewportRender{result.image, result.screen_positions};
+            return vis::ViewportRender{std::move(image), rendering_manager_->getScreenPositions()};
         });
         callback_cleanup_.add([] { vis::set_viewport_render_callback(nullptr); });
+
+        vis::set_capture_viewport_render_callback([this]() -> std::optional<vis::ViewportRender> {
+            if (!rendering_manager_)
+                return std::nullopt;
+
+            auto image = rendering_manager_->captureViewportImage();
+            if (!image)
+                return std::nullopt;
+
+            return vis::ViewportRender{std::move(image), rendering_manager_->getScreenPositions()};
+        });
+        callback_cleanup_.add([] { vis::set_capture_viewport_render_callback(nullptr); });
 
         vis::set_render_settings_callbacks(
             [this]() -> std::optional<vis::RenderSettingsProxy> {

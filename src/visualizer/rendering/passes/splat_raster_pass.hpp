@@ -30,11 +30,6 @@ namespace lfs::vis {
         void renderToTexture(lfs::rendering::RenderingEngine& engine,
                              const FrameContext& ctx, FrameResources& res);
 
-        unsigned int render_fbo_ = 0;
-        unsigned int render_depth_rbo_ = 0;
-        glm::ivec2 texture_size_{0, 0};
-        glm::ivec2 depth_buffer_size_{0, 0};
-
         unsigned long long* d_hovered_depth_id_ = nullptr;
 
         // Async hover readback (1-frame latency)

@@ -11,6 +11,7 @@ namespace lfs::vis {
     struct ViewContextState {
         GetViewCallback view_callback;
         GetViewportRenderCallback viewport_render_callback;
+        CaptureViewportRenderCallback capture_viewport_render_callback;
         GetRenderSettingsCallback get_render_settings_callback;
         SetRenderSettingsCallback set_render_settings_callback;
         SetViewCallback set_view_callback;
@@ -34,6 +35,10 @@ namespace lfs::vis {
         state().viewport_render_callback = std::move(callback);
     }
 
+    void set_capture_viewport_render_callback(CaptureViewportRenderCallback callback) {
+        state().capture_viewport_render_callback = std::move(callback);
+    }
+
     std::optional<ViewInfo> get_current_view_info() {
         const auto& s = state();
         if (!s.view_callback)
@@ -46,6 +51,13 @@ namespace lfs::vis {
         if (!s.viewport_render_callback)
             return std::nullopt;
         return s.viewport_render_callback();
+    }
+
+    std::optional<ViewportRender> capture_viewport_render() {
+        const auto& s = state();
+        if (!s.capture_viewport_render_callback)
+            return std::nullopt;
+        return s.capture_viewport_render_callback();
     }
 
     void set_set_view_callback(SetViewCallback callback) {

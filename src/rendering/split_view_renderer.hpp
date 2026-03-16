@@ -6,6 +6,7 @@
 
 #include "framebuffer.hpp"
 #include "gl_resources.hpp"
+#include "render_target_pool.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_pipeline.hpp"
 #include "shader_manager.hpp"
@@ -23,13 +24,24 @@ namespace lfs::rendering {
 
         Result<RenderResult> render(
             const SplitViewRequest& request,
+            RenderTargetPool& render_target_pool,
+            RenderingPipeline& pipeline,
+            ScreenQuadRenderer& screen_renderer,
+            ManagedShader& quad_shader);
+
+        Result<SplitViewFrameResult> renderGpuFrame(
+            const SplitViewRequest& request,
+            RenderTargetPool& render_target_pool,
             RenderingPipeline& pipeline,
             ScreenQuadRenderer& screen_renderer,
             ManagedShader& quad_shader);
 
     private:
-        std::unique_ptr<FrameBuffer> left_framebuffer_;
-        std::unique_ptr<FrameBuffer> right_framebuffer_;
+        struct SplitViewTargets {
+            std::shared_ptr<FrameBuffer> left;
+            std::shared_ptr<FrameBuffer> right;
+            std::shared_ptr<FrameBuffer> composite;
+        };
 
         ManagedShader split_shader_;
         ManagedShader panel_shader_;
@@ -40,7 +52,8 @@ namespace lfs::rendering {
 
         bool initialized_ = false;
 
-        Result<void> createFramebuffers(int width, int height);
+        Result<SplitViewTargets> acquireTargets(RenderTargetPool& render_target_pool,
+                                                const glm::ivec2& size);
         Result<void> setupQuad();
         Result<void> compositeSplitView(
             GLuint left_texture,
@@ -54,7 +67,7 @@ namespace lfs::rendering {
             bool flip_right_y);
 
         Result<std::optional<RenderingPipeline::RenderResult>> renderPanelContent(
-            FrameBuffer* framebuffer,
+            FrameBuffer& framebuffer,
             const SplitViewPanel& panel,
             const SplitViewRequest& request,
             RenderingPipeline& pipeline,

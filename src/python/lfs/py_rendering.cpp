@@ -23,6 +23,31 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
+    namespace {
+        [[nodiscard]] std::optional<PyViewportRender> toPyViewportRender(
+            const std::optional<vis::ViewportRender>& render,
+            const bool clone_for_async) {
+            if (!render || !render->image)
+                return std::nullopt;
+
+            auto image = clone_for_async ? render->image->clone() : *render->image;
+            image = image.permute({1, 2, 0});
+
+            std::optional<PyTensor> screen_pos;
+            if (render->screen_positions) {
+                auto screen_positions = clone_for_async
+                                            ? render->screen_positions->clone()
+                                            : *render->screen_positions;
+                screen_pos = PyTensor(std::move(screen_positions), true);
+            }
+
+            return PyViewportRender{
+                .image = PyTensor(std::move(image), true),
+                .screen_positions = std::move(screen_pos),
+            };
+        }
+    } // namespace
+
     void set_render_scene_context(core::Scene* scene) {
         set_scene_for_python(scene);
     }
@@ -547,41 +572,11 @@ namespace lfs::python {
     }
 
     std::optional<PyViewportRender> get_viewport_render() {
-        const auto render = vis::get_viewport_render();
-        if (!render || !render->image)
-            return std::nullopt;
-
-        // Image is [3, H, W], permute to [H, W, 3] for Python
-        auto image = render->image->permute({1, 2, 0});
-
-        std::optional<PyTensor> screen_pos;
-        if (render->screen_positions) {
-            screen_pos = PyTensor(*render->screen_positions, true);
-        }
-
-        return PyViewportRender{
-            .image = PyTensor(std::move(image), true),
-            .screen_positions = std::move(screen_pos),
-        };
+        return toPyViewportRender(vis::get_viewport_render(), false);
     }
 
     std::optional<PyViewportRender> capture_viewport() {
-        const auto render = vis::get_viewport_render();
-        if (!render || !render->image)
-            return std::nullopt;
-
-        // Clone tensors for safe async use (independent of render loop)
-        auto image = render->image->clone().permute({1, 2, 0});
-
-        std::optional<PyTensor> screen_pos;
-        if (render->screen_positions) {
-            screen_pos = PyTensor(render->screen_positions->clone(), true);
-        }
-
-        return PyViewportRender{
-            .image = PyTensor(std::move(image), true),
-            .screen_positions = std::move(screen_pos),
-        };
+        return toPyViewportRender(vis::capture_viewport_render(), true);
     }
 
     std::tuple<PyTensor, PyTensor> look_at(const std::tuple<float, float, float>& eye,
@@ -631,10 +626,10 @@ namespace lfs::python {
             .def_ro("screen_positions", &PyViewportRender::screen_positions);
 
         m.def("get_viewport_render", &get_viewport_render,
-              "Get the current viewport's rendered image and screen positions (None if not available)");
+              "Get the current viewport render if a CPU-visible image is already available (does not force GPU readback)");
 
         m.def("capture_viewport", &capture_viewport,
-              "Capture viewport render for async processing (clones data, safe to use from background threads)");
+              "Capture viewport render explicitly (may read back from GPU; clones data, safe to use from background threads)");
 
         m.def("render_view", &render_view, nb::arg("rotation"), nb::arg("translation"), nb::arg("width"), nb::arg("height"),
               nb::arg("fov") = DEFAULT_FOV, nb::arg("bg_color") = nb::none(),

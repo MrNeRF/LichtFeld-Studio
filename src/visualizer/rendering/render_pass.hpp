@@ -10,6 +10,7 @@
 #include "scene/scene_render_state.hpp"
 #include <chrono>
 #include <optional>
+#include <rendering/frame_contract.hpp>
 #include <rendering/rendering.hpp>
 #include <shared_mutex>
 
@@ -62,33 +63,47 @@ namespace lfs::vis {
         int current_camera_id = -1;
         int hovered_gaussian_id = -1;
         float selection_flash_intensity = 0;
-        unsigned int cached_render_texture = 0;
 
-        [[nodiscard]] lfs::rendering::ViewportData makeViewportData() const {
+        [[nodiscard]] lfs::rendering::FrameView makeFrameView() const {
             return {.rotation = viewport.getRotationMatrix(),
                     .translation = viewport.getTranslation(),
                     .size = render_size,
                     .focal_length_mm = settings.focal_length_mm,
+                    .near_plane = lfs::rendering::DEFAULT_NEAR_PLANE,
+                    .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far
+                                                             : lfs::rendering::DEFAULT_FAR_PLANE,
                     .orthographic = settings.orthographic,
-                    .ortho_scale = settings.ortho_scale};
+                    .ortho_scale = settings.ortho_scale,
+                    .background_color = settings.background_color};
+        }
+
+        [[nodiscard]] lfs::rendering::ViewportData makeViewportData() const {
+            const auto frame_view = makeFrameView();
+            return {.rotation = frame_view.rotation,
+                    .translation = frame_view.translation,
+                    .size = frame_view.size,
+                    .focal_length_mm = frame_view.focal_length_mm,
+                    .orthographic = frame_view.orthographic,
+                    .ortho_scale = frame_view.ortho_scale};
         }
     };
 
     // Pass execution order (defined in RenderingManager constructor):
     //   [pre] SplatRasterPass — GT comparison pre-render (before loop, at GT dimensions)
-    //   [0]   SplitViewPass   — Side-by-side views (blocks all downstream if active)
+    //   [0]   SplitViewPass   — Side-by-side views (blocks scene raster passes if active)
     //   [1]   SplatRasterPass — Render splats to offscreen FBO
     //   [2]   PointCloudPass  — Pre-training point cloud (mutually exclusive with splats)
-    //   [3]   PresentPass     — Blit cached splat image to screen
+    //   [3]   PresentPass     — Present cached GPU frame or legacy render result
     //   [4]   MeshPass        — Render meshes, composite with splats
     //   [5]   OverlayPass     — Grid, crop boxes, frustums, pivot, axes
     //
     // Inter-pass coordination flags:
-    //   split_view_executed — Set by SplitViewPass. Skips SplatRaster/PointCloud/Present/Mesh.
+    //   split_view_executed — Set by SplitViewPass. Skips SplatRaster/PointCloud/Mesh.
     //   splats_presented    — Set by PresentPass/PointCloudPass. Tells MeshPass to composite.
     //   splat_pre_rendered  — Set by GT pre-render. Skips SplatRasterPass in the loop.
     struct FrameResources {
         lfs::rendering::RenderResult cached_result;
+        std::optional<lfs::rendering::GpuFrame> cached_gpu_frame;
         glm::ivec2 cached_result_size{0};
         bool render_texture_valid = false;
         bool splats_presented = false;
@@ -111,7 +126,8 @@ namespace lfs::vis {
         [[nodiscard]] virtual const char* name() const = 0;
         [[nodiscard]] virtual DirtyMask sensitivity() const = 0;
 
-        [[nodiscard]] virtual bool shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
+        [[nodiscard]] virtual bool shouldExecute(DirtyMask frame_dirty,
+                                                 const FrameContext& /*ctx*/) const {
             return (frame_dirty & sensitivity()) != 0;
         }
 
