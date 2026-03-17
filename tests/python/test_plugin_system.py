@@ -701,6 +701,15 @@ class TestGitHubUrlParsing:
         )
         assert branch == "develop"
 
+    def test_parse_url_with_at_ref_suffix(self):
+        """Should extract ref from full GitHub URLs using @ref suffix."""
+        from lfs_plugins.installer import parse_github_url
+
+        owner, repo, branch = parse_github_url("https://github.com/owner/repo@feature")
+        assert owner == "owner"
+        assert repo == "repo"
+        assert branch == "feature"
+
     def test_parse_github_shorthand(self):
         """Should parse github:owner/repo shorthand."""
         from lfs_plugins.installer import parse_github_url
@@ -1023,3 +1032,212 @@ required_features = []
         with patch.object(installer, "_get_embedded_python", return_value=None):
             with pytest.raises(PluginDependencyError, match="Bundled Python not found"):
                 installer.ensure_venv()
+
+
+class TestPluginInstallTransports:
+    """Tests for archive-vs-git plugin source acquisition."""
+
+    @staticmethod
+    def _write_plugin(plugin_dir: Path, *, name: str, version: str) -> None:
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            f"""
+[project]
+name = "{name}"
+version = "{version}"
+description = "Transport test plugin"
+dependencies = []
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load():\n    pass\n")
+
+    def test_install_defaults_to_archive_transport(self, temp_plugins_dir):
+        """Direct installs should use archive mode by default."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.installer import PluginSourceInfo, read_plugin_source_metadata
+
+        mgr = PluginManager.instance()
+
+        def fake_prepare(url, staging_parent, on_progress=None):
+            staging = staging_parent / ".archive-plugin-stage"
+            self._write_plugin(staging, name="archive_plugin", version="1.0.0")
+            return staging, PluginSourceInfo(
+                transport="archive",
+                origin=url,
+                github_url="https://github.com/owner/repo",
+                owner="owner",
+                repo="repo",
+            )
+
+        with patch("lfs_plugins.manager.prepare_github_archive", side_effect=fake_prepare) as mock_prepare, \
+             patch("lfs_plugins.manager.clone_from_url") as mock_clone:
+            name = mgr.install("owner/repo", auto_load=False)
+
+        assert name == "archive_plugin"
+        assert mock_prepare.call_count == 1
+        mock_clone.assert_not_called()
+
+        source_info = read_plugin_source_metadata(temp_plugins_dir / "archive_plugin")
+        assert source_info is not None
+        assert source_info.transport == "archive"
+        assert source_info.github_url == "https://github.com/owner/repo"
+
+    def test_install_from_registry_prefers_archive_over_git(self, temp_plugins_dir):
+        """Registry installs should prefer archive downloads even when git refs exist."""
+        from unittest.mock import MagicMock
+        from lfs_plugins import PluginManager
+        from lfs_plugins.registry import RegistryVersionInfo
+
+        mgr = PluginManager.instance()
+        mgr._registry = MagicMock()
+        mgr._registry.resolve_version.return_value = RegistryVersionInfo(
+            version="1.2.0",
+            plugin_api=">=1,<2",
+            lichtfeld_version=">=0.4.2",
+            checksum="sha256:abc123",
+            download_url="https://example.com/archive.tar.gz",
+            git_ref="v1.2.0",
+        )
+        mgr._registry.get_plugin.return_value = {
+            "repository": "https://github.com/lichtfeld/lichtfeld-plugin-colmap",
+        }
+        mgr._registry.verify_checksum.return_value = True
+
+        def fake_archive(download_url, staging_parent, **kwargs):
+            staging = staging_parent / ".registry-plugin-stage"
+            self._write_plugin(staging, name="colmap", version="1.2.0")
+            return staging
+
+        with patch("lfs_plugins.manager.prepare_archive_from_download_url", side_effect=fake_archive) as mock_archive, \
+             patch("lfs_plugins.manager.clone_from_url") as mock_clone:
+            name = mgr.install_from_registry("lichtfeld:colmap", auto_load=False)
+
+        assert name == "colmap"
+        assert mock_archive.call_count == 1
+        mock_clone.assert_not_called()
+
+    def test_install_from_registry_git_writes_registry_metadata_once(self, temp_plugins_dir):
+        """Registry git installs should record enriched source metadata in a single write."""
+        from unittest.mock import MagicMock
+        from lfs_plugins import PluginManager
+        from lfs_plugins.installer import read_plugin_source_metadata, write_plugin_source_metadata
+        from lfs_plugins.registry import RegistryVersionInfo
+
+        mgr = PluginManager.instance()
+        mgr._registry = MagicMock()
+        mgr._registry.resolve_version.return_value = RegistryVersionInfo(
+            version="1.2.0",
+            plugin_api=">=1,<2",
+            lichtfeld_version=">=0.4.2",
+            git_ref="v1.2.0",
+        )
+        mgr._registry.get_plugin.return_value = {
+            "repository": "https://github.com/lichtfeld/lichtfeld-plugin-colmap",
+        }
+
+        plugin_dir = temp_plugins_dir / "colmap"
+        self._write_plugin(plugin_dir, name="colmap", version="1.2.0")
+
+        with patch("lfs_plugins.manager.clone_from_url", return_value=plugin_dir) as mock_clone, \
+             patch("lfs_plugins.manager.write_plugin_source_metadata", wraps=write_plugin_source_metadata) as mock_write:
+            name = mgr.install_from_registry("lichtfeld:colmap", auto_load=False, transport="git")
+
+        assert name == "colmap"
+        mock_clone.assert_called_once_with(
+            "https://github.com/lichtfeld/lichtfeld-plugin-colmap@v1.2.0",
+            temp_plugins_dir,
+            None,
+        )
+        assert mock_write.call_count == 1
+
+        source_info = read_plugin_source_metadata(plugin_dir)
+        assert source_info is not None
+        assert source_info.transport == "git"
+        assert source_info.registry_id == "lichtfeld:colmap"
+        assert source_info.version == "1.2.0"
+        assert source_info.requested_ref == "v1.2.0"
+
+    def test_update_uses_archive_metadata_without_git(self, temp_plugins_dir):
+        """Archive-installed plugins should update through archive re-download, not git."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.installer import PluginSourceInfo, read_plugin_source_metadata, write_plugin_source_metadata
+
+        mgr = PluginManager.instance()
+        plugin_dir = temp_plugins_dir / "archive_plugin"
+        self._write_plugin(plugin_dir, name="archive_plugin", version="1.0.0")
+        (plugin_dir / ".venv").mkdir()
+        write_plugin_source_metadata(
+            plugin_dir,
+            PluginSourceInfo(
+                transport="archive",
+                origin="https://github.com/owner/repo",
+                github_url="https://github.com/owner/repo",
+                owner="owner",
+                repo="repo",
+            ),
+        )
+
+        def fake_prepare(url, staging_parent, on_progress=None):
+            staging = staging_parent / ".archive-plugin-update"
+            self._write_plugin(staging, name="archive_plugin", version="1.1.0")
+            return staging, PluginSourceInfo(
+                transport="archive",
+                origin=url,
+                github_url="https://github.com/owner/repo",
+                owner="owner",
+                repo="repo",
+            )
+
+        with patch("lfs_plugins.manager.prepare_github_archive", side_effect=fake_prepare) as mock_prepare, \
+             patch("lfs_plugins.manager.update_plugin") as mock_git_update:
+            assert mgr.update("archive_plugin") is True
+
+        assert mock_prepare.call_count == 1
+        mock_git_update.assert_not_called()
+        discovered = mgr.discover()
+        assert len(discovered) == 1
+        assert discovered[0].version == "1.1.0"
+        assert (plugin_dir / ".venv").exists()
+
+        source_info = read_plugin_source_metadata(plugin_dir)
+        assert source_info is not None
+        assert source_info.transport == "archive"
+
+    def test_download_url_to_temp_cleans_up_temp_file_on_copy_failure(self, temp_plugins_dir):
+        """Download helper should delete its temp file when copying the response fails."""
+        import io
+
+        from lfs_plugins.installer import _download_url_to_temp
+
+        created_paths = []
+        real_named_temporary_file = tempfile.NamedTemporaryFile
+
+        class _Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.close()
+                return False
+
+        def tracking_named_temporary_file(*args, **kwargs):
+            kwargs.setdefault("dir", temp_plugins_dir)
+            tmp = real_named_temporary_file(*args, **kwargs)
+            created_paths.append(Path(tmp.name))
+            return tmp
+
+        with patch("lfs_plugins.installer.urllib.request.urlopen", return_value=_Response(b"payload")), \
+             patch("lfs_plugins.installer.tempfile.NamedTemporaryFile", side_effect=tracking_named_temporary_file), \
+             patch("lfs_plugins.installer.shutil.copyfileobj", side_effect=RuntimeError("copy failed")):
+            with pytest.raises(RuntimeError, match="copy failed"):
+                _download_url_to_temp("https://example.com/plugin.tar.gz")
+
+        assert len(created_paths) == 1
+        assert not created_paths[0].exists()

@@ -3,7 +3,7 @@
 """Edit menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_action
+from .layouts.menus import register_menu, menu_action, menu_separator
 
 
 @register_menu
@@ -27,6 +27,11 @@ class EditMenu:
                 lf.undo.redo,
                 shortcut="Ctrl+Shift+Z",
                 enabled=lf.undo.can_redo(),
+            ),
+            menu_separator(),
+            menu_action(
+                lf.ui.tr("menu.edit.input_settings"),
+                lambda: lf.ui.set_panel_enabled("lfs.input_settings", True),
             ),
         ]
 

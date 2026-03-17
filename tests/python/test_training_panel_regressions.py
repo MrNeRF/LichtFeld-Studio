@@ -3,6 +3,7 @@
 """Regression tests for retained training panel status bindings."""
 
 from importlib import import_module
+import json
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import sys
@@ -35,6 +36,18 @@ def _install_lf_stub(monkeypatch):
     lf_stub.get_render_settings = lambda: None
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return lf_stub
+
+
+def test_bundled_locales_define_training_panel_strategy_and_color_keys():
+    project_root = Path(__file__).parent.parent.parent
+    locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
+
+    for locale_path in locale_dir.glob("*.json"):
+        data = json.loads(locale_path.read_text())
+        assert data["training"]["options.strategy.igs_plus"] == "IGS+"
+        assert data["training_panel"]["color_red_prefix"] == "R:"
+        assert data["training_panel"]["color_green_prefix"] == "G:"
+        assert data["training_panel"]["color_blue_prefix"] == "B:"
 
 
 @pytest.fixture

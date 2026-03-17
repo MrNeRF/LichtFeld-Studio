@@ -123,7 +123,8 @@
     padding: 8dp;
     display: flex;
     flex-direction: column;
-    transition: border-color background-color 0.15s quadratic-out;
+    transition: background-color 0.18s quadratic-out;
+    background-color: transparent;
 }
 
 .plugin-card--placeholder {
@@ -147,8 +148,7 @@
 }
 
 .plugin-card:hover {
-    border-color: #89b4fa;
-    background-color: #313244;
+    background-color: rgba(137, 180, 250, 24);
 }
 
 .plugin-card.card--in-progress { border-color: #89b4fa; }
@@ -231,7 +231,8 @@
     padding: 2dp 4dp;
 }
 
-.card-startup-row {
+.card-startup-row,
+.card-git-row {
     display: flex;
     align-items: center;
     margin-top: 4dp;

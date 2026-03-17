@@ -291,12 +291,17 @@ progress fill {
 }
 
 /* ── Setting Row Layout ─────────────────────────────────── */
+/* Training and rendering row typography must stay unified.
+ * Keep shared label/control text styling here instead of per-panel RCSS. */
 
 .setting-row {
     display: flex;
     align-items: center;
+    gap: 6dp;
     padding: 2dp 0;
     min-height: 22dp;
+    min-width: 0;
+    width: 100%;
 }
 
 .setting-label {
@@ -306,13 +311,35 @@ progress fill {
     font-size: 12dp;
 }
 
-.prop-label {
-    min-width: 80dp;
-    text-align: left;
-    font-size: 12dp;
+.setting-row > select,
+.setting-row > input[type="text"],
+.setting-row > .number-input,
+.setting-row > .text-disabled,
+.setting-row > chromaticity-diagram,
+.setting-row > crf-curve {
+    flex: 1;
+    min-width: 0;
+}
+
+.setting-row > input[type="checkbox"] {
+    margin: 0;
+}
+
+.prop-label,
+.setting-row__label-col {
+    width: 120dp;
+    min-width: 120dp;
     color: #cdd6f4;
-    margin-left: 4dp;
+    font-size: 12dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     flex-shrink: 0;
+}
+
+.prop-label {
+    text-align: left;
+    margin-left: 0;
 }
 
 .setting-slider {
@@ -343,6 +370,166 @@ progress fill {
     color: #a6adc8;
     margin-left: 4dp;
     flex-shrink: 0;
+}
+
+/* ── Structured Setting Grid ───────────────────────────── */
+
+.setting-group {
+    margin-bottom: 10dp;
+}
+
+.setting-group:last-child {
+    margin-bottom: 0;
+}
+
+.setting-row--aligned {
+    min-width: 0;
+}
+
+.setting-row__label-col {
+    margin-right: 10dp;
+}
+
+.setting-row__control-col {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+}
+
+.setting-row__control-col--checkbox > input[type="checkbox"] {
+    margin: 0;
+}
+
+.setting-row__control-col--fill > select,
+.setting-row__control-col--fill > input[type="text"],
+.setting-row__control-col--fill > .number-input,
+.setting-row__control-col--fill > .text-disabled,
+.setting-row__control-col--fill > .scrub-field,
+.setting-row__control-col--fill > .m2s-chip-list {
+    flex: 1;
+    min-width: 0;
+}
+
+.setting-row__control-col--slider > .setting-slider {
+    flex: 1;
+    min-width: 0;
+    margin-top: 0;
+    position: static;
+    top: auto;
+}
+
+.setting-row__control-col--slider > .slider-value {
+    width: 48dp;
+    min-width: 48dp;
+    margin-left: 8dp;
+    text-align: right;
+}
+
+.setting-row__control-col--slider > .scrub-field {
+    flex: 1;
+    width: auto;
+    min-width: 90dp;
+}
+
+.setting-row__control-col--color {
+    gap: 4dp;
+}
+
+.setting-row__control-col--color > .color-comp {
+    width: 38dp;
+    min-width: 38dp;
+    margin-right: 0;
+    flex: 0 0 auto;
+}
+
+.setting-row__control-col--color > .color-swatch {
+    margin-right: 2dp;
+}
+
+/* ── Scrub Field ───────────────────────────────────────── */
+
+.scrub-field {
+    position: relative;
+    overflow: hidden;
+    width: 90dp;
+    min-width: 90dp;
+    min-height: 18dp;
+    padding: 0 6dp;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    decorator: vertical-gradient(#3a3c52 #2c2d3e);
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    border-radius: 6dp;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    cursor: ew-resize;
+    transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
+}
+
+.scrub-field:hover,
+.scrub-field.is-dragging,
+.scrub-field.is-editing {
+    border-color: #89b4fa;
+}
+
+.scrub-field.is-editing {
+    cursor: text;
+}
+
+.scrub-field-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    decorator: horizontal-gradient(rgba(116,168,249,110) rgba(137,180,250,140));
+    background-color: rgba(137, 180, 250, 90);
+    border-radius: 5dp;
+}
+
+.scrub-field-display,
+.scrub-field-input {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    text-align: right;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    color: #cdd6f4;
+}
+
+.scrub-field-display {
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.scrub-field-input {
+    display: none;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    background-color: transparent;
+    border-width: 0;
+    box-shadow: none;
+}
+
+.scrub-field.is-editing .scrub-field-display {
+    display: none;
+}
+
+.scrub-field.is-editing .scrub-field-input {
+    display: block;
+}
+
+.scrub-field-input:focus,
+.scrub-field-input:focus-visible {
+    border-width: 0;
+    box-shadow: none;
 }
 
 /* ── Collapsible Section ────────────────────────────────── */
@@ -383,6 +570,18 @@ progress fill {
 .section-header:hover .section-arrow,
 .section-header.is-expanded .section-arrow {
     color: #f5f7ff;
+}
+
+.section-header.text-accent,
+.section-header.text-accent:hover,
+.section-header.text-accent.is-expanded {
+    color: #89b4fa;
+}
+
+.section-header .section-arrow.text-accent,
+.section-header:hover .section-arrow.text-accent,
+.section-header.is-expanded .section-arrow.text-accent {
+    color: #89b4fa;
 }
 
 .section-arrow.is-expanded {
@@ -716,7 +915,8 @@ progress fill {
 }
 
 .indent {
-    margin-left: 20dp;
+    /* Keep conditional child rows flat; grouping should come from headers or separators. */
+    margin-left: 0;
 }
 
 .text-disabled {

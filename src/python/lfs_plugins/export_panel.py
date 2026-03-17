@@ -8,6 +8,7 @@ from enum import IntEnum
 
 import lichtfeld as lf
 from . import rml_widgets
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 
 
@@ -24,6 +25,10 @@ FORMAT_INFO = (
     (ExportFormat.SPZ, "export.format.spz_niantic"),
     (ExportFormat.HTML_VIEWER, "export.format.html_viewer"),
 )
+
+SCRUB_FIELD_DEFS = {
+    "sh_degree": ScrubFieldSpec(0.0, 3.0, 1.0, "%d", data_type=int),
+}
 
 
 def _xml_unescape(text):
@@ -53,6 +58,11 @@ class ExportPanel(Panel):
         self._progress_value = "0"
         self._has_models = False
         self._cached_export_state = {}
+        self._scrub_fields = ScrubFieldController(
+            SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
 
     # ── Data model ────────────────────────────────────────────
 
@@ -98,6 +108,14 @@ class ExportPanel(Panel):
         self._export_sh_degree = degree
         self._dirty_model("sh_degree")
 
+    def _get_scrub_value(self, prop):
+        del prop
+        return self._export_sh_degree
+
+    def _set_scrub_value(self, prop, value):
+        del prop
+        self._set_sh_degree(value)
+
     # ── Lifecycle ─────────────────────────────────────────────
 
     def on_mount(self, doc):
@@ -132,15 +150,19 @@ class ExportPanel(Panel):
 
         self._rebuild_format_records()
         self._rebuild_model_records(self._get_splat_nodes())
+        self._scrub_fields.mount(doc)
 
     def on_update(self, doc):
         if self._exporting:
-            return self._update_export_progress()
+            dirty = self._update_export_progress()
+            dirty |= self._scrub_fields.sync_all()
+            return dirty
 
         if self._last_progress >= 0.0:
             self._last_progress = -1.0
             self._progress_value = "0"
             self._dirty_model("show_form", "show_progress")
+            self._scrub_fields.sync_all()
             return True
 
         dirty = False
@@ -166,10 +188,16 @@ class ExportPanel(Panel):
             self._dirty_model("show_no_models", "can_export")
             dirty = True
 
+        dirty |= self._scrub_fields.sync_all()
         return dirty
 
     def on_scene_changed(self, doc):
         self._last_node_key = None
+
+    def on_unmount(self, doc):
+        doc.remove_data_model("export")
+        self._handle = None
+        self._scrub_fields.unmount()
 
     # ── Helpers ──────────────────────────────────────────────
 

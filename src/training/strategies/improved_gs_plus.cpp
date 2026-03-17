@@ -14,6 +14,7 @@
 #include "io/pipelined_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
+#include "kernels/mcmc_kernels.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
 #include <numeric>
@@ -24,6 +25,8 @@ namespace lfs::training {
     namespace {
         constexpr uint32_t IGS_PLUS_MAGIC = 0x4C464947; // "LFIG"
         constexpr uint32_t IGS_PLUS_VERSION = 1;
+        constexpr int64_t ERROR_CANDIDATE_FACTOR = 4;
+        constexpr float EDGE_SCORE_WEIGHT = 0.25f;
 
         // Returns true if shape has any zero dimension (e.g., ShN at sh-degree 0)
         [[nodiscard]] inline bool has_zero_dimension(const lfs::core::TensorShape& shape) {
@@ -101,6 +104,12 @@ namespace lfs::training {
             float median = sorted[valid.numel() / 2].item_as<float>();
             tensor.div_(std::max(median, 1e-9f));
         }
+
+        lfs::core::Tensor normalized_by_positive_median(const lfs::core::Tensor& tensor) {
+            auto normalized = tensor.clone();
+            normalize_by_positive_median_inplace(normalized);
+            return normalized;
+        }
     } // namespace
 
     ImprovedGSPlus::ImprovedGSPlus(lfs::core::SplatData& splat_data)
@@ -145,7 +154,7 @@ namespace lfs::training {
         const double gamma = std::pow(0.1, 1.0 / optimParams.iterations);
         _scheduler = std::make_unique<ExponentialLR>(*_optimizer, gamma, std::vector<ParamType>{ParamType::Means, ParamType::Scaling});
 
-        // Initialize densification info: [2, N] tensor for tracking gradients
+        // Initialize densification info: [2, N] tensor for tracking per-view densification statistics
         _splat_data->_densification_info = lfs::core::Tensor::zeros(
             {2, static_cast<size_t>(_splat_data->size())},
             _splat_data->means().device());
@@ -159,9 +168,10 @@ namespace lfs::training {
         this->_current_step = 0;
 
         this->_budget_schedule = get_count_array();
+        ensure_error_score_shape();
     }
 
-    const lfs::core::Tensor ImprovedGSPlus::compute_gaussian_score(const lfs::core::Tensor& gradients) {
+    const lfs::core::Tensor ImprovedGSPlus::compute_gaussian_score() {
         const int64_t N = _splat_data->size();
 
         auto view_indices = random_cam_indices();
@@ -207,40 +217,75 @@ namespace lfs::training {
         return gaussian_scores;
     }
 
-    void ImprovedGSPlus::densify_with_score(const lfs::core::Tensor& scores, const lfs::core::Tensor& grads, const int64_t budget) {
-        // Get Number of Gaussians to densify
-        const lfs::core::Tensor grad_qualifiers = lfs::core::Tensor::where(grads >= _params->grad_threshold,
-                                                                           lfs::core::Tensor::ones({1}), lfs::core::Tensor::zeros({1}))
-                                                      .to(lfs::core::DataType::Bool);
-
-        const int total_grads = static_cast<int>(grad_qualifiers.sum_scalar());
-
-        // Budget allocation
-        const int64_t curr_points = _splat_data->size();
-        //  budget caps
-        const int64_t curr_budget = std::min(budget, curr_points + total_grads);
-        const int64_t budget_for_alloc = curr_budget - curr_points;
-
-        if (budget_for_alloc > 0) {
-            LAS_densify(scores, budget_for_alloc, grad_qualifiers, grads);
+    void ImprovedGSPlus::ensure_error_score_shape() {
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_error_score_max.is_valid() ||
+            _error_score_max.ndim() != 1 ||
+            _error_score_max.numel() != n) {
+            _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
         }
     }
 
-    void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc, const lfs::core::Tensor& grad_mask, const lfs::core::Tensor& grads) {
-
-        lfs::core::Tensor scores_masked;
-
-        if (_current_step < 3) {
-            scores_masked = scores;
-        } else {
-            const lfs::core::Tensor LAS_grad_mask = lfs::core::Tensor::where(grads >= 0.00004,
-                                                                             lfs::core::Tensor::ones({1}), lfs::core::Tensor::zeros({1}))
-                                                        .to(lfs::core::DataType::Bool);
-
-            scores_masked = scores.masked_fill(~LAS_grad_mask, 0);
+    void ImprovedGSPlus::densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget) {
+        const int64_t curr_points = static_cast<int64_t>(active_count());
+        const int64_t budget_for_alloc = std::max<int64_t>(0, budget - curr_points);
+        if (budget_for_alloc <= 0) {
+            return;
         }
 
-        const lfs::core::Tensor sampled_idxs = lfs::core::Tensor::multinomial(scores_masked, budget_for_alloc, false);
+        const auto active_indices = get_active_indices();
+        const int64_t total_active = static_cast<int64_t>(active_indices.numel());
+        if (total_active == 0) {
+            return;
+        }
+
+        const int64_t candidate_budget = std::min<int64_t>(
+            total_active,
+            std::max<int64_t>(budget_for_alloc, budget_for_alloc * ERROR_CANDIDATE_FACTOR));
+
+        const auto normalized_error = normalized_by_positive_median(error_scores);
+        const auto normalized_edge = normalized_by_positive_median(edge_scores);
+        const auto device = _splat_data->means().device();
+
+        auto active_mask = lfs::core::Tensor::zeros_bool({static_cast<size_t>(_splat_data->size())}, device);
+        auto true_vals = lfs::core::Tensor::ones_bool({static_cast<size_t>(active_indices.numel())}, device);
+        active_mask.index_put_(active_indices, true_vals);
+
+        lfs::core::Tensor candidate_mask = active_mask;
+        if (candidate_budget < total_active) {
+            const auto active_error = normalized_error.index_select(0, active_indices);
+            auto [sorted_error, _] = active_error.sort(0, true);
+            const float threshold = sorted_error[candidate_budget - 1].item_as<float>();
+            candidate_mask = active_mask.logical_and(normalized_error >= threshold);
+        }
+
+        auto sampling_scores = normalized_error * (normalized_edge * EDGE_SCORE_WEIGHT + 1.0f);
+        sampling_scores = sampling_scores.masked_fill(~candidate_mask, 0.0f);
+
+        int64_t selectable = static_cast<int64_t>(sampling_scores.count_nonzero());
+        if (selectable < budget_for_alloc) {
+            auto edge_fallback = normalized_edge.masked_fill(~active_mask, 0.0f);
+            selectable = static_cast<int64_t>(edge_fallback.count_nonzero());
+            if (selectable > 0) {
+                sampling_scores = std::move(edge_fallback);
+            } else {
+                auto active_weights = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, device);
+                auto active_weight_vals = lfs::core::Tensor::ones({static_cast<size_t>(active_indices.numel())}, device);
+                active_weights.index_put_(active_indices, active_weight_vals);
+                sampling_scores = std::move(active_weights);
+                selectable = total_active;
+            }
+        }
+
+        if (selectable <= 0) {
+            return;
+        }
+
+        LAS_densify(sampling_scores.clamp_min(1e-12f), std::min<int64_t>(budget_for_alloc, selectable));
+    }
+
+    void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
+        const lfs::core::Tensor sampled_idxs = lfs::core::Tensor::multinomial(scores, budget_for_alloc, false);
 
         LOG_DEBUG("split(): {} Gaussians to long axis split", budget_for_alloc);
 
@@ -409,11 +454,7 @@ namespace lfs::training {
 
         assert(_views && "set_views() must be called before training");
 
-        const lfs::core::Tensor numer = _splat_data->_densification_info[1];
-        const lfs::core::Tensor denom = _splat_data->_densification_info[0];
-        _precomputed_grads = numer / denom.clamp_min(1.0f);
-
-        _precomputed_scores = compute_gaussian_score(_precomputed_grads);
+        _precomputed_scores = compute_gaussian_score();
         _precompute_valid = true;
     }
 
@@ -427,10 +468,33 @@ namespace lfs::training {
             return;
         }
 
+        {
+            const size_t n = static_cast<size_t>(_splat_data->size());
+            const auto& info = _splat_data->_densification_info;
+            if (!info.is_valid() || info.ndim() != 2 || info.shape()[0] < 2 || info.shape()[1] != n) {
+                _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            }
+            ensure_error_score_shape();
+
+            const auto& accum = _splat_data->_densification_info;
+            if (accum.is_valid() &&
+                accum.ndim() == 2 &&
+                accum.shape()[0] >= 2 &&
+                accum.shape()[1] == _error_score_max.numel()) {
+                const float* error_row = accum.ptr<float>() + accum.shape()[1];
+                lfs::training::mcmc::launch_elementwise_max_inplace(
+                    _error_score_max.ptr<float>(),
+                    error_row,
+                    _error_score_max.numel());
+            }
+
+            _splat_data->_densification_info.zero_();
+        }
+
         if (is_refining(iter)) {
             assert(_precompute_valid);
 
-            densify_with_score(_precomputed_scores, _precomputed_grads, get_current_budget());
+            densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
 
             opacity_prune(iter);
 
@@ -439,11 +503,12 @@ namespace lfs::training {
             _splat_data->_densification_info = lfs::core::Tensor::zeros(
                 {2, static_cast<size_t>(_splat_data->size())},
                 _splat_data->means().device());
+            ensure_error_score_shape();
+            _error_score_max.zero_();
 
             this->_current_step++;
 
             _precomputed_scores = lfs::core::Tensor();
-            _precomputed_grads = lfs::core::Tensor();
             _precompute_valid = false;
         }
 
@@ -453,6 +518,7 @@ namespace lfs::training {
 
         if (iter == _params->stop_refine) {
             _splat_data->_densification_info = lfs::core::Tensor::empty({0});
+            _error_score_max = lfs::core::Tensor::empty({0});
 
             lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         }
@@ -489,6 +555,51 @@ namespace lfs::training {
             _optimizer->reserve_capacity(capacity);
             LOG_INFO("Reserved optimizer capacity for {} Gaussians", capacity);
         }
+    }
+
+    size_t ImprovedGSPlus::active_count() const {
+        if (!_free_mask.is_valid()) {
+            return static_cast<size_t>(_splat_data->size());
+        }
+
+        const size_t current_size = static_cast<size_t>(_splat_data->size());
+        if (current_size == 0) {
+            return 0;
+        }
+
+        auto active_region = _free_mask.slice(0, 0, current_size);
+        const auto free_count_val = static_cast<size_t>(active_region.sum_scalar());
+        return current_size - free_count_val;
+    }
+
+    size_t ImprovedGSPlus::free_count() const {
+        if (!_free_mask.is_valid()) {
+            return 0;
+        }
+
+        const size_t current_size = static_cast<size_t>(_splat_data->size());
+        if (current_size == 0) {
+            return 0;
+        }
+
+        auto active_region = _free_mask.slice(0, 0, current_size);
+        return static_cast<size_t>(active_region.sum_scalar());
+    }
+
+    lfs::core::Tensor ImprovedGSPlus::get_active_indices() const {
+        const size_t current_size = static_cast<size_t>(_splat_data->size());
+        if (current_size == 0) {
+            return lfs::core::Tensor();
+        }
+
+        if (!_free_mask.is_valid() || free_count() == 0) {
+            auto all_active = lfs::core::Tensor::ones_bool({current_size}, _splat_data->means().device());
+            return all_active.nonzero().squeeze(-1);
+        }
+
+        auto active_region = _free_mask.slice(0, 0, current_size);
+        auto is_active = active_region.logical_not();
+        return is_active.nonzero().squeeze(-1);
     }
 
     std::vector<int> ImprovedGSPlus::random_cam_indices(const int N) const {
@@ -598,6 +709,11 @@ namespace lfs::training {
         zero_optimizer_state(ParamType::ShN);
         zero_optimizer_state(ParamType::Opacity);
 
+        if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() >= _splat_data->size()) {
+            auto zeros = lfs::core::Tensor::zeros({static_cast<size_t>(num_pruned)}, _error_score_max.device());
+            _error_score_max.index_put_(prune_indices, zeros);
+        }
+
         LOG_DEBUG("remove(): soft-deleted {} Gaussians (marked as free, rotation & gradients zeroed)", num_pruned);
     }
 
@@ -682,6 +798,11 @@ namespace lfs::training {
         auto false_vals = lfs::core::Tensor::zeros_bool({static_cast<size_t>(slots_to_fill)}, target_indices.device());
         _free_mask.index_put_(target_indices, false_vals);
 
+        if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() >= current_size) {
+            auto zeros = lfs::core::Tensor::zeros({static_cast<size_t>(slots_to_fill)}, _error_score_max.device());
+            _error_score_max.index_put_(target_indices, zeros);
+        }
+
         return {target_indices, count - slots_to_fill};
     }
 
@@ -752,8 +873,8 @@ namespace lfs::training {
             const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
                                                          : static_cast<size_t>(_splat_data->size());
             _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
-            _precomputed_grads = lfs::core::Tensor();
             _precomputed_scores = lfs::core::Tensor();
+            _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
             _precompute_valid = false;
             _current_step = 0;
             _budget_schedule = get_count_array();
@@ -801,8 +922,8 @@ namespace lfs::training {
             _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
         }
 
-        _precomputed_grads = lfs::core::Tensor();
         _precomputed_scores = lfs::core::Tensor();
+        _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
         _precompute_valid = false;
 
         LOG_DEBUG("Deserialized ImprovedGSPlus (version {})", version);

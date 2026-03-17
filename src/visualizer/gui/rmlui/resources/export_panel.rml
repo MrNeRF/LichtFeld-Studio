@@ -50,10 +50,12 @@
 
       <!-- SH Degree -->
       <div class="ep-section">
-        <span class="ep-section-title">@tr:export_dialog.sh_degree</span>
-        <div class="setting-row">
-          <input type="range" class="setting-slider" data-value="sh_degree" min="0" max="3" step="1" />
-          <span class="slider-value">{{sh_degree}}</span>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.sh_degree</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="sh_degree" min="0" max="3" step="1" />
+            <span class="slider-value">{{sh_degree}}</span>
+          </div>
         </div>
       </div>
 

@@ -6,7 +6,14 @@ import math
 
 import lichtfeld as lf
 
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+
+
+def tr(key):
+    result = lf.ui.tr(key)
+    return result if result else key
+
 
 SENSOR_HALF_HEIGHT_MM = 12.0
 
@@ -27,6 +34,26 @@ SLIDER_PROPS = [
     "ppisp_crf_toe", "ppisp_crf_shoulder",
 ]
 
+SCRUB_FIELD_DEFS = {
+    "axes_size": ScrubFieldSpec(0.5, 10.0, 0.01, "%.3f"),
+    "grid_opacity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
+    "camera_frustum_scale": ScrubFieldSpec(0.01, 10.0, 0.01, "%.3f"),
+    "voxel_size": ScrubFieldSpec(0.001, 0.1, 0.001, "%.3f"),
+    "focal_length_mm": ScrubFieldSpec(10.0, 200.0, 0.1, "%.1f"),
+    "render_scale": ScrubFieldSpec(0.25, 1.0, 0.01, "%.2f"),
+    "mesh_wireframe_width": ScrubFieldSpec(0.5, 5.0, 0.01, "%.2f"),
+    "mesh_light_intensity": ScrubFieldSpec(0.0, 5.0, 0.01, "%.2f"),
+    "mesh_ambient": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+    "ppisp_exposure": ScrubFieldSpec(-3.0, 3.0, 0.01, "%.2f"),
+    "ppisp_vignette_strength": ScrubFieldSpec(0.0, 2.0, 0.01, "%.2f"),
+    "ppisp_gamma_multiplier": ScrubFieldSpec(0.5, 2.5, 0.01, "%.2f"),
+    "ppisp_gamma_red": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
+    "ppisp_gamma_green": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
+    "ppisp_gamma_blue": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
+    "ppisp_crf_toe": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
+    "ppisp_crf_shoulder": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
+}
+
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "mesh_shadow_resolution",
 ]
@@ -44,6 +71,15 @@ COLOR_PROPS = [
     "selection_color_center_marker",
     "mesh_wireframe_color",
 ]
+
+SECTION_NAMES = (
+    "viewport",
+    "camera",
+    "selection",
+    "mesh",
+    "post_process",
+    "ppisp_crf",
+)
 
 LOCALE_KEY = {
     "show_coord_axes": "main_panel.show_coord_axes",
@@ -95,12 +131,19 @@ def _prop_label(prop_id):
     if key:
         label = lf.ui.tr(key)
         if label:
-            return label
+            return _entry_label(label)
     s = lf.get_render_settings()
     if s:
         info = s.prop_info(prop_id)
-        return info.get("name", prop_id)
-    return prop_id
+        return _entry_label(info.get("name", prop_id))
+    return _entry_label(prop_id)
+
+
+def _entry_label(text: str) -> str:
+    text = str(text).strip()
+    if not text:
+        return ":"
+    return text if text.endswith(":") else f"{text}:"
 
 
 def _color_to_hex(c):
@@ -129,20 +172,35 @@ class RenderingPanel(Panel):
     def __init__(self):
         self._handle = None
         self._color_edit_prop = None
-        self._collapsed = {"selection_colors", "mesh", "ppisp_crf"}
+        self._collapsed = {"selection", "mesh", "post_process", "ppisp_crf"}
         self._popup_el = None
         self._doc = None
         self._picker_click_handled = False
         self._last_swatch_colors = {}
+        self._last_panel_label = ""
+        self._scrub_fields = ScrubFieldController(
+            SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
+
+    def _sync_panel_label(self):
+        label = tr("window.rendering")
+        if not label or label == self._last_panel_label:
+            return
+        if lf.ui.set_panel_label(self.id, label):
+            self._last_panel_label = label
 
     def on_mount(self, doc):
         self._doc = doc
+        self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
             self._popup_el.add_event_listener("click", self._on_popup_click)
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)
+        self._scrub_fields.mount(doc)
         self._sync_section_states()
 
     def on_bind_model(self, ctx):
@@ -194,12 +252,21 @@ class RenderingPanel(Panel):
         model.bind_func("ppisp_auto",
                          lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
 
-        model.bind_func("label_hdr_selection_colors",
-                         lambda: lf.ui.tr("main_panel.selection_colors") or "Selection Colors")
+        model.bind_func("label_panel_title",
+                         lambda: lf.ui.tr("rendering") or "Rendering")
+        model.bind_func("label_hdr_viewport",
+                         lambda: "Viewport")
+        model.bind_func("label_hdr_camera",
+                         lambda: "Camera & Projection")
+        model.bind_func("label_hdr_selection",
+                         lambda: "Selection & Overlays")
         model.bind_func("label_hdr_mesh",
                          lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
+        model.bind_func("label_hdr_post_process",
+                         lambda: "Post Processing")
         model.bind_func("label_ppisp_color_balance",
-                         lambda: lf.ui.tr("main_panel.ppisp_color_balance") or "Color Correction")
+                         lambda: _entry_label(
+                             lf.ui.tr("main_panel.ppisp_color_balance") or "Color Correction"))
         model.bind_func("label_ppisp_crf",
                          lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF")
 
@@ -227,8 +294,10 @@ class RenderingPanel(Panel):
                          lambda h, e, a: lf.ui.toggle_system_console())
 
         self._handle = model.get_handle()
+        self._sync_panel_label()
 
     def on_update(self, doc):
+        self._sync_panel_label()
         s = lf.get_render_settings()
         if not s:
             return False
@@ -244,6 +313,7 @@ class RenderingPanel(Panel):
             if swatch:
                 swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
                 dirty = True
+        dirty |= self._scrub_fields.sync_all()
         return dirty
 
     def on_scene_changed(self, doc):
@@ -255,6 +325,24 @@ class RenderingPanel(Panel):
         self._handle = None
         self._popup_el = None
         self._doc = None
+        self._scrub_fields.unmount()
+
+    def _get_scrub_value(self, prop):
+        settings = lf.get_render_settings()
+        if not settings:
+            spec = SCRUB_FIELD_DEFS[prop]
+            return spec.min_value
+        return float(getattr(settings, prop, 0.0))
+
+    def _set_scrub_value(self, prop, value):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+        setattr(settings, prop, float(value))
+        if self._handle:
+            self._handle.dirty(prop)
+            if prop == "focal_length_mm":
+                self._handle.dirty("fov_display")
 
     def _set_color_hex(self, prop_id, hex_val):
         s = lf.get_render_settings()
@@ -290,7 +378,7 @@ class RenderingPanel(Panel):
     def _sync_section_states(self):
         from . import rml_widgets as w
 
-        for name in ("selection_colors", "mesh", "ppisp_crf"):
+        for name in SECTION_NAMES:
             header, arrow, content = self._get_section_elements(name)
             if content:
                 w.sync_section_state(content, name not in self._collapsed, header, arrow)

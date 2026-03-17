@@ -1212,9 +1212,9 @@ namespace lfs::training {
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
             const bool use_pixel_error_densification =
-                (params_.optimization.strategy == "mcmc");
-            const bool use_ssim_error = use_pixel_error_densification &&
-                                        (params_.optimization.strategy == "mcmc");
+                (params_.optimization.strategy == "mcmc" ||
+                 params_.optimization.strategy == "igs+");
+            const bool use_ssim_error = use_pixel_error_densification;
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -1525,7 +1525,7 @@ namespace lfs::training {
                                 tile_error_map = densification_error_map_;
                             }
                         } else if (use_ssim_error) {
-                            // lambda_dssim == 0 but MCMC needs SSIM error: standalone pass
+                            // lambda_dssim == 0 but error-priority densification still needs SSIM error
                             lfs::core::Tensor pred_chw = corrected_image;
                             lfs::core::Tensor gt_chw = gt_tile;
                             if (pred_chw.ndim() == 3 && pred_chw.shape()[2] == 3 &&

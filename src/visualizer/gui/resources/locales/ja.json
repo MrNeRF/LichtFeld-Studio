@@ -249,6 +249,7 @@
     "value.not_set": "(未設定)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.adc": "ADC",
+    "options.strategy.igs_plus": "IGS+",
     "options.tile.full": "1 (全体)",
     "options.tile.half": "2 (半分)",
     "options.tile.quarter": "4 (1/4)",
@@ -552,7 +553,10 @@
     "no_trainer_loaded": "トレーナーが読み込まれていません",
     "parameters_unavailable": "パラメータが利用できません",
     "no_dataset_loaded": "データセットが読み込まれていません",
-    "iters_per_sec": "iter/秒"
+    "iters_per_sec": "iter/秒",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gut_mode": "魚眼/歪み/エクイレクタンギュラーカメラ用",
@@ -950,6 +954,7 @@
     "button.install": "インストール",
     "button.github": "GitHub",
     "local_install": "ローカルインストール",
+    "install_as_git_checkout": "Git チェックアウトとしてインストール",
     "confirm_uninstall_title": "プラグインのアンインストールを確認",
     "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",
     "confirm_uninstall_yes": "はい",

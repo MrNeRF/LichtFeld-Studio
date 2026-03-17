@@ -1,7 +1,6 @@
 /* Training panel — panel-specific styles only.
- * Shared widget styles are in components.rcss (auto-included via applyTheme).
- * Spacing values (row padding, indent, frame padding) come from theme CSS.
- * Layout: label LEFT, control RIGHT (matching ImGui layout.prop() convention). */
+ * Shared row/label typography lives in components.rcss so training and rendering
+ * cannot drift visually. */
 
 body {
     font-family: Inter;
@@ -20,50 +19,6 @@ body {
 
 #content {
     min-width: 0;
-}
-
-.prop-label {
-    min-width: 120dp;
-    text-align: left;
-    margin-left: 0;
-}
-
-.setting-row {
-    gap: 4dp;
-    min-width: 0;
-}
-
-select {
-    flex: 1;
-    min-width: 0;
-    min-height: 18dp;
-    box-sizing: border-box;
-}
-
-.number-input {
-    flex: 1;
-    min-width: 0;
-    min-height: 18dp;
-}
-
-.setting-slider {
-    flex: 1;
-    min-width: 0;
-    min-height: 18dp;
-    margin-top: 0;
-}
-
-@media (min-resolution: 1.5x) {
-    .setting-slider {
-        position: relative;
-        top: 1dp;
-    }
-}
-
-@media (min-resolution: 2x) {
-    .setting-slider {
-        top: 2dp;
-    }
 }
 
 .training-panel-title {

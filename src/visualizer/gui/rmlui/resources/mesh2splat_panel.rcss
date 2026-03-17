@@ -1,3 +1,16 @@
+#content-wrap {
+    min-width: 0;
+    overflow-x: hidden;
+}
+
+.m2s-section .setting-row--aligned {
+    min-width: 0;
+}
+
+.m2s-section .setting-row__control-col {
+    min-width: 0;
+}
+
 .m2s-section {
     margin-bottom: 4dp;
 }
@@ -61,7 +74,8 @@
     display: flex;
     flex-wrap: wrap;
     gap: 4dp;
-    margin-top: 2dp;
+    margin-top: 0;
+    min-width: 0;
 }
 
 .m2s-chip {
@@ -73,17 +87,6 @@
     background-color: transparent;
     border-width: 1dp;
     cursor: pointer;
-}
-
-.m2s-summary-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8dp;
-}
-
-.m2s-summary-label {
-    font-size: 10dp;
 }
 
 .m2s-summary-value {

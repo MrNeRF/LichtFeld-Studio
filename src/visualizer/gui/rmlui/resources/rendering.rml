@@ -5,348 +5,393 @@
 </head>
 <body template="docked-panel" data-model="rendering">
 
-  <!-- Background Color -->
-  <div class="setting-row" data-tooltip="tooltip.background">
-    <span class="color-comp">{{background_color_r}}</span>
-    <span class="color-comp">{{background_color_g}}</span>
-    <span class="color-comp">{{background_color_b}}</span>
-    <div class="color-swatch" id="swatch-background_color" data-event-click="color_click('background_color')"></div>
-    <input type="text" class="color-hex" data-value="background_color_hex" />
-    <span class="prop-label">{{label_background_color}}</span>
+  <!-- Viewport -->
+  <div class="section-header text-accent" id="hdr-viewport" data-event-click="toggle_section('viewport')">
+    <span class="section-arrow text-accent is-expanded" id="arrow-viewport">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_viewport}}</span>
   </div>
-
-  <!-- Show Coordinate Axes -->
-  <div class="setting-row" data-tooltip="tooltip.coord_axes">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="show_coord_axes" />
-      <span>{{label_show_coord_axes}}</span>
-    </label>
-  </div>
-  <div class="indent" data-if="show_coord_axes">
-    <div class="setting-row">
-      <input type="range" class="setting-slider" data-value="axes_size" min="0.5" max="10" step="0.01" />
-      <span class="slider-value">{{axes_size | format_float(3)}}</span>
-      <span class="prop-label">{{label_axes_size}}</span>
+  <div class="section-content" id="sec-viewport">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.background">
+      <span class="setting-row__label-col">{{label_background_color}}</span>
+      <div class="setting-row__control-col setting-row__control-col--color">
+        <span class="color-comp">{{background_color_r}}</span>
+        <span class="color-comp">{{background_color_g}}</span>
+        <span class="color-comp">{{background_color_b}}</span>
+        <div class="color-swatch" id="swatch-background_color" data-event-click="color_click('background_color')"></div>
+        <input type="text" class="color-hex" data-value="background_color_hex" />
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.render_scale">
+      <span class="setting-row__label-col">{{label_render_scale}}</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input type="range" class="setting-slider" data-value="render_scale" min="0.25" max="1" step="0.01" />
+        <span class="slider-value">{{render_scale | format_float(2)}}</span>
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_voxel_size}}</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input type="range" class="setting-slider" data-value="voxel_size" min="0.001" max="0.1" step="0.001" />
+        <span class="slider-value">{{voxel_size | format_float(3)}}</span>
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.coord_axes">
+      <span class="setting-row__label-col">{{label_show_coord_axes}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="show_coord_axes" />
+      </label>
+    </div>
+    <div data-if="show_coord_axes">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_axes_size}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="axes_size" min="0.5" max="10" step="0.01" />
+          <span class="slider-value">{{axes_size | format_float(3)}}</span>
+        </div>
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.pivot">
+      <span class="setting-row__label-col">{{label_show_pivot}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="show_pivot" />
+      </label>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid">
+      <span class="setting-row__label-col">{{label_show_grid}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="show_grid" />
+      </label>
+    </div>
+    <div data-if="show_grid">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_grid_plane}}</span>
+        <div class="setting-row__control-col setting-row__control-col--fill">
+          <select data-value="grid_plane">
+            <option value="0">YZ (Right)</option>
+            <option value="1">XZ (Top)</option>
+            <option value="2">XY (Front)</option>
+          </select>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_grid_opacity}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="grid_opacity" min="0" max="1" step="0.01" />
+          <span class="slider-value">{{grid_opacity | format_float(3)}}</span>
+        </div>
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_frustums">
+      <span class="setting-row__label-col">{{label_show_camera_frustums}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="show_camera_frustums" />
+      </label>
+    </div>
+    <div data-if="show_camera_frustums">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_camera_frustum_scale}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="camera_frustum_scale" min="0.01" max="10" step="0.01" />
+          <span class="slider-value">{{camera_frustum_scale | format_float(3)}}</span>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- Show Pivot -->
-  <div class="setting-row" data-tooltip="tooltip.pivot">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="show_pivot" />
-      <span>{{label_show_pivot}}</span>
-    </label>
+  <!-- Camera and Projection -->
+  <div class="section-header text-accent" id="hdr-camera" data-event-click="toggle_section('camera')">
+    <span class="section-arrow text-accent is-expanded" id="arrow-camera">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_camera}}</span>
   </div>
-
-  <!-- Show Grid -->
-  <div class="setting-row" data-tooltip="tooltip.grid">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="show_grid" />
-      <span>{{label_show_grid}}</span>
-    </label>
-  </div>
-  <div class="indent" data-if="show_grid">
-    <div class="setting-row">
-      <select data-value="grid_plane">
-        <option value="0">YZ (Right)</option>
-        <option value="1">XZ (Top)</option>
-        <option value="2">XY (Front)</option>
-      </select>
-      <span class="prop-label">{{label_grid_plane}}</span>
+  <div class="section-content" id="sec-camera">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.focal_length">
+      <span class="setting-row__label-col">{{label_focal_length_mm}}</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input type="range" class="setting-slider" data-value="focal_length_mm" min="10" max="200" step="0.1" />
+        <span class="slider-value">{{focal_length_mm | format_float(1)}}</span>
+      </div>
     </div>
-    <div class="setting-row">
-      <input type="range" class="setting-slider" data-value="grid_opacity" min="0" max="1" step="0.01" />
-      <span class="slider-value">{{grid_opacity | format_float(3)}}</span>
-      <span class="prop-label">{{label_grid_opacity}}</span>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">FOV:</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <span class="text-disabled">{{fov_display}}</span>
+      </div>
     </div>
-  </div>
-
-  <!-- Camera Frustums -->
-  <div class="setting-row" data-tooltip="tooltip.camera_frustums">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="show_camera_frustums" />
-      <span>{{label_show_camera_frustums}}</span>
-    </label>
-  </div>
-  <div class="indent" data-if="show_camera_frustums">
-    <div class="setting-row">
-      <input type="range" class="setting-slider" data-value="camera_frustum_scale" min="0.01" max="10" step="0.01" />
-      <span class="slider-value">{{camera_frustum_scale | format_float(3)}}</span>
-      <span class="prop-label">{{label_camera_frustum_scale}}</span>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.sh_degree">
+      <span class="setting-row__label-col">{{label_sh_degree}}</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <select data-value="sh_degree">
+          <option value="0">0</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+        </select>
+      </div>
     </div>
-  </div>
-
-  <!-- Point Cloud Mode -->
-  <div class="setting-row" data-tooltip="tooltip.point_cloud_mode">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="point_cloud_mode" />
-      <span>{{label_point_cloud_mode}}</span>
-    </label>
-  </div>
-  <div class="indent" data-if="point_cloud_mode">
-    <div class="setting-row">
-      <input type="range" class="setting-slider" data-value="voxel_size" min="0.001" max="0.1" step="0.001" />
-      <span class="slider-value">{{voxel_size | format_float(3)}}</span>
-      <span class="prop-label">{{label_voxel_size}}</span>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.equirectangular">
+      <span class="setting-row__label-col">{{label_equirectangular}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="equirectangular" />
+      </label>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.gut_mode">
+      <span class="setting-row__label-col">{{label_gut}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="gut" />
+      </label>
+    </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mip_filter">
+      <span class="setting-row__label-col">{{label_mip_filter}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="mip_filter" />
+      </label>
     </div>
   </div>
 
-  <!-- Selection Colors (collapsible) -->
-  <div class="section-header" id="hdr-selection-colors" data-event-click="toggle_section('selection_colors')" data-tooltip="tooltip.selection_colors">
-    <span class="section-arrow" id="arrow-selection-colors">&#x25B6;</span>
-    <span>{{label_hdr_selection_colors}}</span>
+  <!-- Selection and Overlays -->
+  <div class="section-header text-accent" id="hdr-selection" data-event-click="toggle_section('selection')">
+    <span class="section-arrow text-accent" id="arrow-selection">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_selection}}</span>
   </div>
-  <div class="section-content collapsed" id="sec-selection-colors">
-    <div class="setting-row">
-      <span class="color-comp">{{selection_color_committed_r}}</span>
-      <span class="color-comp">{{selection_color_committed_g}}</span>
-      <span class="color-comp">{{selection_color_committed_b}}</span>
-      <div class="color-swatch" id="swatch-selection_color_committed" data-event-click="color_click('selection_color_committed')"></div>
-      <input type="text" class="color-hex" data-value="selection_color_committed_hex" />
-      <span class="prop-label">{{label_selection_color_committed}}</span>
+  <div class="section-content collapsed" id="sec-selection">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.desaturate_unselected">
+      <span class="setting-row__label-col">{{label_desaturate_unselected}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="desaturate_unselected" />
+      </label>
     </div>
-    <div class="setting-row">
-      <span class="color-comp">{{selection_color_preview_r}}</span>
-      <span class="color-comp">{{selection_color_preview_g}}</span>
-      <span class="color-comp">{{selection_color_preview_b}}</span>
-      <div class="color-swatch" id="swatch-selection_color_preview" data-event-click="color_click('selection_color_preview')"></div>
-      <input type="text" class="color-hex" data-value="selection_color_preview_hex" />
-      <span class="prop-label">{{label_selection_color_preview}}</span>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.desaturate_cropping">
+      <span class="setting-row__label-col">{{label_desaturate_cropping}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="desaturate_cropping" />
+      </label>
     </div>
-    <div class="setting-row">
-      <span class="color-comp">{{selection_color_center_marker_r}}</span>
-      <span class="color-comp">{{selection_color_center_marker_g}}</span>
-      <span class="color-comp">{{selection_color_center_marker_b}}</span>
-      <div class="color-swatch" id="swatch-selection_color_center_marker" data-event-click="color_click('selection_color_center_marker')"></div>
-      <input type="text" class="color-hex" data-value="selection_color_center_marker_hex" />
-      <span class="prop-label">{{label_selection_color_center_marker}}</span>
+
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_selection_color_committed}}</span>
+      <div class="setting-row__control-col setting-row__control-col--color">
+        <span class="color-comp">{{selection_color_committed_r}}</span>
+        <span class="color-comp">{{selection_color_committed_g}}</span>
+        <span class="color-comp">{{selection_color_committed_b}}</span>
+        <div class="color-swatch" id="swatch-selection_color_committed" data-event-click="color_click('selection_color_committed')"></div>
+        <input type="text" class="color-hex" data-value="selection_color_committed_hex" />
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_selection_color_preview}}</span>
+      <div class="setting-row__control-col setting-row__control-col--color">
+        <span class="color-comp">{{selection_color_preview_r}}</span>
+        <span class="color-comp">{{selection_color_preview_g}}</span>
+        <span class="color-comp">{{selection_color_preview_b}}</span>
+        <div class="color-swatch" id="swatch-selection_color_preview" data-event-click="color_click('selection_color_preview')"></div>
+        <input type="text" class="color-hex" data-value="selection_color_preview_hex" />
+      </div>
+    </div>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_selection_color_center_marker}}</span>
+      <div class="setting-row__control-col setting-row__control-col--color">
+        <span class="color-comp">{{selection_color_center_marker_r}}</span>
+        <span class="color-comp">{{selection_color_center_marker_g}}</span>
+        <span class="color-comp">{{selection_color_center_marker_b}}</span>
+        <div class="color-swatch" id="swatch-selection_color_center_marker" data-event-click="color_click('selection_color_center_marker')"></div>
+        <input type="text" class="color-hex" data-value="selection_color_center_marker_hex" />
+      </div>
     </div>
   </div>
 
-  <!-- Desaturation -->
-  <div class="setting-row" data-tooltip="tooltip.desaturate_unselected">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="desaturate_unselected" />
-      <span>{{label_desaturate_unselected}}</span>
-    </label>
-  </div>
-  <div class="setting-row" data-tooltip="tooltip.desaturate_cropping">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="desaturate_cropping" />
-      <span>{{label_desaturate_cropping}}</span>
-    </label>
-  </div>
-
-  <!-- Focal Length -->
-  <div class="setting-row" data-tooltip="tooltip.focal_length">
-    <input type="range" class="setting-slider" data-value="focal_length_mm" min="10" max="200" step="0.1" />
-    <span class="slider-value">{{focal_length_mm | format_float(1)}}</span>
-    <span class="prop-label">{{label_focal_length_mm}}</span>
-  </div>
-  <div class="setting-row">
-    <span class="text-disabled">{{fov_display}}</span>
-  </div>
-
-  <!-- SH Degree -->
-  <div class="setting-row" data-tooltip="tooltip.sh_degree">
-    <select data-value="sh_degree">
-      <option value="0">0</option>
-      <option value="1">1</option>
-      <option value="2">2</option>
-      <option value="3">3</option>
-    </select>
-    <span class="prop-label">{{label_sh_degree}}</span>
-  </div>
-
-  <!-- Equirectangular / GUT -->
-  <div class="setting-row" data-tooltip="tooltip.equirectangular">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="equirectangular" />
-      <span>{{label_equirectangular}}</span>
-    </label>
-  </div>
-  <div class="setting-row" data-tooltip="tooltip.gut_mode">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="gut" />
-      <span>{{label_gut}}</span>
-    </label>
-  </div>
-
-  <!-- Mip Filter / Render Scale -->
-  <div class="setting-row" data-tooltip="tooltip.mip_filter">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="mip_filter" />
-      <span>{{label_mip_filter}}</span>
-    </label>
-  </div>
-  <div class="setting-row" data-tooltip="tooltip.render_scale">
-    <input type="range" class="setting-slider" data-value="render_scale" min="0.25" max="1" step="0.01" />
-    <span class="slider-value">{{render_scale | format_float(2)}}</span>
-    <span class="prop-label">{{label_render_scale}}</span>
-  </div>
-
-  <!-- Mesh (collapsible) -->
-  <div class="section-header" id="hdr-mesh" data-event-click="toggle_section('mesh')">
-    <span class="section-arrow" id="arrow-mesh">&#x25B6;</span>
-    <span>{{label_hdr_mesh}}</span>
+  <!-- Mesh -->
+  <div class="section-header text-accent" id="hdr-mesh" data-event-click="toggle_section('mesh')">
+    <span class="section-arrow text-accent" id="arrow-mesh">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_mesh}}</span>
   </div>
   <div class="section-content collapsed" id="sec-mesh">
-    <div class="setting-row">
-      <label class="setting-label">
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_mesh_wireframe}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="mesh_wireframe" />
-        <span>{{label_mesh_wireframe}}</span>
       </label>
     </div>
-    <div class="indent" data-if="mesh_wireframe">
-      <div class="setting-row">
-        <span class="color-comp">{{mesh_wireframe_color_r}}</span>
-        <span class="color-comp">{{mesh_wireframe_color_g}}</span>
-        <span class="color-comp">{{mesh_wireframe_color_b}}</span>
-        <div class="color-swatch" id="swatch-mesh_wireframe_color" data-event-click="color_click('mesh_wireframe_color')"></div>
-        <input type="text" class="color-hex" data-value="mesh_wireframe_color_hex" />
-        <span class="prop-label">{{label_mesh_wireframe_color}}</span>
+    <div data-if="mesh_wireframe">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_mesh_wireframe_color}}</span>
+        <div class="setting-row__control-col setting-row__control-col--color">
+          <span class="color-comp">{{mesh_wireframe_color_r}}</span>
+          <span class="color-comp">{{mesh_wireframe_color_g}}</span>
+          <span class="color-comp">{{mesh_wireframe_color_b}}</span>
+          <div class="color-swatch" id="swatch-mesh_wireframe_color" data-event-click="color_click('mesh_wireframe_color')"></div>
+          <input type="text" class="color-hex" data-value="mesh_wireframe_color_hex" />
+        </div>
       </div>
-      <div class="setting-row">
-        <input type="range" class="setting-slider" data-value="mesh_wireframe_width" min="0.5" max="5" step="0.01" />
-        <span class="slider-value">{{mesh_wireframe_width | format_float(2)}}</span>
-        <span class="prop-label">{{label_mesh_wireframe_width}}</span>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_mesh_wireframe_width}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="mesh_wireframe_width" min="0.5" max="5" step="0.01" />
+          <span class="slider-value">{{mesh_wireframe_width | format_float(2)}}</span>
+        </div>
       </div>
     </div>
-    <div class="setting-row">
-      <input type="range" class="setting-slider" data-value="mesh_light_intensity" min="0" max="5" step="0.01" />
-      <span class="slider-value">{{mesh_light_intensity | format_float(2)}}</span>
-      <span class="prop-label">{{label_mesh_light_intensity}}</span>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_mesh_light_intensity}}</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input type="range" class="setting-slider" data-value="mesh_light_intensity" min="0" max="5" step="0.01" />
+        <span class="slider-value">{{mesh_light_intensity | format_float(2)}}</span>
+      </div>
     </div>
-    <div class="setting-row">
-      <input type="range" class="setting-slider" data-value="mesh_ambient" min="0" max="1" step="0.01" />
-      <span class="slider-value">{{mesh_ambient | format_float(2)}}</span>
-      <span class="prop-label">{{label_mesh_ambient}}</span>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_mesh_ambient}}</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input type="range" class="setting-slider" data-value="mesh_ambient" min="0" max="1" step="0.01" />
+        <span class="slider-value">{{mesh_ambient | format_float(2)}}</span>
+      </div>
     </div>
-    <div class="setting-row">
-      <label class="setting-label">
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_mesh_backface_culling}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="mesh_backface_culling" />
-        <span>{{label_mesh_backface_culling}}</span>
       </label>
     </div>
-    <div class="setting-row">
-      <label class="setting-label">
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_mesh_shadow_enabled}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="mesh_shadow_enabled" />
-        <span>{{label_mesh_shadow_enabled}}</span>
       </label>
     </div>
-    <div class="indent" data-if="mesh_shadow_enabled">
-      <div class="setting-row">
-        <select data-value="mesh_shadow_resolution">
-          <option value="512">512</option>
-          <option value="1024">1024</option>
-          <option value="2048">2048</option>
-          <option value="4096">4096</option>
-        </select>
-        <span class="prop-label">{{label_mesh_shadow_resolution}}</span>
+    <div data-if="mesh_shadow_enabled">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_mesh_shadow_resolution}}</span>
+        <div class="setting-row__control-col setting-row__control-col--fill">
+          <select data-value="mesh_shadow_resolution">
+            <option value="512">512</option>
+            <option value="1024">1024</option>
+            <option value="2048">2048</option>
+            <option value="4096">4096</option>
+          </select>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- PPISP Appearance Correction -->
-  <div class="setting-row" data-tooltip="tooltip.appearance_correction">
-    <label class="setting-label">
-      <input type="checkbox" data-checked="apply_appearance_correction" />
-      <span>{{label_apply_appearance_correction}}</span>
-    </label>
+  <!-- Post Processing -->
+  <div class="section-header text-accent" id="hdr-post-process" data-event-click="toggle_section('post_process')">
+    <span class="section-arrow text-accent" id="arrow-post-process">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_post_process}}</span>
   </div>
-  <div class="indent" data-if="apply_appearance_correction">
-    <div class="setting-row" data-tooltip="tooltip.ppisp_mode">
-      <select data-value="ppisp_mode">
-        <option value="MANUAL">Manual</option>
-        <option value="AUTO">Auto (Controller)</option>
-      </select>
-      <span class="prop-label">{{label_ppisp_mode}}</span>
+  <div class="section-content collapsed" id="sec-post-process">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.appearance_correction">
+      <span class="setting-row__label-col">{{label_apply_appearance_correction}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="apply_appearance_correction" />
+      </label>
     </div>
-
-    <div data-class-disabled-overlay="ppisp_auto">
-      <!-- Exposure -->
-      <div class="setting-row" data-tooltip="tooltip.ppisp_exposure">
-        <input type="range" class="setting-slider" data-value="ppisp_exposure" min="-3" max="3" step="0.01" />
-        <span class="slider-value">{{ppisp_exposure | format_float(2)}}</span>
-        <span class="prop-label">{{label_ppisp_exposure}}</span>
-      </div>
-
-      <!-- Vignette -->
-      <div class="setting-row">
-        <label class="setting-label">
-          <input type="checkbox" data-checked="ppisp_vignette_enabled" />
-          <span>{{label_ppisp_vignette_enabled}}</span>
-        </label>
-      </div>
-      <div class="indent" data-if="ppisp_vignette_enabled">
-        <div class="setting-row">
-          <input type="range" class="setting-slider" data-value="ppisp_vignette_strength" min="0" max="2" step="0.01" />
-          <span class="slider-value">{{ppisp_vignette_strength | format_float(2)}}</span>
-          <span class="prop-label">{{label_ppisp_vignette_strength}}</span>
+    <div data-if="apply_appearance_correction">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_mode">
+        <span class="setting-row__label-col">{{label_ppisp_mode}}</span>
+        <div class="setting-row__control-col setting-row__control-col--fill">
+          <select data-value="ppisp_mode">
+            <option value="MANUAL">Manual</option>
+            <option value="AUTO">Auto (Controller)</option>
+          </select>
         </div>
       </div>
 
-      <!-- Chromaticity Diagram -->
-      <div class="setting-row">
-        <chromaticity-diagram
-          data-attr-red-x="ppisp_color_red_x"
-          data-attr-red-y="ppisp_color_red_y"
-          data-attr-green-x="ppisp_color_green_x"
-          data-attr-green-y="ppisp_color_green_y"
-          data-attr-blue-x="ppisp_color_blue_x"
-          data-attr-blue-y="ppisp_color_blue_y"
-          data-attr-wb-temp="ppisp_wb_temperature"
-          data-attr-wb-tint="ppisp_wb_tint"
-          data-event-change="chrom_change"
-        />
-        <span class="prop-label">{{label_ppisp_color_balance}}</span>
-      </div>
+      <div data-class-disabled-overlay="ppisp_auto">
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_exposure">
+          <span class="setting-row__label-col">{{label_ppisp_exposure}}</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="ppisp_exposure" min="-3" max="3" step="0.01" />
+            <span class="slider-value">{{ppisp_exposure | format_float(2)}}</span>
+          </div>
+        </div>
 
-      <!-- Gamma -->
-      <div class="setting-row" data-tooltip="tooltip.ppisp_gamma">
-        <input type="range" class="setting-slider" data-value="ppisp_gamma_multiplier" min="0.5" max="2.5" step="0.01" />
-        <span class="slider-value">{{ppisp_gamma_multiplier | format_float(2)}}</span>
-        <span class="prop-label">{{label_ppisp_gamma_multiplier}}</span>
-      </div>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">{{label_ppisp_vignette_enabled}}</span>
+          <label class="setting-row__control-col setting-row__control-col--checkbox">
+            <input type="checkbox" data-checked="ppisp_vignette_enabled" />
+          </label>
+        </div>
+        <div data-if="ppisp_vignette_enabled">
+          <div class="setting-row setting-row--aligned">
+            <span class="setting-row__label-col">{{label_ppisp_vignette_strength}}</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="ppisp_vignette_strength" min="0" max="2" step="0.01" />
+              <span class="slider-value">{{ppisp_vignette_strength | format_float(2)}}</span>
+            </div>
+          </div>
+        </div>
 
-      <!-- CRF (collapsible) -->
-      <div class="section-header" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
-        <span class="section-arrow" id="arrow-ppisp-crf">&#x25B6;</span>
-        <span>{{label_ppisp_crf}}</span>
-      </div>
-      <div class="section-content collapsed" id="sec-ppisp-crf">
-        <crf-curve
-          data-attr-gamma="ppisp_gamma_multiplier"
-          data-attr-toe="ppisp_crf_toe"
-          data-attr-shoulder="ppisp_crf_shoulder"
-          data-attr-gamma-r="ppisp_gamma_red"
-          data-attr-gamma-g="ppisp_gamma_green"
-          data-attr-gamma-b="ppisp_gamma_blue"
-        />
-        <div class="setting-row" data-tooltip="tooltip.ppisp_gamma_channel">
-          <input type="range" class="setting-slider" data-value="ppisp_gamma_red" min="-0.5" max="0.5" step="0.01" />
-          <span class="slider-value">{{ppisp_gamma_red | format_float(2)}}</span>
-          <span class="prop-label">{{label_ppisp_gamma_red}}</span>
+        <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">{{label_ppisp_color_balance}}</span>
+          <div class="setting-row__control-col">
+            <chromaticity-diagram
+              data-attr-red-x="ppisp_color_red_x"
+              data-attr-red-y="ppisp_color_red_y"
+              data-attr-green-x="ppisp_color_green_x"
+              data-attr-green-y="ppisp_color_green_y"
+              data-attr-blue-x="ppisp_color_blue_x"
+              data-attr-blue-y="ppisp_color_blue_y"
+              data-attr-wb-temp="ppisp_wb_temperature"
+              data-attr-wb-tint="ppisp_wb_tint"
+              data-event-change="chrom_change"
+            />
+          </div>
         </div>
-        <div class="setting-row" data-tooltip="tooltip.ppisp_gamma_channel">
-          <input type="range" class="setting-slider" data-value="ppisp_gamma_green" min="-0.5" max="0.5" step="0.01" />
-          <span class="slider-value">{{ppisp_gamma_green | format_float(2)}}</span>
-          <span class="prop-label">{{label_ppisp_gamma_green}}</span>
+
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_gamma">
+          <span class="setting-row__label-col">{{label_ppisp_gamma_multiplier}}</span>
+          <div class="setting-row__control-col setting-row__control-col--slider">
+            <input type="range" class="setting-slider" data-value="ppisp_gamma_multiplier" min="0.5" max="2.5" step="0.01" />
+            <span class="slider-value">{{ppisp_gamma_multiplier | format_float(2)}}</span>
+          </div>
         </div>
-        <div class="setting-row" data-tooltip="tooltip.ppisp_gamma_channel">
-          <input type="range" class="setting-slider" data-value="ppisp_gamma_blue" min="-0.5" max="0.5" step="0.01" />
-          <span class="slider-value">{{ppisp_gamma_blue | format_float(2)}}</span>
-          <span class="prop-label">{{label_ppisp_gamma_blue}}</span>
+
+        <div class="section-header text-accent" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
+          <span class="section-arrow text-accent" id="arrow-ppisp-crf">&#x25B6;</span>
+          <span class="text-accent">{{label_ppisp_crf}}</span>
         </div>
-        <div class="setting-row" data-tooltip="tooltip.ppisp_crf_toe">
-          <input type="range" class="setting-slider" data-value="ppisp_crf_toe" min="-1" max="1" step="0.01" />
-          <span class="slider-value">{{ppisp_crf_toe | format_float(2)}}</span>
-          <span class="prop-label">{{label_ppisp_crf_toe}}</span>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.ppisp_crf_shoulder">
-          <input type="range" class="setting-slider" data-value="ppisp_crf_shoulder" min="-1" max="1" step="0.01" />
-          <span class="slider-value">{{ppisp_crf_shoulder | format_float(2)}}</span>
-          <span class="prop-label">{{label_ppisp_crf_shoulder}}</span>
+        <div class="section-content collapsed" id="sec-ppisp-crf">
+          <crf-curve
+            data-attr-gamma="ppisp_gamma_multiplier"
+            data-attr-toe="ppisp_crf_toe"
+            data-attr-shoulder="ppisp_crf_shoulder"
+            data-attr-gamma-r="ppisp_gamma_red"
+            data-attr-gamma-g="ppisp_gamma_green"
+            data-attr-gamma-b="ppisp_gamma_blue"
+          />
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_gamma_channel">
+            <span class="setting-row__label-col">{{label_ppisp_gamma_red}}</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="ppisp_gamma_red" min="-0.5" max="0.5" step="0.01" />
+              <span class="slider-value">{{ppisp_gamma_red | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_gamma_channel">
+            <span class="setting-row__label-col">{{label_ppisp_gamma_green}}</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="ppisp_gamma_green" min="-0.5" max="0.5" step="0.01" />
+              <span class="slider-value">{{ppisp_gamma_green | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_gamma_channel">
+            <span class="setting-row__label-col">{{label_ppisp_gamma_blue}}</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="ppisp_gamma_blue" min="-0.5" max="0.5" step="0.01" />
+              <span class="slider-value">{{ppisp_gamma_blue | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_crf_toe">
+            <span class="setting-row__label-col">{{label_ppisp_crf_toe}}</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="ppisp_crf_toe" min="-1" max="1" step="0.01" />
+              <span class="slider-value">{{ppisp_crf_toe | format_float(2)}}</span>
+            </div>
+          </div>
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_crf_shoulder">
+            <span class="setting-row__label-col">{{label_ppisp_crf_shoulder}}</span>
+            <div class="setting-row__control-col setting-row__control-col--slider">
+              <input type="range" class="setting-slider" data-value="ppisp_crf_shoulder" min="-1" max="1" step="0.01" />
+              <span class="slider-value">{{ppisp_crf_shoulder | format_float(2)}}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>

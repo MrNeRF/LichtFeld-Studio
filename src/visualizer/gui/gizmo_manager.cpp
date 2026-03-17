@@ -53,6 +53,9 @@ namespace lfs::vis::gui {
         }
     } // namespace
     constexpr float MIN_GIZMO_SCALE = 0.001f;
+    constexpr float ROTATION_SNAP_DEGREES = 5.0f;
+    constexpr float TRANSLATE_SNAP_UNITS = 0.1f;
+    constexpr float SCALE_SNAP_RATIO = 0.1f;
 
     namespace {
         inline glm::mat3 extractRotation(const glm::mat4& m) {
@@ -63,6 +66,18 @@ namespace lfs::vis::gui {
         inline glm::vec3 extractScale(const glm::mat4& m) {
             return glm::vec3(glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])),
                              glm::length(glm::vec3(m[2])));
+        }
+
+        inline const float* computeSnapPtr(float* buf, ImGuizmo::OPERATION op) {
+            if (!ImGui::GetIO().KeyCtrl)
+                return nullptr;
+            if (op & ImGuizmo::ROTATE)
+                buf[0] = ROTATION_SNAP_DEGREES;
+            else if (op & ImGuizmo::TRANSLATE)
+                buf[0] = buf[1] = buf[2] = TRANSLATE_SNAP_UNITS;
+            else if (op & ImGuizmo::SCALE)
+                buf[0] = buf[1] = buf[2] = SCALE_SNAP_RATIO;
+            return buf;
         }
     } // namespace
 
@@ -497,10 +512,12 @@ namespace lfs::vis::gui {
         const ImGuizmo::MODE gizmo_mode = (actually_using_bounds || !use_world_space) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
         glm::mat4 delta_matrix;
+        float snap_buf[3] = {};
+        const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
         const bool gizmo_changed = ImGuizmo::Manipulate(
             glm::value_ptr(view), glm::value_ptr(projection),
             effective_op, gizmo_mode,
-            glm::value_ptr(gizmo_matrix), glm::value_ptr(delta_matrix), nullptr, bounds_ptr);
+            glm::value_ptr(gizmo_matrix), glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
 
         if (node_gizmo_operation_ == ImGuizmo::ROTATE) {
             const glm::vec3 pivot_pos = glm::vec3(gizmo_matrix[3]);
@@ -899,10 +916,12 @@ namespace lfs::vis::gui {
         glm::mat4 delta_matrix;
         const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
+        float snap_buf[3] = {};
+        const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
         const bool gizmo_changed = ImGuizmo::Manipulate(
             glm::value_ptr(view), glm::value_ptr(projection),
             effective_op, gizmo_mode, glm::value_ptr(gizmo_matrix),
-            glm::value_ptr(delta_matrix), nullptr, bounds_ptr);
+            glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
 
         const bool is_using = ImGuizmo::IsUsing();
 
@@ -1082,10 +1101,12 @@ namespace lfs::vis::gui {
         glm::mat4 delta_matrix;
         const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
+        float snap_buf[3] = {};
+        const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
         const bool gizmo_changed = ImGuizmo::Manipulate(
             glm::value_ptr(view), glm::value_ptr(projection),
             effective_op, gizmo_mode, glm::value_ptr(gizmo_matrix),
-            glm::value_ptr(delta_matrix), nullptr, bounds_ptr);
+            glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
 
         const bool is_using = ImGuizmo::IsUsing();
 

@@ -234,6 +234,22 @@ namespace lfs::vis::gui::rml_theme {
                                                     colorToRmlAlpha(p.primary, 0.55f), colorToRmlAlpha(p.primary, 0.40f));
         const auto prog_fill_decor = std::format("decorator: horizontal-gradient({} {}); background-color: transparent",
                                                  colorToRml(p.primary), colorToRml(blend(p.primary, ImVec4(1, 1, 1, 1), 0.08f)));
+        const auto scrub_bg_top = colorToRml(t.isLightTheme()
+                                                 ? blend(p.surface, p.surface_bright, 0.10f)
+                                                 : blend(p.surface, p.surface_bright, 0.45f));
+        const auto scrub_bg_bottom = colorToRml(t.isLightTheme()
+                                                    ? blend(p.surface, p.background, 0.08f)
+                                                    : blend(p.surface, p.background, 0.22f));
+        const auto scrub_bg_decor =
+            std::format("decorator: vertical-gradient({} {}); background-color: {}",
+                        scrub_bg_top, scrub_bg_bottom, surface);
+        const auto scrub_fill_start = colorToRmlAlpha(blend(p.primary_dim, p.primary, 0.20f),
+                                                      t.isLightTheme() ? 0.36f : 0.42f);
+        const auto scrub_fill_end = colorToRmlAlpha(p.primary,
+                                                    t.isLightTheme() ? 0.52f : 0.60f);
+        const auto scrub_fill_decor =
+            std::format("decorator: horizontal-gradient({} {}); background-color: transparent",
+                        scrub_fill_start, scrub_fill_end);
         const int rounding = static_cast<int>(t.sizes.frame_rounding);
         const int row_pad_y = static_cast<int>(t.sizes.item_spacing.y * 0.5f);
         const int indent = static_cast<int>(t.sizes.indent_spacing);
@@ -296,11 +312,19 @@ namespace lfs::vis::gui::rml_theme {
                        "select:hover {{ border-color: {4}; }}\n"
                        "selectbox {{ background-color: {2}; border-color: {5}; }}\n"
                        "selectbox option:hover {{ background-color: {4}; }}\n"
+                       ".scrub-field {{ {12}; border-color: {5}; }}\n"
+                       ".scrub-field:hover,\n"
+                       ".scrub-field.is-dragging,\n"
+                       ".scrub-field.is-editing {{ border-color: {4}; }}\n"
+                       ".scrub-field-fill {{ {13}; }}\n"
+                       ".scrub-field-display,\n"
+                       ".scrub-field-input {{ color: {0}; }}\n"
                        "progress {{ background-color: {2}; border-color: {5}; }}\n"
                        "progress fill {{ {9}; }}\n"
                        ".progress__text {{ color: {0}; }}\n"
                        ".setting-label {{ color: {0}; }}\n"
-                       ".prop-label {{ color: {0}; }}\n"
+                       ".prop-label,\n"
+                       ".setting-row__label-col {{ color: {0}; }}\n"
                        ".slider-value {{ color: {1}; }}\n"
                        ".section-header {{ color: {0}; border-color: {11}; }}\n"
                        ".section-header:hover {{ color: {0}; border-color: {11}; }}\n"
@@ -308,6 +332,12 @@ namespace lfs::vis::gui::rml_theme {
                        ".section-gap {{ border-color: {11}; }}\n"
                        ".section-content {{ border-color: {11}; }}\n"
                        ".section-arrow {{ color: {1}; }}\n"
+                       ".section-header.text-accent,\n"
+                       ".section-header.text-accent:hover,\n"
+                       ".section-header.text-accent.is-expanded {{ color: {4}; }}\n"
+                       ".section-header .section-arrow.text-accent,\n"
+                       ".section-header:hover .section-arrow.text-accent,\n"
+                       ".section-header.is-expanded .section-arrow.text-accent {{ color: {4}; }}\n"
                        ".separator {{ background-color: {5}; }}\n"
                        ".text-disabled {{ color: {1}; }}\n"
                        ".text-default {{ color: {0}; }}\n"
@@ -331,7 +361,8 @@ namespace lfs::vis::gui::rml_theme {
                        ".border-error {{ border-color: {10}; }}\n"
                        ".icon-btn.selected {{ background-color: {4}; }}\n",
                        text, text_dim, surface, surface_bright, primary, border,
-                       header_decor, header_hover_decor, rounding, prog_fill_decor, error, shell_bg) +
+                       header_decor, header_hover_decor, rounding, prog_fill_decor, error, shell_bg,
+                       scrub_bg_decor, scrub_fill_decor) +
                    std::format(
                        ".btn--primary {{ background-color: {0}; border-color: {0}; color: {6}; }}\n"
                        ".btn--primary:hover {{ background-color: {1}; border-color: {1}; }}\n"
@@ -365,7 +396,8 @@ namespace lfs::vis::gui::rml_theme {
                    std::format(
                        ".setting-row {{ padding: {0}dp 0; }}\n"
                        ".indent {{ margin-left: {1}dp; }}\n"
-                       ".prop-label {{ margin-right: {2}dp; }}\n"
+                       ".prop-label,\n"
+                       ".setting-row__label-col {{ margin-right: {2}dp; }}\n"
                        "input[type=\"text\"] {{ padding: {4}dp {3}dp; }}\n"
                        "select {{ padding: {4}dp {3}dp; }}\n"
                        ".btn--full {{ padding: {4}dp {3}dp; }}\n",

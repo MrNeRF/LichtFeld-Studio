@@ -3,6 +3,7 @@
 """Unified plugin marketplace floating panel."""
 
 from html import escape
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -23,10 +24,7 @@ MAX_OUTPUT_LINES = 100
 SUCCESS_DISMISS_SEC = 3.0
 _CARD_GAP_DP = 12
 _CARD_MIN_WIDTH_DP = 220
-_LAYOUT_HYSTERESIS_DP = 60
-_COLUMN_GROW_HEADROOM_DP = 120
 _GRID_SIDE_MARGIN_DP = 20
-_LAYOUT_WIDTH_QUANTUM_DP = 32
 _SCROLLBAR_GUTTER_DP = 16
 
 _PHASE_MILESTONES: List[Tuple[str, float]] = [
@@ -79,6 +77,8 @@ class PluginMarketplacePanel(Panel):
         self._manual_url = ""
         self._install_filter_idx = 0
         self._sort_idx = 2
+        self._git_available = shutil.which("git") is not None
+        self._git_checkout_selected: Dict[str, bool] = {}
 
         self._card_ops: Dict[str, CardOpState] = {}
         self._lock = threading.RLock()
@@ -102,7 +102,6 @@ class PluginMarketplacePanel(Panel):
         self._formats_open = False
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
-        self._stable_layout_width: Optional[int] = None
 
     # ── Data model ────────────────────────────────────────────
 
@@ -349,6 +348,14 @@ class PluginMarketplacePanel(Panel):
             "github_url": entry.github_url or "",
             "plugin_name": plugin_name or "",
             "show_install": (not buttons_busy) and not is_installed and not is_local_only and not entry.error,
+            "show_git_checkout": (
+                self._git_available
+                and (not buttons_busy)
+                and not is_installed
+                and not is_local_only
+                and not entry.error
+            ),
+            "git_checkout_selected": self._git_checkout_selected.get(card_id, False),
             "show_load": (not buttons_busy) and is_installed and plugin_state != PluginState.ACTIVE,
             "show_unload": (not buttons_busy) and is_installed and plugin_state == PluginState.ACTIVE,
             "show_reload": (not buttons_busy) and is_remote_installed and plugin_state == PluginState.ACTIVE,
@@ -405,54 +412,24 @@ class PluginMarketplacePanel(Panel):
         return int(max(0.0, float(grid_el.client_width or 0.0)))
 
     def _stabilize_layout_width(self, width: int) -> int:
-        effective_width = max(0, width - _SCROLLBAR_GUTTER_DP)
-        if effective_width <= 0:
-            self._stable_layout_width = effective_width
-            return effective_width
-
-        quantum = _LAYOUT_WIDTH_QUANTUM_DP
-        candidate = max(
-            quantum,
-            ((effective_width + (quantum // 2)) // quantum) * quantum,
-        )
-        if self._stable_layout_width is not None and abs(effective_width - self._stable_layout_width) < quantum:
-            return self._stable_layout_width
-        self._stable_layout_width = candidate
-        return candidate
+        return max(0, width - _SCROLLBAR_GUTTER_DP)
 
     def _compute_grid_layout(self, width: int) -> Tuple[int, int]:
         if width <= 0:
             return 1, _CARD_MIN_WIDTH_DP
 
-        usable_width = max(_CARD_MIN_WIDTH_DP, width - (2 * _GRID_SIDE_MARGIN_DP))
-        max_columns = max(1, int((usable_width + _CARD_GAP_DP) // (_CARD_MIN_WIDTH_DP + _CARD_GAP_DP)))
-        columns = max_columns
-        prev_columns = self._last_grid_signature[1] if self._last_grid_signature else None
-        if prev_columns:
-            if max_columns > prev_columns:
-                grow_threshold = (
-                    self._min_row_width(prev_columns + 1)
-                    + (2 * _GRID_SIDE_MARGIN_DP)
-                    + _COLUMN_GROW_HEADROOM_DP
-                )
-                if width < grow_threshold:
-                    columns = prev_columns
-            elif max_columns < prev_columns:
-                shrink_threshold = (
-                    self._min_row_width(prev_columns)
-                    + (2 * _GRID_SIDE_MARGIN_DP)
-                    - _LAYOUT_HYSTERESIS_DP
-                )
-                if width >= shrink_threshold:
-                    columns = prev_columns
+        usable_width = max(0, width - (2 * _GRID_SIDE_MARGIN_DP))
+        if usable_width <= 0:
+            return 1, _CARD_MIN_WIDTH_DP
 
-        columns = max(1, min(columns, max_columns))
-        min_row_width = self._min_row_width(columns)
-        while columns > 1 and width < (min_row_width + (2 * _GRID_SIDE_MARGIN_DP)):
+        columns = max(
+            1,
+            (usable_width + _CARD_GAP_DP) // (_CARD_MIN_WIDTH_DP + _CARD_GAP_DP),
+        )
+        while columns > 1 and self._min_row_width(columns) > usable_width:
             columns -= 1
-            min_row_width = self._min_row_width(columns)
 
-        row_width = max(min_row_width, width - (2 * _GRID_SIDE_MARGIN_DP))
+        row_width = max(self._min_row_width(columns), usable_width)
         return columns, row_width
 
     @staticmethod
@@ -483,6 +460,17 @@ class PluginMarketplacePanel(Panel):
                 f'<input type="checkbox"{startup_checked} data-action="startup" '
                 f'data-card-id="{esc("card_id")}" data-plugin="{esc("plugin_name")}" />'
                 f'<span class="card-startup-label text-disabled">{escape(tr("plugin_marketplace.load_on_startup"))}</span>'
+                '</label></div>'
+            )
+
+        git_checked = ' checked="checked"' if record.get("git_checkout_selected") else ""
+        git_row = ""
+        if record.get("show_git_checkout"):
+            git_row = (
+                '<div class="card-git-row"><label>'
+                f'<input type="checkbox"{git_checked} data-action="git-checkout" '
+                f'data-card-id="{esc("card_id")}" />'
+                f'<span class="card-startup-label text-disabled">{escape(tr("plugin_marketplace.install_as_git_checkout"))}</span>'
                 '</label></div>'
             )
 
@@ -577,6 +565,7 @@ class PluginMarketplacePanel(Panel):
             f'<span class="status-text status-success hidden" id="feedback-{esc("card_id")}-success"></span>'
             f'<span class="status-text status-error hidden" id="feedback-{esc("card_id")}-error"></span>'
             '</div>'
+            f'{git_row}'
             f'{startup_row}'
             f'<div class="card-buttons" id="btns-{esc("card_id")}">{"".join(buttons)}</div>'
             '</div>'
@@ -797,11 +786,12 @@ class PluginMarketplacePanel(Panel):
         if target is None:
             return
 
-        action, _card_id, plugin_name = self._find_card_action(target)
-        if action != "startup" or not plugin_name:
+        action, card_id, plugin_name = self._find_card_action(target)
+        if action == "startup" and plugin_name:
+            self._set_startup_preference(target, plugin_name)
             return
-
-        self._set_startup_preference(target, plugin_name)
+        if action == "git-checkout" and card_id:
+            self._set_git_checkout_preference(target, card_id)
 
     def _find_card_action(self, element):
         while element is not None:
@@ -839,6 +829,18 @@ class PluginMarketplacePanel(Panel):
 
         prefs.set("load_on_startup", checked)
         self._entries_dirty = True
+
+    def _set_git_checkout_preference(self, element, card_id: str):
+        cb_el = self._find_element_with_attr(element, "type", "checkbox")
+        checked = cb_el.has_attribute("checked") if cb_el else False
+        if self._git_checkout_selected.get(card_id, False) == checked:
+            return
+        self._git_checkout_selected[card_id] = checked
+
+    def _selected_install_transport(self, card_id: str) -> str:
+        if self._git_available and self._git_checkout_selected.get(card_id, False):
+            return "git"
+        return "archive"
 
     def _request_uninstall_confirmation(self, name, card_id, ev):
         import lichtfeld as lf
@@ -1004,12 +1006,17 @@ class PluginMarketplacePanel(Panel):
         import lichtfeld as lf
 
         tr = lf.ui.tr
+        transport = self._selected_install_transport(card_id)
 
         def do_install(on_progress):
             if entry.registry_id:
-                name = mgr.install_from_registry(entry.registry_id, on_progress=on_progress)
+                name = mgr.install_from_registry(
+                    entry.registry_id,
+                    on_progress=on_progress,
+                    transport=transport,
+                )
             else:
-                name = mgr.install(entry.source_url, on_progress=on_progress)
+                name = mgr.install(entry.source_url, on_progress=on_progress, transport=transport)
             if mgr.get_state(name) == PluginState.ERROR:
                 err = mgr.get_error(name) or tr("plugin_manager.status.load_failed")
                 raise RuntimeError(err)
@@ -1178,7 +1185,7 @@ class PluginMarketplacePanel(Panel):
             if any(k in known_keys for k in plugin_keys):
                 continue
 
-            remote_url = self._git_remote_url(plugin.path)
+            remote_url = self._remote_source_url(plugin.path)
             if remote_url:
                 norm_remote = self._normalize_url(remote_url)
                 if norm_remote in catalog_urls:
@@ -1205,6 +1212,18 @@ class PluginMarketplacePanel(Panel):
             known_keys.update(plugin_keys)
 
         return merged
+
+    @staticmethod
+    def _remote_source_url(plugin_path: Path) -> str:
+        from .installer import read_plugin_source_metadata
+
+        source_info = read_plugin_source_metadata(plugin_path)
+        if source_info:
+            if source_info.github_url:
+                return source_info.github_url
+            if source_info.origin:
+                return source_info.origin
+        return PluginMarketplacePanel._git_remote_url(plugin_path)
 
     @staticmethod
     def _git_remote_url(plugin_path: Path) -> str:

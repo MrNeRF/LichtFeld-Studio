@@ -81,9 +81,10 @@ namespace lfs::training {
 
         std::vector<int64_t> get_count_array();
 
-        const lfs::core::Tensor compute_gaussian_score(const lfs::core::Tensor& gradients);
-        void densify_with_score(const lfs::core::Tensor& scores, const lfs::core::Tensor& grads, const int64_t budget);
-        void LAS_densify(const lfs::core::Tensor& scores, const int64_t allocation_budget, const lfs::core::Tensor& grad_mask, const lfs::core::Tensor& grads);
+        const lfs::core::Tensor compute_gaussian_score();
+        void ensure_error_score_shape();
+        void densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget);
+        void LAS_densify(const lfs::core::Tensor& scores, const int64_t allocation_budget);
 
         void reset_opacity();
         void prune_post_reset();
@@ -118,8 +119,8 @@ namespace lfs::training {
         std::unique_ptr<const lfs::core::param::OptimizationParameters> _params;
 
         // Pre-computed edge scores for non-blocking densification
-        lfs::core::Tensor _precomputed_grads;
         lfs::core::Tensor _precomputed_scores;
+        lfs::core::Tensor _error_score_max;
         bool _precompute_valid = false;
 
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse

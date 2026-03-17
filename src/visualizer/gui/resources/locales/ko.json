@@ -249,6 +249,7 @@
     "value.not_set": "(설정 안 됨)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.adc": "ADC",
+    "options.strategy.igs_plus": "IGS+",
     "options.tile.full": "1 (전체)",
     "options.tile.half": "2 (절반)",
     "options.tile.quarter": "4 (1/4)",
@@ -552,7 +553,10 @@
     "no_trainer_loaded": "트레이너가 로드되지 않았습니다",
     "parameters_unavailable": "매개변수를 사용할 수 없습니다",
     "no_dataset_loaded": "데이터셋이 로드되지 않았습니다",
-    "iters_per_sec": "iter/초"
+    "iters_per_sec": "iter/초",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gut_mode": "어안/왜곡/정거원통 카메라용",
@@ -950,6 +954,7 @@
     "button.install": "설치",
     "button.github": "GitHub",
     "local_install": "로컬 설치",
+    "install_as_git_checkout": "Git 체크아웃으로 설치",
     "confirm_uninstall_title": "플러그인 제거 확인",
     "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",
     "confirm_uninstall_yes": "예",

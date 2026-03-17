@@ -249,6 +249,7 @@
     "value.not_set": "(nicht gesetzt)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.adc": "ADC",
+    "options.strategy.igs_plus": "IGS+",
     "options.tile.full": "1 (Voll)",
     "options.tile.half": "2 (Halb)",
     "options.tile.quarter": "4 (Viertel)",
@@ -552,7 +553,10 @@
     "no_trainer_loaded": "Kein Trainer geladen",
     "parameters_unavailable": "Parameter nicht verfuegbar",
     "no_dataset_loaded": "Kein Datensatz geladen",
-    "iters_per_sec": "Iter/s"
+    "iters_per_sec": "Iter/s",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gut_mode": "Für Fisheye/verzerrte/equirektangulare Kameras",
@@ -950,6 +954,7 @@
     "button.install": "Installieren",
     "button.github": "GitHub",
     "local_install": "Lokale Installation",
+    "install_as_git_checkout": "Als Git-Checkout installieren",
     "confirm_uninstall_title": "Plugin-Deinstallation bestätigen",
     "confirm_uninstall_message": "Möchten Sie \"{name}\" wirklich deinstallieren?",
     "confirm_uninstall_yes": "Ja",

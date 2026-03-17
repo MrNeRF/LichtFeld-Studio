@@ -249,6 +249,7 @@
     "value.not_set": "(未设置)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.adc": "ADC",
+    "options.strategy.igs_plus": "IGS+",
     "options.tile.full": "1（完整）",
     "options.tile.half": "2（半）",
     "options.tile.quarter": "4（四分之一）",
@@ -552,7 +553,10 @@
     "no_trainer_loaded": "未加载训练器",
     "parameters_unavailable": "参数不可用",
     "no_dataset_loaded": "未加载数据集",
-    "iters_per_sec": "次迭代/秒"
+    "iters_per_sec": "次迭代/秒",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   },
   "tooltip": {
     "gut_mode": "用于鱼眼/畸变/等距柱状相机",
@@ -947,6 +951,7 @@
     "button.install": "安装",
     "button.github": "GitHub",
     "local_install": "本地安装",
+    "install_as_git_checkout": "作为 Git 检出安装",
     "confirm_uninstall_title": "确认卸载插件",
     "confirm_uninstall_message": "确定要卸载“{name}”吗？",
     "confirm_uninstall_yes": "是",
