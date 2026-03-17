@@ -3,7 +3,7 @@
 """View menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_action, menu_separator, menu_submenu, menu_toggle
+from .layouts.menus import register_menu, menu_submenu, menu_toggle
 
 
 @register_menu
@@ -68,16 +68,6 @@ class ViewMenu:
         return [
             menu_submenu(tr("menu.view.theme"), theme_items),
             menu_submenu(tr("menu.view.ui_scale"), scale_items),
-            menu_separator(),
-            menu_action(
-                tr("menu.view.python_console"),
-                lf.ui.show_python_console,
-                shortcut="Ctrl+`",
-            ),
-            menu_action(
-                tr("menu.view.plugin_marketplace"),
-                lambda: lf.ui.set_panel_enabled("lfs.plugin_marketplace", True),
-            ),
         ]
 
 

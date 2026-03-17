@@ -41,9 +41,10 @@ def register_builtin_panels():
         from . import tools
         tools.register()
 
-        from . import file_menu, edit_menu, view_menu, help_menu
+        from . import file_menu, edit_menu, tools_menu, view_menu, help_menu
         file_menu.register()
         edit_menu.register()
+        tools_menu.register()
         view_menu.register()
         help_menu.register()
 
