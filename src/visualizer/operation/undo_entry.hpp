@@ -203,7 +203,7 @@ namespace lfs::vis::op {
 
     LFS_VIS_API bool pushSceneSnapshotIfChanged(std::unique_ptr<SceneSnapshot> snapshot);
 
-    class TensorUndoEntry : public UndoEntry {
+    class LFS_VIS_API TensorUndoEntry : public UndoEntry {
     public:
         using TensorAccessor = std::function<lfs::core::Tensor*()>;
 
@@ -241,7 +241,7 @@ namespace lfs::vis::op {
         bool captured_after_ = false;
     };
 
-    class CropBoxUndoEntry : public UndoEntry {
+    class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
     public:
         CropBoxUndoEntry(SceneManager& scene,
                          RenderingManager* rendering_manager,
@@ -275,7 +275,7 @@ namespace lfs::vis::op {
         bool use_after_ = false;
     };
 
-    class EllipsoidUndoEntry : public UndoEntry {
+    class LFS_VIS_API EllipsoidUndoEntry : public UndoEntry {
     public:
         EllipsoidUndoEntry(SceneManager& scene,
                            RenderingManager* rendering_manager,
@@ -309,7 +309,7 @@ namespace lfs::vis::op {
         bool use_after_ = false;
     };
 
-    class PropertyChangeUndoEntry : public UndoEntry {
+    class LFS_VIS_API PropertyChangeUndoEntry : public UndoEntry {
     public:
         PropertyChangeUndoEntry(std::string property_path,
                                 std::any before,
