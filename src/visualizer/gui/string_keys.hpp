@@ -30,6 +30,8 @@ namespace lichtfeld::Strings {
 
         namespace Tools {
             inline constexpr const char* MENU = "menu.tools";
+            inline constexpr const char* PYTHON_CONSOLE = "menu.tools.python_console";
+            inline constexpr const char* PLUGIN_MARKETPLACE = "menu.tools.plugin_marketplace";
         } // namespace Tools
 
         namespace View {

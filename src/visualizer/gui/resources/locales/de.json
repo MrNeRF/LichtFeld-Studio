@@ -17,6 +17,8 @@
     "edit.input_settings": "Eingabeeinstellungen...",
     "edit.preferences": "Einstellungen...",
     "tools": "Werkzeuge",
+    "tools.python_console": "Python-Konsole",
+    "tools.plugin_marketplace": "Plugin-Marktplatz",
     "view": "Ansicht",
     "view.theme": "Design",
     "view.theme.dark": "Dunkel",
@@ -30,9 +32,7 @@
     "view.debug_info": "Debug-Info...",
     "help": "Hilfe",
     "help.getting_started": "Erste Schritte",
-    "help.about": "Über LichtFeld Studio",
-    "view.python_console": "Python-Konsole",
-    "view.plugin_marketplace": "Plugin-Marktplatz"
+    "help.about": "Über LichtFeld Studio"
   },
   "window": {
     "getting_started": "Erste Schritte",

@@ -17,6 +17,8 @@
     "edit.input_settings": "输入设置...",
     "edit.preferences": "偏好设置...",
     "tools": "工具",
+    "tools.python_console": "Python 控制台",
+    "tools.plugin_marketplace": "插件市场",
     "view": "视图",
     "view.theme": "主题",
     "view.theme.dark": "深色",
@@ -30,9 +32,7 @@
     "view.debug_info": "调试信息...",
     "help": "帮助",
     "help.getting_started": "入门指南",
-    "help.about": "关于LichtFeld Studio",
-    "view.python_console": "Python 控制台",
-    "view.plugin_marketplace": "插件市场"
+    "help.about": "关于LichtFeld Studio"
   },
   "window": {
     "getting_started": "入门指南",

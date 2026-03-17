@@ -17,6 +17,8 @@
     "edit.input_settings": "입력 설정...",
     "edit.preferences": "환경설정...",
     "tools": "도구",
+    "tools.python_console": "Python 콘솔",
+    "tools.plugin_marketplace": "플러그인 마켓플레이스",
     "view": "보기",
     "view.theme": "테마",
     "view.theme.dark": "다크",
@@ -30,9 +32,7 @@
     "view.debug_info": "디버그 정보...",
     "help": "도움말",
     "help.getting_started": "시작하기",
-    "help.about": "LichtFeld Studio 정보",
-    "view.python_console": "Python 콘솔",
-    "view.plugin_marketplace": "플러그인 마켓플레이스"
+    "help.about": "LichtFeld Studio 정보"
   },
   "window": {
     "getting_started": "시작하기",

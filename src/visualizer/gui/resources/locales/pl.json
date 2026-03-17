@@ -17,6 +17,8 @@
     "edit.input_settings": "Ustawienia Wejścia...",
     "edit.preferences": "Preferencje...",
     "tools": "Narzędzia",
+    "tools.python_console": "Konsola Pythona",
+    "tools.plugin_marketplace": "Marketplace wtyczek",
     "view": "Widok",
     "view.theme": "Motyw",
     "view.theme.dark": "Ciemny",
@@ -30,9 +32,7 @@
     "view.debug_info": "Informacje Debugowania...",
     "help": "Pomoc",
     "help.getting_started": "Wprowadzenie",
-    "help.about": "O LichtFeld Studio",
-    "view.python_console": "Konsola Pythona",
-    "view.plugin_marketplace": "Marketplace wtyczek"
+    "help.about": "O LichtFeld Studio"
   },
   "window": {
     "getting_started": "Wprowadzenie",

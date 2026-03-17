@@ -18,12 +18,12 @@ class ToolsMenu:
         tr = lf.ui.tr
         return [
             menu_action(
-                tr("menu.view.python_console"),
+                tr("menu.tools.python_console"),
                 lf.ui.show_python_console,
                 shortcut="Ctrl+`",
             ),
             menu_action(
-                tr("menu.view.plugin_marketplace"),
+                tr("menu.tools.plugin_marketplace"),
                 lambda: lf.ui.set_panel_enabled("lfs.plugin_marketplace", True),
             ),
         ]
