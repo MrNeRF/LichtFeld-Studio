@@ -263,13 +263,15 @@ namespace lfs::vis {
 
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = true;
+            // Loader tensors arrive in display orientation already. Keep the split-view
+            // sampler unflipped to avoid inverting the GT panel.
+            entry.needs_flip = false;
 
             const glm::vec2 tex_scale(
                 entry.interop_texture->getTexcoordScaleX(),
                 entry.interop_texture->getTexcoordScaleY());
 
-            return {entry.interop_texture->getTextureID(), width, height, true, tex_scale};
+            return {entry.interop_texture->getTextureID(), width, height, false, tex_scale};
         } catch (const std::exception& e) {
             LOG_WARN("GT loader path failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
             entry.interop_texture.reset();
@@ -346,9 +348,9 @@ namespace lfs::vis {
             entry.texture_id = texture;
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = true;
+            entry.needs_flip = false;
 
-            return {texture, width, height, true};
+            return {texture, width, height, false};
         } catch (const std::exception& e) {
             LOG_WARN("GT tensor CPU upload failed: {}", e.what());
             return {};
@@ -387,13 +389,13 @@ namespace lfs::vis {
 
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = true;
+            entry.needs_flip = false;
 
             const glm::vec2 tex_scale(
                 entry.interop_texture->getTexcoordScaleX(),
                 entry.interop_texture->getTexcoordScaleY());
 
-            return {entry.interop_texture->getTextureID(), width, height, true, tex_scale};
+            return {entry.interop_texture->getTextureID(), width, height, false, tex_scale};
         } catch (const std::exception& e) {
             LOG_WARN("GPU texture load failed: {}", e.what());
             entry.interop_texture.reset();

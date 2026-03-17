@@ -325,24 +325,30 @@ target_compile_definitions(lichtfeld_tests PRIVATE
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
 
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_TEST_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
+    )
+else()
+    set(LFS_TEST_INTERNAL_LINK_LIBS
+        lfs_mcp
+        lfs_visualizer
+        lfs_sequencer
+        lfs_rendering
+        lfs_training
+        lfs_core
+        lfs_geometry
+        lfs_io
+        lfs_video
+        fastlfs_backend
+        spz_lib
+        lfs_python_utils
+    )
+endif()
+
 # Link libraries
 target_link_libraries(lichtfeld_tests PRIVATE
-    # LFS modules
-    lfs_mcp
-    lfs_visualizer
-    lfs_sequencer
-    lfs_rendering
-    lfs_training
-    lfs_core
-    lfs_geometry
-    lfs_io
-    lfs_video
-
-
-    # Backend libraries
-    fastlfs_backend
-    spz_lib  # Niantic SPZ format library
-    lfs_python_utils
+    ${LFS_TEST_INTERNAL_LINK_LIBS}
 
     # External libraries
     GTest::gtest
@@ -400,16 +406,26 @@ target_compile_definitions(lichtfeld_benchmarks PRIVATE
     PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
 )
 
-target_link_libraries(lichtfeld_benchmarks PRIVATE
-    lfs_visualizer
-    lfs_rendering
-    lfs_training
-    lfs_core
-    lfs_geometry
-    lfs_io
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_BENCH_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,fastlfs_backend,spz_lib>"
+    )
+else()
+    set(LFS_BENCH_INTERNAL_LINK_LIBS
+        lfs_visualizer
+        lfs_rendering
+        lfs_training
+        lfs_core
+        lfs_geometry
+        lfs_io
+        fastlfs_backend
+        spz_lib
+    )
+endif()
 
-    fastlfs_backend
-    spz_lib
+target_link_libraries(lichtfeld_benchmarks PRIVATE
+    ${LFS_BENCH_INTERNAL_LINK_LIBS}
+
     GTest::gtest
     ${TORCH_LIBRARIES}
     ${OPENGL_LIBRARIES}

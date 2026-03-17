@@ -392,8 +392,12 @@ target_include_directories(${PROJECT_NAME}
         ${OPENGL_INCLUDE_DIRS}
 )
 
-target_link_libraries(${PROJECT_NAME}
-        PRIVATE
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_APP_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils>"
+    )
+else()
+    set(LFS_APP_INTERNAL_LINK_LIBS
         lfs_visualizer
         lfs_mcp
         lfs_sequencer
@@ -405,6 +409,12 @@ target_link_libraries(${PROJECT_NAME}
         lfs_video
         fastlfs_backend
         lfs_python_utils
+    )
+endif()
+
+target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+        ${LFS_APP_INTERNAL_LINK_LIBS}
 
         ${OPENGL_LIBRARIES}
         CUDA::cudart
@@ -414,6 +424,10 @@ target_link_libraries(${PROJECT_NAME}
         glad::glad
         SDL3::SDL3
 )
+
+# The app embeds Python and loads the nanobind module at runtime for panels,
+# menus, and operators. Keep the runtime artifact in lockstep with the app.
+add_dependencies(${PROJECT_NAME} lfs_py)
 
 # Copy nvImageCodec shared libraries next to executable for easy deployment
 if(TARGET nvimgcodec)

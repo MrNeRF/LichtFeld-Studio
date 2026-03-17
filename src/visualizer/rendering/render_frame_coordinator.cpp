@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "model_renderability.hpp"
 #include "passes/point_cloud_pass.hpp"
 #include "passes/splat_raster_pass.hpp"
 #include "render_pass.hpp"
@@ -69,7 +70,7 @@ namespace lfs::vis {
             scene_state = context.scene_manager->buildRenderState();
         }
 
-        const bool has_splats = context.model && context.model->size() > 0;
+        const bool has_splats = hasRenderableGaussians(context.model);
         const bool has_point_cloud = scene_state.point_cloud && scene_state.point_cloud->size() > 0;
         if (!has_point_cloud) {
             dependencies_.pass_graph.resetPointCloudCache();

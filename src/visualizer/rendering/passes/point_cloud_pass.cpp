@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_pass.hpp"
+#include "../model_renderability.hpp"
 #include "../viewport_request_builder.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
@@ -13,7 +14,7 @@
 namespace lfs::vis {
 
     bool PointCloudPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
-        if (ctx.model && ctx.model->size() > 0)
+        if (hasRenderableGaussians(ctx.model))
             return false;
         if (!ctx.scene_manager)
             return false;

@@ -156,6 +156,8 @@ namespace lfs::vis {
             case input::Action::PASTE_SELECTION:
             case input::Action::TOGGLE_SELECTION_DEPTH_FILTER:
             case input::Action::TOGGLE_SELECTION_CROP_FILTER:
+            case input::Action::TOGGLE_GT_COMPARISON:
+            case input::Action::TOGGLE_SPLIT_VIEW:
                 return true;
             default:
                 return false;

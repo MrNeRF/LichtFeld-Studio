@@ -4,7 +4,11 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/point_cloud.hpp"
+#include "core/services.hpp"
+#include "core/tensor.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/passes/mesh_pass.hpp"
 #include "visualizer/rendering/passes/point_cloud_pass.hpp"
 #include "visualizer/rendering/passes/splat_raster_pass.hpp"
@@ -12,6 +16,7 @@
 #include "visualizer/rendering/split_view_service.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
+#include "visualizer/scene/scene_manager.hpp"
 
 #include <gtest/gtest.h>
 #include <filesystem>
@@ -27,6 +32,21 @@ namespace lfs::vis {
         }
 
         void TearDown() override {
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+        }
+    };
+
+    class SceneManagerRenderStateTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+            services().clear();
+        }
+
+        void TearDown() override {
+            services().clear();
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
         }
@@ -83,6 +103,45 @@ namespace lfs::vis {
 
         EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
         EXPECT_EQ(settings.split_view_offset, 0);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DatasetReadyStateKeepsVisiblePointCloudWhenTrainingModelIsEmpty) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+
+        auto& scene = manager.getScene();
+        const auto dataset_id = scene.addGroup("Dataset");
+
+        auto means_empty = lfs::core::Tensor::zeros({size_t{0}, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto sh0_empty = lfs::core::Tensor::zeros({size_t{0}, size_t{1}, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto shN_empty = lfs::core::Tensor::zeros({size_t{0}, size_t{3}, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto scaling_empty = lfs::core::Tensor::zeros({size_t{0}, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto rotation_empty = lfs::core::Tensor::zeros({size_t{0}, size_t{4}}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto opacity_empty = lfs::core::Tensor::zeros({size_t{0}, size_t{1}}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        scene.addSplat(
+            "Model",
+            std::make_unique<lfs::core::SplatData>(
+                1,
+                std::move(means_empty),
+                std::move(sh0_empty),
+                std::move(shN_empty),
+                std::move(scaling_empty),
+                std::move(rotation_empty),
+                std::move(opacity_empty),
+                1.0f),
+            dataset_id);
+        scene.setTrainingModelNode("Model");
+
+        auto means = lfs::core::Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, lfs::core::Device::CPU);
+        auto colors = lfs::core::Tensor::from_vector({1.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, lfs::core::Device::CPU);
+        scene.addPointCloud("PointCloud", std::make_shared<lfs::core::PointCloud>(std::move(means), std::move(colors)), dataset_id);
+
+        const auto state = manager.buildRenderState();
+        ASSERT_NE(state.combined_model, nullptr);
+        EXPECT_TRUE(state.combined_model->means_raw().is_valid());
+        EXPECT_EQ(state.combined_model->size(), 0u);
+        ASSERT_NE(state.point_cloud, nullptr);
+        EXPECT_EQ(state.point_cloud->size(), 1);
     }
 
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
@@ -150,6 +209,26 @@ namespace lfs::vis {
         EXPECT_NE(splat_pass.sensitivity() & DirtyFlag::SPLIT_VIEW, 0u);
         EXPECT_NE(point_cloud_pass.sensitivity() & DirtyFlag::SPLIT_VIEW, 0u);
         EXPECT_NE(MeshPass::MESH_GEOMETRY_MASK & DirtyFlag::SPLIT_VIEW, 0u);
+    }
+
+    TEST(RenderPassSensitivityTest, InvalidTrainingModelRoutesToPointCloudFallback) {
+        Viewport viewport;
+        RenderSettings settings;
+        SceneManager manager;
+        const lfs::core::SplatData invalid_model;
+
+        FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = &invalid_model,
+            .settings = settings,
+            .render_size = viewport.windowSize};
+
+        SplatRasterPass splat_pass;
+        PointCloudPass point_cloud_pass;
+
+        EXPECT_FALSE(splat_pass.shouldExecute(DirtyFlag::SPLATS, ctx));
+        EXPECT_TRUE(point_cloud_pass.shouldExecute(DirtyFlag::SPLATS, ctx));
     }
 
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparisonAndEmitsEvent) {

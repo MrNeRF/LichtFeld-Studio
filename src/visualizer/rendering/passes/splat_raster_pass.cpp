@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "splat_raster_pass.hpp"
+#include "../model_renderability.hpp"
 #include "../viewport_request_builder.hpp"
 #include "../viewport_appearance_correction.hpp"
 #include "core/logger.hpp"
@@ -11,7 +12,7 @@
 
 namespace lfs::vis {
     bool SplatRasterPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
-        if (!ctx.model || ctx.model->size() == 0)
+        if (!hasRenderableGaussians(ctx.model))
             return false;
         return (frame_dirty & sensitivity()) != 0;
     }
@@ -28,7 +29,7 @@ namespace lfs::vis {
     void SplatRasterPass::renderToTexture(lfs::rendering::RenderingEngine& engine,
                                           const FrameContext& ctx, FrameResources& res) {
         LOG_TIMER_TRACE("SplatRasterPass::renderToTexture");
-        assert(ctx.model && ctx.model->size() > 0);
+        assert(hasRenderableGaussians(ctx.model));
 
         const auto& settings = ctx.settings;
 

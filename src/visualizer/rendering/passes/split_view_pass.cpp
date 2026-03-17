@@ -84,7 +84,10 @@ namespace lfs::vis {
                 return std::nullopt;
 
             const unsigned int rendered_texture = res.cached_gpu_frame->color.id;
-            const glm::vec2 rendered_texcoord_scale = res.cached_gpu_frame->color.texcoord_scale;
+            // GT compare consumes the pre-rendered GpuFrame directly. Match the old cached-render
+            // contract by sampling only the GT-sized content region, but keep the cached-render
+            // orientation unchanged so the split-view compositor does not apply an extra Y flip.
+            const glm::vec2 rendered_texcoord_scale = res.gt_context->render_texcoord_scale;
 
             auto letterbox_viewport = viewport_data;
             letterbox_viewport.size = ctx.render_size;

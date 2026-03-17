@@ -262,6 +262,9 @@ namespace lfs::rendering {
         GLFramebufferGuard framebuffer_guard;
         GLViewportGuard viewport_guard;
         GLScissorEnableGuard scissor_guard;
+        // Split-view rendering composites into offscreen FBOs. If the GUI viewport scissor
+        // remains enabled here, the window-space scissor box can clip the entire offscreen draw.
+        glDisable(GL_SCISSOR_TEST);
 
         std::array<PanelRenderOutput, 2> panel_outputs;
         for (size_t i = 0; i < request.panels.size(); ++i) {

@@ -28,6 +28,7 @@
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/rendering/model_renderability.hpp"
 #include <algorithm>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
@@ -2145,8 +2146,9 @@ namespace lfs::vis {
             state.combined_model = scene_.getTrainingModel();
         }
 
-        // Always try to get point cloud if no model (supports plugin-added point clouds)
-        if (!state.combined_model) {
+        // Fall back to the visible point cloud whenever the active splat model is absent or empty.
+        // This keeps dataset "ready" scenes renderable before training has produced gaussians.
+        if (!hasRenderableGaussians(state.combined_model)) {
             state.point_cloud = scene_.getVisiblePointCloud();
         }
 

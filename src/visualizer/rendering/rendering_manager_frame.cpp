@@ -5,8 +5,9 @@
 #include "rendering_manager.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
-#include "render_frame_coordinator.hpp"
 #include "core/splat_data.hpp"
+#include "model_renderability.hpp"
+#include "render_frame_coordinator.hpp"
 #include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -51,8 +52,9 @@ namespace lfs::vis {
         const bool resize_completed = resize_result.completed;
 
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
+        const bool has_renderable_model = hasRenderableGaussians(model);
         const auto* const visible_point_cloud =
-            (scene_manager && !model) ? scene_manager->getScene().getVisiblePointCloud() : nullptr;
+            (scene_manager && !has_renderable_model) ? scene_manager->getScene().getVisiblePointCloud() : nullptr;
         const bool has_visible_point_cloud = visible_point_cloud && visible_point_cloud->size() > 0;
         const size_t model_ptr = reinterpret_cast<size_t>(model);
 
@@ -79,7 +81,7 @@ namespace lfs::vis {
             scene_manager,
             settings_,
             camera_interaction_service_.currentCameraId(),
-            model || has_visible_point_cloud,
+            has_renderable_model || has_visible_point_cloud,
             viewport_artifact_service_.hasGpuFrame(),
             gt_texture_cache_,
             request_gt_prerender);
@@ -89,7 +91,7 @@ namespace lfs::vis {
 
         if (const DirtyMask required_dirty = frame_lifecycle_service_.requiredDirtyMask(
                 viewport_artifact_service_.hasViewportOutput(),
-                model || has_visible_point_cloud,
+                has_renderable_model || has_visible_point_cloud,
                 settings_.split_view_mode);
             required_dirty) {
             dirty_mask_.fetch_or(required_dirty, std::memory_order_relaxed);

@@ -4,6 +4,7 @@
 
 #include "rendering_manager.hpp"
 #include "core/logger.hpp"
+#include "model_renderability.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -110,7 +111,7 @@ namespace lfs::vis {
         }
 
         const auto* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
-        if (!model || model->size() == 0) {
+        if (!hasRenderableGaussians(model)) {
             return false;
         }
 
