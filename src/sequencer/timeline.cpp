@@ -3,6 +3,7 @@
 
 #include "timeline.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "interpolation.hpp"
 #include "rendering/render_constants.hpp"
 #include <algorithm>
@@ -188,6 +189,7 @@ namespace lfs::sequencer {
 
     bool Timeline::saveToJson(const std::string& path) const {
         try {
+            const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
             nlohmann::json j;
             j["version"] = JSON_VERSION;
             j["keyframes"] = nlohmann::json::array();
@@ -207,8 +209,8 @@ namespace lfs::sequencer {
                 j["animation_clip"] = clip_->toJson();
             }
 
-            std::ofstream file(path);
-            if (!file.is_open()) {
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(path_fs, file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
@@ -223,8 +225,9 @@ namespace lfs::sequencer {
 
     bool Timeline::loadFromJson(const std::string& path) {
         try {
-            std::ifstream file(path);
-            if (!file.is_open()) {
+            const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path_fs, file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }

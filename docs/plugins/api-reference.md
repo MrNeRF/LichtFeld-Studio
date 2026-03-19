@@ -804,7 +804,7 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 
 | Method                                              | Returns              | Description              |
 |-----------------------------------------------------|----------------------|--------------------------|
-| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker  |
+| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker. `dialog_title` is accepted for compatibility and currently ignored. |
 
 ### Property Binding
 
@@ -1390,6 +1390,8 @@ lf.undo.stack() -> dict
 | `lf.ui.open_dataset_folder_dialog()`        | `str`            |
 | `lf.ui.open_ply_file_dialog(start_dir='')`  | `str`            |
 | `lf.ui.open_mesh_file_dialog(start_dir='')` | `str`            |
+
+`lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.
 | `lf.ui.open_checkpoint_file_dialog()`       | `str`            |
 | `lf.ui.open_json_file_dialog()`             | `str`            |
 | `lf.ui.open_video_file_dialog()`            | `str`            |

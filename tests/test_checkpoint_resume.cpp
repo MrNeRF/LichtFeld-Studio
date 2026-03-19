@@ -62,11 +62,17 @@ namespace {
     TEST_P(CheckpointResumeTest, TrainSaveLoadResume) {
         auto [strategy, sh_degree] = GetParam();
         LOG_INFO("Testing checkpoint resume: strategy={}, sh_degree={}", strategy, sh_degree);
+        const bool fixed_horizon_resume = strategy == "igs+";
+        const int phase_one_iterations = fixed_horizon_resume ? TOTAL_ITER : CHECKPOINT_ITER + 1;
+        const int checkpoint_iteration = phase_one_iterations;
 
-        // Phase 1: Train through the saved total so the mid-training checkpoint contains the final horizon.
+        // Phase 1: Write multiple checkpoints and verify the latest save is the only one retained.
         {
-            auto params = createParams(TOTAL_ITER);
-            params.optimization.save_steps = {CHECKPOINT_ITER};
+            auto params = createParams(phase_one_iterations);
+            params.optimization.save_steps = fixed_horizon_resume
+                                                ? std::vector<size_t>{static_cast<size_t>(CHECKPOINT_ITER)}
+                                                : std::vector<size_t>{static_cast<size_t>(CHECKPOINT_ITER / 2),
+                                                                      static_cast<size_t>(CHECKPOINT_ITER)};
             lfs::core::Scene scene;
 
             auto load_result = lfs::training::loadTrainingDataIntoScene(params, scene);
@@ -82,16 +88,26 @@ namespace {
             auto train_result = trainer->train();
             ASSERT_TRUE(train_result.has_value()) << "Training failed: " << train_result.error();
 
-            EXPECT_EQ(trainer->get_current_iteration(), TOTAL_ITER);
+            EXPECT_EQ(trainer->get_current_iteration(), phase_one_iterations);
 
             trainer->shutdown();
         }
 
-        // Verify checkpoint file exists
-        auto checkpoint_path = output_path_ / "checkpoints" /
-                               std::format("checkpoint_{}.resume", CHECKPOINT_ITER);
+        // Verify the rotating checkpoint exists and is the only checkpoint file.
+        auto checkpoint_path = lfs::training::checkpoint_output_path(output_path_);
         ASSERT_TRUE(std::filesystem::exists(checkpoint_path))
             << "Checkpoint file not found: " << checkpoint_path;
+        EXPECT_EQ(checkpoint_path.filename(), "checkpoint.resume");
+
+        size_t resume_file_count = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(output_path_ / "checkpoints")) {
+            if (entry.path().extension() == ".resume") {
+                ++resume_file_count;
+            }
+            EXPECT_EQ(entry.path().filename(), checkpoint_path.filename())
+                << "Unexpected stale checkpoint file left behind: " << entry.path();
+        }
+        EXPECT_EQ(resume_file_count, 1u);
 
         // Phase 2: Load checkpoint and resume to final iteration
         {
@@ -103,6 +119,11 @@ namespace {
             params.resume_checkpoint = checkpoint_path;
             params.dataset.data_path = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
             params.dataset.output_path = output_path_;
+            auto resumed_params = params;
+            if (!fixed_horizon_resume) {
+                resumed_params.optimization.iterations = TOTAL_ITER;
+                resumed_params.optimization.stop_refine = TOTAL_ITER;
+            }
 
             lfs::core::Scene scene;
 
@@ -115,9 +136,13 @@ namespace {
             auto trainer = std::make_unique<lfs::training::Trainer>(scene);
             auto init_result = trainer->initialize(params);
             ASSERT_TRUE(init_result.has_value()) << "Failed to init trainer: " << init_result.error();
+            if (!fixed_horizon_resume) {
+                trainer->get_strategy_mutable().set_optimization_params(resumed_params.optimization);
+                trainer->setParams(resumed_params);
+            }
 
             // After loading checkpoint, iteration should be at checkpoint point
-            EXPECT_EQ(trainer->get_current_iteration(), CHECKPOINT_ITER);
+            EXPECT_EQ(trainer->get_current_iteration(), checkpoint_iteration);
             EXPECT_EQ(trainer->getParams().optimization.iterations, static_cast<size_t>(TOTAL_ITER));
             EXPECT_EQ(trainer->getParams().optimization.refine_every, static_cast<size_t>(100));
             EXPECT_EQ(trainer->getParams().optimization.stop_refine, static_cast<size_t>(TOTAL_ITER));

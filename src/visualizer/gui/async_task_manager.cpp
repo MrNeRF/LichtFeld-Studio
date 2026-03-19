@@ -10,7 +10,7 @@
 #include "gui/gui_manager.hpp"
 #include "gui/html_viewer_export.hpp"
 #include "gui/panel_registry.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "gui/video_export_utils.hpp"
 #include "io/exporter.hpp"
 #include "rendering/framebuffer.hpp"

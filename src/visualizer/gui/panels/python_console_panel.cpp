@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panels/python_console_panel.hpp"
+#include "core/path_utils.hpp"
 #include "core/events.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/ui_widgets.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "theme/theme.hpp"
 
 #include <chrono>
@@ -194,9 +195,9 @@ namespace {
     }
 
     bool load_script(const std::filesystem::path& path, lfs::vis::gui::panels::PythonConsoleState& state) {
-        std::ifstream file(path);
-        if (!file.is_open()) {
-            state.addError("Failed to open: " + path.string());
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(path, file)) {
+            state.addError("Failed to open: " + lfs::core::path_to_utf8(path));
             return false;
         }
 
@@ -209,7 +210,7 @@ namespace {
 
         state.setScriptPath(path);
         state.setModified(false);
-        state.addInfo("Loaded: " + path.filename().string());
+        state.addInfo("Loaded: " + lfs::core::path_to_utf8(path.filename()));
         return true;
     }
 
@@ -219,9 +220,9 @@ namespace {
             return false;
         }
 
-        std::ofstream file(path);
-        if (!file.is_open()) {
-            state.addError("Failed to save: " + path.string());
+        std::ofstream file;
+        if (!lfs::core::open_file_for_write(path, file)) {
+            state.addError("Failed to save: " + lfs::core::path_to_utf8(path));
             return false;
         }
 
@@ -230,7 +231,7 @@ namespace {
 
         state.setScriptPath(path);
         state.setModified(false);
-        state.addInfo("Saved: " + path.filename().string());
+        state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
         return true;
     }
 
@@ -521,7 +522,7 @@ namespace lfs::vis::gui::panels {
         // Build window title with script name and modified indicator
         std::string window_title = "Python Console";
         if (!state.getScriptPath().empty()) {
-            window_title += " - " + state.getScriptPath().filename().string();
+            window_title += " - " + lfs::core::path_to_utf8(state.getScriptPath().filename());
         }
         if (state.isModified()) {
             window_title += " *";
@@ -961,10 +962,13 @@ namespace lfs::vis::gui::panels {
         if (!has_script)
             ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            if (has_script)
-                ImGui::SetTooltip("Reload: %s", state.getScriptPath().filename().string().c_str());
-            else
+            if (has_script) {
+                const std::string filename_utf8 =
+                    lfs::core::path_to_utf8(state.getScriptPath().filename());
+                ImGui::SetTooltip("Reload: %s", filename_utf8.c_str());
+            } else {
                 ImGui::SetTooltip("No script loaded");
+            }
         }
 
         ImGui::SameLine();

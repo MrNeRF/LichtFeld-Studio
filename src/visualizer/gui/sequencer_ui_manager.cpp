@@ -11,11 +11,12 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/string_keys.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "io/video/video_export_options.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -347,24 +348,26 @@ namespace lfs::vis::gui {
         if (panel_->consumeSavePathRequest()) {
             const auto path = gui::SaveJsonFileDialog("camera_path");
             if (!path.empty()) {
-                if (controller_.saveToJson(path.string()))
-                    LOG_INFO("Camera path saved to {}", path.string());
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                if (controller_.saveToJson(path_utf8))
+                    LOG_INFO("Camera path saved to {}", path_utf8);
                 else
-                    LOG_ERROR("Failed to save camera path to {}", path.string());
+                    LOG_ERROR("Failed to save camera path to {}", path_utf8);
             }
         }
 
         if (panel_->consumeLoadPathRequest()) {
             const auto path = gui::OpenJsonFileDialog();
             if (!path.empty()) {
-                if (controller_.loadFromJson(path.string())) {
-                    LOG_INFO("Camera path loaded from {}", path.string());
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                if (controller_.loadFromJson(path_utf8)) {
+                    LOG_INFO("Camera path loaded from {}", path_utf8);
                     lfs::core::events::state::KeyframeListChanged{
                         .count = controller_.timeline().realKeyframeCount()}
                         .emit();
                     pip_needs_update_ = true;
                 } else {
-                    LOG_ERROR("Failed to load camera path from {}", path.string());
+                    LOG_ERROR("Failed to load camera path from {}", path_utf8);
                 }
             }
         }

@@ -9,6 +9,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
 #include "gui/global_context_menu.hpp"
@@ -16,7 +17,7 @@
 #include "gui/rml_menu_bar.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "py_command.hpp"
@@ -2175,7 +2176,9 @@ namespace lfs::python {
     }
 
     std::tuple<bool, std::string> PyUILayout::path_input(const std::string& label, const std::string& value,
-                                                         const bool folder_mode, const std::string& dialog_title) {
+                                                         const bool folder_mode,
+                                                         const std::string& /*dialog_title*/) {
+        // `dialog_title` is accepted for Python API compatibility; native dialogs currently ignore it.
         char buffer[INPUT_TEXT_BUFFER_SIZE];
         std::strncpy(buffer, value.c_str(), sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
@@ -2190,16 +2193,17 @@ namespace lfs::python {
         ImGui::SameLine();
         const std::string btn_id = "...##" + label + "_browse";
         if (ImGui::Button(btn_id.c_str())) {
-            const std::filesystem::path start_path = value.empty() ? std::filesystem::path{} : std::filesystem::path{value};
+            const std::filesystem::path start_path =
+                value.empty() ? std::filesystem::path{} : lfs::core::utf8_to_path(value);
             std::filesystem::path result;
             if (folder_mode) {
-                result = lfs::vis::gui::SelectFolderDialog(
-                    dialog_title.empty() ? "Select Folder" : dialog_title, start_path);
+                result = lfs::vis::gui::PickFolderDialog(start_path);
             } else {
                 result = lfs::vis::gui::OpenImageFileDialog(start_path);
             }
             if (!result.empty()) {
-                std::strncpy(buffer, result.string().c_str(), sizeof(buffer) - 1);
+                const std::string result_utf8 = lfs::core::path_to_utf8(result);
+                std::strncpy(buffer, result_utf8.c_str(), sizeof(buffer) - 1);
                 buffer[sizeof(buffer) - 1] = '\0';
                 changed = true;
             }
@@ -3487,7 +3491,8 @@ namespace lfs::python {
                  nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f},
                  "Draw a float input with increment/decrement buttons, returns (changed, value)")
             .def("path_input", &PyUILayout::path_input, nb::arg("label"), nb::arg("value"),
-                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "", "Draw a path input with browse button, returns (changed, path)")
+                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
+                 "Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.")
             // Color
             .def("color_edit3", &PyUILayout::color_edit3, nb::arg("label"), nb::arg("color"), "Draw an RGB color editor, returns (changed, color)")
             .def("color_edit4", &PyUILayout::color_edit4, nb::arg("label"), nb::arg("color"), "Draw an RGBA color editor, returns (changed, color)")
@@ -3713,36 +3718,38 @@ namespace lfs::python {
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
                 auto result = lfs::vis::gui::OpenImageFileDialog(start_path);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select an image file. Returns empty string if cancelled.");
 
         m.def(
             "open_folder_dialog",
-            [](const std::string& title, const std::string& start_dir) -> std::string {
+            [](const std::string& /*title*/, const std::string& start_dir) -> std::string {
+                // `title` is accepted for Python API compatibility; native dialogs currently ignore it.
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
-                auto result = lfs::vis::gui::SelectFolderDialog(title, start_path);
-                return result.empty() ? "" : result.string();
+                auto result = lfs::vis::gui::PickFolderDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("title") = "Select Folder", nb::arg("start_dir") = "",
-            "Open a folder selection dialog. Returns empty string if cancelled.");
+            "Open a folder selection dialog. Returns empty string if cancelled. "
+            "title is accepted for compatibility and currently ignored.");
 
         m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
-                auto result = lfs::vis::gui::OpenPlyFileDialogNative(start_path);
-                return result.empty() ? "" : result.string();
+                auto result = lfs::vis::gui::OpenPointCloudFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select a PLY file. Returns empty string if cancelled.");
@@ -3752,10 +3759,10 @@ namespace lfs::python {
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
                 auto result = lfs::vis::gui::OpenMeshFileDialog(start_path);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
@@ -3764,7 +3771,7 @@ namespace lfs::python {
             "open_checkpoint_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenCheckpointFileDialog();
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a file dialog to select a checkpoint file. Returns empty string if cancelled.");
 
@@ -3772,7 +3779,7 @@ namespace lfs::python {
             "open_json_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenJsonFileDialog();
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a file dialog to select a JSON config file. Returns empty string if cancelled.");
 
@@ -3780,7 +3787,7 @@ namespace lfs::python {
             "save_json_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("default_name") = "config.json",
             "Open a save file dialog for JSON files. Returns empty string if cancelled.");
@@ -3789,7 +3796,7 @@ namespace lfs::python {
             "save_ply_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SavePlyFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for PLY files. Returns empty string if cancelled.");
@@ -3798,7 +3805,7 @@ namespace lfs::python {
             "save_sog_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSogFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for SOG files. Returns empty string if cancelled.");
@@ -3807,7 +3814,7 @@ namespace lfs::python {
             "save_spz_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSpzFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
@@ -3816,7 +3823,7 @@ namespace lfs::python {
             "save_html_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveHtmlFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("default_name") = "viewer",
             "Open a save file dialog for HTML viewer files. Returns empty string if cancelled.");
@@ -3824,8 +3831,8 @@ namespace lfs::python {
         m.def(
             "open_dataset_folder_dialog",
             []() -> std::string {
-                auto result = lfs::vis::gui::OpenDatasetFolderDialogNative();
-                return result.empty() ? "" : result.string();
+                auto result = lfs::vis::gui::OpenDatasetFolderDialog();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a folder dialog to select a dataset. Returns empty string if cancelled.");
 
@@ -3833,7 +3840,7 @@ namespace lfs::python {
             "open_video_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenVideoFileDialog();
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a file dialog to select a video file. Returns empty string if cancelled.");
 

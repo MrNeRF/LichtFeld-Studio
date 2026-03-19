@@ -28,7 +28,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include <implot.h>
 
 #include "gui/gui_focus_state.hpp"
@@ -1789,8 +1789,7 @@ namespace lfs::vis::gui {
                         }
                     }
                 } else if (result.button_label == LOC(DiskSpaceDialog::CHANGE_LOCATION)) {
-                    std::filesystem::path new_location = SelectFolderDialog(
-                        LOC(DiskSpaceDialog::SELECT_OUTPUT_LOCATION), path.parent_path());
+                    std::filesystem::path new_location = PickFolderDialog(path.parent_path());
                     if (!new_location.empty() && is_checkpoint) {
                         if (auto* tm = viewer_->getTrainerManager()) {
                             if (auto* trainer = tm->getTrainer()) {

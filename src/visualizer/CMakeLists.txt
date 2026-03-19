@@ -141,7 +141,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         gui/panels/menu_bar.cpp
         gui/panels/menu_bar.hpp
-        gui/utils/windows_utils.cpp
+        gui/utils/native_file_dialog.cpp
         gui/utils/drag_drop_native.cpp
         gui/utils/file_association.cpp
 
@@ -201,6 +201,7 @@ target_link_libraries(lfs_visualizer
         OpenSSL::SSL
         OpenSSL::Crypto
         CUDA::cudart
+        nfd::nfd
         ${OPENGL_LIBRARIES}
         vterm
 )
