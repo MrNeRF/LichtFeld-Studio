@@ -182,7 +182,7 @@ namespace lfs::vis {
 
         applyPendingParams();
 
-        if (auto error = trainer_->getParams().optimization.validate(); !error.empty()) {
+        if (auto error = trainer_->getParams().validate(); !error.empty()) {
             LOG_ERROR("Cannot start training: {}", error);
             last_error_ = error;
             state::TrainingCompleted{

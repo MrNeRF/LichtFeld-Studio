@@ -173,10 +173,22 @@ namespace lfs::core {
                 return "GUT and " + strategy + " strategy cannot be used together";
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
-            if (ppisp_freeze_from_sidecar && ppisp_sidecar_path.empty())
-                return "PPISP sidecar freeze requires a sidecar path";
-            if (ppisp_freeze_from_sidecar && !std::filesystem::exists(ppisp_sidecar_path))
-                return std::format("PPISP sidecar does not exist: '{}'", lfs::core::path_to_utf8(ppisp_sidecar_path));
+            return {};
+        }
+
+        std::string TrainingParameters::validate() const {
+            if (auto error = optimization.validate(); !error.empty()) {
+                return error;
+            }
+            if (optimization.ppisp_freeze_from_sidecar && !resume_checkpoint.has_value()) {
+                if (optimization.ppisp_sidecar_path.empty()) {
+                    return "PPISP sidecar freeze requires a sidecar path";
+                }
+                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                    return std::format("PPISP sidecar does not exist: '{}'",
+                                       lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
+                }
+            }
             return {};
         }
 

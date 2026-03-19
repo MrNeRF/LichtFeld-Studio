@@ -179,7 +179,7 @@ namespace lfs::training {
                              lfs::core::path_to_utf8(path), header.num_cameras, header.num_frames,
                              controller_pool->num_cameras());
                 } else {
-                    LOG_WARN("PPISP file has controller pool but none provided - skipping");
+                    LOG_DEBUG("PPISP file has controller pool but none provided - skipping controller data");
                     // Skip controller pool data by reading into a temporary
                     constexpr uint32_t INFERENCE_MAGIC = 0x4C464349;
                     uint32_t magic, version;

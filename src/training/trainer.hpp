@@ -275,11 +275,24 @@ namespace lfs::training {
         std::expected<void, std::string> initialize_ppisp_controller();
         std::expected<void, std::string> apply_ppisp_sidecar_if_configured();
         std::expected<PPISPFileMetadata, std::string> build_ppisp_sidecar_metadata() const;
-        [[nodiscard]] bool is_ppisp_frozen_from_sidecar() const {
+        struct PPISPSidecarMappings {
+            std::vector<int> frame_mapping;
+            std::vector<int> camera_mapping;
+        };
+        std::expected<PPISPSidecarMappings, std::string> build_ppisp_sidecar_mappings(
+            const PPISP& loaded_ppisp,
+            const PPISPFileMetadata& metadata,
+            const std::filesystem::path& sidecar_path) const;
+        [[nodiscard]] bool is_ppisp_frozen() const {
             return params_.optimization.use_ppisp &&
-                   params_.optimization.ppisp_freeze_from_sidecar &&
+                   params_.optimization.ppisp_freeze_from_sidecar;
+        }
+        [[nodiscard]] bool should_apply_ppisp_sidecar_on_init() const {
+            return is_ppisp_frozen() &&
+                   !params_.resume_checkpoint.has_value() &&
                    !params_.optimization.ppisp_sidecar_path.empty();
         }
+        [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
