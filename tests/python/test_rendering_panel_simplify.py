@@ -110,7 +110,7 @@ def test_rendering_panel_simplify_tracks_selected_splat_and_applies(rendering_pa
     assert panel._simplify_source_name == "Patio"
     assert panel._simplify_original_count == 608_640
     assert panel._compute_simplify_target_count() == 60_864
-    assert panel._simplify_output_name() == "Patio (NanoGS 10%)"
+    assert panel._simplify_output_name() == "Patio (Simplified 10%)"
     assert panel._can_run_simplify() is True
 
     panel._start_simplify()
