@@ -1390,8 +1390,6 @@ lf.undo.stack() -> dict
 | `lf.ui.open_dataset_folder_dialog()`        | `str`            |
 | `lf.ui.open_ply_file_dialog(start_dir='')`  | `str`            |
 | `lf.ui.open_mesh_file_dialog(start_dir='')` | `str`            |
-
-`lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.
 | `lf.ui.open_checkpoint_file_dialog()`       | `str`            |
 | `lf.ui.open_json_file_dialog()`             | `str`            |
 | `lf.ui.open_video_file_dialog()`            | `str`            |
@@ -1400,6 +1398,8 @@ lf.undo.stack() -> dict
 | `lf.ui.save_sog_file_dialog(default_name='export.sog')`   | `str` |
 | `lf.ui.save_spz_file_dialog(default_name='export.spz')`   | `str` |
 | `lf.ui.save_html_file_dialog(default_name='viewer.html')` | `str` |
+
+`lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.
 
 ### UI Hooks
 

@@ -64,6 +64,8 @@ namespace {
         LOG_INFO("Testing checkpoint resume: strategy={}, sh_degree={}", strategy, sh_degree);
         const bool fixed_horizon_resume = strategy == "igs+";
         const int phase_one_iterations = fixed_horizon_resume ? TOTAL_ITER : CHECKPOINT_ITER + 1;
+        // Phase 1 always leaves the rotating checkpoint at the completed iteration because the
+        // final save path writes a .resume alongside the final PLY.
         const int checkpoint_iteration = phase_one_iterations;
 
         // Phase 1: Write multiple checkpoints and verify the latest save is the only one retained.
