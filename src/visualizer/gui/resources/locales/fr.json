@@ -626,7 +626,8 @@
     "masks_dir": "Masques :",
     "output_dir": "Sortie : ",
     "init_file": "Init file (optionnel, remplace points3D) :",
-    "help_text": "Les checkpoints, logs et modèles exportés seront sauvegardés dans le répertoire de sortie."
+    "help_text": "Les checkpoints, logs et modèles exportés seront sauvegardés dans le répertoire de sortie.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "Impossible d'ouvrir",
@@ -757,10 +758,12 @@
     "ppisp_activation_step": "Étape d'activation:",
     "ppisp_controller_lr": "LR du contrôleur:",
     "ppisp_freeze_gaussians": "Geler les Gaussiens:",
-    "disabled": "Désactivé"
+    "disabled": "Désactivé",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
-    "title": "Aper\u00e7u de l'image",
+    "title": "Aperçu de l'image",
     "image_section": "IMAGE",
     "file_section": "FICHIER",
     "view_section": "VUE",

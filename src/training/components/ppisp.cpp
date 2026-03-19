@@ -832,6 +832,97 @@ namespace lfs::training {
         return params.reshape({1, 9});
     }
 
+    std::vector<int> PPISP::ordered_camera_ids() const {
+        assert(finalized_ && "Must call finalize() before ordered_camera_ids()");
+        std::vector<int> ordered(static_cast<size_t>(num_cameras_));
+        for (const auto& [camera_id, idx] : camera_id_to_idx_) {
+            assert(idx >= 0 && idx < num_cameras_ && "Invalid camera index");
+            ordered[static_cast<size_t>(idx)] = camera_id;
+        }
+        return ordered;
+    }
+
+    std::expected<void, std::string> PPISP::copy_inference_weights_from(
+        const PPISP& source,
+        const std::vector<int>& source_frame_indices,
+        const std::vector<int>& source_camera_indices) {
+
+        if (!finalized_) {
+            return std::unexpected("Target PPISP must be finalized before importing inference weights");
+        }
+        if (!source.isFinalized()) {
+            return std::unexpected("Source PPISP must be finalized before importing inference weights");
+        }
+        if (static_cast<int>(source_frame_indices.size()) != num_frames_) {
+            return std::unexpected("Frame mapping size does not match target PPISP frame count");
+        }
+        if (static_cast<int>(source_camera_indices.size()) != num_cameras_) {
+            return std::unexpected("Camera mapping size does not match target PPISP camera count");
+        }
+
+        auto validate_index_range = [](const std::vector<int>& indices, const int upper_bound, const char* label)
+            -> std::expected<void, std::string> {
+            for (size_t i = 0; i < indices.size(); ++i) {
+                if (indices[i] < 0 || indices[i] >= upper_bound) {
+                    return std::unexpected(std::string(label) + " mapping contains out-of-range index at position " +
+                                           std::to_string(i));
+                }
+            }
+            return {};
+        };
+
+        if (auto result = validate_index_range(source_frame_indices, source.num_frames_, "Frame"); !result) {
+            return result;
+        }
+        if (auto result = validate_index_range(source_camera_indices, source.num_cameras_, "Camera"); !result) {
+            return result;
+        }
+
+        const auto frame_indices = lfs::core::Tensor::from_vector(
+            source_frame_indices,
+            {source_frame_indices.size()},
+            lfs::core::Device::CUDA).to(lfs::core::DataType::Int32);
+        const auto camera_indices = lfs::core::Tensor::from_vector(
+            source_camera_indices,
+            {source_camera_indices.size()},
+            lfs::core::Device::CUDA).to(lfs::core::DataType::Int32);
+
+        exposure_params_ = source.exposure_params_.index_select(0, frame_indices).contiguous();
+        color_params_ = source.color_params_.reshape({source.num_frames_, 8})
+                            .index_select(0, frame_indices)
+                            .reshape({num_frames_ * 8})
+                            .contiguous();
+
+        constexpr int VIGNETTING_PARAM_COUNT = 15;
+        constexpr int CRF_PARAM_COUNT = 12;
+
+        vignetting_params_ = source.vignetting_params_.reshape({source.num_cameras_, VIGNETTING_PARAM_COUNT})
+                                 .index_select(0, camera_indices)
+                                 .reshape({num_cameras_ * VIGNETTING_PARAM_COUNT})
+                                 .contiguous();
+        crf_params_ = source.crf_params_.reshape({source.num_cameras_, CRF_PARAM_COUNT})
+                          .index_select(0, camera_indices)
+                          .reshape({num_cameras_ * CRF_PARAM_COUNT})
+                          .contiguous();
+
+        exposure_exp_avg_.zero_();
+        exposure_exp_avg_sq_.zero_();
+        exposure_grad_.zero_();
+        vignetting_exp_avg_.zero_();
+        vignetting_exp_avg_sq_.zero_();
+        vignetting_grad_.zero_();
+        color_exp_avg_.zero_();
+        color_exp_avg_sq_.zero_();
+        color_grad_.zero_();
+        crf_exp_avg_.zero_();
+        crf_exp_avg_sq_.zero_();
+        crf_grad_.zero_();
+        step_ = 0;
+        current_lr_ = initial_lr_;
+
+        return {};
+    }
+
     void PPISP::serialize(std::ostream& os) const {
         os.write(reinterpret_cast<const char*>(&CHECKPOINT_MAGIC), sizeof(CHECKPOINT_MAGIC));
         os.write(reinterpret_cast<const char*>(&CHECKPOINT_VERSION), sizeof(CHECKPOINT_VERSION));

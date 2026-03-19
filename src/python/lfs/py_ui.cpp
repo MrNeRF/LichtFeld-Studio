@@ -3776,6 +3776,19 @@ namespace lfs::python {
             "Open a file dialog to select a checkpoint file. Returns empty string if cancelled.");
 
         m.def(
+            "open_ppisp_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenPPISPFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a PPISP sidecar file. Returns empty string if cancelled.");
+
+        m.def(
             "open_json_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenJsonFileDialog();

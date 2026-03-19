@@ -626,7 +626,8 @@
     "masks_dir": "マスク: ",
     "output_dir": "出力:   ",
     "init_file": "Init file（任意、points3Dを置換）:",
-    "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。"
+    "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "開けません",
@@ -757,7 +758,9 @@
     "ppisp_activation_step": "アクティベーションステップ:",
     "ppisp_controller_lr": "コントローラーLR:",
     "ppisp_freeze_gaussians": "ガウシアン固定:",
-    "disabled": "無効"
+    "disabled": "無効",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "イメージプレビュー",

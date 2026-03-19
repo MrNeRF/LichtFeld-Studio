@@ -260,6 +260,7 @@ set(TEST_FILES
     test_tensor_nn_ops.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
+    test_ppisp_sidecar.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_controller_memory.cpp
     test_undistort.cpp

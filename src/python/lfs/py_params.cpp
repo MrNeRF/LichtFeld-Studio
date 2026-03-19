@@ -7,6 +7,7 @@
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -187,6 +188,9 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
                        "ppisp_use_controller", "Controller", false,
                        "Enable PPISP controller for novel view synthesis")
+            .bool_prop(&OptimizationParameters::ppisp_freeze_from_sidecar,
+                       "ppisp_freeze_from_sidecar", "Freeze From Sidecar", false,
+                       "Load PPISP weights from a sidecar and freeze PPISP learning during training")
             .int_prop(&OptimizationParameters::ppisp_controller_activation_step,
                       "ppisp_controller_activation_step", "Controller Step", -1, -1, 100000,
                       "Iteration to start controller distillation (negative = default schedule)")
@@ -1128,6 +1132,20 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().ppisp_use_controller; },
                 [](PyOptimizationParams& self, bool v) { self.params().ppisp_use_controller = v; },
                 "Enable PPISP controller for novel view synthesis")
+            .def_prop_rw(
+                "ppisp_freeze_from_sidecar",
+                [](PyOptimizationParams& self) { return self.params().ppisp_freeze_from_sidecar; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_freeze_from_sidecar = v; },
+                "Freeze PPISP learning and reuse a PPISP sidecar during training")
+            .def_prop_rw(
+                "ppisp_sidecar_path",
+                [](PyOptimizationParams& self) {
+                    return lfs::core::path_to_utf8(self.params().ppisp_sidecar_path);
+                },
+                [](PyOptimizationParams& self, const std::string& v) {
+                    self.params().ppisp_sidecar_path = lfs::core::utf8_to_path(v);
+                },
+                "Path to a PPISP sidecar used for frozen PPISP training")
             .def_prop_rw(
                 "ppisp_controller_activation_step",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_activation_step; },

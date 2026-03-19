@@ -626,7 +626,8 @@
     "masks_dir": "Maski:   ",
     "output_dir": "Wyjście: ",
     "init_file": "Init file (opcjonalnie, zastępuje points3D):",
-    "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym."
+    "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "Nie można otworzyć",
@@ -757,10 +758,12 @@
     "ppisp_activation_step": "Krok aktywacji:",
     "ppisp_controller_lr": "LR kontrolera:",
     "ppisp_freeze_gaussians": "Zamroź Gaussowskie:",
-    "disabled": "Wyłączony"
+    "disabled": "Wyłączony",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
-    "title": "Podgl\u0105d obrazu",
+    "title": "Podgląd obrazu",
     "image_section": "OBRAZ",
     "file_section": "PLIK",
     "view_section": "WIDOK",

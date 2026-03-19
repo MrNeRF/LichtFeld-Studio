@@ -172,6 +172,21 @@
         <input type="checkbox" data-checked="ppisp" />
       </div>
       <div data-if="dep_ppisp">
+        <div class="setting-row">
+          <span class="prop-label">{{label_ppisp_freeze_from_sidecar}}</span>
+          <input type="checkbox" data-checked="ppisp_freeze_from_sidecar" />
+        </div>
+        <div data-if="dep_ppisp_frozen_sidecar">
+          <div class="setting-row">
+            <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
+            <input type="text" data-value="ppisp_sidecar_path" />
+            <button class="btn btn--secondary" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">&#160;</span>
+            <button class="btn btn--secondary" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
+          </div>
+        </div>
         <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller">
           <span class="prop-label">{{label_ppisp_controller}}</span>
           <input type="checkbox" data-checked="ppisp_use_controller" />

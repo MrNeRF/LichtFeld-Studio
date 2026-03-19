@@ -626,7 +626,8 @@
     "masks_dir": "마스크: ",
     "output_dir": "출력:   ",
     "init_file": "Init file (선택 사항, points3D 대체):",
-    "help_text": "체크포인트, 로그 및 내보낸 모델이 출력 디렉터리에 저장됩니다."
+    "help_text": "체크포인트, 로그 및 내보낸 모델이 출력 디렉터리에 저장됩니다.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "열 수 없음",
@@ -757,7 +758,9 @@
     "ppisp_activation_step": "활성화 단계:",
     "ppisp_controller_lr": "컨트롤러 LR:",
     "ppisp_freeze_gaussians": "가우시안 고정:",
-    "disabled": "비활성화됨"
+    "disabled": "비활성화됨",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "이미지 미리보기",

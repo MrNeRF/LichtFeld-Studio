@@ -54,6 +54,16 @@
       </div>
     </div>
 
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.ppisp_sidecar</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="ppisp_sidecar_path" />
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_ppisp_sidecar">@tr:common.browse</button>
+        </div>
+      </div>
+    </div>
+
     <span class="impdlg-note text-muted">@tr:load_dataset_popup.help_text</span>
 
     <div class="impdlg-buttons">

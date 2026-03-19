@@ -39,7 +39,9 @@
 #include <expected>
 #include <memory>
 #include <nvtx3/nvToolsExt.h>
+#include <numeric>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 
 namespace lfs::training {
@@ -204,10 +206,222 @@ namespace lfs::training {
             LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}",
                      ppisp_->num_cameras(), ppisp_->num_frames(), params_.optimization.ppisp_lr, config.warmup_steps);
 
+            if (auto result = apply_ppisp_sidecar_if_configured(); !result) {
+                return result;
+            }
+
             return {};
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Failed to init PPISP: {}", e.what()));
         }
+    }
+
+    std::expected<PPISPFileMetadata, std::string> Trainer::build_ppisp_sidecar_metadata() const {
+        if (!ppisp_ || !ppisp_->isFinalized()) {
+            return std::unexpected("Cannot build PPISP sidecar metadata before PPISP is initialized");
+        }
+        if (!train_dataset_) {
+            return std::unexpected("Cannot build PPISP sidecar metadata without an active training dataset");
+        }
+
+        PPISPFileMetadata metadata;
+        metadata.dataset_path_utf8 = lfs::core::path_to_utf8(params_.dataset.data_path);
+        metadata.images_folder = params_.dataset.images;
+        metadata.camera_ids = ppisp_->ordered_camera_ids();
+
+        for (const auto& cam : train_dataset_->get_cameras()) {
+            if (!cam) {
+                continue;
+            }
+            metadata.frame_image_names.push_back(cam->image_name());
+            metadata.frame_camera_ids.push_back(cam->camera_id());
+        }
+
+        if (static_cast<int>(metadata.frame_image_names.size()) != ppisp_->num_frames() ||
+            static_cast<int>(metadata.frame_camera_ids.size()) != ppisp_->num_frames()) {
+            return std::unexpected(std::format(
+                "PPISP metadata frame mismatch: metadata has {} names / {} camera ids but PPISP has {} frames",
+                metadata.frame_image_names.size(),
+                metadata.frame_camera_ids.size(),
+                ppisp_->num_frames()));
+        }
+        if (static_cast<int>(metadata.camera_ids.size()) != ppisp_->num_cameras()) {
+            return std::unexpected(std::format(
+                "PPISP metadata camera mismatch: metadata has {} camera ids but PPISP has {} cameras",
+                metadata.camera_ids.size(),
+                ppisp_->num_cameras()));
+        }
+
+        return metadata;
+    }
+
+    std::expected<void, std::string> Trainer::apply_ppisp_sidecar_if_configured() {
+        if (!is_ppisp_frozen_from_sidecar()) {
+            return {};
+        }
+        if (!ppisp_ || !ppisp_->isFinalized()) {
+            return std::unexpected("Cannot apply PPISP sidecar before PPISP initialization is complete");
+        }
+
+        PPISP loaded_ppisp(1);
+        PPISPFileMetadata metadata;
+        const auto sidecar_path = params_.optimization.ppisp_sidecar_path;
+
+        if (auto result = load_ppisp_file(sidecar_path, loaded_ppisp, nullptr, &metadata); !result) {
+            return std::unexpected(std::format(
+                "Failed to load frozen PPISP sidecar '{}': {}",
+                lfs::core::path_to_utf8(sidecar_path),
+                result.error()));
+        }
+
+        std::vector<int> frame_mapping;
+        std::vector<int> camera_mapping;
+
+        if (!metadata.empty()) {
+            if (static_cast<int>(metadata.frame_image_names.size()) != loaded_ppisp.num_frames() ||
+                static_cast<int>(metadata.frame_camera_ids.size()) != loaded_ppisp.num_frames()) {
+                return std::unexpected(std::format(
+                    "PPISP sidecar metadata frame count mismatch: metadata has {} names / {} camera ids but sidecar has {} frames",
+                    metadata.frame_image_names.size(),
+                    metadata.frame_camera_ids.size(),
+                    loaded_ppisp.num_frames()));
+            }
+            if (static_cast<int>(metadata.camera_ids.size()) != loaded_ppisp.num_cameras()) {
+                return std::unexpected(std::format(
+                    "PPISP sidecar metadata camera count mismatch: metadata has {} camera ids but sidecar has {} cameras",
+                    metadata.camera_ids.size(),
+                    loaded_ppisp.num_cameras()));
+            }
+
+            const auto current_dataset_path = lfs::core::path_to_utf8(params_.dataset.data_path);
+            if (!metadata.dataset_path_utf8.empty() && metadata.dataset_path_utf8 != current_dataset_path) {
+                LOG_INFO("Frozen PPISP sidecar dataset path differs from current dataset path: '{}' vs '{}'",
+                         metadata.dataset_path_utf8, current_dataset_path);
+            }
+            if (!metadata.images_folder.empty() && metadata.images_folder != params_.dataset.images) {
+                LOG_INFO("Frozen PPISP sidecar images folder differs from current training config: '{}' vs '{}'",
+                         metadata.images_folder, params_.dataset.images);
+            }
+
+            auto make_frame_key = [](std::string_view image_name, int camera_id) {
+                return std::format("{}\n{}", image_name, camera_id);
+            };
+
+            std::unordered_map<std::string, int> source_frame_index_by_key;
+            source_frame_index_by_key.reserve(metadata.frame_image_names.size());
+            for (size_t i = 0; i < metadata.frame_image_names.size(); ++i) {
+                auto [_, inserted] = source_frame_index_by_key.emplace(
+                    make_frame_key(metadata.frame_image_names[i], metadata.frame_camera_ids[i]),
+                    static_cast<int>(i));
+                if (!inserted) {
+                    return std::unexpected(std::format(
+                        "PPISP sidecar metadata contains duplicate frame key for image '{}' and camera {}",
+                        metadata.frame_image_names[i],
+                        metadata.frame_camera_ids[i]));
+                }
+            }
+
+            frame_mapping.reserve(static_cast<size_t>(ppisp_->num_frames()));
+            std::unordered_set<std::string> seen_target_frames;
+            seen_target_frames.reserve(static_cast<size_t>(ppisp_->num_frames()));
+            for (const auto& cam : train_dataset_->get_cameras()) {
+                if (!cam) {
+                    continue;
+                }
+                const auto key = make_frame_key(cam->image_name(), cam->camera_id());
+                if (!seen_target_frames.insert(key).second) {
+                    return std::unexpected(std::format(
+                        "Current training dataset contains duplicate frame key for image '{}' and camera {}",
+                        cam->image_name(),
+                        cam->camera_id()));
+                }
+                const auto it = source_frame_index_by_key.find(key);
+                if (it == source_frame_index_by_key.end()) {
+                    return std::unexpected(std::format(
+                        "Frozen PPISP sidecar is missing frame '{}' for camera {}",
+                        cam->image_name(),
+                        cam->camera_id()));
+                }
+                frame_mapping.push_back(it->second);
+            }
+            if (seen_target_frames.size() != source_frame_index_by_key.size()) {
+                return std::unexpected(std::format(
+                    "Frozen PPISP sidecar dataset mismatch: sidecar has {} frame keys but current training dataset has {}",
+                    source_frame_index_by_key.size(),
+                    seen_target_frames.size()));
+            }
+
+            std::unordered_map<int, int> source_camera_index_by_id;
+            source_camera_index_by_id.reserve(metadata.camera_ids.size());
+            for (size_t i = 0; i < metadata.camera_ids.size(); ++i) {
+                auto [_, inserted] = source_camera_index_by_id.emplace(metadata.camera_ids[i], static_cast<int>(i));
+                if (!inserted) {
+                    return std::unexpected(std::format(
+                        "PPISP sidecar metadata contains duplicate camera id {}",
+                        metadata.camera_ids[i]));
+                }
+            }
+
+            const auto target_camera_ids = ppisp_->ordered_camera_ids();
+            camera_mapping.reserve(target_camera_ids.size());
+            for (const int camera_id : target_camera_ids) {
+                const auto it = source_camera_index_by_id.find(camera_id);
+                if (it == source_camera_index_by_id.end()) {
+                    return std::unexpected(std::format(
+                        "Frozen PPISP sidecar is missing camera id {} required by the current dataset",
+                        camera_id));
+                }
+                camera_mapping.push_back(it->second);
+            }
+            if (target_camera_ids.size() != source_camera_index_by_id.size()) {
+                return std::unexpected(std::format(
+                    "Frozen PPISP sidecar dataset mismatch: sidecar has {} camera ids but current training dataset uses {}",
+                    source_camera_index_by_id.size(),
+                    target_camera_ids.size()));
+            }
+        } else {
+            if (loaded_ppisp.num_frames() != ppisp_->num_frames() || loaded_ppisp.num_cameras() != ppisp_->num_cameras()) {
+                return std::unexpected(std::format(
+                    "Frozen PPISP sidecar '{}' has no metadata, so exact dimension match is required (sidecar: {} cameras / {} frames, current run: {} cameras / {} frames)",
+                    lfs::core::path_to_utf8(sidecar_path),
+                    loaded_ppisp.num_cameras(),
+                    loaded_ppisp.num_frames(),
+                    ppisp_->num_cameras(),
+                    ppisp_->num_frames()));
+            }
+
+            frame_mapping.resize(static_cast<size_t>(ppisp_->num_frames()));
+            std::iota(frame_mapping.begin(), frame_mapping.end(), 0);
+            camera_mapping.resize(static_cast<size_t>(ppisp_->num_cameras()));
+            std::iota(camera_mapping.begin(), camera_mapping.end(), 0);
+        }
+
+        if (static_cast<int>(frame_mapping.size()) != ppisp_->num_frames()) {
+            return std::unexpected(std::format(
+                "Frozen PPISP sidecar frame mapping size mismatch: {} mappings for {} target frames",
+                frame_mapping.size(),
+                ppisp_->num_frames()));
+        }
+        if (static_cast<int>(camera_mapping.size()) != ppisp_->num_cameras()) {
+            return std::unexpected(std::format(
+                "Frozen PPISP sidecar camera mapping size mismatch: {} mappings for {} target cameras",
+                camera_mapping.size(),
+                ppisp_->num_cameras()));
+        }
+
+        if (auto result = ppisp_->copy_inference_weights_from(loaded_ppisp, frame_mapping, camera_mapping); !result) {
+            return std::unexpected(std::format(
+                "Failed to import frozen PPISP weights from '{}': {}",
+                lfs::core::path_to_utf8(sidecar_path),
+                result.error()));
+        }
+
+        LOG_INFO("Loaded frozen PPISP sidecar '{}' ({} cameras, {} frames{})",
+                 lfs::core::path_to_utf8(sidecar_path),
+                 loaded_ppisp.num_cameras(),
+                 loaded_ppisp.num_frames(),
+                 metadata.empty() ? ", identity mapping" : ", metadata-mapped");
+        return {};
     }
 
     std::expected<void, std::string> Trainer::initialize_ppisp_controller() {
@@ -1221,6 +1435,7 @@ namespace lfs::training {
                                              iter >= ppisp_activation_step &&
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
+            const bool ppisp_frozen = is_ppisp_frozen_from_sidecar();
             const bool use_pixel_error_densification =
                 (params_.optimization.strategy == "mcmc" ||
                  params_.optimization.strategy == "igs+");
@@ -1577,6 +1792,9 @@ namespace lfs::training {
                             ppisp_input = bilateral_grid_->apply(output.image, cam->uid());
                         }
                         raster_grad = ppisp_->backward(ppisp_input, raster_grad, cam->camera_id(), cam->uid());
+                        if (ppisp_frozen) {
+                            ppisp_->zero_grad();
+                        }
                         nvtxRangePop();
                     }
 
@@ -1658,7 +1876,7 @@ namespace lfs::training {
                     nvtxRangePop();
                 }
 
-                if (ppisp_ && params_.optimization.use_ppisp) {
+                if (ppisp_ && params_.optimization.use_ppisp && !ppisp_frozen) {
                     nvtxRangePush("ppisp_reg_and_step");
 
                     loss_tensor_gpu = loss_tensor_gpu + ppisp_->reg_loss_gpu();
@@ -2140,7 +2358,15 @@ namespace lfs::training {
 
         if (ppisp_) {
             const auto ppisp_path = get_ppisp_companion_path(ply_options.output_path);
-            const auto ppisp_result = save_ppisp_file(ppisp_path, *ppisp_, controller_to_save);
+            std::optional<PPISPFileMetadata> metadata;
+            if (auto metadata_result = build_ppisp_sidecar_metadata(); metadata_result) {
+                metadata = std::move(*metadata_result);
+            } else {
+                LOG_WARN("Failed to build PPISP sidecar metadata for '{}': {}. Saving sidecar without metadata.",
+                         lfs::core::path_to_utf8(ppisp_path), metadata_result.error());
+            }
+            const auto ppisp_result = save_ppisp_file(ppisp_path, *ppisp_, controller_to_save,
+                                                      metadata ? &*metadata : nullptr);
             if (!ppisp_result) {
                 LOG_WARN("Failed to save PPISP file: {}", ppisp_result.error());
             }

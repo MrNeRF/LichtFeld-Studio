@@ -341,6 +341,10 @@ namespace lfs::vis::gui {
             return {makeFilter("Checkpoint Files", {".resume"})};
         }
 
+        [[nodiscard]] std::vector<DialogFilter> ppispFilters() {
+            return {makeFilter("PPISP Sidecar Files", {".ppisp"})};
+        }
+
         [[nodiscard]] std::vector<DialogFilter> jsonFilters() {
             return {makeFilter("JSON Files", {".json"})};
         }
@@ -388,6 +392,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenCheckpointFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(checkpointFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenPPISPFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(ppispFilters(), defaultPath), result);
         return result;
     }
 

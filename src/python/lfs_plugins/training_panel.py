@@ -74,6 +74,8 @@ LOCALE_KEYS = {
     "mip_filter": "training_params.mip_filter",
     "ppisp": "training_params.ppisp",
     "ppisp_controller": "training_params.ppisp_controller",
+    "ppisp_freeze_from_sidecar": "training_params.ppisp_freeze_from_sidecar",
+    "ppisp_sidecar_path": "training_params.ppisp_sidecar_path",
     "ppisp_activation_step": "training_params.ppisp_activation_step",
     "ppisp_controller_lr": "training_params.ppisp_controller_lr",
     "ppisp_freeze_gaussians": "training_params.ppisp_freeze_gaussians",
@@ -164,7 +166,7 @@ STRATEGY_LABEL_KEYS = {
 PARAM_BOOL_PROPS = [
     "use_bilateral_grid", "invert_masks", "use_alpha_as_mask",
     "enable_sparsity", "gut", "undistort", "mip_filter",
-    "ppisp", "ppisp_use_controller", "ppisp_freeze_gaussians",
+    "ppisp", "ppisp_use_controller", "ppisp_freeze_from_sidecar", "ppisp_freeze_gaussians",
     "random", "revised_opacity",
 ]
 
@@ -372,6 +374,7 @@ class TrainingPanel(Panel):
         self._bind_bool_props(model, p)
         self._bind_dataset_bools(model, d)
         self._bind_select_props(model, p, d)
+        self._bind_text_props(model, p)
         self._bind_num_props(model, p, d)
         self._bind_slider_props(model, p)
         self._bind_color(model, p)
@@ -402,6 +405,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
+        model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
 
         def _btn_start():
             it = AppState.iteration.value
@@ -439,8 +443,12 @@ class TrainingPanel(Panel):
                          lambda: p() is not None and p().has_params() and p().mask_mode.value == 1)
         model.bind_func("dep_ppisp",
                          lambda: p() is not None and p().has_params() and p().ppisp)
+        model.bind_func("dep_ppisp_frozen_sidecar",
+                         lambda: p() is not None and p().has_params() and p().ppisp and p().ppisp_freeze_from_sidecar)
         model.bind_func("dep_ppisp_controller",
                          lambda: p() is not None and p().has_params() and p().ppisp_use_controller)
+        model.bind_func("has_ppisp_sidecar_clear",
+                         lambda: p() is not None and p().has_params() and bool(p().ppisp_sidecar_path))
         model.bind_func("dep_bg_color",
                          lambda: p() is not None and p().has_params() and p().bg_mode.value in (0, 1))
         model.bind_func("dep_bg_image",
@@ -539,6 +547,11 @@ class TrainingPanel(Panel):
         model.bind("resize_factor_str",
                     lambda: str(d().resize_factor) if d() and d().has_params() else "-1",
                     lambda v: self._set_resize_factor(v))
+
+    def _bind_text_props(self, model, p):
+        model.bind("ppisp_sidecar_path",
+                   lambda: p().ppisp_sidecar_path if p() and p().has_params() else "",
+                   lambda v: self._set_ppisp_sidecar_path(v))
 
     def _bind_num_props(self, model, p, d):
         for prop, dtype, fmt, min_v, max_v, _step in NUM_PROP_DEFS:
@@ -965,12 +978,24 @@ class TrainingPanel(Panel):
             return
         if not hasattr(params, prop):
             return
+        if prop == "ppisp_freeze_from_sidecar" and val:
+            params.ppisp = True
+        elif prop == "ppisp" and not val:
+            params.ppisp_freeze_from_sidecar = False
         setattr(params, prop, val)
         rs = lf.get_render_settings()
         if rs and prop in RENDER_SYNC:
             rs.set(RENDER_SYNC[prop], val)
         if self._handle:
             self._sync_text_bufs()
+            self._handle.dirty_all()
+
+    def _set_ppisp_sidecar_path(self, val):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        params.ppisp_sidecar_path = str(val)
+        if self._handle:
             self._handle.dirty_all()
 
     def _set_strategy(self, val):
@@ -1310,6 +1335,24 @@ class TrainingPanel(Panel):
                 params.bg_image_path = ""
                 if self._handle:
                     self._sync_text_bufs()
+                    self._handle.dirty_all()
+        elif action == "clear_ppisp_sidecar":
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.ppisp_sidecar_path = ""
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "browse_ppisp_sidecar":
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and params.ppisp_sidecar_path:
+                start_dir = params.ppisp_sidecar_path
+            selected = lf.ui.open_ppisp_file_dialog(start_dir)
+            if selected and params and params.has_params():
+                params.ppisp = True
+                params.ppisp_freeze_from_sidecar = True
+                params.ppisp_sidecar_path = selected
+                if self._handle:
                     self._handle.dirty_all()
         elif action == "add_step":
             params = lf.optimization_params()

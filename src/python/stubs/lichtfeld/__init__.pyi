@@ -1527,6 +1527,20 @@ class OptimizationParams:
     def ppisp_use_controller(self, arg: bool, /) -> None: ...
 
     @property
+    def ppisp_freeze_from_sidecar(self) -> bool:
+        """Freeze PPISP learning and reuse a PPISP sidecar during training"""
+
+    @ppisp_freeze_from_sidecar.setter
+    def ppisp_freeze_from_sidecar(self, arg: bool, /) -> None: ...
+
+    @property
+    def ppisp_sidecar_path(self) -> str:
+        """Path to a PPISP sidecar used for frozen PPISP training"""
+
+    @ppisp_sidecar_path.setter
+    def ppisp_sidecar_path(self, arg: str, /) -> None: ...
+
+    @property
     def ppisp_controller_activation_step(self) -> int:
         """
         Iteration to start controller distillation (negative = default schedule)

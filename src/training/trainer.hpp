@@ -34,6 +34,7 @@ namespace lfs::core {
 
 namespace lfs::training {
     class AdamOptimizer;
+    struct PPISPFileMetadata;
 
     struct PPISPViewportOverrides {
         // Exposure
@@ -272,6 +273,13 @@ namespace lfs::training {
         std::expected<void, std::string> initialize_bilateral_grid();
         std::expected<void, std::string> initialize_ppisp();
         std::expected<void, std::string> initialize_ppisp_controller();
+        std::expected<void, std::string> apply_ppisp_sidecar_if_configured();
+        std::expected<PPISPFileMetadata, std::string> build_ppisp_sidecar_metadata() const;
+        [[nodiscard]] bool is_ppisp_frozen_from_sidecar() const {
+            return params_.optimization.use_ppisp &&
+                   params_.optimization.ppisp_freeze_from_sidecar &&
+                   !params_.optimization.ppisp_sidecar_path.empty();
+        }
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});

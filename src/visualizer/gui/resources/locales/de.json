@@ -626,7 +626,8 @@
     "masks_dir": "Masken:  ",
     "output_dir": "Ausgabe: ",
     "init_file": "Init-Datei (optional, ersetzt points3D):",
-    "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden im Ausgabeverzeichnis gespeichert."
+    "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden im Ausgabeverzeichnis gespeichert.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "Kann nicht öffnen",
@@ -757,7 +758,9 @@
     "ppisp_activation_step": "Aktivierungsschritt:",
     "ppisp_controller_lr": "Controller LR:",
     "ppisp_freeze_gaussians": "Gaussians einfrieren:",
-    "disabled": "Deaktiviert"
+    "disabled": "Deaktiviert",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "Bildvorschau",

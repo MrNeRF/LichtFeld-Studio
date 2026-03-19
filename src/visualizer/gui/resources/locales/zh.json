@@ -626,7 +626,8 @@
     "masks_dir": "掩码：  ",
     "output_dir": "输出：  ",
     "init_file": "Init file（可选，替换 points3D）：",
-    "help_text": "检查点、日志和导出的模型将保存到输出目录。"
+    "help_text": "检查点、日志和导出的模型将保存到输出目录。",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "无法打开",
@@ -757,7 +758,9 @@
     "ppisp_activation_step": "激活步骤:",
     "ppisp_controller_lr": "控制器学习率:",
     "ppisp_freeze_gaussians": "冻结高斯:",
-    "disabled": "已禁用"
+    "disabled": "已禁用",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "图像预览",

@@ -1371,7 +1371,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleSwitchToLatestCheckpoint() {
-        LOG_WARN("Switch to latest checkpoint not implemented without project management");
+        // This event is emitted by the training flow even when no project/checkpoint manager is active.
+        // In the plain dataset workflow there is nothing to switch, so treat it as a no-op.
     }
 
 } // namespace lfs::vis

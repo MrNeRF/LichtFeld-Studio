@@ -121,6 +121,8 @@ namespace lfs::core {
             opt_json["ppisp_lr"] = ppisp_lr;
             opt_json["ppisp_reg_weight"] = ppisp_reg_weight;
             opt_json["ppisp_warmup_steps"] = ppisp_warmup_steps;
+            opt_json["ppisp_freeze_from_sidecar"] = ppisp_freeze_from_sidecar;
+            opt_json["ppisp_sidecar_path"] = lfs::core::path_to_utf8(ppisp_sidecar_path);
             opt_json["ppisp_use_controller"] = ppisp_use_controller;
             opt_json["ppisp_freeze_gaussians_on_distill"] = ppisp_freeze_gaussians_on_distill;
             opt_json["ppisp_controller_activation_step"] = ppisp_controller_activation_step;
@@ -169,6 +171,12 @@ namespace lfs::core {
         std::string OptimizationParameters::validate() const {
             if (gut && (strategy == "adc" || strategy == "igs+"))
                 return "GUT and " + strategy + " strategy cannot be used together";
+            if (ppisp_freeze_from_sidecar && !use_ppisp)
+                return "PPISP sidecar freeze requires PPISP enabled";
+            if (ppisp_freeze_from_sidecar && ppisp_sidecar_path.empty())
+                return "PPISP sidecar freeze requires a sidecar path";
+            if (ppisp_freeze_from_sidecar && !std::filesystem::exists(ppisp_sidecar_path))
+                return std::format("PPISP sidecar does not exist: '{}'", lfs::core::path_to_utf8(ppisp_sidecar_path));
             return {};
         }
 
@@ -305,6 +313,12 @@ namespace lfs::core {
             }
             if (json.contains("ppisp_warmup_steps")) {
                 params.ppisp_warmup_steps = json["ppisp_warmup_steps"];
+            }
+            if (json.contains("ppisp_freeze_from_sidecar")) {
+                params.ppisp_freeze_from_sidecar = json["ppisp_freeze_from_sidecar"];
+            }
+            if (json.contains("ppisp_sidecar_path")) {
+                params.ppisp_sidecar_path = utf8_to_path(json["ppisp_sidecar_path"].get<std::string>());
             }
             if (json.contains("ppisp_use_controller")) {
                 params.ppisp_use_controller = json["ppisp_use_controller"];

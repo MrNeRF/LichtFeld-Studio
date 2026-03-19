@@ -178,6 +178,8 @@ namespace {
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", "Enable bilateral grid filtering", {"bilateral-grid"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", "Enable PPISP for per-camera appearance modeling", {"ppisp"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", "Enable PPISP controller for novel views", {"ppisp-controller"});
+            ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", "Freeze PPISP learning and load PPISP weights from a sidecar file", {"ppisp-freeze"});
+            ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
             ::args::Flag bg_modulation(rendering_group, "bg_modulation", "Enable sinusoidal background modulation", {"bg-modulation"});
             ::args::Flag gut(rendering_group, "gut", "Enable GUT mode", {"gut"});
 
@@ -526,6 +528,8 @@ namespace {
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         use_ppisp_flag = bool(use_ppisp),
                                         ppisp_controller_flag = bool(ppisp_controller),
+                                        ppisp_freeze_from_sidecar_flag = bool(ppisp_freeze_from_sidecar),
+                                        ppisp_sidecar_path_val = ppisp_sidecar_path ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
@@ -590,7 +594,13 @@ namespace {
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
                 setFlag(ppisp_controller_flag, opt.ppisp_use_controller);
+                setFlag(ppisp_freeze_from_sidecar_flag, opt.ppisp_freeze_from_sidecar);
+                if (ppisp_sidecar_path_val) {
+                    opt.ppisp_sidecar_path = lfs::core::utf8_to_path(*ppisp_sidecar_path_val);
+                }
                 if (opt.ppisp_use_controller)
+                    opt.use_ppisp = true;
+                if (opt.ppisp_freeze_from_sidecar)
                     opt.use_ppisp = true;
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);

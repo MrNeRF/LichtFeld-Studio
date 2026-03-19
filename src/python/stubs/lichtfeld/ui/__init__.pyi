@@ -1870,6 +1870,11 @@ def open_checkpoint_file_dialog() -> str:
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.
     """
 
+def open_ppisp_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a PPISP sidecar file. Returns empty string if cancelled.
+    """
+
 def open_json_file_dialog() -> str:
     """
     Open a file dialog to select a JSON config file. Returns empty string if cancelled.
