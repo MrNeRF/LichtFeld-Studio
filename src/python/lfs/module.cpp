@@ -1617,6 +1617,7 @@ Mesh-to-Splat:
   lf.mesh_to_splat("name")       - Convert mesh to splats (async)
   lf.is_mesh2splat_active()      - Check if conversion is running
   lf.get_mesh2splat_progress()   - Get progress (0.0-1.0)
+  lf.get_mesh2splat_stage()      - Get current stage text
   lf.get_mesh2splat_error()      - Get error message
 
 Splat Simplify:
@@ -1624,6 +1625,7 @@ Splat Simplify:
   lf.cancel_splat_simplify()         - Cancel the active simplify job
   lf.is_splat_simplify_active()      - Check if simplification is running
   lf.get_splat_simplify_progress()   - Get progress (0.0-1.0)
+  lf.get_splat_simplify_stage()      - Get current stage text
   lf.get_splat_simplify_error()      - Get error message
 
 Camera Control:
@@ -1748,10 +1750,10 @@ Example:
         "on_post_step", "on_pre_optimizer_step", "on_training_end",
         // Mesh-to-splat conversion
         "mesh_to_splat", "is_mesh2splat_active",
-        "get_mesh2splat_progress", "get_mesh2splat_error",
+        "get_mesh2splat_progress", "get_mesh2splat_stage", "get_mesh2splat_error",
         // Splat simplify
         "simplify_splats", "cancel_splat_simplify", "is_splat_simplify_active",
-        "get_splat_simplify_progress", "get_splat_simplify_error",
+        "get_splat_simplify_progress", "get_splat_simplify_stage", "get_splat_simplify_error",
         // Animation
         "on_frame", "stop_animation",
         // Utilities

@@ -130,7 +130,7 @@ namespace lfs::core {
                     return Tensor{};
                 if (has_deleted)
                     return tensor.index_select(0, keep_mask).contiguous();
-                return tensor.clone();
+                return tensor;
             };
 
             const auto means = select_or_clone(input.means_raw()).to(device).contiguous();
