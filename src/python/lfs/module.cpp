@@ -29,6 +29,7 @@
 #include "py_selection.hpp"
 #include "py_signals.hpp"
 #include "py_splat_data.hpp"
+#include "py_splat_simplify.hpp"
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_uilist.hpp"
@@ -1266,6 +1267,7 @@ NB_MODULE(lichtfeld, m) {
 
     // Mesh-to-splat conversion (async, uses GL thread)
     lfs::python::register_mesh2splat(m);
+    lfs::python::register_splat_simplify(m);
 
     // Rendering functions (render_view, compute_screen_positions, etc.)
     lfs::python::register_rendering(m);
@@ -1617,6 +1619,13 @@ Mesh-to-Splat:
   lf.get_mesh2splat_progress()   - Get progress (0.0-1.0)
   lf.get_mesh2splat_error()      - Get error message
 
+Splat Simplify:
+  lf.simplify_splats("name")         - Simplify a splat node into a new output node
+  lf.cancel_splat_simplify()         - Cancel the active simplify job
+  lf.is_splat_simplify_active()      - Check if simplification is running
+  lf.get_splat_simplify_progress()   - Get progress (0.0-1.0)
+  lf.get_splat_simplify_error()      - Get error message
+
 Camera Control:
   lf.get_camera()          - Get current camera state (eye, target, up, fov)
   lf.set_camera(eye, target) - Move viewport camera
@@ -1740,6 +1749,9 @@ Example:
         // Mesh-to-splat conversion
         "mesh_to_splat", "is_mesh2splat_active",
         "get_mesh2splat_progress", "get_mesh2splat_error",
+        // Splat simplify
+        "simplify_splats", "cancel_splat_simplify", "is_splat_simplify_active",
+        "get_splat_simplify_progress", "get_splat_simplify_error",
         // Animation
         "on_frame", "stop_animation",
         // Utilities

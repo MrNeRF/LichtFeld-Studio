@@ -55,6 +55,7 @@ set(CORE_SOURCES
         parameters.cpp
         property_registry.cpp
         scene.cpp
+        splat_simplify.cpp
         splat_data.cpp
         splat_data_mirror.cpp
         splat_data_transform.cpp
@@ -116,7 +117,7 @@ if(MSVC)
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
     )
     target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
@@ -126,7 +127,7 @@ else()
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer -DDEBUG>
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG -march=native>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr>
-        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 --extended-lambda --expt-relaxed-constexpr>
     )
 endif()
 
@@ -141,6 +142,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         )
         target_compile_definitions(lfs_core PRIVATE HAS_AVX2_SUPPORT)
     endif()
+
+    # The splat simplifier is sensitive to tiny FP contraction differences.
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/splat_simplify.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-tree-vectorize;-fno-unsafe-math-optimizations;-frounding-math;-ffloat-store;-fexcess-precision=standard;-mno-fma;-mno-avx2")
 endif()
 
 # Visibility: hide by default, export only LFS_CORE_API symbols

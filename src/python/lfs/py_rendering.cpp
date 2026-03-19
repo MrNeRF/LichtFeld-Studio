@@ -152,7 +152,7 @@ namespace lfs::python {
 
         // Camera Frustums
         add_bool(&Proxy::show_camera_frustums, "show_camera_frustums", "Camera Frustums",
-                 "Show camera frustum wireframes", true);
+                 "Show camera frustum wireframes", false);
         add_float(&Proxy::camera_frustum_scale, "camera_frustum_scale", "Scale", "Camera frustum display scale", 0.25,
                   0.01, 10.0);
 

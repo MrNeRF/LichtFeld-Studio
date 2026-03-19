@@ -9,6 +9,7 @@
 #include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/splat_simplify.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include <atomic>
@@ -144,6 +145,22 @@ namespace lfs::vis {
                 return mesh2splat_state_.source_name;
             }
 
+            // Splat simplification
+            void startSplatSimplify(const std::string& source_name,
+                                    const lfs::core::SplatSimplifyOptions& options);
+            void pollSplatSimplifyCompletion();
+            [[nodiscard]] bool isSplatSimplifyActive() const { return splat_simplify_state_.active.load(); }
+            [[nodiscard]] float getSplatSimplifyProgress() const { return splat_simplify_state_.progress.load(); }
+            [[nodiscard]] std::string getSplatSimplifyStage() const {
+                std::lock_guard lock(splat_simplify_state_.mutex);
+                return splat_simplify_state_.stage;
+            }
+            [[nodiscard]] std::string getSplatSimplifyError() const {
+                std::lock_guard lock(splat_simplify_state_.mutex);
+                return splat_simplify_state_.error;
+            }
+            void cancelSplatSimplify();
+
         private:
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
                                   std::unique_ptr<lfs::core::SplatData> data);
@@ -220,6 +237,22 @@ namespace lfs::vis {
 
             void executeMesh2SplatOnGlThread();
             void applyMesh2SplatResult();
+
+            struct SplatSimplifyState {
+                std::atomic<bool> active{false};
+                std::atomic<bool> cancel_requested{false};
+                std::atomic<bool> completed{false};
+                std::atomic<bool> apply_pending{false};
+                std::atomic<float> progress{0.0f};
+                mutable std::mutex mutex;
+                std::string stage;
+                std::string error;
+                std::string source_name;
+                std::string output_name;
+                std::unique_ptr<lfs::core::SplatData> result;
+                std::optional<std::jthread> thread;
+            };
+            SplatSimplifyState splat_simplify_state_;
         };
 
     } // namespace gui

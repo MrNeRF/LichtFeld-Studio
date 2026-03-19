@@ -2680,6 +2680,83 @@ namespace lfs::vis {
         return unique_name;
     }
 
+    std::string SceneManager::addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
+                                                    const std::string& source_name,
+                                                    const std::string& desired_name,
+                                                    const bool select_new_node) {
+        if (!model) {
+            LOG_ERROR("Cannot add generated splat node: model is null");
+            return {};
+        }
+
+        core::NodeId parent_id = core::NULL_NODE;
+        std::string parent_name;
+        glm::mat4 local_transform{1.0f};
+        bool visible = true;
+        bool locked = false;
+        bool training_enabled = true;
+
+        if (const auto* source = scene_.getNode(source_name)) {
+            local_transform = source->local_transform.get();
+            visible = source->visible.get();
+            locked = source->locked.get();
+            training_enabled = source->training_enabled;
+            if (source->parent_id != core::NULL_NODE) {
+                parent_id = source->parent_id;
+                if (const auto* parent = scene_.getNodeById(parent_id)) {
+                    parent_name = parent->name;
+                }
+            }
+        }
+
+        std::string unique_name = desired_name.empty() ? "Simplified Splat" : desired_name;
+        for (int i = 1; scene_.getNode(unique_name); ++i) {
+            unique_name = std::format("{} {}", desired_name.empty() ? "Simplified Splat" : desired_name, i);
+        }
+
+        const auto history_options = sceneGraphCaptureOptions(true, false);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {}, history_options);
+
+        const core::NodeId node_id = scene_.addSplat(unique_name, std::move(model), parent_id);
+        if (node_id == core::NULL_NODE) {
+            LOG_ERROR("Failed to add generated splat node '{}'", unique_name);
+            return {};
+        }
+
+        if (auto* added = scene_.getMutableNode(unique_name)) {
+            added->local_transform.setQuiet(local_transform);
+            added->visible.setQuiet(visible);
+            added->locked.setQuiet(locked);
+            added->training_enabled = training_enabled;
+            added->transform_dirty = true;
+        }
+
+        if (getContentType() == ContentType::Empty) {
+            changeContentType(ContentType::SplatFiles);
+            python::set_application_scene(&scene_);
+        }
+
+        selection_.invalidateNodeMask();
+        if (select_new_node) {
+            selectNode(unique_name);
+        }
+
+        if (const auto* added = scene_.getNode(unique_name)) {
+            state::PLYAdded{
+                .name = unique_name,
+                .node_gaussians = added->gaussian_count,
+                .total_gaussians = scene_.getTotalGaussianCount(),
+                .is_visible = added->visible,
+                .parent_name = parent_name,
+                .is_group = false,
+                .node_type = static_cast<int>(added->type)}
+                .emit();
+        }
+
+        pushSceneGraphHistoryEntry(*this, "Add Simplified Splat", std::move(history_before), {unique_name}, history_options);
+        return unique_name;
+    }
+
     std::string SceneManager::duplicateNodeTree(const std::string& name) {
         const auto* src = scene_.getNode(name);
         if (!src)

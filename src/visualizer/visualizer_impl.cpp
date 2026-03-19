@@ -295,6 +295,35 @@ namespace lfs::vis {
                 return gm ? gm->asyncTasks().getMesh2SplatError() : std::string{};
             });
         callback_cleanup_.add([] { python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
+        python::set_splat_simplify_callbacks(
+            [](std::string name, core::SplatSimplifyOptions opts) {
+                auto* gm = python::get_gui_manager();
+                if (!gm)
+                    return;
+                gm->asyncTasks().startSplatSimplify(name, opts);
+            },
+            []() {
+                auto* gm = python::get_gui_manager();
+                if (gm)
+                    gm->asyncTasks().cancelSplatSimplify();
+            },
+            []() -> bool {
+                auto* gm = python::get_gui_manager();
+                return gm && gm->asyncTasks().isSplatSimplifyActive();
+            },
+            []() -> float {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyProgress() : 0.0f;
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyStage() : std::string{};
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyError() : std::string{};
+            });
+        callback_cleanup_.add([] { python::set_splat_simplify_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr); });
         python::set_selected_camera_callback([]() -> int {
             const auto* gm = python::get_gui_manager();
             return gm ? gm->getHighlightedCameraUid() : -1;

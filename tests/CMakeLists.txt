@@ -240,6 +240,7 @@ set(TEST_FILES
     test_extended_unary_ops_vs_torch.cpp
     # test_property_system.cpp  # Disabled: needs API update after merge
     test_scene_validity.cpp
+    test_render_settings_defaults.cpp
     test_selection_rasterization_ops.cpp
     test_viewport.cpp
     test_selection_service_interactions.cpp
@@ -265,6 +266,7 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
+    test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp

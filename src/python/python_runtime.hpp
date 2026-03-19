@@ -6,6 +6,7 @@
 
 #include "core/mesh2splat.hpp"
 #include "core/modal_request.hpp"
+#include "core/splat_simplify.hpp"
 #include "visualizer/gui/panel_height_mode.hpp"
 #include "visualizer/gui/panel_space.hpp"
 
@@ -314,6 +315,22 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API float invoke_mesh2splat_progress();
     LFS_PYTHON_RUNTIME_API std::string invoke_mesh2splat_stage();
     LFS_PYTHON_RUNTIME_API std::string invoke_mesh2splat_error();
+
+    using SplatSimplifyStartFn = std::function<void(std::string, core::SplatSimplifyOptions)>;
+    LFS_PYTHON_RUNTIME_API void set_splat_simplify_callbacks(
+        SplatSimplifyStartFn start,
+        std::function<void()> cancel,
+        std::function<bool()> is_active,
+        std::function<float()> get_progress,
+        std::function<std::string()> get_stage,
+        std::function<std::string()> get_error);
+    LFS_PYTHON_RUNTIME_API void invoke_splat_simplify_start(const std::string& name,
+                                                            const core::SplatSimplifyOptions& options);
+    LFS_PYTHON_RUNTIME_API void invoke_splat_simplify_cancel();
+    LFS_PYTHON_RUNTIME_API bool invoke_splat_simplify_active();
+    LFS_PYTHON_RUNTIME_API float invoke_splat_simplify_progress();
+    LFS_PYTHON_RUNTIME_API std::string invoke_splat_simplify_stage();
+    LFS_PYTHON_RUNTIME_API std::string invoke_splat_simplify_error();
 
     // Scene panel state callbacks
     using GetSelectedCameraUidCallback = int (*)();

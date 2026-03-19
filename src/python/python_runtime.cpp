@@ -282,6 +282,44 @@ namespace lfs::python {
     std::string invoke_mesh2splat_error() { return g_m2s_error ? g_m2s_error() : std::string{}; }
 
     namespace {
+        SplatSimplifyStartFn g_splat_simplify_start;
+        std::function<void()> g_splat_simplify_cancel;
+        std::function<bool()> g_splat_simplify_active;
+        std::function<float()> g_splat_simplify_progress;
+        std::function<std::string()> g_splat_simplify_stage;
+        std::function<std::string()> g_splat_simplify_error;
+    } // namespace
+
+    void set_splat_simplify_callbacks(SplatSimplifyStartFn start,
+                                      std::function<void()> cancel,
+                                      std::function<bool()> is_active,
+                                      std::function<float()> get_progress,
+                                      std::function<std::string()> get_stage,
+                                      std::function<std::string()> get_error) {
+        g_splat_simplify_start = std::move(start);
+        g_splat_simplify_cancel = std::move(cancel);
+        g_splat_simplify_active = std::move(is_active);
+        g_splat_simplify_progress = std::move(get_progress);
+        g_splat_simplify_stage = std::move(get_stage);
+        g_splat_simplify_error = std::move(get_error);
+    }
+
+    void invoke_splat_simplify_start(const std::string& name, const core::SplatSimplifyOptions& options) {
+        if (g_splat_simplify_start)
+            g_splat_simplify_start(name, options);
+    }
+
+    void invoke_splat_simplify_cancel() {
+        if (g_splat_simplify_cancel)
+            g_splat_simplify_cancel();
+    }
+
+    bool invoke_splat_simplify_active() { return g_splat_simplify_active ? g_splat_simplify_active() : false; }
+    float invoke_splat_simplify_progress() { return g_splat_simplify_progress ? g_splat_simplify_progress() : 0.0f; }
+    std::string invoke_splat_simplify_stage() { return g_splat_simplify_stage ? g_splat_simplify_stage() : std::string{}; }
+    std::string invoke_splat_simplify_error() { return g_splat_simplify_error ? g_splat_simplify_error() : std::string{}; }
+
+    namespace {
         GetSelectedCameraUidCallback g_get_selected_camera_cb = nullptr;
         GetInvertMasksCallback g_get_invert_masks_cb = nullptr;
     } // namespace

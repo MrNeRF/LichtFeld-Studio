@@ -929,6 +929,7 @@ namespace lfs::vis::gui {
         // Check for async import completion (must happen on main thread)
         async_tasks_.pollImportCompletion();
         async_tasks_.pollMesh2SplatCompletion();
+        async_tasks_.pollSplatSimplifyCompletion();
 
         // Poll UV package manager for async operations
         python::PackageManager::instance().poll();

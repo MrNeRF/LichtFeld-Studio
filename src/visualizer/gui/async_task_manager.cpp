@@ -41,6 +41,27 @@ namespace lfs::vis::gui {
         }
     }
 
+    [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
+        auto cloned = std::make_unique<lfs::core::SplatData>(
+            src.get_max_sh_degree(),
+            src.means_raw().clone(),
+            src.sh0_raw().clone(),
+            src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
+            src.scaling_raw().clone(),
+            src.rotation_raw().clone(),
+            src.opacity_raw().clone(),
+            src.get_scene_scale());
+        cloned->set_active_sh_degree(src.get_active_sh_degree());
+        cloned->set_max_sh_degree(src.get_max_sh_degree());
+        if (src.has_deleted_mask()) {
+            cloned->deleted() = src.deleted().clone();
+        }
+        if (src._densification_info.is_valid()) {
+            cloned->_densification_info = src._densification_info.clone();
+        }
+        return cloned;
+    }
+
     void truncateSHDegree(lfs::core::SplatData& splat, const int target_degree) {
         if (target_degree >= splat.get_max_sh_degree())
             return;
@@ -400,6 +421,12 @@ namespace lfs::vis::gui {
 
         mesh2splat_state_.active.store(false);
         mesh2splat_state_.pending.store(false);
+
+        if (splat_simplify_state_.active.load())
+            cancelSplatSimplify();
+        if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable())
+            splat_simplify_state_.thread->join();
+        splat_simplify_state_.thread.reset();
     }
 
     void AsyncTaskManager::setupEvents() {
@@ -1221,6 +1248,170 @@ namespace lfs::vis::gui {
             .emit();
 
         LOG_INFO("Mesh2Splat: added splat node '{}'", node_name);
+    }
+
+    void AsyncTaskManager::startSplatSimplify(const std::string& source_name,
+                                              const lfs::core::SplatSimplifyOptions& options) {
+        if (splat_simplify_state_.active.load()) {
+            LOG_WARN("Splat simplification already in progress");
+            return;
+        }
+
+        struct SimplifyCapture {
+            std::unique_ptr<lfs::core::SplatData> model;
+            std::string source_name;
+            std::string output_name;
+        };
+
+        auto capture = postToViewerAndWait(
+            viewer_,
+            [this, source_name, options]() -> std::expected<SimplifyCapture, std::string> {
+                auto* const scene_manager = viewer_->getSceneManager();
+                if (!scene_manager) {
+                    return std::unexpected("No scene manager");
+                }
+
+                const auto* const node = scene_manager->getScene().getNode(source_name);
+                if (!node || node->type != core::NodeType::SPLAT || !node->model) {
+                    return std::unexpected(std::format("No splat node named '{}'", source_name));
+                }
+
+                const int ratio_pct = static_cast<int>(std::lround(std::clamp(options.ratio, 0.0, 1.0) * 100.0));
+                return SimplifyCapture{
+                    .model = cloneSplatData(*node->model),
+                    .source_name = source_name,
+                    .output_name = std::format("{} (Simplified {}%)", source_name, ratio_pct),
+                };
+            });
+
+        if (!capture) {
+            LOG_ERROR("Splat simplify capture failed: {}", capture.error());
+            return;
+        }
+
+        if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable()) {
+            splat_simplify_state_.thread->join();
+            splat_simplify_state_.thread.reset();
+        }
+
+        splat_simplify_state_.active.store(true);
+        splat_simplify_state_.cancel_requested.store(false);
+        splat_simplify_state_.completed.store(false);
+        splat_simplify_state_.apply_pending.store(false);
+        splat_simplify_state_.progress.store(0.0f);
+        {
+            const std::lock_guard lock(splat_simplify_state_.mutex);
+            splat_simplify_state_.stage = "Starting...";
+            splat_simplify_state_.error.clear();
+            splat_simplify_state_.source_name = capture->source_name;
+            splat_simplify_state_.output_name = capture->output_name;
+            splat_simplify_state_.result.reset();
+        }
+
+        auto input = std::move(capture->model);
+        auto opts = options;
+        splat_simplify_state_.thread.emplace([this, opts, input = std::move(input)](std::stop_token stop_token) mutable {
+            auto progress_cb = [this, &stop_token](const float progress, const std::string& stage) -> bool {
+                if (stop_token.stop_requested() || splat_simplify_state_.cancel_requested.load())
+                    return false;
+                splat_simplify_state_.progress.store(progress);
+                {
+                    const std::lock_guard lock(splat_simplify_state_.mutex);
+                    splat_simplify_state_.stage = stage;
+                }
+                return true;
+            };
+
+            auto result = lfs::core::simplify_splats(*input, opts, progress_cb);
+            if (result) {
+                {
+                    const std::lock_guard lock(splat_simplify_state_.mutex);
+                    splat_simplify_state_.result = std::move(*result);
+                    splat_simplify_state_.stage = "Applying...";
+                }
+                splat_simplify_state_.progress.store(1.0f);
+                splat_simplify_state_.apply_pending.store(true);
+            } else {
+                const bool cancelled = splat_simplify_state_.cancel_requested.load() || stop_token.stop_requested() ||
+                                       result.error() == "Cancelled";
+                {
+                    const std::lock_guard lock(splat_simplify_state_.mutex);
+                    splat_simplify_state_.error = cancelled ? std::string{} : result.error();
+                    splat_simplify_state_.stage = cancelled ? "Cancelled" : "Failed";
+                }
+                splat_simplify_state_.active.store(false);
+            }
+            splat_simplify_state_.completed.store(true);
+        });
+    }
+
+    void AsyncTaskManager::pollSplatSimplifyCompletion() {
+        if (splat_simplify_state_.apply_pending.exchange(false)) {
+            if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable()) {
+                splat_simplify_state_.thread->join();
+                splat_simplify_state_.thread.reset();
+            }
+
+            auto* const scene_manager = viewer_->getSceneManager();
+            if (!scene_manager) {
+                LOG_ERROR("Splat simplify: no scene manager");
+                splat_simplify_state_.active.store(false);
+                splat_simplify_state_.completed.store(false);
+                return;
+            }
+
+            std::unique_ptr<lfs::core::SplatData> result;
+            std::string source_name;
+            std::string output_name;
+            {
+                const std::lock_guard lock(splat_simplify_state_.mutex);
+                result = std::move(splat_simplify_state_.result);
+                source_name = splat_simplify_state_.source_name;
+                output_name = splat_simplify_state_.output_name;
+            }
+
+            if (!result) {
+                LOG_ERROR("Splat simplify: missing result payload");
+                splat_simplify_state_.active.store(false);
+                splat_simplify_state_.completed.store(false);
+                return;
+            }
+
+            const auto added_name = scene_manager->addGeneratedSplatNode(std::move(result), source_name, output_name, true);
+            {
+                const std::lock_guard lock(splat_simplify_state_.mutex);
+                if (added_name.empty()) {
+                    splat_simplify_state_.error = "Failed to add simplified splat node";
+                    splat_simplify_state_.stage = "Failed";
+                } else {
+                    splat_simplify_state_.stage = "Complete";
+                }
+            }
+            splat_simplify_state_.active.store(false);
+            splat_simplify_state_.completed.store(false);
+            return;
+        }
+
+        if (!splat_simplify_state_.completed.load())
+            return;
+
+        if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable()) {
+            splat_simplify_state_.thread->join();
+            splat_simplify_state_.thread.reset();
+        }
+        splat_simplify_state_.completed.store(false);
+    }
+
+    void AsyncTaskManager::cancelSplatSimplify() {
+        splat_simplify_state_.cancel_requested.store(true);
+        {
+            const std::lock_guard lock(splat_simplify_state_.mutex);
+            splat_simplify_state_.stage = "Cancelling...";
+            splat_simplify_state_.error.clear();
+        }
+        if (splat_simplify_state_.thread) {
+            splat_simplify_state_.thread->request_stop();
+        }
     }
 
 } // namespace lfs::vis::gui
