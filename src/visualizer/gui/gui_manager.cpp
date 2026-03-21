@@ -262,7 +262,6 @@ namespace lfs::vis::gui {
     void GuiManager::rebuildFonts(float scale) {
         ImGuiIO& io = ImGui::GetIO();
 
-        ImGui_ImplOpenGL3_DestroyFontsTexture();
         io.Fonts->Clear();
 
         const auto& t = theme();
@@ -379,11 +378,10 @@ namespace lfs::vis::gui {
             font_regular_ = font_bold_ = font_heading_ = font_small_ = font_section_ = fallback;
         }
 
-        io.Fonts->TexDesiredWidth = 2048;
+        io.Fonts->TexMinWidth = std::max(io.Fonts->TexMinWidth, 2048);
         if (!io.Fonts->Build()) {
             LOG_ERROR("Font atlas build failed — CJK glyphs may be missing");
         }
-        ImGui_ImplOpenGL3_CreateFontsTexture();
     }
 
     void GuiManager::applyUiScale(float scale) {
