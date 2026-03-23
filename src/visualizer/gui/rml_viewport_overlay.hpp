@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
         void compositeToScreen(int screen_w, int screen_h) const;
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
+        [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
         bool updateTheme();

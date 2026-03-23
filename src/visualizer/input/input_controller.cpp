@@ -8,6 +8,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/key_codes.hpp"
+#include "input/input_router.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
 #include "operator/operator_context.hpp"
@@ -35,7 +36,8 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
-        bool dispatchKeyToModals(int key, int scancode, int action, int mods, double x, double y) {
+        bool dispatchKeyToModals(int key, int scancode, int action, int mods,
+                                 double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::KEY;
             evt.data = KeyEvent{key, scancode, action, mods};
@@ -54,12 +56,13 @@ namespace lfs::vis {
             py_evt.mods = mods;
             py_evt.x = x;
             py_evt.y = y;
-            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
+            py_evt.over_gui = over_gui;
 
             return python::dispatch_modal_event(py_evt);
         }
 
-        bool dispatchMouseButtonToModals(int button, int action, int mods, double x, double y) {
+        bool dispatchMouseButtonToModals(int button, int action, int mods,
+                                         double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_BUTTON;
             evt.data = MouseButtonEvent{button, action, mods, {x, y}};
@@ -78,12 +81,13 @@ namespace lfs::vis {
             py_evt.mods = mods;
             py_evt.x = x;
             py_evt.y = y;
-            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
+            py_evt.over_gui = over_gui;
 
             return python::dispatch_modal_event(py_evt);
         }
 
-        bool dispatchMouseMoveToModals(double x, double y, double delta_x, double delta_y, [[maybe_unused]] int mods) {
+        bool dispatchMouseMoveToModals(double x, double y, double delta_x, double delta_y,
+                                       [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_MOVE;
             evt.data = MouseMoveEvent{{x, y}, {delta_x, delta_y}};
@@ -101,12 +105,13 @@ namespace lfs::vis {
             py_evt.y = y;
             py_evt.delta_x = delta_x;
             py_evt.delta_y = delta_y;
-            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
+            py_evt.over_gui = over_gui;
 
             return python::dispatch_modal_event(py_evt);
         }
 
-        bool dispatchScrollToModals(double xoff, double yoff, double x, double y, [[maybe_unused]] int mods) {
+        bool dispatchScrollToModals(double xoff, double yoff, double x, double y,
+                                    [[maybe_unused]] int mods, const bool over_gui) {
             op::ModalEvent evt{};
             evt.type = op::ModalEvent::Type::MOUSE_SCROLL;
             evt.data = MouseScrollEvent{xoff, yoff};
@@ -124,66 +129,9 @@ namespace lfs::vis {
             py_evt.scroll_y = yoff;
             py_evt.x = x;
             py_evt.y = y;
-            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
+            py_evt.over_gui = over_gui;
 
             return python::dispatch_modal_event(py_evt);
-        }
-
-        bool isAlwaysActiveKeyAction(const input::Action action) {
-            switch (action) {
-            case input::Action::TOOL_SELECT:
-            case input::Action::TOOL_TRANSLATE:
-            case input::Action::TOOL_ROTATE:
-            case input::Action::TOOL_SCALE:
-            case input::Action::TOOL_MIRROR:
-            case input::Action::TOOL_BRUSH:
-            case input::Action::TOOL_ALIGN:
-            case input::Action::TOGGLE_UI:
-            case input::Action::TOGGLE_FULLSCREEN:
-            case input::Action::SELECT_MODE_CENTERS:
-            case input::Action::SELECT_MODE_RECTANGLE:
-            case input::Action::SELECT_MODE_POLYGON:
-            case input::Action::SELECT_MODE_LASSO:
-            case input::Action::SELECT_MODE_RINGS:
-            case input::Action::UNDO:
-            case input::Action::REDO:
-            case input::Action::DELETE_SELECTED:
-            case input::Action::DELETE_NODE:
-            case input::Action::INVERT_SELECTION:
-            case input::Action::DESELECT_ALL:
-            case input::Action::SELECT_ALL:
-            case input::Action::COPY_SELECTION:
-            case input::Action::PASTE_SELECTION:
-            case input::Action::TOGGLE_SELECTION_DEPTH_FILTER:
-            case input::Action::TOGGLE_SELECTION_CROP_FILTER:
-                return true;
-            default:
-                return false;
-            }
-        }
-
-        bool isViewportFocusedShortcutAction(const input::Action action) {
-            switch (action) {
-            case input::Action::TOGGLE_GT_COMPARISON:
-            case input::Action::TOGGLE_SPLIT_VIEW:
-                return true;
-            default:
-                return false;
-            }
-        }
-
-        bool isViewportMovementAction(const input::Action action) {
-            switch (action) {
-            case input::Action::CAMERA_MOVE_FORWARD:
-            case input::Action::CAMERA_MOVE_BACKWARD:
-            case input::Action::CAMERA_MOVE_LEFT:
-            case input::Action::CAMERA_MOVE_RIGHT:
-            case input::Action::CAMERA_MOVE_UP:
-            case input::Action::CAMERA_MOVE_DOWN:
-                return true;
-            default:
-                return false;
-            }
         }
 
         bool handleSelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
@@ -260,23 +208,23 @@ namespace lfs::vis {
     InputController::InputController(SDL_Window* window, Viewport& viewport)
         : window_(window),
           viewport_(viewport) {
-        cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
+        go_to_cam_view_handler_id_ =
+            cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
-        cmd::ResetCamera::when([this](const auto&) {
+        reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
             viewport_.camera.resetToHome();
             publishCameraMove();
         });
 
-        state::DatasetLoadCompleted::when([this](const auto& e) {
+        dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
                 viewport_.camera.resetToHome();
                 publishCameraMove();
             }
         });
 
-        internal::WindowFocusLost::when([this](const auto&) {
+        window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
-            viewport_keyboard_focus_ = false;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
             hovered_camera_id_ = -1;
 
@@ -287,6 +235,19 @@ namespace lfs::vis {
     }
 
     InputController::~InputController() {
+        auto unsubscribe = [](const auto event_tag, std::size_t& handler_id) {
+            if (handler_id == 0)
+                return;
+            ::lfs::event::EventBridge::instance().unsubscribe(typeid(decltype(event_tag)), handler_id);
+            handler_id = 0;
+        };
+
+        unsubscribe(cmd::GoToCamView{}, go_to_cam_view_handler_id_);
+        unsubscribe(cmd::ResetCamera{}, reset_camera_handler_id_);
+        unsubscribe(state::DatasetLoadCompleted{}, dataset_load_completed_handler_id_);
+        unsubscribe(internal::WindowFocusLost{}, window_focus_lost_handler_id_);
+        unsubscribe(ui::GTComparisonModeChanged{}, gt_comparison_mode_changed_handler_id_);
+
         if (instance_ == this) {
             instance_ = nullptr;
         }
@@ -325,7 +286,12 @@ namespace lfs::vis {
         refreshMovementKeyCache();
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
 
-        ui::GTComparisonModeChanged::when([this](const auto& event) { gt_comparison_active_ = event.enabled; });
+        if (gt_comparison_mode_changed_handler_id_ == 0) {
+            gt_comparison_mode_changed_handler_id_ =
+                ui::GTComparisonModeChanged::when([this](const auto& event) {
+                    gt_comparison_active_ = event.enabled;
+                });
+        }
     }
 
     void InputController::refreshMovementKeyCache() {
@@ -338,11 +304,14 @@ namespace lfs::vis {
     }
 
     void InputController::onWindowFocusLost() {
-        viewport_keyboard_focus_ = false;
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
+    }
+
+    bool InputController::hasViewportKeyboardFocus() const {
+        return input_router_ && input_router_->isViewportKeyboardFocused();
     }
 
     bool InputController::isKeyPressed(int app_key) const {
@@ -394,14 +363,8 @@ namespace lfs::vis {
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
         auto* gui = services().guiOrNull();
-        const bool in_viewport = isInViewport(x, y);
-        const bool over_gui = isPointerOverBlockingUi(x, y) ||
-                              ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
-
-        if (action == input::ACTION_PRESS) {
-            viewport_keyboard_focus_ = in_viewport && !over_gui && !over_gizmo;
-        }
+        const bool over_gui = isPointerOverBlockingUi(x, y);
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
@@ -418,7 +381,7 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseButtonToModals(button, action, getModifierKeys(), x, y)) {
+        if (dispatchMouseButtonToModals(button, action, getModifierKeys(), x, y, over_gui)) {
             return;
         }
 
@@ -759,13 +722,11 @@ namespace lfs::vis {
         const double delta_y = y - last_mouse_pos_.y;
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys())) {
+        const bool over_gui = isPointerOverBlockingUi(x, y);
+        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui)) {
             last_mouse_pos_ = current_pos;
             return;
         }
-
-        const bool over_gui = isPointerOverBlockingUi(x, y) ||
-                              ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
 
         if (drag_mode_ == DragMode::Splitter && services().renderingOrNull()) {
             const auto viewport_size = glm::ivec2(static_cast<int>(viewport_bounds_.width),
@@ -908,11 +869,10 @@ namespace lfs::vis {
         float fx, fy;
         SDL_GetMouseState(&fx, &fy);
         double mouse_x = fx, mouse_y = fy;
-        const bool over_gui = isPointerOverBlockingUi(mouse_x, mouse_y) ||
-                              ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
+        const bool over_gui = isPointerOverBlockingUi(mouse_x, mouse_y);
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchScrollToModals(xoff, yoff, mouse_x, mouse_y, getModifierKeys())) {
+        if (dispatchScrollToModals(xoff, yoff, mouse_x, mouse_y, getModifierKeys(), over_gui)) {
             return;
         }
 
@@ -952,7 +912,7 @@ namespace lfs::vis {
         if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
             return;
 
-        if (!isInViewport(mouse_x, mouse_y) || gui::guiFocusState().any_item_active || over_gui)
+        if (!isInViewport(mouse_x, mouse_y) || over_gui)
             return;
 
         const float delta = static_cast<float>(yoff);
@@ -1004,7 +964,10 @@ namespace lfs::vis {
         float mx_f, my_f;
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
-        if (dispatchKeyToModals(key, 0, action, mods, mx, my)) {
+        const bool over_gui = input_router_
+                                  ? input_router_->pointerTarget(mx, my) == input::InputTarget::Gui
+                                  : isPointerOverBlockingUi(mx, my);
+        if (dispatchKeyToModals(key, 0, action, mods, mx, my, over_gui)) {
             return;
         }
 
@@ -1031,52 +994,39 @@ namespace lfs::vis {
             }
         }
 
-        const auto& focus = gui::guiFocusState();
-        const bool wants_text_input = focus.want_text_input;
-        const bool imgui_wants_keyboard =
-            focus.any_item_active || wants_text_input || focus.want_capture_keyboard;
+        const bool wants_text_input = input_router_
+                                          ? input_router_->isTextInputActive()
+                                          : gui::guiFocusState().want_text_input;
+        const bool viewport_keyboard_focus = input_router_
+                                                 ? input_router_->isViewportKeyboardFocused()
+                                                 : false;
+        const bool modal_open = input_router_
+                                    ? input_router_->isModalOpen()
+                                    : (gui && gui->isModalWindowOpen());
 
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
 
         const auto tool_mode = getCurrentToolMode();
         const auto bound_action = bindings_.getActionForKey(tool_mode, key, mods);
-        const bool is_viewport_focused_shortcut = isViewportFocusedShortcutAction(bound_action);
-        const bool allow_viewport_movement =
-            viewport_keyboard_focus_ &&
-            isViewportMovementAction(bound_action) &&
-            !wants_text_input &&
-            !(gui && gui->isModalWindowOpen());
-        const bool allow_viewport_shortcut =
-            viewport_keyboard_focus_ &&
-            is_viewport_focused_shortcut &&
-            !wants_text_input &&
-            !(gui && gui->isModalWindowOpen());
 
-        // Global shortcuts bypass ImGui keyboard capture (except text input)
-        if (action == input::ACTION_PRESS && !wants_text_input) {
-            if (bound_action == input::Action::CAMERA_NEXT_VIEW ||
-                bound_action == input::Action::CAMERA_PREV_VIEW) {
-                const auto* trainer = services().trainerOrNull();
-                if (trainer) {
-                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
-                    if (num_cams > 0) {
-                        const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
-                        last_camview_ = (last_camview_ < 0)
-                                            ? (delta > 0 ? 0 : num_cams - 1)
-                                            : (last_camview_ + delta + num_cams) % num_cams;
-                        cmd::GoToCamView{.cam_id = last_camview_}.emit();
-                    }
-                }
+        if (modal_open)
+            return;
+
+        switch (input::shortcutScopeForAction(bound_action)) {
+        case input::ShortcutScope::Viewport:
+            if (!viewport_keyboard_focus || wants_text_input) {
                 return;
             }
+            break;
+        case input::ShortcutScope::GlobalWhenNotTextEditing:
+            if (wants_text_input) {
+                return;
+            }
+            break;
+        case input::ShortcutScope::Global:
+            break;
         }
-
-        const bool is_always_active = isAlwaysActiveKeyAction(bound_action);
-
-        if (imgui_wants_keyboard && !allow_viewport_movement && !allow_viewport_shortcut &&
-            (!is_always_active || wants_text_input))
-            return;
 
         // Only speed controls support key repeat
         if (action == input::ACTION_REPEAT) {
@@ -1105,6 +1055,22 @@ namespace lfs::vis {
             case input::Action::TOGGLE_GT_COMPARISON:
                 cmd::ToggleGTComparison{}.emit();
                 return;
+
+            case input::Action::CAMERA_NEXT_VIEW:
+            case input::Action::CAMERA_PREV_VIEW: {
+                const auto* trainer = services().trainerOrNull();
+                if (trainer) {
+                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
+                    if (num_cams > 0) {
+                        const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
+                        last_camview_ = (last_camview_ < 0)
+                                            ? (delta > 0 ? 0 : num_cams - 1)
+                                            : (last_camview_ + delta + num_cams) % num_cams;
+                        cmd::GoToCamView{.cam_id = last_camview_}.emit();
+                    }
+                }
+                return;
+            }
 
             case input::Action::CAMERA_RESET_HOME:
                 viewport_.camera.resetToHome();
@@ -1662,6 +1628,10 @@ namespace lfs::vis {
     }
 
     bool InputController::isPointerOverBlockingUi(const double x, const double y) const {
+        if (input_router_) {
+            return input_router_->pointerTarget(x, y) == input::InputTarget::Gui;
+        }
+
         const auto& focus = gui::guiFocusState();
         if (focus.want_capture_mouse)
             return true;
@@ -1679,16 +1649,14 @@ namespace lfs::vis {
             return false;
         }
 
-        const auto& focus = gui::guiFocusState();
-        if (focus.want_text_input)
-            return false;
-
-        if (viewport_keyboard_focus_) {
-            auto* gui = services().guiOrNull();
-            return !(gui && gui->isModalWindowOpen());
+        if (input_router_) {
+            return input_router_->isViewportKeyboardFocused() &&
+                   !input_router_->isTextInputActive() &&
+                   !input_router_->isModalOpen();
         }
 
-        if (focus.want_capture_keyboard)
+        const auto& focus = gui::guiFocusState();
+        if (focus.want_text_input || focus.want_capture_keyboard)
             return false;
 
         return !focus.any_item_active;

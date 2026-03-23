@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "input/key_codes.hpp"
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -110,6 +111,12 @@ namespace lfs::vis::input {
         PIE_MENU,
         // Selection depth filter
         DEPTH_ADJUST_NEAR,
+    };
+
+    enum class ShortcutScope : uint8_t {
+        Global,
+        GlobalWhenNotTextEditing,
+        Viewport,
     };
 
     enum Modifier : int {
@@ -248,5 +255,6 @@ namespace lfs::vis::input {
     LFS_VIS_API std::string getKeyName(int key);
     LFS_VIS_API std::string getMouseButtonName(MouseButton button);
     LFS_VIS_API std::string getModifierString(int modifiers);
+    [[nodiscard]] LFS_VIS_API ShortcutScope shortcutScopeForAction(Action action);
 
 } // namespace lfs::vis::input

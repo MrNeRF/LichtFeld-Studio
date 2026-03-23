@@ -292,6 +292,16 @@ namespace lfs::vis::gui {
         overlay_->compositeToScreen(screen_w, screen_h);
     }
 
+    bool SequencerUIManager::blocksPointer(const double x, const double y) const {
+        return overlay_ &&
+               (overlay_->wantsInput() || overlay_->isMouseOverEditOverlay(static_cast<float>(x),
+                                                                           static_cast<float>(y)));
+    }
+
+    bool SequencerUIManager::blocksKeyboard() const {
+        return overlay_ && (overlay_->isContextMenuOpen() || overlay_->isPopupOpen());
+    }
+
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport) {
         const auto& io = ImGui::GetIO();
         controller_.update(io.DeltaTime);

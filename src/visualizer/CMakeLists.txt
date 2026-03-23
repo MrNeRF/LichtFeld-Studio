@@ -89,6 +89,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Input handling
         input/input_controller.cpp
+        input/input_router.cpp
         input/input_bindings.cpp
         input/sdl_key_mapping.cpp
 
