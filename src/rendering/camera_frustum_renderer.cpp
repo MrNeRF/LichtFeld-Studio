@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "camera_frustum_renderer.hpp"
-#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "gl_state_guard.hpp"
-#include "io/nvcodec_image_loader.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace lfs::rendering {
@@ -19,7 +18,6 @@ namespace lfs::rendering {
         constexpr float MIN_RENDER_ALPHA = 0.01f;
         constexpr float WIREFRAME_WIDTH = 1.5f;
         constexpr int PICKING_SAMPLE_SIZE = 3;
-        constexpr int NVCODEC_DECODER_POOL_SIZE = 4;
         constexpr int INITIAL_TEXTURE_ARRAY_CAPACITY = 256;
         constexpr float EQUIRECTANGULAR_DISPLAY_FOV = 1.0472f; // 60 degrees
 
@@ -886,128 +884,80 @@ namespace lfs::rendering {
         }
     }
 
+    void CameraFrustumRenderer::setImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) {
+        std::lock_guard lock(shared_loader_mutex_);
+        shared_loader_ = std::move(loader);
+    }
+
     void CameraFrustumRenderer::thumbnailLoaderWorker() {
-        constexpr auto IDLE_TIMEOUT = std::chrono::seconds(5);
-        constexpr auto POLL_INTERVAL = std::chrono::milliseconds(500);
+        std::shared_ptr<lfs::io::PipelinedImageLoader> fallback;
 
-        std::unique_ptr<lfs::io::NvCodecImageLoader> nvcodec;
-        const bool nvcodec_supported = lfs::io::NvCodecImageLoader::is_available();
-        auto last_activity = std::chrono::steady_clock::now();
-
-        const auto create_nvcodec = [&]() -> bool {
-            if (nvcodec || !nvcodec_supported)
-                return nvcodec != nullptr;
-            try {
-                lfs::io::NvCodecImageLoader::Options opts;
-                opts.device_id = 0;
-                opts.decoder_pool_size = NVCODEC_DECODER_POOL_SIZE;
-                nvcodec = std::make_unique<lfs::io::NvCodecImageLoader>(opts);
-                return true;
-            } catch (const std::exception& e) {
-                LOG_WARN("nvImageCodec init failed: {}", e.what());
-                return false;
+        const auto get_loader = [&]() -> std::shared_ptr<lfs::io::PipelinedImageLoader> {
+            {
+                std::lock_guard lock(shared_loader_mutex_);
+                if (shared_loader_)
+                    return shared_loader_;
             }
+            if (!fallback) {
+                lfs::io::PipelinedLoaderConfig config;
+                config.io_threads = 0;
+                config.cold_process_threads = 0;
+                config.max_cache_bytes = 64ULL * 1024 * 1024;
+                fallback = std::make_shared<lfs::io::PipelinedImageLoader>(config);
+            }
+            return fallback;
         };
 
         while (thumbnail_loader_running_) {
             ThumbnailRequest request;
-            bool has_work = false;
 
             {
                 std::unique_lock lock(load_queue_mutex_);
-                load_queue_cv_.wait_for(lock, POLL_INTERVAL, [this] {
+                load_queue_cv_.wait(lock, [this] {
                     return !thumbnail_load_queue_.empty() || !thumbnail_loader_running_;
                 });
 
                 if (!thumbnail_loader_running_)
                     break;
 
-                if (!thumbnail_load_queue_.empty()) {
-                    request = std::move(thumbnail_load_queue_.front());
-                    thumbnail_load_queue_.pop();
-                    has_work = true;
-                    last_activity = std::chrono::steady_clock::now();
-                }
-            }
+                if (thumbnail_load_queue_.empty())
+                    continue;
 
-            // Release nvcodec after idle timeout to free CUDA resources for training
-            if (!has_work) {
-                if (nvcodec && (std::chrono::steady_clock::now() - last_activity) > IDLE_TIMEOUT) {
-                    LOG_DEBUG("Releasing idle thumbnail nvcodec");
-                    nvcodec.reset();
-                }
-                continue;
+                request = std::move(thumbnail_load_queue_.front());
+                thumbnail_load_queue_.pop();
             }
 
             LoadedThumbnail loaded;
             loaded.camera_uid = request.camera_uid;
 
             try {
-                std::string ext = request.image_path.extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                auto loader = get_loader();
 
-                bool loaded_with_nvcodec = false;
-                const bool is_jpeg = (ext == ".jpg" || ext == ".jpeg");
+                lfs::io::LoadParams params;
+                params.max_width = THUMBNAIL_SIZE;
 
-                if (is_jpeg && create_nvcodec()) {
-                    try {
-                        const int max_dim = std::max(request.image_width, request.image_height);
-                        int pot_resize = 1;
-                        while (pot_resize * 2 <= max_dim / THUMBNAIL_SIZE) {
-                            pot_resize *= 2;
-                        }
+                auto tensor = loader->load_image_immediate(request.image_path, params);
+                assert(tensor.ndim() == 3);
 
-                        auto tensor = nvcodec->load_image_gpu(request.image_path, pot_resize, THUMBNAIL_SIZE);
-                        auto cpu_tensor = tensor.cpu().contiguous();
-                        const auto shape = cpu_tensor.shape();
-                        const int c = shape[0], h = shape[1], w = shape[2];
+                // float32 [C,H,W] on GPU → uint8 [H,W,C] on CPU with Y-flip
+                auto hwc = tensor.permute({1, 2, 0}).contiguous();
+                hwc = (hwc.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8).contiguous();
+                hwc = hwc.cpu().contiguous();
 
-                        if (c != 3)
-                            throw std::runtime_error("Expected 3 channels");
+                const int h = static_cast<int>(hwc.shape()[0]);
+                const int w = static_cast<int>(hwc.shape()[1]);
+                const int ch = static_cast<int>(hwc.shape()[2]);
+                assert(ch == 3);
 
-                        loaded.width = w;
-                        loaded.height = h;
-                        loaded.pixel_data.resize(w * h * 3);
+                loaded.width = w;
+                loaded.height = h;
+                loaded.pixel_data.resize(static_cast<size_t>(w) * h * 3);
 
-                        // CHW (channel-first) to HWC (interleaved) with Y-flip
-                        const float* src = cpu_tensor.ptr<float>();
-                        const int plane_size = h * w;
-                        const float* r_plane = src;
-                        const float* g_plane = src + plane_size;
-                        const float* b_plane = src + 2 * plane_size;
-
-                        for (int y = 0; y < h; ++y) {
-                            const int src_y = h - 1 - y;
-                            uint8_t* dst_row = loaded.pixel_data.data() + y * w * 3;
-                            const float* r_row = r_plane + src_y * w;
-                            const float* g_row = g_plane + src_y * w;
-                            const float* b_row = b_plane + src_y * w;
-
-                            for (int x = 0; x < w; ++x) {
-                                dst_row[x * 3] = static_cast<uint8_t>(std::clamp(r_row[x] * 255.0f, 0.0f, 255.0f));
-                                dst_row[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g_row[x] * 255.0f, 0.0f, 255.0f));
-                                dst_row[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b_row[x] * 255.0f, 0.0f, 255.0f));
-                            }
-                        }
-                        loaded_with_nvcodec = true;
-                    } catch (...) {}
-                }
-
-                if (!loaded_with_nvcodec) {
-                    auto [data, width, height, channels] = lfs::core::load_image(request.image_path, -1, THUMBNAIL_SIZE);
-                    if (!data)
-                        continue;
-
-                    loaded.width = width;
-                    loaded.height = height;
-                    loaded.pixel_data.resize(width * height * 3);
-
-                    for (int y = 0; y < height; ++y) {
-                        std::memcpy(loaded.pixel_data.data() + y * width * 3,
-                                    data + (height - 1 - y) * width * 3,
-                                    width * 3);
-                    }
-                    lfs::core::free_image(data);
+                const auto* src = hwc.ptr<uint8_t>();
+                const size_t row_bytes = static_cast<size_t>(w) * 3;
+                for (int y = 0; y < h; ++y) {
+                    std::memcpy(loaded.pixel_data.data() + y * row_bytes,
+                                src + (h - 1 - y) * row_bytes, row_bytes);
                 }
 
                 {

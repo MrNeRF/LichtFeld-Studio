@@ -26,6 +26,8 @@ def test_plugin_package_exports_unified_panel_types(monkeypatch):
     assert module.Panel.__name__ == "Panel"
     assert not hasattr(module, "RmlPanel")
     assert module.Menu.__name__ == "Menu"
+    assert module.ScrubFieldController.__name__ == "ScrubFieldController"
+    assert module.ScrubFieldSpec.__name__ == "ScrubFieldSpec"
 
 
 def test_plugin_package_imports_without_v1_panel_runtime(monkeypatch):

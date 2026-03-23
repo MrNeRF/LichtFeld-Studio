@@ -143,3 +143,16 @@ loss-graph {
 .color-picker-popup.visible {
     display: block;
 }
+
+.mask-settings-group {
+    margin: 3dp 0 6dp 8dp;
+    padding: 2dp 0 2dp 8dp;
+    border-left-width: 1dp;
+    border-left-color: rgba(137, 180, 250, 56);
+}
+
+.mask-settings-divider {
+    height: 1dp;
+    margin: 4dp 0 2dp;
+    background-color: rgba(137, 180, 250, 32);
+}

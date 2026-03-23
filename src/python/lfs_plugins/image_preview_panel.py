@@ -6,6 +6,7 @@ import time
 from math import gcd
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import lichtfeld as lf
 from .types import Panel
@@ -24,6 +25,11 @@ FILMSTRIP_WINDOW = 40
 THUMB_MAX_PX = 256
 
 _instance = None
+_RML_PATH_SAFE_CHARS = "/:._-~"
+
+
+def _encode_rml_path(path: Path | str) -> str:
+    return quote(str(path), safe=_RML_PATH_SAFE_CHARS)
 
 
 class ImagePreviewPanel(Panel):
@@ -73,6 +79,7 @@ class ImagePreviewPanel(Panel):
 
         self._image_info_cache: dict[str, tuple[int, int, int]] = {}
         self._last_training_params: tuple[int, int, bool] = (1, 0, False)
+        self._decorator_cache: dict[str, str] = {}
 
     def _get_title(self) -> str:
         if self._image_paths:
@@ -135,6 +142,7 @@ class ImagePreviewPanel(Panel):
         if wf:
             wf.add_event_listener("keydown", self._on_keydown)
 
+        self._decorator_cache = {}
         self._dirty = True
 
     def on_update(self, doc):
@@ -179,6 +187,7 @@ class ImagePreviewPanel(Panel):
         self._prev_image_index = -1
         self._crossfade_pending = False
         self._scroll_target = None
+        self._decorator_cache = {}
 
     def _reset_pan(self):
         self._pan_x = 0.0
@@ -276,10 +285,12 @@ class ImagePreviewPanel(Panel):
             pass
         return (1, 0, False)
 
-    def _make_preview_url(self, path: Path, cam_uid: int, thumb: int = 0) -> str:
+    def _make_preview_url(self, path: Path, cam_uid: int,
+                          thumb: int = 0, preview_mw: int = 0) -> str:
         rf, mw, ud = self._last_training_params
         return (f"preview://cam={cam_uid}&thumb={thumb}"
-                f"&rf={rf}&mw={mw}&ud={1 if ud else 0}&path={path}")
+                f"&rf={rf}&mw={mw}&pmw={preview_mw}"
+                f"&ud={1 if ud else 0}&path={_encode_rml_path(path)}")
 
     def _on_filmstrip_click(self, event):
         el = event.target()
@@ -409,16 +420,46 @@ class ImagePreviewPanel(Panel):
         img_el.remove_property("margin-left")
         img_el.remove_property("margin-top")
 
+    def _get_main_preview_max_width(self, doc, path: Path) -> int:
+        if not self._fit_to_window:
+            return 0
+
+        viewport = doc.get_element_by_id("image-viewport") if doc else None
+        if not viewport:
+            return 0
+
+        vw = viewport.client_width
+        vh = viewport.client_height
+        if vw <= 1 or vh <= 1:
+            return 0
+
+        preview_max = max(vw, vh) * 1.25
+
+        w, h, _ = self._get_image_info(path)
+        if w > 0 and h > 0:
+            preview_max = min(preview_max, max(w, h))
+
+        return max(512, (int(preview_max) + 255) // 256 * 256)
+
+    def _set_decorator(self, element, cache_key: str, decorator: str):
+        if not element:
+            self._decorator_cache.pop(cache_key, None)
+            return
+
+        if self._decorator_cache.get(cache_key) != decorator:
+            element.set_property("decorator", decorator)
+            self._decorator_cache[cache_key] = decorator
+
     # -- UI refresh --
 
     def _refresh_ui(self, doc):
         has_images = bool(self._image_paths)
 
         self._update_localized_labels(doc)
+        self._update_main_image(doc, has_images)
         self._update_filmstrip(doc, has_images)
         self._update_sidebar(doc, has_images)
         self._update_nav_arrows(doc, has_images)
-        self._update_main_image(doc, has_images)
         self._update_status(doc, has_images)
 
         if hasattr(self, '_handle'):
@@ -434,10 +475,11 @@ class ImagePreviewPanel(Panel):
             for layer in (layer_a, layer_b):
                 if layer:
                     layer.set_attribute("class", "image-layer hidden")
-                    layer.set_property("decorator", "none")
+            self._set_decorator(layer_a, "main-image-a", "none")
+            self._set_decorator(layer_b, "main-image-b", "none")
             if mask_img:
                 mask_img.set_attribute("class", "")
-                mask_img.set_property("decorator", "none")
+            self._set_decorator(mask_img, "mask-overlay", "none")
             if no_text:
                 no_text.set_attribute("class", "")
                 no_text.set_text(lf.ui.tr("image_preview.no_images_loaded"))
@@ -447,7 +489,8 @@ class ImagePreviewPanel(Panel):
 
         path = self._image_paths[self._current_index]
         uid = self._camera_uids[self._current_index] if self._current_index < len(self._camera_uids) else -1
-        preview_dec = f"image({self._make_preview_url(path, uid)})"
+        preview_mw = self._get_main_preview_max_width(doc, path)
+        preview_dec = f"image({self._make_preview_url(path, uid, preview_mw=preview_mw)})"
         active_layer = doc.get_element_by_id(self._get_active_layer_id())
         inactive_layer = doc.get_element_by_id(self._get_inactive_layer_id())
 
@@ -456,20 +499,20 @@ class ImagePreviewPanel(Panel):
 
         if self._prev_image_index == -1:
             if active_layer:
-                active_layer.set_property("decorator", preview_dec)
+                self._set_decorator(active_layer, self._get_active_layer_id(), preview_dec)
                 active_layer.set_attribute("class", "image-layer")
                 self._apply_zoom(active_layer, path)
             if inactive_layer:
                 inactive_layer.set_attribute("class", "image-layer hidden")
-                inactive_layer.set_property("decorator", "none")
+                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), "none")
             self._prev_image_index = self._current_index
         elif self._prev_image_index != self._current_index:
             if self._crossfade_pending and inactive_layer:
                 inactive_layer.set_attribute("class", "image-layer hidden")
-                inactive_layer.set_property("decorator", "none")
+                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), "none")
 
             if inactive_layer:
-                inactive_layer.set_property("decorator", preview_dec)
+                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), preview_dec)
                 inactive_layer.set_attribute("class", "image-layer")
                 self._apply_zoom(inactive_layer, path)
             if active_layer:
@@ -481,7 +524,7 @@ class ImagePreviewPanel(Panel):
             self._prev_image_index = self._current_index
         else:
             if active_layer:
-                active_layer.set_property("decorator", preview_dec)
+                self._set_decorator(active_layer, self._get_active_layer_id(), preview_dec)
                 self._apply_zoom(active_layer, path)
 
         active_layer = doc.get_element_by_id(self._get_active_layer_id())
@@ -489,19 +532,20 @@ class ImagePreviewPanel(Panel):
         if mask_img:
             if show_mask:
                 mask_path = self._mask_paths[self._current_index]
-                mask_img.set_property("decorator", f"image({mask_path})")
+                self._set_decorator(mask_img, "mask-overlay",
+                                    f"image({_encode_rml_path(mask_path)})")
                 mask_img.set_attribute("class", "visible")
                 self._apply_zoom(mask_img, path)
             else:
                 mask_img.set_attribute("class", "")
-                mask_img.set_property("decorator", "none")
+                self._set_decorator(mask_img, "mask-overlay", "none")
 
     def _finalize_crossfade(self, doc):
         outgoing_id = self._get_inactive_layer_id()
         outgoing = doc.get_element_by_id(outgoing_id)
         if outgoing:
             outgoing.set_attribute("class", "image-layer hidden")
-            outgoing.set_property("decorator", "none")
+            self._set_decorator(outgoing, outgoing_id, "none")
         self._crossfade_pending = False
 
     def _update_filmstrip(self, doc, has_images: bool):

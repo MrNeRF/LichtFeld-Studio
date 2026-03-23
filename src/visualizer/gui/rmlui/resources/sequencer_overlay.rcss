@@ -65,19 +65,8 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 8dp;
     margin-bottom: 2dp;
-}
-
-.close-x {
-    display: inline-block;
-    padding: 0 4dp;
-    cursor: pointer;
-    font-size: 11dp;
-    opacity: 0.6;
-}
-
-.close-x:hover {
-    opacity: 1.0;
 }
 
 #kf-edit-overlay {
@@ -86,7 +75,13 @@ body {
 
 #kf-edit-label {
     display: block;
+    flex: 1;
     font-size: 10dp;
+}
+
+.kf-close-btn {
+    min-width: 44dp;
+    text-align: center;
 }
 
 #kf-edit-delta {

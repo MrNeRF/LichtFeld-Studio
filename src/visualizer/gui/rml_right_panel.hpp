@@ -70,7 +70,9 @@ namespace lfs::vis::gui {
         bool updateTheme();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         bool syncTabData(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
+        bool syncTabScrollState();
         void syncTabNavigation();
+        void scrollTabs(float delta);
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -80,12 +82,17 @@ namespace lfs::vis::gui {
         Rml::Element* left_border_el_ = nullptr;
         Rml::Element* splitter_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;
+        Rml::Element* tab_strip_viewport_el_ = nullptr;
         Rml::Element* tab_separator_el_ = nullptr;
 
         RmlFBO fbo_;
         Rml::DataModelHandle tab_model_;
         std::vector<TabSnapshot> tabs_;
         Rml::String active_tab_;
+        float tab_scroll_left_ = 0.0f;
+        bool tabs_overflow_ = false;
+        bool can_scroll_tabs_left_ = false;
+        bool can_scroll_tabs_right_ = false;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;

@@ -34,6 +34,7 @@ namespace lfs::core {
 
 namespace lfs::training {
     class AdamOptimizer;
+    struct PPISPFileMetadata;
 
     struct PPISPViewportOverrides {
         // Exposure
@@ -272,6 +273,26 @@ namespace lfs::training {
         std::expected<void, std::string> initialize_bilateral_grid();
         std::expected<void, std::string> initialize_ppisp();
         std::expected<void, std::string> initialize_ppisp_controller();
+        std::expected<void, std::string> apply_ppisp_sidecar_if_configured();
+        std::expected<PPISPFileMetadata, std::string> build_ppisp_sidecar_metadata() const;
+        struct PPISPSidecarMappings {
+            std::vector<int> frame_mapping;
+            std::vector<int> camera_mapping;
+        };
+        std::expected<PPISPSidecarMappings, std::string> build_ppisp_sidecar_mappings(
+            const PPISP& loaded_ppisp,
+            const PPISPFileMetadata& metadata,
+            const std::filesystem::path& sidecar_path) const;
+        [[nodiscard]] bool is_ppisp_frozen() const {
+            return params_.optimization.use_ppisp &&
+                   params_.optimization.ppisp_freeze_from_sidecar;
+        }
+        [[nodiscard]] bool should_apply_ppisp_sidecar_on_init() const {
+            return is_ppisp_frozen() &&
+                   !params_.resume_checkpoint.has_value() &&
+                   !params_.optimization.ppisp_sidecar_path.empty();
+        }
+        [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
@@ -319,8 +340,8 @@ namespace lfs::training {
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
 
-        // Pre-allocated SSIM workspace for densification error maps, eliminates repeated allocations
-        lfs::training::kernels::SSIMWorkspace densification_ssim_workspace_;
+        // Pre-allocated SSIM-map workspace for densification error maps.
+        lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
         lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)

@@ -8,6 +8,7 @@
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -119,6 +120,7 @@ namespace lfs::vis {
           rml_manager_(rml_manager) {
         assert(rml_manager_);
         transport_listener_.panel = this;
+        quality_scrub_listener_.panel = this;
     }
 
     RmlSequencerPanel::~RmlSequencerPanel() = default;
@@ -156,7 +158,10 @@ namespace lfs::vis {
             ui.show_film_strip = !ui.show_film_strip;
         else if (id == "btn-preview")
             ui.show_pip_preview = !ui.show_pip_preview;
-        else if (id == "btn-speed") {
+        else if (id == "btn-equirect") {
+            ui.equirectangular = !ui.equirectangular;
+            lfs::core::events::ui::RenderSettingsChanged{.equirectangular = ui.equirectangular}.emit();
+        } else if (id == "btn-speed") {
             const size_t idx = findSpeedIndex(ui.playback_speed);
             const size_t next = (idx + 1) % SPEED_PRESETS.size();
             ui.playback_speed = SPEED_PRESETS[next];
@@ -183,9 +188,6 @@ namespace lfs::vis {
             sx = panel->cached_panel_x_ + abs_offset.x;
             sy = panel->cached_panel_y_ + abs_offset.y + el->GetBox().GetSize().y;
             panel->transport_ctx_request_ = {TransportContextMenuRequest::Target::CLEAR, sx, sy};
-        } else if (id == "quality-slider") {
-            auto val_str = el->GetAttribute<Rml::String>("value", "18");
-            ui.quality = std::clamp(std::stoi(val_str), 15, 28);
         }
     }
 
@@ -279,8 +281,11 @@ namespace lfs::vis {
         el_speed_label_ = document_->GetElementById("speed-label");
         el_format_label_ = document_->GetElementById("format-label");
         el_resolution_info_ = document_->GetElementById("resolution-info");
-        el_quality_slider_ = document_->GetElementById("quality-slider");
-        el_quality_value_ = document_->GetElementById("quality-value");
+        el_quality_scrub_ = document_->GetElementById("quality-scrub");
+        el_quality_fill_ = document_->GetElementById("quality-fill");
+        el_quality_display_ = document_->GetElementById("quality-display");
+        el_quality_input_ = document_->GetElementById("quality-input");
+        el_btn_equirect_ = document_->GetElementById("btn-equirect");
         el_btn_save_ = document_->GetElementById("btn-save-path");
         el_btn_load_ = document_->GetElementById("btn-load-path");
         el_btn_export_ = document_->GetElementById("btn-export");
@@ -297,7 +302,7 @@ namespace lfs::vis {
         for (const char* btn_id : {"btn-skip-back", "btn-stop", "btn-play",
                                    "btn-skip-forward", "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
-                                   "btn-film-strip", "btn-preview", "btn-speed",
+                                   "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
                                    "btn-format", "btn-save-path", "btn-load-path",
                                    "btn-export", "btn-clear"}) {
             auto* el = document_->GetElementById(btn_id);
@@ -305,8 +310,17 @@ namespace lfs::vis {
                 el->AddEventListener(Rml::EventId::Click, &transport_listener_);
         }
 
-        if (el_quality_slider_)
-            el_quality_slider_->AddEventListener(Rml::EventId::Change, &transport_listener_);
+        if (el_quality_scrub_) {
+            el_quality_scrub_->AddEventListener(Rml::EventId::Mousedown, &quality_scrub_listener_);
+            if (auto* body = document_->GetElementById("body")) {
+                body->AddEventListener(Rml::EventId::Mousemove, &quality_scrub_listener_);
+                body->AddEventListener(Rml::EventId::Mouseup, &quality_scrub_listener_);
+            }
+        }
+        if (el_quality_input_) {
+            el_quality_input_->AddEventListener(Rml::EventId::Change, &quality_scrub_listener_);
+            el_quality_input_->AddEventListener(Rml::EventId::Blur, &quality_scrub_listener_);
+        }
     }
 
     std::string RmlSequencerPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
@@ -640,6 +654,7 @@ namespace lfs::vis {
 
         if (!hovered_) {
             tooltip_.clear();
+            gui::RmlPanelHost::setFrameTooltip({}, nullptr);
             if (last_hovered_)
                 rml_context_->ProcessMouseLeave();
             last_hovered_ = false;
@@ -672,7 +687,7 @@ namespace lfs::vis {
         tooltip_.clear();
         auto* hover = rml_context_->GetHoverElement();
         if (hover) {
-            tooltip_ = gui::resolveRmlTooltip(hover);
+            gui::RmlPanelHost::setFrameTooltip(gui::resolveRmlTooltip(hover), hover);
 
             if (input.mouse_clicked[1]) {
                 for (auto* el = hover; el; el = el->GetParentNode()) {
@@ -691,6 +706,8 @@ namespace lfs::vis {
                     }
                 }
             }
+        } else {
+            gui::RmlPanelHost::setFrameTooltip({}, nullptr);
         }
 
         auto* const focused = rml_context_->GetFocusElement();
@@ -721,9 +738,9 @@ namespace lfs::vis {
     }
 
     bool RmlSequencerPanel::consumeExportRequest() {
-        const bool r = export_requested_;
+        const bool request = export_requested_;
         export_requested_ = false;
-        return r;
+        return request;
     }
 
     bool RmlSequencerPanel::consumeClearRequest() {
@@ -749,6 +766,8 @@ namespace lfs::vis {
             el_btn_film_strip_->SetClass("active", ui_state_.show_film_strip);
         if (el_btn_preview_)
             el_btn_preview_->SetClass("active", ui_state_.show_pip_preview);
+        if (el_btn_equirect_)
+            el_btn_equirect_->SetClass("active", ui_state_.equirectangular);
         if (el_speed_label_)
             el_speed_label_->SetInnerRML(formatSpeed(ui_state_.playback_speed));
         if (el_format_label_)
@@ -761,8 +780,8 @@ namespace lfs::vis {
             const int fps = custom ? ui_state_.framerate : info.framerate;
             el_resolution_info_->SetInnerRML(std::format("{}x{} @ {}fps", w, h, fps));
         }
-        if (el_quality_value_)
-            el_quality_value_->SetInnerRML(std::to_string(ui_state_.quality));
+        if (!quality_scrub_editing_)
+            syncQualityScrub();
 
         if (el_btn_save_)
             el_btn_save_->SetClass("disabled", !has_camera_keyframes);
@@ -1109,6 +1128,111 @@ namespace lfs::vis {
         if (!ui_state_.snap_to_grid || ui_state_.snap_interval <= 0.0f)
             return time;
         return std::round(time / ui_state_.snap_interval) * ui_state_.snap_interval;
+    }
+
+    // ── Quality Scrub Field ──────────────────────────────────
+
+    namespace {
+        constexpr int QUALITY_MIN = 15;
+        constexpr int QUALITY_MAX = 28;
+        constexpr float SCRUB_DRAG_THRESHOLD_PX = 4.0f;
+    } // namespace
+
+    void RmlSequencerPanel::QualityScrubListener::ProcessEvent(Rml::Event& event) {
+        assert(panel);
+        const auto event_id = event.GetId();
+        auto* el = event.GetCurrentElement();
+
+        if (event_id == Rml::EventId::Mousedown && el && el->GetId() == "quality-scrub") {
+            const int button = event.GetParameter<int>("button", 0);
+            if (button != 0)
+                return;
+            panel->quality_scrub_active_ = true;
+            panel->quality_scrub_dragging_ = false;
+            panel->quality_scrub_start_x_ = event.GetParameter<float>("mouse_x", 0.0f);
+        } else if (event_id == Rml::EventId::Mousemove && panel->quality_scrub_active_) {
+            const float mx = event.GetParameter<float>("mouse_x", 0.0f);
+            const float dx = mx - panel->quality_scrub_start_x_;
+            if (!panel->quality_scrub_dragging_ && std::abs(dx) < SCRUB_DRAG_THRESHOLD_PX)
+                return;
+
+            if (!panel->quality_scrub_dragging_) {
+                panel->quality_scrub_dragging_ = true;
+                if (panel->el_quality_scrub_)
+                    panel->el_quality_scrub_->SetClass("is-dragging", true);
+            }
+            panel->applyQualityFromDrag(mx);
+            event.StopPropagation();
+        } else if (event_id == Rml::EventId::Mouseup && panel->quality_scrub_active_) {
+            const bool was_dragging = panel->quality_scrub_dragging_;
+            panel->quality_scrub_active_ = false;
+            panel->quality_scrub_dragging_ = false;
+            if (panel->el_quality_scrub_)
+                panel->el_quality_scrub_->SetClass("is-dragging", false);
+
+            if (!was_dragging)
+                panel->enterQualityEdit();
+            event.StopPropagation();
+        } else if (event_id == Rml::EventId::Change && el && el->GetId() == "quality-input") {
+            const bool linebreak = event.GetParameter<bool>("linebreak", false);
+            if (linebreak)
+                panel->exitQualityEdit(true);
+        } else if (event_id == Rml::EventId::Blur && el && el->GetId() == "quality-input") {
+            panel->exitQualityEdit(false);
+        }
+    }
+
+    void RmlSequencerPanel::syncQualityScrub() {
+        if (!el_quality_display_ || !el_quality_fill_)
+            return;
+
+        const int value = std::clamp(ui_state_.quality, QUALITY_MIN, QUALITY_MAX);
+        const float t = static_cast<float>(value - QUALITY_MIN) /
+                        static_cast<float>(QUALITY_MAX - QUALITY_MIN);
+        const std::string pct = std::format("{:.1f}%", t * 100.0f);
+        el_quality_fill_->SetProperty("width", pct);
+        el_quality_display_->SetInnerRML(std::to_string(value));
+    }
+
+    void RmlSequencerPanel::applyQualityFromDrag(const float mouse_x) {
+        if (!el_quality_scrub_)
+            return;
+
+        const float left = el_quality_scrub_->GetAbsoluteLeft();
+        const float width = std::max(el_quality_scrub_->GetBox().GetSize().x, 1.0f);
+        const float t = std::clamp((mouse_x - left) / width, 0.0f, 1.0f);
+        const int value = QUALITY_MIN + static_cast<int>(std::round(t * (QUALITY_MAX - QUALITY_MIN)));
+        ui_state_.quality = std::clamp(value, QUALITY_MIN, QUALITY_MAX);
+        syncQualityScrub();
+    }
+
+    void RmlSequencerPanel::enterQualityEdit() {
+        if (!el_quality_scrub_ || !el_quality_input_ || quality_scrub_editing_)
+            return;
+
+        quality_scrub_editing_ = true;
+        el_quality_scrub_->SetClass("is-editing", true);
+        el_quality_input_->SetAttribute("value", std::to_string(ui_state_.quality));
+        el_quality_input_->Focus();
+    }
+
+    void RmlSequencerPanel::exitQualityEdit(const bool commit) {
+        if (!quality_scrub_editing_)
+            return;
+
+        if (commit && el_quality_input_) {
+            const auto text = el_quality_input_->GetAttribute<Rml::String>("value", "");
+            try {
+                const int val = std::stoi(text);
+                ui_state_.quality = std::clamp(val, QUALITY_MIN, QUALITY_MAX);
+            } catch (...) {
+            }
+        }
+
+        quality_scrub_editing_ = false;
+        if (el_quality_scrub_)
+            el_quality_scrub_->SetClass("is-editing", false);
+        syncQualityScrub();
     }
 
 } // namespace lfs::vis

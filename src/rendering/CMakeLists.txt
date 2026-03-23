@@ -42,6 +42,7 @@ target_link_libraries(lfs_rendering
         lfs_geometry            # LibTorch-free geometry module
         # gs_kernels              # Temporarily disabled - requires LibTorch
         PRIVATE
+        lfs_io
         lfs_rasterizer
         glm::glm
         glad::glad

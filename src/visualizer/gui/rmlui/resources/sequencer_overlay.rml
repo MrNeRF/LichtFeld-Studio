@@ -6,7 +6,7 @@
     <div id="kf-edit-overlay" class="overlay-panel">
         <div class="kf-edit-header">
             <span id="kf-edit-label" class="overlay-text"></span>
-            <span id="kf-close-btn" class="close-x">&#x2715;</span>
+            <div id="kf-close-btn" class="btn btn--secondary kf-close-btn">Close</div>
         </div>
         <span id="kf-edit-delta" class="overlay-text-dim"></span>
         <div id="kf-edit-buttons">

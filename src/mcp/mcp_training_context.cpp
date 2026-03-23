@@ -79,7 +79,7 @@ namespace lfs::mcp {
                 if (!node)
                     continue;
                 has_model = true;
-                total += static_cast<int64_t>(node->gaussian_count);
+                total += static_cast<int64_t>(node->gaussian_count.load(std::memory_order_acquire));
             }
 
             if (!has_model)
@@ -428,7 +428,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error());
         }
 
-        LOG_INFO("MCP: Loaded dataset from {}", path.string());
+        LOG_INFO("MCP: Loaded dataset from {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -468,7 +468,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error());
         }
 
-        LOG_INFO("MCP: Loaded checkpoint from {}", path.string());
+        LOG_INFO("MCP: Loaded checkpoint from {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -492,7 +492,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error());
         }
 
-        LOG_INFO("MCP: Saved checkpoint to {}", path.string());
+        LOG_INFO("MCP: Saved checkpoint to {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -516,7 +516,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error().message);
         }
 
-        LOG_INFO("MCP: Saved PLY to {}", path.string());
+        LOG_INFO("MCP: Saved PLY to {}", core::path_to_utf8(path));
         return {};
     }
 

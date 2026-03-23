@@ -808,4 +808,62 @@ namespace lfs::vis::input {
         return result;
     }
 
+    ShortcutScope shortcutScopeForAction(const Action action) {
+        switch (action) {
+        case Action::TOOL_SELECT:
+        case Action::TOOL_TRANSLATE:
+        case Action::TOOL_ROTATE:
+        case Action::TOOL_SCALE:
+        case Action::TOOL_MIRROR:
+        case Action::TOOL_BRUSH:
+        case Action::TOOL_ALIGN:
+        case Action::TOGGLE_UI:
+        case Action::TOGGLE_FULLSCREEN:
+        case Action::SELECT_MODE_CENTERS:
+        case Action::SELECT_MODE_RECTANGLE:
+        case Action::SELECT_MODE_POLYGON:
+        case Action::SELECT_MODE_LASSO:
+        case Action::SELECT_MODE_RINGS:
+        case Action::UNDO:
+        case Action::REDO:
+        case Action::DELETE_SELECTED:
+        case Action::DELETE_NODE:
+        case Action::INVERT_SELECTION:
+        case Action::DESELECT_ALL:
+        case Action::SELECT_ALL:
+        case Action::COPY_SELECTION:
+        case Action::PASTE_SELECTION:
+        case Action::TOGGLE_SELECTION_DEPTH_FILTER:
+        case Action::TOGGLE_SELECTION_CROP_FILTER:
+        case Action::SEQUENCER_ADD_KEYFRAME:
+        case Action::SEQUENCER_UPDATE_KEYFRAME:
+        case Action::SEQUENCER_PLAY_PAUSE:
+            return ShortcutScope::GlobalWhenNotTextEditing;
+
+        case Action::CAMERA_MOVE_FORWARD:
+        case Action::CAMERA_MOVE_BACKWARD:
+        case Action::CAMERA_MOVE_LEFT:
+        case Action::CAMERA_MOVE_RIGHT:
+        case Action::CAMERA_MOVE_UP:
+        case Action::CAMERA_MOVE_DOWN:
+        case Action::CAMERA_RESET_HOME:
+        case Action::CAMERA_FOCUS_SELECTION:
+        case Action::CAMERA_SET_PIVOT:
+        case Action::CAMERA_NEXT_VIEW:
+        case Action::CAMERA_PREV_VIEW:
+        case Action::CAMERA_SPEED_UP:
+        case Action::CAMERA_SPEED_DOWN:
+        case Action::ZOOM_SPEED_UP:
+        case Action::ZOOM_SPEED_DOWN:
+        case Action::TOGGLE_SPLIT_VIEW:
+        case Action::TOGGLE_GT_COMPARISON:
+        case Action::CYCLE_SELECTION_VIS:
+        case Action::PIE_MENU:
+            return ShortcutScope::Viewport;
+
+        default:
+            return ShortcutScope::Global;
+        }
+    }
+
 } // namespace lfs::vis::input

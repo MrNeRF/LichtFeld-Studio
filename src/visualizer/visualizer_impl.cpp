@@ -295,6 +295,35 @@ namespace lfs::vis {
                 return gm ? gm->asyncTasks().getMesh2SplatError() : std::string{};
             });
         callback_cleanup_.add([] { python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
+        python::set_splat_simplify_callbacks(
+            [](std::string name, core::SplatSimplifyOptions opts) {
+                auto* gm = python::get_gui_manager();
+                if (!gm)
+                    return;
+                gm->asyncTasks().startSplatSimplify(name, opts);
+            },
+            []() {
+                auto* gm = python::get_gui_manager();
+                if (gm)
+                    gm->asyncTasks().cancelSplatSimplify();
+            },
+            []() -> bool {
+                auto* gm = python::get_gui_manager();
+                return gm && gm->asyncTasks().isSplatSimplifyActive();
+            },
+            []() -> float {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyProgress() : 0.0f;
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyStage() : std::string{};
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyError() : std::string{};
+            });
+        callback_cleanup_.add([] { python::set_splat_simplify_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr); });
         python::set_selected_camera_callback([]() -> int {
             const auto* gm = python::get_gui_manager();
             return gm ? gm->getHighlightedCameraUid() : -1;
@@ -489,6 +518,7 @@ namespace lfs::vis {
                 state.show_pip_preview = s.show_pip_preview;
                 state.pip_preview_scale = s.pip_preview_scale;
                 state.show_film_strip = s.show_film_strip;
+                state.equirectangular = s.equirectangular;
             }
 
             s.show_camera_path = state.show_camera_path;
@@ -499,6 +529,7 @@ namespace lfs::vis {
             s.show_pip_preview = state.show_pip_preview;
             s.pip_preview_scale = state.pip_preview_scale;
             s.show_film_strip = state.show_film_strip;
+            s.equirectangular = state.equirectangular;
             const auto sel = gm->sequencer().selectedKeyframe();
             s.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
             sequencer_ui_initialized_ = true;
@@ -759,22 +790,12 @@ namespace lfs::vis {
             internal::TrainingReadyToStart{}.emit();
         });
 
-        // Training started - switch to splat rendering and select training model
+        // Training started - switch to splat rendering without hijacking scene selection
         state::TrainingStarted::when([this](const auto&) {
             ui::PointCloudModeChanged{
                 .enabled = false,
                 .voxel_size = 0.01f}
                 .emit();
-
-            // Select the training model so it's visible
-            if (scene_manager_) {
-                const auto& scene = scene_manager_->getScene();
-                const auto& model_name = scene.getTrainingModelNodeName();
-                if (!model_name.empty()) {
-                    scene_manager_->selectNode(model_name);
-                    LOG_INFO("Selected training model '{}' for training", model_name);
-                }
-            }
 
             LOG_INFO("Switched to splat rendering mode (training started)");
         });
@@ -843,7 +864,8 @@ namespace lfs::vis {
         });
 
         state::SceneLoaded::when([](const auto& event) {
-            python::update_scene(true, event.path.string().c_str());
+            const std::string path_utf8 = core::path_to_utf8(event.path);
+            python::update_scene(true, path_utf8.c_str());
         });
 
         state::SceneCleared::when([](const auto&) {
@@ -1364,7 +1386,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleSwitchToLatestCheckpoint() {
-        LOG_WARN("Switch to latest checkpoint not implemented without project management");
+        // This event is emitted by the training flow even when no project/checkpoint manager is active.
+        // In the plain dataset workflow there is nothing to switch, so treat it as a no-op.
     }
 
 } // namespace lfs::vis

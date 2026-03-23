@@ -148,6 +148,59 @@
     </div>
   </div>
 
+  <!-- Splat Simplify -->
+  <div class="section-header text-accent" id="hdr-simplify" data-event-click="toggle_section('simplify')">
+    <span class="section-arrow text-accent is-expanded" id="arrow-simplify">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_simplify}}</span>
+  </div>
+  <div class="section-content" id="sec-simplify">
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">Source:</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <span class="text-muted" data-if="!simplify_has_source">Select a splat node</span>
+        <span data-if="simplify_has_source">{{simplify_source_name}}</span>
+      </div>
+    </div>
+    <div data-if="simplify_has_source">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">Ratio:</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="simplify_ratio" min="0.01" max="1" step="0.01" />
+          <span class="slider-value">{{simplify_ratio | format_float(2)}}</span>
+        </div>
+      </div>
+      <div class="rendering-simplify-stats">
+        <div class="rendering-simplify-stat">
+          <span class="rendering-simplify-stat__label">Original</span>
+          <span class="rendering-simplify-stat__value">{{simplify_original_count}}</span>
+        </div>
+        <div class="rendering-simplify-stat">
+          <span class="rendering-simplify-stat__label">Target</span>
+          <span class="rendering-simplify-stat__value">{{simplify_target_count}}</span>
+        </div>
+      </div>
+
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">Output:</span>
+        <div class="setting-row__control-col setting-row__control-col--fill">
+          <span class="text-muted">{{simplify_output_name}}</span>
+        </div>
+      </div>
+
+      <div class="rendering-simplify-actions">
+        <button class="btn btn--primary" data-event-click="simplify_apply()" data-attrif-disabled="!simplify_can_apply">Apply</button>
+        <button class="btn btn--secondary" data-event-click="simplify_cancel()" data-attrif-disabled="!simplify_show_progress">Cancel</button>
+      </div>
+
+      <div class="rendering-simplify-progress" data-if="simplify_show_progress">
+        <progress max="1" data-attr-value="simplify_progress_value"></progress>
+        <span class="progress__text">{{simplify_progress_pct}}</span>
+      </div>
+      <div class="rendering-simplify-stage text-muted" data-if="simplify_show_progress">{{simplify_progress_stage}}</div>
+      <div class="rendering-simplify-error" data-if="simplify_show_error">{{simplify_error_text}}</div>
+    </div>
+  </div>
+
   <!-- Selection and Overlays -->
   <div class="section-header text-accent" id="hdr-selection" data-event-click="toggle_section('selection')">
     <span class="section-arrow text-accent" id="arrow-selection">&#x25B6;</span>

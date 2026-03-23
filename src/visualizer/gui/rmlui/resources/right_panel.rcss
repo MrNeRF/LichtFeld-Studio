@@ -39,10 +39,55 @@ body {
     left: 0;
     width: 100%;
     height: 28dp;
+}
+
+#tab-strip-viewport {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
     display: flex;
     flex-direction: row;
     align-items: stretch;
     overflow: hidden;
+}
+
+#tab-bar.with-scroll #tab-strip-viewport {
+    left: 16dp;
+    right: 16dp;
+}
+
+.tab-nav {
+    position: absolute;
+    top: 4dp;
+    width: 14dp;
+    height: 20dp;
+    padding: 0;
+    margin: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    background-color: transparent;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+    line-height: 20dp;
+    text-align: center;
+    font-size: 10dp;
+    font-weight: bold;
+    z-index: 2;
+}
+
+.tab-nav.disabled {
+    cursor: default;
+}
+
+#tab-scroll-left {
+    left: 1dp;
+}
+
+#tab-scroll-right {
+    right: 1dp;
 }
 
 #tab-separator {
@@ -54,7 +99,8 @@ body {
 }
 
 .tab {
-    display: inline-block;
+    display: block;
+    flex: 0 0 auto;
     padding: 6dp 14dp;
     white-space: nowrap;
     cursor: pointer;

@@ -15,6 +15,53 @@ lf.unregister_class(cls)         # Unregister a Panel, Operator, or Menu class
 
 ---
 
+## Scrub Controls
+
+```python
+from lfs_plugins import ScrubFieldController, ScrubFieldSpec
+```
+
+Retained panels can use these helpers to turn a range slider row (`input.setting-slider`) into a scrub field:
+
+- Drag horizontally on the scrub field to scrub values.
+- Click the numeric text area to type a value directly.
+- The controller keeps the displayed value in sync and applies clamping, snapping, and fill width updates.
+
+```python
+SCRUB_FIELD_SPECS = {
+    "quality": ScrubFieldSpec(min_value=0.0, max_value=1.0, step=0.01, fmt="%.2f"),
+}
+
+class MyPanel(lf.ui.Panel):
+    # ...
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("my_panel")
+        if model is None:
+            return
+        model.bind("quality", lambda: f"{self._quality:.2f}", self._set_quality)
+
+    def __init__(self):
+        self._scrub_fields = ScrubFieldController(
+            SCRUB_FIELD_SPECS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
+
+    def on_mount(self, doc):
+        self._scrub_fields.mount(doc)
+
+    def on_unmount(self, doc):
+        self._scrub_fields.unmount()
+
+    def on_update(self, doc):
+        return self._scrub_fields.sync_all()
+```
+
+Each scrubbed `data-value` still needs a normal `model.bind(...)` entry. The controller upgrades the range input UI, but it does not create data-model variables for you.
+
+`ScrubFieldSpec` fields are `min_value`, `max_value`, `step`, `fmt`,
+`data_type` (default `float`), and `pixels_per_step` (unused in the current controller implementation).
+
 ## Panel
 
 ```python
@@ -757,7 +804,7 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 
 | Method                                              | Returns              | Description              |
 |-----------------------------------------------------|----------------------|--------------------------|
-| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker  |
+| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker. `dialog_title` is accepted for compatibility and currently ignored. |
 
 ### Property Binding
 
@@ -1351,6 +1398,8 @@ lf.undo.stack() -> dict
 | `lf.ui.save_sog_file_dialog(default_name='export.sog')`   | `str` |
 | `lf.ui.save_spz_file_dialog(default_name='export.spz')`   | `str` |
 | `lf.ui.save_html_file_dialog(default_name='viewer.html')` | `str` |
+
+`lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.
 
 ### UI Hooks
 

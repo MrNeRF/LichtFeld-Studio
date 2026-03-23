@@ -112,7 +112,7 @@ class PluginMarketplacePanel(Panel):
         if model is None:
             return
 
-        model.bind_func("panel_label", lambda: lf.ui.tr("menu.view.plugin_marketplace"))
+        model.bind_func("panel_label", lambda: lf.ui.tr("menu.tools.plugin_marketplace"))
 
         model.bind(
             "manual_url",

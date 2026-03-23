@@ -4,6 +4,7 @@
 
 #include "improved_gs_plus.hpp"
 
+#include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "edge_rasterizer.hpp"
@@ -17,6 +18,7 @@
 #include "kernels/mcmc_kernels.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
+#include <cmath>
 #include <numeric>
 #include <random>
 
@@ -110,6 +112,93 @@ namespace lfs::training {
             normalize_by_positive_median_inplace(normalized);
             return normalized;
         }
+
+        [[nodiscard]] size_t deleted_mask_capacity(const lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask) {
+            return free_mask.is_valid() ? static_cast<size_t>(free_mask.numel())
+                                        : static_cast<size_t>(splat_data.size());
+        }
+
+        void ensure_deleted_mask_size(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask) {
+            const size_t current_size = static_cast<size_t>(splat_data.size());
+            const size_t desired_capacity = deleted_mask_capacity(splat_data, free_mask);
+            auto& deleted = splat_data.deleted();
+            if (!deleted.is_valid() || deleted.ndim() != 1 || deleted.numel() != current_size) {
+                deleted = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
+            }
+            deleted.reserve(desired_capacity);
+        }
+
+        void sync_deleted_mask_from_free_mask(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask) {
+            const size_t current_size = static_cast<size_t>(splat_data.size());
+            const size_t desired_capacity = deleted_mask_capacity(splat_data, free_mask);
+
+            if (!free_mask.is_valid()) {
+                splat_data.deleted() = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
+                splat_data.deleted().reserve(desired_capacity);
+                return;
+            }
+
+            splat_data.deleted() = free_mask.slice(0, 0, current_size).clone();
+            splat_data.deleted().reserve(desired_capacity);
+        }
+
+        void set_deleted_mask_rows(
+            lfs::core::SplatData& splat_data,
+            const lfs::core::Tensor& free_mask,
+            const lfs::core::Tensor& indices,
+            bool deleted) {
+            if (indices.numel() == 0) {
+                return;
+            }
+
+            ensure_deleted_mask_size(splat_data, free_mask);
+            auto values = deleted
+                              ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
+                              : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
+            splat_data.deleted().index_put_(indices, values);
+        }
+
+        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const lfs::core::Tensor& free_mask, size_t n_rows) {
+            if (n_rows == 0) {
+                return;
+            }
+
+            auto& deleted = splat_data.deleted();
+            if (!deleted.is_valid()) {
+                deleted = lfs::core::Tensor::zeros_bool({static_cast<size_t>(splat_data.size())}, splat_data.means().device());
+            }
+            deleted.reserve(deleted_mask_capacity(splat_data, free_mask));
+            deleted.append_zeros(n_rows);
+        }
+
+        struct SampledScaleSummary {
+            float p95 = 0.0f;
+            float max = 0.0f;
+            float exp_max = 0.0f;
+        };
+
+        [[nodiscard]] SampledScaleSummary summarize_sampled_scales(
+            const lfs::core::Tensor& scaling_raw,
+            const lfs::core::Tensor& sampled_idxs) {
+            if (sampled_idxs.numel() == 0) {
+                return {};
+            }
+
+            const int sampled_scale_count = static_cast<int>(sampled_idxs.numel() * 3);
+            auto sampled_scales = scaling_raw.index_select(0, sampled_idxs).reshape({sampled_scale_count});
+            if (sampled_scales.numel() == 0) {
+                return {};
+            }
+
+            const float p95 = get_percentil_value(0.95f, sampled_scales);
+            const float max_raw = get_percentil_value(1.0f, sampled_scales);
+            return {
+                .p95 = p95,
+                .max = max_raw,
+                .exp_max = std::exp(max_raw),
+            };
+        }
+
     } // namespace
 
     ImprovedGSPlus::ImprovedGSPlus(lfs::core::SplatData& splat_data)
@@ -163,6 +252,7 @@ namespace lfs::training {
         const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
                                                      : static_cast<size_t>(_splat_data->size());
         _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
+        sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
         // Initialize I-GS+ specifics
         this->_current_step = 0;
@@ -197,6 +287,10 @@ namespace lfs::training {
 
             const int img_h = image.shape()[1];
             const int img_w = image.shape()[2];
+
+            if (cam->image_width() != img_w || cam->image_height() != img_h) {
+                cam->set_image_dimensions(img_w, img_h);
+            }
             if (view == 0 ||
                 img_h != static_cast<int>(canny_ws.nms_output.shape()[0]) ||
                 img_w != static_cast<int>(canny_ws.nms_output.shape()[1])) {
@@ -227,7 +321,9 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget) {
+        const int64_t current_size = static_cast<int64_t>(_splat_data->size());
         const int64_t curr_points = static_cast<int64_t>(active_count());
+        const int64_t free_slots = static_cast<int64_t>(free_count());
         const int64_t budget_for_alloc = std::max<int64_t>(0, budget - curr_points);
         if (budget_for_alloc <= 0) {
             return;
@@ -281,13 +377,32 @@ namespace lfs::training {
             return;
         }
 
+        _pending_failure_snapshot.valid = true;
+        _pending_failure_snapshot.size_before = current_size;
+        _pending_failure_snapshot.active_before = curr_points;
+        _pending_failure_snapshot.free_before = free_slots;
+        _pending_failure_snapshot.budget = budget;
+        _pending_failure_snapshot.budget_for_alloc = budget_for_alloc;
+        _pending_failure_snapshot.candidate_budget = candidate_budget;
+        _pending_failure_snapshot.selectable = selectable;
+        _pending_failure_snapshot.selected = std::min<int64_t>(budget_for_alloc, selectable);
+        _pending_failure_snapshot.num_filled = 0;
+        _pending_failure_snapshot.num_appended = 0;
+        _pending_failure_snapshot.sampled_scale_p95 = 0.0f;
+        _pending_failure_snapshot.sampled_scale_max = 0.0f;
+        _pending_failure_snapshot.sampled_scale_exp_max = 0.0f;
+
         LAS_densify(sampling_scores.clamp_min(1e-12f), std::min<int64_t>(budget_for_alloc, selectable));
     }
 
     void ImprovedGSPlus::LAS_densify(const lfs::core::Tensor& scores, const int64_t budget_for_alloc) {
         const lfs::core::Tensor sampled_idxs = lfs::core::Tensor::multinomial(scores, budget_for_alloc, false);
-
-        LOG_DEBUG("split(): {} Gaussians to long axis split", budget_for_alloc);
+        const auto sampled_scale_summary = summarize_sampled_scales(_splat_data->scaling_raw(), sampled_idxs);
+        if (_pending_failure_snapshot.valid) {
+            _pending_failure_snapshot.sampled_scale_p95 = sampled_scale_summary.p95;
+            _pending_failure_snapshot.sampled_scale_max = sampled_scale_summary.max;
+            _pending_failure_snapshot.sampled_scale_exp_max = sampled_scale_summary.exp_max;
+        }
 
         // Get SH dimensions
         const bool has_shN = _splat_data->shN().is_valid();
@@ -372,6 +487,10 @@ namespace lfs::training {
             second_sh0, second_shN, second_opacities, budget_for_alloc);
 
         const int64_t num_filled = budget_for_alloc - remaining;
+        if (_pending_failure_snapshot.valid) {
+            _pending_failure_snapshot.num_filled = num_filled;
+            _pending_failure_snapshot.num_appended = remaining;
+        }
 
         // Append remaining second results
         if (remaining > 0) {
@@ -394,6 +513,7 @@ namespace lfs::training {
                 new_indices_vec, lfs::core::TensorShape({n_remaining}), device);
 
             // Extend and write data
+            append_live_deleted_rows(*_splat_data, _free_mask, n_remaining);
             _splat_data->means().append_zeros(n_remaining);
             _splat_data->means().index_put_(new_indices, append_positions);
 
@@ -430,7 +550,6 @@ namespace lfs::training {
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_remaining);
             _optimizer->extend_state_for_new_params(ParamType::Opacity, n_remaining);
         }
-        LOG_DEBUG("split(): done, {} filled free slots, {} appended", num_filled, remaining);
     }
 
     void ImprovedGSPlus::reset_opacity() {
@@ -494,9 +613,36 @@ namespace lfs::training {
         if (is_refining(iter)) {
             assert(_precompute_valid);
 
+            _pending_failure_snapshot = {};
             densify_with_score(_precomputed_scores, _error_score_max, get_current_budget());
 
             opacity_prune(iter);
+
+            if (_pending_failure_snapshot.valid) {
+                _pending_failure_snapshot.iter = iter;
+                _pending_failure_snapshot.active_after = static_cast<int64_t>(active_count());
+                _pending_failure_snapshot.free_after = static_cast<int64_t>(free_count());
+
+                lfs::core::update_igs_plus_failure_snapshot({
+                    .valid = true,
+                    .iter = _pending_failure_snapshot.iter,
+                    .size_before = _pending_failure_snapshot.size_before,
+                    .active_before = _pending_failure_snapshot.active_before,
+                    .free_before = _pending_failure_snapshot.free_before,
+                    .budget = _pending_failure_snapshot.budget,
+                    .budget_for_alloc = _pending_failure_snapshot.budget_for_alloc,
+                    .candidate_budget = _pending_failure_snapshot.candidate_budget,
+                    .selectable = _pending_failure_snapshot.selectable,
+                    .selected = _pending_failure_snapshot.selected,
+                    .num_filled = _pending_failure_snapshot.num_filled,
+                    .num_appended = _pending_failure_snapshot.num_appended,
+                    .active_after = _pending_failure_snapshot.active_after,
+                    .free_after = _pending_failure_snapshot.free_after,
+                    .sampled_scale_p95 = _pending_failure_snapshot.sampled_scale_p95,
+                    .sampled_scale_max = _pending_failure_snapshot.sampled_scale_max,
+                    .sampled_scale_exp_max = _pending_failure_snapshot.sampled_scale_exp_max,
+                });
+            }
 
             lfs::core::Tensor::trim_memory_pool();
 
@@ -669,10 +815,11 @@ namespace lfs::training {
 
         // Mark pruned slots as free
         mark_as_free(prune_indices);
+        set_deleted_mask_rows(*_splat_data, _free_mask, prune_indices, true);
 
         // Zero out quaternion to trigger early exit in preprocessing kernel
-        // The rasterizer checks: if (q_norm_sq < 1e-8f) active = false
-        // This happens BEFORE expensive covariance computation and gradient computation
+        // Deleted rows are now also tracked explicitly via splat_data.deleted().
+        // Zero quaternion remains a secondary inactive sentinel for preprocessing kernels.
         auto zero_rotation = lfs::core::Tensor::zeros(
             {static_cast<size_t>(num_pruned), 4},
             _splat_data->rotation_raw().device());
@@ -797,6 +944,7 @@ namespace lfs::training {
         // Mark filled slots as active
         auto false_vals = lfs::core::Tensor::zeros_bool({static_cast<size_t>(slots_to_fill)}, target_indices.device());
         _free_mask.index_put_(target_indices, false_vals);
+        set_deleted_mask_rows(*_splat_data, _free_mask, target_indices, false);
 
         if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() >= current_size) {
             auto zeros = lfs::core::Tensor::zeros({static_cast<size_t>(slots_to_fill)}, _error_score_max.device());
@@ -873,6 +1021,7 @@ namespace lfs::training {
             const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
                                                          : static_cast<size_t>(_splat_data->size());
             _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
+            sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
             _precomputed_scores = lfs::core::Tensor();
             _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());
             _precompute_valid = false;
@@ -921,6 +1070,7 @@ namespace lfs::training {
                                                          : static_cast<size_t>(_splat_data->size());
             _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
         }
+        sync_deleted_mask_from_free_mask(*_splat_data, _free_mask);
 
         _precomputed_scores = lfs::core::Tensor();
         _error_score_max = lfs::core::Tensor::zeros({static_cast<size_t>(_splat_data->size())}, _splat_data->means().device());

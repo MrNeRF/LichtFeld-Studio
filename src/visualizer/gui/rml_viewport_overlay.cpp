@@ -216,6 +216,23 @@ namespace lfs::vis::gui {
         }
     }
 
+    bool RmlViewportOverlay::blocksPointer(const double screen_x, const double screen_y) const {
+        if (!rml_context_ || !document_ || vp_size_.x <= 0 || vp_size_.y <= 0) {
+            return false;
+        }
+
+        const float local_x = static_cast<float>(screen_x) - vp_pos_.x;
+        const float local_y = static_cast<float>(screen_y) - vp_pos_.y;
+        if (local_x < 0.0f || local_x >= vp_size_.x || local_y < 0.0f || local_y >= vp_size_.y) {
+            return false;
+        }
+
+        auto* const hover = rml_context_->GetElementAtPoint(Rml::Vector2f(local_x, local_y));
+        return hover && hover->GetTagName() != "body" &&
+               hover->GetId() != "overlay-body" &&
+               hover->GetId() != "dm-root";
+    }
+
     void RmlViewportOverlay::ensureBodyDataModelBound(Rml::Element* body) {
         if (!body)
             return;

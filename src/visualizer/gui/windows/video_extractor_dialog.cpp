@@ -5,8 +5,9 @@
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/include/core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/string_keys.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "theme/theme.hpp"
 
 #include <array>
@@ -17,7 +18,7 @@
 using namespace lichtfeld::Strings;
 
 using lfs::vis::gui::OpenVideoFileDialog;
-using lfs::vis::gui::SelectFolderDialog;
+using lfs::vis::gui::PickFolderDialog;
 
 namespace lfs::gui {
 
@@ -156,7 +157,9 @@ namespace lfs::gui {
 
             // Auto-set output directory
             if (output_dir_.empty()) {
-                output_dir_ = video_path_.parent_path() / (video_path_.stem().string() + "_frames");
+                std::filesystem::path output_name = video_path_.stem();
+                output_name += "_frames";
+                output_dir_ = video_path_.parent_path() / output_name;
             }
         }
     }
@@ -534,7 +537,8 @@ namespace lfs::gui {
         ImGui::SameLine();
 
         const std::string video_display =
-            video_path_.empty() ? LOC(VideoExtractor::NO_FILE) : video_path_.filename().string();
+            video_path_.empty() ? LOC(VideoExtractor::NO_FILE)
+                                : lfs::core::path_to_utf8(video_path_.filename());
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", video_display.c_str());
 
         ImGui::SameLine();
@@ -552,13 +556,14 @@ namespace lfs::gui {
         ImGui::SameLine();
 
         const std::string output_display =
-            output_dir_.empty() ? LOC(VideoExtractor::NO_DIR) : output_dir_.string();
+            output_dir_.empty() ? LOC(VideoExtractor::NO_DIR)
+                                : lfs::core::path_to_utf8(output_dir_);
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", output_display.c_str());
 
         ImGui::SameLine();
         ImGui::PushID("output");
         if (ImGui::Button(LOC(VideoExtractor::BROWSE))) {
-            const auto path = SelectFolderDialog(LOC(VideoExtractor::SELECT_FOLDER));
+            const auto path = PickFolderDialog(output_dir_);
             if (!path.empty()) {
                 output_dir_ = path;
             }

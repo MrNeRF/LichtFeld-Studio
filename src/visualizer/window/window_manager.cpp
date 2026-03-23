@@ -68,6 +68,14 @@ namespace lfs::vis {
         SDL_Quit();
     }
 
+    void WindowManager::setInputController(InputController* ic) {
+        input_controller_ = ic;
+        input_router_.setInputController(ic);
+        if (input_controller_) {
+            input_controller_->setInputRouter(&input_router_);
+        }
+    }
+
     bool WindowManager::init() {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -228,6 +236,7 @@ namespace lfs::vis {
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             lfs::core::events::internal::WindowFocusLost{}.emit();
+            input_router_.onWindowFocusLost();
             if (input_controller_) {
                 input_controller_->onWindowFocusLost();
             }
@@ -250,7 +259,9 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
+            input_router_.beginMouseButton(action, event.button.x, event.button.y);
             input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
+            input_router_.endMouseButton(action);
             break;
         }
 

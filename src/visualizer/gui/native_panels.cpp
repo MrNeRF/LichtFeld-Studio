@@ -70,8 +70,11 @@ namespace lfs::vis::gui::native_panels {
     }
 
     bool SequencerPanel::poll(const PanelDrawContext& ctx) {
-        return !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
-               !ctx.ui->editor->isToolsDisabled() && layout_->isShowSequencer();
+        const bool is_enabled = !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
+                                !ctx.ui->editor->isToolsDisabled() && layout_->isShowSequencer();
+        if (!is_enabled && seq_)
+            seq_->setSequencerEnabled(false);
+        return is_enabled;
     }
 
     NodeTransformGizmoPanel::NodeTransformGizmoPanel(GizmoManager* gizmo)

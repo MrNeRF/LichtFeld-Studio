@@ -32,6 +32,7 @@ namespace lfs::vis {
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
             const lfs::core::SplatData* model = nullptr;
+            bool render_lock_held = false;
             const RenderSettings& settings;
             DirtyMask frame_dirty = 0;
             float selection_flash_intensity = 0.0f;

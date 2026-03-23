@@ -16,6 +16,9 @@
     "edit": "編集",
     "edit.input_settings": "入力設定...",
     "edit.preferences": "環境設定...",
+    "tools": "ツール",
+    "tools.python_console": "Python コンソール",
+    "tools.plugin_marketplace": "プラグインマーケットプレイス",
     "view": "表示",
     "view.theme": "テーマ",
     "view.theme.dark": "ダーク",
@@ -29,9 +32,7 @@
     "view.debug_info": "デバッグ情報...",
     "help": "ヘルプ",
     "help.getting_started": "はじめに",
-    "help.about": "LichtFeld Studioについて",
-    "view.python_console": "Python コンソール",
-    "view.plugin_marketplace": "プラグインマーケットプレイス"
+    "help.about": "LichtFeld Studioについて"
   },
   "window": {
     "getting_started": "はじめに",
@@ -130,10 +131,10 @@
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-    "masking.invert_masks": "Invert Masks:",
-    "masking.threshold": "Threshold:",
-    "masking.penalty_weight": "Penalty Weight:",
-    "masking.penalty_power": "Penalty Power:",
+    "masking.invert_masks": "反転:",
+    "masking.threshold": "閾値:",
+    "masking.penalty_weight": "重み:",
+    "masking.penalty_power": "指数:",
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
@@ -198,7 +199,7 @@
     "tooltip.ppisp_lr": "PPISPパラメータの学習率",
     "tooltip.ppisp_reg": "PPISPパラメータの正則化重み",
     "tooltip.ppisp_warmup": "PPISPトレーニング開始前のステップ",
-    "tooltip.ppisp_activation_step": "コントローラートレーニング開始イテレーション（-1 = 自動: イテレーション - 5000）",
+    "tooltip.ppisp_activation_step": "コントローラートレーニング開始イテレーション。負の値: イテレーション - round(5000 * max(steps_scaler, 1))。",
     "tooltip.ppisp_controller_lr": "コントローラーネットワークの学習率",
     "tooltip.ppisp_freeze_gaussians": "コントローラートレーニング中にガウシアンパラメータを固定",
     "tooltip.strategy_gut_conflict": "GUTが有効の場合、ADCおよびigs+戦略は使用できません",
@@ -625,7 +626,8 @@
     "masks_dir": "マスク: ",
     "output_dir": "出力:   ",
     "init_file": "Init file（任意、points3Dを置換）:",
-    "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。"
+    "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "開けません",
@@ -713,11 +715,11 @@
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",
-    "invert_masks": "  Invert Masks:",
+    "invert_masks": "反転:",
     "opacity_penalty_weight": "  Opacity Penalty Weight:",
     "opacity_penalty_power": "  Opacity Penalty Power:",
     "mask_threshold": "  Mask Threshold:",
-    "use_alpha_as_mask": "Use Alpha as Mask:",
+    "use_alpha_as_mask": "アルファマスク:",
     "sparsity": "Sparsity:",
     "gut": "GUT:",
     "undistort": "Undistort:",
@@ -756,7 +758,9 @@
     "ppisp_activation_step": "アクティベーションステップ:",
     "ppisp_controller_lr": "コントローラーLR:",
     "ppisp_freeze_gaussians": "ガウシアン固定:",
-    "disabled": "無効"
+    "disabled": "無効",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "イメージプレビュー",

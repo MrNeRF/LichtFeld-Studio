@@ -16,6 +16,9 @@
     "edit": "Bewerken",
     "edit.input_settings": "Invoerinstellingen...",
     "edit.preferences": "Voorkeuren...",
+    "tools": "Hulpmiddelen",
+    "tools.python_console": "Python-console",
+    "tools.plugin_marketplace": "Plugin-marktplaats",
     "view": "Weergave",
     "view.theme": "Thema",
     "view.theme.dark": "Donker",
@@ -29,9 +32,7 @@
     "view.debug_info": "Debug Info...",
     "help": "Help",
     "help.getting_started": "Aan de Slag",
-    "help.about": "Over LichtFeld Studio",
-    "view.python_console": "Python-console",
-    "view.plugin_marketplace": "Plugin-marktplaats"
+    "help.about": "Over LichtFeld Studio"
   },
   "window": {
     "getting_started": "Aan de Slag",
@@ -130,10 +131,10 @@
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-    "masking.invert_masks": "Invert Masks:",
-    "masking.threshold": "Threshold:",
-    "masking.penalty_weight": "Penalty Weight:",
-    "masking.penalty_power": "Penalty Power:",
+    "masking.invert_masks": "Omkeren:",
+    "masking.threshold": "Drempel:",
+    "masking.penalty_weight": "Strafgew.:",
+    "masking.penalty_power": "Strafexp.:",
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
@@ -198,7 +199,7 @@
     "tooltip.ppisp_lr": "Leersnelheid voor PPISP-parameters",
     "tooltip.ppisp_reg": "Regularisatiegewicht voor PPISP-parameters",
     "tooltip.ppisp_warmup": "Stappen voor PPISP-training begint",
-    "tooltip.ppisp_activation_step": "Iteratie wanneer controller-training begint (-1 = auto: iteraties - 5000)",
+    "tooltip.ppisp_activation_step": "Iteratie wanneer controller-training begint. Negatieve waarden: iteraties - round(5000 * max(steps_scaler, 1)).",
     "tooltip.ppisp_controller_lr": "Leersnelheid voor het controller-netwerk",
     "tooltip.ppisp_freeze_gaussians": "Gaussian-parameters bevriezen tijdens controller-training",
     "tooltip.strategy_gut_conflict": "ADC- en igs+-strategieën zijn niet beschikbaar wanneer GUT is ingeschakeld",
@@ -625,7 +626,8 @@
     "masks_dir": "Maskers:     ",
     "output_dir": "Output:      ",
     "init_file": "Init file (optioneel, vervangt points3D):",
-    "help_text": "Checkpoints, logs en geëxporteerde modellen worden opgeslagen in de output map."
+    "help_text": "Checkpoints, logs en geëxporteerde modellen worden opgeslagen in de output map.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "Kan niet openen",
@@ -713,11 +715,11 @@
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",
-    "invert_masks": "  Invert Masks:",
+    "invert_masks": "Omkeren:",
     "opacity_penalty_weight": "  Opacity Penalty Weight:",
     "opacity_penalty_power": "  Opacity Penalty Power:",
     "mask_threshold": "  Mask Threshold:",
-    "use_alpha_as_mask": "Use Alpha as Mask:",
+    "use_alpha_as_mask": "Alfamasker:",
     "sparsity": "Sparsity:",
     "gut": "GUT:",
     "undistort": "Undistort:",
@@ -756,7 +758,9 @@
     "ppisp_activation_step": "Activatie-stap:",
     "ppisp_controller_lr": "Controller LR:",
     "ppisp_freeze_gaussians": "Gaussians bevriezen:",
-    "disabled": "Uitgeschakeld"
+    "disabled": "Uitgeschakeld",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "Afbeeldingsvoorbeeld",

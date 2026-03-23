@@ -55,6 +55,7 @@ set(CORE_SOURCES
         parameters.cpp
         property_registry.cpp
         scene.cpp
+        splat_simplify.cpp
         splat_data.cpp
         splat_data_mirror.cpp
         splat_data_transform.cpp
@@ -141,6 +142,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         )
         target_compile_definitions(lfs_core PRIVATE HAS_AVX2_SUPPORT)
     endif()
+
+    # The splat simplifier is sensitive to tiny FP contraction differences.
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/splat_simplify.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-tree-vectorize;-fno-unsafe-math-optimizations;-frounding-math;-ffloat-store;-fexcess-precision=standard;-mno-fma;-mno-avx2")
 endif()
 
 # Visibility: hide by default, export only LFS_CORE_API symbols

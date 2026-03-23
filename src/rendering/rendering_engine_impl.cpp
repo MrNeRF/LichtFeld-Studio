@@ -1182,6 +1182,10 @@ namespace lfs::rendering {
         camera_frustum_renderer_.clearThumbnailCache();
     }
 
+    void RenderingEngineImpl::setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) {
+        camera_frustum_renderer_.setImageLoader(std::move(loader));
+    }
+
     glm::mat4 RenderingEngineImpl::createViewMatrix(const ViewportData& viewport) const {
         glm::mat3 flip_yz = glm::mat3(1, 0, 0, 0, -1, 0, 0, 0, -1);
         glm::mat3 R_inv = glm::transpose(viewport.rotation);

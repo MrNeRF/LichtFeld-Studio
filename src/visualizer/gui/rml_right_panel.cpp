@@ -18,6 +18,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <algorithm>
 #include <cassert>
 #include <format>
 
@@ -44,6 +45,9 @@ namespace lfs::vis::gui {
         ctor.RegisterArray<std::vector<TabSnapshot>>();
         ctor.Bind("tabs", &tabs_);
         ctor.Bind("active_tab", &active_tab_);
+        ctor.Bind("tabs_overflow", &tabs_overflow_);
+        ctor.Bind("can_scroll_tabs_left", &can_scroll_tabs_left_);
+        ctor.Bind("can_scroll_tabs_right", &can_scroll_tabs_right_);
 
         ctor.BindEventCallback("tab_click",
                                [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
@@ -52,6 +56,16 @@ namespace lfs::vis::gui {
                                        if (!id.empty() && on_tab_changed)
                                            on_tab_changed(std::string(id));
                                    }
+                               });
+        ctor.BindEventCallback("scroll_tabs_left",
+                               [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+                                   if (can_scroll_tabs_left_)
+                                       scrollTabs(-1.0f);
+                               });
+        ctor.BindEventCallback("scroll_tabs_right",
+                               [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+                                   if (can_scroll_tabs_right_)
+                                       scrollTabs(1.0f);
                                });
 
         tab_model_ = ctor.GetModelHandle();
@@ -73,6 +87,7 @@ namespace lfs::vis::gui {
         left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
+        tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
         tab_separator_el_ = document_->GetElementById("tab-separator");
 
         updateTheme();
@@ -91,7 +106,12 @@ namespace lfs::vis::gui {
         left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
+        tab_strip_viewport_el_ = nullptr;
         tab_separator_el_ = nullptr;
+        tab_scroll_left_ = 0.0f;
+        tabs_overflow_ = false;
+        can_scroll_tabs_left_ = false;
+        can_scroll_tabs_right_ = false;
     }
 
     std::string RmlRightPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
@@ -104,6 +124,9 @@ namespace lfs::vis::gui {
         const auto tab_accent = colorToRml(p.primary);
         const auto tab_text = colorToRml(p.text);
         const auto tab_text_dim = colorToRml(p.text_dim);
+        const auto tab_nav_bg = colorToRmlAlpha(p.surface_bright, 0.2f);
+        const auto tab_nav_hover = colorToRmlAlpha(p.surface_bright, 0.55f);
+        const auto tab_nav_disabled = colorToRmlAlpha(p.text_dim, 0.35f);
         const auto splitter_bg = colorToRmlAlpha(p.border, 0.4f);
         const auto splitter_hover = colorToRmlAlpha(p.info, 0.6f);
         const auto splitter_active = colorToRmlAlpha(p.info, 0.8f);
@@ -121,6 +144,10 @@ namespace lfs::vis::gui {
             ".tab:focus-visible {{ background-color: {}; color: {}; border-bottom-color: {}; }}\n"
             ".tab.active {{ background-color: {}; color: {}; "
             "border-bottom-color: {}; }}\n"
+            ".tab-nav {{ background-color: {}; color: {}; }}\n"
+            ".tab-nav:hover {{ background-color: {}; color: {}; }}\n"
+            ".tab-nav.disabled {{ background-color: transparent; color: {}; opacity: 0.55; }}\n"
+            ".tab-nav.disabled:hover {{ background-color: transparent; color: {}; opacity: 0.55; }}\n"
             "#left-border {{ background-color: {}; }}\n"
             "#tab-separator {{ background-color: {}; }}\n"
             "#resize-handle:hover {{ background-color: {}; }}\n"
@@ -130,6 +157,10 @@ namespace lfs::vis::gui {
             tab_hover,
             tab_hover, tab_text, tab_accent,
             tab_active_bg, tab_text, tab_accent,
+            tab_nav_bg, tab_text_dim,
+            tab_nav_hover, tab_text,
+            tab_nav_disabled,
+            tab_nav_disabled,
             border_color,
             separator_color,
             resize_hover,
@@ -166,6 +197,108 @@ namespace lfs::vis::gui {
         if (active_tab_ != active_tab) {
             active_tab_ = active_tab;
             tab_model_.DirtyVariable("active_tab");
+            dirty = true;
+        }
+
+        return dirty;
+    }
+
+    void RmlRightPanel::scrollTabs(float delta) {
+        if (!tab_strip_viewport_el_ || !document_ || tabs_.empty() || delta == 0.0f)
+            return;
+
+        const float max_scroll = std::max(
+            0.0f, tab_strip_viewport_el_->GetScrollWidth() - tab_strip_viewport_el_->GetClientWidth());
+        const float current_scroll = std::clamp(tab_scroll_left_, 0.0f, max_scroll);
+        const float viewport_left =
+            tab_strip_viewport_el_->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        const float epsilon = 0.5f;
+        float next_scroll = current_scroll;
+
+        if (delta > 0.0f) {
+            next_scroll = max_scroll;
+            for (const auto& tab : tabs_) {
+                if (tab.dom_id.empty())
+                    continue;
+                auto* button = document_->GetElementById(tab.dom_id);
+                if (!button)
+                    continue;
+
+                const float tab_left =
+                    current_scroll +
+                    (button->GetAbsoluteOffset(Rml::BoxArea::Border).x - viewport_left);
+                if (tab_left > current_scroll + epsilon) {
+                    next_scroll = tab_left;
+                    break;
+                }
+            }
+        } else {
+            next_scroll = 0.0f;
+            for (auto it = tabs_.rbegin(); it != tabs_.rend(); ++it) {
+                if (it->dom_id.empty())
+                    continue;
+                auto* button = document_->GetElementById(it->dom_id);
+                if (!button)
+                    continue;
+
+                const float tab_left =
+                    current_scroll +
+                    (button->GetAbsoluteOffset(Rml::BoxArea::Border).x - viewport_left);
+                if (tab_left < current_scroll - epsilon) {
+                    next_scroll = tab_left;
+                    break;
+                }
+            }
+        }
+
+        next_scroll = std::clamp(next_scroll, 0.0f, max_scroll);
+        if (next_scroll == tab_scroll_left_)
+            return;
+
+        tab_scroll_left_ = next_scroll;
+        render_needed_ = true;
+        input_dirty_ = true;
+    }
+
+    bool RmlRightPanel::syncTabScrollState() {
+        if (!tab_bar_el_ || !tab_strip_viewport_el_)
+            return false;
+
+        bool dirty = false;
+
+        const float full_bar_width = tab_bar_el_->GetClientWidth();
+        const float content_width = tab_strip_viewport_el_->GetScrollWidth();
+        const bool tabs_overflow = content_width > full_bar_width + 0.5f;
+        if (tabs_overflow_ != tabs_overflow) {
+            tabs_overflow_ = tabs_overflow;
+            tab_model_.DirtyVariable("tabs_overflow");
+            dirty = true;
+        }
+
+        const float viewport_width = tab_strip_viewport_el_->GetClientWidth();
+        const float max_scroll = tabs_overflow_
+                                     ? std::max(0.0f, content_width - viewport_width)
+                                     : 0.0f;
+        float next_scroll = std::clamp(tab_scroll_left_, 0.0f, max_scroll);
+
+        if (next_scroll != tab_scroll_left_) {
+            tab_scroll_left_ = next_scroll;
+            dirty = true;
+        }
+
+        if (tab_strip_viewport_el_->GetScrollLeft() != tab_scroll_left_)
+            tab_strip_viewport_el_->SetScrollLeft(tab_scroll_left_);
+
+        const bool can_scroll_left = tabs_overflow_ && tab_scroll_left_ > 0.5f;
+        const bool can_scroll_right = tabs_overflow_ && tab_scroll_left_ < max_scroll - 0.5f;
+        if (can_scroll_tabs_left_ != can_scroll_left) {
+            can_scroll_tabs_left_ = can_scroll_left;
+            tab_model_.DirtyVariable("can_scroll_tabs_left");
+            dirty = true;
+        }
+        if (can_scroll_tabs_right_ != can_scroll_right) {
+            can_scroll_tabs_right_ = can_scroll_right;
+            tab_model_.DirtyVariable("can_scroll_tabs_right");
             dirty = true;
         }
 
@@ -412,7 +545,12 @@ namespace lfs::vis::gui {
             }
 
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            rml_context_->Update();
+            for (int pass = 0; pass < 3; ++pass) {
+                rml_context_->Update();
+                syncTabNavigation();
+                if (!syncTabScrollState())
+                    break;
+            }
             syncTabNavigation();
 
             fbo_.ensure(w, h);

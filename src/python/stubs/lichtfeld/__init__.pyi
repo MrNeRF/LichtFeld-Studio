@@ -981,6 +981,24 @@ def get_mesh2splat_error() -> str:
     Get error message from last mesh-to-splat conversion (empty on success)
     """
 
+def simplify_splats(source_name: str, ratio: float = 0.1, knn_k: int = 16, merge_cap: float = 0.5) -> None:
+    """Simplify a splat node asynchronously and create a new output node."""
+
+def cancel_splat_simplify() -> None:
+    """Cancel the active splat simplification job"""
+
+def is_splat_simplify_active() -> bool:
+    """Check if a splat simplification job is currently running"""
+
+def get_splat_simplify_progress() -> float:
+    """Get splat simplification progress (0.0 to 1.0)"""
+
+def get_splat_simplify_stage() -> str:
+    """Get splat simplification stage text"""
+
+def get_splat_simplify_error() -> str:
+    """Get the last splat simplification error (empty on success)"""
+
 class ViewInfo:
     @property
     def rotation(self) -> Tensor: ...
@@ -1509,8 +1527,24 @@ class OptimizationParams:
     def ppisp_use_controller(self, arg: bool, /) -> None: ...
 
     @property
+    def ppisp_freeze_from_sidecar(self) -> bool:
+        """Freeze PPISP learning and reuse a PPISP sidecar during training"""
+
+    @ppisp_freeze_from_sidecar.setter
+    def ppisp_freeze_from_sidecar(self, arg: bool, /) -> None: ...
+
+    @property
+    def ppisp_sidecar_path(self) -> str:
+        """Path to a PPISP sidecar used for frozen PPISP training"""
+
+    @ppisp_sidecar_path.setter
+    def ppisp_sidecar_path(self, arg: str, /) -> None: ...
+
+    @property
     def ppisp_controller_activation_step(self) -> int:
-        """Iteration to start controller distillation (-1 = auto)"""
+        """
+        Iteration to start controller distillation (negative = default schedule)
+        """
 
     @ppisp_controller_activation_step.setter
     def ppisp_controller_activation_step(self, arg: int, /) -> None: ...
@@ -1801,4 +1835,4 @@ class CheckpointParams:
 def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_error', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')

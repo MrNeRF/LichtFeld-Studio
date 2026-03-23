@@ -16,6 +16,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -137,7 +138,7 @@ namespace lfs::python {
                 auto result = loader->load(path, options);
                 if (!result) {
                     throw std::runtime_error(
-                        std::format("Failed to load '{}': {}", path.string(), result.error().format()));
+                        std::format("Failed to load '{}': {}", lfs::core::path_to_utf8(path), result.error().format()));
                 }
 
                 PyLoadResult py_result;

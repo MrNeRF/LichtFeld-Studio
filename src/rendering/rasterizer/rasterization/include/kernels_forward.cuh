@@ -237,16 +237,19 @@ namespace lfs::rendering::kernels::forward {
             active = false;
 
         // compute 3d covariance from raw scale and rotation
-        const float3 raw_scale = raw_scales[global_idx];
-        const float3 variance = make_float3(expf(2.0f * raw_scale.x), expf(2.0f * raw_scale.y), expf(2.0f * raw_scale.z));
         auto [qr, qx, qy, qz] = raw_rotations[global_idx];
         const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
         const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
         if (q_norm_sq < 1e-8f)
             active = false;
-        const float qxx = 2.0f * qxx_raw / q_norm_sq, qyy = 2.0f * qyy_raw / q_norm_sq, qzz = 2.0f * qzz_raw / q_norm_sq;
-        const float qxy = 2.0f * qx * qy / q_norm_sq, qxz = 2.0f * qx * qz / q_norm_sq, qyz = 2.0f * qy * qz / q_norm_sq;
-        const float qrx = 2.0f * qr * qx / q_norm_sq, qry = 2.0f * qr * qy / q_norm_sq, qrz = 2.0f * qr * qz / q_norm_sq;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
+        const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
+        const float3 raw_scale = active ? raw_scales[global_idx] : make_float3(0.0f, 0.0f, 0.0f);
+        const float3 variance = make_float3(expf(2.0f * raw_scale.x), expf(2.0f * raw_scale.y), expf(2.0f * raw_scale.z));
+        const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
+        const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
+        const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
         const mat3x3 rotation = {
             1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
             qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
@@ -317,15 +320,19 @@ namespace lfs::rendering::kernels::forward {
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
         if (det < 1e-8f)
             active = false;
-        const float det_rcp = 1.0f / det;
+        const float det_safe = fmaxf(det, 1e-8f);
+        const float det_rcp = 1.0f / det_safe;
         const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
         if (output_opacity < config::min_alpha_threshold)
             active = false;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
 
         const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
 
         // Compute bounds
-        const float power_threshold = logf(output_opacity * config::min_alpha_threshold_rcp);
+        const float safe_output_opacity = fmaxf(output_opacity, config::min_alpha_threshold);
+        const float power_threshold = logf(safe_output_opacity * config::min_alpha_threshold_rcp);
         const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);

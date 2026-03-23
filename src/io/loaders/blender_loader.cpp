@@ -11,6 +11,7 @@
 #include "formats/transforms.hpp"
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/loaders/loader_utils.hpp"
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -176,14 +177,7 @@ namespace lfs::io {
                 }
             }
 
-            bool images_have_alpha = false;
-            if (!cameras.empty()) {
-                try {
-                    auto [w, h, c] = lfs::core::get_image_info(cameras[0]->image_path());
-                    images_have_alpha = (c == 4);
-                } catch (const std::exception&) {
-                }
-            }
+            const bool images_have_alpha = detect_camera_alpha(cameras);
 
             if (options.progress) {
                 options.progress(60.0f, "Loading point cloud...");

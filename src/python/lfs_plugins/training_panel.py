@@ -64,6 +64,9 @@ LOCALE_KEYS = {
     "bilateral_grid": "training_params.bilateral_grid",
     "mask_mode": "training_params.mask_mode",
     "invert_masks": "training_params.invert_masks",
+    "opacity_penalty_weight": "training.masking.penalty_weight",
+    "opacity_penalty_power": "training.masking.penalty_power",
+    "mask_threshold": "training.masking.threshold",
     "use_alpha_as_mask": "training_params.use_alpha_as_mask",
     "sparsity": "training_params.sparsity",
     "gut": "training_params.gut",
@@ -71,7 +74,8 @@ LOCALE_KEYS = {
     "mip_filter": "training_params.mip_filter",
     "ppisp": "training_params.ppisp",
     "ppisp_controller": "training_params.ppisp_controller",
-    "ppisp_auto": "common.auto",
+    "ppisp_freeze_from_sidecar": "training_params.ppisp_freeze_from_sidecar",
+    "ppisp_sidecar_path": "training_params.ppisp_sidecar_path",
     "ppisp_activation_step": "training_params.ppisp_activation_step",
     "ppisp_controller_lr": "training_params.ppisp_controller_lr",
     "ppisp_freeze_gaussians": "training_params.ppisp_freeze_gaussians",
@@ -85,6 +89,7 @@ LOCALE_KEYS = {
     "cpu_cache": "training.dataset.cpu_cache",
     "fs_cache": "training.dataset.fs_cache",
     "dataset_output": "training.dataset.output",
+    "auto": "common.auto",
     "no_dataset": "training_panel.no_dataset_loaded",
     "opt_strategy": "training_params.strategy",
     "lr_header": "training.opt.learning_rates",
@@ -133,7 +138,6 @@ LOCALE_KEYS = {
     "remove": "common.remove",
     "bg_browse": "training_params.bg_image_browse",
     "bg_clear": "training_params.bg_image_clear",
-    "auto": "common.auto",
     "strategy_mcmc": "training.options.strategy.mcmc",
     "strategy_adc": "training.options.strategy.adc",
     "strategy_igs_plus": "training.options.strategy.igs_plus",
@@ -162,7 +166,7 @@ STRATEGY_LABEL_KEYS = {
 PARAM_BOOL_PROPS = [
     "use_bilateral_grid", "invert_masks", "use_alpha_as_mask",
     "enable_sparsity", "gut", "undistort", "mip_filter",
-    "ppisp", "ppisp_use_controller", "ppisp_freeze_gaussians",
+    "ppisp", "ppisp_use_controller", "ppisp_freeze_from_sidecar", "ppisp_freeze_gaussians",
     "random", "revised_opacity",
 ]
 
@@ -189,6 +193,9 @@ NUM_PROP_DEFS = [
     ("bilateral_grid_y", int, "%d", 1, None, 1),
     ("bilateral_grid_w", int, "%d", 1, None, 1),
     ("bilateral_grid_lr", float, "%.6f", 0, None, 0.00001),
+    ("mask_opacity_penalty_weight", float, "%.3f", 0, None, 0.1),
+    ("mask_opacity_penalty_power", float, "%.3f", 0.5, None, 0.1),
+    ("mask_threshold", float, "%.3f", 0, 1, 0.05),
     ("opacity_reg", float, "%.4f", 0, None, 0.001),
     ("scale_reg", float, "%.4f", 0, None, 0.001),
     ("tv_loss_weight", float, "%.1f", 0, None, 0.5),
@@ -244,6 +251,23 @@ def _parse_num(val_str, dtype):
     if not _FLOAT_INPUT_RE.fullmatch(value):
         raise ValueError(f"invalid numeric input: {val_str!r}")
     return value.replace(",", "")
+
+
+def _resolved_ppisp_activation_step(params):  # Must match OptimizationParameters::resolved_ppisp_controller_activation_step()
+    if params is None or not params.has_params():
+        return 0
+    scaler = max(float(getattr(params, "steps_scaler", 1.0)), 1.0)
+    iterations = int(getattr(params, "iterations", 0))
+    tail_iters = int(5000.0 * scaler + 0.5)
+    return max(0, iterations - tail_iters)
+
+
+def _display_ppisp_activation_step(params):
+    if params is None or not params.has_params():
+        return 0
+    step = int(getattr(params, "ppisp_controller_activation_step", -1))
+    return step if step >= 0 else _resolved_ppisp_activation_step(params)
+
 
 SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
 
@@ -350,6 +374,7 @@ class TrainingPanel(Panel):
         self._bind_bool_props(model, p)
         self._bind_dataset_bools(model, d)
         self._bind_select_props(model, p, d)
+        self._bind_text_props(model, p)
         self._bind_num_props(model, p, d)
         self._bind_slider_props(model, p)
         self._bind_color(model, p)
@@ -380,6 +405,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
+        model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
 
         def _btn_start():
             it = AppState.iteration.value
@@ -413,13 +439,16 @@ class TrainingPanel(Panel):
 
         model.bind_func("dep_mask_mode",
                          lambda: p() is not None and p().has_params() and p().mask_mode.value != 0)
+        model.bind_func("dep_mask_segment",
+                         lambda: p() is not None and p().has_params() and p().mask_mode.value == 1)
         model.bind_func("dep_ppisp",
                          lambda: p() is not None and p().has_params() and p().ppisp)
+        model.bind_func("dep_ppisp_frozen_sidecar",
+                         lambda: p() is not None and p().has_params() and p().ppisp and p().ppisp_freeze_from_sidecar)
         model.bind_func("dep_ppisp_controller",
                          lambda: p() is not None and p().has_params() and p().ppisp_use_controller)
-        model.bind_func("dep_ppisp_manual_step",
-                         lambda: p() is not None and p().has_params() and
-                                 p().ppisp_controller_activation_step >= 0)
+        model.bind_func("has_ppisp_sidecar_clear",
+                         lambda: p() is not None and p().has_params() and bool(p().ppisp_sidecar_path))
         model.bind_func("dep_bg_color",
                          lambda: p() is not None and p().has_params() and p().bg_mode.value in (0, 1))
         model.bind_func("dep_bg_image",
@@ -485,11 +514,6 @@ class TrainingPanel(Panel):
                        lambda pr=prop: getattr(p(), pr, False) if p() and p().has_params() else False,
                        lambda v, pr=prop: self._set_bool_prop(pr, v))
 
-        model.bind("ppisp_auto_step",
-                    lambda: p() is not None and p().has_params() and
-                            p().ppisp_controller_activation_step < 0,
-                    lambda v: self._set_ppisp_auto_step(v))
-
     def _bind_dataset_bools(self, model, d):
         def _set_dataset_bool(v, pr):
             dp = d()
@@ -524,6 +548,11 @@ class TrainingPanel(Panel):
                     lambda: str(d().resize_factor) if d() and d().has_params() else "-1",
                     lambda v: self._set_resize_factor(v))
 
+    def _bind_text_props(self, model, p):
+        model.bind("ppisp_sidecar_path",
+                   lambda: p().ppisp_sidecar_path if p() and p().has_params() else "",
+                   lambda v: self._set_ppisp_sidecar_path(v))
+
     def _bind_num_props(self, model, p, d):
         for prop, dtype, fmt, min_v, max_v, _step in NUM_PROP_DEFS:
             key = f"{prop}_str"
@@ -543,8 +572,8 @@ class TrainingPanel(Panel):
         def ppisp_activation_step_getter():
             if self._text_bufs["ppisp_activation_step_str"] is None:
                 self._text_bufs["ppisp_activation_step_str"] = (
-                    f"{p().ppisp_controller_activation_step:,}"
-                    if p() and p().has_params() and p().ppisp_controller_activation_step >= 0
+                    f"{_display_ppisp_activation_step(p()):,}"
+                    if p() and p().has_params()
                     else ""
                 )
             return self._text_bufs["ppisp_activation_step_str"]
@@ -600,8 +629,8 @@ class TrainingPanel(Panel):
                 return _fmt_num(getattr(p, prop, 0), dtype, fmt) if p and p.has_params() else ""
 
         if key == "ppisp_activation_step_str":
-            if p and p.has_params() and p.ppisp_controller_activation_step >= 0:
-                return f"{p.ppisp_controller_activation_step:,}"
+            if p and p.has_params():
+                return f"{_display_ppisp_activation_step(p):,}"
             return ""
 
         if key == "max_width_str":
@@ -641,8 +670,7 @@ class TrainingPanel(Panel):
             key = f"{prop}_str"
             self._text_bufs[key] = _fmt_num(getattr(p, prop, 0), dtype, fmt) if p and p.has_params() else ""
         if p and p.has_params():
-            step = p.ppisp_controller_activation_step
-            self._text_bufs["ppisp_activation_step_str"] = f"{step:,}" if step >= 0 else ""
+            self._text_bufs["ppisp_activation_step_str"] = f"{_display_ppisp_activation_step(p):,}"
         else:
             self._text_bufs["ppisp_activation_step_str"] = ""
         self._text_bufs["max_width_str"] = f"{d.max_width:,}" if d and d.has_params() else ""
@@ -950,6 +978,10 @@ class TrainingPanel(Panel):
             return
         if not hasattr(params, prop):
             return
+        if prop == "ppisp_freeze_from_sidecar" and val:
+            params.ppisp = True
+        elif prop == "ppisp" and not val:
+            params.ppisp_freeze_from_sidecar = False
         setattr(params, prop, val)
         rs = lf.get_render_settings()
         if rs and prop in RENDER_SYNC:
@@ -958,16 +990,12 @@ class TrainingPanel(Panel):
             self._sync_text_bufs()
             self._handle.dirty_all()
 
-    def _set_ppisp_auto_step(self, val):
+    def _set_ppisp_sidecar_path(self, val):
         params = lf.optimization_params()
         if not params or not params.has_params():
             return
-        if val:
-            params.ppisp_controller_activation_step = -1
-        else:
-            params.ppisp_controller_activation_step = max(1, int(params.iterations) - 5000)
+        params.ppisp_sidecar_path = str(val)
         if self._handle:
-            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def _set_strategy(self, val):
@@ -1180,9 +1208,7 @@ class TrainingPanel(Panel):
             params = lf.optimization_params()
             if not params or not params.has_params():
                 return
-            current = params.ppisp_controller_activation_step
-            if current < 0:
-                return
+            current = _display_ppisp_activation_step(params)
             new_val = max(1, current + 100 * direction)
             params.ppisp_controller_activation_step = new_val
             self._text_bufs["ppisp_activation_step_str"] = f"{new_val:,}"
@@ -1309,6 +1335,24 @@ class TrainingPanel(Panel):
                 params.bg_image_path = ""
                 if self._handle:
                     self._sync_text_bufs()
+                    self._handle.dirty_all()
+        elif action == "clear_ppisp_sidecar":
+            params = lf.optimization_params()
+            if params and params.has_params():
+                params.ppisp_sidecar_path = ""
+                if self._handle:
+                    self._handle.dirty_all()
+        elif action == "browse_ppisp_sidecar":
+            params = lf.optimization_params()
+            start_dir = ""
+            if params and params.has_params() and params.ppisp_sidecar_path:
+                start_dir = params.ppisp_sidecar_path
+            selected = lf.ui.open_ppisp_file_dialog(start_dir)
+            if selected and params and params.has_params():
+                params.ppisp = True
+                params.ppisp_freeze_from_sidecar = True
+                params.ppisp_sidecar_path = selected
+                if self._handle:
                     self._handle.dirty_all()
         elif action == "add_step":
             params = lf.optimization_params()

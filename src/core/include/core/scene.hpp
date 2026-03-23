@@ -102,7 +102,7 @@ namespace lfs::core {
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
-        size_t gaussian_count = 0;
+        std::atomic<size_t> gaussian_count{0};
         glm::vec3 centroid{0.0f};
 
         std::shared_ptr<lfs::core::Camera> camera;
@@ -317,11 +317,13 @@ namespace lfs::core {
 
         [[nodiscard]] lfs::core::SplatData* getTrainingModel();
         [[nodiscard]] const lfs::core::SplatData* getTrainingModel() const;
+        [[nodiscard]] size_t getTrainingModelGaussianCount() const;
 
         void setTrainingModelNode(const std::string& name);
         [[nodiscard]] const std::string& getTrainingModelNodeName() const { return training_model_node_; }
 
         void setTrainingModel(std::unique_ptr<lfs::core::SplatData> splat_data, const std::string& name);
+        void syncTrainingModelTopology(size_t gaussian_count);
 
         size_t getNodeCount() const { return nodes_.size(); }
         size_t getTotalGaussianCount() const;
@@ -341,10 +343,10 @@ namespace lfs::core {
         }
 
         void invalidateCache() {
-            model_cache_valid_ = false;
-            transform_cache_valid_ = false;
+            model_cache_valid_.store(false, std::memory_order_release);
+            transform_cache_valid_.store(false, std::memory_order_release);
         }
-        void invalidateTransformCache() { transform_cache_valid_ = false; }
+        void invalidateTransformCache() { transform_cache_valid_.store(false, std::memory_order_release); }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
 
@@ -362,11 +364,11 @@ namespace lfs::core {
         mutable std::atomic<int> export_pin_count_{0};
         mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
-        mutable bool model_cache_valid_ = false;
+        mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
 
         mutable std::vector<glm::mat4> cached_transforms_;
-        mutable bool transform_cache_valid_ = false;
+        mutable std::atomic<bool> transform_cache_valid_{false};
         mutable bool consolidated_ = false;
         mutable std::vector<NodeId> consolidated_node_ids_;
 

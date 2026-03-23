@@ -145,6 +145,17 @@ body {
     flex: 1;
     overflow: auto;
     min-height: 0;
+    tab-index: auto;
+}
+
+#tree-container scrollbarvertical,
+#history-container scrollbarvertical {
+    width: 14dp;
+}
+
+#tree-container scrollbarvertical sliderbar,
+#history-container scrollbarvertical sliderbar {
+    min-height: 40dp;
 }
 
 #history-container {

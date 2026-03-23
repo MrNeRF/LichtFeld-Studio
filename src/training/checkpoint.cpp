@@ -15,6 +15,36 @@
 
 namespace lfs::training {
 
+    namespace {
+        constexpr char kCheckpointTempSuffix[] = ".tmp";
+
+        std::filesystem::path checkpoint_temp_path(const std::filesystem::path& checkpoint_path) {
+            auto temp_path = checkpoint_path;
+            temp_path += kCheckpointTempSuffix;
+            return temp_path;
+        }
+
+        std::expected<void, std::string> replace_checkpoint_file(
+            const std::filesystem::path& checkpoint_path,
+            const std::filesystem::path& temp_checkpoint_path) {
+
+            std::error_code ec;
+            std::filesystem::remove(checkpoint_path, ec);
+            if (ec) {
+                return std::unexpected("Failed to remove existing checkpoint file '" +
+                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
+            }
+
+            std::filesystem::rename(temp_checkpoint_path, checkpoint_path, ec);
+            if (ec) {
+                return std::unexpected("Failed to replace checkpoint file '" +
+                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
+            }
+
+            return {};
+        }
+    } // namespace
+
     using lfs::core::CHECKPOINT_MAGIC;
     using lfs::core::CHECKPOINT_VERSION;
     using lfs::core::CheckpointFlags;
@@ -36,7 +66,9 @@ namespace lfs::training {
                 return std::unexpected("Cannot save checkpoint: output path is empty");
             }
 
-            const auto checkpoint_dir = path / "checkpoints";
+            const auto checkpoint_dir = checkpoint_directory(path);
+            const auto checkpoint_path = checkpoint_output_path(path);
+            const auto temp_checkpoint_path = checkpoint_temp_path(checkpoint_path);
 
             // Create checkpoint directory with error checking
             std::error_code ec;
@@ -45,8 +77,6 @@ namespace lfs::training {
                 return std::unexpected("Failed to create checkpoint directory '" +
                                        lfs::core::path_to_utf8(checkpoint_dir) + "': " + ec.message());
             }
-
-            const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
 
             const auto& model = strategy.get_model();
 
@@ -114,8 +144,9 @@ namespace lfs::training {
             }
 
             std::ofstream file;
-            if (!lfs::core::open_file_for_write(checkpoint_path, std::ios::binary, file)) {
-                return std::unexpected("Failed to open checkpoint file: " + lfs::core::path_to_utf8(checkpoint_path));
+            if (!lfs::core::open_file_for_write(temp_checkpoint_path, std::ios::binary, file)) {
+                return std::unexpected("Failed to open checkpoint file: " +
+                                       lfs::core::path_to_utf8(temp_checkpoint_path));
             }
 
             CheckpointHeader header{};
@@ -177,6 +208,14 @@ namespace lfs::training {
             header.params_json_size = static_cast<uint64_t>(params_end - params_pos);
             file.seekp(header_pos);
             file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+            file.close();
+            if (!file) {
+                return std::unexpected("Failed to finalize checkpoint file: " +
+                                       lfs::core::path_to_utf8(temp_checkpoint_path));
+            }
+
+            if (auto replace_result = replace_checkpoint_file(checkpoint_path, temp_checkpoint_path); !replace_result)
+                return std::unexpected(replace_result.error());
 
             std::string extras;
             if (bilateral_grid)

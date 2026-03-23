@@ -17,10 +17,11 @@ namespace lfs::vis::input {
             return KEY_0 + digit;
         }
 
-        // Numpad: KP_1-KP_9 (89-97), KP_0 (98)
-        if (scancode >= SDL_SCANCODE_KP_1 && scancode <= SDL_SCANCODE_KP_0) {
-            const int digit = (scancode - SDL_SCANCODE_KP_1 + 1) % 10;
-            return KEY_KP_0 + digit;
+        if (scancode >= SDL_SCANCODE_KP_1 && scancode <= SDL_SCANCODE_KP_9) {
+            return KEY_KP_1 + (scancode - SDL_SCANCODE_KP_1);
+        }
+        if (scancode == SDL_SCANCODE_KP_0) {
+            return KEY_KP_0;
         }
 
         switch (scancode) {

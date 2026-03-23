@@ -13,6 +13,19 @@
 
 namespace lfs::vis {
 
+    namespace {
+        [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
+            const SceneManager* const scene_manager) {
+            std::optional<std::shared_lock<std::shared_mutex>> lock;
+            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
+                if (const auto* trainer = tm->getTrainer()) {
+                    lock.emplace(trainer->getRenderMutex());
+                }
+            }
+            return lock;
+        }
+    } // namespace
+
     RenderingManager::ContentBounds RenderingManager::getContentBounds(const glm::ivec2& viewport_size) const {
         ContentBounds bounds{0.0f, 0.0f, static_cast<float>(viewport_size.x), static_cast<float>(viewport_size.y), false};
 
@@ -110,6 +123,7 @@ namespace lfs::vis {
             return false;
         }
 
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const auto* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
         if (!hasRenderableGaussians(model)) {
             return false;

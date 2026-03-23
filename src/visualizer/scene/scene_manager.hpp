@@ -107,6 +107,10 @@ namespace lfs::vis {
         // Operations - Generic splat file loading
         void loadSplatFile(const std::filesystem::path& path);
         std::string addSplatFile(const std::filesystem::path& path, const std::string& name = "", bool is_visible = true);
+        std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
+                                          const std::string& source_name,
+                                          const std::string& desired_name,
+                                          bool select_new_node = true);
         size_t consolidateNodeModels();
 
         void removePLY(const std::string& name, bool keep_children = false);

@@ -28,6 +28,12 @@ namespace lichtfeld::Strings {
             inline constexpr const char* PREFERENCES = "menu.edit.preferences";
         } // namespace Edit
 
+        namespace Tools {
+            inline constexpr const char* MENU = "menu.tools";
+            inline constexpr const char* PYTHON_CONSOLE = "menu.tools.python_console";
+            inline constexpr const char* PLUGIN_MARKETPLACE = "menu.tools.plugin_marketplace";
+        } // namespace Tools
+
         namespace View {
             inline constexpr const char* MENU = "menu.view";
             inline constexpr const char* THEME = "menu.view.theme";

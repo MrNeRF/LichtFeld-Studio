@@ -23,6 +23,7 @@ from .marketplace import (
     PluginMarketplaceCatalog,
 )
 from .plugin import PluginInfo, PluginInstance, PluginState
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
 from .settings import PluginSettings, SettingsManager
 from .templates import create_plugin
@@ -88,6 +89,8 @@ __all__ = [
     "CapabilityBroker",
     "PluginSettings",
     "SettingsManager",
+    "ScrubFieldController",
+    "ScrubFieldSpec",
     "create_plugin",
     "get_gpu_memory",
     "log_gpu_memory",

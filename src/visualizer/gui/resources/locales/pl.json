@@ -16,6 +16,9 @@
     "edit": "Edycja",
     "edit.input_settings": "Ustawienia Wejścia...",
     "edit.preferences": "Preferencje...",
+    "tools": "Narzędzia",
+    "tools.python_console": "Konsola Pythona",
+    "tools.plugin_marketplace": "Marketplace wtyczek",
     "view": "Widok",
     "view.theme": "Motyw",
     "view.theme.dark": "Ciemny",
@@ -29,9 +32,7 @@
     "view.debug_info": "Informacje Debugowania...",
     "help": "Pomoc",
     "help.getting_started": "Wprowadzenie",
-    "help.about": "O LichtFeld Studio",
-    "view.python_console": "Konsola Pythona",
-    "view.plugin_marketplace": "Marketplace wtyczek"
+    "help.about": "O LichtFeld Studio"
   },
   "window": {
     "getting_started": "Wprowadzenie",
@@ -130,10 +131,10 @@
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-    "masking.invert_masks": "Invert Masks:",
-    "masking.threshold": "Threshold:",
-    "masking.penalty_weight": "Penalty Weight:",
-    "masking.penalty_power": "Penalty Power:",
+    "masking.invert_masks": "Odwróć:",
+    "masking.threshold": "Próg:",
+    "masking.penalty_weight": "Waga kary:",
+    "masking.penalty_power": "Potęga:",
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
@@ -198,7 +199,7 @@
     "tooltip.ppisp_lr": "Tempo uczenia dla parametrów PPISP",
     "tooltip.ppisp_reg": "Waga regularyzacji dla parametrów PPISP",
     "tooltip.ppisp_warmup": "Kroki przed rozpoczęciem treningu PPISP",
-    "tooltip.ppisp_activation_step": "Iteracja rozpoczęcia treningu kontrolera (-1 = auto: iteracje - 5000)",
+    "tooltip.ppisp_activation_step": "Iteracja rozpoczęcia treningu kontrolera. Wartości ujemne: iteracje - round(5000 * max(steps_scaler, 1)).",
     "tooltip.ppisp_controller_lr": "Tempo uczenia dla sieci kontrolera",
     "tooltip.ppisp_freeze_gaussians": "Zamroź parametry Gaussowskich podczas treningu kontrolera",
     "tooltip.strategy_gut_conflict": "Strategie ADC i igs+ są niedostępne gdy GUT jest włączony",
@@ -625,7 +626,8 @@
     "masks_dir": "Maski:   ",
     "output_dir": "Wyjście: ",
     "init_file": "Init file (opcjonalnie, zastępuje points3D):",
-    "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym."
+    "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "Nie można otworzyć",
@@ -713,11 +715,11 @@
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",
-    "invert_masks": "  Invert Masks:",
+    "invert_masks": "Odwróć:",
     "opacity_penalty_weight": "  Opacity Penalty Weight:",
     "opacity_penalty_power": "  Opacity Penalty Power:",
     "mask_threshold": "  Mask Threshold:",
-    "use_alpha_as_mask": "Use Alpha as Mask:",
+    "use_alpha_as_mask": "Maska alfa:",
     "sparsity": "Sparsity:",
     "gut": "GUT:",
     "undistort": "Undistort:",
@@ -756,10 +758,12 @@
     "ppisp_activation_step": "Krok aktywacji:",
     "ppisp_controller_lr": "LR kontrolera:",
     "ppisp_freeze_gaussians": "Zamroź Gaussowskie:",
-    "disabled": "Wyłączony"
+    "disabled": "Wyłączony",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
-    "title": "Podgl\u0105d obrazu",
+    "title": "Podgląd obrazu",
     "image_section": "OBRAZ",
     "file_section": "PLIK",
     "view_section": "WIDOK",

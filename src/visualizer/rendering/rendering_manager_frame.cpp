@@ -11,10 +11,26 @@
 #include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
+#include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include <glad/glad.h>
+#include <optional>
+#include <shared_mutex>
 
 namespace lfs::vis {
+
+    namespace {
+        [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
+            const SceneManager* const scene_manager) {
+            std::optional<std::shared_lock<std::shared_mutex>> lock;
+            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
+                if (const auto* trainer = tm->getTrainer()) {
+                    lock.emplace(trainer->getRenderMutex());
+                }
+            }
+            return lock;
+        }
+    } // namespace
 
     void RenderingManager::renderFrame(const RenderContext& context) {
         SceneManager* const scene_manager = context.scene_manager;
@@ -51,6 +67,7 @@ namespace lfs::vis {
         }
         const bool resize_completed = resize_result.completed;
 
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
         const bool has_renderable_model = hasRenderableGaussians(model);
         const auto* const visible_point_cloud =
@@ -129,6 +146,7 @@ namespace lfs::vis {
              .viewport_region = context.viewport_region,
              .scene_manager = scene_manager,
              .model = model,
+             .render_lock_held = render_lock.has_value(),
              .settings = settings_,
              .frame_dirty = frame_dirty,
              .selection_flash_intensity = getSelectionFlashIntensity(),

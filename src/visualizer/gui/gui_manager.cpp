@@ -28,7 +28,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include <implot.h>
 
 #include "gui/gui_focus_state.hpp"
@@ -869,7 +869,8 @@ namespace lfs::vis::gui {
     void GuiManager::render() {
         if (auto* ri = rmlui_manager_.getRenderInterface()) {
             auto* sm = viewer_->getSceneManager();
-            ri->set_scene(sm ? &sm->getScene() : nullptr);
+            ri->set_scene_manager(sm);
+            ri->process_pending_preview_uploads();
         }
 
         if (pending_cuda_warning_) {
@@ -929,6 +930,7 @@ namespace lfs::vis::gui {
         // Check for async import completion (must happen on main thread)
         async_tasks_.pollImportCompletion();
         async_tasks_.pollMesh2SplatCompletion();
+        async_tasks_.pollSplatSimplifyCompletion();
 
         // Poll UV package manager for async operations
         python::PackageManager::instance().poll();
@@ -995,8 +997,8 @@ namespace lfs::vis::gui {
 
         PanelInputState frame_input = buildPanelInputFromSDL(sdl_input);
         updateInputOverrides(frame_input, mouse_in_viewport);
-        if (auto* const ic = viewer_->getInputController()) {
-            frame_input.viewport_keyboard_focus = ic->hasViewportKeyboardFocus();
+        if (auto* const wm = viewer_->getWindowManager()) {
+            frame_input.viewport_keyboard_focus = wm->inputRouter().isViewportKeyboardFocused();
         }
 
         auto& reg = PanelRegistry::instance();
@@ -1700,6 +1702,43 @@ namespace lfs::vis::gui {
         return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
+    GuiHitTestResult GuiManager::hitTestPointer(const double x, const double y) const {
+        if (isCapturingInput() || isModalWindowOpen() || startup_overlay_.isVisible() ||
+            (global_context_menu_ && global_context_menu_->isOpen())) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
+        if (panel_layout_.isResizingPanel() || isPositionOverFloatingPanel(x, y)) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
+        if (sequencer_ui_.blocksPointer(x, y) || rml_viewport_overlay_.blocksPointer(x, y)) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
+        return {};
+    }
+
+    GuiInputState GuiManager::inputState() const {
+        const auto& focus = guiFocusState();
+        const bool modal_open =
+            isCapturingInput() ||
+            isModalWindowOpen() ||
+            startup_overlay_.isVisible() ||
+            (global_context_menu_ && global_context_menu_->isOpen()) ||
+            sequencer_ui_.blocksKeyboard();
+
+        return {
+            .has_keyboard_focus = focus.any_item_active || focus.want_capture_keyboard,
+            .text_input_active = focus.want_text_input,
+            .modal_open = modal_open,
+        };
+    }
+
     void GuiManager::setupEventHandlers() {
         using namespace lfs::core::events;
 
@@ -1816,8 +1855,7 @@ namespace lfs::vis::gui {
                         }
                     }
                 } else if (result.button_label == LOC(DiskSpaceDialog::CHANGE_LOCATION)) {
-                    std::filesystem::path new_location = SelectFolderDialog(
-                        LOC(DiskSpaceDialog::SELECT_OUTPUT_LOCATION), path.parent_path());
+                    std::filesystem::path new_location = PickFolderDialog(path.parent_path());
                     if (!new_location.empty() && is_checkpoint) {
                         if (auto* tm = viewer_->getTrainerManager()) {
                             if (auto* trainer = tm->getTrainer()) {

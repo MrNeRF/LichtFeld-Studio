@@ -145,6 +145,7 @@ namespace lfs::rendering {
             const CameraFrustumPickRequest& request) override;
 
         void clearFrustumCache() override;
+        void setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) override;
 
     private:
         Result<RenderingPipeline::ImageRenderResult> renderGaussiansRasterResult(

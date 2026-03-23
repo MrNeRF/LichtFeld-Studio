@@ -102,6 +102,8 @@ namespace lfs::core {
         const std::filesystem::path& image_path() const noexcept { return _image_path; }
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
         bool has_mask() const noexcept { return !_mask_path.empty() && std::filesystem::exists(_mask_path); }
+        bool has_alpha() const noexcept { return _has_alpha; }
+        void set_has_alpha(bool v) noexcept { _has_alpha = v; }
         int uid() const noexcept { return _uid; }
         int camera_id() const noexcept { return _camera_id; }
 
@@ -138,6 +140,7 @@ namespace lfs::core {
         std::string _image_name;
         std::filesystem::path _image_path;
         std::filesystem::path _mask_path;
+        bool _has_alpha = false;
         int _camera_width = 0;
         int _camera_height = 0;
         int _image_width = 0;

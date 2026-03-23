@@ -408,6 +408,40 @@ def test_steps_scaler_syncs_dependent_text_bufs(training_panel_module, monkeypat
     assert panel._handle.dirty_all_count >= 1
 
 
+def test_legacy_negative_ppisp_activation_step_displays_resolved_value(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    model = _ModelStub()
+    params = _ParamsStub()
+    params.iterations = 60000
+    params.steps_scaler = 2.0
+    params.ppisp_controller_activation_step = -1
+    dataset = _DatasetStub()
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+        ),
+    )
+
+    panel._bind_num_props(model, lambda: params, lambda: dataset)
+
+    getter, _setter = model.bindings["ppisp_activation_step_str"]
+    assert getter() == "50,000"
+
+
+def test_training_rml_no_longer_includes_ppisp_auto_toggle():
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    assert "ppisp_auto_step" not in content
+    assert "label_ppisp_auto" not in content
+
+
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
     """Issue #972: _set_bool_prop must not crash on missing attributes."""
     panel = training_panel_module.TrainingPanel()

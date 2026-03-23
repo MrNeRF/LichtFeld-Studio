@@ -1016,6 +1016,11 @@ namespace lfs::vis::gui {
             !input.viewport_keyboard_focus;
         bool commit_requested = false;
         const bool composing = text_input_handler && text_input_handler->isComposing();
+        auto isNumpadTextKey = [](int sc) {
+            return (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
+                   sc == SDL_SCANCODE_KP_PERIOD;
+        };
+
         if (forward_keys) {
             const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                           input.key_alt, input.key_super);
@@ -1023,6 +1028,8 @@ namespace lfs::vis::gui {
                 const bool is_submit_key =
                     (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER);
                 if (composing && (is_submit_key || sc == SDL_SCANCODE_ESCAPE))
+                    continue;
+                if (has_text_focus_ && isNumpadTextKey(sc))
                     continue;
                 auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN) {
@@ -1039,6 +1046,8 @@ namespace lfs::vis::gui {
             for (int sc : input.keys_released) {
                 if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
                                   sc == SDL_SCANCODE_ESCAPE))
+                    continue;
+                if (has_text_focus_ && isNumpadTextKey(sc))
                     continue;
                 auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN) {

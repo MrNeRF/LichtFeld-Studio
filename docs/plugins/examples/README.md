@@ -23,6 +23,7 @@ After that, use the focused examples by topic:
 | [`modal_operator.py`](modal_operator.py) | Interactive modal operators and event handling |
 | [`training_monitor.py`](training_monitor.py) | App state, signals, training callbacks, and reactive UI |
 | [`full_plugin/`](full_plugin/) | Multi-file plugin structure with panels, operators, overlays, tools, and capabilities |
+| [`scrub_controls_demo/`](scrub_controls_demo/) | Full plugin package demonstrating `lfs_plugins.ScrubFieldController` |
 
 Recommended reading order:
 

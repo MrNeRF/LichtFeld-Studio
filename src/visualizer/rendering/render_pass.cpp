@@ -10,6 +10,9 @@ namespace lfs::vis {
 
     std::optional<std::shared_lock<std::shared_mutex>> acquireRenderLock(const FrameContext& ctx) {
         std::optional<std::shared_lock<std::shared_mutex>> lock;
+        if (ctx.render_lock_held) {
+            return lock;
+        }
         if (const auto* tm = ctx.scene_manager ? ctx.scene_manager->getTrainerManager() : nullptr)
             if (const auto* trainer = tm->getTrainer())
                 lock.emplace(trainer->getRenderMutex());

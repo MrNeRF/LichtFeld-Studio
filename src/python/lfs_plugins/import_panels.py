@@ -96,6 +96,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._dataset_info = None
         self._output_path = ""
         self._init_path = ""
+        self._ppisp_sidecar_path = ""
         self._last_lang = ""
 
     def on_bind_model(self, ctx):
@@ -115,9 +116,11 @@ class DatasetImportPanel(_ImportDialogPanel):
 
         model.bind("output_path", lambda: self._output_path, self._set_output_path)
         model.bind("init_path", lambda: self._init_path, self._set_init_path)
+        model.bind("ppisp_sidecar_path", lambda: self._ppisp_sidecar_path, self._set_ppisp_sidecar_path)
 
         model.bind_event("browse_output", self._on_browse_output)
         model.bind_event("browse_init", self._on_browse_init)
+        model.bind_event("browse_ppisp_sidecar", self._on_browse_ppisp_sidecar)
         model.bind_event("do_load", self._on_do_load)
         model.bind_event("do_cancel", self._on_do_cancel)
 
@@ -140,6 +143,10 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._dataset_info = info
         self._output_path = str(Path(info.base_path) / "output")
         self._init_path = ""
+        params = lf.optimization_params()
+        self._ppisp_sidecar_path = (
+            str(params.ppisp_sidecar_path) if params and params.has_params() else ""
+        )
         self._dirty_model()
         lf.ui.set_panel_enabled(self.id, True)
         return True
@@ -186,6 +193,13 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._init_path = next_value
         self._dirty_model("init_path")
 
+    def _set_ppisp_sidecar_path(self, value):
+        next_value = str(value)
+        if next_value == self._ppisp_sidecar_path:
+            return
+        self._ppisp_sidecar_path = next_value
+        self._dirty_model("ppisp_sidecar_path")
+
     def _on_browse_output(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_dataset_folder_dialog()
         if path:
@@ -198,12 +212,28 @@ class DatasetImportPanel(_ImportDialogPanel):
         if path:
             self._set_init_path(path)
 
+    def _on_browse_ppisp_sidecar(self, _handle=None, _ev=None, _args=None):
+        start_dir = str(self._dataset_info.base_path) if self._dataset_info is not None else ""
+        if self._ppisp_sidecar_path:
+            start_dir = self._ppisp_sidecar_path
+        path = lf.ui.open_ppisp_file_dialog(start_dir)
+        if path:
+            self._set_ppisp_sidecar_path(path)
+
     def _on_do_load(self, _handle=None, _ev=None, _args=None):
         if self._dataset_info is None or not self._output_path.strip():
             return
 
         base_path = str(self._dataset_info.base_path)
         init_path = self._init_path.strip()
+        ppisp_sidecar_path = self._ppisp_sidecar_path.strip()
+
+        params = lf.optimization_params()
+        if params and params.has_params():
+            params.ppisp_sidecar_path = ppisp_sidecar_path
+            params.ppisp_freeze_from_sidecar = bool(ppisp_sidecar_path)
+            if ppisp_sidecar_path:
+                params.ppisp = True
 
         lf.ui.set_panel_enabled(self.id, False)
         lf.load_file(

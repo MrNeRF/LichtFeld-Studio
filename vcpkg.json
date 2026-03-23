@@ -31,6 +31,7 @@
     "implot",
     "libarchive",
     "libwebp",
+    "nativefiledialog-extended",
     "nlohmann-json",
     {
       "name": "openimageio",

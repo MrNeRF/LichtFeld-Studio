@@ -72,7 +72,7 @@ namespace edge_compute::rasterization::kernels::forward {
             active = false;
 
         // compute 3d covariance from raw scale and rotation
-        const float3 raw_scale = raw_scales[primitive_idx];
+        const float3 raw_scale = active ? raw_scales[primitive_idx] : make_float3(0.0f, 0.0f, 0.0f);
         const float3 clamped_scale = make_float3(
             fminf(raw_scale.x, config::max_raw_scale),
             fminf(raw_scale.y, config::max_raw_scale),
@@ -83,9 +83,12 @@ namespace edge_compute::rasterization::kernels::forward {
         const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
         if (q_norm_sq < 1e-8f)
             active = false;
-        const float qxx = 2.0f * qxx_raw / q_norm_sq, qyy = 2.0f * qyy_raw / q_norm_sq, qzz = 2.0f * qzz_raw / q_norm_sq;
-        const float qxy = 2.0f * qx * qy / q_norm_sq, qxz = 2.0f * qx * qz / q_norm_sq, qyz = 2.0f * qy * qz / q_norm_sq;
-        const float qrx = 2.0f * qr * qx / q_norm_sq, qry = 2.0f * qr * qy / q_norm_sq, qrz = 2.0f * qr * qz / q_norm_sq;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
+        const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
+        const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
+        const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
+        const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
         const mat3x3 rotation = {
             1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
             qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,

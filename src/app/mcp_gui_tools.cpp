@@ -90,7 +90,7 @@ namespace lfs::app {
                 if (!node)
                     continue;
                 has_model = true;
-                total += static_cast<int64_t>(node->gaussian_count);
+                total += static_cast<int64_t>(node->gaussian_count.load(std::memory_order_acquire));
             }
 
             if (!has_model)
@@ -311,7 +311,7 @@ namespace lfs::app {
                 {"type", node_type_to_string(node.type)},
                 {"visible", static_cast<bool>(node.visible)},
                 {"locked", static_cast<bool>(node.locked)},
-                {"gaussian_count", node.gaussian_count},
+                {"gaussian_count", node.gaussian_count.load(std::memory_order_acquire)},
             };
 
             if (node.parent_id != core::NULL_NODE) {
@@ -1701,7 +1701,7 @@ namespace lfs::app {
                 if (!result)
                     return json{{"error", result.error()}};
 
-                return json{{"success", true}, {"path", path.string()}};
+                return json{{"success", true}, {"path", core::path_to_utf8(path)}};
             });
 
         mcp::register_shared_scene_tools(mcp::SharedSceneToolBackend{

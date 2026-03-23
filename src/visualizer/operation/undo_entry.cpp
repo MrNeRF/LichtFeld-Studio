@@ -752,7 +752,7 @@ namespace lfs::vis::op {
             snapshot.visible = node.visible.get();
             snapshot.locked = node.locked.get();
             snapshot.training_enabled = node.training_enabled;
-            snapshot.gaussian_count = node.gaussian_count;
+            snapshot.gaussian_count = node.gaussian_count.load(std::memory_order_acquire);
             snapshot.centroid = node.centroid;
 
             if (node.parent_id != lfs::core::NULL_NODE) {
@@ -939,7 +939,7 @@ namespace lfs::vis::op {
             if (const auto* node = scene_manager.getScene().getNode(snapshot.name)) {
                 PLYAdded{
                     .name = node->name,
-                    .node_gaussians = node->gaussian_count,
+                    .node_gaussians = node->gaussian_count.load(std::memory_order_acquire),
                     .total_gaussians = scene_manager.getScene().getTotalGaussianCount(),
                     .is_visible = node->visible,
                     .parent_name = snapshot.parent_name,
@@ -1033,7 +1033,7 @@ namespace lfs::vis::op {
             restored->visible.setQuiet(snapshot.visible);
             restored->locked.setQuiet(snapshot.locked);
             restored->training_enabled = snapshot.training_enabled;
-            restored->gaussian_count = snapshot.gaussian_count;
+            restored->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
             restored->centroid = snapshot.centroid;
             restored->transform_dirty = true;
 

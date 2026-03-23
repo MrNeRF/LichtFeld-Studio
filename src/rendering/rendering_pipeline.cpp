@@ -79,7 +79,12 @@ namespace lfs::rendering {
             projection[1][1] *= -1.0f;
             return projection;
         }
-    }
+
+        [[nodiscard]] bool tensorMatchesGaussianCount(const Tensor* const tensor,
+                                                      const size_t gaussian_count) {
+            return tensor == nullptr || !tensor->is_valid() || tensor->numel() == gaussian_count;
+        }
+    } // namespace
 
     RenderingPipeline::RenderingPipeline()
         : background_(Tensor::zeros({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32)) {
@@ -157,6 +162,7 @@ namespace lfs::rendering {
 
         // Regular gaussian splatting rendering
         LOG_TRACE("Using gaussian splatting rendering mode");
+        const size_t gaussian_count = static_cast<size_t>(model.size());
 
         // Update background tensor in-place to avoid allocation
         // Access the tensor data directly
@@ -221,6 +227,12 @@ namespace lfs::rendering {
                 transform_indices_ptr = transform_indices_cuda.get();
             }
         }
+        if (!tensorMatchesGaussianCount(transform_indices_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring transform_indices with stale size: model has {}, tensor has {}",
+                     gaussian_count, transform_indices_ptr->numel());
+            transform_indices_ptr = nullptr;
+            transform_indices_cuda.reset();
+        }
 
         // Get selection mask pointer (already a tensor, just need to ensure it's on CUDA)
         std::unique_ptr<Tensor> selection_mask_cuda;
@@ -232,6 +244,26 @@ namespace lfs::rendering {
                 selection_mask_cuda = std::make_unique<Tensor>(request.selection_mask->cuda());
                 selection_mask_ptr = selection_mask_cuda.get();
             }
+        }
+        if (!tensorMatchesGaussianCount(selection_mask_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring selection_mask with stale size: model has {}, tensor has {}",
+                     gaussian_count, selection_mask_ptr->numel());
+            selection_mask_ptr = nullptr;
+            selection_mask_cuda.reset();
+        }
+
+        Tensor* preview_selection_ptr = request.preview_selection_tensor;
+        if (!tensorMatchesGaussianCount(preview_selection_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring preview_selection_tensor with stale size: model has {}, tensor has {}",
+                     gaussian_count, preview_selection_ptr->numel());
+            preview_selection_ptr = nullptr;
+        }
+
+        const Tensor* deleted_mask_ptr = request.deleted_mask;
+        if (!tensorMatchesGaussianCount(deleted_mask_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring deleted_mask with stale size: model has {}, tensor has {}",
+                     gaussian_count, deleted_mask_ptr->numel());
+            deleted_mask_ptr = nullptr;
         }
 
         try {
@@ -264,7 +296,7 @@ namespace lfs::rendering {
                                                    selection_mask_ptr,
                                                    screen_positions_out,
                                                    request.cursor_active, request.cursor_x, request.cursor_y, request.cursor_radius,
-                                                   request.preview_selection_add_mode, request.preview_selection_tensor,
+                                                   request.preview_selection_add_mode, preview_selection_ptr,
                                                    request.cursor_saturation_preview, request.cursor_saturation_amount,
                                                    request.show_center_markers,
                                                    request.crop_box_transform, request.crop_box_min, request.crop_box_max,
@@ -272,7 +304,7 @@ namespace lfs::rendering {
                                                    request.ellipsoid_transform, request.ellipsoid_radii,
                                                    request.ellipsoid_inverse, request.ellipsoid_desaturate, request.ellipsoid_parent_node_index,
                                                    request.view_volume_transform, request.view_volume_min, request.view_volume_max,
-                                                   request.deleted_mask,
+                                                   deleted_mask_ptr,
                                                    request.hovered_depth_id,
                                                    request.focused_gaussian_id,
                                                    request.far_plane,

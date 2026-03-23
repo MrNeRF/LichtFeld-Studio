@@ -8,8 +8,8 @@
 
 #include <memory>
 
-namespace lfs::core {
-    class Scene;
+namespace lfs::vis {
+    class SceneManager;
 }
 
 namespace lfs::vis::gui {
@@ -24,12 +24,14 @@ namespace lfs::vis::gui {
         Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String& source) override;
         void ReleaseTexture(Rml::TextureHandle texture_handle) override;
 
-        void set_scene(lfs::core::Scene* scene);
+        void set_scene_manager(lfs::vis::SceneManager* scene_manager);
+        void process_pending_preview_uploads();
+        void clear_pending_preview_loads();
 
     private:
         Rml::TextureHandle load_preview_texture(Rml::Vector2i& dimensions, const Rml::String& source);
 
-        lfs::core::Scene* scene_ = nullptr;
+        lfs::vis::SceneManager* scene_manager_ = nullptr;
         std::unique_ptr<PreviewTextureCache> preview_cache_;
     };
 

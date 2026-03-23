@@ -146,6 +146,7 @@ add_library(lfs_io STATIC
         formats/spz.cpp
 
         # Concrete loader implementations
+        loaders/loader_utils.hpp
         loaders/ply_loader.hpp
         loaders/ply_loader.cpp
         loaders/colmap_loader.hpp

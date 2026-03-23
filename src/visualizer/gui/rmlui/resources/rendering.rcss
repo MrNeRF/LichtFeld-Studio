@@ -79,3 +79,70 @@ body {
 .color-picker-popup.visible {
     display: block;
 }
+
+.rendering-simplify-stats {
+    display: flex;
+    gap: 8dp;
+    margin: 8dp 0 4dp;
+}
+
+.rendering-simplify-stat {
+    flex-grow: 1;
+    min-width: 0;
+    padding: 10dp 12dp;
+    border-width: 1dp;
+    border-color: rgba(166, 173, 200, 36);
+    border-radius: 10dp;
+    background-color: rgba(24, 26, 37, 190);
+}
+
+.rendering-simplify-stat__label {
+    display: block;
+    margin-bottom: 4dp;
+    color: #a6adc8;
+    font-size: 9dp;
+    text-transform: uppercase;
+    letter-spacing: 0.6dp;
+}
+
+.rendering-simplify-stat__value {
+    display: block;
+    color: #f5f7ff;
+    font-size: 16dp;
+    font-weight: bold;
+}
+
+.rendering-simplify-actions {
+    display: flex;
+    gap: 8dp;
+    margin-top: 8dp;
+}
+
+.rendering-simplify-actions > .btn {
+    flex-grow: 1;
+}
+
+.rendering-simplify-progress {
+    position: relative;
+    margin-top: 10dp;
+}
+
+.rendering-simplify-progress > progress {
+    width: 100%;
+}
+
+.rendering-simplify-progress > .progress__text {
+    position: absolute;
+    top: 50%;
+    right: 8dp;
+    transform: translateY(-50%);
+}
+
+.rendering-simplify-stage {
+    margin-top: 4dp;
+}
+
+.rendering-simplify-error {
+    margin-top: 8dp;
+    color: #f38ba8;
+}

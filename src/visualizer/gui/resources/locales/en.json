@@ -16,6 +16,9 @@
     "edit": "Edit",
     "edit.input_settings": "Input Settings...",
     "edit.preferences": "Preferences...",
+    "tools": "Tools",
+    "tools.python_console": "Python Console",
+    "tools.plugin_marketplace": "Plugin Marketplace",
     "view": "View",
     "view.theme": "Theme",
     "view.theme.dark": "Dark",
@@ -29,9 +32,7 @@
     "view.debug_info": "Debug Info...",
     "help": "Help",
     "help.getting_started": "Getting Started",
-    "help.about": "About LichtFeld Studio",
-    "view.python_console": "Python Console",
-    "view.plugin_marketplace": "Plugin Marketplace"
+    "help.about": "About LichtFeld Studio"
   },
   "window": {
     "getting_started": "Getting Started",
@@ -130,7 +131,7 @@
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-    "masking.invert_masks": "Invert Masks:",
+    "masking.invert_masks": "Invert:",
     "masking.threshold": "Threshold:",
     "masking.penalty_weight": "Penalty Weight:",
     "masking.penalty_power": "Penalty Power:",
@@ -198,7 +199,7 @@
     "tooltip.ppisp_lr": "Learning rate for PPISP parameters",
     "tooltip.ppisp_reg": "Regularization weight for PPISP parameters",
     "tooltip.ppisp_warmup": "Steps before PPISP training starts",
-    "tooltip.ppisp_activation_step": "Iteration when controller training begins (-1 = auto: iterations - 5000)",
+    "tooltip.ppisp_activation_step": "Iteration when controller training begins. Negative values default to iterations - round(5000 * max(steps_scaler, 1)).",
     "tooltip.ppisp_controller_lr": "Learning rate for the controller network",
     "tooltip.ppisp_freeze_gaussians": "Freeze Gaussian parameters during controller training",
     "tooltip.strategy_gut_conflict": "ADC and igs+ strategies are not available when GUT is enabled",
@@ -637,7 +638,8 @@
     "masks_dir": "Masks:   ",
     "output_dir": "Output:  ",
     "init_file": "Init file (optional, replaces points3D):",
-    "help_text": "Training checkpoints, logs, and exported models will be saved to the output directory."
+    "help_text": "Training checkpoints, logs, and exported models will be saved to the output directory.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "Cannot Open",
@@ -725,11 +727,11 @@
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",
-    "invert_masks": "  Invert Masks:",
+    "invert_masks": "Invert:",
     "opacity_penalty_weight": "  Opacity Penalty Weight:",
     "opacity_penalty_power": "  Opacity Penalty Power:",
     "mask_threshold": "  Mask Threshold:",
-    "use_alpha_as_mask": "Use Alpha as Mask:",
+    "use_alpha_as_mask": "Alpha Mask:",
     "sparsity": "Sparsity:",
     "gut": "GUT:",
     "undistort": "Undistort:",
@@ -768,7 +770,9 @@
     "ppisp_activation_step": "Activation Step:",
     "ppisp_controller_lr": "Controller LR:",
     "ppisp_freeze_gaussians": "Freeze Gaussians:",
-    "disabled": "Disabled"
+    "disabled": "Disabled",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "Image Preview",

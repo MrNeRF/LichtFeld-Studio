@@ -182,7 +182,7 @@ namespace lfs::vis {
 
         applyPendingParams();
 
-        if (auto error = trainer_->getParams().optimization.validate(); !error.empty()) {
+        if (auto error = trainer_->getParams().validate(); !error.empty()) {
             LOG_ERROR("Cannot start training: {}", error);
             last_error_ = error;
             state::TrainingCompleted{
@@ -417,16 +417,16 @@ namespace lfs::vis {
     int TrainerManager::getNumSplats() const {
         if (!trainer_)
             return 0;
-        // Strategy may not be created yet if using Scene-based constructor
-        // In that case, try to get size from scene
+
+        // Prefer scene metadata so UI polling does not dereference the live
+        // training model while topology-changing refinement is in progress.
         if (scene_) {
-            const auto* model = scene_->getTrainingModel();
-            if (model) {
-                return static_cast<int>(model->size());
-            }
+            return static_cast<int>(scene_->getTrainingModelGaussianCount());
         }
-        // Fall back to strategy if trainer is initialized
+
+        // Legacy fallback for non-scene-backed trainers.
         if (trainer_->isInitialized()) {
+            const std::shared_lock lock(trainer_->getRenderMutex());
             return static_cast<int>(trainer_->get_strategy().get_model().size());
         }
         return 0;

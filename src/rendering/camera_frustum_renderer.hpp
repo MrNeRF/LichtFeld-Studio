@@ -19,6 +19,10 @@
 #include <unordered_set>
 #include <vector>
 
+namespace lfs::io {
+    class PipelinedImageLoader;
+}
+
 namespace lfs::rendering {
 
     class CameraFrustumRenderer {
@@ -27,6 +31,8 @@ namespace lfs::rendering {
 
         CameraFrustumRenderer() = default;
         ~CameraFrustumRenderer();
+
+        void setImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
 
         Result<void> init();
         Result<void> render(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
@@ -189,6 +195,8 @@ namespace lfs::rendering {
 
         std::thread thumbnail_loader_thread_;
         std::atomic<bool> thumbnail_loader_running_{false};
+        std::shared_ptr<lfs::io::PipelinedImageLoader> shared_loader_;
+        std::mutex shared_loader_mutex_;
     };
 
 } // namespace lfs::rendering

@@ -144,7 +144,7 @@ namespace lfs::core {
             auto* existing = getNodeById(name_it->second);
             assert(existing);
             existing->model = std::move(model);
-            existing->gaussian_count = gaussian_count;
+            existing->gaussian_count.store(gaussian_count, std::memory_order_release);
             existing->centroid = centroid;
         } else {
             const NodeId id = next_node_id_++;
@@ -153,7 +153,7 @@ namespace lfs::core {
             node->type = NodeType::SPLAT;
             node->name = name;
             node->model = std::move(model);
-            node->gaussian_count = gaussian_count;
+            node->gaussian_count.store(gaussian_count, std::memory_order_release);
             node->centroid = centroid;
 
             id_to_index_[id] = nodes_.size();
@@ -254,9 +254,12 @@ namespace lfs::core {
         if (node) {
             const size_t gaussian_count = static_cast<size_t>(model->size());
             const glm::vec3 centroid = computeCentroid(model.get());
-            LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians", name, node->gaussian_count, gaussian_count);
+            LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians",
+                      name,
+                      node->gaussian_count.load(std::memory_order_acquire),
+                      gaussian_count);
             node->model = std::move(model);
-            node->gaussian_count = gaussian_count;
+            node->gaussian_count.store(gaussian_count, std::memory_order_release);
             node->centroid = centroid;
             notifyMutation(MutationType::MODEL_CHANGED);
         } else {
@@ -314,8 +317,8 @@ namespace lfs::core {
         cached_combined_.reset();
         cached_transform_indices_.reset();
         cached_transforms_.clear();
-        model_cache_valid_ = false;
-        transform_cache_valid_ = false;
+        model_cache_valid_.store(false, std::memory_order_release);
+        transform_cache_valid_.store(false, std::memory_order_release);
         consolidated_ = false;
         consolidated_node_ids_.clear();
 
@@ -443,7 +446,7 @@ namespace lfs::core {
         size_t total = 0;
         for (const auto& node : nodes_) {
             if (node->visible) {
-                total += node->gaussian_count;
+                total += node->gaussian_count.load(std::memory_order_acquire);
             }
         }
         return total;
@@ -510,14 +513,14 @@ namespace lfs::core {
     }
 
     void Scene::rebuildModelCacheIfNeeded() const {
-        if (model_cache_valid_)
+        if (model_cache_valid_.load(std::memory_order_acquire))
             return;
 
         if (export_pin_count_.load(std::memory_order_acquire) > 0)
             return;
 
         if (consolidated_ && cached_combined_) {
-            model_cache_valid_ = true;
+            model_cache_valid_.store(true, std::memory_order_release);
             return;
         }
 
@@ -537,8 +540,8 @@ namespace lfs::core {
         if (visible_nodes.empty()) {
             cached_combined_.reset();
             cached_transform_indices_.reset();
-            model_cache_valid_ = true;
-            transform_cache_valid_ = false;
+            model_cache_valid_.store(true, std::memory_order_release);
+            transform_cache_valid_.store(false, std::memory_order_release);
             return;
         }
 
@@ -552,8 +555,8 @@ namespace lfs::core {
                 lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
 
             LOG_DEBUG("Single node: {} ({} gaussians)", node->name, n);
-            model_cache_valid_ = true;
-            transform_cache_valid_ = false;
+            model_cache_valid_.store(true, std::memory_order_release);
+            transform_cache_valid_.store(false, std::memory_order_release);
             return;
         }
 
@@ -660,12 +663,12 @@ namespace lfs::core {
             cached_combined_->deleted() = std::move(deleted);
         }
 
-        model_cache_valid_ = true;
-        transform_cache_valid_ = false;
+        model_cache_valid_.store(true, std::memory_order_release);
+        transform_cache_valid_.store(false, std::memory_order_release);
     }
 
     void Scene::rebuildTransformCacheIfNeeded() const {
-        if (transform_cache_valid_)
+        if (transform_cache_valid_.load(std::memory_order_acquire))
             return;
 
         cached_transforms_.clear();
@@ -675,7 +678,7 @@ namespace lfs::core {
                 cached_transforms_.push_back(getWorldTransform(node->id));
             }
         }
-        transform_cache_valid_ = true;
+        transform_cache_valid_.store(true, std::memory_order_release);
     }
 
     void Scene::rebuildCacheIfNeeded() const {
@@ -969,7 +972,7 @@ namespace lfs::core {
             if (node->model && node->model->has_deleted_mask()) {
                 const size_t removed = node->model->apply_deleted();
                 if (removed > 0) {
-                    node->gaussian_count = node->model->size();
+                    node->gaussian_count.store(node->model->size(), std::memory_order_release);
                     node->centroid = computeCentroid(node->model.get());
                     total_removed += removed;
                 }
@@ -1205,7 +1208,7 @@ namespace lfs::core {
         node->type = NodeType::SPLAT;
         node->name = name;
         node->model = std::move(model);
-        node->gaussian_count = gaussian_count;
+        node->gaussian_count.store(gaussian_count, std::memory_order_release);
         node->centroid = centroid;
 
         if (parent != NULL_NODE) {
@@ -1252,7 +1255,7 @@ namespace lfs::core {
         node->type = NodeType::POINTCLOUD;
         node->name = name;
         node->point_cloud = std::move(point_cloud);
-        node->gaussian_count = point_count;
+        node->gaussian_count.store(point_count, std::memory_order_release);
         node->centroid = centroid;
 
         if (parent != NULL_NODE) {
@@ -1307,7 +1310,7 @@ namespace lfs::core {
         node->name = unique_name;
         const int64_t nf = mesh_data->face_count();
         node->mesh = std::move(mesh_data);
-        node->gaussian_count = static_cast<size_t>(nv);
+        node->gaussian_count.store(static_cast<size_t>(nv), std::memory_order_release);
         node->centroid = centroid;
 
         if (parent != NULL_NODE) {
@@ -1435,7 +1438,7 @@ namespace lfs::core {
         node->parent_id = parent;
         node->type = NodeType::CAMERA_GROUP;
         node->name = name;
-        node->gaussian_count = camera_count;
+        node->gaussian_count.store(camera_count, std::memory_order_release);
 
         if (parent != NULL_NODE) {
             if (auto* p = getNodeById(parent)) {
@@ -2249,6 +2252,18 @@ namespace lfs::core {
         LOG_INFO("Created training model node '{}' from checkpoint", name);
     }
 
+    void Scene::syncTrainingModelTopology(const size_t gaussian_count) {
+        if (!training_model_node_.empty()) {
+            if (auto* const node = getMutableNode(training_model_node_)) {
+                node->gaussian_count.store(gaussian_count, std::memory_order_release);
+            }
+        }
+
+        // Densification/pruning changes invalidate cached merged-model state and
+        // per-gaussian transform indices derived from the previous topology.
+        invalidateCache();
+    }
+
     lfs::core::SplatData* Scene::getTrainingModel() {
         if (training_model_node_.empty())
             return nullptr;
@@ -2268,6 +2283,19 @@ namespace lfs::core {
         if (!node || !isNodeEffectivelyVisible(node->id))
             return nullptr;
         return node->model.get();
+    }
+
+    size_t Scene::getTrainingModelGaussianCount() const {
+        if (training_model_node_.empty())
+            return 0;
+
+        const auto* node = getNode(training_model_node_);
+        if (!node || !node->model || !isNodeEffectivelyVisible(node->id))
+            return 0;
+
+        // UI/status polling must not touch the live training SplatData while the
+        // trainer is mutating topology under render_mutex_.
+        return node->gaussian_count.load(std::memory_order_acquire);
     }
 
     std::shared_ptr<const lfs::core::Camera> Scene::getCameraByUid(int uid) const {

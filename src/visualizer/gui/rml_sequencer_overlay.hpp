@@ -38,7 +38,7 @@ namespace lfs::vis::gui {
             SET_ROTATE,
             SET_EASING,
             DELETE_KEYFRAME,
-            DESELECT_KEYFRAME,
+            CLOSE_EDIT_PANEL,
             APPLY_EDIT,
             REVERT_EDIT
         };
@@ -82,6 +82,12 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isContextMenuOpen() const { return context_menu_open_; }
         [[nodiscard]] bool isPopupOpen() const { return time_edit_active_ || focal_edit_active_; }
         [[nodiscard]] bool wantsInput() const { return wants_input_; }
+        [[nodiscard]] bool isMouseOverEditOverlay(float mx, float my) const {
+            if (!edit_overlay_visible_)
+                return false;
+            return mx >= overlay_px_left_ && mx <= overlay_px_left_ + overlay_px_width_ &&
+                   my >= overlay_px_top_ && my <= overlay_px_top_ + overlay_px_height_;
+        }
 
         [[nodiscard]] std::optional<PendingAction> consumeAction();
         [[nodiscard]] std::optional<EditResult> consumeTimeEdit();
@@ -157,6 +163,11 @@ namespace lfs::vis::gui {
 
         int width_ = 0;
         int height_ = 0;
+
+        float overlay_px_left_ = 0.0f;
+        float overlay_px_top_ = 0.0f;
+        float overlay_px_width_ = 0.0f;
+        float overlay_px_height_ = 0.0f;
     };
 
 } // namespace lfs::vis::gui

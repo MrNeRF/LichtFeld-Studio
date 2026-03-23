@@ -52,6 +52,7 @@ SCRUB_FIELD_DEFS = {
     "ppisp_gamma_blue": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
     "ppisp_crf_toe": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
     "ppisp_crf_shoulder": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
+    "simplify_ratio": ScrubFieldSpec(0.01, 1.0, 0.01, "%.2f"),
 }
 
 SELECT_PROPS = [
@@ -75,6 +76,7 @@ COLOR_PROPS = [
 SECTION_NAMES = (
     "viewport",
     "camera",
+    "simplify",
     "selection",
     "mesh",
     "post_process",
@@ -178,6 +180,13 @@ class RenderingPanel(Panel):
         self._picker_click_handled = False
         self._last_swatch_colors = {}
         self._last_panel_label = ""
+        self._simplify_ratio = 0.1
+        self._simplify_source_name = ""
+        self._simplify_original_count = 0
+        self._simplify_task_active = False
+        self._simplify_progress_value = "0"
+        self._simplify_progress_stage = ""
+        self._simplify_error_text = ""
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -249,6 +258,8 @@ class RenderingPanel(Panel):
                        lambda p=prop_id: float(getattr(s(), p, 0.0)),
                        lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
 
+        model.bind("simplify_ratio", lambda: float(self._simplify_ratio), lambda v: self._set_simplify_ratio(v))
+
         model.bind_func("ppisp_auto",
                          lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
 
@@ -258,6 +269,8 @@ class RenderingPanel(Panel):
                          lambda: "Viewport")
         model.bind_func("label_hdr_camera",
                          lambda: "Camera & Projection")
+        model.bind_func("label_hdr_simplify",
+                         lambda: "Splat Simplify")
         model.bind_func("label_hdr_selection",
                          lambda: "Selection & Overlays")
         model.bind_func("label_hdr_mesh",
@@ -285,11 +298,25 @@ class RenderingPanel(Panel):
         model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
         model.bind_func("label_console",
                          lambda: lf.ui.tr("main_panel.console") or "Console")
+        model.bind_func("simplify_has_source", lambda: bool(self._simplify_source_name))
+        model.bind_func("simplify_source_name", lambda: self._simplify_source_name)
+        model.bind_func("simplify_original_count", lambda: f"{self._simplify_original_count:,}")
+        model.bind_func("simplify_target_count", lambda: f"{self._compute_simplify_target_count():,}")
+        model.bind_func("simplify_output_name", self._simplify_output_name)
+        model.bind_func("simplify_can_apply", self._can_run_simplify)
+        model.bind_func("simplify_show_progress", lambda: self._simplify_task_active)
+        model.bind_func("simplify_progress_value", lambda: self._simplify_progress_value)
+        model.bind_func("simplify_progress_pct", self._simplify_progress_pct)
+        model.bind_func("simplify_progress_stage", lambda: self._simplify_progress_stage)
+        model.bind_func("simplify_show_error", lambda: bool(self._simplify_error_text))
+        model.bind_func("simplify_error_text", lambda: self._simplify_error_text)
 
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
         model.bind_event("chrom_change", self._on_chrom_change)
         model.bind_event("picker_change", self._on_picker_change)
+        model.bind_event("simplify_apply", self._on_simplify_apply)
+        model.bind_event("simplify_cancel", self._on_simplify_cancel)
         model.bind_event("toggle_console",
                          lambda h, e, a: lf.ui.toggle_system_console())
 
@@ -313,6 +340,8 @@ class RenderingPanel(Panel):
             if swatch:
                 swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
                 dirty = True
+        dirty |= self._refresh_simplify_source(force=False)
+        dirty |= self._sync_simplify_task_state(force=False)
         dirty |= self._scrub_fields.sync_all()
         return dirty
 
@@ -328,6 +357,8 @@ class RenderingPanel(Panel):
         self._scrub_fields.unmount()
 
     def _get_scrub_value(self, prop):
+        if prop == "simplify_ratio":
+            return self._simplify_ratio
         settings = lf.get_render_settings()
         if not settings:
             spec = SCRUB_FIELD_DEFS[prop]
@@ -335,6 +366,9 @@ class RenderingPanel(Panel):
         return float(getattr(settings, prop, 0.0))
 
     def _set_scrub_value(self, prop, value):
+        if prop == "simplify_ratio":
+            self._set_simplify_ratio(value)
+            return
         settings = lf.get_render_settings()
         if not settings:
             return
@@ -452,6 +486,142 @@ class RenderingPanel(Panel):
             setattr(s, "ppisp_mode", v)
         if self._handle:
             self._handle.dirty("ppisp_auto")
+
+    def _dirty_model(self, *fields):
+        if not self._handle:
+            return
+        if not fields:
+            self._handle.dirty_all()
+            return
+        for field in fields:
+            self._handle.dirty(field)
+
+    def _active_splat_node(self):
+        scene = getattr(lf, "get_scene", lambda: None)()
+        if scene is None:
+            return None, "", 0
+
+        selected_name = str(getattr(lf, "get_selected_node_name", lambda: "")() or "")
+        if not selected_name:
+            return None, "", 0
+
+        node = scene.get_node(selected_name)
+        if node is None:
+            return None, "", 0
+
+        node_type_enum = getattr(getattr(lf, "scene", None), "NodeType", None)
+        if node_type_enum is not None and getattr(node, "type", None) != node_type_enum.SPLAT:
+            return None, "", 0
+
+        try:
+            splat = node.splat_data()
+        except Exception:
+            splat = None
+        if splat is None:
+            return None, "", 0
+
+        try:
+            count = int(splat.visible_count())
+        except Exception:
+            count = int(getattr(node, "gaussian_count", 0))
+        return node, selected_name, count
+
+    def _refresh_simplify_source(self, force: bool) -> bool:
+        _node, source_name, source_count = self._active_splat_node()
+        changed = force or source_name != self._simplify_source_name or source_count != self._simplify_original_count
+        if not changed:
+            return False
+
+        self._simplify_source_name = source_name
+        self._simplify_original_count = source_count
+        self._dirty_model(
+            "simplify_has_source",
+            "simplify_source_name",
+            "simplify_original_count",
+            "simplify_target_count",
+            "simplify_output_name",
+            "simplify_can_apply",
+        )
+        return True
+
+    def _compute_simplify_target_count(self) -> int:
+        if self._simplify_original_count <= 0:
+            return 0
+        return max(1, min(self._simplify_original_count, int(math.ceil(self._simplify_original_count * self._simplify_ratio))))
+
+    def _simplify_output_name(self) -> str:
+        if not self._simplify_source_name:
+            return ""
+        return f"{self._simplify_source_name} (Simplified {int(round(self._simplify_ratio * 100.0))}%)"
+
+    def _can_run_simplify(self) -> bool:
+        return bool(self._simplify_source_name and self._simplify_original_count > 0 and not self._simplify_task_active)
+
+    def _set_simplify_ratio(self, value):
+        try:
+            next_value = max(0.01, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return
+        if abs(next_value - self._simplify_ratio) < 1e-6:
+            return
+        self._simplify_ratio = next_value
+        self._dirty_model("simplify_ratio", "simplify_target_count", "simplify_output_name")
+
+    def _simplify_progress_pct(self) -> str:
+        try:
+            return f"{int(round(float(self._simplify_progress_value) * 100.0))}%"
+        except (TypeError, ValueError):
+            return "0%"
+
+    def _sync_simplify_task_state(self, force: bool) -> bool:
+        active = bool(getattr(lf, "is_splat_simplify_active", lambda: False)())
+        progress = max(0.0, min(1.0, float(getattr(lf, "get_splat_simplify_progress", lambda: 0.0)())))
+        progress_value = f"{progress:.4f}".rstrip("0").rstrip(".") or "0"
+        stage = str(getattr(lf, "get_splat_simplify_stage", lambda: "")() or "")
+        error_text = str(getattr(lf, "get_splat_simplify_error", lambda: "")() or "")
+
+        changed = force or (
+            active != self._simplify_task_active or
+            progress_value != self._simplify_progress_value or
+            stage != self._simplify_progress_stage or
+            error_text != self._simplify_error_text
+        )
+        if not changed:
+            return False
+
+        self._simplify_task_active = active
+        self._simplify_progress_value = progress_value
+        self._simplify_progress_stage = stage
+        self._simplify_error_text = error_text
+        self._dirty_model(
+            "simplify_can_apply",
+            "simplify_show_progress",
+            "simplify_progress_value",
+            "simplify_progress_pct",
+            "simplify_progress_stage",
+            "simplify_show_error",
+            "simplify_error_text",
+        )
+        return True
+
+    def _start_simplify(self):
+        if not self._can_run_simplify():
+            return
+        self._simplify_error_text = ""
+        self._dirty_model("simplify_show_error", "simplify_error_text")
+        lf.simplify_splats(
+            self._simplify_source_name,
+            ratio=self._simplify_ratio,
+        )
+        self._sync_simplify_task_state(force=True)
+
+    def _on_simplify_apply(self, _handle=None, _ev=None, _args=None):
+        self._start_simplify()
+
+    def _on_simplify_cancel(self, _handle=None, _ev=None, _args=None):
+        cancel = getattr(lf, "cancel_splat_simplify", None)
+        if cancel is not None:
+            cancel()
 
     def _on_chrom_change(self, handle, event, args):
         s = lf.get_render_settings()

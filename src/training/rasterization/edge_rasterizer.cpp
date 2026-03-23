@@ -41,6 +41,9 @@ namespace lfs::training {
         const float cx_adjusted = cx - static_cast<float>(tile_x_offset);
         const float cy_adjusted = cy - static_cast<float>(tile_y_offset);
 
+        assert(!pixel_weights.is_valid() ||
+               pixel_weights.numel() == static_cast<size_t>(width) * static_cast<size_t>(height));
+
         // Get Gaussian parameters
         auto& means = gaussian_model.means();
         auto& raw_opacities = gaussian_model.opacity_raw();
@@ -73,7 +76,8 @@ namespace lfs::training {
         }
 
         // Input pixel_weights pointer and output accum_weights
-        const float* pixel_weights_ptr = pixel_weights.contiguous().ptr<float>();
+        auto pixel_weights_contig = pixel_weights.contiguous();
+        const float* pixel_weights_ptr = pixel_weights_contig.ptr<float>();
 
         auto accum_weights = core::Tensor::zeros(
             {static_cast<size_t>(n_primitives)}, core::Device::CUDA, core::DataType::Float32);

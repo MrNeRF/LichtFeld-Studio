@@ -11,11 +11,12 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/string_keys.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "io/video/video_export_options.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -41,7 +42,6 @@ namespace lfs::vis::gui {
         constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
         constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
-        constexpr auto FRUSTUM_DOUBLE_CLICK_WINDOW = std::chrono::milliseconds(350);
 
         [[nodiscard]] std::string formatTimelineTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
@@ -79,8 +79,65 @@ namespace lfs::vis::gui {
             overlay_->destroyGLResources();
     }
 
+    void SequencerUIManager::setSequencerEnabled(const bool enabled) {
+        if (enabled)
+            return;
+
+        if (ui_state_.show_pip_preview)
+            ui_state_.show_pip_preview = false;
+
+        pip_last_keyframe_ = std::nullopt;
+        pip_needs_update_ = true;
+        endViewportKeyframeEdit();
+    }
+
+    void SequencerUIManager::beginViewportKeyframeEdit(const size_t keyframe_index) {
+        const auto* const keyframe = controller_.timeline().getKeyframe(keyframe_index);
+        if (!keyframe || keyframe->is_loop_point)
+            return;
+
+        controller_.selectKeyframe(keyframe_index);
+        if (auto* sm = viewer_->getSceneManager())
+            sm->clearSelection();
+        viewport_keyframe_edit_snapshot_ = *keyframe;
+        keyframe_gizmo_op_ = ImGuizmo::OPERATION(0);
+        edit_entered_mouse_down_ = true;
+    }
+
+    void SequencerUIManager::endViewportKeyframeEdit() {
+        viewport_keyframe_edit_snapshot_ = std::nullopt;
+        if (overlay_)
+            overlay_->hideEditOverlay();
+    }
+
+    sequencer::CameraState SequencerUIManager::currentViewportCameraState() const {
+        const auto& cam = viewer_->getViewport().camera;
+        auto* const rm = viewer_->getRenderingManager();
+
+        return {
+            .position = cam.t,
+            .rotation = glm::quat_cast(cam.R),
+            .focal_length_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM};
+    }
+
+    void SequencerUIManager::restoreViewportCameraState(const sequencer::CameraState& state) const {
+        auto& vp = viewer_->getViewport();
+        vp.camera.R = glm::mat3_cast(state.rotation);
+        vp.camera.t = state.position;
+
+        if (auto* const rm = viewer_->getRenderingManager()) {
+            rm->setFocalLength(state.focal_length_mm);
+            rm->markDirty(DirtyFlag::CAMERA);
+        }
+    }
+
     void SequencerUIManager::setupEvents() {
         using namespace lfs::core::events;
+
+        ui::RenderSettingsChanged::when([this](const auto& event) {
+            if (event.equirectangular)
+                ui_state_.equirectangular = *event.equirectangular;
+        });
 
         cmd::SequencerAddKeyframe::when([this](const auto&) {
             const auto& cam = viewer_->getViewport().camera;
@@ -113,7 +170,22 @@ namespace lfs::vis::gui {
                 cam.t,
                 glm::quat_cast(cam.R),
                 focal_mm);
+            if (viewport_keyframe_edit_snapshot_.has_value() &&
+                controller_.selectedKeyframeId().has_value() &&
+                *controller_.selectedKeyframeId() ==
+                    viewport_keyframe_edit_snapshot_->id) {
+                viewport_keyframe_edit_snapshot_->position = cam.t;
+                viewport_keyframe_edit_snapshot_->rotation =
+                    glm::quat_cast(cam.R);
+                viewport_keyframe_edit_snapshot_->focal_length_mm = focal_mm;
+            } else {
+                endViewportKeyframeEdit();
+            }
             state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
+        });
+
+        cmd::SequencerGoToKeyframe::when([this](const auto&) {
+            endViewportKeyframeEdit();
         });
 
         cmd::SequencerPlayPause::when([this](const auto&) {
@@ -125,19 +197,74 @@ namespace lfs::vis::gui {
         });
 
         ui::NodeSelected::when([this](const auto& e) {
-            if (e.type != "KEYFRAME")
+            if (e.type != "KEYFRAME") {
                 keyframe_gizmo_op_ = ImGuizmo::OPERATION(0);
+                endViewportKeyframeEdit();
+            }
         });
 
         scene_sync_->setupEvents();
     }
 
     void SequencerUIManager::render(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (ui_state_.show_camera_path) {
+        const auto* const gui = viewer_->getGuiManager();
+        const bool sequencer_enabled = gui && gui->panelLayout().isShowSequencer();
+        if (!sequencer_enabled) {
+            setSequencerEnabled(false);
+            return;
+        }
+
+        if (ui_state_.equirectangular != last_equirectangular_) {
+            last_equirectangular_ = ui_state_.equirectangular;
+            pip_needs_update_ = true;
+            film_strip_.invalidateAll();
+        }
+
+        const auto& sdl_buf = viewer_->getWindowManager()->frameInput();
+        lfs::vis::PanelInputState overlay_input;
+        overlay_input.mouse_x = sdl_buf.mouse_x;
+        overlay_input.mouse_y = sdl_buf.mouse_y;
+        overlay_input.mouse_down[0] = sdl_buf.mouse_down[0];
+        overlay_input.mouse_down[1] = sdl_buf.mouse_down[1];
+        overlay_input.mouse_clicked[0] = sdl_buf.mouse_clicked[0];
+        overlay_input.mouse_clicked[1] = sdl_buf.mouse_clicked[1];
+        overlay_input.mouse_released[0] = sdl_buf.mouse_released[0];
+        overlay_input.mouse_released[1] = sdl_buf.mouse_released[1];
+        overlay_input.key_ctrl = (sdl_buf.key_mods & SDL_KMOD_CTRL) != 0;
+        overlay_input.key_shift = (sdl_buf.key_mods & SDL_KMOD_SHIFT) != 0;
+        overlay_input.key_alt = (sdl_buf.key_mods & SDL_KMOD_ALT) != 0;
+        overlay_input.key_super = (sdl_buf.key_mods & SDL_KMOD_GUI) != 0;
+        for (auto sc : sdl_buf.keys_pressed)
+            overlay_input.keys_pressed.push_back(static_cast<int>(sc));
+        for (auto sc : sdl_buf.keys_released)
+            overlay_input.keys_released.push_back(static_cast<int>(sc));
+        overlay_input.text_codepoints = sdl_buf.text_codepoints;
+        overlay_input.text_inputs = sdl_buf.text_inputs;
+        overlay_input.text_editing = sdl_buf.text_editing;
+        overlay_input.text_editing_start = sdl_buf.text_editing_start;
+        overlay_input.text_editing_length = sdl_buf.text_editing_length;
+        overlay_input.has_text_editing = sdl_buf.has_text_editing;
+
+        renderKeyframeEditOverlay(viewport);
+        overlay_->processInput(overlay_input);
+        handleOverlayActions();
+
+        const bool overlay_active = overlay_->wantsInput() ||
+                                    overlay_->isMouseOverEditOverlay(sdl_buf.mouse_x, sdl_buf.mouse_y);
+        if (edit_entered_mouse_down_ && !sdl_buf.mouse_down[0])
+            edit_entered_mouse_down_ = false;
+        if (overlay_active || edit_entered_mouse_down_)
+            guiFocusState().want_capture_mouse = true;
+
+        const bool actively_following =
+            ui_state_.follow_playback && controller_.isPlaying() &&
+            controller_.timeline().realKeyframeCount() > 0;
+
+        if (ui_state_.show_camera_path && !actively_following) {
             renderCameraPath(viewport);
             renderKeyframeGizmo(ctx, viewport);
-            renderKeyframePreview(ctx);
         }
+        renderKeyframePreview(ctx);
         renderSequencerPanel(ctx, viewport);
         {
             const float dp = panel_->cachedDpRatio();
@@ -155,43 +282,24 @@ namespace lfs::vis::gui {
         drawTimelineGuides();
         drawTimelineTooltip();
         drawPipPreviewWindow(viewport);
-        renderKeyframeEditOverlay(viewport);
-        handleOverlayActions();
-
-        const auto& sdl_buf = viewer_->getWindowManager()->frameInput();
-        lfs::vis::PanelInputState overlay_input;
-        overlay_input.mouse_x = sdl_buf.mouse_x;
-        overlay_input.mouse_y = sdl_buf.mouse_y;
-        overlay_input.mouse_down[0] = sdl_buf.mouse_down[0];
-        overlay_input.mouse_down[1] = sdl_buf.mouse_down[1];
-        overlay_input.mouse_clicked[0] = sdl_buf.mouse_clicked[0];
-        overlay_input.mouse_clicked[1] = sdl_buf.mouse_clicked[1];
-        overlay_input.key_ctrl = (sdl_buf.key_mods & SDL_KMOD_CTRL) != 0;
-        overlay_input.key_shift = (sdl_buf.key_mods & SDL_KMOD_SHIFT) != 0;
-        overlay_input.key_alt = (sdl_buf.key_mods & SDL_KMOD_ALT) != 0;
-        overlay_input.key_super = (sdl_buf.key_mods & SDL_KMOD_GUI) != 0;
-        for (auto sc : sdl_buf.keys_pressed)
-            overlay_input.keys_pressed.push_back(static_cast<int>(sc));
-        for (auto sc : sdl_buf.keys_released)
-            overlay_input.keys_released.push_back(static_cast<int>(sc));
-        overlay_input.text_codepoints = sdl_buf.text_codepoints;
-        overlay_input.text_inputs = sdl_buf.text_inputs;
-        overlay_input.text_editing = sdl_buf.text_editing;
-        overlay_input.text_editing_start = sdl_buf.text_editing_start;
-        overlay_input.text_editing_length = sdl_buf.text_editing_length;
-        overlay_input.has_text_editing = sdl_buf.has_text_editing;
-        overlay_->processInput(overlay_input);
 
         overlay_->render(sdl_buf.window_w, sdl_buf.window_h);
-
-        if (overlay_->wantsInput())
-            guiFocusState().want_capture_mouse = true;
     }
 
     void SequencerUIManager::compositeOverlays(const int screen_w, const int screen_h) const {
         if (!overlay_)
             return;
         overlay_->compositeToScreen(screen_w, screen_h);
+    }
+
+    bool SequencerUIManager::blocksPointer(const double x, const double y) const {
+        return overlay_ &&
+               (overlay_->wantsInput() || overlay_->isMouseOverEditOverlay(static_cast<float>(x),
+                                                                           static_cast<float>(y)));
+    }
+
+    bool SequencerUIManager::blocksKeyboard() const {
+        return overlay_ && (overlay_->isContextMenuOpen() || overlay_->isPopupOpen());
     }
 
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport) {
@@ -228,15 +336,8 @@ namespace lfs::vis::gui {
         panel_->render(viewport.pos.x, viewport.size.x,
                        viewport.pos.y + viewport.size.y - strip_offset, input);
 
-        if (panel_->isHovered()) {
+        if (panel_->isHovered())
             guiFocusState().want_capture_mouse = true;
-            auto tip = panel_->consumeTooltip();
-            if (!tip.empty()) {
-                timeline_tooltip_active_ = true;
-                timeline_tooltip_pos_ = {input.mouse_x, input.mouse_y};
-                timeline_tooltip_text_ = std::move(tip);
-            }
-        }
         if (panel_->wantsKeyboard())
             guiFocusState().want_capture_keyboard = true;
 
@@ -255,26 +356,28 @@ namespace lfs::vis::gui {
             overlay_->showFocalEdit(focal_req.keyframe_index, focal_req.current_focal_mm);
 
         if (panel_->consumeSavePathRequest()) {
-            const auto path = gui::SaveJsonFileDialog("camera_path.json");
+            const auto path = gui::SaveJsonFileDialog("camera_path");
             if (!path.empty()) {
-                if (controller_.saveToJson(path.string()))
-                    LOG_INFO("Camera path saved to {}", path.string());
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                if (controller_.saveToJson(path_utf8))
+                    LOG_INFO("Camera path saved to {}", path_utf8);
                 else
-                    LOG_ERROR("Failed to save camera path to {}", path.string());
+                    LOG_ERROR("Failed to save camera path to {}", path_utf8);
             }
         }
 
         if (panel_->consumeLoadPathRequest()) {
             const auto path = gui::OpenJsonFileDialog();
             if (!path.empty()) {
-                if (controller_.loadFromJson(path.string())) {
-                    LOG_INFO("Camera path loaded from {}", path.string());
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                if (controller_.loadFromJson(path_utf8)) {
+                    LOG_INFO("Camera path loaded from {}", path_utf8);
                     lfs::core::events::state::KeyframeListChanged{
                         .count = controller_.timeline().realKeyframeCount()}
                         .emit();
                     pip_needs_update_ = true;
                 } else {
-                    LOG_ERROR("Failed to load camera path from {}", path.string());
+                    LOG_ERROR("Failed to load camera path from {}", path_utf8);
                 }
             }
         }
@@ -636,18 +739,18 @@ namespace lfs::vis::gui {
 
         line_renderer_.end();
 
-        if (mouse_in_viewport && !ImGui::IsAnyItemHovered()) {
-            if (hovered_keyframe.has_value() && input.mouse_clicked[0] && !ImGuizmo::IsOver()) {
-                const auto now = std::chrono::steady_clock::now();
-                if (last_frustum_clicked_ == *hovered_keyframe &&
-                    last_frustum_click_time_ != std::chrono::steady_clock::time_point{} &&
-                    (now - last_frustum_click_time_) < FRUSTUM_DOUBLE_CLICK_WINDOW) {
-                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *hovered_keyframe}.emit();
-                    last_frustum_clicked_ = std::nullopt;
-                } else {
-                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *hovered_keyframe}.emit();
-                    last_frustum_click_time_ = now;
-                    last_frustum_clicked_ = *hovered_keyframe;
+        if (mouse_in_viewport && !ImGui::IsAnyItemHovered() &&
+            !overlay_->wantsInput() && hovered_keyframe.has_value() && !ImGuizmo::IsOver()) {
+            const auto* const hovered = timeline.getKeyframe(*hovered_keyframe);
+            if (hovered && !hovered->is_loop_point) {
+                if (input.mouse_clicked[0]) {
+                    beginViewportKeyframeEdit(*hovered_keyframe);
+                    guiFocusState().want_capture_mouse = true;
+                }
+                if (input.mouse_clicked[1]) {
+                    overlay_->showContextMenu(mouse_x, mouse_y, hovered_keyframe,
+                                              hovered->time, keyframe_gizmo_op_);
+                    guiFocusState().want_capture_mouse = true;
                 }
             }
         }
@@ -749,24 +852,29 @@ namespace lfs::vis::gui {
                 pip_needs_update_ = true;
             } break;
             case Action::UPDATE_KEYFRAME:
+                endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 cmd::SequencerUpdateKeyframe{}.emit();
                 break;
             case Action::GOTO_KEYFRAME:
+                endViewportKeyframeEdit();
                 cmd::SequencerGoToKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 break;
             case Action::EDIT_FOCAL_LENGTH:
+                endViewportKeyframeEdit();
                 panel_->openFocalLengthEdit(
                     action->keyframe_index,
                     controller_.timeline().keyframes()[action->keyframe_index].focal_length_mm);
                 break;
             case Action::SET_TRANSLATE:
+                endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 keyframe_gizmo_op_ = (keyframe_gizmo_op_ == ImGuizmo::TRANSLATE)
                                          ? ImGuizmo::OPERATION(0)
                                          : ImGuizmo::TRANSLATE;
                 break;
             case Action::SET_ROTATE:
+                endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 keyframe_gizmo_op_ = (keyframe_gizmo_op_ == ImGuizmo::ROTATE)
                                          ? ImGuizmo::OPERATION(0)
@@ -779,20 +887,38 @@ namespace lfs::vis::gui {
                 break;
             }
             case Action::DELETE_KEYFRAME:
+                endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 controller_.removeSelectedKeyframe();
                 state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
                 break;
-            case Action::DESELECT_KEYFRAME:
-                controller_.deselectKeyframe();
+            case Action::CLOSE_EDIT_PANEL:
+                endViewportKeyframeEdit();
                 break;
             case Action::APPLY_EDIT:
-                cmd::SequencerUpdateKeyframe{}.emit();
+                if (viewport_keyframe_edit_snapshot_.has_value()) {
+                    const auto view_state = currentViewportCameraState();
+                    if (controller_.updateKeyframeById(
+                            viewport_keyframe_edit_snapshot_->id,
+                            view_state.position,
+                            view_state.rotation,
+                            view_state.focal_length_mm)) {
+                        state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
+                        pip_needs_update_ = true;
+                    }
+                    if (const auto* const keyframe =
+                            controller_.timeline().getKeyframeById(
+                                viewport_keyframe_edit_snapshot_->id)) {
+                        viewport_keyframe_edit_snapshot_ = *keyframe;
+                    }
+                }
                 break;
             case Action::REVERT_EDIT: {
-                const auto sel = controller_.selectedKeyframe();
-                if (sel.has_value())
-                    cmd::SequencerGoToKeyframe{.keyframe_index = *sel}.emit();
+                if (viewport_keyframe_edit_snapshot_.has_value()) {
+                    restoreViewportCameraState({.position = viewport_keyframe_edit_snapshot_->position,
+                                                .rotation = viewport_keyframe_edit_snapshot_->rotation,
+                                                .focal_length_mm = viewport_keyframe_edit_snapshot_->focal_length_mm});
+                }
                 break;
             }
             }
@@ -1231,11 +1357,6 @@ namespace lfs::vis::gui {
         const bool is_playing = !controller_.isStopped();
         const auto selected = controller_.selectedKeyframe();
 
-        if (!is_playing && !selected.has_value()) {
-            pip_last_keyframe_ = std::nullopt;
-            return;
-        }
-
         const auto now = std::chrono::steady_clock::now();
         if (is_playing) {
             const float elapsed = std::chrono::duration<float>(now - pip_last_render_time_).count();
@@ -1254,6 +1375,7 @@ namespace lfs::vis::gui {
         glm::mat3 cam_rot;
         glm::vec3 cam_pos;
         float cam_focal_length_mm;
+        auto& vp = ctx.viewer->getViewport();
 
         if (is_playing) {
             const auto state = controller_.currentCameraState();
@@ -1261,23 +1383,38 @@ namespace lfs::vis::gui {
             cam_pos = state.position;
             cam_focal_length_mm = state.focal_length_mm;
         } else {
-            if (pip_last_keyframe_ == selected && !pip_needs_update_)
-                return;
+            if (selected.has_value()) {
+                if (pip_last_keyframe_ == selected && !pip_needs_update_)
+                    return;
 
-            const auto& timeline = controller_.timeline();
-            if (*selected >= timeline.size())
-                return;
+                const auto& timeline = controller_.timeline();
+                if (*selected >= timeline.size())
+                    return;
 
-            const auto* const kf = timeline.getKeyframe(*selected);
-            if (!kf)
-                return;
+                const auto* const kf = timeline.getKeyframe(*selected);
+                if (!kf)
+                    return;
 
-            cam_rot = glm::mat3_cast(kf->rotation);
-            cam_pos = kf->position;
-            cam_focal_length_mm = kf->focal_length_mm;
+                cam_rot = glm::mat3_cast(kf->rotation);
+                cam_pos = kf->position;
+                cam_focal_length_mm = kf->focal_length_mm;
+            } else {
+                if (pip_last_keyframe_.has_value()) {
+                    pip_needs_update_ = true;
+                    pip_last_keyframe_ = std::nullopt;
+                }
+                if (!pip_needs_update_)
+                    return;
+
+                cam_rot = vp.camera.R;
+                cam_pos = vp.camera.t;
+                cam_focal_length_mm = rm ? rm->getFocalLengthMm()
+                                         : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
+            }
         }
 
-        if (rm->renderPreviewFrame(sm, cam_rot, cam_pos, cam_focal_length_mm, pip_fbo_, pip_texture_, PREVIEW_WIDTH, PREVIEW_HEIGHT)) {
+        if (rm->renderPreviewFrame(sm, cam_rot, cam_pos, cam_focal_length_mm,
+                                   pip_fbo_, pip_texture_, PREVIEW_WIDTH, PREVIEW_HEIGHT)) {
             pip_last_render_time_ = now;
             if (!is_playing) {
                 pip_last_keyframe_ = selected;
@@ -1293,12 +1430,10 @@ namespace lfs::vis::gui {
         const bool is_playing = !controller_.isStopped();
         const auto selected = controller_.selectedKeyframe();
 
-        if (!is_playing && !selected.has_value())
-            return;
         if (!pip_initialized_ || pip_texture_ == 0)
             return;
 
-        if (!is_playing) {
+        if (!is_playing && selected.has_value()) {
             const auto& timeline = controller_.timeline();
             if (*selected >= timeline.size())
                 return;
@@ -1338,13 +1473,14 @@ namespace lfs::vis::gui {
         dl->AddRect(pos, p1, border_color, t.sizes.window_rounding, 0, 2.0f);
 
         const float playhead = controller_.playhead();
-        const size_t kf_num = *selected + 1;
-        const std::string title =
-            is_playing
-                ? std::vformat(LOC(lichtfeld::Strings::Sequencer::PLAYBACK_TIME),
-                               std::make_format_args(playhead))
-                : std::vformat(LOC(lichtfeld::Strings::Sequencer::KEYFRAME_PREVIEW),
-                               std::make_format_args(kf_num));
+        const std::string title = (is_playing || !selected.has_value())
+                                      ? std::vformat(LOC(lichtfeld::Strings::Sequencer::PLAYBACK_TIME),
+                                                     std::make_format_args(playhead))
+                                      : [&selected]() {
+                                            const size_t kf_num = *selected + 1;
+                                            return std::vformat(LOC(lichtfeld::Strings::Sequencer::KEYFRAME_PREVIEW),
+                                                                std::make_format_args(kf_num));
+                                        }();
         dl->AddText({pos.x + PADDING, pos.y + PADDING}, text_color, title.c_str());
 
         const ImVec2 img_pos(pos.x + PADDING, pos.y + PADDING + TITLE_HEIGHT);
@@ -1354,38 +1490,40 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::renderKeyframeEditOverlay(const ViewportLayout& viewport) {
-        const auto selected = controller_.selectedKeyframe();
-        if (!selected.has_value()) {
+        if (!viewport_keyframe_edit_snapshot_.has_value()) {
             overlay_->hideEditOverlay();
             return;
         }
 
         const auto& timeline = controller_.timeline();
-        if (*selected >= timeline.size()) {
+        const auto selected = controller_.selectedKeyframe();
+        if (!selected.has_value() || !controller_.selectedKeyframeId().has_value() ||
+            *controller_.selectedKeyframeId() != viewport_keyframe_edit_snapshot_->id) {
+            endViewportKeyframeEdit();
             overlay_->hideEditOverlay();
             return;
         }
 
-        const auto* kf = timeline.getKeyframe(*selected);
-        if (!kf || kf->is_loop_point) {
+        const auto keyframe_index = timeline.findKeyframeIndex(viewport_keyframe_edit_snapshot_->id);
+        if (!keyframe_index.has_value()) {
+            endViewportKeyframeEdit();
             overlay_->hideEditOverlay();
             return;
         }
 
-        const auto& cam = viewer_->getViewport().camera;
-        const float pos_delta = glm::length(cam.t - kf->position);
-        const glm::quat cam_rot = glm::quat_cast(cam.R);
-        const float dot = std::clamp(std::abs(glm::dot(cam_rot, kf->rotation)), 0.0f, 1.0f);
+        const auto* const keyframe = timeline.getKeyframe(*keyframe_index);
+        if (!keyframe || keyframe->is_loop_point) {
+            endViewportKeyframeEdit();
+            overlay_->hideEditOverlay();
+            return;
+        }
+
+        const auto cam = currentViewportCameraState();
+        const float pos_delta = glm::length(cam.position - viewport_keyframe_edit_snapshot_->position);
+        const float dot = std::clamp(std::abs(glm::dot(cam.rotation, viewport_keyframe_edit_snapshot_->rotation)), 0.0f, 1.0f);
         const float rot_delta = glm::degrees(2.0f * std::acos(dot));
 
-        constexpr float POS_THRESHOLD = 0.001f;
-        constexpr float ROT_THRESHOLD = 0.1f;
-        if (pos_delta < POS_THRESHOLD && rot_delta < ROT_THRESHOLD) {
-            overlay_->hideEditOverlay();
-            return;
-        }
-
-        overlay_->updateEditOverlay(*selected, pos_delta, rot_delta,
+        overlay_->updateEditOverlay(*keyframe_index, pos_delta, rot_delta,
                                     viewport.pos.x + viewport.size.x, viewport.pos.y);
     }
 

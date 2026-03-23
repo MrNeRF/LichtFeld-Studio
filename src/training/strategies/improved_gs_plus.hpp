@@ -101,6 +101,26 @@ namespace lfs::training {
             const lfs::core::Tensor& opacities,
             int64_t count);
 
+        struct PendingFailureSnapshot {
+            bool valid = false;
+            int iter = -1;
+            int64_t size_before = 0;
+            int64_t active_before = 0;
+            int64_t free_before = 0;
+            int64_t budget = 0;
+            int64_t budget_for_alloc = 0;
+            int64_t candidate_budget = 0;
+            int64_t selectable = 0;
+            int64_t selected = 0;
+            int64_t num_filled = 0;
+            int64_t num_appended = 0;
+            int64_t active_after = 0;
+            int64_t free_after = 0;
+            float sampled_scale_p95 = 0.0f;
+            float sampled_scale_max = 0.0f;
+            float sampled_scale_exp_max = 0.0f;
+        };
+
         // Auxiliary variables
         int64_t _initial_points;
         int _current_step;
@@ -125,5 +145,6 @@ namespace lfs::training {
 
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse
         lfs::core::Tensor _free_mask;
+        PendingFailureSnapshot _pending_failure_snapshot;
     };
 } // namespace lfs::training

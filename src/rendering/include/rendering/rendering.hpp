@@ -25,6 +25,10 @@ namespace lfs::core {
     class Tensor;
 } // namespace lfs::core
 
+namespace lfs::io {
+    class PipelinedImageLoader;
+}
+
 namespace lfs::rendering {
 
     // Import Tensor into this namespace for convenience
@@ -495,6 +499,7 @@ namespace lfs::rendering {
             const CameraFrustumPickRequest& request) = 0;
 
         virtual void clearFrustumCache() = 0;
+        virtual void setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) = 0;
     };
 
 } // namespace lfs::rendering

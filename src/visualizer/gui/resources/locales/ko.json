@@ -16,6 +16,9 @@
     "edit": "편집",
     "edit.input_settings": "입력 설정...",
     "edit.preferences": "환경설정...",
+    "tools": "도구",
+    "tools.python_console": "Python 콘솔",
+    "tools.plugin_marketplace": "플러그인 마켓플레이스",
     "view": "보기",
     "view.theme": "테마",
     "view.theme.dark": "다크",
@@ -29,9 +32,7 @@
     "view.debug_info": "디버그 정보...",
     "help": "도움말",
     "help.getting_started": "시작하기",
-    "help.about": "LichtFeld Studio 정보",
-    "view.python_console": "Python 콘솔",
-    "view.plugin_marketplace": "플러그인 마켓플레이스"
+    "help.about": "LichtFeld Studio 정보"
   },
   "window": {
     "getting_started": "시작하기",
@@ -130,10 +131,10 @@
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-    "masking.invert_masks": "Invert Masks:",
-    "masking.threshold": "Threshold:",
-    "masking.penalty_weight": "Penalty Weight:",
-    "masking.penalty_power": "Penalty Power:",
+    "masking.invert_masks": "반전:",
+    "masking.threshold": "임계값:",
+    "masking.penalty_weight": "가중치:",
+    "masking.penalty_power": "지수:",
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
@@ -198,7 +199,7 @@
     "tooltip.ppisp_lr": "PPISP 파라미터 학습률",
     "tooltip.ppisp_reg": "PPISP 파라미터 정규화 가중치",
     "tooltip.ppisp_warmup": "PPISP 학습 시작 전 단계",
-    "tooltip.ppisp_activation_step": "컨트롤러 학습 시작 반복 (-1 = 자동: 반복 - 5000)",
+    "tooltip.ppisp_activation_step": "컨트롤러 학습 시작 반복. 음수 값: 반복 - round(5000 * max(steps_scaler, 1)).",
     "tooltip.ppisp_controller_lr": "컨트롤러 네트워크 학습률",
     "tooltip.ppisp_freeze_gaussians": "컨트롤러 학습 중 가우시안 파라미터 고정",
     "tooltip.strategy_gut_conflict": "GUT가 활성화된 경우 ADC 및 igs+ 전략을 사용할 수 없습니다",
@@ -625,7 +626,8 @@
     "masks_dir": "마스크: ",
     "output_dir": "출력:   ",
     "init_file": "Init file (선택 사항, points3D 대체):",
-    "help_text": "체크포인트, 로그 및 내보낸 모델이 출력 디렉터리에 저장됩니다."
+    "help_text": "체크포인트, 로그 및 내보낸 모델이 출력 디렉터리에 저장됩니다.",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "열 수 없음",
@@ -713,11 +715,11 @@
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",
-    "invert_masks": "  Invert Masks:",
+    "invert_masks": "반전:",
     "opacity_penalty_weight": "  Opacity Penalty Weight:",
     "opacity_penalty_power": "  Opacity Penalty Power:",
     "mask_threshold": "  Mask Threshold:",
-    "use_alpha_as_mask": "Use Alpha as Mask:",
+    "use_alpha_as_mask": "알파 마스크:",
     "sparsity": "Sparsity:",
     "gut": "GUT:",
     "undistort": "Undistort:",
@@ -756,7 +758,9 @@
     "ppisp_activation_step": "활성화 단계:",
     "ppisp_controller_lr": "컨트롤러 LR:",
     "ppisp_freeze_gaussians": "가우시안 고정:",
-    "disabled": "비활성화됨"
+    "disabled": "비활성화됨",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "이미지 미리보기",

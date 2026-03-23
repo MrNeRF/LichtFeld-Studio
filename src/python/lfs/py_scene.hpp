@@ -227,7 +227,7 @@ namespace lfs::python {
         nb::tuple world_transform() const;
 
         // Metadata (read-only)
-        size_t gaussian_count() const { return node_->gaussian_count; }
+        size_t gaussian_count() const { return node_->gaussian_count.load(std::memory_order_acquire); }
         std::tuple<float, float, float> centroid() const {
             return {node_->centroid.x, node_->centroid.y, node_->centroid.z};
         }

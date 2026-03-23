@@ -9,6 +9,16 @@
 
 namespace lfs::rendering {
 
+    namespace {
+        [[nodiscard]] int resolve_render_sh_degree(
+            const lfs::core::SplatData& gaussian_model,
+            const int requested_sh_degree) {
+            const int fallback_sh_degree = gaussian_model.get_active_sh_degree();
+            const int target_sh_degree = requested_sh_degree >= 0 ? requested_sh_degree : fallback_sh_degree;
+            return std::clamp(target_sh_degree, 0, gaussian_model.get_max_sh_degree());
+        }
+    } // namespace
+
     std::tuple<Tensor, Tensor> rasterize_tensor(
         const lfs::core::Camera& viewpoint_camera,
         const lfs::core::SplatData& gaussian_model,
@@ -61,9 +71,7 @@ namespace lfs::rendering {
         const float cx = viewpoint_camera.center_x();
         const float cy = viewpoint_camera.center_y();
 
-        const int sh_degree = sh_degree_override >= 0
-                                  ? std::min(sh_degree_override, gaussian_model.get_max_sh_degree())
-                                  : gaussian_model.get_active_sh_degree();
+        const int sh_degree = resolve_render_sh_degree(gaussian_model, sh_degree_override);
         const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
 
         constexpr float NEAR_PLANE = 0.01f;
@@ -195,9 +203,7 @@ namespace lfs::rendering {
 
         const int width = camera.camera_width();
         const int height = camera.camera_height();
-        const int sh_degree = sh_degree_override >= 0
-                                  ? std::min(sh_degree_override, model.get_max_sh_degree())
-                                  : model.get_active_sh_degree();
+        const int sh_degree = resolve_render_sh_degree(model, sh_degree_override);
 
         const auto& w2c = camera.world_view_transform();
 

@@ -87,6 +87,7 @@ def test_rendering_panel_section_headers_use_literals_without_missing_keys(rende
 
     assert model.func_bindings["label_hdr_viewport"]() == "Viewport"
     assert model.func_bindings["label_hdr_camera"]() == "Camera & Projection"
+    assert model.func_bindings["label_hdr_simplify"]() == "Splat Simplify"
     assert model.func_bindings["label_hdr_selection"]() == "Selection & Overlays"
     assert model.func_bindings["label_hdr_post_process"]() == "Post Processing"
     assert "rendering_panel.section_viewport" not in requested_keys

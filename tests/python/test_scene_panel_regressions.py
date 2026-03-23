@@ -87,6 +87,53 @@ class _ContainerStub:
         self.client_height = height
         self.offset_height = height
         self.scroll_top = 0.0
+        self.focus_calls = 0
+
+    def focus(self):
+        self.focus_calls += 1
+        return True
+
+
+class _ElementStub:
+    def __init__(self, *, tag="div", parent=None, classes=None, attributes=None):
+        self._tag = tag
+        self._parent = parent
+        self._classes = set(classes or [])
+        self._attributes = dict(attributes or {})
+
+    def parent(self):
+        return self._parent
+
+    def tag_name(self):
+        return self._tag
+
+    def is_class_set(self, name):
+        return name in self._classes
+
+    def has_attribute(self, name):
+        return name in self._attributes
+
+    def get_attribute(self, name, default=""):
+        return self._attributes.get(name, default)
+
+
+class _EventStub:
+    def __init__(self, *, target=None, params=None):
+        self._target = target
+        self._params = dict(params or {})
+        self.stopped = False
+
+    def target(self):
+        return self._target
+
+    def current_target(self):
+        return self._target
+
+    def get_parameter(self, key, default=""):
+        return self._params.get(key, default)
+
+    def stop_propagation(self):
+        self.stopped = True
 
 
 class _DocStub:
@@ -453,3 +500,156 @@ def test_scene_panel_scene_change_refreshes_cleared_history(scene_panel_module, 
     assert panel._history_summary_text == "No history yet"
     assert panel._handle.records["history_undo_items"] == []
     assert panel._handle.records["history_redo_items"] == []
+
+
+def test_scene_panel_tree_click_focuses_container(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel.container = _ContainerStub()
+
+    clicked = []
+    monkeypatch.setattr(panel, "_handle_click", lambda name: clicked.append(name))
+
+    row = _ElementStub(
+        parent=panel.container,
+        classes={"tree-row"},
+        attributes={"data-node": "NodeB"},
+    )
+    target = _ElementStub(tag="span", parent=row)
+    event = _EventStub(target=target)
+
+    panel._on_tree_click(event)
+
+    assert panel.container.focus_calls == 1
+    assert clicked == ["NodeB"]
+    assert event.stopped is True
+
+
+def test_scene_panel_arrow_down_moves_selection(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel.container = _ContainerStub()
+    panel._committed_node_order = ["NodeA", "NodeB", "NodeC"]
+    panel._selected_nodes = {"NodeA"}
+    panel._prev_selected = {"NodeA"}
+    panel._click_anchor = "NodeA"
+
+    calls = []
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            select_node=lambda name: calls.append(name),
+            select_nodes=lambda names: None,
+            ui=SimpleNamespace(is_ctrl_down=lambda: False, is_shift_down=lambda: False),
+        ),
+    )
+    monkeypatch.setattr(panel, "_render_tree_window", lambda force=True: True)
+
+    event = _EventStub(target=panel.container, params={"key_identifier": str(scene_panel_module.KI_DOWN)})
+
+    panel._on_tree_keydown(event)
+
+    assert calls == ["NodeB"]
+    assert panel._selected_nodes == {"NodeB"}
+    assert panel._prev_selected == {"NodeB"}
+    assert panel._click_anchor == "NodeB"
+    assert panel._scroll_to_node == "NodeB"
+    assert event.stopped is True
+
+
+def test_scene_panel_shift_arrow_extends_selection(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel.container = _ContainerStub()
+    panel._committed_node_order = ["NodeA", "NodeB", "NodeC"]
+    panel._selected_nodes = {"NodeA"}
+    panel._prev_selected = {"NodeA"}
+    panel._click_anchor = "NodeA"
+
+    calls = []
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            select_node=lambda name: None,
+            select_nodes=lambda names: calls.append(list(names)),
+            ui=SimpleNamespace(is_ctrl_down=lambda: False, is_shift_down=lambda: True),
+        ),
+    )
+    monkeypatch.setattr(panel, "_render_tree_window", lambda force=True: True)
+
+    event = _EventStub(target=panel.container, params={"key_identifier": str(scene_panel_module.KI_DOWN)})
+
+    panel._on_tree_keydown(event)
+
+    assert calls == [["NodeA", "NodeB"]]
+    assert panel._selected_nodes == {"NodeA", "NodeB"}
+    assert panel._prev_selected == {"NodeA", "NodeB"}
+    assert panel._click_anchor == "NodeA"
+    assert panel._scroll_to_node == "NodeB"
+    assert event.stopped is True
+
+
+def test_scene_panel_arrow_navigation_ignores_text_inputs(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel.container = _ContainerStub()
+    panel._committed_node_order = ["NodeA", "NodeB", "NodeC"]
+    panel._selected_nodes = {"NodeA"}
+    panel._prev_selected = {"NodeA"}
+    panel._click_anchor = "NodeA"
+
+    calls = []
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            select_node=lambda name: calls.append(name),
+            select_nodes=lambda names: None,
+            ui=SimpleNamespace(is_ctrl_down=lambda: False, is_shift_down=lambda: False),
+        ),
+    )
+
+    event = _EventStub(target=_ElementStub(tag="input", parent=panel.container),
+                       params={"key_identifier": str(scene_panel_module.KI_DOWN)})
+
+    panel._on_tree_keydown(event)
+
+    assert calls == []
+    assert panel._selected_nodes == {"NodeA"}
+    assert event.stopped is False
+
+
+def test_scene_panel_enter_activates_selected_camera(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel.container = _ContainerStub()
+    panel._committed_node_order = ["CameraA"]
+    panel._selected_nodes = {"CameraA"}
+    panel._prev_selected = {"CameraA"}
+    panel._click_anchor = "CameraA"
+
+    opened = []
+    monkeypatch.setitem(
+        sys.modules,
+        "lfs_plugins.image_preview_panel",
+        SimpleNamespace(open_camera_preview_by_uid=lambda uid: opened.append(uid)),
+    )
+
+    camera = SimpleNamespace(type="CAMERA", camera_uid=42)
+    scene = SimpleNamespace(get_node=lambda name: camera if name == "CameraA" else None)
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            get_scene=lambda: scene,
+            ui=SimpleNamespace(
+                is_ctrl_down=lambda: False,
+                is_shift_down=lambda: False,
+                go_to_keyframe=lambda index: None,
+            ),
+        ),
+    )
+
+    event = _EventStub(target=panel.container, params={"key_identifier": str(scene_panel_module.KI_RETURN)})
+
+    panel._on_tree_keydown(event)
+
+    assert opened == [42]
+    assert event.stopped is True

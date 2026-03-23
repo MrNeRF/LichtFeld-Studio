@@ -50,6 +50,7 @@ namespace lfs::vis::gui {
         for (int i = 0; i < 3; ++i) {
             input.mouse_down[i] = buf.mouse_down[i];
             input.mouse_clicked[i] = buf.mouse_clicked[i];
+            input.mouse_released[i] = buf.mouse_released[i];
         }
         input.mouse_wheel = buf.mouse_wheel;
         input.key_shift = (buf.key_mods & SDL_KMOD_SHIFT) != 0;

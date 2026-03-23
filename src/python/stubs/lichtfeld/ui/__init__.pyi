@@ -405,7 +405,10 @@ class RmlUILayout:
 
     def stepper_float(self, label: str, value: float, steps: Sequence[float] = [1.0, 0.10000000149011612, 0.009999999776482582]) -> tuple[bool, float]: ...
 
-    def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]: ...
+    def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
+        """
+        Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
 
@@ -1394,7 +1397,9 @@ class UILayout:
         """
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
-        """Draw a path input with browse button, returns (changed, path)"""
+        """
+        Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]:
         """Draw an RGB color editor, returns (changed, color)"""
@@ -1846,7 +1851,9 @@ def open_image_dialog(start_dir: str = '') -> str:
     """
 
 def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str:
-    """Open a folder selection dialog. Returns empty string if cancelled."""
+    """
+    Open a folder selection dialog. Returns empty string if cancelled. title is accepted for compatibility and currently ignored.
+    """
 
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
@@ -1861,6 +1868,11 @@ def open_mesh_file_dialog(start_dir: str = '') -> str:
 def open_checkpoint_file_dialog() -> str:
     """
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.
+    """
+
+def open_ppisp_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a PPISP sidecar file. Returns empty string if cancelled.
     """
 
 def open_json_file_dialog() -> str:

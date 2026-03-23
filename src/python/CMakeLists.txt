@@ -162,6 +162,7 @@ nanobind_add_module(
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp
     lfs/py_mesh2splat.cpp
+    lfs/py_splat_simplify.cpp
     lfs/openmesh/handles.cpp
     lfs/openmesh/io.cpp
     lfs/py_rendering.cpp

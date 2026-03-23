@@ -87,6 +87,7 @@ namespace lfs::vis {
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
+            .render_lock_held = context.render_lock_held,
             .scene_manager = context.scene_manager,
             .model = context.model,
             .scene_state = std::move(scene_state),

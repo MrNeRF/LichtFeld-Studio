@@ -120,14 +120,35 @@
           <option value="3">{{label_mask_alpha_consistent}}</option>
         </select>
       </div>
-      <div data-if="dep_mask_mode">
+      <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-tooltip="training.tooltip.invert_masks">
           <span class="prop-label">{{label_invert_masks}}</span>
           <input type="checkbox" data-checked="invert_masks" />
         </div>
+        <div class="setting-row" data-tooltip="training.tooltip.mask_threshold">
+          <span class="prop-label">{{label_mask_threshold}}</span>
+          <input type="text" class="number-input" data-value="mask_threshold_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', 1)">+</button>
+        </div>
         <div class="setting-row" data-tooltip="training.tooltip.use_alpha_as_mask">
           <span class="prop-label">{{label_use_alpha_as_mask}}</span>
           <input type="checkbox" data-checked="use_alpha_as_mask" />
+        </div>
+        <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
+        <div data-if="dep_mask_segment">
+          <div class="setting-row" data-tooltip="training.tooltip.penalty_weight">
+            <span class="prop-label">{{label_opacity_penalty_weight}}</span>
+            <input type="text" class="number-input" data-value="mask_opacity_penalty_weight_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_weight', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_weight', 1)">+</button>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.penalty_power">
+            <span class="prop-label">{{label_opacity_penalty_power}}</span>
+            <input type="text" class="number-input" data-value="mask_opacity_penalty_power_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_power', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_power', 1)">+</button>
+          </div>
         </div>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.sparsity">
@@ -151,22 +172,31 @@
         <input type="checkbox" data-checked="ppisp" />
       </div>
       <div data-if="dep_ppisp">
+        <div class="setting-row">
+          <span class="prop-label">{{label_ppisp_freeze_from_sidecar}}</span>
+          <input type="checkbox" data-checked="ppisp_freeze_from_sidecar" />
+        </div>
+        <div data-if="dep_ppisp_frozen_sidecar">
+          <div class="setting-row">
+            <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
+            <input type="text" data-value="ppisp_sidecar_path" />
+            <button class="btn btn--secondary" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">&#160;</span>
+            <button class="btn btn--secondary" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
+          </div>
+        </div>
         <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller">
           <span class="prop-label">{{label_ppisp_controller}}</span>
           <input type="checkbox" data-checked="ppisp_use_controller" />
         </div>
         <div data-if="dep_ppisp_controller">
-          <div class="setting-row">
-            <span class="prop-label">{{label_ppisp_auto}}</span>
-            <input type="checkbox" data-checked="ppisp_auto_step" />
-          </div>
-          <div data-if="dep_ppisp_manual_step">
-            <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step">
-              <span class="prop-label">{{label_ppisp_activation_step}}</span>
-              <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
-              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
-            </div>
+          <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step">
+            <span class="prop-label">{{label_ppisp_activation_step}}</span>
+            <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
           </div>
           <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller_lr">
             <span class="prop-label">{{label_ppisp_controller_lr}}</span>

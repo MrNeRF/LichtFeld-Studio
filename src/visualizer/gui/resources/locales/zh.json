@@ -16,6 +16,9 @@
     "edit": "编辑",
     "edit.input_settings": "输入设置...",
     "edit.preferences": "偏好设置...",
+    "tools": "工具",
+    "tools.python_console": "Python 控制台",
+    "tools.plugin_marketplace": "插件市场",
     "view": "视图",
     "view.theme": "主题",
     "view.theme.dark": "深色",
@@ -29,9 +32,7 @@
     "view.debug_info": "调试信息...",
     "help": "帮助",
     "help.getting_started": "入门指南",
-    "help.about": "关于LichtFeld Studio",
-    "view.python_console": "Python 控制台",
-    "view.plugin_marketplace": "插件市场"
+    "help.about": "关于LichtFeld Studio"
   },
   "window": {
     "getting_started": "入门指南",
@@ -130,10 +131,10 @@
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-    "masking.invert_masks": "Invert Masks:",
-    "masking.threshold": "Threshold:",
-    "masking.penalty_weight": "Penalty Weight:",
-    "masking.penalty_power": "Penalty Power:",
+    "masking.invert_masks": "反转:",
+    "masking.threshold": "阈值:",
+    "masking.penalty_weight": "惩罚权重:",
+    "masking.penalty_power": "惩罚指数:",
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
@@ -198,7 +199,7 @@
     "tooltip.ppisp_lr": "PPISP参数学习率",
     "tooltip.ppisp_reg": "PPISP参数正则化权重",
     "tooltip.ppisp_warmup": "PPISP训练开始前的步数",
-    "tooltip.ppisp_activation_step": "控制器训练开始的迭代次数（-1 = 自动：迭代次数 - 5000）",
+    "tooltip.ppisp_activation_step": "控制器训练开始的迭代次数。负值默认：迭代次数 - round(5000 * max(steps_scaler, 1))。",
     "tooltip.ppisp_controller_lr": "控制器网络学习率",
     "tooltip.ppisp_freeze_gaussians": "在控制器训练期间冻结高斯参数",
     "tooltip.strategy_gut_conflict": "启用GUT时无法使用ADC和igs+策略",
@@ -625,7 +626,8 @@
     "masks_dir": "掩码：  ",
     "output_dir": "输出：  ",
     "init_file": "Init file（可选，替换 points3D）：",
-    "help_text": "检查点、日志和导出的模型将保存到输出目录。"
+    "help_text": "检查点、日志和导出的模型将保存到输出目录。",
+    "ppisp_sidecar": "PPISP Sidecar:"
   },
   "notification": {
     "cannot_open": "无法打开",
@@ -713,11 +715,11 @@
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",
-    "invert_masks": "  Invert Masks:",
+    "invert_masks": "反转:",
     "opacity_penalty_weight": "  Opacity Penalty Weight:",
     "opacity_penalty_power": "  Opacity Penalty Power:",
     "mask_threshold": "  Mask Threshold:",
-    "use_alpha_as_mask": "Use Alpha as Mask:",
+    "use_alpha_as_mask": "Alpha遮罩:",
     "sparsity": "Sparsity:",
     "gut": "GUT:",
     "undistort": "Undistort:",
@@ -756,7 +758,9 @@
     "ppisp_activation_step": "激活步骤:",
     "ppisp_controller_lr": "控制器学习率:",
     "ppisp_freeze_gaussians": "冻结高斯:",
-    "disabled": "已禁用"
+    "disabled": "已禁用",
+    "ppisp_freeze_from_sidecar": "Frozen Sidecar:",
+    "ppisp_sidecar_path": "Sidecar Path:"
   },
   "image_preview": {
     "title": "图像预览",

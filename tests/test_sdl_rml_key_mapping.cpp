@@ -4,6 +4,8 @@
 
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "input/frame_input_buffer.hpp"
+#include "input/key_codes.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include <gtest/gtest.h>
 
 namespace {
@@ -15,6 +17,24 @@ namespace {
     TEST(SdlRmlKeyMappingTest, EqualsKeyMapsToOemPlus) {
         EXPECT_EQ(lfs::vis::gui::sdlKeycodeToRml(SDLK_EQUALS), Rml::Input::KI_OEM_PLUS);
         EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(SDL_SCANCODE_EQUALS), Rml::Input::KI_OEM_PLUS);
+    }
+
+    TEST(SdlKeyMappingTest, NumpadScancodesMapToAppKeys) {
+        EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_0), lfs::vis::input::KEY_KP_0);
+        EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_1), lfs::vis::input::KEY_KP_1);
+        EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_9), lfs::vis::input::KEY_KP_9);
+        EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_PLUS), lfs::vis::input::KEY_KP_ADD);
+        EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_MINUS), lfs::vis::input::KEY_KP_SUBTRACT);
+        EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_ENTER), lfs::vis::input::KEY_KP_ENTER);
+    }
+
+    TEST(SdlKeyMappingTest, AppNumpadKeysMapBackToScancodes) {
+        EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_0), SDL_SCANCODE_KP_0);
+        EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_1), SDL_SCANCODE_KP_1);
+        EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_9), SDL_SCANCODE_KP_9);
+        EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_ADD), SDL_SCANCODE_KP_PLUS);
+        EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_SUBTRACT), SDL_SCANCODE_KP_MINUS);
+        EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_ENTER), SDL_SCANCODE_KP_ENTER);
     }
 
     TEST(SdlRmlKeyMappingTest, ModifierTranslationPreservesMeta) {

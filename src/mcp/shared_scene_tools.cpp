@@ -107,11 +107,11 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "scene.save_checkpoint",
-                .description = "Save current training state. The path is a base directory; checkpoints are saved as checkpoints/checkpoint_N.resume inside it. Omit path to use the current output path.",
+                .description = "Save current training state. The path is a base directory; checkpoints are saved as checkpoints/checkpoint.resume inside it. Omit path to use the current output path.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Base output directory; checkpoint files are written to <path>/checkpoints/checkpoint_<iter>.resume"}}}},
+                        {"path", json{{"type", "string"}, {"description", "Base output directory; checkpoint files are written to <path>/checkpoints/checkpoint.resume"}}}},
                     .required = {}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {

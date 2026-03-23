@@ -144,9 +144,93 @@ body {
     background-color: rgba(160, 160, 180, 60);
 }
 
-#quality-slider {
+/* ── Quality Scrub Field ───────────────────────────────── */
+
+#quality-scrub {
+    position: relative;
+    overflow: hidden;
     width: 60dp;
-    height: 4dp;
+    min-width: 50dp;
+    min-height: 18dp;
+    padding: 0 6dp;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    decorator: vertical-gradient(#3a3c52 #2c2d3e);
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    border-radius: 6dp;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    cursor: ew-resize;
+    transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
+}
+
+#quality-scrub:hover,
+#quality-scrub.is-dragging,
+#quality-scrub.is-editing {
+    border-color: #89b4fa;
+}
+
+#quality-scrub.is-editing {
+    cursor: text;
+}
+
+#quality-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 0%;
+    decorator: horizontal-gradient(rgba(116,168,249,110) rgba(137,180,250,140));
+    background-color: rgba(137, 180, 250, 90);
+    border-radius: 5dp;
+}
+
+#quality-display,
+#quality-input {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    text-align: right;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    color: #cdd6f4;
+}
+
+#quality-display {
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+#quality-input {
+    display: none;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    background-color: transparent;
+    border-width: 0;
+    box-shadow: none;
+}
+
+#quality-scrub.is-editing #quality-display {
+    display: none;
+}
+
+#quality-scrub.is-editing #quality-input {
+    display: block;
+}
+
+#quality-input:focus,
+#quality-input:focus-visible {
+    border-width: 0;
+    box-shadow: none;
+}
+
+#btn-equirect {
+    min-width: 46dp;
 }
 
 /* --- Transport overrides --- */

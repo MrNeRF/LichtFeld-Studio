@@ -254,7 +254,7 @@ namespace lfs::python {
 
         const int64_t n = pc_->size();
         if (node_) {
-            node_->gaussian_count = n;
+            node_->gaussian_count.store(static_cast<size_t>(n), std::memory_order_release);
             if (n > 0) {
                 auto centroid = pc_->means.mean(0).cpu();
                 auto acc = centroid.accessor<float, 1>();

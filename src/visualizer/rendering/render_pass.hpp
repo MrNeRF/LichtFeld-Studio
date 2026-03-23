@@ -46,6 +46,7 @@ namespace lfs::vis {
     struct FrameContext {
         const Viewport& viewport;
         const ViewportRegion* viewport_region = nullptr;
+        bool render_lock_held = false;
 
         SceneManager* scene_manager = nullptr;
         const lfs::core::SplatData* model = nullptr;

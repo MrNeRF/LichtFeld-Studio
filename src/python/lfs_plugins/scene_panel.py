@@ -7,12 +7,16 @@ import math
 import lichtfeld as lf
 
 from .types import Panel
-from .rml_keys import KI_DELETE, KI_ESCAPE, KI_F2, KI_RETURN
+from .rml_keys import KI_DELETE, KI_DOWN, KI_ESCAPE, KI_F2, KI_RETURN, KI_UP
 from .ui.state import AppState
 
 TREE_ROW_HEIGHT_DP = 20
 TREE_HEADER_HEIGHT_DP = 24
 TREE_OVERSCAN_ROWS = 10
+TREE_SCROLL_STEP_ROWS = 5
+TREE_SCROLL_FAST_STEP_ROWS = 16
+TREE_SCROLL_PAGE_FRACTION = 0.9
+AUTO_COLLAPSE_CAMERA_GROUP_THRESHOLD = 25
 SCENE_MODEL_NAME = "scene_panel"
 SCENE_TAB_SCENE = "scene"
 SCENE_TAB_HISTORY = "history"
@@ -245,7 +249,9 @@ class ScenePanel(Panel):
         if self.container:
             self.container.add_event_listener("click", self._on_tree_click)
             self.container.add_event_listener("dblclick", self._on_tree_dblclick)
+            self.container.add_event_listener("keydown", self._on_tree_keydown)
             self.container.add_event_listener("mousedown", self._on_tree_mousedown)
+            self.container.add_event_listener("mousescroll", self._on_tree_scroll)
             self.container.add_event_listener("dragstart", self._on_tree_dragstart)
             self.container.add_event_listener("dragover", self._on_tree_dragover)
             self.container.add_event_listener("dragout", self._on_tree_dragout)
@@ -304,9 +310,8 @@ class ScenePanel(Panel):
         current = set(lf.get_selected_node_names())
         if current != self._prev_selected:
             self._prev_selected = current
+            # Mirror external selection changes without stealing the tree scroll position.
             self._selected_nodes = current
-            if current and self._restore_scroll_top is None:
-                self._scroll_to_node = next(iter(current))
             dirty |= self._render_tree_window(force=True)
 
         if self.container:
@@ -563,6 +568,7 @@ class ScenePanel(Panel):
         target = event.target()
         if target is None:
             return
+        self._focus_tree_container(target)
 
         if target.has_attribute("data-action"):
             event.stop_propagation()
@@ -603,22 +609,7 @@ class ScenePanel(Panel):
             return
         event.stop_propagation()
         node_name = row.get_attribute("data-node", "")
-        node_type = row.get_attribute("data-type", "")
-        if not node_name:
-            return
-        scene = lf.get_scene()
-        if not scene:
-            return
-        node = scene.get_node(node_name)
-        if not node:
-            return
-        if node_type == "CAMERA":
-            from .image_preview_panel import open_camera_preview_by_uid
-            open_camera_preview_by_uid(node.camera_uid)
-        elif node_type == "KEYFRAME":
-            kf = node.keyframe_data()
-            if kf:
-                lf.ui.go_to_keyframe(kf.keyframe_index)
+        self._activate_node(node_name)
 
     def _on_tree_mousedown(self, event):
         button = int(event.get_parameter("button", "0"))
@@ -627,6 +618,7 @@ class ScenePanel(Panel):
         target = event.target()
         if target is None:
             return
+        self._focus_tree_container(target)
         row = self._find_row_from_target(target)
         if not row:
             return
@@ -644,6 +636,28 @@ class ScenePanel(Panel):
             self._prev_selected = set(self._selected_nodes)
             self._render_tree_window(force=True)
         self._show_context_menu(node_name, mouse_x, mouse_y)
+
+    def _on_tree_keydown(self, event):
+        if self._active_tab != SCENE_TAB_SCENE or self._models_collapsed:
+            return
+        if lf.ui.is_ctrl_down():
+            return
+
+        target = event.target()
+        if self._is_text_input_target(target):
+            return
+
+        key = int(event.get_parameter("key_identifier", "0"))
+        if key == KI_UP:
+            if self._move_selection(-1, extend=lf.ui.is_shift_down()):
+                event.stop_propagation()
+        elif key == KI_DOWN:
+            if self._move_selection(1, extend=lf.ui.is_shift_down()):
+                event.stop_propagation()
+        elif key == KI_RETURN:
+            current = self._selection_cursor_name()
+            if current and self._activate_node(current):
+                event.stop_propagation()
 
     def _on_tree_dragstart(self, event):
         row = self._find_row_from_target(event.target())
@@ -728,6 +742,28 @@ class ScenePanel(Panel):
         self._last_render_key = None
         self._render_tree_window(force=True)
 
+    def _activate_node(self, node_name):
+        if not node_name:
+            return False
+        scene = lf.get_scene()
+        if not scene:
+            return False
+        node = scene.get_node(node_name)
+        if not node:
+            return False
+
+        node_type = _node_type(node)
+        if node_type == "CAMERA":
+            from .image_preview_panel import open_camera_preview_by_uid
+            open_camera_preview_by_uid(node.camera_uid)
+            return True
+        if node_type == "KEYFRAME":
+            kf = node.keyframe_data()
+            if kf:
+                lf.ui.go_to_keyframe(kf.keyframe_index)
+                return True
+        return False
+
     def _on_keydown(self, event):
         if self._active_tab != SCENE_TAB_SCENE:
             return
@@ -784,6 +820,53 @@ class ScenePanel(Panel):
 
     def _preserve_scroll_for_local_selection(self):
         self._restore_scroll_top = self.container.scroll_top if self.container else None
+
+    def _focus_tree_container(self, target=None):
+        if not self.container or self._is_text_input_target(target):
+            return False
+        try:
+            return bool(self.container.focus())
+        except (AttributeError, RuntimeError, TypeError):
+            return False
+
+    @staticmethod
+    def _is_text_input_target(target):
+        try:
+            return bool(target and target.tag_name() == "input")
+        except (AttributeError, RuntimeError, TypeError):
+            return False
+
+    def _on_tree_scroll(self, event):
+        scroll_el = event.current_target()
+        if not scroll_el:
+            return
+
+        try:
+            wheel_delta = float(event.get_parameter("wheel_delta_y", "0"))
+        except (RuntimeError, TypeError, ValueError):
+            return
+
+        max_scroll = max(0.0, scroll_el.scroll_height - scroll_el.client_height)
+        if max_scroll <= 0.0:
+            event.stop_propagation()
+            return
+
+        row_height = self._row_height_px()
+        if lf.ui.is_ctrl_down():
+            scroll_step = max(scroll_el.client_height * TREE_SCROLL_PAGE_FRACTION, row_height)
+        elif lf.ui.is_shift_down():
+            scroll_step = row_height * TREE_SCROLL_FAST_STEP_ROWS
+        else:
+            scroll_step = row_height * TREE_SCROLL_STEP_ROWS
+
+        new_scroll = min(
+            max(scroll_el.scroll_top + wheel_delta * scroll_step, 0.0),
+            max_scroll,
+        )
+        if abs(new_scroll - scroll_el.scroll_top) > 0.01:
+            scroll_el.scroll_top = new_scroll
+
+        event.stop_propagation()
 
     def _ui_scale(self):
         try:
@@ -866,6 +949,9 @@ class ScenePanel(Panel):
         for node in nodes:
             snapshots[node.id] = self._make_node_snapshot(node)
 
+        self._collapsed_ids.intersection_update(snapshots.keys())
+        previous_ids = set(self._node_snapshots)
+
         for snapshot in snapshots.values():
             parent = snapshots.get(snapshot["parent_id"])
             parent_is_dataset = bool(parent and parent["node_type"] == "DATASET")
@@ -873,6 +959,10 @@ class ScenePanel(Panel):
                 snapshot["node_type"], parent_is_dataset)
             snapshot["deletable"] = _is_deletable(
                 snapshot["node_type"], parent_is_dataset)
+            if (snapshot["id"] not in previous_ids and
+                    snapshot["node_type"] == "CAMERA_GROUP" and
+                    len(snapshot["children"]) >= AUTO_COLLAPSE_CAMERA_GROUP_THRESHOLD):
+                self._collapsed_ids.add(snapshot["id"])
 
         root_ids = [node.id for node in nodes if node.parent_id == -1]
         return snapshots, root_ids
@@ -1341,6 +1431,48 @@ class ScenePanel(Panel):
 
         self._prev_selected = set(self._selected_nodes)
         self._render_tree_window(force=True)
+
+    def _move_selection(self, delta, extend=False):
+        order = self._committed_node_order
+        if not order:
+            return False
+
+        current = self._selection_cursor_name()
+        if current is None:
+            target = order[0] if delta > 0 else order[-1]
+        else:
+            current_index = order.index(current)
+            target_index = min(max(current_index + delta, 0), len(order) - 1)
+            target = order[target_index]
+
+        self._hide_context_menu()
+        if extend:
+            anchor = self._click_anchor if self._click_anchor in order else current or target
+            names = self._get_range(anchor, target)
+            if set(names) != self._selected_nodes:
+                lf.select_nodes(names)
+                self._selected_nodes = set(names)
+                self._prev_selected = set(self._selected_nodes)
+                self._scroll_to_node = target
+                self._render_tree_window(force=True)
+            return True
+
+        if self._selected_nodes != {target}:
+            lf.select_node(target)
+            self._selected_nodes = {target}
+            self._prev_selected = set(self._selected_nodes)
+            self._scroll_to_node = target
+            self._render_tree_window(force=True)
+        self._click_anchor = target
+        return True
+
+    def _selection_cursor_name(self):
+        if self._click_anchor in self._selected_nodes and self._click_anchor in self._committed_node_order:
+            return self._click_anchor
+        for name in self._committed_node_order:
+            if name in self._selected_nodes:
+                return name
+        return None
 
     def _get_range(self, a, b):
         order = self._committed_node_order

@@ -130,4 +130,36 @@ F11: int = 300
 
 F12: int = 301
 
+KP_0: int = 320
+
+KP_1: int = 321
+
+KP_2: int = 322
+
+KP_3: int = 323
+
+KP_4: int = 324
+
+KP_5: int = 325
+
+KP_6: int = 326
+
+KP_7: int = 327
+
+KP_8: int = 328
+
+KP_9: int = 329
+
+KP_DECIMAL: int = 330
+
+KP_DIVIDE: int = 331
+
+KP_MULTIPLY: int = 332
+
+KP_SUBTRACT: int = 333
+
+KP_ADD: int = 334
+
 KP_ENTER: int = 335
+
+KP_EQUAL: int = 336
