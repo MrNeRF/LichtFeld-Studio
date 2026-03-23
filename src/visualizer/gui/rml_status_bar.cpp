@@ -337,9 +337,19 @@ namespace lfs::vis::gui {
             const char* strategy_raw = tm ? tm->getStrategyType() : "default";
             bool gut = tm && tm->isGutEnabled();
             std::string method = gut ? "GUT" : "3DGS";
-            std::string strat_name = (std::string_view(strategy_raw) == "mcmc")
-                                         ? LOC("training.options.strategy.mcmc")
-                                         : LOC("status_bar.strategy_default");
+            std::string strat_name;
+            const std::string_view strategy = strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
+            if (strategy == "mcmc") {
+                strat_name = LOC("training.options.strategy.mcmc");
+            } else if (strategy == "adc") {
+                strat_name = LOC("training.options.strategy.adc");
+            } else if (strategy == "lfs") {
+                strat_name = LOC("training.options.strategy.lfs");
+            } else if (strategy == "igs+") {
+                strat_name = LOC("training.options.strategy.igs_plus");
+            } else {
+                strat_name = LOC("status_bar.strategy_default");
+            }
 
             auto suffix = std::format(" ({}/{})", strat_name, method);
 

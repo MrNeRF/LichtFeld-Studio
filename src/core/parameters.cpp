@@ -50,6 +50,7 @@ namespace lfs::core {
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
             sh_degree_interval = apply(sh_degree_interval);
+            grow_until_iter = apply(grow_until_iter);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
                 std::set<size_t> unique;
@@ -168,16 +169,15 @@ namespace lfs::core {
             opt_json["use_alpha_as_mask"] = use_alpha_as_mask;
 
             // LFS strategy parameters
-            opt_json["lfs_growth_grad_threshold"] = lfs_growth_grad_threshold;
-            opt_json["lfs_growth_select_fraction"] = lfs_growth_select_fraction;
-            opt_json["lfs_growth_stop_iter"] = lfs_growth_stop_iter;
-            opt_json["lfs_opac_decay"] = lfs_opac_decay;
-            opt_json["lfs_scale_decay"] = lfs_scale_decay;
-            opt_json["lfs_mean_noise_weight"] = lfs_mean_noise_weight;
-            opt_json["lfs_bound_percentile"] = lfs_bound_percentile;
-            opt_json["lfs_split_distance"] = lfs_split_distance;
-            opt_json["lfs_use_error_map"] = lfs_use_error_map;
-            opt_json["lfs_use_edge_map"] = lfs_use_edge_map;
+            opt_json["growth_grad_threshold"] = growth_grad_threshold;
+            opt_json["grow_fraction"] = grow_fraction;
+            opt_json["grow_until_iter"] = grow_until_iter;
+            opt_json["opacity_decay"] = opacity_decay;
+            opt_json["scale_decay"] = scale_decay;
+            opt_json["means_noise_weight"] = means_noise_weight;
+            opt_json["bounds_percentile"] = bounds_percentile;
+            opt_json["use_error_map"] = use_error_map;
+            opt_json["use_edge_map"] = use_edge_map;
 
             return opt_json;
         }
@@ -228,7 +228,7 @@ namespace lfs::core {
             p.strategy = "lfs";
             p.refine_every = 200;
             p.start_refine = 0;
-            p.stop_refine = 30'000;
+            p.stop_refine = 28'500;
             p.max_cap = 5'000'000;
             p.min_opacity = 1.0f / 255.0f;
             p.grad_threshold = 0.003f;
@@ -243,8 +243,8 @@ namespace lfs::core {
             p.revised_opacity = true;
             p.opacity_reg = 0.0f;
             p.scale_reg = 0.0f;
-            p.lfs_use_error_map = true;
-            p.lfs_use_edge_map = true;
+            p.use_error_map = true;
+            p.use_edge_map = true;
             return p;
         }
 
@@ -502,35 +502,32 @@ namespace lfs::core {
             }
 
             // LFS strategy parameters
-            if (json.contains("lfs_growth_grad_threshold")) {
-                params.lfs_growth_grad_threshold = json["lfs_growth_grad_threshold"];
+            if (json.contains("growth_grad_threshold")) {
+                params.growth_grad_threshold = json["growth_grad_threshold"];
             }
-            if (json.contains("lfs_growth_select_fraction")) {
-                params.lfs_growth_select_fraction = json["lfs_growth_select_fraction"];
+            if (json.contains("grow_fraction")) {
+                params.grow_fraction = json["grow_fraction"];
             }
-            if (json.contains("lfs_growth_stop_iter")) {
-                params.lfs_growth_stop_iter = json["lfs_growth_stop_iter"];
+            if (json.contains("grow_until_iter")) {
+                params.grow_until_iter = json["grow_until_iter"];
             }
-            if (json.contains("lfs_opac_decay")) {
-                params.lfs_opac_decay = json["lfs_opac_decay"];
+            if (json.contains("opacity_decay")) {
+                params.opacity_decay = json["opacity_decay"];
             }
-            if (json.contains("lfs_scale_decay")) {
-                params.lfs_scale_decay = json["lfs_scale_decay"];
+            if (json.contains("scale_decay")) {
+                params.scale_decay = json["scale_decay"];
             }
-            if (json.contains("lfs_mean_noise_weight")) {
-                params.lfs_mean_noise_weight = json["lfs_mean_noise_weight"];
+            if (json.contains("means_noise_weight")) {
+                params.means_noise_weight = json["means_noise_weight"];
             }
-            if (json.contains("lfs_bound_percentile")) {
-                params.lfs_bound_percentile = json["lfs_bound_percentile"];
+            if (json.contains("bounds_percentile")) {
+                params.bounds_percentile = json["bounds_percentile"];
             }
-            if (json.contains("lfs_split_distance")) {
-                params.lfs_split_distance = json["lfs_split_distance"];
+            if (json.contains("use_error_map")) {
+                params.use_error_map = json["use_error_map"];
             }
-            if (json.contains("lfs_use_error_map")) {
-                params.lfs_use_error_map = json["lfs_use_error_map"];
-            }
-            if (json.contains("lfs_use_edge_map")) {
-                params.lfs_use_edge_map = json["lfs_use_edge_map"];
+            if (json.contains("use_edge_map")) {
+                params.use_edge_map = json["use_edge_map"];
             }
 
             return params;

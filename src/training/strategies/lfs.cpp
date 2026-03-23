@@ -4,19 +4,129 @@
 
 #include "lfs.hpp"
 #include "core/logger.hpp"
+#include "edge_rasterizer.hpp"
+#include "kernels/image_kernels.hpp"
 #include "kernels/lfs_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "strategy_utils.hpp"
+#include "training/dataset.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <numeric>
+#include <random>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
 
 namespace lfs::training {
+
+    namespace {
+        constexpr float LFS_EDGE_SCORE_WEIGHT = 0.25f;
+        constexpr int LFS_EDGE_MIN_VIEW_SAMPLES = 10;
+
+        [[nodiscard]] bool has_zero_dimension(const lfs::core::TensorShape& shape) {
+            for (size_t i = 0; i < shape.rank(); ++i) {
+                if (shape[i] == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        void reset_optimizer_state_at_indices(
+            AdamOptimizer& optimizer,
+            const ParamType param_type,
+            const lfs::core::Tensor& indices) {
+            if (!indices.is_valid() || indices.numel() == 0) {
+                return;
+            }
+
+            auto* state = optimizer.get_state_mutable(param_type);
+            if (!state) {
+                return;
+            }
+
+            const auto& shape = state->exp_avg.shape();
+            if (has_zero_dimension(shape)) {
+                return;
+            }
+
+            std::vector<size_t> dims = {indices.numel()};
+            for (size_t i = 1; i < shape.rank(); ++i) {
+                dims.push_back(shape[i]);
+            }
+            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
+
+            state->exp_avg.index_put_(indices, zeros);
+            state->exp_avg_sq.index_put_(indices, zeros);
+            if (state->grad.is_valid()) {
+                state->grad.index_put_(indices, zeros);
+            }
+        }
+
+        struct CannyWorkspace {
+            lfs::core::Tensor grayscale;
+            lfs::core::Tensor blurred;
+            lfs::core::Tensor magnitude;
+            lfs::core::Tensor angle;
+            lfs::core::Tensor nms_output;
+        };
+
+        [[nodiscard]] CannyWorkspace create_canny_workspace(const int height, const int width) {
+            const size_t hw = static_cast<size_t>(height) * static_cast<size_t>(width);
+            const auto dev = lfs::core::Device::CUDA;
+            const auto dt = lfs::core::DataType::Float32;
+            return {
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({static_cast<size_t>(height), static_cast<size_t>(width)}, dev, dt)};
+        }
+
+        void apply_canny_filter(const lfs::core::Tensor& input_data, CannyWorkspace& ws) {
+            assert(input_data.dtype() == lfs::core::DataType::Float32);
+            assert(input_data.device() == lfs::core::Device::CUDA);
+            assert(input_data.ndim() == 3);
+
+            const int width = static_cast<int>(input_data.shape()[2]);
+            const int height = static_cast<int>(input_data.shape()[1]);
+
+            ws.grayscale.zero_();
+            ws.blurred.zero_();
+            ws.magnitude.zero_();
+            ws.angle.zero_();
+            ws.nms_output.zero_();
+
+            auto input_contig = input_data.contiguous();
+            kernels::launch_grayscale_filter(input_contig.ptr<float>(), ws.grayscale.ptr<float>(), height, width);
+            kernels::launch_gausssian_blur(ws.grayscale.ptr<float>(), ws.blurred.ptr<float>(), 3, height, width);
+            kernels::launch_sobel_gradient_filter(ws.blurred.ptr<float>(), ws.magnitude.ptr<float>(), ws.angle.ptr<float>(), height, width);
+            kernels::launch_nms_kernel(ws.magnitude.ptr<float>(), ws.angle.ptr<float>(), ws.nms_output.ptr<float>(), height, width);
+        }
+
+        void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
+            tensor.masked_fill_(tensor.isnan(), 0.0f);
+            auto valid = tensor.masked_select(tensor > 0.0f);
+            if (valid.numel() == 0) {
+                tensor.zero_();
+                return;
+            }
+            auto [sorted, _] = valid.sort();
+            const float median = sorted[valid.numel() / 2].item_as<float>();
+            tensor.div_(std::max(median, 1e-9f));
+        }
+
+        [[nodiscard]] lfs::core::Tensor normalized_by_positive_median(const lfs::core::Tensor& tensor) {
+            auto normalized = tensor.clone();
+            normalize_by_positive_median_inplace(normalized);
+            return normalized;
+        }
+    } // namespace
 
     LFS::LFS(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
 
@@ -73,6 +183,24 @@ namespace lfs::training {
         LOG_INFO("LFS strategy initialized with {} Gaussians", n);
     }
 
+    void LFS::pre_step(int iter, RenderOutput& /*render_output*/) {
+        _precomputed_edge_scores = lfs::core::Tensor();
+        _edge_precompute_valid = false;
+
+        if (!_params || !_params->use_edge_map || !is_refining(iter)) {
+            return;
+        }
+
+        if (!_views || !_image_loader || _views->size() == 0 || _splat_data->size() == 0) {
+            return;
+        }
+
+        _precomputed_edge_scores = compute_edge_scores(iter);
+        _edge_precompute_valid = _precomputed_edge_scores.is_valid() &&
+                                 _precomputed_edge_scores.ndim() == 1 &&
+                                 _precomputed_edge_scores.numel() == static_cast<size_t>(_splat_data->size());
+    }
+
     void LFS::ensure_densification_info_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
         const auto& info = _splat_data->_densification_info;
@@ -92,9 +220,13 @@ namespace lfs::training {
             _splat_data->increment_sh_degree();
         }
 
-        const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
-        if (train_t > 0.95f) {
+        if (iter == static_cast<int>(_params->stop_refine)) {
             _splat_data->_densification_info = Tensor::empty({0});
+            _precomputed_edge_scores = Tensor();
+            _edge_precompute_valid = false;
+        }
+
+        if (iter >= static_cast<int>(_params->stop_refine)) {
             return;
         }
 
@@ -130,16 +262,15 @@ namespace lfs::training {
 
         if (is_refining(iter)) {
             refine(iter);
+            _precomputed_edge_scores = Tensor();
+            _edge_precompute_valid = false;
         }
     }
 
     bool LFS::is_refining(int iter) const {
-        if (iter <= 0)
-            return false;
-        if (iter % _params->refine_every != 0)
-            return false;
-        const float train_t = static_cast<float>(iter) / static_cast<float>(_params->iterations);
-        return train_t <= 0.95f;
+        return (iter < static_cast<int>(_params->stop_refine) &&
+                iter > static_cast<int>(_params->start_refine) &&
+                iter % _params->refine_every == 0);
     }
 
     void LFS::refine(int iter) {
@@ -203,19 +334,19 @@ namespace lfs::training {
         const size_t n = static_cast<size_t>(_splat_data->size());
         const int desired_total = static_cast<int>(
             std::round(static_cast<float>(
-                           ((_refine_weight_max > _params->lfs_growth_grad_threshold) &&
+                           ((_refine_weight_max > _params->growth_grad_threshold) &&
                             (_vis_count > 0.0f))
                                .sum()
                                .item()) *
-                       _params->lfs_growth_select_fraction));
+                       _params->grow_fraction));
         const int budget = (_params->max_cap > 0)
                                ? std::max(0, _params->max_cap - static_cast<int>(n))
                                : INT_MAX;
         const int n_replace = std::min(pruned_count, budget);
         int n_grow = 0;
         lfs::core::Tensor above_threshold;
-        if (iter < static_cast<int>(_params->lfs_growth_stop_iter)) {
-            above_threshold = (_refine_weight_max > _params->lfs_growth_grad_threshold) &&
+        if (iter < static_cast<int>(_params->grow_until_iter)) {
+            above_threshold = (_refine_weight_max > _params->growth_grad_threshold) &&
                               (_vis_count > 0.0f);
             n_grow = std::max(0, desired_total - pruned_count);
             n_grow = std::min(n_grow, budget - n_replace);
@@ -231,6 +362,8 @@ namespace lfs::training {
         auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
 
+        const auto edge_guidance = edge_guidance_factor();
+
         Tensor split_indices;
         Tensor replace_inds;
         Tensor growth_inds;
@@ -240,6 +373,9 @@ namespace lfs::training {
             if (opacities.ndim() == 2 && opacities.shape()[1] == 1)
                 opacities = opacities.squeeze(-1);
             auto replace_weights = opacities * (_vis_count > 0.0f);
+            if (edge_guidance.is_valid()) {
+                replace_weights = replace_weights * edge_guidance;
+            }
             replace_inds = Tensor::empty({static_cast<size_t>(n_replace)}, Device::CUDA, DataType::Int64);
             lfs_strategy::launch_gumbel_topk(
                 replace_weights.ptr<float>(), n, n_replace, seed,
@@ -248,6 +384,9 @@ namespace lfs::training {
 
         if (n_grow > 0) {
             auto growth_weights = above_threshold * _refine_weight_max;
+            if (edge_guidance.is_valid()) {
+                growth_weights = growth_weights * edge_guidance;
+            }
             growth_inds = Tensor::empty({static_cast<size_t>(n_grow)}, Device::CUDA, DataType::Int64);
             lfs_strategy::launch_gumbel_topk(
                 growth_weights.ptr<float>(), n, n_grow, seed + 1,
@@ -333,7 +472,14 @@ namespace lfs::training {
             child_rotations.ptr<float>(),
             child_sh0.ptr<float>(),
             sh_rest > 0 ? child_shN.ptr<float>() : nullptr,
-            K, sh_rest, _params->lfs_split_distance);
+            K, sh_rest);
+
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
 
         if (_splat_data->opacity_raw().ndim() == 2) {
             child_raw_opacities = child_raw_opacities.unsqueeze(-1);
@@ -353,6 +499,7 @@ namespace lfs::training {
         LOG_TIMER("LFS::compact_splats");
         using namespace lfs::core;
 
+        const size_t old_size = static_cast<size_t>(_splat_data->size());
         Tensor valid_indices = keep_mask.nonzero().squeeze(-1);
         const size_t new_size = valid_indices.numel();
         const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
@@ -393,10 +540,16 @@ namespace lfs::training {
             state->capacity = cap;
         }
 
+        const auto& info = _splat_data->_densification_info;
+        if (info.is_valid() && info.ndim() == 2 && info.shape()[1] == old_size) {
+            _splat_data->_densification_info = info.index_select(1, valid_indices).contiguous();
+        }
         if (_refine_weight_max.is_valid() && _refine_weight_max.numel() > new_size)
             _refine_weight_max = _refine_weight_max.index_select(0, valid_indices).contiguous();
         if (_vis_count.is_valid() && _vis_count.numel() > new_size)
             _vis_count = _vis_count.index_select(0, valid_indices).contiguous();
+        if (_precomputed_edge_scores.is_valid() && _precomputed_edge_scores.numel() > new_size)
+            _precomputed_edge_scores = _precomputed_edge_scores.index_select(0, valid_indices).contiguous();
     }
 
     void LFS::inject_noise(int /*iter*/) {
@@ -414,7 +567,7 @@ namespace lfs::training {
             _splat_data->opacity_raw().ptr<float>(),
             _vis_count.ptr<float>(),
             lr_mean,
-            _params->lfs_mean_noise_weight,
+            _params->means_noise_weight,
             _bounds.median_size,
             n, seed);
     }
@@ -429,8 +582,8 @@ namespace lfs::training {
         lfs_strategy::launch_lfs_decay(
             _splat_data->opacity_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
-            _params->lfs_opac_decay,
-            _params->lfs_scale_decay,
+            _params->opacity_decay,
+            _params->scale_decay,
             train_t,
             n);
     }
@@ -476,7 +629,7 @@ namespace lfs::training {
         lfs_strategy::launch_percentile_bounds(
             _splat_data->means().ptr<float>(),
             n,
-            _params->lfs_bound_percentile,
+            _params->bounds_percentile,
             &_bounds);
 
         _bounds_valid = true;
@@ -503,9 +656,8 @@ namespace lfs::training {
         using namespace lfs::core;
 
         Tensor keep_mask = mask.logical_not();
-        Tensor keep_indices = keep_mask.nonzero().squeeze(-1);
         const size_t old_size = static_cast<size_t>(_splat_data->size());
-        const int n_remove = static_cast<int>(old_size - keep_indices.numel());
+        const int n_remove = static_cast<int>(old_size - keep_mask.to(DataType::Int32).sum().template item<int>());
 
         LOG_INFO("LFS::remove_gaussians: mask size={}, n_remove={}, current size={}",
                  mask.numel(), n_remove, _splat_data->size());
@@ -513,28 +665,94 @@ namespace lfs::training {
         if (n_remove == 0)
             return;
 
-        _splat_data->means() = _splat_data->means().index_select(0, keep_indices).contiguous();
-        _splat_data->sh0() = _splat_data->sh0().index_select(0, keep_indices).contiguous();
-        if (_splat_data->shN().is_valid()) {
-            _splat_data->shN() = _splat_data->shN().index_select(0, keep_indices).contiguous();
-        }
-        _splat_data->scaling_raw() = _splat_data->scaling_raw().index_select(0, keep_indices).contiguous();
-        _splat_data->rotation_raw() = _splat_data->rotation_raw().index_select(0, keep_indices).contiguous();
-        _splat_data->opacity_raw() = _splat_data->opacity_raw().index_select(0, keep_indices).contiguous();
+        compact_splats(keep_mask);
 
-        const auto& info = _splat_data->_densification_info;
-        if (info.is_valid() && info.ndim() == 2 && info.shape()[1] == old_size) {
-            _splat_data->_densification_info = info.index_select(1, keep_indices).contiguous();
+        if (_splat_data->size() == 0) {
+            _bounds_valid = false;
+        } else if (_bounds_valid) {
+            compute_bounds();
         }
-        if (_refine_weight_max.is_valid() && _refine_weight_max.numel() == old_size) {
-            _refine_weight_max = _refine_weight_max.index_select(0, keep_indices).contiguous();
-        }
-        if (_vis_count.is_valid() && _vis_count.numel() == old_size) {
-            _vis_count = _vis_count.index_select(0, keep_indices).contiguous();
+    }
+
+    lfs::core::Tensor LFS::compute_edge_scores(const int iter) {
+        const int64_t N = static_cast<int64_t>(_splat_data->size());
+        if (N <= 0 || !_views || !_image_loader || _views->size() == 0) {
+            return {};
         }
 
-        _optimizer = create_optimizer(*_splat_data, *_params);
-        _scheduler = create_scheduler(*_params, *_optimizer);
+        const int num_cam_dataset = static_cast<int>(_views->size());
+        int num_samples = 0;
+        if (num_cam_dataset < LFS_EDGE_MIN_VIEW_SAMPLES) {
+            num_samples = num_cam_dataset;
+        } else {
+            const int min_cam_dataset = static_cast<int>(0.08f * static_cast<float>(num_cam_dataset));
+            num_samples = std::max(LFS_EDGE_MIN_VIEW_SAMPLES, min_cam_dataset);
+        }
+        if (num_samples <= 0) {
+            return {};
+        }
+
+        std::vector<int> view_indices(num_cam_dataset);
+        std::iota(view_indices.begin(), view_indices.end(), 0);
+        std::default_random_engine rng(static_cast<unsigned>(iter));
+        std::shuffle(view_indices.begin(), view_indices.end(), rng);
+        view_indices.resize(num_samples);
+
+        CannyWorkspace canny_ws;
+        auto gaussian_scores = lfs::core::Tensor::zeros(
+            {static_cast<size_t>(N)}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+
+        for (const int dataset_idx : view_indices) {
+            lfs::core::Camera* cam = _views->get_camera(static_cast<size_t>(dataset_idx));
+
+            lfs::io::LoadParams params;
+            params.resize_factor = _views->get_resize_factor();
+            params.max_width = _views->get_max_width();
+            if (cam->is_undistort_prepared()) {
+                params.undistort = &cam->undistort_params();
+            }
+
+            lfs::core::Tensor image = _image_loader->load_image_immediate(cam->image_path(), params);
+            const int img_h = static_cast<int>(image.shape()[1]);
+            const int img_w = static_cast<int>(image.shape()[2]);
+
+            if (cam->image_width() != img_w || cam->image_height() != img_h) {
+                cam->set_image_dimensions(img_w, img_h);
+            }
+
+            if (!canny_ws.nms_output.is_valid() ||
+                img_h != static_cast<int>(canny_ws.nms_output.shape()[0]) ||
+                img_w != static_cast<int>(canny_ws.nms_output.shape()[1])) {
+                canny_ws = create_canny_workspace(img_h, img_w);
+            }
+
+            apply_canny_filter(image, canny_ws);
+            normalize_by_positive_median_inplace(canny_ws.nms_output);
+
+            lfs::core::Tensor bg;
+            auto score_render = edge_rasterize(*cam, this->get_model(), bg, canny_ws.nms_output);
+            normalize_by_positive_median_inplace(score_render.edges_score);
+            gaussian_scores.add_(score_render.edges_score);
+        }
+
+        gaussian_scores.div_(static_cast<float>(num_samples));
+        return gaussian_scores;
+    }
+
+    lfs::core::Tensor LFS::edge_guidance_factor() const {
+        if (!_params || !_params->use_edge_map || !_edge_precompute_valid) {
+            return {};
+        }
+
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (!_precomputed_edge_scores.is_valid() ||
+            _precomputed_edge_scores.ndim() != 1 ||
+            _precomputed_edge_scores.numel() != n) {
+            return {};
+        }
+
+        auto normalized_edge = normalized_by_positive_median(_precomputed_edge_scores);
+        return normalized_edge.mul(LFS_EDGE_SCORE_WEIGHT).add(1.0f);
     }
 
     namespace {

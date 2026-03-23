@@ -17,15 +17,14 @@ namespace lfs::training::lfs_strategy {
     };
 
     /**
-     * Long-axis split: deterministic child placement along longest ellipsoid axis.
+     * Long-axis split matching the fixed IGS+ child-generation rule.
      *
      * Per split:
-     *   1. Opacity revision: new_opac = 1 - sqrt(1 - sigmoid(raw))
-     *   2. Offset: ±(split_distance * 3σ_max) along longest axis, rotated by quaternion
-     *   3. Scale: longest → σ_max*(1-d), others → σ_i*sqrt(1-d²)
-     *   4. Parent: mean -= offset, child: mean + offset
+     *   1. Opacity revision: sigmoid(raw) * 0.6
+     *   2. Offset: ±0.5σ_max along the longest axis, rotated by quaternion
+     *   3. Scale: longest *= 0.5, others *= 0.85
+     *   4. Parent/child are written symmetrically around the original mean
      *
-     * @param split_distance — fraction of 3σ extent for child placement (default 0.45)
      */
     void launch_lfs_split_inplace(
         const int64_t* split_indices,
@@ -43,7 +42,6 @@ namespace lfs::training::lfs_strategy {
         float* child_shN,
         size_t K,
         size_t sh_rest,
-        float split_distance,
         void* stream = nullptr);
 
     /**
@@ -76,12 +74,12 @@ namespace lfs::training::lfs_strategy {
     /**
      * Time-dependent opacity and scale decay.
      *
-     * opac = sigmoid(raw_opac) - opac_decay * (1 - train_t)
+     * opac = sigmoid(raw_opac) - opacity_decay * (1 - train_t)
      * scale = exp(log_scale) * (1 - scale_decay * (1 - train_t))
      *
      * @param raw_opacities [N] — raw opacities (modified in-place)
      * @param log_scales [N, 3] — log scales (modified in-place)
-     * @param opac_decay — opacity decay rate
+     * @param opacity_decay — opacity decay rate
      * @param scale_decay — scale decay rate
      * @param train_t — current training progress [0, 1]
      * @param N — number of splats
@@ -90,7 +88,7 @@ namespace lfs::training::lfs_strategy {
     void launch_lfs_decay(
         float* raw_opacities,
         float* log_scales,
-        float opac_decay,
+        float opacity_decay,
         float scale_decay,
         float train_t,
         size_t N,

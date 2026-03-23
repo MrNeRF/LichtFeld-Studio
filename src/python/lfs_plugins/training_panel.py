@@ -2092,29 +2092,29 @@ class TrainingPanel(Panel):
                     layout.table_setup_column(tr("common.column_label"), 140.0)
                     layout.table_setup_column(tr("common.column_control"), 0.0)
                     layout.begin_disabled(not can_edit)
-                    self._input_float_prop_row(layout, "Growth Grad Threshold", "lfs_growth_grad_threshold", params, 0.0001, 0.001, "%.5f", min_val=0.0)
-                    self._input_float_prop_row(layout, "Growth Select Fraction", "lfs_growth_select_fraction", params, 0.01, 0.05, "%.3f", min_val=0.0, max_val=1.0)
-                    self._input_int_row(layout, "Growth Stop Iter", "lfs_growth_stop_iter", params, 1000, 5000)
-                    self._input_float_prop_row(layout, "Opacity Decay", "lfs_opac_decay", params, 0.0001, 0.001, "%.4f", min_val=0.0)
-                    self._input_float_prop_row(layout, "Scale Decay", "lfs_scale_decay", params, 0.0001, 0.001, "%.4f", min_val=0.0)
-                    self._input_float_prop_row(layout, "Noise Weight", "lfs_mean_noise_weight", params, 1.0, 10.0, "%.1f", min_val=0.0)
-                    self._input_float_prop_row(layout, "Bound Percentile", "lfs_bound_percentile", params, 0.01, 0.05, "%.2f", min_val=0.5, max_val=1.0)
+                    self._input_float_prop_row(layout, "Growth Grad Threshold", "growth_grad_threshold", params, 0.0001, 0.001, "%.5f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Grow Fraction", "grow_fraction", params, 0.01, 0.05, "%.3f", min_val=0.0, max_val=1.0)
+                    self._input_int_row(layout, "Grow Until Iter", "grow_until_iter", params, 1000, 5000)
+                    self._input_float_prop_row(layout, "Opacity Decay", "opacity_decay", params, 0.0001, 0.001, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Scale Decay", "scale_decay", params, 0.0001, 0.001, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Means Noise Weight", "means_noise_weight", params, 1.0, 10.0, "%.1f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Bounds Percentile", "bounds_percentile", params, 0.01, 0.05, "%.2f", min_val=0.5, max_val=1.0)
 
                     layout.table_next_row()
                     layout.table_next_column()
                     layout.label("Error Map")
                     layout.table_next_column()
-                    changed, new_val = layout.checkbox("##py_lfs_use_error_map", params.lfs_use_error_map)
+                    changed, new_val = layout.checkbox("##py_use_error_map", params.use_error_map)
                     if changed:
-                        params.lfs_use_error_map = new_val
+                        params.use_error_map = new_val
 
                     layout.table_next_row()
                     layout.table_next_column()
                     layout.label("Edge Map")
                     layout.table_next_column()
-                    changed, new_val = layout.checkbox("##py_lfs_use_edge_map", params.lfs_use_edge_map)
+                    changed, new_val = layout.checkbox("##py_use_edge_map", params.use_edge_map)
                     if changed:
-                        params.lfs_use_edge_map = new_val
+                        params.use_edge_map = new_val
 
                     layout.end_disabled()
             finally:

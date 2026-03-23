@@ -52,8 +52,7 @@ namespace lfs::training::lfs_strategy {
         float* __restrict__ child_sh0,
         float* __restrict__ child_shN,
         size_t K,
-        size_t sh_rest,
-        float split_distance) {
+        size_t sh_rest) {
 
         const size_t idx = threadIdx.x + blockIdx.x * static_cast<size_t>(blockDim.x);
         if (idx >= K)
@@ -65,43 +64,35 @@ namespace lfs::training::lfs_strategy {
         const float orig_mean1 = means[si * 3 + 1];
         const float orig_mean2 = means[si * 3 + 2];
 
-        // Opacity revision: new_opac = 1 - sqrt(1 - sigmoid(raw))
+        // Match the fixed IGS+ split rule: opacity *= 0.6 in opacity space.
         const float opac = d_sigmoid(raw_opacities[si]);
-        const float new_opac = 1.0f - sqrtf(fmaxf(1.0f - opac, 0.0f));
-        const float clamped = fminf(fmaxf(new_opac, 1.0f / 255.0f), 1.0f - 1.0f / 255.0f);
-        const float new_raw_opac = d_logit(clamped);
+        const float new_opac = fminf(fmaxf(opac * 0.6f, 1e-7f), 1.0f - 1e-7f);
+        const float new_raw_opac = d_logit(new_opac);
 
         const float ls0 = log_scales[si * 3 + 0];
         const float ls1 = log_scales[si * 3 + 1];
         const float ls2 = log_scales[si * 3 + 2];
         const float s0 = expf(ls0), s1 = expf(ls1), s2 = expf(ls2);
 
-        // Find longest axis and compute scale shrink factors
-        const float log_rate_w = logf(1.0f - split_distance);
-        const float log_rate_h = 0.5f * logf(1.0f - split_distance * split_distance);
-
-        float new_ls0, new_ls1, new_ls2;
-        float s_max;
+        // Match IGS+: longest axis shrinks by 0.5, others by 0.85.
+        float new_ls0 = ls0 + logf(0.85f);
+        float new_ls1 = ls1 + logf(0.85f);
+        float new_ls2 = ls2 + logf(0.85f);
         float local_offset[3] = {0.0f, 0.0f, 0.0f};
+        float offset_magnitude = 0.5f * s0;
 
         if (s0 >= s1 && s0 >= s2) {
-            s_max = s0;
-            new_ls0 = ls0 + log_rate_w;
-            new_ls1 = ls1 + log_rate_h;
-            new_ls2 = ls2 + log_rate_h;
-            local_offset[0] = split_distance * s_max * 3.0f;
+            new_ls0 = ls0 + logf(0.5f);
+            offset_magnitude = 0.5f * s0;
+            local_offset[0] = offset_magnitude;
         } else if (s1 >= s2) {
-            s_max = s1;
-            new_ls0 = ls0 + log_rate_h;
-            new_ls1 = ls1 + log_rate_w;
-            new_ls2 = ls2 + log_rate_h;
-            local_offset[1] = split_distance * s_max * 3.0f;
+            new_ls1 = ls1 + logf(0.5f);
+            offset_magnitude = 0.5f * s1;
+            local_offset[1] = offset_magnitude;
         } else {
-            s_max = s2;
-            new_ls0 = ls0 + log_rate_h;
-            new_ls1 = ls1 + log_rate_h;
-            new_ls2 = ls2 + log_rate_w;
-            local_offset[2] = split_distance * s_max * 3.0f;
+            new_ls2 = ls2 + logf(0.5f);
+            offset_magnitude = 0.5f * s2;
+            local_offset[2] = offset_magnitude;
         }
 
         // Rotate offset by quaternion
@@ -118,19 +109,19 @@ namespace lfs::training::lfs_strategy {
         float ox, oy, oz;
         d_quat_rotate(qw, qx, qy, qz, local_offset[0], local_offset[1], local_offset[2], ox, oy, oz);
 
-        // Modify parent in-place
-        means[si * 3 + 0] = orig_mean0 - ox;
-        means[si * 3 + 1] = orig_mean1 - oy;
-        means[si * 3 + 2] = orig_mean2 - oz;
+        // Modify parent in-place using the same orientation as IGS+.
+        means[si * 3 + 0] = orig_mean0 + ox;
+        means[si * 3 + 1] = orig_mean1 + oy;
+        means[si * 3 + 2] = orig_mean2 + oz;
         log_scales[si * 3 + 0] = new_ls0;
         log_scales[si * 3 + 1] = new_ls1;
         log_scales[si * 3 + 2] = new_ls2;
         raw_opacities[si] = new_raw_opac;
 
         // Output child
-        child_means[idx * 3 + 0] = orig_mean0 + ox;
-        child_means[idx * 3 + 1] = orig_mean1 + oy;
-        child_means[idx * 3 + 2] = orig_mean2 + oz;
+        child_means[idx * 3 + 0] = orig_mean0 - ox;
+        child_means[idx * 3 + 1] = orig_mean1 - oy;
+        child_means[idx * 3 + 2] = orig_mean2 - oz;
         child_log_scales[idx * 3 + 0] = new_ls0;
         child_log_scales[idx * 3 + 1] = new_ls1;
         child_log_scales[idx * 3 + 2] = new_ls2;
@@ -166,7 +157,6 @@ namespace lfs::training::lfs_strategy {
         float* child_shN,
         size_t K,
         size_t sh_rest,
-        float split_distance,
         void* stream) {
 
         if (K == 0)
@@ -181,7 +171,7 @@ namespace lfs::training::lfs_strategy {
             rotations, sh0, shN,
             child_means, child_log_scales, child_raw_opacities,
             child_rotations, child_sh0, child_shN,
-            K, sh_rest, split_distance);
+            K, sh_rest);
     }
 
     __global__ void lfs_noise_injection_kernel(
@@ -244,7 +234,7 @@ namespace lfs::training::lfs_strategy {
     __global__ void lfs_decay_kernel(
         float* __restrict__ raw_opacities,
         float* __restrict__ log_scales,
-        float opac_decay,
+        float opacity_decay,
         float scale_decay,
         float train_t,
         size_t N) {
@@ -255,7 +245,7 @@ namespace lfs::training::lfs_strategy {
 
         const float t_shrink = 1.0f - train_t;
 
-        float opac = d_sigmoid(raw_opacities[idx]) - opac_decay * t_shrink;
+        float opac = d_sigmoid(raw_opacities[idx]) - opacity_decay * t_shrink;
         opac = fminf(fmaxf(opac, 1e-12f), 1.0f - 1e-12f);
         raw_opacities[idx] = d_logit(opac);
 
@@ -269,7 +259,7 @@ namespace lfs::training::lfs_strategy {
     void launch_lfs_decay(
         float* raw_opacities,
         float* log_scales,
-        float opac_decay,
+        float opacity_decay,
         float scale_decay,
         float train_t,
         size_t N,
@@ -283,7 +273,7 @@ namespace lfs::training::lfs_strategy {
         cudaStream_t s = stream ? static_cast<cudaStream_t>(stream) : nullptr;
 
         lfs_decay_kernel<<<blocks, threads, 0, s>>>(
-            raw_opacities, log_scales, opac_decay, scale_decay, train_t, N);
+            raw_opacities, log_scales, opacity_decay, scale_decay, train_t, N);
     }
 
     __global__ void elementwise_add_inplace_kernel(

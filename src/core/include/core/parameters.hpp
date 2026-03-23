@@ -117,16 +117,15 @@ namespace lfs::core {
             float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling
 
             // LFS strategy specific parameters
-            float lfs_growth_grad_threshold = 0.003f;
-            float lfs_growth_select_fraction = 0.07f;
-            size_t lfs_growth_stop_iter = 15000;
-            float lfs_opac_decay = 0.004f;
-            float lfs_scale_decay = 0.002f;
-            float lfs_mean_noise_weight = 50.0f;
-            float lfs_bound_percentile = 0.8f;
-            float lfs_split_distance = 0.45f;
-            bool lfs_use_error_map = true;
-            bool lfs_use_edge_map = true;
+            float growth_grad_threshold = 0.003f;
+            float grow_fraction = 0.07f;
+            size_t grow_until_iter = 15000;
+            float opacity_decay = 0.004f;
+            float scale_decay = 0.002f;
+            float means_noise_weight = 50.0f;
+            float bounds_percentile = 0.8f;
+            bool use_error_map = true;
+            bool use_edge_map = true;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM

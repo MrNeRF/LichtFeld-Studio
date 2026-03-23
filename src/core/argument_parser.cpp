@@ -112,9 +112,8 @@ namespace {
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", "Minimum opacity threshold", {"min-opacity"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", "Scale training steps by factor", {"steps-scaler"});
             ::args::ValueFlag<int> tile_mode(training_group, "tile_mode", "Tile mode for memory-efficient training: 1=1 tile, 2=2 tiles, 4=4 tiles (default: 1)", {"tile-mode"});
-            ::args::ValueFlag<float> lfs_split_distance(training_group, "lfs_split_distance", "LFS split distance fraction along longest axis (default: 0.45)", {"lfs-split-distance"});
-            ::args::Flag lfs_use_error_map(training_group, "lfs_use_error_map", "Weight LFS refine signal by per-pixel SSIM error map", {"lfs-use-error-map"});
-            ::args::Flag lfs_use_edge_map(training_group, "lfs_use_edge_map", "Weight LFS refine signal by Sobel edge map on GT images", {"lfs-use-edge-map"});
+            ::args::Flag use_error_map(training_group, "use_error_map", "Weight LFS refine signal by per-pixel SSIM error map", {"use-error-map"});
+            ::args::Flag use_edge_map(training_group, "use_edge_map", "Weight LFS refine signal by Sobel edge map on GT images", {"use-edge-map"});
 
             // =============================================================================
             // INITIALIZATION
@@ -552,9 +551,8 @@ namespace {
                                         enable_sparsity_flag = bool(enable_sparsity),
                                         invert_masks_flag = bool(invert_masks),
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask),
-                                        lfs_split_distance_val = lfs_split_distance ? std::optional<float>(::args::get(lfs_split_distance)) : std::optional<float>(),
-                                        lfs_use_error_map_flag = bool(lfs_use_error_map),
-                                        lfs_use_edge_map_flag = bool(lfs_use_edge_map)]() {
+                                        use_error_map_flag = bool(use_error_map),
+                                        use_edge_map_flag = bool(use_edge_map)]() {
                 auto& opt = params.optimization;
                 auto& ds = params.dataset;
 
@@ -621,9 +619,8 @@ namespace {
                 setFlag(gut_flag, opt.gut);
                 setFlag(undistort_flag, opt.undistort);
                 setFlag(enable_sparsity_flag, opt.enable_sparsity);
-                setVal(lfs_split_distance_val, opt.lfs_split_distance);
-                setFlag(lfs_use_error_map_flag, opt.lfs_use_error_map);
-                setFlag(lfs_use_edge_map_flag, opt.lfs_use_edge_map);
+                setFlag(use_error_map_flag, opt.use_error_map);
+                setFlag(use_edge_map_flag, opt.use_edge_map);
 
                 // Mask parameters
                 setVal(mask_mode_val, opt.mask_mode);

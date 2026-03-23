@@ -159,6 +159,7 @@ set(TEST_FILES
     test_expression_templates.cpp
     test_lfs_adam_optimizer.cpp
     test_lfs_scheduler.cpp
+    test_lfs_strategy.cpp
     test_lfs_losses.cpp
     test_mcmc_kernels.cpp
     test_tensor_bool.cpp

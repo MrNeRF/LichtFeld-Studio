@@ -187,35 +187,32 @@ namespace lfs::python {
                        "Use revised opacity calculation for ADC")
 
             // LFS strategy parameters
-            .float_prop(&OptimizationParameters::lfs_growth_grad_threshold,
-                        "lfs_growth_grad_threshold", "Growth Grad Threshold", 0.001f, 0.0f, 1.0f,
+            .float_prop(&OptimizationParameters::growth_grad_threshold,
+                        "growth_grad_threshold", "Growth Grad Threshold", 0.003f, 0.0f, 1.0f,
                         "Min refine weight for growth candidacy (LFS)")
-            .float_prop(&OptimizationParameters::lfs_growth_select_fraction,
-                        "lfs_growth_select_fraction", "Growth Select Fraction", 0.2f, 0.0f, 1.0f,
+            .float_prop(&OptimizationParameters::grow_fraction,
+                        "grow_fraction", "Grow Fraction", 0.07f, 0.0f, 1.0f,
                         "Fraction of above-threshold splats to grow (LFS)")
-            .size_prop(&OptimizationParameters::lfs_growth_stop_iter,
-                       "lfs_growth_stop_iter", "Growth Stop Iter", 15000, 0, 100000,
-                       "Stop growing after this iteration (LFS)")
-            .float_prop(&OptimizationParameters::lfs_opac_decay,
-                        "lfs_opac_decay", "Opacity Decay", 0.004f, 0.0f, 0.1f,
+            .size_prop(&OptimizationParameters::grow_until_iter,
+                       "grow_until_iter", "Grow Until Iter", 15000, 0, 100000,
+                       "Stop LFS growth after this iteration")
+            .float_prop(&OptimizationParameters::opacity_decay,
+                        "opacity_decay", "Opacity Decay", 0.004f, 0.0f, 0.1f,
                         "Opacity decay rate per refine (LFS)")
-            .float_prop(&OptimizationParameters::lfs_scale_decay,
-                        "lfs_scale_decay", "Scale Decay", 0.002f, 0.0f, 0.1f,
+            .float_prop(&OptimizationParameters::scale_decay,
+                        "scale_decay", "Scale Decay", 0.002f, 0.0f, 0.1f,
                         "Scale decay rate per refine (LFS)")
-            .float_prop(&OptimizationParameters::lfs_mean_noise_weight,
-                        "lfs_mean_noise_weight", "Noise Weight", 50.0f, 0.0f, 200.0f,
-                        "Exploration noise multiplier (LFS)")
-            .float_prop(&OptimizationParameters::lfs_bound_percentile,
-                        "lfs_bound_percentile", "Bound Percentile", 0.8f, 0.5f, 1.0f,
+            .float_prop(&OptimizationParameters::means_noise_weight,
+                        "means_noise_weight", "Means Noise Weight", 50.0f, 0.0f, 200.0f,
+                        "Exploration noise multiplier for means updates (LFS)")
+            .float_prop(&OptimizationParameters::bounds_percentile,
+                        "bounds_percentile", "Bounds Percentile", 0.8f, 0.5f, 1.0f,
                         "Percentile for bounds computation (LFS)")
-            .float_prop(&OptimizationParameters::lfs_split_distance,
-                        "lfs_split_distance", "Split Distance", 0.45f, 0.1f, 0.9f,
-                        "Fraction of 3σ extent for child placement along longest axis (LFS)")
-            .bool_prop(&OptimizationParameters::lfs_use_error_map,
-                       "lfs_use_error_map", "Error Map", true,
+            .bool_prop(&OptimizationParameters::use_error_map,
+                       "use_error_map", "Error Map", true,
                        "Weight LFS refine signal by per-pixel SSIM error map")
-            .bool_prop(&OptimizationParameters::lfs_use_edge_map,
-                       "lfs_use_edge_map", "Edge Map", true,
+            .bool_prop(&OptimizationParameters::use_edge_map,
+                       "use_edge_map", "Edge Map", true,
                        "Weight LFS refine signal by Sobel edge map on GT images")
 
             // Flags

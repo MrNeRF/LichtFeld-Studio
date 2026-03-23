@@ -1,0 +1,238 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+class LFSStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
+class LFSStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
+class LFSStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
+
+#include "core/parameters.hpp"
+#include "core/splat_data.hpp"
+#include "training/strategies/lfs.hpp"
+
+#include <cmath>
+#include <gtest/gtest.h>
+#include <vector>
+
+using namespace lfs::core;
+using namespace lfs::training;
+
+namespace {
+
+    SplatData create_lfs_test_splat_data() {
+        constexpr int n_gaussians = 10;
+
+        std::vector<float> means_data(n_gaussians * 3, 0.0f);
+        for (int i = 0; i < n_gaussians; ++i) {
+            means_data[i * 3 + 0] = static_cast<float>(i);
+        }
+
+        std::vector<float> sh0_data(n_gaussians * 3, 0.5f);
+        std::vector<float> shN_data(n_gaussians * 15 * 3, 0.0f);
+        std::vector<float> scaling_data(n_gaussians * 3, 0.0f);
+        std::vector<float> rotation_data(n_gaussians * 4, 0.0f);
+        std::vector<float> opacity_data(n_gaussians, 0.0f);
+
+        for (int i = 0; i < n_gaussians; ++i) {
+            rotation_data[i * 4 + 0] = 1.0f; // identity quaternion
+        }
+
+        auto means = Tensor::from_vector(means_data, TensorShape({n_gaussians, 3}), Device::CUDA);
+        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n_gaussians, 1, 3}), Device::CUDA);
+        auto shN = Tensor::from_vector(shN_data, TensorShape({n_gaussians, 15, 3}), Device::CUDA);
+        auto scaling = Tensor::from_vector(scaling_data, TensorShape({n_gaussians, 3}), Device::CUDA);
+        auto rotation = Tensor::from_vector(rotation_data, TensorShape({n_gaussians, 4}), Device::CUDA);
+        auto opacity = Tensor::from_vector(opacity_data, TensorShape({n_gaussians, 1}), Device::CUDA);
+
+        return SplatData(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+    }
+
+} // namespace
+
+TEST(LFSStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
+    auto splat_data = create_lfs_test_splat_data();
+    LFS strategy(splat_data);
+
+    param::OptimizationParameters opt_params;
+    opt_params.iterations = 10'000;
+    opt_params.refine_every = 100;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.use_edge_map = true;
+
+    strategy.initialize(opt_params);
+
+    std::vector<float> edge_scores_data(10, 0.0f);
+    edge_scores_data[0] = 1.0f;
+    edge_scores_data[1] = 10.0f;
+    strategy._precomputed_edge_scores =
+        Tensor::from_vector(edge_scores_data, TensorShape({10}), Device::CUDA);
+    strategy._edge_precompute_valid = true;
+
+    const auto guidance = strategy.edge_guidance_factor().cpu();
+    const float* guidance_ptr = guidance.ptr<float>();
+
+    EXPECT_NEAR(guidance_ptr[2], 1.0f, 1e-5f);
+    EXPECT_GT(guidance_ptr[0], 1.0f);
+    EXPECT_GT(guidance_ptr[1], guidance_ptr[0]);
+}
+
+TEST(LFSStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
+    auto splat_data = create_lfs_test_splat_data();
+    LFS strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::lfs_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+
+    strategy.initialize(opt_params);
+    splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const auto mask = Tensor::from_vector(
+        std::vector<bool>{false, true, false, true, false, false, false, false, false, false},
+        TensorShape({10}),
+        Device::CUDA);
+
+    strategy.remove_gaussians(mask);
+
+    ASSERT_EQ(splat_data.size(), 8u);
+    ASSERT_TRUE(splat_data._densification_info.is_valid());
+    EXPECT_EQ(splat_data._densification_info.shape()[1], 8u);
+
+    EXPECT_NO_THROW({
+        auto& means_grad = strategy.get_optimizer().get_grad(ParamType::Means);
+        EXPECT_EQ(means_grad.shape()[0], 8u);
+    });
+    EXPECT_NO_THROW({
+        auto& opacity_grad = strategy.get_optimizer().get_grad(ParamType::Opacity);
+        EXPECT_EQ(opacity_grad.shape()[0], 8u);
+    });
+}
+
+TEST(LFSStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
+    auto splat_data = create_lfs_test_splat_data();
+    LFS strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::lfs_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 1.0f;
+    opt_params.grow_until_iter = 10'000;
+
+    strategy.initialize(opt_params);
+
+    auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
+    ASSERT_NE(means_state, nullptr);
+    means_state->exp_avg.fill_(5.0f);
+    means_state->exp_avg_sq.fill_(6.0f);
+    means_state->grad.fill_(7.0f);
+
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+
+    const size_t initial_size = splat_data.size();
+    strategy.grow_and_split(1, 0);
+
+    ASSERT_EQ(splat_data.size(), initial_size + 1);
+    ASSERT_EQ(means_state->size, initial_size + 1);
+
+    const auto exp_avg_cpu = means_state->exp_avg.cpu();
+    const auto exp_avg_sq_cpu = means_state->exp_avg_sq.cpu();
+    const auto grad_cpu = means_state->grad.cpu();
+
+    const float* exp_avg_ptr = exp_avg_cpu.ptr<float>();
+    const float* exp_avg_sq_ptr = exp_avg_sq_cpu.ptr<float>();
+    const float* grad_ptr = grad_cpu.ptr<float>();
+
+    for (int c = 0; c < 3; ++c) {
+        EXPECT_FLOAT_EQ(exp_avg_ptr[c], 0.0f);
+        EXPECT_FLOAT_EQ(exp_avg_sq_ptr[c], 0.0f);
+        EXPECT_FLOAT_EQ(grad_ptr[c], 0.0f);
+    }
+
+    for (int c = 0; c < 3; ++c) {
+        EXPECT_FLOAT_EQ(exp_avg_ptr[3 + c], 5.0f);
+        EXPECT_FLOAT_EQ(exp_avg_sq_ptr[3 + c], 6.0f);
+        EXPECT_FLOAT_EQ(grad_ptr[3 + c], 7.0f);
+    }
+
+    const size_t child_offset = initial_size * 3;
+    for (int c = 0; c < 3; ++c) {
+        EXPECT_FLOAT_EQ(exp_avg_ptr[child_offset + c], 0.0f);
+        EXPECT_FLOAT_EQ(exp_avg_sq_ptr[child_offset + c], 0.0f);
+        EXPECT_FLOAT_EQ(grad_ptr[child_offset + c], 0.0f);
+    }
+}
+
+TEST(LFSStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
+    auto splat_data = create_lfs_test_splat_data();
+    LFS strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::lfs_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 1.0f;
+    opt_params.grow_until_iter = 10'000;
+    strategy.initialize(opt_params);
+
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+
+    const size_t initial_size = splat_data.size();
+    strategy.grow_and_split(1, 0);
+
+    ASSERT_EQ(splat_data.size(), initial_size + 1);
+
+    const auto means_cpu = splat_data.means().cpu();
+    const auto scales_cpu = splat_data.scaling_raw().cpu();
+    const auto opacities_cpu = splat_data.opacity_raw().cpu();
+
+    const float* means_ptr = means_cpu.ptr<float>();
+    const float* scales_ptr = scales_cpu.ptr<float>();
+    const float* opacities_ptr = opacities_cpu.ptr<float>();
+
+    EXPECT_NEAR(means_ptr[0], 0.5f, 1e-5f);
+    EXPECT_NEAR(means_ptr[1], 0.0f, 1e-5f);
+    EXPECT_NEAR(means_ptr[2], 0.0f, 1e-5f);
+
+    const size_t child_base = initial_size * 3;
+    EXPECT_NEAR(means_ptr[child_base + 0], -0.5f, 1e-5f);
+    EXPECT_NEAR(means_ptr[child_base + 1], 0.0f, 1e-5f);
+    EXPECT_NEAR(means_ptr[child_base + 2], 0.0f, 1e-5f);
+
+    EXPECT_NEAR(scales_ptr[0], std::log(0.5f), 1e-5f);
+    EXPECT_NEAR(scales_ptr[1], std::log(0.85f), 1e-5f);
+    EXPECT_NEAR(scales_ptr[2], std::log(0.85f), 1e-5f);
+
+    const size_t child_scale_base = initial_size * 3;
+    EXPECT_NEAR(scales_ptr[child_scale_base + 0], std::log(0.5f), 1e-5f);
+    EXPECT_NEAR(scales_ptr[child_scale_base + 1], std::log(0.85f), 1e-5f);
+    EXPECT_NEAR(scales_ptr[child_scale_base + 2], std::log(0.85f), 1e-5f);
+
+    EXPECT_NEAR(opacities_ptr[0], std::log(0.3f / 0.7f), 1e-5f);
+    EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
+}
+
+TEST(LFSStrategyTest, StepScalingAlsoScalesGrowUntilIter) {
+    auto params = param::OptimizationParameters::lfs_defaults();
+    params.grow_until_iter = 15000;
+    params.steps_scaler = 0.5f;
+
+    params.apply_step_scaling();
+
+    EXPECT_EQ(params.grow_until_iter, 7500u);
+    EXPECT_EQ(params.refine_every, 100u);
+    EXPECT_EQ(params.stop_refine, 14250u);
+}

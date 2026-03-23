@@ -1518,7 +1518,7 @@ namespace lfs::training {
                 (params_.optimization.strategy == "mcmc") ||
                 (params_.optimization.strategy == "igs+") ||
                 (params_.optimization.strategy == "lfs" &&
-                 (params_.optimization.lfs_use_error_map || params_.optimization.lfs_use_edge_map));
+                 params_.optimization.use_error_map);
             const bool use_ssim_error = use_pixel_error_densification;
             DensificationType densification_type = DensificationType::None;
             if (params_.optimization.strategy == "mcmc")
@@ -1865,40 +1865,6 @@ namespace lfs::training {
                              params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
                             tile_error_map = (tile_error_map * mask_tile).contiguous();
                         }
-                    }
-
-                    if (params_.optimization.lfs_use_edge_map &&
-                        params_.optimization.strategy == "lfs") {
-                        lfs::core::Tensor gt_chw = gt_tile;
-                        if (gt_chw.ndim() == 3 && gt_chw.shape()[2] == 3)
-                            gt_chw = gt_chw.permute({2, 0, 1}).contiguous();
-
-                        assert(gt_chw.ndim() == 3 && gt_chw.shape()[0] >= 1);
-                        const int C = static_cast<int>(gt_chw.shape()[0]);
-                        const int H = static_cast<int>(gt_chw.shape()[1]);
-                        const int W = static_cast<int>(gt_chw.shape()[2]);
-
-                        if (!edge_map_buffer_.is_valid() ||
-                            edge_map_buffer_.shape()[0] != H ||
-                            edge_map_buffer_.shape()[1] != W) {
-                            edge_map_buffer_ = core::Tensor::empty(
-                                {static_cast<size_t>(H), static_cast<size_t>(W)},
-                                core::Device::CUDA);
-                        }
-
-                        lfs_strategy::launch_sobel_edge_map(
-                            gt_chw.ptr<float>(), edge_map_buffer_.ptr<float>(),
-                            C, H, W);
-
-                        const float edge_mean = edge_map_buffer_.mean().item();
-                        auto normalized_edge = (edge_mean > 1e-6f)
-                                                   ? (edge_map_buffer_ / edge_mean)
-                                                   : edge_map_buffer_;
-
-                        if (tile_error_map.is_valid())
-                            tile_error_map = (tile_error_map * normalized_edge).contiguous();
-                        else
-                            tile_error_map = normalized_edge.contiguous();
                     }
 
                     if (tile_error_map.is_valid() && params_.optimization.strategy == "lfs") {
