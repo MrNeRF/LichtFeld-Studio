@@ -19,6 +19,11 @@ namespace lfs::vis::input {
         Viewport,
     };
 
+    struct PointerTargets {
+        InputTarget hover_target = InputTarget::None;
+        InputTarget pointer_target = InputTarget::None;
+    };
+
     struct InputState {
         InputTarget keyboard_focus = InputTarget::None;
         InputTarget pointer_capture = InputTarget::None;
@@ -36,6 +41,7 @@ namespace lfs::vis::input {
 
         [[nodiscard]] InputTarget hoverTarget(double x, double y) const;
         [[nodiscard]] InputTarget pointerTarget(double x, double y) const;
+        [[nodiscard]] PointerTargets pointerTargets(double x, double y) const;
         [[nodiscard]] InputTarget keyboardFocus() const;
         [[nodiscard]] bool isViewportKeyboardFocused() const;
         [[nodiscard]] bool isGuiKeyboardFocused() const;
@@ -44,6 +50,7 @@ namespace lfs::vis::input {
         [[nodiscard]] const InputState& state() const { return state_; }
 
     private:
+        [[nodiscard]] InputTarget hitTestHoverTarget(double x, double y) const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const;
 
         InputController* input_controller_ = nullptr;

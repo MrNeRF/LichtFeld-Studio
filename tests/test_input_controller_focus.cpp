@@ -185,4 +185,18 @@ namespace lfs::vis {
         EXPECT_EQ(router.hoverTarget(2500.0, 2500.0), input::InputTarget::None);
     }
 
+    TEST_F(InputControllerFocusTest, PointerTargetsExposeHoverAndCapturedTargets) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+
+        const auto targets = router.pointerTargets(2500.0, 2500.0);
+        EXPECT_EQ(targets.pointer_target, input::InputTarget::Viewport);
+        EXPECT_EQ(targets.hover_target, input::InputTarget::None);
+    }
+
 } // namespace lfs::vis

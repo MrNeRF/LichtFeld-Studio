@@ -82,7 +82,7 @@ namespace lfs::vis::input {
         state_.pointer_capture = InputTarget::None;
     }
 
-    InputTarget InputRouter::hoverTarget(const double x, const double y) const {
+    InputTarget InputRouter::hitTestHoverTarget(const double x, const double y) const {
         if (auto* gui = services().guiOrNull()) {
             const auto hit = gui->hitTestPointer(x, y);
             if (hit.blocks_pointer || !gui->isPositionInViewport(x, y)) {
@@ -94,12 +94,26 @@ namespace lfs::vis::input {
         return isViewportPoint(x, y) ? InputTarget::Viewport : InputTarget::None;
     }
 
+    InputTarget InputRouter::hoverTarget(const double x, const double y) const {
+        return hitTestHoverTarget(x, y);
+    }
+
     InputTarget InputRouter::pointerTarget(const double x, const double y) const {
         if (state_.pointer_capture != InputTarget::None) {
             return state_.pointer_capture;
         }
 
-        return hoverTarget(x, y);
+        return hitTestHoverTarget(x, y);
+    }
+
+    PointerTargets InputRouter::pointerTargets(const double x, const double y) const {
+        const auto hover_target = hitTestHoverTarget(x, y);
+        return {
+            .hover_target = hover_target,
+            .pointer_target = state_.pointer_capture != InputTarget::None
+                                  ? state_.pointer_capture
+                                  : hover_target,
+        };
     }
 
     InputTarget InputRouter::keyboardFocus() const {
