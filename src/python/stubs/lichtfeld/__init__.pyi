@@ -1377,6 +1377,13 @@ class OptimizationParams:
     def means_lr(self, arg: float, /) -> None: ...
 
     @property
+    def means_lr_end(self) -> float:
+        """Target end learning rate for gaussian positions"""
+
+    @means_lr_end.setter
+    def means_lr_end(self, arg: float, /) -> None: ...
+
+    @property
     def shs_lr(self) -> float:
         """Learning rate for spherical harmonics"""
 
@@ -1396,6 +1403,13 @@ class OptimizationParams:
 
     @scaling_lr.setter
     def scaling_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def scaling_lr_end(self) -> float:
+        """Target end learning rate for gaussian scales"""
+
+    @scaling_lr_end.setter
+    def scaling_lr_end(self, arg: float, /) -> None: ...
 
     @property
     def rotation_lr(self) -> float:
@@ -1430,7 +1444,7 @@ class OptimizationParams:
         """Active optimization strategy name"""
 
     def set_strategy(self, strategy: str) -> None:
-        """Set active strategy ('mcmc' or 'adc')"""
+        """Set active strategy ('mcmc', 'adc', or 'lfs')"""
 
     @property
     def headless(self) -> bool:

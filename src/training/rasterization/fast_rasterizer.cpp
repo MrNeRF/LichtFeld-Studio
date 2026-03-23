@@ -415,7 +415,8 @@ namespace lfs::training {
         core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
         const core::Tensor& grad_alpha_extra,
-        const core::Tensor& pixel_error_map) {
+        const core::Tensor& pixel_error_map,
+        DensificationType densification_type) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -527,7 +528,8 @@ namespace lfs::training {
             ctx.focal_y,
             ctx.center_x,
             ctx.center_y,
-            ctx.mip_filter);
+            ctx.mip_filter,
+            densification_type);
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);

@@ -4,6 +4,7 @@
 
 #include "strategy_factory.hpp"
 #include "adc.hpp"
+#include "lfs.hpp"
 #include "core/logger.hpp"
 #include "mcmc.hpp"
 #include <format>
@@ -29,6 +30,11 @@ namespace lfs::training {
         registry_["mcmc"] = [](core::SplatData& model)
             -> std::expected<std::unique_ptr<IStrategy>, std::string> {
             return std::make_unique<MCMC>(model);
+        };
+
+        registry_["lfs"] = [](core::SplatData& model)
+            -> std::expected<std::unique_ptr<IStrategy>, std::string> {
+            return std::make_unique<LFS>(model);
         };
     }
 

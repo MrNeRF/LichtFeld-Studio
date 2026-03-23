@@ -29,6 +29,7 @@
 #include "strategies/adc.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
+#include "training/kernels/lfs_kernels.hpp"
 #include "training/kernels/grad_alpha.hpp"
 
 #include <filesystem>
@@ -1113,9 +1114,15 @@ namespace lfs::training {
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
             const bool use_pixel_error_densification =
-                (params_.optimization.strategy == "mcmc");
-            const bool use_ssim_error = use_pixel_error_densification &&
-                                        (params_.optimization.strategy == "mcmc");
+                (params_.optimization.strategy == "mcmc") ||
+                (params_.optimization.strategy == "lfs" &&
+                 (params_.optimization.lfs_use_error_map || params_.optimization.lfs_use_edge_map));
+            const bool use_ssim_error = use_pixel_error_densification;
+            DensificationType densification_type = DensificationType::None;
+            if (params_.optimization.strategy == "mcmc")
+                densification_type = DensificationType::MCMC;
+            else if (params_.optimization.strategy == "lfs")
+                densification_type = DensificationType::LFS;
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -1469,6 +1476,44 @@ namespace lfs::training {
                         }
                     }
 
+                    if (params_.optimization.lfs_use_edge_map &&
+                        params_.optimization.strategy == "lfs") {
+                        lfs::core::Tensor gt_chw = gt_tile;
+                        if (gt_chw.ndim() == 3 && gt_chw.shape()[2] == 3)
+                            gt_chw = gt_chw.permute({2, 0, 1}).contiguous();
+
+                        assert(gt_chw.ndim() == 3 && gt_chw.shape()[0] >= 1);
+                        const int C = static_cast<int>(gt_chw.shape()[0]);
+                        const int H = static_cast<int>(gt_chw.shape()[1]);
+                        const int W = static_cast<int>(gt_chw.shape()[2]);
+
+                        if (!edge_map_buffer_.is_valid() ||
+                            edge_map_buffer_.shape()[0] != H ||
+                            edge_map_buffer_.shape()[1] != W) {
+                            edge_map_buffer_ = core::Tensor::empty({H, W}, core::Device::CUDA);
+                        }
+
+                        lfs_strategy::launch_sobel_edge_map(
+                            gt_chw.ptr<float>(), edge_map_buffer_.ptr<float>(),
+                            C, H, W);
+
+                        const float edge_mean = edge_map_buffer_.mean().item();
+                        auto normalized_edge = (edge_mean > 1e-6f)
+                                                   ? (edge_map_buffer_ / edge_mean)
+                                                   : edge_map_buffer_;
+
+                        if (tile_error_map.is_valid())
+                            tile_error_map = (tile_error_map * normalized_edge).contiguous();
+                        else
+                            tile_error_map = normalized_edge.contiguous();
+                    }
+
+                    if (tile_error_map.is_valid() && params_.optimization.strategy == "lfs") {
+                        const float map_mean = tile_error_map.mean().item();
+                        if (map_mean > 1e-6f)
+                            tile_error_map = (tile_error_map / map_mean).contiguous();
+                    }
+
                     loss_tensor_gpu = loss_tensor_gpu + tile_loss;
                     tiles_processed++;
                     nvtxRangePop();
@@ -1501,7 +1546,8 @@ namespace lfs::training {
                     } else {
                         fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                 strategy_->get_optimizer(), tile_grad_alpha,
-                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
+                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                densification_type);
                     }
                     nvtxRangePop();
                 }

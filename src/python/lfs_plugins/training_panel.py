@@ -200,11 +200,14 @@ class TrainingPanel(Panel):
             strategy_items = [
                 tr("training.options.strategy.mcmc"),
                 tr("training.options.strategy.adc"),
+                tr("training.options.strategy.lfs"),
             ]
-            strategy_idx = 0 if params.strategy == "mcmc" else 1
+            strategy_map = {0: "mcmc", 1: "adc", 2: "lfs"}
+            strategy_idx = {"mcmc": 0, "adc": 1, "lfs": 2}.get(params.strategy, 0)
             changed, new_idx = layout.combo("##py_strategy", strategy_idx, strategy_items)
             if changed:
-                if new_idx == 1 and params.gut:
+                new_strategy = strategy_map[new_idx]
+                if new_strategy == "adc" and params.gut:
                     btn_gut = tr("training.conflict.btn_disable_gut")
                     btn_cancel = tr("training.conflict.btn_cancel")
                     def _on_strategy_conflict(button, _gut=btn_gut):
@@ -218,7 +221,7 @@ class TrainingPanel(Panel):
                         [btn_gut, btn_cancel],
                         _on_strategy_conflict)
                 else:
-                    params.set_strategy("mcmc" if new_idx == 0 else "adc")
+                    params.set_strategy(new_strategy)
             layout.pop_item_width()
             if layout.is_item_hovered():
                 tooltip = tr("training.tooltip.strategy_gut_conflict") if params.gut else tr("training.tooltip.strategy")
@@ -711,6 +714,44 @@ class TrainingPanel(Panel):
                     self._input_float_prop_row(layout, tr("training.thresholds.prune_scale_2d"), "prune_scale2d", params, 0.01, 0.1, "%.3f", min_val=0.0)
                     self._input_int_row(layout, tr("training.thresholds.pause_after_reset"), "pause_refine_after_reset", params, 100, 500)
                     self._table_prop(layout, params, "revised_opacity", tr("training.thresholds.revised_opacity"))
+                    layout.end_disabled()
+            finally:
+                if table_open:
+                    layout.end_table()
+                layout.tree_pop()
+
+        if params.strategy == "lfs" and layout.tree_node(tr("training_panel.lfs_params") + "##py"):
+            table_open = False
+            try:
+                table_open = layout.begin_table("PyLFSTable", 2)
+                if table_open:
+                    layout.table_setup_column(tr("common.column_label"), 140.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
+                    layout.begin_disabled(not can_edit)
+                    self._input_float_prop_row(layout, "Growth Grad Threshold", "lfs_growth_grad_threshold", params, 0.0001, 0.001, "%.5f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Growth Select Fraction", "lfs_growth_select_fraction", params, 0.01, 0.05, "%.3f", min_val=0.0, max_val=1.0)
+                    self._input_int_row(layout, "Growth Stop Iter", "lfs_growth_stop_iter", params, 1000, 5000)
+                    self._input_float_prop_row(layout, "Opacity Decay", "lfs_opac_decay", params, 0.0001, 0.001, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Scale Decay", "lfs_scale_decay", params, 0.0001, 0.001, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Noise Weight", "lfs_mean_noise_weight", params, 1.0, 10.0, "%.1f", min_val=0.0)
+                    self._input_float_prop_row(layout, "Bound Percentile", "lfs_bound_percentile", params, 0.01, 0.05, "%.2f", min_val=0.5, max_val=1.0)
+
+                    layout.table_next_row()
+                    layout.table_next_column()
+                    layout.label("Error Map")
+                    layout.table_next_column()
+                    changed, new_val = layout.checkbox("##py_lfs_use_error_map", params.lfs_use_error_map)
+                    if changed:
+                        params.lfs_use_error_map = new_val
+
+                    layout.table_next_row()
+                    layout.table_next_column()
+                    layout.label("Edge Map")
+                    layout.table_next_column()
+                    changed, new_val = layout.checkbox("##py_lfs_use_edge_map", params.lfs_use_edge_map)
+                    if changed:
+                        params.lfs_use_edge_map = new_val
+
                     layout.end_disabled()
             finally:
                 if table_open:

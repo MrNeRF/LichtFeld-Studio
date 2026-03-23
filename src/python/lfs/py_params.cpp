@@ -49,6 +49,10 @@ namespace lfs::python {
                         "means_lr", "Position LR", 0.000016f, 0.0f, 0.001f,
                         "Learning rate for gaussian positions")
             .flags(PROP_LIVE_UPDATE)
+            .float_prop(&OptimizationParameters::means_lr_end,
+                        "means_lr_end", "Position LR End", 0.00000016f, 0.0f, 0.001f,
+                        "Target end learning rate for gaussian positions")
+            .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::shs_lr,
                         "shs_lr", "SH LR", 0.0025f, 0.0f, 0.1f,
                         "Learning rate for spherical harmonics")
@@ -60,6 +64,10 @@ namespace lfs::python {
             .float_prop(&OptimizationParameters::scaling_lr,
                         "scaling_lr", "Scale LR", 0.005f, 0.0f, 0.1f,
                         "Learning rate for gaussian scales")
+            .flags(PROP_LIVE_UPDATE)
+            .float_prop(&OptimizationParameters::scaling_lr_end,
+                        "scaling_lr_end", "Scale LR End", 0.005f, 0.0f, 0.1f,
+                        "Target end learning rate for gaussian scales")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::rotation_lr,
                         "rotation_lr", "Rotation LR", 0.001f, 0.0f, 0.1f,
@@ -148,7 +156,7 @@ namespace lfs::python {
             // Strategy
             .string_prop(&OptimizationParameters::strategy,
                          "strategy", "Strategy", "mcmc",
-                         "Optimization strategy: mcmc or adc")
+                         "Optimization strategy: mcmc, adc, or lfs")
             .flags(PROP_NEEDS_RESTART)
 
             // ADC strategy parameters
@@ -176,6 +184,38 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::revised_opacity,
                        "revised_opacity", "Revised Opacity", false,
                        "Use revised opacity calculation for ADC")
+
+            // LFS strategy parameters
+            .float_prop(&OptimizationParameters::lfs_growth_grad_threshold,
+                        "lfs_growth_grad_threshold", "Growth Grad Threshold", 0.001f, 0.0f, 1.0f,
+                        "Min refine weight for growth candidacy (LFS)")
+            .float_prop(&OptimizationParameters::lfs_growth_select_fraction,
+                        "lfs_growth_select_fraction", "Growth Select Fraction", 0.2f, 0.0f, 1.0f,
+                        "Fraction of above-threshold splats to grow (LFS)")
+            .size_prop(&OptimizationParameters::lfs_growth_stop_iter,
+                       "lfs_growth_stop_iter", "Growth Stop Iter", 15000, 0, 100000,
+                       "Stop growing after this iteration (LFS)")
+            .float_prop(&OptimizationParameters::lfs_opac_decay,
+                        "lfs_opac_decay", "Opacity Decay", 0.004f, 0.0f, 0.1f,
+                        "Opacity decay rate per refine (LFS)")
+            .float_prop(&OptimizationParameters::lfs_scale_decay,
+                        "lfs_scale_decay", "Scale Decay", 0.002f, 0.0f, 0.1f,
+                        "Scale decay rate per refine (LFS)")
+            .float_prop(&OptimizationParameters::lfs_mean_noise_weight,
+                        "lfs_mean_noise_weight", "Noise Weight", 50.0f, 0.0f, 200.0f,
+                        "Exploration noise multiplier (LFS)")
+            .float_prop(&OptimizationParameters::lfs_bound_percentile,
+                        "lfs_bound_percentile", "Bound Percentile", 0.8f, 0.5f, 1.0f,
+                        "Percentile for bounds computation (LFS)")
+            .float_prop(&OptimizationParameters::lfs_split_distance,
+                        "lfs_split_distance", "Split Distance", 0.45f, 0.1f, 0.9f,
+                        "Fraction of 3σ extent for child placement along longest axis (LFS)")
+            .bool_prop(&OptimizationParameters::lfs_use_error_map,
+                       "lfs_use_error_map", "Error Map", true,
+                       "Weight LFS refine signal by per-pixel SSIM error map")
+            .bool_prop(&OptimizationParameters::lfs_use_edge_map,
+                       "lfs_use_edge_map", "Edge Map", true,
+                       "Weight LFS refine signal by Sobel edge map on GT images")
 
             // Flags
             .bool_prop(&OptimizationParameters::mip_filter,
@@ -991,6 +1031,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr = v; }); },
                 "Learning rate for gaussian positions")
             .def_prop_rw(
+                "means_lr_end",
+                [](PyOptimizationParams& self) { return self.params().means_lr_end; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr_end = v; }); },
+                "Target end learning rate for gaussian positions")
+            .def_prop_rw(
                 "shs_lr",
                 [](PyOptimizationParams& self) { return self.params().shs_lr; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.shs_lr = v; }); },
@@ -1005,6 +1050,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().scaling_lr; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr = v; }); },
                 "Learning rate for gaussian scales")
+            .def_prop_rw(
+                "scaling_lr_end",
+                [](PyOptimizationParams& self) { return self.params().scaling_lr_end; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr_end = v; }); },
+                "Target end learning rate for gaussian scales")
             .def_prop_rw(
                 "rotation_lr",
                 [](PyOptimizationParams& self) { return self.params().rotation_lr; },
@@ -1031,8 +1081,8 @@ namespace lfs::python {
             .def(
                 "set_strategy",
                 [](PyOptimizationParams& /*self*/, const std::string& strategy) {
-                    if (strategy != "mcmc" && strategy != "adc") {
-                        throw std::invalid_argument("Strategy must be 'mcmc' or 'adc'");
+                    if (strategy != "mcmc" && strategy != "adc" && strategy != "lfs") {
+                        throw std::invalid_argument("Strategy must be 'mcmc', 'adc', or 'lfs'");
                     }
                     auto* pm = get_parameter_manager();
                     if (pm) {
@@ -1040,7 +1090,7 @@ namespace lfs::python {
                     }
                 },
                 nb::arg("strategy"),
-                "Set active strategy ('mcmc' or 'adc')")
+                "Set active strategy ('mcmc', 'adc', or 'lfs')")
             .def_prop_ro(
                 "headless", [](PyOptimizationParams& self) { return self.params().headless; },
                 "Whether running without visualization")

@@ -33,6 +33,8 @@ namespace lfs::vis {
         mcmc_current_ = mcmc_session_;
         adc_session_ = lfs::core::param::OptimizationParameters::adc_defaults();
         adc_current_ = adc_session_;
+        lfs_session_ = lfs::core::param::OptimizationParameters::lfs_defaults();
+        lfs_current_ = lfs_session_;
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
 
         loaded_ = true;
@@ -40,11 +42,19 @@ namespace lfs::vis {
     }
 
     lfs::core::param::OptimizationParameters& ParameterManager::getCurrentParams(const std::string_view strategy) {
-        return (strategy == "mcmc") ? mcmc_current_ : adc_current_;
+        if (strategy == "mcmc")
+            return mcmc_current_;
+        if (strategy == "lfs")
+            return lfs_current_;
+        return adc_current_;
     }
 
     const lfs::core::param::OptimizationParameters& ParameterManager::getCurrentParams(const std::string_view strategy) const {
-        return (strategy == "mcmc") ? mcmc_current_ : adc_current_;
+        if (strategy == "mcmc")
+            return mcmc_current_;
+        if (strategy == "lfs")
+            return lfs_current_;
+        return adc_current_;
     }
 
     void ParameterManager::resetToDefaults(const std::string_view strategy) {
@@ -54,6 +64,9 @@ namespace lfs::vis {
         }
         if (strategy.empty() || strategy == "adc") {
             adc_current_ = adc_session_;
+        }
+        if (strategy.empty() || strategy == "lfs") {
+            lfs_current_ = lfs_session_;
         }
     }
 
@@ -69,10 +82,16 @@ namespace lfs::vis {
         if (!opt.strategy.empty())
             setActiveStrategy(opt.strategy);
 
-        auto& session = (active_strategy_ == "mcmc") ? mcmc_session_ : adc_session_;
-        auto& current = (active_strategy_ == "mcmc") ? mcmc_current_ : adc_current_;
-        session = opt;
-        current = opt;
+        if (active_strategy_ == "mcmc") {
+            mcmc_session_ = opt;
+            mcmc_current_ = opt;
+        } else if (active_strategy_ == "lfs") {
+            lfs_session_ = opt;
+            lfs_current_ = opt;
+        } else {
+            adc_session_ = opt;
+            adc_current_ = opt;
+        }
 
         // Apply CLI overrides to dataset config
         const auto& ds = params.dataset;
@@ -99,11 +118,7 @@ namespace lfs::vis {
         if (!params.strategy.empty()) {
             setActiveStrategy(params.strategy);
         }
-        if (active_strategy_ == "mcmc") {
-            mcmc_current_ = params;
-        } else {
-            adc_current_ = params;
-        }
+        getCurrentParams(active_strategy_) = params;
         LOG_DEBUG("Current params updated: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
 
@@ -115,6 +130,9 @@ namespace lfs::vis {
         if (active_strategy_ == "mcmc") {
             mcmc_session_ = params;
             mcmc_current_ = params;
+        } else if (active_strategy_ == "lfs") {
+            lfs_session_ = params;
+            lfs_current_ = params;
         } else {
             adc_session_ = params;
             adc_current_ = params;
@@ -123,7 +141,7 @@ namespace lfs::vis {
     }
 
     void ParameterManager::setActiveStrategy(const std::string_view strategy) {
-        if (strategy == "mcmc" || strategy == "adc") {
+        if (strategy == "mcmc" || strategy == "adc" || strategy == "lfs") {
             active_strategy_ = std::string(strategy);
         }
     }
@@ -145,6 +163,7 @@ namespace lfs::vis {
         std::lock_guard lock(params_mutex_);
         apply_scaler_to_params(mcmc_current_, new_scaler);
         apply_scaler_to_params(adc_current_, new_scaler);
+        apply_scaler_to_params(lfs_current_, new_scaler);
         dirty_.store(true, std::memory_order_release);
         LOG_INFO("Auto-scaled steps for {} images: scaler={:.2f}", image_count, new_scaler);
     }

@@ -36,9 +36,11 @@ namespace lfs::core {
             size_t iterations = 30'000;
             size_t sh_degree_interval = 1'000;
             float means_lr = 0.000016f;
+            float means_lr_end = 0.00000016f;
             float shs_lr = 0.0025f;
             float opacity_lr = 0.025f;
             float scaling_lr = 0.005f;
+            float scaling_lr_end = 0.005f;
             float rotation_lr = 0.001f;
             float lambda_dssim = 0.2f;
             float min_opacity = 0.005f;
@@ -63,7 +65,7 @@ namespace lfs::core {
             bool no_interop = false;                          // Disable CUDA-GL interop (use CPU fallback)
             bool debug_python = false;                        // Start debugpy listener for plugin debugging
             int debug_python_port = 5678;                     // Port for debugpy listener
-            std::string strategy = "mcmc";                    // Optimization strategy: mcmc, adc.
+            std::string strategy = "mcmc";                    // Optimization strategy: mcmc, adc, lfs.
 
             // Mask parameters
             MaskMode mask_mode = MaskMode::None;      // Attention mask mode
@@ -112,6 +114,18 @@ namespace lfs::core {
             bool undistort = false;
             float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling
 
+            // LFS strategy specific parameters
+            float lfs_growth_grad_threshold = 0.003f;
+            float lfs_growth_select_fraction = 0.07f;
+            size_t lfs_growth_stop_iter = 15000;
+            float lfs_opac_decay = 0.004f;
+            float lfs_scale_decay = 0.002f;
+            float lfs_mean_noise_weight = 50.0f;
+            float lfs_bound_percentile = 0.8f;
+            float lfs_split_distance = 0.45f;
+            bool lfs_use_error_map = true;
+            bool lfs_use_edge_map = true;
+
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM
             int init_num_pts = 100'000; // Number of random points to initialize
@@ -140,6 +154,7 @@ namespace lfs::core {
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();
             static OptimizationParameters adc_defaults();
+            static OptimizationParameters lfs_defaults();
         };
 
         struct LFS_CORE_API LoadingParams {

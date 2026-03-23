@@ -8,6 +8,10 @@
 
 #define DEF inline constexpr
 
+enum class DensificationType : int { None = 0,
+                                     MCMC = 1,
+                                     LFS = 2 };
+
 namespace fast_lfs::rasterization::config {
     DEF bool debug = false;
     // rendering constants

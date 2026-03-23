@@ -310,6 +310,9 @@ namespace lfs::training {
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
 
+        // Reusable buffer for Sobel edge map (lfs edge-importance densification)
+        core::Tensor edge_map_buffer_;
+
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
 

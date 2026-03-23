@@ -266,7 +266,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     // based on https://github.com/humansensinglab/taming-3dgs/blob/fd0f7d9edfe135eb4eefd3be82ee56dada7f2a16/submodules/diff-gaussian-rasterization/cuda_rasterizer/backward.cu#L404
-    template <bool HAS_DENSIFICATION>
+    template <DensificationType DENSIFICATION_TYPE>
     __global__ void blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ tile_bucket_offsets,
@@ -458,7 +458,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
             const float blending_weight = transmittance * alpha;
 
-            if constexpr (HAS_DENSIFICATION) {
+            if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
                 const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                 const float pixel_error = densification_error_map[pixel_idx];
                 densification_weight_accum += blending_weight;
@@ -491,6 +491,15 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                                  conic.y * delta.x + conic.z * delta.y);
             dL_dmean2d_accum += dL_dmean2d;
 
+            if constexpr (DENSIFICATION_TYPE == DensificationType::LFS) {
+                const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                const float pixel_error = (densification_error_map != nullptr)
+                                              ? densification_error_map[pixel_idx]
+                                              : 1.0f;
+                densification_weight_accum += blending_weight;
+                densification_error_weighted_accum += blending_weight * pixel_error;
+            }
+
             transmittance *= one_minus_alpha;
         }
 
@@ -515,7 +524,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             atomicAdd(&grad_color[primitive_idx].y, clamped_color.y);
             atomicAdd(&grad_color[primitive_idx].z, clamped_color.z);
 
-            if constexpr (HAS_DENSIFICATION) {
+            if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
                 atomicAdd(&densification_info[primitive_idx], densification_weight_accum);
                 atomicAdd(&densification_info[n_primitives + primitive_idx], densification_error_weighted_accum);
             }

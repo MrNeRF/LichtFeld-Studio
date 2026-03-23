@@ -9,6 +9,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "nanoflann.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <expected>
 #include <format>
@@ -96,6 +97,117 @@ namespace {
             }
 
             result_data[i] = (valid_neighbors > 0) ? (sum_dist / valid_neighbors) : 0.01f;
+        }
+
+        return result.to(points.device());
+    }
+
+    lfs::core::Tensor compute_lfs_knn_log_scales(const lfs::core::Tensor& points) {
+        auto cpu_points = points.cpu();
+        const int num_points = cpu_points.size(0);
+
+        if (cpu_points.ndim() != 2 || cpu_points.size(1) != 3) {
+            LOG_ERROR("Input points must have shape [N, 3], got {}", cpu_points.shape().str());
+            return lfs::core::Tensor();
+        }
+
+        if (cpu_points.dtype() != lfs::core::DataType::Float32) {
+            LOG_ERROR("Input points must be float32");
+            return lfs::core::Tensor();
+        }
+
+        // Match LFS: if there are too few points, use log_scale=0.
+        if (num_points < 3) {
+            auto zeros = lfs::core::Tensor::zeros(
+                {static_cast<size_t>(num_points), 3},
+                lfs::core::Device::CPU);
+            return zeros.to(points.device());
+        }
+
+        const float* data = cpu_points.ptr<float>();
+
+        constexpr float percentile = 0.75f;
+        std::vector<float> x_vals;
+        std::vector<float> y_vals;
+        std::vector<float> z_vals;
+        x_vals.reserve(num_points);
+        y_vals.reserve(num_points);
+        z_vals.reserve(num_points);
+        for (int i = 0; i < num_points; ++i) {
+            const float x = data[i * 3 + 0];
+            const float y = data[i * 3 + 1];
+            const float z = data[i * 3 + 2];
+            if (std::isfinite(x))
+                x_vals.push_back(x);
+            if (std::isfinite(y))
+                y_vals.push_back(y);
+            if (std::isfinite(z))
+                z_vals.push_back(z);
+        }
+
+        if (x_vals.empty() || y_vals.empty() || z_vals.empty()) {
+            auto zeros = lfs::core::Tensor::zeros(
+                {static_cast<size_t>(num_points), 3},
+                lfs::core::Device::CPU);
+            return zeros.to(points.device());
+        }
+
+        std::sort(x_vals.begin(), x_vals.end());
+        std::sort(y_vals.begin(), y_vals.end());
+        std::sort(z_vals.begin(), z_vals.end());
+
+        const auto idx_pair = [percentile](const size_t len) {
+            const size_t lower_idx = static_cast<size_t>(((1.0f - percentile) / 2.0f) * static_cast<float>(len));
+            const size_t upper_idx =
+                std::min(len - 1, static_cast<size_t>(((1.0f + percentile) / 2.0f) * static_cast<float>(len)));
+            return std::pair<size_t, size_t>{lower_idx, upper_idx};
+        };
+
+        const auto [lx, ux] = idx_pair(x_vals.size());
+        const auto [ly, uy] = idx_pair(y_vals.size());
+        const auto [lz, uz] = idx_pair(z_vals.size());
+
+        const float ex = (x_vals[ux] - x_vals[lx]) * 0.5f;
+        const float ey = (y_vals[uy] - y_vals[ly]) * 0.5f;
+        const float ez = (z_vals[uz] - z_vals[lz]) * 0.5f;
+
+        float sorted_extents[3] = {ex, ey, ez};
+        std::sort(sorted_extents, sorted_extents + 3);
+        const float median_size = std::max(sorted_extents[1] * 2.0f, 0.01f);
+        const float max_scale = median_size * 0.1f;
+
+        PointCloudAdaptor cloud(data, num_points);
+        KDTree index(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
+        index.buildIndex();
+
+        auto result = lfs::core::Tensor::zeros(
+            {static_cast<size_t>(num_points), 3},
+            lfs::core::Device::CPU);
+        float* result_data = result.ptr<float>();
+
+#pragma omp parallel for if (num_points > 1000)
+        for (int i = 0; i < num_points; i++) {
+            const float query_pt[3] = {
+                data[i * 3 + 0],
+                data[i * 3 + 1],
+                data[i * 3 + 2]};
+
+            constexpr size_t num_results = 3; // self + 2 nearest neighbors
+            std::vector<size_t> ret_indices(num_results);
+            std::vector<float> out_dists_sqr(num_results);
+
+            nanoflann::KNNResultSet<float> result_set(num_results);
+            result_set.init(&ret_indices[0], &out_dists_sqr[0]);
+            index.findNeighbors(result_set, &query_pt[0], nanoflann::SearchParameters(10));
+
+            const float a1 = std::sqrt(std::max(out_dists_sqr[1], 0.0f));
+            const float a2 = std::sqrt(std::max(out_dists_sqr[2], 0.0f));
+            const float dist = (a1 + a2) * 0.25f;
+            const float log_scale = std::log(std::clamp(dist, 1e-3f, max_scale));
+
+            result_data[i * 3 + 0] = log_scale;
+            result_data[i * 3 + 1] = log_scale;
+            result_data[i * 3 + 2] = log_scale;
         }
 
         return result.to(points.device());
@@ -621,16 +733,20 @@ namespace lfs::core {
 
                 // Compute scaling on CPU
                 LOG_DEBUG("  Computing neighbor distances...");
-                auto nn_dist = compute_mean_neighbor_distances(means_cpu).clamp_min(1e-7f);
-                LOG_DEBUG("  nn_dist computed: is_valid={}, shape={}, numel={}",
-                          nn_dist.is_valid(), nn_dist.shape().str(), nn_dist.numel());
+                if (params.optimization.strategy == "lfs") {
+                    scaling_cpu = compute_lfs_knn_log_scales(means_cpu);
+                } else {
+                    auto nn_dist = compute_mean_neighbor_distances(means_cpu).clamp_min(1e-7f);
+                    LOG_DEBUG("  nn_dist computed: is_valid={}, shape={}, numel={}",
+                              nn_dist.is_valid(), nn_dist.shape().str(), nn_dist.numel());
 
-                std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
-                scaling_cpu = nn_dist.sqrt()
-                                  .mul(params.optimization.init_scaling)
-                                  .log()
-                                  .unsqueeze(-1)
-                                  .expand(std::span<const int>(scale_expand_shape));
+                    std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
+                    scaling_cpu = nn_dist.sqrt()
+                                      .mul(params.optimization.init_scaling)
+                                      .log()
+                                      .unsqueeze(-1)
+                                      .expand(std::span<const int>(scale_expand_shape));
+                }
                 LOG_DEBUG("  scaling_cpu computed: is_valid={}, ptr={}, device={}, shape={}, numel={}",
                           scaling_cpu.is_valid(), static_cast<const void*>(scaling_cpu.ptr<float>()),
                           scaling_cpu.device() == Device::CUDA ? "CUDA" : "CPU",
@@ -818,14 +934,19 @@ namespace lfs::core {
                     means_temp = positions.cuda();
                 }
 
-                auto nn_dist = compute_mean_neighbor_distances(means_temp).clamp_min(1e-7f);
-                std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
-                auto scaling_temp = nn_dist.sqrt()
-                                        .mul(params.optimization.init_scaling)
-                                        .log()
-                                        .unsqueeze(-1)
-                                        .expand(std::span<const int>(scale_expand_shape))
-                                        .cuda();
+                Tensor scaling_temp;
+                if (params.optimization.strategy == "lfs") {
+                    scaling_temp = compute_lfs_knn_log_scales(means_temp).cuda();
+                } else {
+                    auto nn_dist = compute_mean_neighbor_distances(means_temp).clamp_min(1e-7f);
+                    std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
+                    scaling_temp = nn_dist.sqrt()
+                                       .mul(params.optimization.init_scaling)
+                                       .log()
+                                       .unsqueeze(-1)
+                                       .expand(std::span<const int>(scale_expand_shape))
+                                       .cuda();
+                }
 
                 auto ones_col = Tensor::ones({num_points, 1}, Device::CUDA);
                 auto zeros_cols = Tensor::zeros({num_points, 3}, Device::CUDA);

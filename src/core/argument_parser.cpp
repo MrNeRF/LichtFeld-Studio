@@ -30,7 +30,7 @@ namespace {
         Help
     };
 
-    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc"};
+    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc", "lfs"};
 
     // Parse log level from string
     lfs::core::LogLevel parse_log_level(const std::string& level_str) {
@@ -105,13 +105,16 @@ namespace {
             ::args::Group training_sep(parser, " ");
             ::args::Group training_group(parser, "TRAINING PARAMETERS:");
             ::args::ValueFlag<uint32_t> iterations(training_group, "iterations", "Number of iterations", {'i', "iter"});
-            ::args::ValueFlag<std::string> strategy(training_group, "strategy", "Optimization strategy: mcmc, adc", {"strategy"});
+            ::args::ValueFlag<std::string> strategy(training_group, "strategy", "Optimization strategy: mcmc, adc, lfs", {"strategy"});
             ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", "Max SH degree [0-3]", {"sh-degree"});
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", "SH degree interval", {"sh-degree-interval"});
             ::args::ValueFlag<int> max_cap(training_group, "max_cap", "Max Gaussians for MCMC", {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", "Minimum opacity threshold", {"min-opacity"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", "Scale training steps by factor", {"steps-scaler"});
             ::args::ValueFlag<int> tile_mode(training_group, "tile_mode", "Tile mode for memory-efficient training: 1=1 tile, 2=2 tiles, 4=4 tiles (default: 1)", {"tile-mode"});
+            ::args::ValueFlag<float> lfs_split_distance(training_group, "lfs_split_distance", "LFS split distance fraction along longest axis (default: 0.45)", {"lfs-split-distance"});
+            ::args::Flag lfs_use_error_map(training_group, "lfs_use_error_map", "Weight LFS refine signal by per-pixel SSIM error map", {"lfs-use-error-map"});
+            ::args::Flag lfs_use_edge_map(training_group, "lfs_use_edge_map", "Weight LFS refine signal by Sobel edge map on GT images", {"lfs-use-edge-map"});
 
             // =============================================================================
             // INITIALIZATION
@@ -423,7 +426,7 @@ namespace {
                 const auto strat = ::args::get(strategy);
                 if (VALID_STRATEGIES.find(strat) == VALID_STRATEGIES.end()) {
                     return std::unexpected(std::format(
-                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, adc",
+                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, adc, lfs",
                         strat));
                 }
 
@@ -538,7 +541,10 @@ namespace {
                                         undistort_flag = bool(undistort),
                                         enable_sparsity_flag = bool(enable_sparsity),
                                         invert_masks_flag = bool(invert_masks),
-                                        no_alpha_as_mask_flag = bool(no_alpha_as_mask)]() {
+                                        no_alpha_as_mask_flag = bool(no_alpha_as_mask),
+                                        lfs_split_distance_val = lfs_split_distance ? std::optional<float>(::args::get(lfs_split_distance)) : std::optional<float>(),
+                                        lfs_use_error_map_flag = bool(lfs_use_error_map),
+                                        lfs_use_edge_map_flag = bool(lfs_use_edge_map)]() {
                 auto& opt = params.optimization;
                 auto& ds = params.dataset;
 
@@ -599,6 +605,9 @@ namespace {
                 setFlag(gut_flag, opt.gut);
                 setFlag(undistort_flag, opt.undistort);
                 setFlag(enable_sparsity_flag, opt.enable_sparsity);
+                setVal(lfs_split_distance_val, opt.lfs_split_distance);
+                setFlag(lfs_use_error_map_flag, opt.lfs_use_error_map);
+                setFlag(lfs_use_edge_map_flag, opt.lfs_use_edge_map);
 
                 // Mask parameters
                 setVal(mask_mode_val, opt.mask_mode);
@@ -676,9 +685,13 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             return std::unexpected("--strategy conflicts with config file");
         }
     } else {
-        params->optimization = (strategy == "adc")
-                                   ? lfs::core::param::OptimizationParameters::adc_defaults()
-                                   : lfs::core::param::OptimizationParameters::mcmc_defaults();
+        if (strategy == "adc") {
+            params->optimization = lfs::core::param::OptimizationParameters::adc_defaults();
+        } else if (strategy == "lfs") {
+            params->optimization = lfs::core::param::OptimizationParameters::lfs_defaults();
+        } else {
+            params->optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        }
     }
 
     params->dataset.loading_params = lfs::core::param::LoadingParams{};

@@ -74,7 +74,8 @@ class StatusBarPanel(Panel):
         strategy = lf.trainer_strategy_type()
         gut = lf.trainer_is_gut_enabled()
         method = "GUT" if gut else "3DGS"
-        strat_name = tr("training.options.strategy.mcmc") if strategy == "mcmc" else tr("status_bar.strategy_default")
+        strategy_names = {"mcmc": "training.options.strategy.mcmc", "lfs": "training.options.strategy.lfs"}
+        strat_name = tr(strategy_names.get(strategy, "status_bar.strategy_default"))
 
         if state == "running":
             return f"{tr('status.training')} ({strat_name}/{method})", p.warning

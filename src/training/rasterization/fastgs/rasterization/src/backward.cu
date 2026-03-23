@@ -52,7 +52,8 @@ void fast_lfs::rasterization::backward(
     const float fy,
     const float cx,
     const float cy,
-    bool mip_filter) {
+    bool mip_filter,
+    DensificationType densification_type) {
     if (n_visible_primitives == 0 || n_instances == 0 || n_buckets == 0)
         return;
 
@@ -71,8 +72,8 @@ void fast_lfs::rasterization::backward(
     per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
 
     // Backward blend (template dispatch eliminates densification branch from inner loop)
-    auto launch_blend_backward = [&]<bool HAS_DENSIFICATION>() {
-        kernels::backward::blend_backward_cu<HAS_DENSIFICATION><<<n_buckets, 32>>>(
+    auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
+        kernels::backward::blend_backward_cu<DENS_TYPE><<<n_buckets, 32>>>(
             per_tile_buffers.instance_ranges,
             per_tile_buffers.bucket_offsets,
             per_instance_buffers.primitive_indices.Current(),
@@ -101,10 +102,12 @@ void fast_lfs::rasterization::backward(
             grid.x,
             mip_filter);
     };
-    if (densification_info != nullptr && densification_error_map != nullptr) {
-        launch_blend_backward.template operator()<true>();
+    if (densification_type == DensificationType::LFS && densification_info != nullptr) {
+        launch_blend_backward.template operator()<DensificationType::LFS>();
+    } else if (densification_info != nullptr && densification_error_map != nullptr) {
+        launch_blend_backward.template operator()<DensificationType::MCMC>();
     } else {
-        launch_blend_backward.template operator()<false>();
+        launch_blend_backward.template operator()<DensificationType::None>();
     }
     CHECK_CUDA(config::debug, "blend_backward")
 
@@ -125,7 +128,7 @@ void fast_lfs::rasterization::backward(
         grad_sh_coefficients_0,
         grad_sh_coefficients_rest,
         grad_w2c,
-        densification_error_map == nullptr ? densification_info : nullptr,
+        (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
         n_primitives,
         active_sh_bases,
         total_bases_sh_rest,
