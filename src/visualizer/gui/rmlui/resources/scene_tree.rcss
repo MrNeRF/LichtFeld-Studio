@@ -145,6 +145,7 @@ body {
     flex: 1;
     overflow: auto;
     min-height: 0;
+    tab-index: auto;
 }
 
 #tree-container scrollbarvertical,

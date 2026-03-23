@@ -55,7 +55,7 @@ namespace lfs::vis {
         EXPECT_EQ(goto_cam_view_count, 0);
     }
 
-    TEST_F(InputControllerFocusTest, GtComparisonHotkeyRemainsAvailableOutsideTextEntry) {
+    TEST_F(InputControllerFocusTest, ViewportViewHotkeysDoNotBypassGuiKeyboardFocus) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
         input::InputRouter router;
@@ -64,19 +64,24 @@ namespace lfs::vis {
 
         lfs::event::ScopedHandler handlers;
         int toggle_gt_count = 0;
+        int toggle_split_count = 0;
         handlers.subscribe<core::events::cmd::ToggleGTComparison>(
             [&](const auto&) { ++toggle_gt_count; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>(
+            [&](const auto&) { ++toggle_split_count; });
 
         auto& focus = gui::guiFocusState();
         focus.want_capture_keyboard = true;
         focus.any_item_active = true;
 
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
 
-        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_gt_count, 0);
+        EXPECT_EQ(toggle_split_count, 0);
     }
 
-    TEST_F(InputControllerFocusTest, GtComparisonHotkeyStaysBlockedDuringTextEntry) {
+    TEST_F(InputControllerFocusTest, ViewportViewHotkeysWorkAfterViewportFocus) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
         input::InputRouter router;
@@ -85,17 +90,50 @@ namespace lfs::vis {
 
         lfs::event::ScopedHandler handlers;
         int toggle_gt_count = 0;
+        int toggle_split_count = 0;
         handlers.subscribe<core::events::cmd::ToggleGTComparison>(
             [&](const auto&) { ++toggle_gt_count; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>(
+            [&](const auto&) { ++toggle_split_count; });
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        router.endMouseButton(input::ACTION_RELEASE);
+
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        EXPECT_EQ(toggle_gt_count, 1);
+        EXPECT_EQ(toggle_split_count, 1);
+    }
+
+    TEST_F(InputControllerFocusTest, ViewportViewHotkeysStayBlockedDuringTextEntry) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        lfs::event::ScopedHandler handlers;
+        int toggle_gt_count = 0;
+        int toggle_split_count = 0;
+        handlers.subscribe<core::events::cmd::ToggleGTComparison>(
+            [&](const auto&) { ++toggle_gt_count; });
+        handlers.subscribe<core::events::cmd::ToggleSplitView>(
+            [&](const auto&) { ++toggle_split_count; });
 
         auto& focus = gui::guiFocusState();
         focus.want_capture_keyboard = true;
         focus.want_text_input = true;
         focus.any_item_active = true;
 
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        router.endMouseButton(input::ACTION_RELEASE);
+
         controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+        controller.handleKey(input::KEY_V, input::ACTION_PRESS, input::KEYMOD_NONE);
 
         EXPECT_EQ(toggle_gt_count, 0);
+        EXPECT_EQ(toggle_split_count, 0);
     }
 
     TEST_F(InputControllerFocusTest, StaleMouseCaptureDoesNotRequireSecondViewportClick) {
@@ -114,6 +152,37 @@ namespace lfs::vis {
 
         EXPECT_TRUE(controller.hasViewportKeyboardFocus());
         EXPECT_TRUE(controller.isContinuousInputActive());
+    }
+
+    TEST_F(InputControllerFocusTest, MissedMouseReleaseClearsPointerCapture) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::Viewport);
+        EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::Viewport);
+
+        router.syncPressedMouseButtons(false);
+
+        EXPECT_EQ(router.state().pointer_capture, input::InputTarget::None);
+        EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, HoverTargetIgnoresPointerCapture) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+
+        EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::Viewport);
+        EXPECT_EQ(router.hoverTarget(2500.0, 2500.0), input::InputTarget::None);
     }
 
 } // namespace lfs::vis

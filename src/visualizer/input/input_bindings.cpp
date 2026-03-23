@@ -819,8 +819,6 @@ namespace lfs::vis::input {
         case Action::TOOL_ALIGN:
         case Action::TOGGLE_UI:
         case Action::TOGGLE_FULLSCREEN:
-        case Action::TOGGLE_SPLIT_VIEW:
-        case Action::TOGGLE_GT_COMPARISON:
         case Action::SELECT_MODE_CENTERS:
         case Action::SELECT_MODE_RECTANGLE:
         case Action::SELECT_MODE_POLYGON:
@@ -857,6 +855,8 @@ namespace lfs::vis::input {
         case Action::CAMERA_SPEED_DOWN:
         case Action::ZOOM_SPEED_UP:
         case Action::ZOOM_SPEED_DOWN:
+        case Action::TOGGLE_SPLIT_VIEW:
+        case Action::TOGGLE_GT_COMPARISON:
         case Action::CYCLE_SELECTION_VIS:
         case Action::PIE_MENU:
             return ShortcutScope::Viewport;

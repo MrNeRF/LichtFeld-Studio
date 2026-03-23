@@ -365,6 +365,7 @@ namespace lfs::vis {
         auto* gui = services().guiOrNull();
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
         const bool over_gui = isPointerOverBlockingUi(x, y);
+        const bool over_gui_hover = isPointerOverUiHover(x, y);
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
@@ -381,7 +382,7 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseButtonToModals(button, action, getModifierKeys(), x, y, over_gui)) {
+        if (dispatchMouseButtonToModals(button, action, getModifierKeys(), x, y, over_gui_hover)) {
             return;
         }
 
@@ -723,7 +724,8 @@ namespace lfs::vis {
 
         // Dispatch to modal operators first - if consumed, don't continue
         const bool over_gui = isPointerOverBlockingUi(x, y);
-        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui)) {
+        const bool over_gui_hover = isPointerOverUiHover(x, y);
+        if (dispatchMouseMoveToModals(x, y, delta_x, delta_y, getModifierKeys(), over_gui_hover)) {
             last_mouse_pos_ = current_pos;
             return;
         }
@@ -870,9 +872,10 @@ namespace lfs::vis {
         SDL_GetMouseState(&fx, &fy);
         double mouse_x = fx, mouse_y = fy;
         const bool over_gui = isPointerOverBlockingUi(mouse_x, mouse_y);
+        const bool over_gui_hover = isPointerOverUiHover(mouse_x, mouse_y);
 
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchScrollToModals(xoff, yoff, mouse_x, mouse_y, getModifierKeys(), over_gui)) {
+        if (dispatchScrollToModals(xoff, yoff, mouse_x, mouse_y, getModifierKeys(), over_gui_hover)) {
             return;
         }
 
@@ -964,9 +967,7 @@ namespace lfs::vis {
         float mx_f, my_f;
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
-        const bool over_gui = input_router_
-                                  ? input_router_->pointerTarget(mx, my) == input::InputTarget::Gui
-                                  : isPointerOverBlockingUi(mx, my);
+        const bool over_gui = isPointerOverUiHover(mx, my);
         if (dispatchKeyToModals(key, 0, action, mods, mx, my, over_gui)) {
             return;
         }
@@ -1242,6 +1243,11 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        if (input_router_) {
+            const bool any_mouse_buttons_pressed = SDL_GetMouseState(nullptr, nullptr) != 0;
+            input_router_->syncPressedMouseButtons(any_mouse_buttons_pressed);
+        }
+
         const bool drag_button_released = drag_button_ >= 0 &&
                                           !isMouseButtonPressed(drag_button_);
 
@@ -1642,6 +1648,14 @@ namespace lfs::vis {
 
         return gui->panelLayout().isResizingPanel() ||
                gui->isPositionOverFloatingPanel(x, y);
+    }
+
+    bool InputController::isPointerOverUiHover(const double x, const double y) const {
+        if (input_router_) {
+            return input_router_->hoverTarget(x, y) == input::InputTarget::Gui;
+        }
+
+        return isPointerOverBlockingUi(x, y);
     }
 
     bool InputController::shouldCameraHandleInput() const {

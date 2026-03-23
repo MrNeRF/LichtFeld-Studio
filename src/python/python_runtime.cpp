@@ -994,6 +994,7 @@ namespace lfs::python {
         core_evt.mods = event.mods;
         core_evt.scroll_x = event.scroll_x;
         core_evt.scroll_y = event.scroll_y;
+        core_evt.over_gui = event.over_gui;
 
         if (!can_acquire_gil())
             return false;

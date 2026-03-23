@@ -87,7 +87,7 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
-        void setInputRouter(const input::InputRouter* router) { input_router_ = router; }
+        void setInputRouter(input::InputRouter* router) { input_router_ = router; }
 
         // Node rectangle selection state (for rendering)
         [[nodiscard]] bool isNodeRectDragging() const { return is_node_rect_dragging_; }
@@ -112,6 +112,7 @@ namespace lfs::vis {
         // Helpers
         bool isInViewport(double x, double y) const;
         bool isPointerOverBlockingUi(double x, double y) const;
+        bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
         void selectCameraByUid(int uid);
         void updateCameraSpeed(bool increase);
@@ -231,7 +232,7 @@ namespace lfs::vis {
         std::size_t window_focus_lost_handler_id_ = 0;
         std::size_t gt_comparison_mode_changed_handler_id_ = 0;
 
-        const input::InputRouter* input_router_ = nullptr;
+        input::InputRouter* input_router_ = nullptr;
         static InputController* instance_;
     };
 
