@@ -62,15 +62,14 @@ namespace lfs::rendering::kernels::forward {
         const int* transform_indices,  // Per-Gaussian index into transforms array [N]
         const int num_transforms,      // Number of transforms in array
         const uint8_t* selection_mask,
-        const bool brush_active,
-        const float brush_x,
-        const float brush_y,
-        const float brush_radius_sq,
-        const bool brush_add_mode,
-        bool* brush_selection_out,
-        const bool brush_saturation_mode,
-        const float brush_saturation_amount,
-        const bool selection_mode_rings,
+        const bool cursor_active,
+        const float cursor_x,
+        const float cursor_y,
+        const float cursor_radius_sq,
+        const bool preview_selection_add_mode,
+        bool* preview_selection_out,
+        const bool cursor_saturation_preview,
+        const float cursor_saturation_amount,
         const float* crop_box_transform,
         const float3* crop_box_min,
         const float3* crop_box_max,
@@ -82,15 +81,15 @@ namespace lfs::rendering::kernels::forward {
         const bool ellipsoid_inverse,
         const bool ellipsoid_desaturate,
         const int ellipsoid_parent_node_index,
-        const float* depth_filter_transform,
-        const float3* depth_filter_min,
-        const float3* depth_filter_max,
+        const float* view_volume_transform,
+        const float3* view_volume_min,
+        const float3* view_volume_max,
         const bool* deleted_mask,
-        const int highlight_gaussian_id,
+        const int focused_gaussian_id,
         unsigned long long* hovered_depth_id,
-        const bool* selected_node_mask,
+        const bool* emphasized_node_mask,
         const int num_selected_nodes,
-        const bool desaturate_unselected,
+        const bool dim_non_emphasized,
         const bool* node_visibility_mask,
         const int num_visibility_nodes,
         const bool orthographic,
@@ -198,11 +197,11 @@ namespace lfs::rendering::kernels::forward {
             }
         }
 
-        // Depth filter (desaturate only, no culling)
-        if (active && depth_filter_transform != nullptr) {
-            const float3 dmin = *depth_filter_min;
-            const float3 dmax = *depth_filter_max;
-            const float* const d = depth_filter_transform;
+        // View-volume filter (desaturate only, no culling)
+        if (active && view_volume_transform != nullptr) {
+            const float3 dmin = *view_volume_min;
+            const float3 dmax = *view_volume_max;
+            const float* const d = view_volume_transform;
             const float dx = d[0] * mean3d.x + d[1] * mean3d.y + d[2] * mean3d.z + d[3];
             const float dy = d[4] * mean3d.x + d[5] * mean3d.y + d[6] * mean3d.z + d[7];
             const float dz = d[8] * mean3d.x + d[9] * mean3d.y + d[10] * mean3d.z + d[11];
@@ -214,9 +213,9 @@ namespace lfs::rendering::kernels::forward {
         }
 
         // Mark unselected nodes for desaturation
-        if (active && desaturate_unselected && selected_node_mask != nullptr && num_selected_nodes > 0 && transform_indices != nullptr) {
+        if (active && dim_non_emphasized && emphasized_node_mask != nullptr && num_selected_nodes > 0 && transform_indices != nullptr) {
             const int node_idx = transform_indices[global_idx];
-            if (node_idx >= 0 && node_idx < num_selected_nodes && !selected_node_mask[node_idx]) {
+            if (node_idx >= 0 && node_idx < num_selected_nodes && !emphasized_node_mask[node_idx]) {
                 outside_crop = true;
             }
         }
@@ -238,16 +237,19 @@ namespace lfs::rendering::kernels::forward {
             active = false;
 
         // compute 3d covariance from raw scale and rotation
-        const float3 raw_scale = raw_scales[global_idx];
-        const float3 variance = make_float3(expf(2.0f * raw_scale.x), expf(2.0f * raw_scale.y), expf(2.0f * raw_scale.z));
         auto [qr, qx, qy, qz] = raw_rotations[global_idx];
         const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
         const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
         if (q_norm_sq < 1e-8f)
             active = false;
-        const float qxx = 2.0f * qxx_raw / q_norm_sq, qyy = 2.0f * qyy_raw / q_norm_sq, qzz = 2.0f * qzz_raw / q_norm_sq;
-        const float qxy = 2.0f * qx * qy / q_norm_sq, qxz = 2.0f * qx * qz / q_norm_sq, qyz = 2.0f * qy * qz / q_norm_sq;
-        const float qrx = 2.0f * qr * qx / q_norm_sq, qry = 2.0f * qr * qy / q_norm_sq, qrz = 2.0f * qr * qz / q_norm_sq;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
+        const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
+        const float3 raw_scale = active ? raw_scales[global_idx] : make_float3(0.0f, 0.0f, 0.0f);
+        const float3 variance = make_float3(expf(2.0f * raw_scale.x), expf(2.0f * raw_scale.y), expf(2.0f * raw_scale.z));
+        const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
+        const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
+        const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
         const mat3x3 rotation = {
             1.0f - (qyy + qzz), qxy - qrz, qry + qxz,
             qrz + qxy, 1.0f - (qxx + qzz), qyz - qrx,
@@ -318,15 +320,19 @@ namespace lfs::rendering::kernels::forward {
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
         if (det < 1e-8f)
             active = false;
-        const float det_rcp = 1.0f / det;
+        const float det_safe = fmaxf(det, 1e-8f);
+        const float det_rcp = 1.0f / det_safe;
         const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
         if (output_opacity < config::min_alpha_threshold)
             active = false;
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
 
         const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
 
         // Compute bounds
-        const float power_threshold = logf(output_opacity * config::min_alpha_threshold_rcp);
+        const float safe_output_opacity = fmaxf(output_opacity, config::min_alpha_threshold);
+        const float power_threshold = logf(safe_output_opacity * config::min_alpha_threshold_rcp);
         const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
@@ -376,22 +382,22 @@ namespace lfs::rendering::kernels::forward {
         // Brush hit test
         const bool selectable = !outside_crop;
         bool under_brush = false;
-        if (brush_active) {
-            const float dx = mean2d.x - brush_x;
-            const float dy = mean2d.y - brush_y;
-            under_brush = (dx * dx + dy * dy <= brush_radius_sq);
+        if (cursor_active) {
+            const float dx = mean2d.x - cursor_x;
+            const float dy = mean2d.y - cursor_y;
+            under_brush = (dx * dx + dy * dy <= cursor_radius_sq);
         }
 
-        // Mark gaussians under brush for selection (add/remove determined by endStroke)
-        // Use global_idx since brush_selection_out is N-sized (original gaussian count)
-        if (under_brush && brush_selection_out != nullptr && selectable) {
-            brush_selection_out[global_idx] = true;
+        // Mark gaussians under the cursor overlay in the preview-selection mask.
+        // Use global_idx since preview_selection_out is N-sized (original gaussian count).
+        if (under_brush && preview_selection_out != nullptr && selectable) {
+            preview_selection_out[global_idx] = true;
         }
 
         // Saturation preview
-        if (brush_saturation_mode && under_brush && selectable) {
+        if (cursor_saturation_preview && under_brush && selectable) {
             const float lum = 0.2126f * color.x + 0.7152f * color.y + 0.0722f * color.z;
-            const float sat = 1.0f + brush_saturation_amount;
+            const float sat = 1.0f + cursor_saturation_amount;
             color.x = fmaxf(0.0f, fminf(1.0f, lum + sat * (color.x - lum)));
             color.y = fmaxf(0.0f, fminf(1.0f, lum + sat * (color.y - lum)));
             color.z = fmaxf(0.0f, fminf(1.0f, lum + sat * (color.z - lum)));
@@ -405,10 +411,10 @@ namespace lfs::rendering::kernels::forward {
         }
 
         // Ring mode hover detection
-        if (selection_mode_rings && brush_active && hovered_depth_id != nullptr && selectable) {
-            if (brush_x >= mean2d.x - extent_x && brush_x <= mean2d.x + extent_x &&
-                brush_y >= mean2d.y - extent_y && brush_y <= mean2d.y + extent_y) {
-                const float2 delta = make_float2(brush_x - mean2d.x, brush_y - mean2d.y);
+        if (cursor_active && hovered_depth_id != nullptr && selectable) {
+            if (cursor_x >= mean2d.x - extent_x && cursor_x <= mean2d.x + extent_x &&
+                cursor_y >= mean2d.y - extent_y && cursor_y <= mean2d.y + extent_y) {
+                const float2 delta = make_float2(cursor_x - mean2d.x, cursor_y - mean2d.y);
                 const float sigma = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
                                     conic.y * delta.x * delta.y;
                 if (sigma >= 0.0f) {
@@ -416,7 +422,7 @@ namespace lfs::rendering::kernels::forward {
                     if (hover_alpha >= config::min_alpha_threshold) {
                         const unsigned int depth_bits = __float_as_uint(depth);
                         const unsigned long long packed =
-                            (static_cast<unsigned long long>(depth_bits) << 32) | primitive_idx;
+                            (static_cast<unsigned long long>(depth_bits) << 32) | global_idx;
                         atomicMin(hovered_depth_id, packed);
                     }
                 }
@@ -425,17 +431,17 @@ namespace lfs::rendering::kernels::forward {
 
         // Encode selection status (use global_idx for N-sized input arrays)
         uint8_t sel_status = 0;
-        if (!brush_saturation_mode) {
+        if (!cursor_saturation_preview) {
             const uint8_t group_id = selection_mask ? selection_mask[global_idx] : 0;
             const bool is_committed = group_id > 0;
-            const bool is_in_preview = brush_selection_out && brush_selection_out[global_idx];
-            const bool is_ring_highlight = selection_mode_rings && selectable &&
-                                           highlight_gaussian_id == static_cast<int>(global_idx);
+            const bool is_in_preview = preview_selection_out && preview_selection_out[global_idx];
+            const bool is_ring_highlight = selectable &&
+                                           focused_gaussian_id == static_cast<int>(global_idx);
 
-            const bool is_preview = (is_in_preview && !is_committed && brush_add_mode) ||
-                                    (is_in_preview && is_committed && !brush_add_mode) ||
-                                    (under_brush && selectable && brush_add_mode && !is_committed) ||
-                                    (under_brush && selectable && !brush_add_mode && is_committed) ||
+            const bool is_preview = (is_in_preview && !is_committed && preview_selection_add_mode) ||
+                                    (is_in_preview && is_committed && !preview_selection_add_mode) ||
+                                    (under_brush && selectable && preview_selection_add_mode && !is_committed) ||
+                                    (under_brush && selectable && !preview_selection_add_mode && is_committed) ||
                                     is_ring_highlight;
 
             sel_status = (group_id & SELECTION_GROUP_MASK) | (is_preview ? SELECTION_PREVIEW_FLAG : 0);
@@ -622,9 +628,9 @@ namespace lfs::rendering::kernels::forward {
         const bool show_rings,
         const float ring_width,
         const bool show_center_markers,
-        const float selection_flash_intensity,
+        const float emphasis_flash_intensity,
         const int* transform_indices,
-        const bool* selected_node_mask,
+        const bool* emphasized_node_mask,
         const int num_selected_nodes) {
         auto block = cg::this_thread_block();
         const dim3 group_index = block.group_index();
@@ -734,11 +740,11 @@ namespace lfs::rendering::kernels::forward {
                 }
 
                 // Selection flash highlight (use global_idx for N-sized transform_indices lookup)
-                if (selection_flash_intensity > 0.0f && selected_node_mask != nullptr && transform_indices != nullptr) {
+                if (emphasis_flash_intensity > 0.0f && emphasized_node_mask != nullptr && transform_indices != nullptr) {
                     const int node_idx = transform_indices[collected_global_idx[j]];
-                    if (node_idx >= 0 && node_idx < num_selected_nodes && selected_node_mask[node_idx]) {
+                    if (node_idx >= 0 && node_idx < num_selected_nodes && emphasized_node_mask[node_idx]) {
                         constexpr float3 SELECTION_FLASH_COLOR = {1.0f, 0.95f, 0.6f};
-                        final_color = lerp(final_color, SELECTION_FLASH_COLOR, selection_flash_intensity * 0.5f);
+                        final_color = lerp(final_color, SELECTION_FLASH_COLOR, emphasis_flash_intensity * 0.5f);
                     }
                 }
 

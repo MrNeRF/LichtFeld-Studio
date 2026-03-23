@@ -81,6 +81,11 @@ FULL_PLUGIN_FILES = (
     if (DOCS_EXAMPLES / "full_plugin").exists()
     else []
 )
+SCRUB_DEMO_FILES = (
+    sorted((DOCS_EXAMPLES / "scrub_controls_demo").rglob("*.py"))
+    if (DOCS_EXAMPLES / "scrub_controls_demo").exists()
+    else []
+)
 ALL_PY_FILES = EXAMPLE_FILES + FULL_PLUGIN_FILES
 
 
@@ -154,10 +159,9 @@ class TestExamplesImports:
         ids=[p.stem for p in EXAMPLE_FILES],
     )
     def test_no_wrong_import_patterns(self, path):
-        """Must not use lf.ui.Panel, lf.ui.register_panel, or similar wrong patterns."""
+        """Examples must use the canonical panel API and avoid retired helpers."""
         source = path.read_text()
         bad_patterns = [
-            "lf.ui.Panel",
             "lf.ui.Operator",
             "lf.ui.register_panel",
             "lf.ui.register_operator",
@@ -268,7 +272,38 @@ class TestFullPluginStructure:
 
 
 # ===========================================================================
-# 6. Pure-Python API verification — test against real source
+# 6. Scrub demo structure
+# ===========================================================================
+
+class TestScrubControlsDemo:
+    """The packaged scrub-controls demo must stay runnable."""
+
+    def test_has_package_files(self):
+        root = DOCS_EXAMPLES / "scrub_controls_demo"
+        assert (root / "pyproject.toml").exists()
+        assert (root / "__init__.py").exists()
+        assert (root / "panels" / "__init__.py").exists()
+        assert (root / "panels" / "main_panel.py").exists()
+        assert (root / "panels" / "main_panel.rml").exists()
+        assert (root / "panels" / "main_panel.rcss").exists()
+
+    @pytest.mark.parametrize(
+        "path",
+        SCRUB_DEMO_FILES,
+        ids=[str(p.relative_to(PROJECT_ROOT)) for p in SCRUB_DEMO_FILES],
+    )
+    def test_python_files_compile(self, path):
+        _compile_file(path)
+
+    def test_panel_stays_docked_and_uses_scrub_helpers(self):
+        source = (DOCS_EXAMPLES / "scrub_controls_demo" / "panels" / "main_panel.py").read_text()
+        assert "ScrubFieldController" in source
+        assert "ScrubFieldSpec" in source
+        assert "PanelSpace.MAIN_PANEL_TAB" in source
+
+
+# ===========================================================================
+# 7. Pure-Python API verification — test against real source
 # ===========================================================================
 
 class TestPanelAPI:
@@ -295,7 +330,7 @@ class TestPanelAPI:
 
         class TestPanel(Panel):
             label = "Test"
-            space = "SIDE_PANEL"
+            space = "MAIN_PANEL_TAB"
             order = 10
 
             def draw(self, layout):
@@ -971,7 +1006,7 @@ class TestMarkdownDocs:
 
     def test_getting_started_references_correct_imports(self):
         content = (PROJECT_ROOT / "docs" / "plugins" / "getting-started.md").read_text()
-        assert "from lfs_plugins.types import Panel" in content
+        assert "lf.ui.Panel" in content
         assert "from lfs_plugins.types import Operator" in content
         assert "lf.register_class" in content
         assert "lf.unregister_class" in content
@@ -1007,7 +1042,6 @@ class TestMarkdownDocs:
         for md in (PROJECT_ROOT / "docs" / "plugins").glob("*.md"):
             content = md.read_text()
             bad_patterns = [
-                "lf.ui.Panel",
                 "lf.ui.register_panel",
                 "bare `draw(self)`",
             ]

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <array>
 #include <atomic>
 #include <functional>
@@ -57,7 +59,7 @@ namespace lfs::vis {
     };
 
     // State machine configuration
-    class TrainingStateMachine {
+    class LFS_VIS_API TrainingStateMachine {
     public:
         // State transition callback signatures
         using StateChangeCallback = std::function<void(TrainingState old_state, TrainingState new_state)>;

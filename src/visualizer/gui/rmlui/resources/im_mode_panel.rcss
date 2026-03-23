@@ -1,0 +1,224 @@
+/* Immediate-mode layout bridge styles */
+
+#im-root {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.im-line {
+    display: flex;
+    align-items: center;
+    padding: 1dp 0;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-line > .setting-row {
+    flex: 1;
+}
+
+.im-line > .setting-label {
+    flex: 1;
+    padding: 2dp 0;
+    min-height: 22dp;
+    margin-left: 4dp;
+}
+
+.im-line > .setting-row > .prop-label {
+    width: 120dp;
+    min-width: 120dp;
+    margin-left: 0;
+}
+
+.im-line > button {
+    flex-shrink: 0;
+}
+
+.im-line > .btn {
+    min-height: 20dp;
+    padding: 3dp 12dp;
+    font-size: 11dp;
+}
+
+.im-progress {
+    position: relative;
+    width: 100%;
+    margin: 2dp 0;
+}
+
+.im-label {
+    font-size: 10dp;
+    padding: 0 0 0 2dp;
+}
+
+.im-text-wrapped {
+    font-size: 10dp;
+    padding: 0 2dp;
+    word-break: break-word;
+}
+
+.im-bullet {
+    font-size: 10dp;
+    padding: 0 0 0 8dp;
+}
+
+/* Radio button */
+
+.im-radio {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 1dp 4dp;
+    gap: 4dp;
+    transition: background-color 0.12s quadratic-out;
+}
+
+.im-radio:hover {
+    background-color: rgba(88, 91, 112, 77);
+}
+
+.im-radio-dot {
+    font-size: 11dp;
+    width: 16dp;
+    text-align: center;
+}
+
+.im-radio-label {
+    font-size: 10dp;
+}
+
+/* Table layout */
+
+.im-table {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.im-table-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 0;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-table-cell {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+}
+
+/* Color widgets */
+
+.im-color-swatch {
+    width: 24dp;
+    height: 24dp;
+    border-radius: 3dp;
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 51);
+}
+
+.im-color-btn {
+    min-width: 24dp;
+    min-height: 24dp;
+    border-radius: 3dp;
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 51);
+    padding: 0;
+}
+
+/* Tooltip */
+
+.im-tooltip {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    background-color: rgba(30, 30, 46, 240);
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 128);
+    border-radius: 3dp;
+    padding: 4dp 8dp;
+    font-size: 11dp;
+    max-width: 300dp;
+    pointer-events: none;
+}
+
+.im-tooltip.visible {
+    display: block;
+}
+
+/* Row / Column sub-layouts */
+
+.im-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-column {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+/* Child containers */
+
+.im-child {
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.im-child-bordered {
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 77);
+    border-radius: 3dp;
+    padding: 4dp;
+}
+
+/* Popup modal */
+
+.im-popup-backdrop {
+    display: none;
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 100);
+    z-index: 90;
+}
+
+.im-popup-backdrop.visible {
+    display: block;
+}
+
+.im-popup-dialog {
+    display: none;
+    position: fixed;
+    z-index: 100;
+    min-width: 300dp;
+    background-color: rgba(30, 30, 46, 245);
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 128);
+    border-radius: 6dp;
+    padding: 12dp;
+}
+
+.im-popup-dialog.visible {
+    display: flex;
+    flex-direction: column;
+}
+
+.im-popup-title {
+    font-size: 12dp;
+    font-weight: bold;
+    padding-bottom: 8dp;
+    border-bottom-width: 1dp;
+    border-bottom-color: rgba(88, 91, 112, 77);
+    margin-bottom: 8dp;
+}

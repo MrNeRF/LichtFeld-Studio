@@ -229,7 +229,7 @@ namespace lfs::io {
             if (!entry.is_directory())
                 continue;
 
-            const auto folder_name = entry.path().filename().string();
+            const auto folder_name = lfs::core::path_to_utf8(entry.path().filename());
             if (folder_name.rfind(CACHE_PREFIX, 0) != 0)
                 continue;
             if (std::filesystem::exists(entry.path() / ".lock"))

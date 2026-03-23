@@ -6,6 +6,7 @@
 #include "core/camera.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
+#include "gl_state_guard.hpp"
 #include "gs_rasterizer_tensor.hpp"
 #include "image_layout.hpp"
 
@@ -16,7 +17,70 @@ namespace lfs::rendering {
 
     namespace {
         constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
-    }
+
+        [[nodiscard]] GpuFrame buildPersistentGpuFrame(const GLuint color_texture,
+                                                       const GLuint depth_texture,
+                                                       const glm::ivec2 alloc_size,
+                                                       const glm::ivec2 render_size,
+                                                       const float far_plane,
+                                                       const bool orthographic) {
+            return {
+                .color = {.id = color_texture,
+                          .size = alloc_size,
+                          .texcoord_scale = {
+                              alloc_size.x > 0 ? static_cast<float>(render_size.x) / static_cast<float>(alloc_size.x) : 1.0f,
+                              alloc_size.y > 0 ? static_cast<float>(render_size.y) / static_cast<float>(alloc_size.y) : 1.0f}},
+                .depth = {.id = depth_texture, .size = alloc_size, .texcoord_scale = {alloc_size.x > 0 ? static_cast<float>(render_size.x) / static_cast<float>(alloc_size.x) : 1.0f, alloc_size.y > 0 ? static_cast<float>(render_size.y) / static_cast<float>(alloc_size.y) : 1.0f}},
+                .depth_is_ndc = true,
+                .near_plane = DEFAULT_NEAR_PLANE,
+                .far_plane = far_plane,
+                .orthographic = orthographic};
+        }
+
+        [[nodiscard]] glm::mat4 buildPointCloudViewMatrix(
+            const RenderingPipeline::RasterRequest& request,
+            const bool apply_first_model_transform = false) {
+            glm::mat3 flip_yz = glm::mat3(
+                1, 0, 0,
+                0, -1, 0,
+                0, 0, -1);
+
+            glm::mat3 rotation_inv = glm::transpose(request.view_rotation);
+            glm::vec3 translation_inv = -rotation_inv * request.view_translation;
+
+            rotation_inv = flip_yz * rotation_inv;
+            translation_inv = flip_yz * translation_inv;
+
+            glm::mat4 view(1.0f);
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j) {
+                    view[i][j] = rotation_inv[i][j];
+                }
+            }
+            view[3][0] = translation_inv.x;
+            view[3][1] = translation_inv.y;
+            view[3][2] = translation_inv.z;
+            view[3][3] = 1.0f;
+
+            if (apply_first_model_transform && !request.model_transforms.empty()) {
+                view = view * request.model_transforms[0];
+            }
+
+            return view;
+        }
+
+        [[nodiscard]] glm::mat4 buildPointCloudProjectionMatrix(
+            const RenderingPipeline::RasterRequest& request) {
+            glm::mat4 projection = request.getProjectionMatrix();
+            projection[1][1] *= -1.0f;
+            return projection;
+        }
+
+        [[nodiscard]] bool tensorMatchesGaussianCount(const Tensor* const tensor,
+                                                      const size_t gaussian_count) {
+            return tensor == nullptr || !tensor->is_valid() || tensor->numel() == gaussian_count;
+        }
+    } // namespace
 
     RenderingPipeline::RenderingPipeline()
         : background_(Tensor::zeros({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32)) {
@@ -29,11 +93,21 @@ namespace lfs::rendering {
         cleanupPBO();
     }
 
-    Result<RenderingPipeline::RenderResult> RenderingPipeline::render(
-        const lfs::core::SplatData& model,
-        const RenderRequest& request) {
+    void RenderingPipeline::resetResources() {
+#ifdef CUDA_GL_INTEROP_ENABLED
+        fbo_interop_texture_.reset();
+        fbo_interop_last_width_ = 0;
+        fbo_interop_last_height_ = 0;
+#endif
+        cleanupFBO();
+        cleanupPBO();
+    }
 
-        LOG_TIMER_TRACE("RenderingPipeline::render");
+    Result<RenderingPipeline::ImageRenderResult> RenderingPipeline::renderGaussianImage(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderGaussianImage");
 
         // Validate dimensions
         if (request.viewport_size.x <= 0 || request.viewport_size.y <= 0 ||
@@ -42,14 +116,49 @@ namespace lfs::rendering {
             return std::unexpected("Invalid viewport dimensions");
         }
 
-        // Point cloud rendering mode
-        if (request.point_cloud_mode) {
-            LOG_TRACE("Using point cloud rendering mode");
-            return renderPointCloud(model, request);
+        return renderGaussianImageResult(model, request, nullptr);
+    }
+
+    Result<RenderingPipeline::ImageRenderResult> RenderingPipeline::renderPointCloudImage(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderPointCloudImage");
+
+        if (request.viewport_size.x <= 0 || request.viewport_size.y <= 0 ||
+            request.viewport_size.x > 16384 || request.viewport_size.y > 16384) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport_size.x, request.viewport_size.y);
+            return std::unexpected("Invalid viewport dimensions");
         }
+
+        return renderPointCloudImageResult(model, request);
+    }
+
+    Result<Tensor> RenderingPipeline::renderScreenPositions(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderScreenPositions");
+
+        Tensor screen_positions;
+        auto render_result = renderGaussianImageResult(model, request, &screen_positions);
+        if (!render_result) {
+            return std::unexpected(render_result.error());
+        }
+        if (!screen_positions.is_valid()) {
+            return std::unexpected("Screen-position render returned no screen positions");
+        }
+        return screen_positions;
+    }
+
+    Result<RenderingPipeline::ImageRenderResult> RenderingPipeline::renderGaussianImageResult(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request,
+        Tensor* const screen_positions_out) {
 
         // Regular gaussian splatting rendering
         LOG_TRACE("Using gaussian splatting rendering mode");
+        const size_t gaussian_count = static_cast<size_t>(model.size());
 
         // Update background tensor in-place to avoid allocation
         // Access the tensor data directly
@@ -114,6 +223,12 @@ namespace lfs::rendering {
                 transform_indices_ptr = transform_indices_cuda.get();
             }
         }
+        if (!tensorMatchesGaussianCount(transform_indices_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring transform_indices with stale size: model has {}, tensor has {}",
+                     gaussian_count, transform_indices_ptr->numel());
+            transform_indices_ptr = nullptr;
+            transform_indices_cuda.reset();
+        }
 
         // Get selection mask pointer (already a tensor, just need to ensure it's on CUDA)
         std::unique_ptr<Tensor> selection_mask_cuda;
@@ -126,85 +241,42 @@ namespace lfs::rendering {
                 selection_mask_ptr = selection_mask_cuda.get();
             }
         }
+        if (!tensorMatchesGaussianCount(selection_mask_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring selection_mask with stale size: model has {}, tensor has {}",
+                     gaussian_count, selection_mask_ptr->numel());
+            selection_mask_ptr = nullptr;
+            selection_mask_cuda.reset();
+        }
+
+        Tensor* preview_selection_ptr = request.preview_selection_tensor;
+        if (!tensorMatchesGaussianCount(preview_selection_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring preview_selection_tensor with stale size: model has {}, tensor has {}",
+                     gaussian_count, preview_selection_ptr->numel());
+            preview_selection_ptr = nullptr;
+        }
+
+        const Tensor* deleted_mask_ptr = request.deleted_mask;
+        if (!tensorMatchesGaussianCount(deleted_mask_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring deleted_mask with stale size: model has {}, tensor has {}",
+                     gaussian_count, deleted_mask_ptr->numel());
+            deleted_mask_ptr = nullptr;
+        }
 
         try {
-            if (request.sh_degree != model.get_active_sh_degree()) {
-                auto& mutable_sh = const_cast<lfs::core::SplatData&>(model);
-                const int original_sh_degree = model.get_active_sh_degree();
-                mutable_sh.set_active_sh_degree(request.sh_degree);
-                const struct ShDegreeGuard {
-                    lfs::core::SplatData& m;
-                    int original;
-                    ~ShDegreeGuard() { m.set_active_sh_degree(original); }
-                } sh_guard{mutable_sh, original_sh_degree};
-
-                RenderResult result;
-
-                if (request.gut || request.equirectangular) {
-                    const auto camera_model = request.equirectangular
-                                                  ? GutCameraModel::EQUIRECTANGULAR
-                                                  : GutCameraModel::PINHOLE;
-                    auto render_output = gut_rasterize_tensor(
-                        cam, const_cast<lfs::core::SplatData&>(model), background_,
-                        request.scaling_modifier, camera_model, model_transforms_tensor.get(),
-                        transform_indices_ptr, request.node_visibility_mask);
-                    result.image = std::move(render_output.image);
-                    result.depth = std::move(render_output.depth);
-                } else {
-                    LOG_TRACE("Using TENSOR_NATIVE backend (sh_degree temporarily changed from {} to {})",
-                              original_sh_degree, request.sh_degree);
-                    Tensor screen_positions;
-                    auto [image, depth] = rasterize_tensor(cam, const_cast<lfs::core::SplatData&>(model), background_,
-                                                           request.show_rings, request.ring_width,
-                                                           model_transforms_tensor.get(), transform_indices_ptr,
-                                                           selection_mask_ptr,
-                                                           request.output_screen_positions ? &screen_positions : nullptr,
-                                                           request.brush_active, request.brush_x, request.brush_y, request.brush_radius,
-                                                           request.brush_add_mode, request.brush_selection_tensor,
-                                                           request.brush_saturation_mode, request.brush_saturation_amount,
-                                                           request.selection_mode_rings,
-                                                           request.show_center_markers,
-                                                           request.crop_box_transform, request.crop_box_min, request.crop_box_max,
-                                                           request.crop_inverse, request.crop_desaturate, request.crop_parent_node_index,
-                                                           request.ellipsoid_transform, request.ellipsoid_radii,
-                                                           request.ellipsoid_inverse, request.ellipsoid_desaturate, request.ellipsoid_parent_node_index,
-                                                           request.depth_filter_transform, request.depth_filter_min, request.depth_filter_max,
-                                                           request.deleted_mask,
-                                                           request.hovered_depth_id,
-                                                           request.highlight_gaussian_id,
-                                                           request.far_plane,
-                                                           request.selected_node_mask,
-                                                           request.desaturate_unselected,
-                                                           request.node_visibility_mask,
-                                                           request.selection_flash_intensity,
-                                                           request.orthographic,
-                                                           request.ortho_scale,
-                                                           request.mip_filter);
-                    result.image = std::move(image);
-                    result.depth = std::move(depth);
-                    if (request.output_screen_positions) {
-                        result.screen_positions = std::move(screen_positions);
-                    }
-                }
-
-                result.valid = true;
-                result.orthographic = request.orthographic;
-                result.far_plane = request.far_plane;
-                return result;
+            const int effective_sh_degree = std::clamp(request.sh_degree, 0, model.get_max_sh_degree());
+            if (effective_sh_degree != request.sh_degree) {
+                LOG_TRACE("Clamped requested SH degree {} to model max {}", request.sh_degree, effective_sh_degree);
             }
-
-            // No sh_degree change needed - safe to use model as-is
-            lfs::core::SplatData& mutable_model = const_cast<lfs::core::SplatData&>(model);
-            RenderResult result;
+            ImageRenderResult result;
 
             if (request.gut || request.equirectangular) {
                 const auto camera_model = request.equirectangular
                                               ? GutCameraModel::EQUIRECTANGULAR
                                               : GutCameraModel::PINHOLE;
                 auto render_output = gut_rasterize_tensor(
-                    cam, mutable_model, background_, request.scaling_modifier, camera_model,
+                    cam, model, background_, effective_sh_degree, request.scaling_modifier, camera_model,
                     model_transforms_tensor.get(), transform_indices_ptr, request.node_visibility_mask);
-                return RenderResult{
+                return ImageRenderResult{
                     .image = std::move(render_output.image),
                     .depth = std::move(render_output.depth),
                     .valid = true,
@@ -213,38 +285,34 @@ namespace lfs::rendering {
             }
 
             // Use libtorch-free tensor-based rasterizer
-            Tensor screen_positions;
-            auto [image, depth] = rasterize_tensor(cam, mutable_model, background_,
+            auto [image, depth] = rasterize_tensor(cam, model, background_,
+                                                   effective_sh_degree,
                                                    request.show_rings, request.ring_width,
                                                    model_transforms_tensor.get(), transform_indices_ptr,
                                                    selection_mask_ptr,
-                                                   request.output_screen_positions ? &screen_positions : nullptr,
-                                                   request.brush_active, request.brush_x, request.brush_y, request.brush_radius,
-                                                   request.brush_add_mode, request.brush_selection_tensor,
-                                                   request.brush_saturation_mode, request.brush_saturation_amount,
-                                                   request.selection_mode_rings,
+                                                   screen_positions_out,
+                                                   request.cursor_active, request.cursor_x, request.cursor_y, request.cursor_radius,
+                                                   request.preview_selection_add_mode, preview_selection_ptr,
+                                                   request.cursor_saturation_preview, request.cursor_saturation_amount,
                                                    request.show_center_markers,
                                                    request.crop_box_transform, request.crop_box_min, request.crop_box_max,
                                                    request.crop_inverse, request.crop_desaturate, request.crop_parent_node_index,
                                                    request.ellipsoid_transform, request.ellipsoid_radii,
                                                    request.ellipsoid_inverse, request.ellipsoid_desaturate, request.ellipsoid_parent_node_index,
-                                                   request.depth_filter_transform, request.depth_filter_min, request.depth_filter_max,
-                                                   request.deleted_mask,
+                                                   request.view_volume_transform, request.view_volume_min, request.view_volume_max,
+                                                   deleted_mask_ptr,
                                                    request.hovered_depth_id,
-                                                   request.highlight_gaussian_id,
+                                                   request.focused_gaussian_id,
                                                    request.far_plane,
-                                                   request.selected_node_mask,
-                                                   request.desaturate_unselected,
+                                                   request.emphasized_node_mask,
+                                                   request.dim_non_emphasized,
                                                    request.node_visibility_mask,
-                                                   request.selection_flash_intensity,
+                                                   request.emphasis_flash_intensity,
                                                    request.orthographic,
                                                    request.ortho_scale,
                                                    request.mip_filter);
             result.image = std::move(image);
             result.depth = std::move(depth);
-            if (request.output_screen_positions) {
-                result.screen_positions = std::move(screen_positions);
-            }
             result.valid = true;
             result.orthographic = request.orthographic;
             result.far_plane = request.far_plane;
@@ -258,88 +326,30 @@ namespace lfs::rendering {
         }
     }
 
-    Result<RenderingPipeline::RenderResult> RenderingPipeline::renderPointCloud(
+    Result<RenderingPipeline::ImageRenderResult> RenderingPipeline::renderPointCloudImageResult(
         const lfs::core::SplatData& model,
-        const RenderRequest& request) {
+        const RasterRequest& request) {
 
         LOG_TIMER_TRACE("RenderingPipeline::renderPointCloud");
 
-        // Initialize point cloud renderer if needed
-        if (!point_cloud_renderer_->isInitialized()) {
-            LOG_DEBUG("Initializing point cloud renderer");
-            if (auto result = point_cloud_renderer_->initialize(); !result) {
-                LOG_ERROR("Failed to initialize point cloud renderer: {}", result.error());
-                return std::unexpected(std::format("Failed to initialize point cloud renderer: {}",
-                                                   result.error()));
-            }
+        if (auto init_result = ensurePointCloudRendererInitialized(); !init_result) {
+            return std::unexpected(init_result.error());
         }
 
-        // Save GL state for FBO rendering
-        GLint saved_viewport[4];
-        GLint saved_fbo;
-        glGetIntegerv(GL_VIEWPORT, saved_viewport);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-        const GLboolean saved_scissor = glIsEnabled(GL_SCISSOR_TEST);
-        if (saved_scissor)
-            glDisable(GL_SCISSOR_TEST);
+        GLFramebufferGuard framebuffer_guard;
+        GLViewportGuard viewport_guard;
+        GLScissorEnableGuard scissor_guard;
+        glDisable(GL_SCISSOR_TEST);
 
-        // RAII restore
-        const struct StateGuard {
-            const GLint* vp;
-            const GLint fbo;
-            const GLboolean scissor;
-            ~StateGuard() {
-                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                glViewport(vp[0], vp[1], vp[2], vp[3]);
-                if (scissor)
-                    glEnable(GL_SCISSOR_TEST);
-            }
-        } guard{saved_viewport, saved_fbo, saved_scissor};
-
-        // Create view matrix using the same convention as Viewport::getViewMatrix()
-        glm::mat3 flip_yz = glm::mat3(
-            1, 0, 0,
-            0, -1, 0,
-            0, 0, -1);
-
-        // Convert from camera space (what we get in request) to view space
-        glm::mat3 R_inv = glm::transpose(request.view_rotation); // Inverse of rotation matrix
-        glm::vec3 t_inv = -R_inv * request.view_translation;     // Inverse translation
-
-        // Apply flip
-        R_inv = flip_yz * R_inv;
-        t_inv = flip_yz * t_inv;
-
-        // Build view matrix
-        glm::mat4 view(1.0f);
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                view[i][j] = R_inv[i][j];
-            }
-        }
-        view[3][0] = t_inv.x;
-        view[3][1] = t_inv.y;
-        view[3][2] = t_inv.z;
-        view[3][3] = 1.0f;
-
-        // Create projection matrix (Y-flipped for OpenGL bottom-left origin)
-        glm::mat4 projection = request.getProjectionMatrix();
-        projection[1][1] *= -1.0f;
-
-        // OPTIMIZATION: Use persistent FBO (avoids expensive glGenFramebuffers/glDeleteFramebuffers)
-        // This saves ~3-5ms per frame by reusing the same FBO across renders
-        ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
-        if (persistent_fbo_ == 0) {
-            LOG_ERROR("Failed to setup persistent framebuffer");
-            return std::unexpected("Failed to setup persistent framebuffer");
+        if (auto target_result = preparePointCloudRenderTarget(request); !target_result) {
+            return std::unexpected(target_result.error());
         }
 
-        // Set viewport to match the request size
-        glViewport(0, 0, request.viewport_size.x, request.viewport_size.y);
+        const glm::mat4 view = buildPointCloudViewMatrix(request);
+        const glm::mat4 projection = buildPointCloudProjectionMatrix(request);
 
-        // Render point cloud to framebuffer
         {
-            LOG_TIMER_TRACE("point_cloud_renderer_->render");
+            LOG_TIMER_TRACE("point_cloud_renderer_->render(SplatData)");
             if (auto result = point_cloud_renderer_->render(model, view, projection,
                                                             request.voxel_size, request.background_color,
                                                             request.model_transforms, request.transform_indices,
@@ -350,189 +360,80 @@ namespace lfs::rendering {
             }
         }
 
-        const int width = request.viewport_size.x;
-        const int height = request.viewport_size.y;
-        RenderResult result;
-
-#ifdef CUDA_GL_INTEROP_ENABLED
-        if (use_fbo_interop_) {
-            LOG_TIMER_TRACE("CUDA-GL FBO interop readback");
-
-            const bool fbo_changed = fbo_interop_last_width_ != persistent_fbo_width_ ||
-                                     fbo_interop_last_height_ != persistent_fbo_height_;
-            const bool dims_mismatch = fbo_interop_texture_ &&
-                                       (fbo_interop_texture_->getWidth() != persistent_fbo_width_ ||
-                                        fbo_interop_texture_->getHeight() != persistent_fbo_height_);
-            const bool should_init = persistent_color_texture_ != 0 &&
-                                     (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
-
-            if (should_init) {
-                fbo_interop_texture_.reset();
-                fbo_interop_texture_.emplace();
-                if (auto init_result = fbo_interop_texture_->initForReading(
-                        persistent_color_texture_, persistent_fbo_width_, persistent_fbo_height_);
-                    !init_result) {
-                    LOG_TRACE("FBO interop init failed: {}", init_result.error());
-                    fbo_interop_texture_.reset();
-                }
-                fbo_interop_last_width_ = persistent_fbo_width_;
-                fbo_interop_last_height_ = persistent_fbo_height_;
-            }
-
-            if (use_fbo_interop_ && fbo_interop_texture_) {
-                Tensor image_hwc;
-                if (auto read_result = fbo_interop_texture_->readToTensor(image_hwc, width, height); read_result) {
-                    result.image = image_hwc.permute({2, 0, 1}).contiguous();
-                    result.valid = true;
-                    result.external_depth_texture = persistent_depth_texture_;
-                    result.depth_is_ndc = true;
-                } else {
-                    LOG_TRACE("FBO interop read failed: {}", read_result.error());
-                    fbo_interop_texture_.reset();
-                    result.valid = false;
-                }
-            }
+        auto image_result = readPersistentPointCloudImage(request);
+        if (!image_result) {
+            return std::unexpected(image_result.error());
         }
 
-        if (!result.valid)
-#endif
-        {
-            LOG_TIMER_TRACE("PBO fallback readback");
-
-            ensurePBOSize(width, height);
-
-            // Ping-pong between two PBOs for double-buffering
-            int current_pbo = pbo_index_;
-            int next_pbo = 1 - pbo_index_;
-
-            std::vector<float> pixels(width * height * 3);
-            {
-                // Start async readback into current PBO
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_[current_pbo]);
-                glReadPixels(0, 0, width, height, GL_RGB, GL_FLOAT, nullptr);
-
-                // Map the PBO to read data (may wait if transfer not complete)
-                void* mapped_data = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-                if (mapped_data) {
-                    // Copy data from mapped PBO to our vector
-                    std::memcpy(pixels.data(), mapped_data, width * height * 3 * sizeof(float));
-                    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-                } else {
-                    LOG_ERROR("Failed to map PBO for readback");
-                    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-                    return std::unexpected("Failed to map PBO for readback");
-                }
-
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-            }
-
-            // Swap PBO index for next frame
-            pbo_index_ = next_pbo;
-
-            const auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
-                                                       lfs::core::Device::CPU);
-            {
-                LOG_TIMER_TRACE("permute and cuda upload");
-                result.image = image_cpu.permute({2, 0, 1}).cuda();
-            }
-            result.external_depth_texture = persistent_depth_texture_;
-            result.depth_is_ndc = true;
-            result.valid = true;
-        }
-
-        result.orthographic = request.orthographic;
-        result.far_plane = request.far_plane;
-
-        LOG_TRACE("Point cloud rendering completed");
-        return result;
+        LOG_TRACE("Point cloud image rendering completed");
+        return *image_result;
     }
 
-    Result<RenderingPipeline::RenderResult> RenderingPipeline::renderRawPointCloud(
+    Result<GpuFrame> RenderingPipeline::renderPointCloudGpuFrame(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderPointCloudGpuFrame");
+
+        if (auto init_result = ensurePointCloudRendererInitialized(); !init_result) {
+            return std::unexpected(init_result.error());
+        }
+
+        GLFramebufferGuard framebuffer_guard;
+        GLViewportGuard viewport_guard;
+        GLScissorEnableGuard scissor_guard;
+        glDisable(GL_SCISSOR_TEST);
+
+        if (auto target_result = preparePointCloudRenderTarget(request); !target_result) {
+            return std::unexpected(target_result.error());
+        }
+
+        const glm::mat4 view = buildPointCloudViewMatrix(request);
+        const glm::mat4 projection = buildPointCloudProjectionMatrix(request);
+
+        {
+            LOG_TIMER_TRACE("point_cloud_renderer_->render(SplatData)");
+            if (auto result = point_cloud_renderer_->render(model, view, projection,
+                                                            request.voxel_size, request.background_color,
+                                                            request.model_transforms, request.transform_indices,
+                                                            request.equirectangular, request.point_cloud_crop_params);
+                !result) {
+                LOG_ERROR("Point cloud GPU-frame render failed: {}", result.error());
+                return std::unexpected(std::format("Point cloud GPU-frame render failed: {}", result.error()));
+            }
+        }
+
+        return buildPersistentGpuFrame(
+            persistent_render_target_->colorTexture(),
+            persistent_render_target_->depthTexture(),
+            {persistent_fbo_width_, persistent_fbo_height_},
+            request.viewport_size,
+            request.far_plane,
+            request.orthographic);
+    }
+
+    Result<GpuFrame> RenderingPipeline::renderRawPointCloudGpuFrame(
         const lfs::core::PointCloud& point_cloud,
-        const RenderRequest& request) {
+        const RasterRequest& request) {
 
-        LOG_TIMER_TRACE("RenderingPipeline::renderRawPointCloud");
+        LOG_TIMER_TRACE("RenderingPipeline::renderRawPointCloudGpuFrame");
 
-        // Initialize point cloud renderer if needed
-        if (!point_cloud_renderer_->isInitialized()) {
-            LOG_DEBUG("Initializing point cloud renderer");
-            if (auto result = point_cloud_renderer_->initialize(); !result) {
-                LOG_ERROR("Failed to initialize point cloud renderer: {}", result.error());
-                return std::unexpected(std::format("Failed to initialize point cloud renderer: {}",
-                                                   result.error()));
-            }
+        if (auto init_result = ensurePointCloudRendererInitialized(); !init_result) {
+            return std::unexpected(init_result.error());
         }
 
-        // Save GL state for FBO rendering
-        GLint saved_viewport[4];
-        GLint saved_fbo;
-        glGetIntegerv(GL_VIEWPORT, saved_viewport);
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-        const GLboolean saved_scissor = glIsEnabled(GL_SCISSOR_TEST);
-        if (saved_scissor)
-            glDisable(GL_SCISSOR_TEST);
+        GLFramebufferGuard framebuffer_guard;
+        GLViewportGuard viewport_guard;
+        GLScissorEnableGuard scissor_guard;
+        glDisable(GL_SCISSOR_TEST);
 
-        // RAII restore
-        const struct StateGuard {
-            const GLint* vp;
-            const GLint fbo;
-            const GLboolean scissor;
-            ~StateGuard() {
-                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                glViewport(vp[0], vp[1], vp[2], vp[3]);
-                if (scissor)
-                    glEnable(GL_SCISSOR_TEST);
-            }
-        } guard{saved_viewport, saved_fbo, saved_scissor};
-
-        // Create view matrix using the same convention as Viewport::getViewMatrix()
-        glm::mat3 flip_yz = glm::mat3(
-            1, 0, 0,
-            0, -1, 0,
-            0, 0, -1);
-
-        // Convert from camera space (what we get in request) to view space
-        glm::mat3 R_inv = glm::transpose(request.view_rotation); // Inverse of rotation matrix
-        glm::vec3 t_inv = -R_inv * request.view_translation;     // Inverse translation
-
-        // Apply flip
-        R_inv = flip_yz * R_inv;
-        t_inv = flip_yz * t_inv;
-
-        // Build view matrix
-        glm::mat4 view(1.0f);
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                view[i][j] = R_inv[i][j];
-            }
-        }
-        view[3][0] = t_inv.x;
-        view[3][1] = t_inv.y;
-        view[3][2] = t_inv.z;
-        view[3][3] = 1.0f;
-
-        // Apply model transform if provided (for point cloud node transforms)
-        if (!request.model_transforms.empty()) {
-            // model_view = view * model_transform
-            // This transforms points from model space -> world space -> view space
-            view = view * request.model_transforms[0];
+        if (auto target_result = preparePointCloudRenderTarget(request); !target_result) {
+            return std::unexpected(target_result.error());
         }
 
-        // Create projection matrix (Y-flipped for OpenGL bottom-left origin)
-        glm::mat4 projection = request.getProjectionMatrix();
-        projection[1][1] *= -1.0f;
+        const glm::mat4 view = buildPointCloudViewMatrix(request, true);
+        const glm::mat4 projection = buildPointCloudProjectionMatrix(request);
 
-        // OPTIMIZATION: Use persistent FBO
-        ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
-        if (persistent_fbo_ == 0) {
-            LOG_ERROR("Failed to setup persistent framebuffer");
-            return std::unexpected("Failed to setup persistent framebuffer");
-        }
-
-        // Set viewport to match the request size
-        glViewport(0, 0, request.viewport_size.x, request.viewport_size.y);
-
-        // Raw point clouds: transform already baked into view matrix
         {
             LOG_TIMER_TRACE("point_cloud_renderer_->render(PointCloud)");
             if (auto result = point_cloud_renderer_->render(point_cloud, view, projection,
@@ -544,9 +445,45 @@ namespace lfs::rendering {
             }
         }
 
+        return buildPersistentGpuFrame(
+            persistent_render_target_->colorTexture(),
+            persistent_render_target_->depthTexture(),
+            {persistent_fbo_width_, persistent_fbo_height_},
+            request.viewport_size,
+            request.far_plane,
+            request.orthographic);
+    }
+
+    Result<void> RenderingPipeline::ensurePointCloudRendererInitialized() {
+        if (point_cloud_renderer_->isInitialized()) {
+            return {};
+        }
+
+        LOG_DEBUG("Initializing point cloud renderer");
+        if (auto result = point_cloud_renderer_->initialize(); !result) {
+            LOG_ERROR("Failed to initialize point cloud renderer: {}", result.error());
+            return std::unexpected(std::format("Failed to initialize point cloud renderer: {}", result.error()));
+        }
+
+        return {};
+    }
+
+    Result<void> RenderingPipeline::preparePointCloudRenderTarget(const RasterRequest& request) {
+        ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
+        if (!persistent_render_target_) {
+            LOG_ERROR("Failed to setup persistent framebuffer");
+            return std::unexpected("Failed to setup persistent framebuffer");
+        }
+
+        glViewport(0, 0, request.viewport_size.x, request.viewport_size.y);
+        return {};
+    }
+
+    Result<RenderingPipeline::ImageRenderResult> RenderingPipeline::readPersistentPointCloudImage(
+        const RasterRequest& request) {
         const int width = request.viewport_size.x;
         const int height = request.viewport_size.y;
-        RenderResult result;
+        ImageRenderResult result;
 
 #ifdef CUDA_GL_INTEROP_ENABLED
         if (use_fbo_interop_) {
@@ -557,14 +494,14 @@ namespace lfs::rendering {
             const bool dims_mismatch = fbo_interop_texture_ &&
                                        (fbo_interop_texture_->getWidth() != persistent_fbo_width_ ||
                                         fbo_interop_texture_->getHeight() != persistent_fbo_height_);
-            const bool should_init = persistent_color_texture_ != 0 &&
+            const bool should_init = persistent_render_target_ &&
                                      (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
 
             if (should_init) {
                 fbo_interop_texture_.reset();
                 fbo_interop_texture_.emplace();
                 if (auto init_result = fbo_interop_texture_->initForReading(
-                        persistent_color_texture_, persistent_fbo_width_, persistent_fbo_height_);
+                        persistent_render_target_->colorTexture(), persistent_fbo_width_, persistent_fbo_height_);
                     !init_result) {
                     LOG_TRACE("FBO interop init failed: {}", init_result.error());
                     fbo_interop_texture_.reset();
@@ -578,7 +515,7 @@ namespace lfs::rendering {
                 if (auto read_result = fbo_interop_texture_->readToTensor(image_hwc, width, height); read_result) {
                     result.image = image_hwc.permute({2, 0, 1}).contiguous();
                     result.valid = true;
-                    result.external_depth_texture = persistent_depth_texture_;
+                    result.external_depth_texture = persistent_render_target_->depthTexture();
                     result.depth_is_ndc = true;
                 } else {
                     LOG_TRACE("FBO interop read failed: {}", read_result.error());
@@ -588,7 +525,6 @@ namespace lfs::rendering {
             }
         }
 
-        // Fallback to PBO path if interop failed
         if (!result.valid)
 #endif
         {
@@ -596,8 +532,8 @@ namespace lfs::rendering {
 
             ensurePBOSize(width, height);
 
-            int current_pbo = pbo_index_;
-            int next_pbo = 1 - pbo_index_;
+            const int current_pbo = pbo_index_;
+            const int next_pbo = 1 - pbo_index_;
 
             std::vector<float> pixels(width * height * 3);
             {
@@ -625,19 +561,18 @@ namespace lfs::rendering {
                 LOG_TIMER_TRACE("permute and cuda upload");
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
             }
-            result.external_depth_texture = persistent_depth_texture_;
+            result.external_depth_texture = persistent_render_target_->depthTexture();
             result.depth_is_ndc = true;
             result.valid = true;
         }
 
         result.orthographic = request.orthographic;
         result.far_plane = request.far_plane;
-        LOG_TRACE("Raw point cloud rendering completed");
         return result;
     }
 
     void RenderingPipeline::applyDepthParams(
-        const RenderResult& result,
+        const ImageRenderResult& result,
         ScreenQuadRenderer& renderer,
         const glm::ivec2& viewport_size) {
 
@@ -664,7 +599,7 @@ namespace lfs::rendering {
     }
 
     Result<void> RenderingPipeline::uploadToScreen(
-        const RenderResult& result,
+        const ImageRenderResult& result,
         ScreenQuadRenderer& renderer,
         const glm::ivec2& viewport_size) {
         LOG_TIMER_TRACE("RenderingPipeline::uploadToScreen");
@@ -748,7 +683,7 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<lfs::core::Camera> RenderingPipeline::createCamera(const RenderRequest& request) {
+    Result<lfs::core::Camera> RenderingPipeline::createCamera(const RasterRequest& request) {
         LOG_TIMER_TRACE("RenderingPipeline::createCamera");
 
         // Convert view matrix to camera matrix
@@ -810,54 +745,38 @@ namespace lfs::rendering {
         const int alloc_width = ((width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
         const int alloc_height = ((height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
 
-        if (persistent_fbo_ != 0 && alloc_width == persistent_fbo_width_ && alloc_height == persistent_fbo_height_) {
-            glBindFramebuffer(GL_FRAMEBUFFER, persistent_fbo_);
+        if (persistent_render_target_ &&
+            alloc_width == persistent_fbo_width_ && alloc_height == persistent_fbo_height_) {
+            glBindFramebuffer(GL_FRAMEBUFFER, persistent_render_target_->framebuffer());
             return;
         }
 
         LOG_DEBUG("FBO resize: {}x{} -> {}x{}", persistent_fbo_width_, persistent_fbo_height_, alloc_width, alloc_height);
 
-        if (persistent_fbo_ != 0) {
+        if (render_target_pool_) {
+            auto target = render_target_pool_->acquireHighPrecision(
+                "rendering_pipeline.point_cloud", {alloc_width, alloc_height});
+            if (!target) {
+                LOG_ERROR("Failed to acquire high-precision render target: {}", target.error());
+                cleanupFBO();
+                return;
+            }
+            persistent_render_target_ = *target;
+        } else {
+            if (!persistent_render_target_) {
+                persistent_render_target_ = std::make_shared<HighPrecisionRenderTarget>();
+            }
+            if (auto result = persistent_render_target_->ensureSize({alloc_width, alloc_height}); !result) {
+                LOG_ERROR("Failed to resize persistent render target: {}", result.error());
+                cleanupFBO();
+                return;
+            }
+        }
+
 #ifdef CUDA_GL_INTEROP_ENABLED
-            fbo_interop_texture_.reset();
+        fbo_interop_texture_.reset();
 #endif
-            cleanupFBO();
-        }
-
-        // Create new FBO
-        glGenFramebuffers(1, &persistent_fbo_);
-        if (persistent_fbo_ == 0) {
-            LOG_ERROR("Failed to create persistent framebuffer");
-            return;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, persistent_fbo_);
-
-        glGenTextures(1, &persistent_color_texture_);
-        glBindTexture(GL_TEXTURE_2D, persistent_color_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, alloc_width, alloc_height, 0, GL_RGB, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               persistent_color_texture_, 0);
-
-        glGenTextures(1, &persistent_depth_texture_);
-        glBindTexture(GL_TEXTURE_2D, persistent_depth_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, alloc_width, alloc_height,
-                     0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                               persistent_depth_texture_, 0);
-
-        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("FBO incomplete: 0x{:x}", status);
-            cleanupFBO();
-            return;
-        }
-
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glFinish();
+        glBindFramebuffer(GL_FRAMEBUFFER, persistent_render_target_->framebuffer());
 
         persistent_fbo_width_ = alloc_width;
         persistent_fbo_height_ = alloc_height;
@@ -866,18 +785,7 @@ namespace lfs::rendering {
     }
 
     void RenderingPipeline::cleanupFBO() {
-        if (persistent_fbo_ != 0) {
-            glDeleteFramebuffers(1, &persistent_fbo_);
-            persistent_fbo_ = 0;
-        }
-        if (persistent_color_texture_ != 0) {
-            glDeleteTextures(1, &persistent_color_texture_);
-            persistent_color_texture_ = 0;
-        }
-        if (persistent_depth_texture_ != 0) {
-            glDeleteTextures(1, &persistent_depth_texture_);
-            persistent_depth_texture_ = 0;
-        }
+        persistent_render_target_.reset();
         persistent_fbo_width_ = 0;
         persistent_fbo_height_ = 0;
     }

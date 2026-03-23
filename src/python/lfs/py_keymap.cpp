@@ -57,6 +57,8 @@ namespace lfs::python {
             .value("PASTE_SELECTION", Action::PASTE_SELECTION)
             .value("DEPTH_ADJUST_FAR", Action::DEPTH_ADJUST_FAR)
             .value("DEPTH_ADJUST_SIDE", Action::DEPTH_ADJUST_SIDE)
+            .value("TOGGLE_SELECTION_DEPTH_FILTER", Action::TOGGLE_SELECTION_DEPTH_FILTER)
+            .value("TOGGLE_SELECTION_CROP_FILTER", Action::TOGGLE_SELECTION_CROP_FILTER)
             .value("BRUSH_RESIZE", Action::BRUSH_RESIZE)
             .value("CYCLE_BRUSH_MODE", Action::CYCLE_BRUSH_MODE)
             .value("CONFIRM_POLYGON", Action::CONFIRM_POLYGON)
@@ -85,7 +87,9 @@ namespace lfs::python {
             .value("TOOL_SCALE", Action::TOOL_SCALE)
             .value("TOOL_MIRROR", Action::TOOL_MIRROR)
             .value("TOOL_BRUSH", Action::TOOL_BRUSH)
-            .value("TOOL_ALIGN", Action::TOOL_ALIGN);
+            .value("TOOL_ALIGN", Action::TOOL_ALIGN)
+            .value("PIE_MENU", Action::PIE_MENU)
+            .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")

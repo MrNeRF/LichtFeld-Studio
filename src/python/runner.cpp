@@ -449,7 +449,7 @@ _add_dll_dirs()
                     LOG_INFO("Added Python module dir to path: {}", python_module_dir_utf8);
                 } else {
                     const auto exe_dir_utf8 = lfs::core::path_to_utf8(lfs::core::getExecutableDir());
-                    LOG_WARN("Python module (lichtfeld.pyd) not found. Searched: {}/src/python, {}",
+                    LOG_WARN("Python module 'lichtfeld' not found. Expected a lichtfeld*.so/.pyd in: {}/src/python, {}",
                              exe_dir_utf8, exe_dir_utf8);
                 }
             }
@@ -862,12 +862,71 @@ _repl_out.close()
 
         static constexpr const char* FORMAT_CODE = R"(
 def _lfs_format_code(code):
-    import importlib, sys
+    import importlib
+    import textwrap
     importlib.invalidate_caches()
     try:
         import black
     except ImportError as e:
         return (None, f"ImportError: {e}")
+
+    def _indent_width(line):
+        return len(line) - len(line.lstrip(' '))
+
+    def _previous_significant_line(lines, idx):
+        for j in range(idx - 1, -1, -1):
+            stripped = lines[j].strip()
+            if stripped and not stripped.startswith('#'):
+                return j, stripped
+        return None, ''
+
+    def _expected_indent(lines, idx):
+        prev_idx, prev_stripped = _previous_significant_line(lines, idx)
+        if prev_idx is None:
+            return 0
+        prev_indent = _indent_width(lines[prev_idx])
+        if prev_stripped.endswith(':'):
+            return prev_indent + 4
+        return prev_indent
+
+    def _repair_indentation(source):
+        lines = source.split('\n')
+        changed = False
+
+        for _ in range(len(lines)):
+            try:
+                compile('\n'.join(lines), '<lfs_formatter>', 'exec')
+                return ('\n'.join(lines), changed)
+            except IndentationError as err:
+                lineno = getattr(err, 'lineno', None)
+                if lineno is None:
+                    break
+
+                idx = lineno - 1
+                if idx < 0 or idx >= len(lines):
+                    break
+
+                stripped = lines[idx].lstrip()
+                if not stripped:
+                    break
+
+                msg = str(err)
+                target_indent = _expected_indent(lines, idx)
+
+                if 'expected an indented block' in msg:
+                    target_indent = max(target_indent, 4)
+                elif 'unexpected indent' not in msg and \
+                        'unindent does not match any outer indentation level' not in msg:
+                    break
+
+                new_line = (' ' * target_indent) + stripped
+                if new_line == lines[idx]:
+                    break
+
+                lines[idx] = new_line
+                changed = True
+
+        return ('\n'.join(lines), changed)
 
     # Normalize unicode characters that break parsing (from copy-paste)
     replacements = {
@@ -898,48 +957,30 @@ def _lfs_format_code(code):
         return (code, None)
 
     # Convert tabs to spaces consistently
-    lines = [line.replace('\t', '    ') for line in lines]
-
-    # Find indentation levels for all non-empty lines
-    indents = []
-    for line in lines:
-        if line.strip():
-            indents.append(len(line) - len(line.lstrip()))
-
-    if not indents:
-        return (code, None)
-
-    # If first line has 0 indent but others have consistent indent,
-    # this is likely a copy-paste issue - use the mode of other indents
-    min_indent = min(indents)
-    if min_indent == 0 and len(indents) > 1:
-        other_indents = [i for i in indents[1:] if i > 0]
-        if other_indents:
-            # Find the smallest non-zero indent from other lines
-            min_other = min(other_indents)
-            # Check if most lines use this or a multiple of it
-            consistent = sum(1 for i in other_indents if i >= min_other) / len(other_indents)
-            if consistent > 0.5:
-                min_indent = min_other
-
-    # Remove common indentation
-    dedented = []
-    for line in lines:
-        if line.strip():
-            current_indent = len(line) - len(line.lstrip())
-            if current_indent >= min_indent:
-                dedented.append(line[min_indent:])
-            else:
-                dedented.append(line.lstrip())  # Line has less indent, just strip it
-        else:
-            dedented.append('')
-
-    cleaned = '\n'.join(dedented)
+    cleaned = '\n'.join(line.replace('\t', '    ') for line in lines)
 
     try:
         return (black.format_str(cleaned, mode=black.Mode()), None)
-    except Exception as e:
-        return (None, str(e))
+    except Exception as first_error:
+        repaired, changed = _repair_indentation(cleaned)
+        if changed and repaired != cleaned:
+            try:
+                return (black.format_str(repaired, mode=black.Mode()), None)
+            except Exception:
+                pass
+
+        non_empty = [line for line in cleaned.split('\n') if line.strip()]
+        first_non_empty = non_empty[0] if non_empty else ''
+        dedented = textwrap.dedent(cleaned)
+
+        # Only try to dedent when the snippet itself starts indented.
+        if first_non_empty[:1].isspace() and dedented != cleaned:
+            try:
+                return (black.format_str(dedented, mode=black.Mode()), None)
+            except Exception as dedent_error:
+                return (None, str(dedent_error))
+
+        return (None, str(first_error))
 )";
 
         PyRun_SimpleString(FORMAT_CODE);

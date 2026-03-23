@@ -46,7 +46,8 @@ namespace lfs::core {
 
         void init(LogLevel console_level = LogLevel::Info,
                   const std::string& log_file = "",
-                  const std::string& filter_pattern = "");
+                  const std::string& filter_pattern = "",
+                  bool use_stderr = false);
 
         // Log a pre-formatted message (called by macros)
         void log(LogLevel level, const std::source_location& loc, std::string_view msg);

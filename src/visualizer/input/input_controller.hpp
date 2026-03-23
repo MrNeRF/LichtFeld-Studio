@@ -10,6 +10,7 @@
 #include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include <chrono>
+#include <cstddef>
 #include <glm/glm.hpp>
 #include <memory>
 
@@ -17,6 +18,10 @@ struct SDL_Window;
 struct SDL_Cursor;
 
 namespace lfs::vis {
+
+    namespace input {
+        class InputRouter;
+    }
 
     // Forward declarations
     namespace tools {
@@ -80,6 +85,9 @@ namespace lfs::vis {
                                      drag_mode_ == DragMode::Rotate;
             return movement_active || camera_drag;
         }
+        [[nodiscard]] bool hasViewportKeyboardFocus() const;
+        [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
+        void setInputRouter(input::InputRouter* router) { input_router_ = router; }
 
         // Node rectangle selection state (for rendering)
         [[nodiscard]] bool isNodeRectDragging() const { return is_node_rect_dragging_; }
@@ -103,6 +111,8 @@ namespace lfs::vis {
 
         // Helpers
         bool isInViewport(double x, double y) const;
+        bool isPointerOverBlockingUi(double x, double y) const;
+        bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
         void selectCameraByUid(int uid);
         void updateCameraSpeed(bool increase);
@@ -215,6 +225,14 @@ namespace lfs::vis {
         glm::vec2 node_rect_start_{0.0f};
         glm::vec2 node_rect_end_{0.0f};
 
+        // Event bridge subscriptions
+        std::size_t go_to_cam_view_handler_id_ = 0;
+        std::size_t reset_camera_handler_id_ = 0;
+        std::size_t dataset_load_completed_handler_id_ = 0;
+        std::size_t window_focus_lost_handler_id_ = 0;
+        std::size_t gt_comparison_mode_changed_handler_id_ = 0;
+
+        input::InputRouter* input_router_ = nullptr;
         static InputController* instance_;
     };
 

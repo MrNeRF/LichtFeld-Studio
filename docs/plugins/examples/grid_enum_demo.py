@@ -3,31 +3,30 @@
 """Grid flow and prop_enum usage."""
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 
 
 class GridEnumSettings:
     mode = "fast"
 
 
-class GridEnumPanel(Panel):
+class GridEnumPanel(lf.ui.Panel):
     label = "Grid & Enum Demo"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 301
 
     def __init__(self):
         self.settings = GridEnumSettings()
 
-    def draw(self, layout):
-        with layout.row() as row:
+    def draw(self, ui):
+        with ui.row() as row:
             row.prop_enum(self.settings, "mode", "fast", "Fast")
             row.prop_enum(self.settings, "mode", "balanced", "Balanced")
             row.prop_enum(self.settings, "mode", "quality", "Quality")
 
-        layout.separator()
+        ui.separator()
 
         items = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]
-        with layout.grid_flow(columns=3) as grid:
+        with ui.grid_flow(columns=3) as grid:
             for item in items:
                 with grid.box() as cell:
                     cell.label(item)

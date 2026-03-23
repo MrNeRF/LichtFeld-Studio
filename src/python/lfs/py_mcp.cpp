@@ -3,6 +3,7 @@
 
 #include "py_mcp.hpp"
 
+#include "core/base64.hpp"
 #include "core/logger.hpp"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_tools.hpp"
@@ -255,6 +256,67 @@ namespace lfs::python {
             return registered_tools_;
         }
 
+        std::vector<std::string> list_all_tools() {
+            auto tools = mcp::ToolRegistry::instance().list_tools();
+            std::vector<std::string> names;
+            names.reserve(tools.size());
+            for (const auto& tool : tools) {
+                names.push_back(tool.name);
+            }
+            return names;
+        }
+
+        nb::list describe_all_tools() {
+            nb::list result;
+            for (const auto& tool : mcp::ToolRegistry::instance().list_tools()) {
+                result.append(json_to_python(mcp::tool_to_json(tool)));
+            }
+            return result;
+        }
+
+        std::vector<std::string> list_all_resources() {
+            auto resources = mcp::ResourceRegistry::instance().list_resources();
+            std::vector<std::string> uris;
+            uris.reserve(resources.size());
+            for (const auto& resource : resources) {
+                uris.push_back(resource.uri);
+            }
+            return uris;
+        }
+
+        nb::list read_resource_contents(const std::string& uri) {
+            auto contents = mcp::ResourceRegistry::instance().read_resource(uri);
+            if (!contents) {
+                throw nb::value_error(contents.error().c_str());
+            }
+
+            nb::list result;
+            for (const auto& content : *contents) {
+                nb::dict item;
+                item["uri"] = content.uri;
+                if (content.mime_type) {
+                    item["mime_type"] = *content.mime_type;
+                }
+
+                if (std::holds_alternative<std::string>(content.content)) {
+                    const auto& string_content = std::get<std::string>(content.content);
+                    const bool is_blob =
+                        content.mime_type && content.mime_type->starts_with("image/");
+                    if (is_blob) {
+                        item["blob"] = string_content;
+                    } else {
+                        item["text"] = string_content;
+                    }
+                } else {
+                    item["blob"] = core::base64_encode(std::get<std::vector<uint8_t>>(content.content));
+                }
+
+                result.append(std::move(item));
+            }
+
+            return result;
+        }
+
     } // namespace
 
     void register_mcp(nb::module_& m) {
@@ -275,8 +337,40 @@ namespace lfs::python {
             "Unregister an MCP tool");
 
         mcp_module.def(
-            "list_tools", []() { return list_python_tools(); },
-            "List all registered Python MCP tools");
+            "list_tools", []() { return list_all_tools(); },
+            "List all registered shared capabilities/tools");
+
+        mcp_module.def(
+            "list_python_tools", []() { return list_python_tools(); },
+            "List Python-provided MCP tools registered through this module");
+
+        mcp_module.def(
+            "describe_tools", []() { return describe_all_tools(); },
+            "Describe all registered shared capabilities/tools");
+
+        mcp_module.def(
+            "list_resources", []() { return list_all_resources(); },
+            "List all registered MCP resources");
+
+        mcp_module.def(
+            "read_resource", [](const std::string& uri) { return read_resource_contents(uri); },
+            nb::arg("uri"),
+            "Read one registered MCP resource");
+
+        mcp_module.def(
+            "call_tool",
+            [](const std::string& name, nb::handle args) {
+                mcp::json json_args = mcp::json::object();
+                if (!args.is_none()) {
+                    json_args = python_value_to_json(args);
+                    if (!json_args.is_object()) {
+                        throw nb::value_error("call_tool args must be a dict/object");
+                    }
+                }
+                return json_to_python(mcp::ToolRegistry::instance().call_tool(name, json_args));
+            },
+            nb::arg("name"), nb::arg("args") = nb::none(),
+            "Invoke a registered shared capability/tool");
 
         mcp_module.def(
             "tool",

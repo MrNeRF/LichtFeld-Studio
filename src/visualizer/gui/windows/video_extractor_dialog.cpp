@@ -4,8 +4,10 @@
 
 #include "video_extractor_dialog.hpp"
 #include "core/event_bridge/localization_manager.hpp"
+#include "core/include/core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/string_keys.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "theme/theme.hpp"
 
 #include <array>
@@ -16,7 +18,7 @@
 using namespace lichtfeld::Strings;
 
 using lfs::vis::gui::OpenVideoFileDialog;
-using lfs::vis::gui::SelectFolderDialog;
+using lfs::vis::gui::PickFolderDialog;
 
 namespace lfs::gui {
 
@@ -46,14 +48,57 @@ namespace lfs::gui {
     VideoExtractorDialog::VideoExtractorDialog() : player_(std::make_unique<io::VideoPlayer>()) {}
 
     VideoExtractorDialog::~VideoExtractorDialog() {
+        joinExtractionThread();
         if (preview_texture_ != 0) {
             glDeleteTextures(1, &preview_texture_);
         }
     }
 
-    void VideoExtractorDialog::setOnStartExtraction(
-        std::function<void(const VideoExtractionParams&)> callback) {
-        on_start_extraction_ = std::move(callback);
+    void VideoExtractorDialog::shutdown() {
+        joinExtractionThread();
+    }
+
+    void VideoExtractorDialog::startExtraction(const VideoExtractionParams& params) {
+        joinExtractionThread();
+
+        extraction_thread_.emplace([this, params]() {
+            io::VideoFrameExtractor extractor;
+
+            io::VideoFrameExtractor::Params extract_params;
+            extract_params.video_path = params.video_path;
+            extract_params.output_dir = params.output_dir;
+            extract_params.mode = params.mode;
+            extract_params.fps = params.fps;
+            extract_params.frame_interval = params.frame_interval;
+            extract_params.format = params.format;
+            extract_params.jpg_quality = params.jpg_quality;
+            extract_params.start_time = params.start_time;
+            extract_params.end_time = params.end_time;
+            extract_params.resolution_mode = params.resolution_mode;
+            extract_params.scale = params.scale;
+            extract_params.custom_width = params.custom_width;
+            extract_params.custom_height = params.custom_height;
+            extract_params.filename_pattern = params.filename_pattern;
+
+            extract_params.progress_callback = [this](int current, int total) {
+                updateProgress(current, total);
+            };
+
+            std::string error;
+            if (!extractor.extract(extract_params, error)) {
+                LOG_ERROR("Video frame extraction failed: {}", error);
+                setExtractionError(error);
+            } else {
+                LOG_INFO("Video frame extraction completed successfully");
+                setExtractionComplete();
+            }
+        });
+    }
+
+    void VideoExtractorDialog::joinExtractionThread() {
+        if (extraction_thread_ && extraction_thread_->joinable())
+            extraction_thread_->join();
+        extraction_thread_.reset();
     }
 
     void VideoExtractorDialog::updateProgress(int current, int total) {
@@ -63,13 +108,40 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::setExtractionComplete() {
         extracting_.store(false);
+        std::lock_guard lock(extraction_status_mutex_);
         error_message_.clear();
         show_completion_message_ = true;
     }
 
     void VideoExtractorDialog::setExtractionError(const std::string& error) {
         extracting_.store(false);
+        std::lock_guard lock(extraction_status_mutex_);
         error_message_ = error;
+        show_completion_message_ = false;
+    }
+
+    VideoExtractorDialog::ExtractionStatusSnapshot VideoExtractorDialog::getExtractionStatusSnapshot() const {
+        std::lock_guard lock(extraction_status_mutex_);
+        return {
+            .error_message = error_message_,
+            .show_completion_message = show_completion_message_,
+        };
+    }
+
+    void VideoExtractorDialog::clearExtractionStatus() {
+        std::lock_guard lock(extraction_status_mutex_);
+        error_message_.clear();
+        show_completion_message_ = false;
+    }
+
+    void VideoExtractorDialog::clearCompletionMessage() {
+        std::lock_guard lock(extraction_status_mutex_);
+        show_completion_message_ = false;
+    }
+
+    void VideoExtractorDialog::clearErrorMessage() {
+        std::lock_guard lock(extraction_status_mutex_);
+        error_message_.clear();
     }
 
     bool VideoExtractorDialog::isVideoPlaying() const {
@@ -85,7 +157,9 @@ namespace lfs::gui {
 
             // Auto-set output directory
             if (output_dir_.empty()) {
-                output_dir_ = video_path_.parent_path() / (video_path_.stem().string() + "_frames");
+                std::filesystem::path output_name = video_path_.stem();
+                output_name += "_frames";
+                output_dir_ = video_path_.parent_path() / output_name;
             }
         }
     }
@@ -463,7 +537,8 @@ namespace lfs::gui {
         ImGui::SameLine();
 
         const std::string video_display =
-            video_path_.empty() ? LOC(VideoExtractor::NO_FILE) : video_path_.filename().string();
+            video_path_.empty() ? LOC(VideoExtractor::NO_FILE)
+                                : lfs::core::path_to_utf8(video_path_.filename());
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", video_display.c_str());
 
         ImGui::SameLine();
@@ -481,13 +556,14 @@ namespace lfs::gui {
         ImGui::SameLine();
 
         const std::string output_display =
-            output_dir_.empty() ? LOC(VideoExtractor::NO_DIR) : output_dir_.string();
+            output_dir_.empty() ? LOC(VideoExtractor::NO_DIR)
+                                : lfs::core::path_to_utf8(output_dir_);
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", output_display.c_str());
 
         ImGui::SameLine();
         ImGui::PushID("output");
         if (ImGui::Button(LOC(VideoExtractor::BROWSE))) {
-            const auto path = SelectFolderDialog(LOC(VideoExtractor::SELECT_FOLDER));
+            const auto path = PickFolderDialog(output_dir_);
             if (!path.empty()) {
                 output_dir_ = path;
             }
@@ -660,40 +736,37 @@ namespace lfs::gui {
         }
 
         if (ImGui::Button(LOC(VideoExtractor::START), ImVec2(150, 30))) {
-            if (on_start_extraction_) {
-                VideoExtractionParams params;
-                params.video_path = video_path_;
-                params.output_dir = output_dir_;
-                params.mode =
-                    mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
-                params.fps = static_cast<double>(fps_);
-                params.frame_interval = frame_interval_;
-                params.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
-                params.jpg_quality = jpg_quality_;
-                params.start_time = static_cast<double>(trim_start_);
-                params.end_time = static_cast<double>(trim_end_);
+            VideoExtractionParams params;
+            params.video_path = video_path_;
+            params.output_dir = output_dir_;
+            params.mode =
+                mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
+            params.fps = static_cast<double>(fps_);
+            params.frame_interval = frame_interval_;
+            params.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
+            params.jpg_quality = jpg_quality_;
+            params.start_time = static_cast<double>(trim_start_);
+            params.end_time = static_cast<double>(trim_end_);
 
-                static constexpr std::array<io::ResolutionMode, 3> res_modes = {
-                    io::ResolutionMode::Original,
-                    io::ResolutionMode::Scale,
-                    io::ResolutionMode::Custom};
-                static constexpr std::array<float, 4> scale_values = {0.25f, 0.5f, 0.75f, 1.0f};
+            static constexpr std::array<io::ResolutionMode, 3> res_modes = {
+                io::ResolutionMode::Original,
+                io::ResolutionMode::Scale,
+                io::ResolutionMode::Custom};
+            static constexpr std::array<float, 4> scale_values = {0.25f, 0.5f, 0.75f, 1.0f};
 
-                params.resolution_mode = res_modes[resolution_mode_];
-                params.scale = scale_values[scale_selection_];
-                params.custom_width = custom_width_;
-                params.custom_height = custom_height_;
+            params.resolution_mode = res_modes[resolution_mode_];
+            params.scale = scale_values[scale_selection_];
+            params.custom_width = custom_width_;
+            params.custom_height = custom_height_;
 
-                params.filename_pattern = filename_pattern_.data();
+            params.filename_pattern = filename_pattern_.data();
 
-                extracting_.store(true);
-                current_frame_.store(0);
-                total_frames_.store(0);
-                error_message_.clear();
-                show_completion_message_ = false;
+            extracting_.store(true);
+            current_frame_.store(0);
+            total_frames_.store(0);
+            clearExtractionStatus();
 
-                on_start_extraction_(params);
-            }
+            startExtraction(params);
         }
 
         if (!can_start) {
@@ -730,7 +803,9 @@ namespace lfs::gui {
             }
         }
 
-        if (show_completion_message_ && !extracting_.load()) {
+        const auto extraction_status = getExtractionStatusSnapshot();
+
+        if (extraction_status.show_completion_message && !extracting_.load()) {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -741,20 +816,21 @@ namespace lfs::gui {
             ImGui::Text(LOC(VideoExtractor::EXTRACTED), total);
 
             if (ImGui::Button(LOC(VideoExtractor::OK), ImVec2(100, 30))) {
-                show_completion_message_ = false;
+                clearCompletionMessage();
                 current_frame_.store(0);
                 total_frames_.store(0);
             }
         }
 
-        if (!error_message_.empty()) {
+        if (!extraction_status.error_message.empty()) {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), LOC(VideoExtractor::ERROR_MSG), error_message_.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), LOC(VideoExtractor::ERROR_MSG),
+                               extraction_status.error_message.c_str());
 
             if (ImGui::Button(LOC(VideoExtractor::DISMISS), ImVec2(100, 30))) {
-                error_message_.clear();
+                clearErrorMessage();
             }
         }
 

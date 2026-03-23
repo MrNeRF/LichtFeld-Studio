@@ -7,13 +7,82 @@
 #include "ppisp.hpp"
 #include "ppisp_controller_pool.hpp"
 #include <fstream>
+#include <nlohmann/json.hpp>
 
 namespace lfs::training {
+
+    namespace {
+        nlohmann::json metadata_to_json(const PPISPFileMetadata& metadata) {
+            nlohmann::json json;
+            json["dataset_path"] = metadata.dataset_path_utf8;
+            json["images_folder"] = metadata.images_folder;
+            json["frame_image_names"] = metadata.frame_image_names;
+            json["frame_camera_ids"] = metadata.frame_camera_ids;
+            json["camera_ids"] = metadata.camera_ids;
+            return json;
+        }
+
+        std::expected<PPISPFileMetadata, std::string> metadata_from_json(const nlohmann::json& json) {
+            PPISPFileMetadata metadata;
+            try {
+                if (json.contains("dataset_path")) {
+                    metadata.dataset_path_utf8 = json["dataset_path"].get<std::string>();
+                }
+                if (json.contains("images_folder")) {
+                    metadata.images_folder = json["images_folder"].get<std::string>();
+                }
+                if (json.contains("frame_image_names")) {
+                    metadata.frame_image_names = json["frame_image_names"].get<std::vector<std::string>>();
+                }
+                if (json.contains("frame_camera_ids")) {
+                    metadata.frame_camera_ids = json["frame_camera_ids"].get<std::vector<int>>();
+                }
+                if (json.contains("camera_ids")) {
+                    metadata.camera_ids = json["camera_ids"].get<std::vector<int>>();
+                }
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string("Failed to parse PPISP metadata: ") + e.what());
+            }
+            return metadata;
+        }
+
+        std::expected<void, std::string> write_metadata_block(std::ostream& file, const PPISPFileMetadata& metadata) {
+            const std::string json = metadata_to_json(metadata).dump();
+            const uint64_t size = static_cast<uint64_t>(json.size());
+            file.write(reinterpret_cast<const char*>(&size), sizeof(size));
+            file.write(json.data(), static_cast<std::streamsize>(json.size()));
+            if (!file) {
+                return std::unexpected("Failed to write PPISP metadata block");
+            }
+            return {};
+        }
+
+        std::expected<PPISPFileMetadata, std::string> read_metadata_block(std::istream& file) {
+            uint64_t size = 0;
+            file.read(reinterpret_cast<char*>(&size), sizeof(size));
+            if (!file) {
+                return std::unexpected("Failed to read PPISP metadata size");
+            }
+
+            std::string json(size, '\0');
+            file.read(json.data(), static_cast<std::streamsize>(size));
+            if (!file) {
+                return std::unexpected("Failed to read PPISP metadata payload");
+            }
+
+            try {
+                return metadata_from_json(nlohmann::json::parse(json));
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string("Failed to parse PPISP metadata JSON: ") + e.what());
+            }
+        }
+    } // namespace
 
     std::expected<void, std::string> save_ppisp_file(
         const std::filesystem::path& path,
         const PPISP& ppisp,
-        const PPISPControllerPool* controller_pool) {
+        const PPISPControllerPool* controller_pool,
+        const PPISPFileMetadata* metadata) {
 
         try {
             std::ofstream file;
@@ -28,6 +97,9 @@ namespace lfs::training {
             if (controller_pool) {
                 header.flags |= static_cast<uint32_t>(PPISPFileFlags::HAS_CONTROLLER);
             }
+            if (metadata && !metadata->empty()) {
+                header.flags |= static_cast<uint32_t>(PPISPFileFlags::HAS_METADATA);
+            }
 
             file.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
@@ -38,13 +110,20 @@ namespace lfs::training {
                 controller_pool->serialize_inference(file);
             }
 
-            LOG_INFO("PPISP file saved: {} ({} cameras, {} frames{})",
+            if (metadata && !metadata->empty()) {
+                if (auto result = write_metadata_block(file, *metadata); !result) {
+                    return result;
+                }
+            }
+
+            LOG_INFO("PPISP file saved: {} ({} cameras, {} frames{}{})",
                      lfs::core::path_to_utf8(path),
                      header.num_cameras,
                      header.num_frames,
                      controller_pool
                          ? ", +controller_pool(" + std::to_string(controller_pool->num_cameras()) + ")"
-                         : "");
+                         : "",
+                     (metadata && !metadata->empty()) ? ", +metadata" : "");
 
             return {};
 
@@ -56,7 +135,8 @@ namespace lfs::training {
     std::expected<void, std::string> load_ppisp_file(
         const std::filesystem::path& path,
         PPISP& ppisp,
-        PPISPControllerPool* controller_pool) {
+        PPISPControllerPool* controller_pool,
+        PPISPFileMetadata* metadata) {
 
         try {
             std::ifstream file;
@@ -73,6 +153,9 @@ namespace lfs::training {
 
             if (header.version > PPISP_FILE_VERSION) {
                 return std::unexpected("Unsupported PPISP file version: " + std::to_string(header.version));
+            }
+            if (metadata) {
+                *metadata = {};
             }
 
             const bool is_inference_load = ppisp.num_cameras() == 0 && ppisp.num_frames() == 0;
@@ -96,7 +179,7 @@ namespace lfs::training {
                              lfs::core::path_to_utf8(path), header.num_cameras, header.num_frames,
                              controller_pool->num_cameras());
                 } else {
-                    LOG_WARN("PPISP file has controller pool but none provided - skipping");
+                    LOG_DEBUG("PPISP file has controller pool but none provided - skipping controller data");
                     // Skip controller pool data by reading into a temporary
                     constexpr uint32_t INFERENCE_MAGIC = 0x4C464349;
                     uint32_t magic, version;
@@ -118,6 +201,16 @@ namespace lfs::training {
                 }
                 LOG_INFO("PPISP file loaded: {} ({} cameras, {} frames)",
                          lfs::core::path_to_utf8(path), header.num_cameras, header.num_frames);
+            }
+
+            if (header.version >= 2 && has_flag(header.flags, PPISPFileFlags::HAS_METADATA)) {
+                auto metadata_result = read_metadata_block(file);
+                if (!metadata_result) {
+                    return std::unexpected(metadata_result.error());
+                }
+                if (metadata) {
+                    *metadata = std::move(*metadata_result);
+                }
             }
 
             return {};

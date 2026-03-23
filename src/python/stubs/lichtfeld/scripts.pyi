@@ -1,3 +1,5 @@
+"""Python script management"""
+
 from collections.abc import Sequence
 
 

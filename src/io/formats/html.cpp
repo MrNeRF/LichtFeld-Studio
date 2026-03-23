@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "html.hpp"
+#include "core/base64.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "html_viewer_resources.hpp"
@@ -16,26 +17,6 @@
 namespace lfs::io {
 
     namespace {
-
-        constexpr char BASE64_CHARS[] =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-        std::string base64_encode(const std::vector<uint8_t>& data) {
-            std::string result;
-            result.reserve(((data.size() + 2) / 3) * 4);
-
-            for (size_t i = 0; i < data.size(); i += 3) {
-                const uint32_t b0 = data[i];
-                const uint32_t b1 = (i + 1 < data.size()) ? data[i + 1] : 0;
-                const uint32_t b2 = (i + 2 < data.size()) ? data[i + 2] : 0;
-
-                result += BASE64_CHARS[(b0 >> 2) & 0x3F];
-                result += BASE64_CHARS[((b0 << 4) | (b1 >> 4)) & 0x3F];
-                result += (i + 1 < data.size()) ? BASE64_CHARS[((b1 << 2) | (b2 >> 6)) & 0x3F] : '=';
-                result += (i + 2 < data.size()) ? BASE64_CHARS[b2 & 0x3F] : '=';
-            }
-            return result;
-        }
 
         std::vector<uint8_t> read_file_binary(const std::filesystem::path& path) {
             std::ifstream file;
@@ -172,7 +153,7 @@ namespace lfs::io {
                               "Failed to read temporary SOG file", temp_sog);
         }
 
-        const auto base64_data = base64_encode(sog_data);
+        const auto base64_data = core::base64_encode(sog_data);
 
         if (options.progress_callback) {
             options.progress_callback(0.8f, "Generating HTML...");

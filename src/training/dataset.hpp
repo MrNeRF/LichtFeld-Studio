@@ -210,6 +210,11 @@ namespace lfs::training {
             LOG_INFO("Dataset created with {} images (split: {})", indices_.size(), static_cast<int>(split_));
         }
 
+        lfs::core::Camera* get_camera(size_t index) const {
+            assert(index < indices_.size());
+            return cameras_[indices_[index]].get();
+        }
+
         /// Get single example by index
         CameraExample get(size_t index) const {
             if (index >= indices_.size()) {
@@ -522,7 +527,7 @@ namespace lfs::training {
               sampler_(std::move(sampler)),
               config_(config),
               mask_config_(mask_config),
-              loader_(std::make_unique<lfs::io::PipelinedImageLoader>(config)),
+              loader_(std::make_shared<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
             // Prefetch initial batch
@@ -589,6 +594,9 @@ namespace lfs::training {
 
         auto get_stats() const { return loader_->get_stats(); }
 
+        lfs::io::PipelinedImageLoader* get_loader() const { return loader_.get(); }
+        std::shared_ptr<lfs::io::PipelinedImageLoader> get_loader_shared() const { return loader_; }
+
     private:
         void prefetch_next_batch() {
             while (loader_->in_flight_count() < config_.prefetch_count) {
@@ -611,7 +619,7 @@ namespace lfs::training {
                     request.params.undistort = request.undistort;
                 }
 
-                if (mask_config_.use_alpha_as_mask) {
+                if (mask_config_.use_alpha_as_mask && cam->has_alpha()) {
                     request.extract_alpha_as_mask = true;
                     request.alpha_mask_params.invert = mask_config_.invert_masks;
                     request.alpha_mask_params.threshold = mask_config_.mask_threshold;
@@ -629,7 +637,7 @@ namespace lfs::training {
         Sampler sampler_;
         lfs::io::PipelinedLoaderConfig config_;
         PipelinedMaskConfig mask_config_;
-        std::unique_ptr<lfs::io::PipelinedImageLoader> loader_;
+        std::shared_ptr<lfs::io::PipelinedImageLoader> loader_;
 
         std::unordered_map<size_t, size_t> sequence_to_camera_;
         size_t next_sequence_id_ = 0;

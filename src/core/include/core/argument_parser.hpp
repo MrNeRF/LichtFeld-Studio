@@ -23,9 +23,6 @@ namespace lfs::core::args {
     struct HelpMode {};
     struct VersionMode {};
     struct WarmupMode {}; // JIT compile PTX kernels and exit
-    struct McpMode {
-        std::optional<std::filesystem::path> scene_path;
-    };
     struct PluginMode {
         enum class Command { CREATE,
                              CHECK,
@@ -34,7 +31,7 @@ namespace lfs::core::args {
         std::string name;
     };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, HelpMode, VersionMode, WarmupMode, McpMode, PluginMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, HelpMode, VersionMode, WarmupMode, PluginMode>;
 
     LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

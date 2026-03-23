@@ -27,6 +27,16 @@ namespace lfs::vis::op {
             {"ed.undo", "Undo"},
             {"ed.redo", "Redo"},
             {"ed.delete", "Delete"},
+            {"selection.clear", "Clear Selection"},
+            {"scene.select_node", "Select Node"},
+            {"crop_box.add", "Add Crop Box"},
+            {"crop_box.set", "Set Crop Box"},
+            {"crop_box.fit", "Fit Crop Box"},
+            {"crop_box.reset", "Reset Crop Box"},
+            {"ellipsoid.add", "Add Ellipsoid"},
+            {"ellipsoid.set", "Set Ellipsoid"},
+            {"ellipsoid.fit", "Fit Ellipsoid"},
+            {"ellipsoid.reset", "Reset Ellipsoid"},
         }};
 
         struct ToolInfo {

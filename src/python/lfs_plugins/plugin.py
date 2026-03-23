@@ -32,7 +32,9 @@ class PluginInfo:
     dependencies: List[str] = field(default_factory=list)
     auto_start: bool = False
     hot_reload: bool = True
-    min_lichtfeld_version: str = ""
+    plugin_api: str = ""
+    lichtfeld_version: str = ""
+    required_features: List[str] = field(default_factory=list)
 
 
 @dataclass

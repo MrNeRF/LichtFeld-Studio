@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/modal_request.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/operator/poll_dependency.hpp"
 
@@ -25,10 +26,16 @@ namespace nb = nanobind;
 
 namespace lfs::vis::gui {
     struct UIContext;
-}
+    class IPanel;
+    struct MenuDropdownContent;
+} // namespace lfs::vis::gui
 
 namespace lfs::vis::op {
     struct ModalEvent;
+}
+
+namespace Rml {
+    class ElementDocument;
 }
 
 namespace lfs::python {
@@ -309,6 +316,16 @@ namespace lfs::python {
     public:
         explicit PyUILayout(int initial_menu_depth = 0) : menu_depth_(initial_menu_depth) {}
 
+        void setCollecting(vis::gui::MenuDropdownContent* target) {
+            collecting_ = target != nullptr;
+            collect_target_ = target;
+            collect_callback_index_ = 0;
+        }
+        bool isCollecting() const { return collecting_; }
+
+        void setExecuteAtIndex(int index) { execute_at_index_ = index; }
+        int executeAtIndex() const { return execute_at_index_; }
+
         // Text
         void label(const std::string& text);
         void label_centered(const std::string& text);
@@ -355,13 +372,16 @@ namespace lfs::python {
         std::tuple<bool, float> stepper_float(const std::string& label, float value,
                                               const std::vector<float>& steps = {1.0f, 0.1f, 0.01f});
         std::tuple<bool, std::string> path_input(const std::string& label, const std::string& value,
-                                                 bool folder_mode = true, const std::string& dialog_title = "");
+                                                 bool folder_mode = true,
+                                                 const std::string& dialog_title = "");
 
         // Color
         std::tuple<bool, std::tuple<float, float, float>> color_edit3(const std::string& label,
                                                                       std::tuple<float, float, float> color);
         std::tuple<bool, std::tuple<float, float, float, float>> color_edit4(const std::string& label,
                                                                              std::tuple<float, float, float, float> color);
+        std::tuple<bool, std::tuple<float, float, float>> color_picker3(const std::string& label,
+                                                                        std::tuple<float, float, float> color);
         bool color_button(const std::string& label, nb::object color,
                           std::tuple<float, float> size = {0, 0});
 
@@ -432,6 +452,7 @@ namespace lfs::python {
         void capture_mouse_from_app(bool capture = true);
         void set_scroll_here_y(float center_y_ratio = 0.5f);
         std::tuple<float, float> get_cursor_screen_pos() const;
+        std::tuple<float, float> get_mouse_pos() const;
         std::tuple<float, float> get_window_pos() const;
         float get_window_width() const;
         float get_text_line_height() const;
@@ -637,11 +658,16 @@ namespace lfs::python {
         int menu_depth_;
         int box_id_counter_ = 0;
         int grid_id_counter_ = 0;
+
+        bool collecting_ = false;
+        vis::gui::MenuDropdownContent* collect_target_ = nullptr;
+        int collect_callback_index_ = 0;
+        int execute_at_index_ = -1;
     };
 
     using PollDependency = lfs::vis::op::PollDependency;
 
-    class PythonPanelAdapter;
+    namespace gui = lfs::vis::gui;
 
     class PyPanelRegistry {
     public:
@@ -649,6 +675,7 @@ namespace lfs::python {
 
         void register_panel(nb::object panel_class);
         void unregister_panel(nb::object panel_class);
+        void unregister_for_module(const std::string& prefix);
         void unregister_all();
 
     private:
@@ -657,8 +684,13 @@ namespace lfs::python {
         PyPanelRegistry(const PyPanelRegistry&) = delete;
         PyPanelRegistry& operator=(const PyPanelRegistry&) = delete;
 
+        struct RegisteredPanel {
+            std::shared_ptr<gui::IPanel> adapter;
+            std::string module_prefix;
+        };
+
         mutable std::mutex mutex_;
-        std::unordered_map<std::string, std::shared_ptr<PythonPanelAdapter>> adapters_;
+        std::unordered_map<std::string, RegisteredPanel> panels_;
     };
 
     // Theme palette wrapper (read-only)
@@ -743,6 +775,10 @@ namespace lfs::python {
         void invoke(const std::string& panel,
                     const std::string& section,
                     PyHookPosition position);
+        void invoke_document(const std::string& panel,
+                             const std::string& section,
+                             Rml::ElementDocument* document,
+                             PyHookPosition position);
 
         // Check if hooks exist
         bool has_hooks(const std::string& panel, const std::string& section) const;
@@ -790,6 +826,9 @@ namespace lfs::python {
         bool has_menu_bar_entries() const;
         std::vector<PyMenuClassInfo*> get_menu_bar_entries();
         void draw_menu_bar_entry(const std::string& idname);
+
+        vis::gui::MenuDropdownContent collect_menu_content(const std::string& idname);
+        void execute_menu_callback(const std::string& idname, int callback_index);
 
         void sync_from_python() const;
 
@@ -845,12 +884,14 @@ namespace lfs::python {
         bool needs_open = true;
     };
 
-    // Singleton registry for modal dialogs
     class PyModalRegistry {
     public:
+        using EnqueueCallback = std::function<void(lfs::core::ModalRequest)>;
+
         static PyModalRegistry& instance();
 
-        // Show dialogs
+        void set_enqueue_callback(EnqueueCallback cb);
+
         void show_confirm(const std::string& title, const std::string& message,
                           const std::vector<std::string>& buttons, nb::object callback);
         void show_confirm(const std::string& title, const std::string& message,
@@ -862,13 +903,10 @@ namespace lfs::python {
                           MessageStyle style = MessageStyle::Info,
                           nb::object callback = nb::none());
 
-        // Draw pending modals (called from C++ render loop)
         void draw_modals();
 
-        // Check if any modals are open
         bool has_open_modals() const;
 
-        // Test hooks for lock-order regression coverage
         void clear_for_test();
         bool can_lock_mutex_for_test() const;
         void run_pending_callback_for_test(std::function<void()> callback);
@@ -881,13 +919,10 @@ namespace lfs::python {
 
         using ModalCallbackAction = std::function<void()>;
 
-        std::optional<ModalCallbackAction> draw_confirm_dialog(PyModalDialog& modal, float scale);
-        std::optional<ModalCallbackAction> draw_input_dialog(PyModalDialog& modal, float scale);
-        std::optional<ModalCallbackAction> draw_message_dialog(PyModalDialog& modal, float scale);
-
         mutable std::mutex mutex_;
         std::vector<PyModalDialog> modals_;
         uint32_t next_id_ = 0;
+        EnqueueCallback enqueue_cb_;
     };
 
     // Register UI classes with nanobind module
@@ -903,7 +938,9 @@ namespace lfs::python {
     void register_ui_modals(nb::module_& m);
     void register_ui_hooks(nb::module_& m);
     void register_ui_menus(nb::module_& m);
+    void register_ui_context_menu(nb::module_& m);
     void register_ui_panels(nb::module_& m);
+    void register_rml_im_mode_layout(nb::module_& m);
     void register_keymap(nb::module_& m);
 
 } // namespace lfs::python

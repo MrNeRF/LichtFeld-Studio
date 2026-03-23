@@ -7,6 +7,7 @@
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -156,7 +157,7 @@ namespace lfs::python {
             // Strategy
             .string_prop(&OptimizationParameters::strategy,
                          "strategy", "Strategy", "mcmc",
-                         "Optimization strategy: mcmc, adc, or lfs")
+                         "Optimization strategy: mcmc, adc, lfs, or igs+")
             .flags(PROP_NEEDS_RESTART)
 
             // ADC strategy parameters
@@ -227,9 +228,12 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
                        "ppisp_use_controller", "Controller", false,
                        "Enable PPISP controller for novel view synthesis")
+            .bool_prop(&OptimizationParameters::ppisp_freeze_from_sidecar,
+                       "ppisp_freeze_from_sidecar", "Freeze From Sidecar", false,
+                       "Load PPISP weights from a sidecar and freeze PPISP learning during training")
             .int_prop(&OptimizationParameters::ppisp_controller_activation_step,
                       "ppisp_controller_activation_step", "Controller Step", -1, -1, 100000,
-                      "Iteration to start controller distillation (-1 = auto)")
+                      "Iteration to start controller distillation (negative = default schedule)")
             .float_prop(&OptimizationParameters::ppisp_controller_lr,
                         "ppisp_controller_lr", "Controller LR", 2e-3f, 1e-5f, 1e-1f,
                         "Learning rate for PPISP controller")
@@ -1081,8 +1085,8 @@ namespace lfs::python {
             .def(
                 "set_strategy",
                 [](PyOptimizationParams& /*self*/, const std::string& strategy) {
-                    if (strategy != "mcmc" && strategy != "adc" && strategy != "lfs") {
-                        throw std::invalid_argument("Strategy must be 'mcmc', 'adc', or 'lfs'");
+                    if (strategy != "mcmc" && strategy != "adc" && strategy != "lfs" && strategy != "igs+") {
+                        throw std::invalid_argument("Strategy must be 'mcmc', 'adc', 'lfs', or 'igs+'");
                     }
                     auto* pm = get_parameter_manager();
                     if (pm) {
@@ -1090,7 +1094,7 @@ namespace lfs::python {
                     }
                 },
                 nb::arg("strategy"),
-                "Set active strategy ('mcmc', 'adc', or 'lfs')")
+                "Set active strategy ('mcmc', 'adc', 'lfs', or 'igs+')")
             .def_prop_ro(
                 "headless", [](PyOptimizationParams& self) { return self.params().headless; },
                 "Whether running without visualization")
@@ -1147,7 +1151,7 @@ namespace lfs::python {
                         pm->autoScaleSteps(image_count);
                 },
                 nb::arg("image_count"),
-                "Auto-scale steps for both strategies based on image count")
+                "Auto-scale steps for all strategies based on image count")
             .def_prop_rw(
                 "gut",
                 [](PyOptimizationParams& self) { return self.params().gut; },
@@ -1179,10 +1183,24 @@ namespace lfs::python {
                 [](PyOptimizationParams& self, bool v) { self.params().ppisp_use_controller = v; },
                 "Enable PPISP controller for novel view synthesis")
             .def_prop_rw(
+                "ppisp_freeze_from_sidecar",
+                [](PyOptimizationParams& self) { return self.params().ppisp_freeze_from_sidecar; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_freeze_from_sidecar = v; },
+                "Freeze PPISP learning and reuse a PPISP sidecar during training")
+            .def_prop_rw(
+                "ppisp_sidecar_path",
+                [](PyOptimizationParams& self) {
+                    return lfs::core::path_to_utf8(self.params().ppisp_sidecar_path);
+                },
+                [](PyOptimizationParams& self, const std::string& v) {
+                    self.params().ppisp_sidecar_path = lfs::core::utf8_to_path(v);
+                },
+                "Path to a PPISP sidecar used for frozen PPISP training")
+            .def_prop_rw(
                 "ppisp_controller_activation_step",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_activation_step; },
                 [](PyOptimizationParams& self, int v) { self.params().ppisp_controller_activation_step = v; },
-                "Iteration to start controller distillation (-1 = auto)")
+                "Iteration to start controller distillation (negative = default schedule)")
             .def_prop_rw(
                 "ppisp_controller_lr",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_lr; },
@@ -1238,6 +1256,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
                 "Undistort images on-the-fly before training")
+            .def_prop_rw(
+                "revised_opacity",
+                [](PyOptimizationParams& self) { return self.params().revised_opacity; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.revised_opacity = v; }); },
+                "Use revised opacity calculation for ADC densification")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

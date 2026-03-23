@@ -13,7 +13,7 @@ flat in uint isValidation[];
 flat in uint isEquirectangular[];
 flat in int equiView[];
 flat in uint isTrainingDisabled[];
-flat in uint isSelected[];
+flat in uint isEmphasized[];
 
 out vec3 g_FragPos;
 out vec4 g_vertexColor;
@@ -23,7 +23,7 @@ flat out uint g_textureID;
 flat out uint g_isValidation;
 flat out uint g_isEquirectangular;
 flat out uint g_isTrainingDisabled;
-flat out uint g_isSelected;
+flat out uint g_isEmphasized;
 
 void main() {
     if (equiView[0] == 1 && abs(ndcX[0] - ndcX[1]) > 1.0)
@@ -39,7 +39,7 @@ void main() {
         g_isValidation = isValidation[i];
         g_isEquirectangular = isEquirectangular[i];
         g_isTrainingDisabled = isTrainingDisabled[i];
-        g_isSelected = isSelected[i];
+        g_isEmphasized = isEmphasized[i];
         EmitVertex();
     }
     EndPrimitive();

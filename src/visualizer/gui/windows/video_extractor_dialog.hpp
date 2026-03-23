@@ -4,15 +4,20 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
+#include "visualizer/gui/video_widget_interface.hpp"
 
 #include <array>
 #include <atomic>
 #include <filesystem>
 #include <functional>
 #include <glad/glad.h>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 
 struct ImDrawList;
 struct ImVec2;
@@ -39,21 +44,32 @@ namespace lfs::gui {
         std::string filename_pattern = "frame_%d";
     };
 
-    class VideoExtractorDialog {
+    class LFS_VIS_API VideoExtractorDialog : public IVideoExtractorWidget {
     public:
         VideoExtractorDialog();
-        ~VideoExtractorDialog();
+        ~VideoExtractorDialog() override;
 
-        bool render();
-        void setOnStartExtraction(std::function<void(const VideoExtractionParams&)> callback);
+        bool render() override;
+        [[nodiscard]] bool isVideoPlaying() const override;
+        void shutdown() override;
+
+    private:
+        struct ExtractionStatusSnapshot {
+            std::string error_message;
+            bool show_completion_message = false;
+        };
+
+        void startExtraction(const VideoExtractionParams& params);
+        void joinExtractionThread();
 
         void updateProgress(int current, int total);
         void setExtractionComplete();
         void setExtractionError(const std::string& error);
+        [[nodiscard]] ExtractionStatusSnapshot getExtractionStatusSnapshot() const;
+        void clearExtractionStatus();
+        void clearCompletionMessage();
+        void clearErrorMessage();
 
-        [[nodiscard]] bool isVideoPlaying() const;
-
-    private:
         void renderVideoPreview();
         void renderTransportControls();
         void renderTimeline();
@@ -88,11 +104,10 @@ namespace lfs::gui {
         float trim_start_ = 0.0f;
         float trim_end_ = -1.0f;
 
-        std::function<void(const VideoExtractionParams&)> on_start_extraction_;
-
         std::atomic<bool> extracting_{false};
         std::atomic<int> current_frame_{0};
         std::atomic<int> total_frames_{0};
+        mutable std::mutex extraction_status_mutex_;
         std::string error_message_;
         bool show_completion_message_ = false;
 
@@ -103,6 +118,8 @@ namespace lfs::gui {
         bool texture_needs_update_ = true;
 
         bool scrubbing_ = false;
+
+        std::optional<std::jthread> extraction_thread_;
     };
 
 } // namespace lfs::gui

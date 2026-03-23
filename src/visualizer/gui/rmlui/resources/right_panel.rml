@@ -1,0 +1,32 @@
+<rml>
+<head>
+    <link type="text/rcss" href="right_panel.rcss"/>
+</head>
+<body id="rp-body" data-model="right_panel_tabs">
+    <div id="resize-handle"></div>
+    <div id="left-border"></div>
+    <div id="splitter"></div>
+    <div id="tab-bar" data-class-with-scroll="tabs_overflow">
+        <button id="tab-scroll-left"
+                class="tab-nav"
+                data-class-hidden="!tabs_overflow"
+                data-class-disabled="!can_scroll_tabs_left"
+                data-event-click="scroll_tabs_left()">&lt;</button>
+        <div id="tab-strip-viewport">
+            <button data-for="tab : tabs"
+                class="tab"
+                data-attr-id="tab.dom_id"
+                data-class-active="tab.id == active_tab"
+                data-event-click="tab_click(tab.id)">
+                {{ tab.label }}
+            </button>
+        </div>
+        <button id="tab-scroll-right"
+                class="tab-nav"
+                data-class-hidden="!tabs_overflow"
+                data-class-disabled="!can_scroll_tabs_right"
+                data-event-click="scroll_tabs_right()">&gt;</button>
+    </div>
+    <div id="tab-separator"></div>
+</body>
+</rml>

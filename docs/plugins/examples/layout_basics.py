@@ -3,12 +3,11 @@
 """Basic layout composition with row, column, box, and split."""
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 
 
-class LayoutBasicsPanel(Panel):
+class LayoutBasicsPanel(lf.ui.Panel):
     label = "Layout Basics"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 300
 
     def __init__(self):
@@ -17,22 +16,22 @@ class LayoutBasicsPanel(Panel):
         self.name = "Untitled"
         self.is_active = True
 
-    def draw(self, layout):
-        with layout.row() as row:
+    def draw(self, ui):
+        with ui.row() as row:
             row.button("Action A")
             row.button("Action B")
             row.button("Action C")
 
-        with layout.box() as box:
+        with ui.box() as box:
             box.heading("Settings")
             changed, self.opacity = box.slider_float("Opacity", self.opacity, 0.0, 1.0)
             changed, self.threshold = box.slider_float("Threshold", self.threshold, 0.0, 1.0)
 
-        with layout.split(0.3) as split:
+        with ui.split(0.3) as split:
             split.label("Name")
             changed, self.name = split.input_text("##name", self.name)
 
-        with layout.column() as col:
+        with ui.column() as col:
             col.enabled = self.is_active
             changed, self.opacity = col.slider_float("Opacity##col", self.opacity, 0.0, 1.0)
             with col.row() as row:

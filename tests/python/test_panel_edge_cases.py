@@ -57,9 +57,8 @@ class TestPanelEdgeCases:
             pytest.skip("lfs_types.Panel not available")
 
         class DoublePanel(lfs_types.Panel):
-            lf_label = "Double Panel"
-            lf_space_type = "VIEW_3D"
-            lf_region_type = "UI"
+            label = "Double Panel"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def draw(self, context):
                 pass
@@ -76,26 +75,30 @@ class TestPanelEdgeCases:
         except AttributeError:
             pytest.skip("Panel registration not supported")
 
-    def test_registration_with_missing_attributes(self, lf, panel_fixture):
-        """Panel missing required attributes should fail gracefully."""
+    def test_registration_without_label_uses_id_fallback(self, lf, panel_fixture):
+        """Panels without labels should fall back to their id."""
         registered, lfs_types = panel_fixture
 
         if not hasattr(lfs_types, "Panel"):
             pytest.skip("lfs_types.Panel not available")
 
         class NoLabelPanel(lfs_types.Panel):
-            lf_space_type = "VIEW_3D"
-            lf_region_type = "UI"
+            id = "tests.no_label_panel"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def draw(self, context):
                 pass
 
+        lf.register_class(NoLabelPanel)
         try:
-            lf.register_class(NoLabelPanel)
-            # Should have failed
             registered.append(NoLabelPanel)
-        except (AttributeError, KeyError, TypeError, ValueError):
-            pass  # Expected - missing lf_label
+            info = lf.ui.get_panel("tests.no_label_panel")
+            assert info is not None
+            assert info.id == "tests.no_label_panel"
+            assert info.label == "tests.no_label_panel"
+        finally:
+            lf.unregister_class(NoLabelPanel)
+            registered.remove(NoLabelPanel)
 
     def test_panel_instantiation_failure(self, lf, panel_fixture):
         """Panel that fails to instantiate should be handled."""
@@ -105,9 +108,8 @@ class TestPanelEdgeCases:
             pytest.skip("lfs_types.Panel not available")
 
         class FailInitPanel(lfs_types.Panel):
-            lf_label = "Fail Init"
-            lf_space_type = "VIEW_3D"
-            lf_region_type = "UI"
+            label = "Fail Init"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def __init__(self):
                 raise RuntimeError("Init failed")
@@ -119,7 +121,7 @@ class TestPanelEdgeCases:
             lf.register_class(FailInitPanel)
             registered.append(FailInitPanel)
             # Drawing would fail, but registration might succeed
-        except (RuntimeError, TypeError):
+        except (RuntimeError, TypeError, ValueError):
             pass
 
 
@@ -134,9 +136,8 @@ class TestPanelDrawEdgeCases:
             pytest.skip("lfs_types.Panel not available")
 
         class ExcPanel(lfs_types.Panel):
-            lf_label = "Exception Panel"
-            lf_space_type = "VIEW_3D"
-            lf_region_type = "UI"
+            label = "Exception Panel"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def draw(self, context):
                 raise RuntimeError("Draw failed")
@@ -156,9 +157,8 @@ class TestPanelDrawEdgeCases:
             pytest.skip("lfs_types.Panel not available")
 
         class StatefulPanel(lfs_types.Panel):
-            lf_label = "Stateful Panel"
-            lf_space_type = "VIEW_3D"
-            lf_region_type = "UI"
+            label = "Stateful Panel"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
             draw_count = 0
 
             def draw(self, context):

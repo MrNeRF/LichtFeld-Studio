@@ -1,0 +1,392 @@
+/* Scene tree panel — panel-specific styles only.
+ * Shared widget styles are in components.rcss (auto-included via applyTheme). */
+
+body {
+    font-family: Inter;
+    font-size: 12dp;
+    color: #cdd6f4;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.scene-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6dp;
+    padding: 5dp 6dp 3dp;
+}
+
+.scene-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6dp;
+}
+
+.scene-tab-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 4dp;
+    flex-shrink: 0;
+}
+
+.scene-tab {
+    display: inline-block;
+    min-width: 54dp;
+    padding: 5dp 10dp 6dp;
+    color: #a6adc8;
+    background-color: rgba(49, 50, 68, 140);
+    border-width: 1dp;
+    border-color: #45475a;
+    border-bottom-width: 2dp;
+    border-bottom-color: transparent;
+    border-top-left-radius: 4dp;
+    border-top-right-radius: 4dp;
+    cursor: pointer;
+    transition: border-color background-color color 0.12s quadratic-out;
+}
+
+.scene-tab:hover,
+.scene-tab:focus-visible {
+    color: #f5f7ff;
+    border-color: rgba(137, 180, 250, 110);
+    background-color: rgba(137, 180, 250, 24);
+}
+
+.scene-tab.active {
+    color: #f5f7ff;
+    background-color: rgba(137, 180, 250, 28);
+    border-color: rgba(137, 180, 250, 132);
+    border-bottom-color: rgba(137, 180, 250, 255);
+}
+
+.scene-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4dp;
+    justify-content: flex-start;
+    min-width: 0;
+}
+
+.scene-chip {
+    display: inline-block;
+    padding: 2dp 7dp;
+    font-size: 10dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+.scene-chip--accent {
+    color: #f5f7ff;
+    background-color: rgba(137, 180, 250, 72);
+    border-color: rgba(137, 180, 250, 150);
+}
+
+/* Search container */
+#search-container {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    padding: 4dp 6dp;
+    margin-bottom: 4dp;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+#search-icon {
+    width: 13dp;
+    height: 13dp;
+    margin-right: 4dp;
+    image-color: #6c7086;
+}
+
+#filter-input {
+    flex: 1;
+    font-size: 11dp;
+    color: #cdd6f4;
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
+}
+
+#filter-input:focus {
+    border-width: 0;
+}
+
+#filter-clear {
+    width: 12dp;
+    height: 12dp;
+    margin-left: 4dp;
+    background-color: transparent;
+    border-width: 0;
+    cursor: pointer;
+    padding: 0;
+}
+
+#filter-clear img {
+    width: 12dp;
+    height: 12dp;
+    image-color: #6c7086;
+}
+
+#filter-clear:hover img,
+#filter-clear:focus-visible img {
+    image-color: #cdd6f4;
+}
+
+#tree-container {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    tab-index: auto;
+}
+
+#tree-container scrollbarvertical,
+#history-container scrollbarvertical {
+    width: 14dp;
+}
+
+#tree-container scrollbarvertical sliderbar,
+#history-container scrollbarvertical sliderbar {
+    min-height: 40dp;
+}
+
+#history-container {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+    padding-top: 4dp;
+}
+
+#search-container.hidden,
+#tree-container.hidden,
+#history-container.hidden,
+.scene-chip-row.hidden {
+    display: none;
+}
+
+#tree-content {
+    display: block;
+}
+
+.tree-row {
+    display: block;
+    width: auto;
+    height: 20dp;
+    box-sizing: border-box;
+    padding: 1dp 4dp;
+    border-left-width: 2dp;
+    border-left-color: rgba(0, 0, 0, 0);
+    cursor: pointer;
+    overflow: hidden;
+}
+
+.tree-row.placeholder {
+    display: none;
+}
+
+.tree-row:hover {
+    background-color: rgba(137, 180, 250, 28);
+    border-left-color: rgba(137, 180, 250, 255);
+}
+
+.tree-row.even {
+    background-color: #1e1e2e08;
+}
+
+.tree-row.odd {
+    background-color: #31324408;
+}
+
+/* selected MUST come after even/odd for cascade */
+.tree-row.selected {
+    background-color: rgba(137, 180, 250, 71);
+}
+
+.tree-row.selected:hover {
+    background-color: rgba(137, 180, 250, 97);
+    border-left-color: rgba(180, 208, 251, 255);
+}
+
+.tree-row.drop-target {
+    border-width: 1dp;
+    border-color: #89b4fa;
+}
+
+.tree-row:drag {
+    opacity: 0.5;
+}
+
+.row-content {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+/* Expand/collapse toggle — inline before name */
+.expand-toggle {
+    display: inline;
+    width: 12dp;
+    font-size: 11dp;
+    color: #a6adc8;
+    cursor: pointer;
+    text-align: center;
+    transition: color 0.1s quadratic-out;
+}
+
+.expand-toggle:hover {
+    color: #cdd6f4;
+}
+
+/* Leaf spacer — same width as expand-toggle for alignment */
+.leaf-spacer {
+    display: inline;
+    width: 12dp;
+}
+
+/* Icon images — base style for all PNG icons */
+.row-icon {
+    display: inline;
+    width: 14dp;
+    height: 14dp;
+    margin-right: 2dp;
+    image-color: #cdd6f4;
+}
+
+.row-icon.type-icon {
+    width: 12dp;
+    height: 12dp;
+    margin-right: 4dp;
+    image-color: #a6adc8;
+}
+
+.row-icon.mask-icon {
+    width: 12dp;
+    height: 12dp;
+    margin-right: 2dp;
+    image-color: rgba(148, 226, 213, 200);
+}
+
+.row-icon.mask-icon.mask-inverted {
+    transform: rotate(180deg);
+}
+
+/* Visibility toggle */
+.row-icon.icon-vis-on {
+    image-color: rgba(102, 230, 102, 255);
+    transition: image-color 0.12s quadratic-out;
+}
+
+.row-icon.icon-vis-on:hover {
+    image-color: rgba(130, 255, 130, 255);
+}
+
+.row-icon.icon-vis-off {
+    image-color: rgba(153, 102, 102, 178);
+    transition: image-color 0.12s quadratic-out;
+}
+
+.row-icon.icon-vis-off:hover {
+    image-color: rgba(180, 120, 120, 220);
+}
+
+
+/* Colored dot — replaces type icons for a cleaner row */
+.row-icon.type-icon.splat        { image-color: rgba(153, 204, 255, 230); }
+.row-icon.type-icon.group        { image-color: rgba(178, 178, 178, 204); }
+.row-icon.type-icon.dataset      { image-color: rgba(127, 178, 255, 230); }
+.row-icon.type-icon.camera       { image-color: rgba(127, 153, 204, 200); }
+.row-icon.type-icon.camera_group { image-color: rgba(153, 178, 230, 204); }
+.row-icon.type-icon.cropbox      { image-color: rgba(255, 178, 77, 230); }
+.row-icon.type-icon.ellipsoid    { image-color: rgba(77, 204, 255, 230); }
+.row-icon.type-icon.pointcloud   { image-color: rgba(204, 127, 255, 204); }
+.row-icon.type-icon.mesh         { image-color: rgba(127, 230, 153, 230); }
+
+/* Fallback Unicode node icons (keyframe etc. without PNG) */
+.node-icon {
+    display: inline;
+    width: 16dp;
+    font-size: 12dp;
+    text-align: center;
+    margin-right: 4dp;
+}
+
+.node-icon.keyframe_group { color: rgba(230, 178, 77, 204); }
+.node-icon.keyframe       { color: rgba(255, 204, 51, 230); }
+
+
+.row-icon.trash-icon {
+    width: 14dp;
+    height: 14dp;
+    margin-right: 2dp;
+    image-color: rgba(180, 80, 80, 178);
+}
+
+.row-icon.trash-icon:hover {
+    image-color: rgba(243, 139, 168, 230);
+}
+
+.tree-row.selected .row-icon.trash-icon {
+    image-color: rgba(255, 153, 153, 230);
+}
+
+.node-name {
+    display: block;
+    color: #cdd6f4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.node-name.training-disabled {
+    color: #9399b2;
+}
+
+
+/* Inline rename input */
+.rename-input {
+    display: inline;
+    width: 150dp;
+    padding: 2dp 4dp;
+    font-size: 11dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #89b4fa;
+}
+
+/* Scene tree overrides section-header to block display with different padding */
+.section-header {
+    display: block;
+    min-height: 24dp;
+    padding: 4dp 6dp;
+    font-size: 12dp;
+    cursor: pointer;
+}
+
+.section-arrow {
+    display: inline-block;
+    width: 12dp;
+    color: #a6adc8;
+}
+
+.virtual-spacer {
+    display: block;
+    height: 0;
+}
+
+.empty-state {
+    padding: 6dp 0;
+}

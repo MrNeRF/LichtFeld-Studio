@@ -1,10 +1,20 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Base types for LichtFeld plugins."""
-
 from typing import Set
 
 from .props import PropertyGroup
+
+try:
+    import lichtfeld as _lf
+except ModuleNotFoundError:
+    _lf = None
+
+
+if _lf is not None and hasattr(_lf, "ui") and hasattr(_lf.ui, "Panel"):
+    Panel = _lf.ui.Panel
+else:
+    from _lfs_panel_contract import FallbackPanel as Panel
 
 
 class Event:
@@ -96,39 +106,19 @@ class Operator(PropertyGroup):
         pass
 
 
-class Panel:
-    """Base class for UI panels.
-
-    This is a minimal base class. Panels define:
-    - label: Display name
-    - draw(layout): Render the panel content
-    - poll(context): Optional visibility check
-    """
-
-    label: str = ""
-
-    @classmethod
-    def _class_id(cls) -> str:
-        return f"{cls.__module__}.{cls.__qualname__}"
-
-    @classmethod
-    def poll(cls, context) -> bool:
-        """Check if the panel should be drawn."""
-        return True
-
-    def draw(self, layout):
-        """Draw the panel contents."""
-        pass
-
-
 class Menu:
-    """Base class for menu definitions."""
+    """Base class for menu definitions.
+
+    New menus should prefer menu_items() and return a declarative schema.
+    draw(layout) remains available as a legacy fallback.
+    """
 
     label: str = ""
     location: str = "FILE"
     order: int = 100
 
+    def menu_items(self):
+        return []
+
     def draw(self, layout):
         pass
-
-

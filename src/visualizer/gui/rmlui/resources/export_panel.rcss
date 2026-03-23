@@ -1,0 +1,153 @@
+/* Export panel styles */
+
+#content-wrap {
+    min-width: 0;
+    overflow-x: hidden;
+}
+
+.ep-section {
+    margin-bottom: 4dp;
+}
+
+.ep-section .setting-row--aligned {
+    min-width: 0;
+}
+
+.ep-section-title {
+    font-size: 10dp;
+    font-weight: bold;
+    color: #89b4fa;
+    margin-bottom: 4dp;
+}
+
+/* ── Format list ─────────────────────────────────────── */
+
+.ep-format-list {
+    margin-top: 2dp;
+}
+
+.ep-format-option {
+    display: flex;
+    align-items: center;
+    padding: 3dp 6dp;
+    cursor: pointer;
+    transition: background-color 0.1s quadratic-out;
+}
+
+.ep-format-option:hover {
+    background-color: rgba(137, 180, 250, 40);
+}
+
+.ep-format-option.selected {
+    background-color: rgba(137, 180, 250, 64);
+}
+
+.ep-format-dot {
+    width: 8dp;
+    height: 8dp;
+    border-width: 1dp;
+    border-color: #585b70;
+    border-radius: 4dp;
+    margin-right: 8dp;
+    flex-shrink: 0;
+}
+
+.ep-format-option.selected .ep-format-dot {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+}
+
+.ep-format-name {
+    font-size: 10dp;
+    color: #cdd6f4;
+}
+
+/* ── Model list ──────────────────────────────────────── */
+
+.ep-toggle-row {
+    display: flex;
+    gap: 4dp;
+    margin-bottom: 4dp;
+}
+
+.ep-small-btn {
+    font-size: 10dp;
+    padding: 1dp 8dp;
+}
+
+.ep-model-list {
+    margin-top: 2dp;
+}
+
+.ep-model-row {
+    display: flex;
+    align-items: center;
+    padding: 2dp 4dp;
+    min-height: 20dp;
+}
+
+.ep-model-row .setting-label {
+    flex: 1;
+    overflow: hidden;
+}
+
+.ep-model-name {
+    font-size: 10dp;
+    color: #cdd6f4;
+}
+
+.ep-model-count {
+    font-size: 10dp;
+    color: #a6adc8;
+    margin-left: 6dp;
+    flex-shrink: 0;
+}
+
+.ep-no-models {
+    font-size: 10dp;
+    color: #a6adc8;
+    padding: 4dp 0;
+}
+
+/* ── Action area ─────────────────────────────────────── */
+
+.ep-error {
+    display: block;
+    font-size: 10dp;
+    color: #f38ba8;
+    margin-bottom: 4dp;
+}
+
+.ep-buttons {
+    display: flex;
+    gap: 6dp;
+    margin-top: 4dp;
+}
+
+.ep-action-btn {
+    flex: 1;
+    text-align: center;
+}
+
+/* ── Progress section ──────────────────────────────── */
+
+@keyframes ep-pulse {
+    from { background-color: #89b4fa; }
+    to   { background-color: #b4d0fb; }
+}
+
+.ep-progress-wrap {
+    position: relative;
+    margin: 6dp 0;
+}
+
+.ep-progress fill {
+    animation: ep-pulse 1.2s quadratic-in-out infinite alternate;
+}
+
+.ep-stage-text {
+    display: block;
+    font-size: 10dp;
+    color: #a6adc8;
+    margin-bottom: 6dp;
+}

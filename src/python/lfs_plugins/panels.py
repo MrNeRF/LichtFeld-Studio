@@ -20,9 +20,11 @@ def register_builtin_panels():
         from .scene_panel import ScenePanel
         lf.register_class(ScenePanel)
 
-        from .toolbar import GizmoToolbar, UtilityToolbar
-        lf.register_class(UtilityToolbar)
-        lf.register_class(GizmoToolbar)
+        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel
+        lf.register_class(DatasetImportPanel)
+        lf.ui.set_panel_enabled("lfs.dataset_import", False)
+        lf.register_class(ResumeCheckpointPanel)
+        lf.ui.set_panel_enabled("lfs.resume_checkpoint", False)
 
         from . import selection_groups
         selection_groups.register()
@@ -39,9 +41,10 @@ def register_builtin_panels():
         from . import tools
         tools.register()
 
-        from . import file_menu, edit_menu, view_menu, help_menu
+        from . import file_menu, edit_menu, tools_menu, view_menu, help_menu
         file_menu.register()
         edit_menu.register()
+        tools_menu.register()
         view_menu.register()
         help_menu.register()
 
@@ -62,20 +65,27 @@ def register_builtin_panels():
         lf.register_class(ImagePreviewPanel)
         lf.ui.set_panel_enabled("lfs.image_preview", False)
 
+        from .image_preview_panel import open_camera_preview_by_uid
+        lf.ui.on_open_camera_preview(open_camera_preview_by_uid)
+
         from .scripts_panel import ScriptsPanel
         lf.register_class(ScriptsPanel)
         lf.ui.set_panel_enabled("lfs.scripts", False)
+
+        from .history_panel import HistoryPanel
+        lf.register_class(HistoryPanel)
+        lf.ui.set_panel_enabled("lfs.history", False)
 
         from .input_settings_panel import InputSettingsPanel
         lf.register_class(InputSettingsPanel)
         lf.ui.set_panel_enabled("lfs.input_settings", False)
 
+        from .mesh2splat_panel import Mesh2SplatPanel
+        lf.register_class(Mesh2SplatPanel)
+        lf.ui.set_panel_enabled("native.mesh2splat", False)
+
         lf.register_class(PluginMarketplacePanel)
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
-
-        # Status bar (must be registered last, always visible)
-        from .status_bar_panel import StatusBarPanel
-        lf.register_class(StatusBarPanel)
 
         # Viewport overlays
         from .overlays import register as register_overlays

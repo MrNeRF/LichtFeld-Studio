@@ -1,0 +1,60 @@
+<rml>
+<head>
+    <link type="text/rcss" href="menubar.rcss"/>
+</head>
+<body id="body" data-model="menu_bar">
+    <div id="menu-items">
+        <span class="menu-label"
+              data-for="menu : menu_labels"
+              data-class-active="menu.active"
+              data-attr-data-index="menu.index">{{ menu.label }}</span>
+    </div>
+    <div id="bottom-border"></div>
+    <div id="dropdown-overlay"></div>
+    <div id="dropdown-container">
+        <div class="dropdown-popup">
+            <div data-for="item : dropdown_items">
+                <div class="menu-separator" data-if="item.separator_before"></div>
+                <div class="submenu-container" data-if="item.has_children">
+                    <div class="menu-item">
+                        <span class="label">{{ item.label }}</span>
+                        <span class="submenu-arrow">&gt;</span>
+                    </div>
+                    <div class="submenu-popup dropdown-popup">
+                        <div data-for="child : item.children">
+                            <div class="menu-separator" data-if="child.separator_before"></div>
+                            <div class="menu-item menu-item-label"
+                                 data-if="child.is_label"
+                                 data-class-disabled="true">
+                                <span class="label">{{ child.label }}</span>
+                            </div>
+                            <div class="menu-item"
+                                 data-if="!child.is_label"
+                                 data-class-disabled="!child.enabled"
+                                 data-attr-data-action="child.action"
+                                 data-attr-data-operator-id="child.operator_id"
+                                 data-attr-data-callback-index="child.callback_index"
+                                 data-attrif-disabled="!child.enabled">
+                                <span class="label">{{ child.label }}</span>
+                                <span class="shortcut" data-if="child.has_shortcut">{{ child.shortcut }}</span>
+                                <span class="checkmark" data-if="child.show_checkmark">{{ child.checkmark }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="menu-item"
+                     data-if="!item.has_children"
+                     data-class-disabled="!item.enabled"
+                     data-attr-data-action="item.action"
+                     data-attr-data-operator-id="item.operator_id"
+                     data-attr-data-callback-index="item.callback_index"
+                     data-attrif-disabled="!item.enabled">
+                    <span class="label">{{ item.label }}</span>
+                    <span class="shortcut" data-if="item.has_shortcut">{{ item.shortcut }}</span>
+                    <span class="checkmark" data-if="item.show_checkmark">{{ item.checkmark }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

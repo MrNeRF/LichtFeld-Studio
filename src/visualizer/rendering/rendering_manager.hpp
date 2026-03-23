@@ -4,67 +4,45 @@
 
 #pragma once
 
+#include "camera_interaction_service.hpp"
 #include "core/export.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
+#include "gt_texture_cache.hpp"
 #include "internal/viewport.hpp"
-#include "io/nvcodec_image_loader.hpp"
+#include "render_animation_state.hpp"
+#include "render_pass_graph.hpp"
 #include "rendering/cuda_gl_interop.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_types.hpp"
+#include "split_view_service.hpp"
+#include "viewport_artifact_service.hpp"
+#include "viewport_frame_lifecycle_service.hpp"
+#include "viewport_interaction_context.hpp"
+#include "viewport_overlay_service.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
+namespace lfs::core {
+    class Tensor;
+}
+
+namespace lfs::core::events::ui {
+    struct GridSettingsChanged;
+    struct PointCloudModeChanged;
+    struct RenderSettingsChanged;
+} // namespace lfs::core::events::ui
+
 namespace lfs::vis {
-    class RenderPass;
     class SceneManager;
-    class SplatRasterPass;
-    class OverlayPass;
-    class PointCloudPass;
-
-    // GT Image Cache for efficient GPU-resident texture management
-    class GTTextureCache {
-    public:
-        static constexpr int MAX_TEXTURE_DIM = 2048;
-
-        struct TextureInfo {
-            unsigned int texture_id = 0;
-            int width = 0;
-            int height = 0;
-            bool needs_flip = false;
-            glm::vec2 texcoord_scale{1.0f};
-        };
-
-        GTTextureCache();
-        ~GTTextureCache();
-
-        TextureInfo getGTTexture(int cam_id, const std::filesystem::path& image_path);
-        void clear();
-
-    private:
-        struct CacheEntry {
-            std::unique_ptr<lfs::rendering::CudaGLInteropTexture> interop_texture;
-            unsigned int texture_id = 0;
-            int width = 0;
-            int height = 0;
-            bool needs_flip = false;
-            std::chrono::steady_clock::time_point last_access;
-        };
-
-        std::unordered_map<int, CacheEntry> texture_cache_;
-        std::unique_ptr<lfs::io::NvCodecImageLoader> nvcodec_loader_;
-        static constexpr size_t MAX_CACHE_SIZE = 20;
-
-        void evictOldest();
-        TextureInfo loadTexture(const std::filesystem::path& path);
-        TextureInfo loadTextureGPU(const std::filesystem::path& path, CacheEntry& entry);
-    };
 
     class LFS_VIS_API RenderingManager {
     public:
@@ -72,7 +50,6 @@ namespace lfs::vis {
             const Viewport& viewport;
             const RenderSettings& settings;
             const ViewportRegion* viewport_region = nullptr;
-            bool has_focus = false;
             SceneManager* scene_manager = nullptr;
         };
 
@@ -89,7 +66,7 @@ namespace lfs::vis {
         }
 
         // Main render function
-        void renderFrame(const RenderContext& context, SceneManager* scene_manager);
+        void renderFrame(const RenderContext& context);
 
         // Render preview to external texture (for PiP preview)
         bool renderPreviewFrame(SceneManager* scene_manager,
@@ -104,54 +81,25 @@ namespace lfs::vis {
         void markDirty(DirtyMask flags);
 
         [[nodiscard]] bool pollDirtyState() {
-            if (pivot_animation_active_.load() &&
-                std::chrono::steady_clock::now() < from_ns(pivot_animation_end_ns_.load(std::memory_order_acquire))) {
-                dirty_mask_.fetch_or(DirtyFlag::CAMERA | DirtyFlag::OVERLAY, std::memory_order_relaxed);
-                return true;
-            }
-            pivot_animation_active_.store(false);
-
-            if (selection_flash_active_.load()) {
-                const auto elapsed = std::chrono::steady_clock::now() -
-                                     from_ns(selection_flash_start_ns_.load(std::memory_order_acquire));
-                if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
-                    dirty_mask_.fetch_or(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, std::memory_order_relaxed);
-                    return true;
-                }
-                selection_flash_active_.store(false);
-            }
-
-            if (overlay_animation_active_.load()) {
-                dirty_mask_.fetch_or(DirtyFlag::OVERLAY, std::memory_order_relaxed);
+            if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
+                dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
                 return true;
             }
             return dirty_mask_.load(std::memory_order_relaxed) != 0;
         }
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
-            pivot_animation_end_ns_.store(to_ns(end_time), std::memory_order_release);
-            pivot_animation_active_.store(true);
+            animation_state_.setPivotAnimationEndTime(end_time);
         }
 
         void triggerSelectionFlash() {
-            selection_flash_start_ns_.store(to_ns(std::chrono::steady_clock::now()), std::memory_order_release);
-            selection_flash_active_.store(true);
-            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH);
+            markDirty(animation_state_.triggerSelectionFlash());
         }
 
-        void setOverlayAnimationActive(const bool active) { overlay_animation_active_.store(active); }
+        void setOverlayAnimationActive(const bool active) { animation_state_.setOverlayAnimationActive(active); }
 
         [[nodiscard]] float getSelectionFlashIntensity() const {
-            if (!selection_flash_active_.load())
-                return 0.0f;
-            const float t = std::chrono::duration<float>(
-                                std::chrono::steady_clock::now() -
-                                from_ns(selection_flash_start_ns_.load(std::memory_order_acquire)))
-                                .count() /
-                            SELECTION_FLASH_DURATION_SEC;
-            if (t >= 1.0f)
-                return 0.0f;
-            return 1.0f - t * t; // Ease-out
+            return animation_state_.selectionFlashIntensity();
         }
 
         // Settings management
@@ -178,10 +126,10 @@ namespace lfs::vis {
 
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {
-            current_camera_id_ = cam_id;
+            camera_interaction_service_.setCurrentCameraId(cam_id);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
         }
-        int getCurrentCameraId() const { return current_camera_id_; }
+        int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
 
         // FPS monitoring
         float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
@@ -192,81 +140,88 @@ namespace lfs::vis {
 
         // Camera frustum picking
         int pickCameraFrustum(const glm::vec2& mouse_pos);
-        void setHoveredCameraId(int cam_id) { hovered_camera_id_ = cam_id; }
-        int getHoveredCameraId() const { return hovered_camera_id_; }
 
         // Depth buffer access for tools (returns camera-space depth at pixel, or -1 if invalid)
         float getDepthAtPixel(int x, int y) const;
-        const lfs::rendering::RenderResult& getCachedResult() const { return cached_result_; }
-        glm::ivec2 getRenderedSize() const { return cached_result_size_; }
+        glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
+        std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
+        std::shared_ptr<lfs::core::Tensor> captureViewportImage();
+        [[nodiscard]] uint64_t getViewportArtifactGeneration() const {
+            return viewport_artifact_service_.artifactGeneration();
+        }
 
-        // Screen positions output for brush tool
-        void setOutputScreenPositions(bool enable) { output_screen_positions_ = enable; }
-        bool getOutputScreenPositions() const { return output_screen_positions_; }
-        std::shared_ptr<lfs::core::Tensor> getScreenPositions() const { return cached_result_.screen_positions; }
-
-        // Brush selection on GPU - mouse_x/y in image coords (not window coords!)
-        void brushSelect(float mouse_x, float mouse_y, float radius, lfs::core::Tensor& selection_out);
-
-        // Apply crop filter to selection - filters out selections outside crop box/ellipsoid
-        void applyCropFilter(lfs::core::Tensor& selection);
-
-        void setBrushState(bool active, float x, float y, float radius, bool add_mode = true,
-                           lfs::core::Tensor* selection_tensor = nullptr,
-                           bool saturation_mode = false, float saturation_amount = 0.0f);
-        void clearBrushState();
-        [[nodiscard]] bool isBrushActive() const { return brush_active_; }
-        void getBrushState(float& x, float& y, float& radius, bool& add_mode) const {
-            x = brush_x_;
-            y = brush_y_;
-            radius = brush_radius_;
-            add_mode = brush_add_mode_;
+        void setCursorPreviewState(bool active, float x, float y, float radius, bool add_mode = true,
+                                   lfs::core::Tensor* selection_tensor = nullptr,
+                                   bool saturation_mode = false, float saturation_amount = 0.0f);
+        void clearCursorPreviewState();
+        [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
+        void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
+            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            x = cursor.x;
+            y = cursor.y;
+            radius = cursor.radius;
+            add_mode = cursor.add_mode;
         }
 
         // Rectangle preview
         void setRectPreview(float x0, float y0, float x1, float y1, bool add_mode = true);
         void clearRectPreview();
-        [[nodiscard]] bool isRectPreviewActive() const { return rect_preview_active_; }
+        [[nodiscard]] bool isRectPreviewActive() const { return viewport_overlay_service_.isRectPreviewActive(); }
         void getRectPreview(float& x0, float& y0, float& x1, float& y1, bool& add_mode) const {
-            x0 = rect_x0_;
-            y0 = rect_y0_;
-            x1 = rect_x1_;
-            y1 = rect_y1_;
-            add_mode = rect_add_mode_;
+            x0 = viewport_overlay_service_.rectX0();
+            y0 = viewport_overlay_service_.rectY0();
+            x1 = viewport_overlay_service_.rectX1();
+            y1 = viewport_overlay_service_.rectY1();
+            add_mode = viewport_overlay_service_.rectAddMode();
         }
 
-        // Polygon preview
+        // Polygon preview (render-space points, same coordinate system as screen_positions output)
         void setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode = true);
+        // Interactive polygon preview in world-space coordinates.
+        void setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points, bool closed,
+                                         bool add_mode = true);
         void clearPolygonPreview();
-        [[nodiscard]] bool isPolygonPreviewActive() const { return polygon_preview_active_; }
-        [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const { return polygon_points_; }
-        [[nodiscard]] bool isPolygonClosed() const { return polygon_closed_; }
-        [[nodiscard]] bool isPolygonAddMode() const { return polygon_add_mode_; }
+        [[nodiscard]] bool isPolygonPreviewActive() const { return viewport_overlay_service_.isPolygonPreviewActive(); }
+        [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const {
+            return viewport_overlay_service_.polygonPoints();
+        }
+        [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const {
+            return viewport_overlay_service_.polygonWorldPoints();
+        }
+        [[nodiscard]] bool isPolygonClosed() const { return viewport_overlay_service_.polygonClosed(); }
+        [[nodiscard]] bool isPolygonAddMode() const { return viewport_overlay_service_.polygonAddMode(); }
+        [[nodiscard]] bool isPolygonPreviewWorldSpace() const {
+            return viewport_overlay_service_.polygonWorldSpace();
+        }
 
         // Lasso preview
         void setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode = true);
         void clearLassoPreview();
-        [[nodiscard]] bool isLassoPreviewActive() const { return lasso_preview_active_; }
-        [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const { return lasso_points_; }
-        [[nodiscard]] bool isLassoAddMode() const { return lasso_add_mode_; }
+        [[nodiscard]] bool isLassoPreviewActive() const { return viewport_overlay_service_.isLassoPreviewActive(); }
+        [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const {
+            return viewport_overlay_service_.lassoPoints();
+        }
+        [[nodiscard]] bool isLassoAddMode() const { return viewport_overlay_service_.lassoAddMode(); }
 
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
-            preview_selection_ = preview;
-            brush_add_mode_ = add_mode;
+            viewport_overlay_service_.setPreviewSelection(preview, add_mode);
             markDirty(DirtyFlag::SELECTION);
         }
         void clearPreviewSelection() {
-            preview_selection_ = nullptr;
+            viewport_overlay_service_.clearPreviewSelection();
             markDirty(DirtyFlag::SELECTION);
         }
+        void clearSelectionPreviews();
 
-        // Selection mode for brush tool
-        void setSelectionMode(lfs::rendering::SelectionMode mode) { selection_mode_ = mode; }
-        [[nodiscard]] lfs::rendering::SelectionMode getSelectionMode() const { return selection_mode_; }
-        [[nodiscard]] int getHoveredGaussianId() const { return hovered_gaussian_id_; }
-        void adjustSaturation(float mouse_x, float mouse_y, float radius, float saturation_delta,
-                              lfs::core::Tensor& sh0_tensor);
+        // Selection preview mode for viewport interaction overlays
+        void setSelectionPreviewMode(SelectionPreviewMode mode) {
+            viewport_overlay_service_.setSelectionPreviewMode(mode);
+        }
+        [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
+            return viewport_overlay_service_.selectionPreviewMode();
+        }
+        [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
 
         // Sync selection group colors to GPU constant memory
         void syncSelectionGroupColor(int group_id, const glm::vec3& color);
@@ -274,73 +229,57 @@ namespace lfs::vis {
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
                                   const glm::mat4& world_transform) {
-            cropbox_gizmo_active_ = active;
-            if (active) {
-                pending_cropbox_min_ = min;
-                pending_cropbox_max_ = max;
-                pending_cropbox_transform_ = world_transform;
-            }
+            viewport_overlay_service_.setCropbox(active, min, max, world_transform);
         }
         void setEllipsoidGizmoState(bool active, const glm::vec3& radii,
                                     const glm::mat4& world_transform) {
-            ellipsoid_gizmo_active_ = active;
-            if (active) {
-                pending_ellipsoid_radii_ = radii;
-                pending_ellipsoid_transform_ = world_transform;
-            }
+            viewport_overlay_service_.setEllipsoid(active, radii, world_transform);
         }
-        void setCropboxGizmoActive(bool active) { cropbox_gizmo_active_ = active; }
-        void setEllipsoidGizmoActive(bool active) { ellipsoid_gizmo_active_ = active; }
+        void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
+        void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
+
+        void setViewportResizeActive(bool active);
+        [[nodiscard]] bool isViewportResizeDeferring() const {
+            return frame_lifecycle_service_.isResizeDeferring();
+        }
+        bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
     private:
-        static int64_t to_ns(std::chrono::steady_clock::time_point tp) {
-            return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
-        }
-        static std::chrono::steady_clock::time_point from_ns(int64_t ns) {
-            return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
-        }
-
-        void doFullRender(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model);
         void setupEventHandlers();
+        void handleToggleSplitView();
+        void handleToggleGTComparison();
+        void handleGoToCamView(int cam_id);
+        void handleSplitPositionChanged(float position);
+        void handleRenderSettingsChanged(const lfs::core::events::ui::RenderSettingsChanged& event);
+        void handleWindowResized();
+        void handleGridSettingsChanged(const lfs::core::events::ui::GridSettingsChanged& event);
+        void handleSceneLoaded();
+        void handleSceneChanged();
+        void handleSceneCleared();
+        void handlePLYVisibilityChanged();
+        void handlePLYAdded();
+        void handlePLYRemoved();
+        void handleCropBoxChanged(bool enabled);
+        void handleEllipsoidChanged(bool enabled);
+        void handlePointCloudModeChanged(const lfs::core::events::ui::PointCloudModeChanged& event);
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
-        std::vector<std::unique_ptr<RenderPass>> passes_;
-        SplatRasterPass* splat_raster_pass_ = nullptr;
-        OverlayPass* overlay_pass_ = nullptr;
-        PointCloudPass* point_cloud_pass_ = nullptr;
-        FramerateController framerate_controller_;
+        RenderPassGraph pass_graph_;
+        mutable FramerateController framerate_controller_;
 
         // GT texture cache
         GTTextureCache gt_texture_cache_;
 
-        // Cached render texture for reuse in split view
-        unsigned int cached_render_texture_ = 0;
-        std::atomic<bool> render_texture_valid_{false};
-
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
 
-        std::atomic<bool> pivot_animation_active_{false};
-        std::atomic<int64_t> pivot_animation_end_ns_{0};
-        lfs::rendering::RenderResult cached_result_;
+        RenderAnimationState animation_state_;
+        ViewportArtifactService viewport_artifact_service_;
 
-        // Selection flash animation
-        mutable std::atomic<bool> selection_flash_active_{false};
-        std::atomic<int64_t> selection_flash_start_ns_{0};
-        static constexpr float SELECTION_FLASH_DURATION_SEC = 0.5f;
-
-        std::atomic<bool> overlay_animation_active_{false};
-
-        size_t last_model_ptr_ = 0;
-        std::chrono::steady_clock::time_point last_training_render_;
-
-        // Split view state
-        mutable std::mutex split_info_mutex_;
-        SplitViewInfo current_split_info_;
-
-        int current_camera_id_ = -1;
-        bool pre_gt_equirectangular_ = false;
+        CameraInteractionService camera_interaction_service_;
+        SplitViewService split_view_service_;
+        ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings
         RenderSettings settings_;
@@ -349,65 +288,12 @@ namespace lfs::vis {
         bool initialized_ = false;
         glm::ivec2 initial_viewport_size_{1280, 720}; // Default fallback
 
-        // Camera picking state
-        int hovered_camera_id_ = -1;
-        int highlighted_camera_index_ = -1;
-        glm::vec2 pending_pick_pos_{-1, -1};
-        bool pick_requested_ = false;
-        std::chrono::steady_clock::time_point last_pick_time_;
-        static constexpr auto pick_throttle_interval_ = std::chrono::milliseconds(50);
+        ViewportInteractionContext viewport_interaction_context_;
 
         // Debug tracking
         uint64_t render_count_ = 0;
-        uint64_t pick_count_ = 0;
 
-        // Screen positions output flag
-        bool output_screen_positions_ = false;
-
-        // Brush state
-        bool brush_active_ = false;
-        float brush_x_ = 0.0f;
-        float brush_y_ = 0.0f;
-        float brush_radius_ = 0.0f;
-        bool brush_add_mode_ = true;
-        lfs::core::Tensor* brush_selection_tensor_ = nullptr;
-        lfs::core::Tensor* preview_selection_ = nullptr;
-        bool brush_saturation_mode_ = false;
-        float brush_saturation_amount_ = 0.0f;
-        lfs::rendering::SelectionMode selection_mode_ = lfs::rendering::SelectionMode::Centers;
-
-        // Selection shape preview state (for rectangle, polygon, lasso)
-        bool rect_preview_active_ = false;
-        float rect_x0_ = 0.0f, rect_y0_ = 0.0f, rect_x1_ = 0.0f, rect_y1_ = 0.0f;
-        bool rect_add_mode_ = true;
-
-        bool polygon_preview_active_ = false;
-        std::vector<std::pair<float, float>> polygon_points_;
-        bool polygon_closed_ = false;
-        bool polygon_add_mode_ = true;
-
-        bool lasso_preview_active_ = false;
-        std::vector<std::pair<float, float>> lasso_points_;
-        bool lasso_add_mode_ = true;
-
-        // Ring mode hover preview (gaussian ID extracted from packed depth+id atomicMin)
-        int hovered_gaussian_id_ = -1;
-
-        // Viewport state
-        glm::ivec2 last_viewport_size_{0, 0}; // Last requested viewport size
-        glm::ivec2 cached_result_size_{0, 0}; // Size at which cached_result_ was actually rendered
-
-        std::optional<GTComparisonContext> gt_context_;
-        int gt_context_camera_id_ = -1;
-
-        // Gizmo state for wireframe sync
-        bool cropbox_gizmo_active_ = false;
-        bool ellipsoid_gizmo_active_ = false;
-        glm::vec3 pending_cropbox_min_{0.0f};
-        glm::vec3 pending_cropbox_max_{0.0f};
-        glm::mat4 pending_cropbox_transform_{1.0f};
-        glm::vec3 pending_ellipsoid_radii_{1.0f};
-        glm::mat4 pending_ellipsoid_transform_{1.0f};
+        ViewportOverlayService viewport_overlay_service_;
     };
 
 } // namespace lfs::vis

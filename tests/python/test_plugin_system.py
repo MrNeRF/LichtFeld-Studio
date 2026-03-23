@@ -6,6 +6,23 @@ import pytest
 import tempfile
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+
+@pytest.fixture(autouse=True)
+def bypass_installer_for_manager_tests(request):
+    """Keep manager-path tests independent from the bundled uv runtime."""
+    nodeid = request.node.nodeid
+    if (
+        "test_load_venv_creation_uses_bundled_python_only" in nodeid
+        or "TestInstallerSyncDetection" in nodeid
+    ):
+        yield
+        return
+
+    with patch("lfs_plugins.installer.PluginInstaller.ensure_venv", return_value=True), \
+         patch("lfs_plugins.installer.PluginInstaller.install_dependencies", return_value=True):
+        yield
 
 
 @pytest.fixture
@@ -57,6 +74,9 @@ dependencies = []
 [tool.lichtfeld]
 auto_start = true
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
     )
 
@@ -112,6 +132,34 @@ class TestPluginDiscovery:
         mgr = PluginManager.instance()
         plugins = mgr.discover()
         assert plugins == []
+
+    def test_discover_logs_v1_manifest_fix_hint(self, temp_plugins_dir, caplog):
+        """Should log a direct fix hint for pre-v1 plugin manifests."""
+        from lfs_plugins import PluginManager
+
+        plugin_dir = temp_plugins_dir / "legacy_plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "legacy_plugin"
+version = "0.1.0"
+description = "Legacy plugin"
+
+[tool.lichtfeld]
+hot_reload = true
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load(): pass")
+
+        mgr = PluginManager.instance()
+        with caplog.at_level("WARNING"):
+            plugins = mgr.discover()
+
+        assert plugins == []
+        assert any("Skipping plugin 'legacy_plugin': invalid manifest." in record.message for record in caplog.records)
+        assert any("missing tool.lichtfeld.plugin_api" in record.message for record in caplog.records)
+        assert any("v1 manifest requires" in record.message for record in caplog.records)
 
 
 class TestPluginLoading:
@@ -180,6 +228,9 @@ dependencies = []
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("def on_load():\n    pass\n")
@@ -273,6 +324,9 @@ description = "Minimal plugin"
 [tool.lichtfeld]
 auto_start = false
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("def on_load(): pass")
@@ -316,6 +370,9 @@ description = "Plugin that fails to load"
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("raise RuntimeError('intentional')")
@@ -325,7 +382,7 @@ hot_reload = false
 
         assert result is False
         assert mgr.get_state("broken_plugin") == PluginState.ERROR
-        assert mgr.get_error("broken_plugin") is not None
+        assert "intentional" in mgr.get_error("broken_plugin")
 
 
 class TestPluginLifecycle:
@@ -361,6 +418,9 @@ description = "Plugin {name}"
 
 [tool.lichtfeld]
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
             )
             (plugin_dir / "__init__.py").write_text("def on_load(): pass")
@@ -395,6 +455,9 @@ description = "Plugin with auto_start in manifest"
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("def on_load(): pass")
@@ -419,6 +482,9 @@ description = "Plugin without auto_start"
 
 [tool.lichtfeld]
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("def on_load(): pass")
@@ -432,6 +498,12 @@ hot_reload = true
 
 class TestVersionEnforcement:
     """Tests for plugin version enforcement."""
+
+    @staticmethod
+    def _load_without_installer(mgr, name: str):
+        with patch("lfs_plugins.installer.PluginInstaller.ensure_venv", return_value=None), \
+             patch("lfs_plugins.installer.PluginInstaller.install_dependencies", return_value=True):
+            return mgr.load(name)
 
     def test_version_check_passes(self, temp_plugins_dir):
         """Should load plugin with compatible version requirement."""
@@ -449,20 +521,22 @@ description = "Plugin with compatible version"
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
-min_lichtfeld_version = "0.5.0"
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("def on_load(): pass")
 
         mgr = PluginManager.instance()
-        result = mgr.load("compatible_plugin")
+        result = self._load_without_installer(mgr, "compatible_plugin")
 
         assert result is True
         assert mgr.get_state("compatible_plugin") == PluginState.ACTIVE
         mgr.unload("compatible_plugin")
 
-    def test_version_check_fails(self, temp_plugins_dir):
-        """Should fail to load plugin requiring newer LichtFeld version."""
+    def test_lichtfeld_version_check_fails(self, temp_plugins_dir):
+        """Should fail to load plugin requiring a newer LichtFeld host version."""
         from lfs_plugins import PluginManager, PluginVersionError
 
         plugin_dir = temp_plugins_dir / "future_plugin"
@@ -477,15 +551,73 @@ description = "Plugin requiring future version"
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
-min_lichtfeld_version = "99.0.0"
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=99.0"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("def on_load(): pass")
 
         mgr = PluginManager.instance()
 
-        with pytest.raises(PluginVersionError, match="requires LichtFeld >= 99.0.0"):
-            mgr.load("future_plugin")
+        with pytest.raises(PluginVersionError, match="requires LichtFeld >=99.0"):
+            self._load_without_installer(mgr, "future_plugin")
+
+    def test_plugin_api_check_fails(self, temp_plugins_dir):
+        """Should fail to load plugin requiring a newer plugin API major."""
+        from lfs_plugins import PluginManager, PluginVersionError
+
+        plugin_dir = temp_plugins_dir / "future_api_plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "future_api_plugin"
+version = "1.0.0"
+description = "Plugin requiring future plugin API"
+
+[tool.lichtfeld]
+auto_start = true
+hot_reload = false
+plugin_api = ">=2,<3"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load(): pass")
+
+        mgr = PluginManager.instance()
+
+        with pytest.raises(PluginVersionError, match="requires plugin API >=2,<3"):
+            self._load_without_installer(mgr, "future_api_plugin")
+
+    def test_required_features_check_fails(self, temp_plugins_dir):
+        """Should fail to load plugin requiring unsupported runtime features."""
+        from lfs_plugins import PluginManager, PluginVersionError
+
+        plugin_dir = temp_plugins_dir / "feature_plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "pyproject.toml").write_text(
+            """
+[project]
+name = "feature_plugin"
+version = "1.0.0"
+description = "Plugin requiring unsupported features"
+
+[tool.lichtfeld]
+auto_start = true
+hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = ["panels.v2"]
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load(): pass")
+
+        mgr = PluginManager.instance()
+
+        with pytest.raises(PluginVersionError, match="requires unsupported features: panels.v2"):
+            self._load_without_installer(mgr, "feature_plugin")
 
 
 class TestModuleNamespacing:
@@ -521,6 +653,9 @@ description = "Plugin named json for collision test"
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_dir / "__init__.py").write_text("PLUGIN_LOADED = True\ndef on_load(): pass")
@@ -565,6 +700,15 @@ class TestGitHubUrlParsing:
             "https://github.com/owner/repo/tree/develop"
         )
         assert branch == "develop"
+
+    def test_parse_url_with_at_ref_suffix(self):
+        """Should extract ref from full GitHub URLs using @ref suffix."""
+        from lfs_plugins.installer import parse_github_url
+
+        owner, repo, branch = parse_github_url("https://github.com/owner/repo@feature")
+        assert owner == "owner"
+        assert repo == "repo"
+        assert branch == "feature"
 
     def test_parse_github_shorthand(self):
         """Should parse github:owner/repo shorthand."""
@@ -639,6 +783,9 @@ dependencies = ["requests>=2.0"]
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         venv_dir = plugin_dir / ".venv"
@@ -660,6 +807,9 @@ hot_reload = false
             dependencies=["requests>=2.0"],
             auto_start=True,
             hot_reload=True,
+            plugin_api=">=1,<2",
+            lichtfeld_version=">=0.4.2",
+            required_features=[],
         )
         instance = PluginInstance(info=info)
         instance.venv_path = plugin_dir / ".venv"
@@ -692,6 +842,9 @@ dependencies = ["requests>=2.0"]
 [tool.lichtfeld]
 auto_start = true
 hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         installer = self._make_installer(installer_plugin)
@@ -879,3 +1032,212 @@ hot_reload = false
         with patch.object(installer, "_get_embedded_python", return_value=None):
             with pytest.raises(PluginDependencyError, match="Bundled Python not found"):
                 installer.ensure_venv()
+
+
+class TestPluginInstallTransports:
+    """Tests for archive-vs-git plugin source acquisition."""
+
+    @staticmethod
+    def _write_plugin(plugin_dir: Path, *, name: str, version: str) -> None:
+        plugin_dir.mkdir(parents=True, exist_ok=True)
+        (plugin_dir / "pyproject.toml").write_text(
+            f"""
+[project]
+name = "{name}"
+version = "{version}"
+description = "Transport test plugin"
+dependencies = []
+
+[tool.lichtfeld]
+auto_start = false
+hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
+"""
+        )
+        (plugin_dir / "__init__.py").write_text("def on_load():\n    pass\n")
+
+    def test_install_defaults_to_archive_transport(self, temp_plugins_dir):
+        """Direct installs should use archive mode by default."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.installer import PluginSourceInfo, read_plugin_source_metadata
+
+        mgr = PluginManager.instance()
+
+        def fake_prepare(url, staging_parent, on_progress=None):
+            staging = staging_parent / ".archive-plugin-stage"
+            self._write_plugin(staging, name="archive_plugin", version="1.0.0")
+            return staging, PluginSourceInfo(
+                transport="archive",
+                origin=url,
+                github_url="https://github.com/owner/repo",
+                owner="owner",
+                repo="repo",
+            )
+
+        with patch("lfs_plugins.manager.prepare_github_archive", side_effect=fake_prepare) as mock_prepare, \
+             patch("lfs_plugins.manager.clone_from_url") as mock_clone:
+            name = mgr.install("owner/repo", auto_load=False)
+
+        assert name == "archive_plugin"
+        assert mock_prepare.call_count == 1
+        mock_clone.assert_not_called()
+
+        source_info = read_plugin_source_metadata(temp_plugins_dir / "archive_plugin")
+        assert source_info is not None
+        assert source_info.transport == "archive"
+        assert source_info.github_url == "https://github.com/owner/repo"
+
+    def test_install_from_registry_prefers_archive_over_git(self, temp_plugins_dir):
+        """Registry installs should prefer archive downloads even when git refs exist."""
+        from unittest.mock import MagicMock
+        from lfs_plugins import PluginManager
+        from lfs_plugins.registry import RegistryVersionInfo
+
+        mgr = PluginManager.instance()
+        mgr._registry = MagicMock()
+        mgr._registry.resolve_version.return_value = RegistryVersionInfo(
+            version="1.2.0",
+            plugin_api=">=1,<2",
+            lichtfeld_version=">=0.4.2",
+            checksum="sha256:abc123",
+            download_url="https://example.com/archive.tar.gz",
+            git_ref="v1.2.0",
+        )
+        mgr._registry.get_plugin.return_value = {
+            "repository": "https://github.com/lichtfeld/lichtfeld-plugin-colmap",
+        }
+        mgr._registry.verify_checksum.return_value = True
+
+        def fake_archive(download_url, staging_parent, **kwargs):
+            staging = staging_parent / ".registry-plugin-stage"
+            self._write_plugin(staging, name="colmap", version="1.2.0")
+            return staging
+
+        with patch("lfs_plugins.manager.prepare_archive_from_download_url", side_effect=fake_archive) as mock_archive, \
+             patch("lfs_plugins.manager.clone_from_url") as mock_clone:
+            name = mgr.install_from_registry("lichtfeld:colmap", auto_load=False)
+
+        assert name == "colmap"
+        assert mock_archive.call_count == 1
+        mock_clone.assert_not_called()
+
+    def test_install_from_registry_git_writes_registry_metadata_once(self, temp_plugins_dir):
+        """Registry git installs should record enriched source metadata in a single write."""
+        from unittest.mock import MagicMock
+        from lfs_plugins import PluginManager
+        from lfs_plugins.installer import read_plugin_source_metadata, write_plugin_source_metadata
+        from lfs_plugins.registry import RegistryVersionInfo
+
+        mgr = PluginManager.instance()
+        mgr._registry = MagicMock()
+        mgr._registry.resolve_version.return_value = RegistryVersionInfo(
+            version="1.2.0",
+            plugin_api=">=1,<2",
+            lichtfeld_version=">=0.4.2",
+            git_ref="v1.2.0",
+        )
+        mgr._registry.get_plugin.return_value = {
+            "repository": "https://github.com/lichtfeld/lichtfeld-plugin-colmap",
+        }
+
+        plugin_dir = temp_plugins_dir / "colmap"
+        self._write_plugin(plugin_dir, name="colmap", version="1.2.0")
+
+        with patch("lfs_plugins.manager.clone_from_url", return_value=plugin_dir) as mock_clone, \
+             patch("lfs_plugins.manager.write_plugin_source_metadata", wraps=write_plugin_source_metadata) as mock_write:
+            name = mgr.install_from_registry("lichtfeld:colmap", auto_load=False, transport="git")
+
+        assert name == "colmap"
+        mock_clone.assert_called_once_with(
+            "https://github.com/lichtfeld/lichtfeld-plugin-colmap@v1.2.0",
+            temp_plugins_dir,
+            None,
+        )
+        assert mock_write.call_count == 1
+
+        source_info = read_plugin_source_metadata(plugin_dir)
+        assert source_info is not None
+        assert source_info.transport == "git"
+        assert source_info.registry_id == "lichtfeld:colmap"
+        assert source_info.version == "1.2.0"
+        assert source_info.requested_ref == "v1.2.0"
+
+    def test_update_uses_archive_metadata_without_git(self, temp_plugins_dir):
+        """Archive-installed plugins should update through archive re-download, not git."""
+        from lfs_plugins import PluginManager
+        from lfs_plugins.installer import PluginSourceInfo, read_plugin_source_metadata, write_plugin_source_metadata
+
+        mgr = PluginManager.instance()
+        plugin_dir = temp_plugins_dir / "archive_plugin"
+        self._write_plugin(plugin_dir, name="archive_plugin", version="1.0.0")
+        (plugin_dir / ".venv").mkdir()
+        write_plugin_source_metadata(
+            plugin_dir,
+            PluginSourceInfo(
+                transport="archive",
+                origin="https://github.com/owner/repo",
+                github_url="https://github.com/owner/repo",
+                owner="owner",
+                repo="repo",
+            ),
+        )
+
+        def fake_prepare(url, staging_parent, on_progress=None):
+            staging = staging_parent / ".archive-plugin-update"
+            self._write_plugin(staging, name="archive_plugin", version="1.1.0")
+            return staging, PluginSourceInfo(
+                transport="archive",
+                origin=url,
+                github_url="https://github.com/owner/repo",
+                owner="owner",
+                repo="repo",
+            )
+
+        with patch("lfs_plugins.manager.prepare_github_archive", side_effect=fake_prepare) as mock_prepare, \
+             patch("lfs_plugins.manager.update_plugin") as mock_git_update:
+            assert mgr.update("archive_plugin") is True
+
+        assert mock_prepare.call_count == 1
+        mock_git_update.assert_not_called()
+        discovered = mgr.discover()
+        assert len(discovered) == 1
+        assert discovered[0].version == "1.1.0"
+        assert (plugin_dir / ".venv").exists()
+
+        source_info = read_plugin_source_metadata(plugin_dir)
+        assert source_info is not None
+        assert source_info.transport == "archive"
+
+    def test_download_url_to_temp_cleans_up_temp_file_on_copy_failure(self, temp_plugins_dir):
+        """Download helper should delete its temp file when copying the response fails."""
+        import io
+
+        from lfs_plugins.installer import _download_url_to_temp
+
+        created_paths = []
+        real_named_temporary_file = tempfile.NamedTemporaryFile
+
+        class _Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.close()
+                return False
+
+        def tracking_named_temporary_file(*args, **kwargs):
+            kwargs.setdefault("dir", temp_plugins_dir)
+            tmp = real_named_temporary_file(*args, **kwargs)
+            created_paths.append(Path(tmp.name))
+            return tmp
+
+        with patch("lfs_plugins.installer.urllib.request.urlopen", return_value=_Response(b"payload")), \
+             patch("lfs_plugins.installer.tempfile.NamedTemporaryFile", side_effect=tracking_named_temporary_file), \
+             patch("lfs_plugins.installer.shutil.copyfileobj", side_effect=RuntimeError("copy failed")):
+            with pytest.raises(RuntimeError, match="copy failed"):
+                _download_url_to_temp("https://example.com/plugin.tar.gz")
+
+        assert len(created_paths) == 1
+        assert not created_paths[0].exists()

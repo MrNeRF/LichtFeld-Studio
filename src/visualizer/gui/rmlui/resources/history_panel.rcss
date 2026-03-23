@@ -1,0 +1,143 @@
+.history-summary {
+    display: block;
+    margin-bottom: 6dp;
+}
+
+.history-summary__label {
+    display: block;
+    font-size: 9dp;
+    letter-spacing: 0.4dp;
+    text-transform: uppercase;
+    margin-bottom: 2dp;
+}
+
+.history-summary__value {
+    display: block;
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+.history-transaction {
+    display: block;
+    margin-bottom: 8dp;
+    padding: 6dp 8dp;
+    border-radius: 6dp;
+    font-size: 10dp;
+}
+
+.history-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6dp;
+}
+
+.history-action {
+    flex: 1;
+    text-align: center;
+    min-height: 24dp;
+}
+
+.history-action--clear {
+    flex: 0 0 auto;
+    min-width: 84dp;
+}
+
+.history-note {
+    display: block;
+    margin-top: -2dp;
+    margin-bottom: 2dp;
+    font-size: 9dp;
+}
+
+.history-section {
+    display: flex;
+    flex-direction: column;
+    gap: 5dp;
+}
+
+.history-section__title {
+    display: block;
+    font-size: 10dp;
+    font-weight: bold;
+}
+
+.history-list {
+    display: block;
+}
+
+.history-stack-item {
+    display: block;
+    width: 100%;
+    margin-bottom: 6dp;
+}
+
+.btn.history-row {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 8dp 10dp 9dp;
+    border-width: 1dp 1dp 1dp 4dp;
+    border-radius: 7dp;
+    border-color: rgba(255, 184, 92, 84) rgba(255, 184, 92, 84) rgba(255, 184, 92, 84)
+        rgba(255, 184, 92, 170);
+    background-color: rgba(43, 46, 57, 245);
+    cursor: pointer;
+    text-align: left;
+    line-height: 1.25;
+}
+
+.history-row:hover {
+    border-color: rgba(255, 184, 92, 150) rgba(255, 184, 92, 150) rgba(255, 184, 92, 150)
+        rgba(255, 184, 92, 220);
+    background-color: rgba(52, 55, 68, 248);
+}
+
+.history-row.is-next {
+    border-color: rgba(255, 184, 92, 220) rgba(255, 184, 92, 220) rgba(255, 184, 92, 220)
+        rgba(255, 184, 92, 255);
+    background-color: rgba(83, 62, 24, 242);
+}
+
+.history-row--redo {
+    border-color: rgba(123, 211, 137, 90) rgba(123, 211, 137, 90) rgba(123, 211, 137, 90)
+        rgba(123, 211, 137, 176);
+}
+
+.history-row--redo:hover {
+    border-color: rgba(123, 211, 137, 150) rgba(123, 211, 137, 150) rgba(123, 211, 137, 150)
+        rgba(123, 211, 137, 220);
+}
+
+.history-row--redo.is-next {
+    border-color: rgba(123, 211, 137, 220) rgba(123, 211, 137, 220) rgba(123, 211, 137, 220)
+        rgba(123, 211, 137, 255);
+    background-color: rgba(30, 72, 39, 242);
+}
+
+.history-row__line {
+    display: block;
+    width: auto;
+}
+
+.history-row__line--primary {
+    margin-bottom: 2dp;
+    font-size: 10.5dp;
+    font-weight: bold;
+}
+
+.history-row__line--stack {
+    font-size: 8.75dp;
+    line-height: 1.2;
+}
+
+.history-row__line--secondary {
+    font-size: 9dp;
+    line-height: 1.3;
+}
+
+.history-empty {
+    display: block;
+    padding: 4dp 0;
+    font-size: 10dp;
+}

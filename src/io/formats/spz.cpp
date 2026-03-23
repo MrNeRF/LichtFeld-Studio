@@ -9,6 +9,7 @@
 #include "load-spz.h"
 #include <chrono>
 #include <format>
+#include <fstream>
 
 namespace lfs::io {
 
@@ -137,10 +138,29 @@ namespace lfs::io {
 
         LOG_INFO("Loading SPZ file: {}", lfs::core::path_to_utf8(filepath));
 
-        // Load using Niantic's library (outputs RDF coordinate system like PLY)
+        std::ifstream in;
+        if (!lfs::core::open_file_for_read(filepath, std::ios::binary | std::ios::ate, in)) {
+            return std::unexpected(std::format("Failed to open SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+        }
+
+        const auto size = in.tellg();
+        if (size < 0) {
+            return std::unexpected(std::format("Failed to read SPZ file size: {}", lfs::core::path_to_utf8(filepath)));
+        }
+
+        std::vector<uint8_t> data(static_cast<size_t>(size));
+        in.seekg(0, std::ios::beg);
+        in.read(reinterpret_cast<char*>(data.data()), size);
+        in.close();
+
+        if (!in.good()) {
+            return std::unexpected(std::format("Failed to read SPZ file: {}", lfs::core::path_to_utf8(filepath)));
+        }
+
+        // Load through the in-memory API to avoid narrow-path handling in the bundled SPZ library.
         spz::UnpackOptions options;
         options.to = spz::CoordinateSystem::RDF;
-        auto cloud = spz::loadSpz(lfs::core::path_to_utf8(filepath), options);
+        auto cloud = spz::loadSpz(data, options);
 
         if (cloud.numPoints == 0) {
             return std::unexpected(std::format("Failed to load SPZ file: {}", lfs::core::path_to_utf8(filepath)));

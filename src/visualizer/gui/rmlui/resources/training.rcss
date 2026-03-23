@@ -1,0 +1,158 @@
+/* Training panel — panel-specific styles only.
+ * Shared row/label typography lives in components.rcss so training and rendering
+ * cannot drift visually. */
+
+body {
+    font-family: Inter;
+    padding: 0;
+    bottom: 0;
+}
+
+#content-wrap {
+    min-width: 0;
+    height: 0;
+    flex-grow: 1;
+    padding: 6dp;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#content {
+    min-width: 0;
+}
+
+.training-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin-top: 2dp;
+    padding: 6dp 0 0;
+    border-top-width: 1dp;
+    border-top-color: rgba(137, 180, 250, 84);
+    color: #f5f7ff;
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+.training-panel-title--secondary {
+    margin-top: 8dp;
+}
+
+.training-panel-title-icon {
+    width: 14dp;
+    height: 14dp;
+    image-color: #89b4fa;
+    flex-shrink: 0;
+}
+
+.training-panel-block {
+    margin-top: 4dp;
+}
+
+.training-subsection {
+    margin-top: 0;
+}
+
+.training-subsection-title {
+    padding-top: 6dp;
+    border-top-width: 1dp;
+    border-top-color: rgba(137, 180, 250, 32);
+    margin-bottom: 4dp;
+    color: #a6adc8;
+    font-size: 10dp;
+    font-weight: bold;
+}
+
+.training-panel-block > .training-subsection:first-child {
+    margin-top: 0;
+}
+
+.training-panel-block > .training-subsection:first-child > .training-subsection-title {
+    padding-top: 0;
+    border-top-width: 0;
+}
+
+.training-subsection > .section-header {
+    margin-top: 0;
+}
+
+.training-panel-block > .training-subsection:first-child > .section-header {
+}
+
+.loss-graph-wrap {
+    display: flex;
+    align-items: stretch;
+    gap: 4dp;
+    height: 78dp;
+    min-width: 0;
+    overflow: hidden;
+    background-color: rgba(25, 25, 25, 255);
+}
+
+.loss-graph-ticks {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    width: 42dp;
+    flex-shrink: 0;
+    padding: 6dp 0 6dp 0;
+}
+
+.loss-tick {
+    font-family: "JetBrains Mono";
+    font-size: 10dp;
+    color: #bac2de;
+    text-align: right;
+    white-space: nowrap;
+}
+
+loss-graph {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    height: 78dp;
+}
+
+#loss-graph-container {
+    margin-top: 4dp;
+    min-width: 0;
+}
+
+#loss-label {
+    margin-bottom: 2dp;
+    min-width: 0;
+}
+
+.training-status-line {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.color-picker-popup {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    padding: 4dp;
+    background-color: rgba(30, 30, 46, 230);
+    border-width: 1dp;
+    border-color: #585b70;
+}
+
+.color-picker-popup.visible {
+    display: block;
+}
+
+.mask-settings-group {
+    margin: 3dp 0 6dp 8dp;
+    padding: 2dp 0 2dp 8dp;
+    border-left-width: 1dp;
+    border-left-color: rgba(137, 180, 250, 56);
+}
+
+.mask-settings-divider {
+    height: 1dp;
+    margin: 4dp 0 2dp;
+    background-color: rgba(137, 180, 250, 32);
+}

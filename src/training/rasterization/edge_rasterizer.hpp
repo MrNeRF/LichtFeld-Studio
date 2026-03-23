@@ -1,0 +1,84 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+#include "core/camera.hpp"
+#include "core/splat_data.hpp"
+#include "optimizer/adam_optimizer.hpp"
+#include "optimizer/render_output.hpp"
+#include <edge_rasterization_api.h>
+#include <expected>
+#include <string>
+
+namespace lfs::training {
+    // Forward pass context - holds intermediate buffers needed for backward
+    struct FastRasterizeContext {
+        lfs::core::Tensor image;
+        lfs::core::Tensor alpha;
+        lfs::core::Tensor bg_color; // Saved for alpha gradient computation
+
+        // Gaussian parameters (saved to avoid re-fetching in backward)
+        lfs::core::Tensor means;
+        lfs::core::Tensor raw_scales;
+        lfs::core::Tensor raw_rotations;
+        lfs::core::Tensor raw_opacities;
+        lfs::core::Tensor shN;
+
+        const float* w2c_ptr = nullptr;
+        const float* cam_position_ptr = nullptr;
+
+        // Forward context (contains buffer pointers, frame_id, etc.)
+        edge_compute::rasterization::ForwardContext forward_ctx;
+
+        int active_sh_bases;
+        int total_bases_sh_rest;
+        int width;
+        int height;
+        float focal_x;
+        float focal_y;
+        float center_x;
+        float center_y;
+        float near_plane;
+        float far_plane;
+        bool mip_filter = false;
+
+        // Tile information (for tile-based training)
+        int tile_x_offset = 0; // Horizontal offset of this tile
+        int tile_y_offset = 0; // Vertical offset of this tile
+        int tile_width = 0;    // Width of this tile (0 = full image)
+        int tile_height = 0;   // Height of this tile (0 = full image)
+
+        // Background image for per-pixel blending (optional, empty = use bg_color)
+        lfs::core::Tensor bg_image;
+    };
+
+    // Explicit forward pass - returns render output and context for backward
+    // Optional tile parameters for memory-efficient training (tile_width/height=0 means full image)
+    // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
+    std::expected<std::pair<RenderOutput, FastRasterizeContext>, std::string> edge_rasterize_forward(
+        lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        const lfs::core::Tensor& pixel_weights,
+        int tile_x_offset = 0,
+        int tile_y_offset = 0,
+        int tile_width = 0,
+        int tile_height = 0,
+        bool mip_filter = false,
+        const lfs::core::Tensor& bg_image = {});
+
+    // Convenience wrapper for inference (no backward needed)
+    inline RenderOutput edge_rasterize(
+        lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        const lfs::core::Tensor& pixel_weights) {
+        auto result = edge_rasterize_forward(viewpoint_camera, gaussian_model, bg_color, pixel_weights);
+        if (!result) {
+            throw std::runtime_error(result.error());
+        }
+        return result->first;
+    }
+} // namespace lfs::training

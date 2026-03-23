@@ -3,6 +3,7 @@
 
 #include "tools/align_tool.hpp"
 #include "core/services.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "theme/theme.hpp"
@@ -60,7 +61,7 @@ namespace lfs::vis::tools {
         const ImVec2 mouse_pos = ImGui::GetMousePos();
         const auto& viewport = tool_context_->getViewport();
         auto* const rendering_manager = tool_context_->getRenderingManager();
-        const bool over_gui = ImGui::GetIO().WantCaptureMouse;
+        const bool over_gui = gui::guiFocusState().want_capture_mouse;
 
         constexpr float SPHERE_RADIUS = 0.05f;
         const auto& t = theme();
@@ -97,7 +98,7 @@ namespace lfs::vis::tools {
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 preview_point = viewport.unprojectPixel(
                     mouse_pos.x, mouse_pos.y, depth, rendering_manager->getFocalLengthMm());
-                if (preview_point.x > -1e9f) {
+                if (Viewport::isValidWorldPosition(preview_point)) {
                     const ImVec2 screen_pos = projectToScreen(preview_point, viewport);
                     const float screen_radius = calculateScreenRadius(preview_point, SPHERE_RADIUS, viewport);
 
@@ -118,7 +119,7 @@ namespace lfs::vis::tools {
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 p2 = viewport.unprojectPixel(
                     mouse_pos.x, mouse_pos.y, depth, rendering_manager->getFocalLengthMm());
-                if (p2.x > -1e9f) {
+                if (Viewport::isValidWorldPosition(p2)) {
                     const glm::vec3& p0 = picked_points[0];
                     const glm::vec3& p1 = picked_points[1];
 

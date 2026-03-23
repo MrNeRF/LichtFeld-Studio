@@ -30,7 +30,7 @@ namespace {
         Help
     };
 
-    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc", "lfs"};
+    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc", "lfs", "igs+"};
 
     // Parse log level from string
     lfs::core::LogLevel parse_log_level(const std::string& level_str) {
@@ -105,10 +105,10 @@ namespace {
             ::args::Group training_sep(parser, " ");
             ::args::Group training_group(parser, "TRAINING PARAMETERS:");
             ::args::ValueFlag<uint32_t> iterations(training_group, "iterations", "Number of iterations", {'i', "iter"});
-            ::args::ValueFlag<std::string> strategy(training_group, "strategy", "Optimization strategy: mcmc, adc, lfs", {"strategy"});
+            ::args::ValueFlag<std::string> strategy(training_group, "strategy", "Optimization strategy: mcmc, adc, lfs, igs+", {"strategy"});
             ::args::ValueFlag<int> sh_degree(training_group, "sh_degree", "Max SH degree [0-3]", {"sh-degree"});
             ::args::ValueFlag<int> sh_degree_interval(training_group, "sh_degree_interval", "SH degree interval", {"sh-degree-interval"});
-            ::args::ValueFlag<int> max_cap(training_group, "max_cap", "Max Gaussians for MCMC", {"max-cap"});
+            ::args::ValueFlag<int> max_cap(training_group, "max_cap", "Maximum number of Gaussians", {"max-cap"});
             ::args::ValueFlag<float> min_opacity(training_group, "min_opacity", "Minimum opacity threshold", {"min-opacity"});
             ::args::ValueFlag<float> steps_scaler(training_group, "steps_scaler", "Scale training steps by factor", {"steps-scaler"});
             ::args::ValueFlag<int> tile_mode(training_group, "tile_mode", "Tile mode for memory-efficient training: 1=1 tile, 2=2 tiles, 4=4 tiles (default: 1)", {"tile-mode"});
@@ -181,6 +181,8 @@ namespace {
             ::args::Flag use_bilateral_grid(rendering_group, "bilateral_grid", "Enable bilateral grid filtering", {"bilateral-grid"});
             ::args::Flag use_ppisp(rendering_group, "ppisp", "Enable PPISP for per-camera appearance modeling", {"ppisp"});
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", "Enable PPISP controller for novel views", {"ppisp-controller"});
+            ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", "Freeze PPISP learning and load PPISP weights from a sidecar file", {"ppisp-freeze"});
+            ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
             ::args::Flag bg_modulation(rendering_group, "bg_modulation", "Enable sinusoidal background modulation", {"bg-modulation"});
             ::args::Flag gut(rendering_group, "gut", "Enable GUT mode", {"gut"});
 
@@ -202,7 +204,9 @@ namespace {
             ::args::Group ui_group(parser, "UI OPTIONS:");
             ::args::Flag headless(ui_group, "headless", "Disable visualization during training", {"headless"});
             ::args::Flag auto_train(ui_group, "train", "Start training immediately on startup", {"train"});
+#ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
+#endif
             ::args::Flag no_interop(ui_group, "no_interop", "Disable CUDA-GL interop (use CPU fallback for display)", {"no-interop"});
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
@@ -426,7 +430,7 @@ namespace {
                 const auto strat = ::args::get(strategy);
                 if (VALID_STRATEGIES.find(strat) == VALID_STRATEGIES.end()) {
                     return std::unexpected(std::format(
-                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, adc, lfs",
+                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, adc, lfs, igs+",
                         strat));
                 }
 
@@ -527,10 +531,16 @@ namespace {
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         use_ppisp_flag = bool(use_ppisp),
                                         ppisp_controller_flag = bool(ppisp_controller),
+                                        ppisp_freeze_from_sidecar_flag = bool(ppisp_freeze_from_sidecar),
+                                        ppisp_sidecar_path_val = ppisp_sidecar_path ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
+#ifdef LFS_BUILD_PORTABLE
+                                        no_splash_flag = false,
+#else
                                         no_splash_flag = bool(no_splash),
+#endif
                                         no_interop_flag = bool(no_interop),
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = debug_python_port ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
@@ -590,7 +600,13 @@ namespace {
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(use_ppisp_flag, opt.use_ppisp);
                 setFlag(ppisp_controller_flag, opt.ppisp_use_controller);
+                setFlag(ppisp_freeze_from_sidecar_flag, opt.ppisp_freeze_from_sidecar);
+                if (ppisp_sidecar_path_val) {
+                    opt.ppisp_sidecar_path = lfs::core::utf8_to_path(*ppisp_sidecar_path_val);
+                }
                 if (opt.ppisp_use_controller)
+                    opt.use_ppisp = true;
+                if (opt.ppisp_freeze_from_sidecar)
                     opt.use_ppisp = true;
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);
@@ -644,9 +660,7 @@ namespace {
             return;
 
         if (opt.ppisp_controller_activation_step < 0) {
-            constexpr int CONTROLLER_TRAINING_ITERS = 5000;
-            opt.ppisp_controller_activation_step =
-                std::max(0, static_cast<int>(opt.iterations) - CONTROLLER_TRAINING_ITERS);
+            opt.ppisp_controller_activation_step = opt.resolved_ppisp_controller_activation_step();
         }
     }
 
@@ -660,7 +674,16 @@ std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string
 lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
-    auto parse_result = parse_arguments(convert_args(argc, argv), *params);
+    auto args = convert_args(argc, argv);
+
+    if (args.size() >= 2 && !args[1].starts_with('-') && args[1] != "convert" && args[1] != "plugin") {
+        const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
+        std::error_code ec;
+        if (std::filesystem::exists(p, ec))
+            args.insert(args.begin() + 1, "-v");
+    }
+
+    auto parse_result = parse_arguments(args, *params);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 
@@ -685,13 +708,14 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             return std::unexpected("--strategy conflicts with config file");
         }
     } else {
-        if (strategy == "adc") {
+        if (strategy == "adc")
             params->optimization = lfs::core::param::OptimizationParameters::adc_defaults();
-        } else if (strategy == "lfs") {
+        else if (strategy == "lfs")
             params->optimization = lfs::core::param::OptimizationParameters::lfs_defaults();
-        } else {
+        else if (strategy == "igs+")
+            params->optimization = lfs::core::param::OptimizationParameters::igs_plus_defaults();
+        else
             params->optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
-        }
     }
 
     params->dataset.loading_params = lfs::core::param::LoadingParams{};
@@ -702,7 +726,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 
-    if (auto error = params->optimization.validate(); !error.empty())
+    if (auto error = params->validate(); !error.empty())
         return std::unexpected("ERROR: " + error);
 
     return params;
@@ -747,17 +771,6 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
 
         if (arg1 == "--warmup") {
             return WarmupMode{};
-        }
-
-        if (arg1 == "--mcp") {
-            McpMode mode;
-            if (argc >= 3) {
-                const std::filesystem::path scene_path = lfs::core::utf8_to_path(argv[2]);
-                if (std::filesystem::exists(scene_path)) {
-                    mode.scene_path = scene_path;
-                }
-            }
-            return mode;
         }
 
         if (arg1 == "convert") {

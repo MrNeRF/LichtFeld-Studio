@@ -500,4 +500,61 @@ namespace lfs::training {
         }
     }
 
+    std::string PPISPControllerPool::copy_inference_weights_from(
+        const PPISPControllerPool& source,
+        const std::vector<int>& source_camera_indices) {
+
+        if (static_cast<int>(source_camera_indices.size()) != num_cameras_) {
+            return "Camera mapping size does not match target controller pool camera count";
+        }
+
+        for (size_t i = 0; i < source_camera_indices.size(); ++i) {
+            if (source_camera_indices[i] < 0 || source_camera_indices[i] >= source.num_cameras_) {
+                return "Camera mapping contains out-of-range source index at position " + std::to_string(i);
+            }
+        }
+
+        conv1_w_ = source.conv1_w_.clone().contiguous();
+        conv1_b_ = source.conv1_b_.clone().contiguous();
+        conv2_w_ = source.conv2_w_.clone().contiguous();
+        conv2_b_ = source.conv2_b_.clone().contiguous();
+        conv3_w_ = source.conv3_w_.clone().contiguous();
+        conv3_b_ = source.conv3_b_.clone().contiguous();
+
+        for (int target_idx = 0; target_idx < num_cameras_; ++target_idx) {
+            const int source_idx = source_camera_indices[static_cast<size_t>(target_idx)];
+            fc1_w_[target_idx] = source.fc1_w_[source_idx].clone().contiguous();
+            fc1_b_[target_idx] = source.fc1_b_[source_idx].clone().contiguous();
+            fc2_w_[target_idx] = source.fc2_w_[source_idx].clone().contiguous();
+            fc2_b_[target_idx] = source.fc2_b_[source_idx].clone().contiguous();
+            fc3_w_[target_idx] = source.fc3_w_[source_idx].clone().contiguous();
+            fc3_b_[target_idx] = source.fc3_b_[source_idx].clone().contiguous();
+            fc4_w_[target_idx] = source.fc4_w_[source_idx].clone().contiguous();
+            fc4_b_[target_idx] = source.fc4_b_[source_idx].clone().contiguous();
+        }
+
+        zero_grad();
+        fc1_w_m_.zero_();
+        fc1_w_v_.zero_();
+        fc1_b_m_.zero_();
+        fc1_b_v_.zero_();
+        fc2_w_m_.zero_();
+        fc2_w_v_.zero_();
+        fc2_b_m_.zero_();
+        fc2_b_v_.zero_();
+        fc3_w_m_.zero_();
+        fc3_w_v_.zero_();
+        fc3_b_m_.zero_();
+        fc3_b_v_.zero_();
+        fc4_w_m_.zero_();
+        fc4_w_v_.zero_();
+        fc4_b_m_.zero_();
+        fc4_b_v_.zero_();
+        step_ = 0;
+        current_lr_ = initial_lr_;
+        last_predict_camera_ = -1;
+
+        return {};
+    }
+
 } // namespace lfs::training

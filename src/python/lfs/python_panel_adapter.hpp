@@ -19,17 +19,7 @@ namespace lfs::python {
     namespace gui = lfs::vis::gui;
 
     inline gui::PanelSpace to_gui_space(PanelSpace ps) {
-        switch (ps) {
-        case PanelSpace::SidePanel: return gui::PanelSpace::SidePanel;
-        case PanelSpace::Floating: return gui::PanelSpace::Floating;
-        case PanelSpace::ViewportOverlay: return gui::PanelSpace::ViewportOverlay;
-        case PanelSpace::Dockable: return gui::PanelSpace::Dockable;
-        case PanelSpace::MainPanelTab: return gui::PanelSpace::MainPanelTab;
-        case PanelSpace::SceneHeader: return gui::PanelSpace::SceneHeader;
-        case PanelSpace::StatusBar: return gui::PanelSpace::StatusBar;
-        }
-        assert(false && "Unknown PanelSpace");
-        return gui::PanelSpace::Floating;
+        return ps;
     }
 
     class PythonPanelAdapter : public gui::IPanel {

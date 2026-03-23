@@ -14,7 +14,7 @@
 
 namespace lfs::vis {
 
-    // Session defaults set once at startup (CLI > --config > JSON), current params are user-editable.
+    // Session defaults come from the most recent explicit parameter source, current params are user-editable.
     class LFS_VIS_API ParameterManager {
     public:
         std::expected<void, std::string> ensureLoaded();
@@ -28,7 +28,7 @@ namespace lfs::vis {
         // Reset current to session defaults
         void resetToDefaults(std::string_view strategy = "");
 
-        // Set session defaults from CLI params (called once at startup)
+        // Set or replace session defaults from explicit params.
         void setSessionDefaults(const lfs::core::param::TrainingParameters& params);
 
         // Set current params (e.g., from loaded checkpoint)
@@ -36,6 +36,9 @@ namespace lfs::vis {
 
         // Import params: overwrites both session and current for active strategy
         void importParams(const lfs::core::param::OptimizationParameters& params);
+
+        // Import a fully resolved training configuration (e.g., checkpoint restore).
+        void importTrainingParams(const lfs::core::param::TrainingParameters& params);
 
         [[nodiscard]] const std::string& getActiveStrategy() const { return active_strategy_; }
         void setActiveStrategy(std::string_view strategy);
@@ -68,18 +71,19 @@ namespace lfs::vis {
 
     private:
         bool loaded_ = false;
-        bool session_defaults_set_ = false;
         std::string active_strategy_ = "mcmc";
 
-        // Session defaults (immutable after startup)
+        // Session defaults
         lfs::core::param::OptimizationParameters mcmc_session_;
         lfs::core::param::OptimizationParameters adc_session_;
         lfs::core::param::OptimizationParameters lfs_session_;
+        lfs::core::param::OptimizationParameters igs_session_;
 
         // Current params (user-editable)
         lfs::core::param::OptimizationParameters mcmc_current_;
         lfs::core::param::OptimizationParameters adc_current_;
         lfs::core::param::OptimizationParameters lfs_current_;
+        lfs::core::param::OptimizationParameters igs_current_;
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;

@@ -74,6 +74,15 @@ namespace lfs::core {
             scale_steps(1.0f / steps_scaler);
         }
 
+        int OptimizationParameters::resolved_ppisp_controller_activation_step() const {
+            if (ppisp_controller_activation_step >= 0)
+                return ppisp_controller_activation_step;
+
+            const float clamped_scaler = std::max(steps_scaler, 1.0f);
+            const int tail_iters = static_cast<int>(std::lround(5000.0f * clamped_scaler));
+            return std::max(0, static_cast<int>(iterations) - tail_iters);
+        }
+
         nlohmann::json OptimizationParameters::to_json() const {
 
             nlohmann::json opt_json;
@@ -101,6 +110,7 @@ namespace lfs::core {
             opt_json["save_steps"] = save_steps;
             opt_json["enable_eval"] = enable_eval;
             opt_json["enable_save_eval_images"] = enable_save_eval_images;
+            opt_json["headless"] = headless;
             opt_json["strategy"] = strategy;
             opt_json["mip_filter"] = mip_filter;
             opt_json["use_bilateral_grid"] = use_bilateral_grid;
@@ -113,6 +123,8 @@ namespace lfs::core {
             opt_json["ppisp_lr"] = ppisp_lr;
             opt_json["ppisp_reg_weight"] = ppisp_reg_weight;
             opt_json["ppisp_warmup_steps"] = ppisp_warmup_steps;
+            opt_json["ppisp_freeze_from_sidecar"] = ppisp_freeze_from_sidecar;
+            opt_json["ppisp_sidecar_path"] = lfs::core::path_to_utf8(ppisp_sidecar_path);
             opt_json["ppisp_use_controller"] = ppisp_use_controller;
             opt_json["ppisp_freeze_gaussians_on_distill"] = ppisp_freeze_gaussians_on_distill;
             opt_json["ppisp_controller_activation_step"] = ppisp_controller_activation_step;
@@ -171,8 +183,26 @@ namespace lfs::core {
         }
 
         std::string OptimizationParameters::validate() const {
-            if (gut && strategy == "adc")
-                return "GUT and ADC strategy cannot be used together";
+            if (gut && (strategy == "adc" || strategy == "igs+"))
+                return "GUT and " + strategy + " strategy cannot be used together";
+            if (ppisp_freeze_from_sidecar && !use_ppisp)
+                return "PPISP sidecar freeze requires PPISP enabled";
+            return {};
+        }
+
+        std::string TrainingParameters::validate() const {
+            if (auto error = optimization.validate(); !error.empty()) {
+                return error;
+            }
+            if (optimization.ppisp_freeze_from_sidecar && !resume_checkpoint.has_value()) {
+                if (optimization.ppisp_sidecar_path.empty()) {
+                    return "PPISP sidecar freeze requires a sidecar path";
+                }
+                if (!std::filesystem::exists(optimization.ppisp_sidecar_path)) {
+                    return std::format("PPISP sidecar does not exist: '{}'",
+                                       lfs::core::path_to_utf8(optimization.ppisp_sidecar_path));
+                }
+            }
             return {};
         }
 
@@ -218,6 +248,25 @@ namespace lfs::core {
             return p;
         }
 
+        OptimizationParameters OptimizationParameters::igs_plus_defaults() {
+            auto p = OptimizationParameters{};
+            p.strategy = "igs+";
+            p.means_lr = 0.000016f;
+            p.shs_lr = 0.005f;
+            p.scaling_lr = 0.02f;
+            p.rotation_lr = 0.0015f;
+            p.stop_refine = 15'000;
+            p.refine_every = 500;
+            p.opacity_reg = 0.0f;
+            p.scale_reg = 0.0f;
+            p.init_opacity = 0.1f;
+            p.init_scaling = 0.1f;
+            p.revised_opacity = true;
+            p.max_cap = 4'000'000;
+            p.tv_loss_weight = 5.0f;
+            return p;
+        }
+
         OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
 
             OptimizationParameters params;
@@ -259,7 +308,7 @@ namespace lfs::core {
 
             if (json.contains("strategy")) {
                 std::string strategy = json["strategy"];
-                if (strategy == "mcmc" || strategy == "adc" || strategy == "lfs") {
+                if (strategy == "mcmc" || strategy == "adc" || strategy == "lfs" || strategy == "igs+") {
                     params.strategy = strategy;
                 } else {
                     LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
@@ -285,6 +334,9 @@ namespace lfs::core {
             }
             if (json.contains("enable_save_eval_images")) {
                 params.enable_save_eval_images = json["enable_save_eval_images"];
+            }
+            if (json.contains("headless")) {
+                params.headless = json["headless"];
             }
             if (json.contains("mip_filter")) {
                 params.mip_filter = json["mip_filter"];
@@ -318,6 +370,12 @@ namespace lfs::core {
             }
             if (json.contains("ppisp_warmup_steps")) {
                 params.ppisp_warmup_steps = json["ppisp_warmup_steps"];
+            }
+            if (json.contains("ppisp_freeze_from_sidecar")) {
+                params.ppisp_freeze_from_sidecar = json["ppisp_freeze_from_sidecar"];
+            }
+            if (json.contains("ppisp_sidecar_path")) {
+                params.ppisp_sidecar_path = utf8_to_path(json["ppisp_sidecar_path"].get<std::string>());
             }
             if (json.contains("ppisp_use_controller")) {
                 params.ppisp_use_controller = json["ppisp_use_controller"];

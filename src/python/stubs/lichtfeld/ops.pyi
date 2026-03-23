@@ -1,3 +1,5 @@
+"""Operator system"""
+
 import enum
 
 import lichtfeld
@@ -34,6 +36,26 @@ class BuiltinOp(enum.Enum):
     Redo = 9
 
     Delete = 10
+
+    SelectionClear = 11
+
+    SceneSelectNode = 12
+
+    CropBoxAdd = 13
+
+    CropBoxSet = 14
+
+    CropBoxFit = 15
+
+    CropBoxReset = 16
+
+    EllipsoidAdd = 17
+
+    EllipsoidSet = 18
+
+    EllipsoidFit = 19
+
+    EllipsoidReset = 20
 
 class BuiltinTool(enum.Enum):
     Select = 0
@@ -122,18 +144,6 @@ def get_all() -> list[str]:
 
 def get_descriptor(id: str) -> OperatorDescriptor | None:
     """Get operator descriptor by ID (None if not found)"""
-
-def undo() -> None:
-    """Undo the last operation"""
-
-def redo() -> None:
-    """Redo the last undone operation"""
-
-def can_undo() -> bool:
-    """Check if undo is available"""
-
-def can_redo() -> bool:
-    """Check if redo is available"""
 
 def has_modal() -> bool:
     """Check if a modal operator is running"""

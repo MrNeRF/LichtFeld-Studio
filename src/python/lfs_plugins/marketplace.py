@@ -14,6 +14,24 @@ from typing import Dict, List, Set, Tuple
 
 _log = logging.getLogger(__name__)
 
+try:
+    import lichtfeld as _lf
+
+    class _LfLogHandler(logging.Handler):
+        def emit(self, record):
+            msg = self.format(record)
+            if record.levelno >= logging.ERROR:
+                _lf.log.error(msg)
+            elif record.levelno >= logging.WARNING:
+                _lf.log.warn(msg)
+            else:
+                _lf.log.info(msg)
+
+    _log.addHandler(_LfLogHandler())
+    _log.setLevel(logging.DEBUG)
+except Exception:
+    pass
+
 GITHUB_TIMEOUT_SEC = 10
 REFRESH_RETRY_COOLDOWN_SEC = 30
 GITHUB_API_URL = "https://api.github.com/repos"
@@ -23,6 +41,8 @@ CURATED_PLUGIN_URLS: Tuple[str, ...] = (
     "https://github.com/shadygm/Lichtfeld-ml-sharp-Plugin",
     "https://github.com/jacobvanbeets/360_record",
     "https://github.com/jacobvanbeets/lichtfeld-depthmap-plugin",
+    "https://github.com/jacobvanbeets/splat-vr-viewer",
+    "https://github.com/jacobvanbeets/lichtfeld-measurement-plugin",
 )
 
 
@@ -51,18 +71,25 @@ class PluginMarketplaceCatalog:
         self._lock = threading.Lock()
         self._entries: List[MarketplacePluginEntry] = _build_curated_fallback()
         self._loading = False
-        self._loaded_once = False
+        self._registry_loaded = False
+        self._github_enriched = False
         self._last_attempt: float = 0.0
 
-    def refresh_async(self, force: bool = False) -> None:
-        """Fetch registry entries in a background thread and merge with curated list."""
+    def refresh_async(self, force: bool = False, require_github_enrichment: bool = False) -> None:
+        """Fetch registry entries, optionally enriching curated entries with GitHub metadata."""
         with self._lock:
             if self._loading:
                 return
-            if self._loaded_once and not force:
+            needs_github_upgrade = require_github_enrichment and not self._github_enriched
+            if self._registry_loaded and not needs_github_upgrade and not force:
                 return
             now = time.monotonic()
-            if not force and self._last_attempt > 0 and (now - self._last_attempt) < REFRESH_RETRY_COOLDOWN_SEC:
+            if (
+                not force
+                and not needs_github_upgrade
+                and self._last_attempt > 0
+                and (now - self._last_attempt) < REFRESH_RETRY_COOLDOWN_SEC
+            ):
                 return
             self._loading = True
             self._last_attempt = now
@@ -80,19 +107,36 @@ class PluginMarketplaceCatalog:
             except Exception as exc:
                 _log.debug("Registry search failed: %s", exc)
 
-            curated_resolved = _resolve_curated_from_github()
-            merged = _merge_entries(registry_entries, curated_resolved)
+            curated_entries = (
+                _resolve_curated_from_github()
+                if require_github_enrichment
+                else _build_curated_fallback()
+            )
+            merged = _merge_entries(registry_entries, curated_entries)
+            if registry_ok:
+                _log.info(
+                    "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
+                    len(registry_entries),
+                    len(merged),
+                )
+            else:
+                _log.info(
+                    "Plugin marketplace registry unavailable, using fallback catalog: %d fallback entries, %d total catalog entries",
+                    len(curated_entries),
+                    len(merged),
+                )
             with self._lock:
                 self._entries = merged
                 self._loading = False
-                self._loaded_once = registry_ok
+                self._registry_loaded = registry_ok
+                self._github_enriched = self._github_enriched or require_github_enrichment
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def snapshot(self) -> Tuple[List[MarketplacePluginEntry], bool]:
-        """Return (entries, is_loading)."""
+    def snapshot(self) -> Tuple[List[MarketplacePluginEntry], bool, bool]:
+        """Return (entries, is_loading, registry_loaded)."""
         with self._lock:
-            return list(self._entries), self._loading
+            return list(self._entries), self._loading, self._registry_loaded
 
 
 def _entry_key(owner: str, repo: str) -> str:

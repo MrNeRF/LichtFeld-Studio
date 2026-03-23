@@ -1,0 +1,55 @@
+.sp-actions {
+    display: flex;
+    gap: 8dp;
+}
+
+.sp-actions .btn {
+    flex: 1;
+}
+
+.sp-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+}
+
+.sp-script {
+    border-width: 1dp;
+    padding: 8dp;
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+}
+
+.sp-script.disabled {
+    opacity: 0.72;
+}
+
+.sp-script-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8dp;
+}
+
+.sp-filename {
+    font-size: 11dp;
+}
+
+.sp-reload-btn {
+    min-width: 70dp;
+}
+
+.sp-path {
+    display: block;
+    font-size: 10dp;
+}
+
+.sp-meta-label {
+    font-weight: bold;
+}
+
+.sp-error {
+    display: block;
+    font-size: 10dp;
+}

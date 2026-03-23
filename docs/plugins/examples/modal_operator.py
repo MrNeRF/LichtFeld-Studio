@@ -5,7 +5,7 @@ and draws a selection rectangle on the viewport.
 """
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel, Operator, Event
+from lfs_plugins.types import Operator, Event
 from lfs_plugins.props import FloatProperty
 
 
@@ -108,22 +108,22 @@ class PointInfoOperator(Operator):
         return {"RUNNING_MODAL"}
 
 
-class ModalDemoPanel(Panel):
+class ModalDemoPanel(lf.ui.Panel):
     label = "Modal Tools"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 160
 
-    def draw(self, layout):
-        layout.heading("Modal Operators")
+    def draw(self, ui):
+        ui.heading("Modal Operators")
 
         if RectSelectOperator.poll(None):
-            if layout.button("Rectangle Select", (-1, 0)):
+            if ui.button("Rectangle Select", (-1, 0)):
                 lf.ui.ops.invoke(RectSelectOperator._class_id())
 
-            if layout.button("Point Info", (-1, 0)):
+            if ui.button("Point Info", (-1, 0)):
                 lf.ui.ops.invoke(PointInfoOperator._class_id())
         else:
-            layout.text_disabled("Load a scene to use these tools")
+            ui.text_disabled("Load a scene to use these tools")
 
 
 _classes = [RectSelectOperator, PointInfoOperator, ModalDemoPanel]

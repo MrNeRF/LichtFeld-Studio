@@ -6,20 +6,36 @@ import builtins
 import importlib.machinery
 import importlib.util
 import logging
+import shutil
 import sys
-import tarfile
-import tempfile
 import threading
 import time
 import traceback
 import types
-import urllib.request
+import uuid
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from .capabilities import CapabilityRegistry
+from .compat import (
+    LICHTFELD_VERSION,
+    PLUGIN_API_VERSION,
+    SUPPORTED_PLUGIN_FEATURES,
+    compatibility_errors,
+    validate_manifest_compatibility_fields,
+)
 from .errors import PluginError, PluginVersionError
-from .installer import PluginInstaller, clone_from_url, uninstall_plugin, update_plugin
+from .installer import (
+    PluginInstaller,
+    PluginSourceInfo,
+    clone_from_url,
+    prepare_archive_from_download_url,
+    prepare_github_archive,
+    read_plugin_source_metadata,
+    uninstall_plugin,
+    update_plugin,
+    write_plugin_source_metadata,
+)
 from .plugin import PluginInfo, PluginInstance, PluginState
 from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
 from .watcher import PluginWatcher
@@ -54,7 +70,6 @@ try:
 except Exception:
     pass
 
-LICHTFELD_VERSION = "1.0.0"
 MODULE_PREFIX = "lfs_plugins"
 
 
@@ -92,6 +107,106 @@ class PluginManager:
             self._registry = RegistryClient()
         return self._registry
 
+    @staticmethod
+    def _normalize_install_transport(transport: str) -> str:
+        value = str(transport or "archive").strip().lower()
+        if value in {"", "auto"}:
+            return "archive"
+        if value not in {"archive", "git"}:
+            raise PluginError(f"Unsupported plugin install transport: {transport}")
+        return value
+
+    @staticmethod
+    def _safe_write_source_metadata(plugin_dir: Path, source_info: PluginSourceInfo) -> None:
+        try:
+            write_plugin_source_metadata(plugin_dir, source_info)
+        except Exception as exc:
+            _log.warning("Failed to write plugin source metadata for '%s': %s", plugin_dir, exc)
+
+    @staticmethod
+    def _source_info_for_git_url(
+        url: str,
+        *,
+        registry_id: str = "",
+        version: str = "",
+    ) -> PluginSourceInfo:
+        from .installer import parse_github_url
+
+        owner, repo, ref = parse_github_url(url)
+        return PluginSourceInfo(
+            transport="git",
+            origin=url.strip(),
+            github_url=f"https://github.com/{owner}/{repo}",
+            owner=owner,
+            repo=repo,
+            requested_ref=ref or "",
+            resolved_ref=ref or "",
+            registry_id=registry_id,
+            version=version,
+            git_remote=f"https://github.com/{owner}/{repo}.git",
+        )
+
+    def _finalize_new_plugin_install(
+        self,
+        staging_dir: Path,
+        source_info: PluginSourceInfo,
+        on_progress: Optional[Callable[[str], None]],
+        auto_load: bool,
+    ) -> str:
+        try:
+            info = self._parse_manifest(staging_dir)
+            target_dir = self._plugins_dir / info.name
+            if target_dir.exists() and target_dir != staging_dir:
+                raise PluginError(f"Plugin directory already exists: {target_dir}")
+            if staging_dir != target_dir:
+                staging_dir.replace(target_dir)
+            self._safe_write_source_metadata(target_dir, source_info)
+            if auto_load:
+                self.load(info.name, on_progress)
+            return info.name
+        except Exception:
+            if staging_dir.exists() and staging_dir.parent == self._plugins_dir and staging_dir.name.startswith("."):
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
+
+    def _replace_plugin_install(
+        self,
+        plugin_dir: Path,
+        staging_dir: Path,
+        source_info: PluginSourceInfo,
+    ) -> str:
+        current_info = self._parse_manifest(plugin_dir)
+        new_info = self._parse_manifest(staging_dir)
+        if new_info.name != current_info.name:
+            raise PluginError(
+                f"Updated plugin manifest changed project.name from '{current_info.name}' to '{new_info.name}'"
+            )
+
+        backup_dir = self._plugins_dir / f".{plugin_dir.name}.backup-{uuid.uuid4().hex[:8]}"
+        try:
+            plugin_dir.replace(backup_dir)
+            staging_dir.replace(plugin_dir)
+
+            old_venv = backup_dir / ".venv"
+            new_venv = plugin_dir / ".venv"
+            if old_venv.exists() and not new_venv.exists():
+                try:
+                    old_venv.replace(new_venv)
+                except Exception as exc:
+                    _log.warning("Failed to preserve plugin venv during update for '%s': %s", current_info.name, exc)
+
+            self._safe_write_source_metadata(plugin_dir, source_info)
+            return current_info.name
+        except Exception:
+            if not plugin_dir.exists() and backup_dir.exists():
+                backup_dir.replace(plugin_dir)
+            raise
+        finally:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir, ignore_errors=True)
+
     def get_active_plugins_snapshot(self) -> List[tuple]:
         """Return thread-safe snapshot of active plugins."""
         with self._plugins_lock:
@@ -109,7 +224,7 @@ class PluginManager:
                 try:
                     plugins.append(self._parse_manifest(entry))
                 except Exception as e:
-                    _log.warning("Skipping invalid plugin '%s': %s", entry.name, e)
+                    _log.warning("Skipping plugin '%s': invalid manifest. %s", entry.name, e)
         return plugins
 
     def pre_register(self, discovered: List[PluginInfo]) -> None:
@@ -136,6 +251,9 @@ class PluginManager:
 
         if "hot_reload" not in lf:
             raise ValueError("Missing tool.lichtfeld.hot_reload")
+        compatibility_errors_in_manifest = validate_manifest_compatibility_fields(lf)
+        if compatibility_errors_in_manifest:
+            raise ValueError(compatibility_errors_in_manifest[0].removeprefix("pyproject.toml: "))
 
         authors = project.get("authors", [])
         author = authors[0].get("name", "") if authors else lf.get("author", "")
@@ -150,7 +268,9 @@ class PluginManager:
             dependencies=project.get("dependencies", []),
             auto_start=lf.get("auto_start", False),
             hot_reload=lf["hot_reload"],
-            min_lichtfeld_version=lf.get("min_lichtfeld_version", ""),
+            plugin_api=lf["plugin_api"].strip(),
+            lichtfeld_version=lf["lichtfeld_version"].strip(),
+            required_features=list(lf["required_features"]),
         )
 
     def load(self, name: str, on_progress: Optional[Callable] = None) -> bool:
@@ -216,13 +336,17 @@ class PluginManager:
             return False
 
     def _check_version_compatibility(self, plugin: PluginInstance, name: str):
-        """Raise PluginVersionError if plugin requires newer LichtFeld."""
-        if not plugin.info.min_lichtfeld_version or Version is None:
-            return
-        required = Version(plugin.info.min_lichtfeld_version)
-        current = Version(LICHTFELD_VERSION)
-        if current < required:
-            raise PluginVersionError(f"Plugin '{name}' requires LichtFeld >= {required}, but you have {current}")
+        """Raise PluginVersionError if plugin compatibility contract is not satisfied."""
+        issues = compatibility_errors(
+            plugin.info.plugin_api,
+            plugin.info.lichtfeld_version,
+            plugin.info.required_features,
+            current_plugin_api=PLUGIN_API_VERSION,
+            current_lichtfeld_version=LICHTFELD_VERSION,
+            supported_features=SUPPORTED_PLUGIN_FEATURES,
+        )
+        if issues:
+            raise PluginVersionError(f"Plugin '{name}' {'; '.join(issues)}")
 
     _SLOW_IMPORT_THRESHOLD_MS = 100
     _SLOW_TOTAL_THRESHOLD_MS = 500
@@ -354,6 +478,12 @@ class PluginManager:
             except Exception:
                 _log.exception("Failed to cleanup signal subscriptions for '%s'", name)
 
+            try:
+                import lichtfeld as lf
+                lf.ui.unregister_panels_for_module(f"{MODULE_PREFIX}.{plugin.info.name}")
+            except Exception:
+                pass
+
             module_prefix = f"{MODULE_PREFIX}.{plugin.info.name}"
             to_remove = [m for m in sys.modules if m == module_prefix or m.startswith(f"{module_prefix}.")]
             for m in to_remove:
@@ -412,6 +542,12 @@ class PluginManager:
                 SubscriptionRegistry.instance().unsubscribe_all(name)
             except Exception:
                 _log.exception("Failed to cleanup signal subscriptions for '%s'", name)
+
+            try:
+                import lichtfeld as lf
+                lf.ui.unregister_panels_for_module(f"{MODULE_PREFIX}.{plugin.info.name}")
+            except Exception:
+                pass
 
             module_prefix = f"{MODULE_PREFIX}.{plugin.info.name}"
             to_remove = [m for m in sys.modules if m == module_prefix or m.startswith(f"{module_prefix}.")]
@@ -514,16 +650,29 @@ class PluginManager:
     def on_plugin_unloaded(self, callback: Callable):
         self._on_plugin_unloaded.append(callback)
 
-    def install(self, url: str, on_progress: Optional[Callable[[str], None]] = None, auto_load: bool = True) -> str:
-        """Install a plugin from GitHub URL."""
-        plugin_dir = clone_from_url(url, self._plugins_dir, on_progress)
-        info = self._parse_manifest(plugin_dir)
-        if auto_load:
-            self.load(info.name, on_progress)
-        return info.name
+    def install(
+        self,
+        url: str,
+        on_progress: Optional[Callable[[str], None]] = None,
+        auto_load: bool = True,
+        transport: str = "archive",
+        source_info: Optional[PluginSourceInfo] = None,
+    ) -> str:
+        """Install a plugin from GitHub using the selected transport."""
+        mode = self._normalize_install_transport(transport)
+        if mode == "git":
+            plugin_dir = clone_from_url(url, self._plugins_dir, on_progress)
+            info = self._parse_manifest(plugin_dir)
+            self._safe_write_source_metadata(plugin_dir, source_info or self._source_info_for_git_url(url))
+            if auto_load:
+                self.load(info.name, on_progress)
+            return info.name
+
+        staging_dir, source_info = prepare_github_archive(url, self._plugins_dir, on_progress)
+        return self._finalize_new_plugin_install(staging_dir, source_info, on_progress, auto_load)
 
     def update(self, name: str, on_progress: Optional[Callable[[str], None]] = None) -> bool:
-        """Update a plugin by pulling latest from git."""
+        """Update a plugin according to its recorded install transport."""
         plugin = self._plugins.get(name)
         plugin_dir = plugin.info.path if plugin else self._find_plugin_dir(name)
 
@@ -531,7 +680,26 @@ class PluginManager:
         if was_loaded:
             self.unload(name)
 
-        update_plugin(plugin_dir, on_progress)
+        source_info = read_plugin_source_metadata(plugin_dir)
+        if source_info and source_info.transport == "archive":
+            if source_info.registry_id:
+                self._update_archive_plugin_from_registry(plugin_dir, source_info, on_progress)
+            else:
+                self._update_archive_plugin_from_github(plugin_dir, source_info, on_progress)
+        elif source_info and source_info.transport == "git":
+            update_plugin(plugin_dir, on_progress)
+        elif (plugin_dir / ".git").exists():
+            update_plugin(plugin_dir, on_progress)
+        else:
+            raise PluginError(
+                f"Plugin '{name}' was not installed from a known remote source and cannot be updated automatically"
+            )
+
+        refreshed_info = self._parse_manifest(plugin_dir)
+        if plugin:
+            plugin.info = refreshed_info
+            plugin.error = None
+            plugin.error_traceback = None
 
         if was_loaded:
             self.load(name, on_progress)
@@ -560,7 +728,13 @@ class PluginManager:
 
     def search(self, query: str, compatible_only: bool = True) -> List[RegistryPluginInfo]:
         """Search plugin registry."""
-        return self.registry.search(query, compatible_only, LICHTFELD_VERSION)
+        return self.registry.search(
+            query,
+            compatible_only,
+            LICHTFELD_VERSION,
+            plugin_api=PLUGIN_API_VERSION,
+            supported_features=SUPPORTED_PLUGIN_FEATURES,
+        )
 
     def install_from_registry(
         self,
@@ -568,86 +742,189 @@ class PluginManager:
         version: Optional[str] = None,
         on_progress: Optional[Callable[[str], None]] = None,
         auto_load: bool = True,
+        transport: str = "archive",
     ) -> str:
         """Install plugin from registry."""
-        version_info = self.registry.resolve_version(plugin_id, version, LICHTFELD_VERSION)
+        mode = self._normalize_install_transport(transport)
+        version_info = self.registry.resolve_version(
+            plugin_id,
+            version,
+            LICHTFELD_VERSION,
+            plugin_api=PLUGIN_API_VERSION,
+            supported_features=SUPPORTED_PLUGIN_FEATURES,
+        )
+        plugin_data = self.registry.get_plugin(plugin_id)
+        repo_url = plugin_data.get("repository", "")
 
-        if version_info.git_ref:
-            plugin_data = self.registry.get_plugin(plugin_id)
-            repo_url = plugin_data.get("repository", "")
-            if repo_url:
-                return self.install(f"{repo_url}@{version_info.git_ref}", on_progress, auto_load)
+        if mode == "git":
+            if version_info.git_ref and repo_url:
+                install_url = f"{repo_url}@{version_info.git_ref}"
+                source_info = self._source_info_for_git_url(
+                    install_url,
+                    registry_id=plugin_id,
+                    version=version_info.version,
+                )
+                return self.install(
+                    install_url,
+                    on_progress,
+                    auto_load,
+                    transport="git",
+                    source_info=source_info,
+                )
+            raise PluginError(f"No git install method available for {plugin_id}")
 
         if version_info.download_url:
-            return self._install_from_tarball(plugin_id, version_info, on_progress, auto_load)
+            source_info = PluginSourceInfo(
+                transport="archive",
+                origin=repo_url or version_info.download_url,
+                registry_id=plugin_id,
+                version=version_info.version,
+                archive_url=version_info.download_url,
+                checksum=version_info.checksum,
+            )
+            staging_dir = prepare_archive_from_download_url(
+                version_info.download_url,
+                self._plugins_dir,
+                temp_prefix=f".{plugin_id.replace(':', '-')}-",
+                on_progress=on_progress,
+                archive_validator=(
+                    (lambda path: self._verify_registry_archive_checksum(path, version_info, plugin_id))
+                    if version_info.checksum
+                    else None
+                ),
+            )
+            return self._finalize_new_plugin_install(staging_dir, source_info, on_progress, auto_load)
+
+        if repo_url:
+            install_url = f"{repo_url}@{version_info.git_ref}" if version_info.git_ref else repo_url
+            staging_dir, source_info = prepare_github_archive(install_url, self._plugins_dir, on_progress)
+            source_info = PluginSourceInfo(
+                transport=source_info.transport,
+                origin=source_info.origin,
+                github_url=source_info.github_url,
+                owner=source_info.owner,
+                repo=source_info.repo,
+                requested_ref=source_info.requested_ref,
+                resolved_ref=source_info.resolved_ref,
+                registry_id=plugin_id,
+                version=version_info.version,
+                archive_url=source_info.archive_url,
+                checksum=version_info.checksum,
+            )
+            return self._finalize_new_plugin_install(staging_dir, source_info, on_progress, auto_load)
 
         raise PluginError(f"No download method available for {plugin_id}")
 
-    def _install_from_tarball(
+    def _verify_registry_archive_checksum(
         self,
-        plugin_id: str,
+        archive_path: Path,
         version_info: RegistryVersionInfo,
-        on_progress: Optional[Callable[[str], None]],
-        auto_load: bool,
-    ) -> str:
-        """Install plugin from tarball URL."""
-        _, name = self.registry._parse_id(plugin_id)
+        plugin_id: str,
+    ) -> None:
+        if version_info.checksum and not self.registry.verify_checksum(archive_path, version_info.checksum):
+            raise PluginError(f"Checksum verification failed for {plugin_id}")
 
-        if on_progress:
-            on_progress(f"Downloading {name}...")
+    def _update_archive_plugin_from_registry(
+        self,
+        plugin_dir: Path,
+        source_info: PluginSourceInfo,
+        on_progress: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        plugin_id = source_info.registry_id
+        if not plugin_id:
+            raise PluginError(f"Missing registry id for archive-installed plugin: {plugin_dir.name}")
 
-        req = urllib.request.Request(version_info.download_url, headers={"User-Agent": "LichtFeld-PluginManager/1.0"})
+        version_info = self.registry.resolve_version(
+            plugin_id,
+            None,
+            LICHTFELD_VERSION,
+            plugin_api=PLUGIN_API_VERSION,
+            supported_features=SUPPORTED_PLUGIN_FEATURES,
+        )
+        plugin_data = self.registry.get_plugin(plugin_id)
+        repo_url = plugin_data.get("repository", "")
 
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-                tmp.write(resp.read())
-                tmp_path = Path(tmp.name)
+        if version_info.download_url:
+            new_source_info = PluginSourceInfo(
+                transport="archive",
+                origin=repo_url or version_info.download_url,
+                registry_id=plugin_id,
+                version=version_info.version,
+                archive_url=version_info.download_url,
+                checksum=version_info.checksum,
+            )
+            staging_dir = prepare_archive_from_download_url(
+                version_info.download_url,
+                self._plugins_dir,
+                temp_prefix=f".{plugin_dir.name}-",
+                on_progress=on_progress,
+                archive_validator=(
+                    (lambda path: self._verify_registry_archive_checksum(path, version_info, plugin_id))
+                    if version_info.checksum
+                    else None
+                ),
+            )
+            self._replace_plugin_install(plugin_dir, staging_dir, new_source_info)
+            return
 
-        try:
-            if version_info.checksum and not self.registry.verify_checksum(tmp_path, version_info.checksum):
-                raise PluginError(f"Checksum verification failed for {name}")
+        if repo_url:
+            install_url = f"{repo_url}@{version_info.git_ref}" if version_info.git_ref else repo_url
+            staging_dir, github_source_info = prepare_github_archive(install_url, self._plugins_dir, on_progress)
+            new_source_info = PluginSourceInfo(
+                transport="archive",
+                origin=github_source_info.origin,
+                github_url=github_source_info.github_url,
+                owner=github_source_info.owner,
+                repo=github_source_info.repo,
+                requested_ref=github_source_info.requested_ref,
+                resolved_ref=github_source_info.resolved_ref,
+                registry_id=plugin_id,
+                version=version_info.version,
+                archive_url=github_source_info.archive_url,
+                checksum=version_info.checksum,
+            )
+            self._replace_plugin_install(plugin_dir, staging_dir, new_source_info)
+            return
 
-            target_dir = self._plugins_dir / name
-            if target_dir.exists():
-                raise PluginError(f"Plugin directory already exists: {target_dir}")
+        raise PluginError(f"No archive update method available for {plugin_id}")
 
-            if on_progress:
-                on_progress(f"Extracting {name}...")
-
-            self._extract_tarball(tmp_path, target_dir)
-
-            info = self._parse_manifest(target_dir)
-            if auto_load:
-                self.load(info.name, on_progress)
-
-            return info.name
-
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-    def _extract_tarball(self, src: Path, dest: Path):
-        """Extract tarball, stripping top-level directory if present."""
-        with tarfile.open(src, "r:gz") as tar:
-            members = tar.getmembers()
-            if not members:
-                return
-
-            # Check if all files are under a common prefix
-            first_part = members[0].name.split("/")[0] if "/" in members[0].name else None
-            strip_prefix = first_part and all(m.name.startswith(f"{first_part}/") for m in members if m.name)
-
-            for member in members:
-                if strip_prefix and member.name.startswith(f"{first_part}/"):
-                    member.name = member.name[len(first_part) + 1 :]
-                if member.name:
-                    tar.extract(member, dest)
+    def _update_archive_plugin_from_github(
+        self,
+        plugin_dir: Path,
+        source_info: PluginSourceInfo,
+        on_progress: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        origin = source_info.origin or source_info.github_url
+        if not origin:
+            raise PluginError(f"Missing GitHub source for archive-installed plugin: {plugin_dir.name}")
+        install_url = origin
+        if source_info.requested_ref and "@" not in install_url and "/tree/" not in install_url:
+            install_url = f"{install_url}@{source_info.requested_ref}"
+        staging_dir, new_source_info = prepare_github_archive(install_url, self._plugins_dir, on_progress)
+        merged_source_info = PluginSourceInfo(
+            transport="archive",
+            origin=new_source_info.origin,
+            github_url=new_source_info.github_url,
+            owner=new_source_info.owner,
+            repo=new_source_info.repo,
+            requested_ref=new_source_info.requested_ref,
+            resolved_ref=new_source_info.resolved_ref,
+            registry_id=source_info.registry_id,
+            version=source_info.version,
+            archive_url=new_source_info.archive_url,
+            checksum=source_info.checksum,
+        )
+        self._replace_plugin_install(plugin_dir, staging_dir, merged_source_info)
 
     def check_updates(self) -> Dict[str, tuple]:
         """Check for available updates. Returns {name: (current, available)}."""
         updates = {}
         for info in self.discover():
             try:
-                registry_info = self.registry.get_plugin(info.name)
+                registry_plugin_id = self._resolve_registry_plugin_id(info.name)
+                if not registry_plugin_id:
+                    continue
+                registry_info = self.registry.get_plugin(registry_plugin_id)
                 latest = registry_info.get("latest_version", "0.0.0")
                 if Version is not None and Version(latest) > Version(info.version):
                     updates[info.name] = (info.version, latest)
@@ -656,3 +933,9 @@ class PluginManager:
             except Exception:
                 pass
         return updates
+
+    def _resolve_registry_plugin_id(self, plugin_name: str) -> Optional[str]:
+        matches = [entry for entry in self.search(plugin_name, compatible_only=False) if entry.name == plugin_name]
+        if len(matches) == 1:
+            return matches[0].full_id
+        return None

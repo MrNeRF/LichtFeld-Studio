@@ -42,6 +42,7 @@ target_link_libraries(lfs_rendering
         lfs_geometry            # LibTorch-free geometry module
         # gs_kernels              # Temporarily disabled - requires LibTorch
         PRIVATE
+        lfs_io
         lfs_rasterizer
         glm::glm
         glad::glad
@@ -94,5 +95,6 @@ target_compile_definitions(lfs_rendering PRIVATE
 
 if(NOT BUILD_PORTABLE)
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/rendering.hpp
+                  ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/frame_contract.hpp
             DESTINATION include/rendering)
 endif()

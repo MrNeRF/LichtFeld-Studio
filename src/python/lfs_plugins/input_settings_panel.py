@@ -6,19 +6,16 @@ import lichtfeld as lf
 from .types import Panel
 
 
-def tr(key):
-    result = lf.ui.tr(key)
-    return result if result else key
-
-
 class InputSettingsPanel(Panel):
-    """Input Settings panel - floating window for configuring keybindings."""
-
-    idname = "lfs.input_settings"
+    id = "lfs.input_settings"
     label = "Input Settings"
-    space = "FLOATING"
+    space = lf.ui.PanelSpace.FLOATING
     order = 100
-    options = {"DEFAULT_CLOSED"}
+    template = "rmlui/input_settings.rml"
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+    size = (500, 0)
+    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
+    update_interval_ms = 50
 
     TOOL_MODES = [
         lf.keymap.ToolMode.GLOBAL,
@@ -64,6 +61,9 @@ class InputSettingsPanel(Panel):
         ],
         "depth": [
             lf.keymap.Action.TOGGLE_DEPTH_MODE,
+            lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER,
+            lf.keymap.Action.TOGGLE_SELECTION_CROP_FILTER,
+            lf.keymap.Action.DEPTH_ADJUST_NEAR,
             lf.keymap.Action.DEPTH_ADJUST_FAR,
             lf.keymap.Action.DEPTH_ADJUST_SIDE,
         ],
@@ -91,205 +91,352 @@ class InputSettingsPanel(Panel):
     }
 
     def __init__(self):
-        self._selected_mode = lf.keymap.ToolMode.GLOBAL
+        self._selected_mode_idx = 0
         self._rebinding_action = None
         self._rebinding_mode = None
+        self._handle = None
+        self._last_profiles = []
+        self._last_state_key = None
+        self._last_lang = ""
+        self._last_current_profile = ""
+        self._last_display_h = 0
+        self._last_capturing = None
 
-    def draw(self, layout):
-        layout.text_colored(tr("input_settings.title"), (0.4, 0.6, 1.0, 1.0))
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
+    # ── Data model ────────────────────────────────────────────
 
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("input_settings")
+        if model is None:
+            return
+
+        model.bind_func("panel_label", lambda: lf.ui.tr("input_settings.title"))
+        model.bind_func("bindings_hint", self._get_bindings_hint)
+        model.bind_func("is_capturing", lambda: lf.keymap.is_capturing())
+
+        model.bind(
+            "profile_idx",
+            lambda: str(self._get_profile_idx()),
+            self._set_profile_idx,
+        )
+        model.bind(
+            "mode_idx",
+            lambda: str(self._selected_mode_idx),
+            self._set_mode_idx,
+        )
+
+        model.bind_event("save_profile", self._on_save_profile)
+        model.bind_event("reset_default", self._on_reset_default)
+        model.bind_event("export_profile", self._on_export_profile)
+        model.bind_event("import_profile", self._on_import_profile)
+        model.bind_record_list("profiles")
+        model.bind_record_list("tool_modes")
+        model.bind_record_list("binding_rows")
+
+        self._handle = model.get_handle()
+
+    def _get_profile_idx(self):
         profiles = lf.keymap.get_available_profiles()
         current = lf.keymap.get_current_profile()
-        current_idx = profiles.index(current) if current in profiles else 0
-        is_rebinding = lf.keymap.is_capturing()
+        return profiles.index(current) if current in profiles else 0
 
-        if is_rebinding:
-            layout.begin_disabled()
+    def _set_profile_idx(self, v):
+        try:
+            idx = int(v)
+        except (ValueError, TypeError):
+            return
+        profiles = lf.keymap.get_available_profiles()
+        if 0 <= idx < len(profiles):
+            lf.keymap.load_profile(profiles[idx])
+            self._last_state_key = None
 
-        layout.label(tr("input_settings.active_profile"))
-        layout.same_line()
-        changed, new_idx = layout.combo("##profile", current_idx, profiles)
-        if changed and new_idx != current_idx:
-            lf.keymap.load_profile(profiles[new_idx])
+    def _set_mode_idx(self, v):
+        try:
+            idx = int(v)
+        except (ValueError, TypeError):
+            return
+        if 0 <= idx < len(self.TOOL_MODES) and idx != self._selected_mode_idx:
+            self._selected_mode_idx = idx
+            self._last_state_key = None
 
-        if is_rebinding:
-            layout.end_disabled()
+    # ── Events ────────────────────────────────────────────────
 
-        layout.spacing()
-        layout.spacing()
+    def _on_save_profile(self, _handle, _ev, _args):
+        lf.keymap.save_profile(lf.keymap.get_current_profile())
 
-        layout.text_colored(tr("input_settings.tool_mode"), (0.6, 0.6, 0.6, 1.0))
-        layout.text_disabled(tr("input_settings.select_tool_mode"))
-        layout.spacing()
+    def _on_reset_default(self, _handle, _ev, _args):
+        lf.keymap.reset_to_default()
+        self._last_state_key = None
 
-        mode_names = [lf.keymap.get_tool_mode_name(m) for m in self.TOOL_MODES]
-        current_mode_idx = self.TOOL_MODES.index(self._selected_mode) if self._selected_mode in self.TOOL_MODES else 0
+    def _on_export_profile(self, _handle, _ev, _args):
+        tr = lf.ui.tr
+        path = lf.ui.save_file_dialog(tr("input_settings.export_dialog_title"), "json")
+        if path:
+            lf.keymap.export_profile(path)
 
-        if is_rebinding:
-            layout.begin_disabled()
+    def _on_import_profile(self, _handle, _ev, _args):
+        tr = lf.ui.tr
+        path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
+        if path:
+            lf.keymap.import_profile(path)
+            self._last_state_key = None
 
-        changed, new_mode_idx = layout.combo("##toolmode", current_mode_idx, mode_names)
-        if changed and new_mode_idx != current_mode_idx:
-            self._selected_mode = self.TOOL_MODES[new_mode_idx]
+    # ── Lifecycle ─────────────────────────────────────────────
 
-        if is_rebinding:
-            layout.end_disabled()
+    def on_mount(self, doc):
+        super().on_mount(doc)
+        self._last_lang = lf.ui.get_current_language()
+        self._last_current_profile = lf.keymap.get_current_profile()
 
-        layout.spacing()
-        layout.spacing()
+        self._rebuild_profile_records()
+        self._rebuild_mode_records()
+        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
 
-        layout.text_colored(tr("input_settings.current_bindings"), (0.6, 0.6, 0.6, 1.0))
-        if self._selected_mode == lf.keymap.ToolMode.GLOBAL:
-            layout.text_disabled(tr("input_settings.global_bindings_hint"))
-        else:
-            layout.text_disabled(tr("input_settings.tool_bindings_hint"))
-        layout.spacing()
+        table_el = doc.get_element_by_id("bindings-table")
+        if table_el:
+            table_el.add_event_listener("click", self._on_table_click)
 
-        mode = self._selected_mode
+    def on_update(self, doc):
+        self._update_max_height(doc)
 
-        if layout.begin_table("bindings_table", 3):
-            layout.table_setup_column(tr("input_settings.action"), 180)
-            layout.table_setup_column(tr("input_settings.binding"), -1)
-            layout.table_setup_column("", 70)
-            layout.table_headers_row()
+        current_lang = lf.ui.get_current_language()
+        profiles = lf.keymap.get_available_profiles()
+        if profiles != self._last_profiles:
+            self._last_profiles = list(profiles)
+            self._rebuild_profile_records()
+            self._dirty_model("profile_idx")
 
-            self._draw_section_header(layout, tr("input_settings.section.navigation"))
-            for action in self.BINDING_SECTIONS["navigation"]:
-                self._draw_binding_row(layout, action, mode)
+        is_capturing = lf.keymap.is_capturing()
+        mode = self.TOOL_MODES[self._selected_mode_idx]
 
-            if mode == lf.keymap.ToolMode.GLOBAL:
-                for action in self.BINDING_SECTIONS["navigation_global"]:
-                    self._draw_binding_row(layout, action, mode)
-
-            if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
-                self._draw_section_header(layout, tr("input_settings.section.selection"))
-                for action in self.BINDING_SECTIONS["selection"]:
-                    self._draw_binding_row(layout, action, mode)
-
-                if mode == lf.keymap.ToolMode.GLOBAL:
-                    for action in self.BINDING_SECTIONS["selection_global"]:
-                        self._draw_binding_row(layout, action, mode)
-
-                if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION):
-                    for action in self.BINDING_SECTIONS["depth"]:
-                        self._draw_binding_row(layout, action, mode)
-
-            if mode == lf.keymap.ToolMode.BRUSH:
-                self._draw_section_header(layout, tr("input_settings.section.brush"))
-                for action in self.BINDING_SECTIONS["brush"]:
-                    self._draw_binding_row(layout, action, mode)
-
-            if mode == lf.keymap.ToolMode.CROP_BOX:
-                self._draw_section_header(layout, tr("input_settings.section.crop_box"))
-                for action in self.BINDING_SECTIONS["crop_box"]:
-                    self._draw_binding_row(layout, action, mode)
-
-            self._draw_section_header(layout, tr("input_settings.section.editing"))
-            if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
-                        lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
-                self._draw_binding_row(layout, lf.keymap.Action.DELETE_NODE, mode)
-            else:
-                self._draw_binding_row(layout, lf.keymap.Action.DELETE_SELECTED, mode)
-
-            for action in self.BINDING_SECTIONS["editing"]:
-                self._draw_binding_row(layout, action, mode)
-
-            if mode == lf.keymap.ToolMode.GLOBAL:
-                self._draw_section_header(layout, tr("input_settings.section.view"))
-                for action in self.BINDING_SECTIONS["view_global"]:
-                    self._draw_binding_row(layout, action, mode)
-
-            layout.end_table()
-
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
-
-        layout.push_style_color("button", (0.2, 0.6, 0.2, 0.7))
-        if layout.button(tr("input_settings.save_current_profile")):
-            lf.keymap.save_profile(lf.keymap.get_current_profile())
-        layout.pop_style_color()
-
-        layout.same_line()
-
-        layout.push_style_color("button", (0.6, 0.2, 0.2, 0.7))
-        if layout.button(tr("input_settings.reset_to_default")):
-            lf.keymap.reset_to_default()
-        layout.pop_style_color()
-
-        layout.spacing()
-
-        layout.push_style_color("button", (0.3, 0.3, 0.5, 0.7))
-        if layout.button(tr("input_settings.export")):
-            path = lf.ui.save_file_dialog(tr("input_settings.export_dialog_title"), "json")
-            if path:
-                lf.keymap.export_profile(path)
-        layout.pop_style_color()
-
-        layout.same_line()
-
-        layout.push_style_color("button", (0.3, 0.3, 0.5, 0.7))
-        if layout.button(tr("input_settings.import")):
-            path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
-            if path:
-                lf.keymap.import_profile(path)
-        layout.pop_style_color()
-
-        layout.spacing()
-        layout.text_disabled(tr("input_settings.save_hint"))
-        layout.text_disabled(tr("input_settings.double_click_hint"))
-
-    def _draw_section_header(self, layout, title):
-        layout.table_next_row()
-        layout.table_next_column()
-        layout.table_set_bg_color(0, (0.2, 0.3, 0.5, 0.2))
-        layout.text_colored(title, (0.5, 0.7, 1.0, 1.0))
-        layout.table_next_column()
-        layout.table_next_column()
-
-    def _draw_binding_row(self, layout, action, mode):
-        is_rebinding = (lf.keymap.is_capturing() and
-                        self._rebinding_action == action and
-                        self._rebinding_mode == mode)
-
-        layout.table_next_row()
-        layout.table_next_column()
-        layout.label(lf.keymap.get_action_name(action))
-
-        layout.table_next_column()
-        if is_rebinding:
-            if lf.keymap.is_waiting_for_double_click():
-                layout.text_colored(tr("input_settings.click_again_double"), (1.0, 0.8, 0.3, 1.0))
-            else:
-                layout.text_colored(tr("input_settings.press_key_or_click"), (1.0, 0.8, 0.3, 1.0))
-        else:
-            desc = lf.keymap.get_trigger_description(action, mode)
-            layout.text_colored(desc, (0.4, 0.6, 1.0, 1.0))
-
-        layout.table_next_column()
-        unique_id = action.value * 100 + mode.value
-
-        if is_rebinding:
-            layout.push_style_color("button", (0.6, 0.2, 0.2, 0.8))
-            if layout.button(f"{tr('input_settings.cancel')}##{unique_id}"):
-                lf.keymap.cancel_capture()
-                self._rebinding_action = None
-                self._rebinding_mode = None
-            layout.pop_style_color()
-        else:
-            layout.push_style_color("button", (0.2, 0.4, 0.6, 0.8))
-            if layout.button(f"{tr('input_settings.rebind')}##{unique_id}"):
-                self._rebinding_action = action
-                self._rebinding_mode = mode
-                lf.keymap.start_capture(mode, action)
-            layout.pop_style_color()
-
-        if is_rebinding:
+        if is_capturing and self._rebinding_action is not None:
             trigger = lf.keymap.get_captured_trigger()
             if trigger is not None:
                 self._rebinding_action = None
                 self._rebinding_mode = None
 
+        current_profile = lf.keymap.get_current_profile()
+        state_key = (
+            self._selected_mode_idx,
+            self._rebinding_action,
+            is_capturing,
+            current_profile,
+            current_lang,
+        )
+        if state_key != self._last_state_key:
+            self._last_state_key = state_key
+            self._rebuild_binding_rows(mode)
+            self._dirty_model("bindings_hint")
+
+        if current_lang != self._last_lang:
+            self._last_lang = current_lang
+            self._rebuild_mode_records()
+            self._rebuild_profile_records()
+            self._dirty_model()
+
+        if current_profile != self._last_current_profile:
+            self._last_current_profile = current_profile
+            self._dirty_model("profile_idx")
+
+        if is_capturing != self._last_capturing:
+            self._last_capturing = is_capturing
+            self._dirty_model("is_capturing")
+
+    def _update_max_height(self, doc):
+        try:
+            _, display_h = lf.ui.get_display_size()
+        except (RuntimeError, AttributeError):
+            return
+        if display_h == self._last_display_h:
+            return
+        self._last_display_h = display_h
+        max_h = int(display_h * 2 / 3)
+        wrap = doc.get_element_by_id("content-wrap")
+        if wrap:
+            wrap.set_property("max-height", f"{max_h}dp")
+
+    # ── Retained model updates ────────────────────────────────
+
+    def _dirty_model(self, *fields):
+        if not self._handle:
+            return
+        if not fields:
+            self._handle.dirty_all()
+            return
+        for field in fields:
+            self._handle.dirty(field)
+
+    def _get_bindings_hint(self):
+        tr = lf.ui.tr
+        mode = self.TOOL_MODES[self._selected_mode_idx]
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            return tr("input_settings.global_bindings_hint")
+        return tr("input_settings.tool_bindings_hint")
+
+    def _rebuild_profile_records(self):
+        if not self._handle:
+            return
+        profiles = lf.keymap.get_available_profiles()
+        self._last_profiles = list(profiles)
+        self._handle.update_record_list(
+            "profiles",
+            [{"index": str(i), "label": name} for i, name in enumerate(profiles)],
+        )
+
+    def _rebuild_mode_records(self):
+        if not self._handle:
+            return
+        self._handle.update_record_list(
+            "tool_modes",
+            [
+                {"index": str(i), "label": lf.keymap.get_tool_mode_name(mode)}
+                for i, mode in enumerate(self.TOOL_MODES)
+            ],
+        )
+
+    def _append_binding_section(self, rows, title, actions, mode):
+        rows.append({
+            "is_section": True,
+            "section_title": title,
+        })
+        for action in actions:
+            rows.append(self._binding_row_record(action, mode))
+
+    def _rebuild_binding_rows(self, mode):
+        if not self._handle:
+            return
+
+        tr = lf.ui.tr
+        rows = []
+
+        self._append_binding_section(
+            rows, tr("input_settings.section.navigation"),
+            self.BINDING_SECTIONS["navigation"], mode)
+
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            for action in self.BINDING_SECTIONS["navigation_global"]:
+                rows.append(self._binding_row_record(action, mode))
+
+        if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
+            self._append_binding_section(
+                rows, tr("input_settings.section.selection"),
+                self.BINDING_SECTIONS["selection"], mode)
+
+            if mode == lf.keymap.ToolMode.GLOBAL:
+                for action in self.BINDING_SECTIONS["selection_global"]:
+                    rows.append(self._binding_row_record(action, mode))
+
+            if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION):
+                for action in self.BINDING_SECTIONS["depth"]:
+                    rows.append(self._binding_row_record(action, mode))
+
+        if mode == lf.keymap.ToolMode.BRUSH:
+            self._append_binding_section(
+                rows, tr("input_settings.section.brush"),
+                self.BINDING_SECTIONS["brush"], mode)
+
+        if mode == lf.keymap.ToolMode.CROP_BOX:
+            self._append_binding_section(
+                rows, tr("input_settings.section.crop_box"),
+                self.BINDING_SECTIONS["crop_box"], mode)
+
+        rows.append({
+            "is_section": True,
+            "section_title": tr("input_settings.section.editing"),
+        })
+        if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
+                    lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
+            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_NODE, mode))
+        else:
+            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_SELECTED, mode))
+
+        for action in self.BINDING_SECTIONS["editing"]:
+            rows.append(self._binding_row_record(action, mode))
+
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            self._append_binding_section(
+                rows, tr("input_settings.section.view"),
+                self.BINDING_SECTIONS["view_global"], mode)
+
+        self._handle.update_record_list("binding_rows", rows)
+
+    def _binding_row_record(self, action, mode):
+        tr = lf.ui.tr
+        is_rebinding = (lf.keymap.is_capturing() and
+                        self._rebinding_action == action and
+                        self._rebinding_mode == mode)
+
+        action_name = lf.keymap.get_action_name(action)
+        action_val = str(action.value)
+        mode_val = str(mode.value)
+
+        if is_rebinding:
+            if lf.keymap.is_waiting_for_double_click():
+                desc_text = tr("input_settings.click_again_double")
+            else:
+                desc_text = tr("input_settings.press_key_or_click")
+            desc_class = "is-binding-desc is-capturing"
+            button_action = "cancel"
+            button_label = tr("input_settings.cancel")
+            button_class = "btn--error"
+        else:
+            desc_text = lf.keymap.get_trigger_description(action, mode)
+            desc_class = "is-binding-desc"
+            button_action = "rebind"
+            button_label = tr("input_settings.rebind")
+            button_class = "btn--primary"
+
+        return {
+            "is_section": False,
+            "section_title": "",
+            "action_name": action_name,
+            "desc_text": desc_text,
+            "desc_class": desc_class,
+            "button_action": button_action,
+            "button_label": button_label,
+            "button_class": button_class,
+            "action_id": action_val,
+            "mode_id": mode_val,
+        }
+
+    # ── Event delegation ──────────────────────────────────────
+
+    def _on_table_click(self, ev):
+        target = ev.target()
+        if target is None:
+            return
+
+        btn_action, action_id, mode_id = self._find_btn_action(target)
+        if not btn_action:
+            return
+
+        try:
+            action = lf.keymap.Action(action_id)
+            mode = lf.keymap.ToolMode(mode_id)
+        except (ValueError, KeyError):
+            return
+
+        if btn_action == "rebind":
+            self._rebinding_action = action
+            self._rebinding_mode = mode
+            lf.keymap.start_capture(mode, action)
+            self._last_state_key = None
+        elif btn_action == "cancel":
+            lf.keymap.cancel_capture()
+            self._rebinding_action = None
+            self._rebinding_mode = None
+            self._last_state_key = None
+
+    def _find_btn_action(self, element):
+        while element is not None:
+            action = element.get_attribute("data-btn-action")
+            if action:
+                aid_str = element.get_attribute("data-action-id")
+                mid_str = element.get_attribute("data-mode-id")
+                if not aid_str or not mid_str:
+                    return None, None, None
+                try:
+                    return action, int(aid_str), int(mid_str)
+                except (ValueError, TypeError):
+                    return None, None, None
+            element = element.parent()
+        return None, None, None

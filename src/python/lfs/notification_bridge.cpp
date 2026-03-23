@@ -102,6 +102,23 @@ namespace lfs::python {
             // Note: Disk space error dialog is handled separately in gui_manager
         });
 
+        state::ExportFailed::when([](const auto& e) {
+            PyModalRegistry::instance().show_message(
+                "Export Failed", std::format("Failed to export:\n\n{}", e.error), MessageStyle::Error);
+        });
+
+        state::VideoExportFailed::when([](const auto& e) {
+            PyModalRegistry::instance().show_message(
+                "Video Export Failed", std::format("Failed to export video:\n\n{}", e.error),
+                MessageStyle::Error);
+        });
+
+        state::Mesh2SplatFailed::when([](const auto& e) {
+            PyModalRegistry::instance().show_message(
+                "Mesh to Splat Failed", std::format("Conversion failed:\n\n{}", e.error),
+                MessageStyle::Error);
+        });
+
         state::TrainingCompleted::when([](const auto& e) {
             if (e.user_stopped)
                 return;

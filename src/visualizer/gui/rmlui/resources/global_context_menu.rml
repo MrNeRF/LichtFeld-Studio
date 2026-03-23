@@ -1,0 +1,20 @@
+<rml>
+<head>
+  <link type="text/rcss" href="global_context_menu.rcss"/>
+</head>
+<body id="body" data-model="global_context_menu">
+  <div id="backdrop"></div>
+  <div id="ctx-menu" class="context-menu">
+    <div data-for="item : items">
+      <div class="context-menu-separator" data-if="item.separator_before"></div>
+      <div class="context-menu-label" data-if="item.is_label">{{ item.label }}</div>
+      <button type="button"
+              class="context-menu-item"
+              data-if="!item.is_label"
+              data-class-submenu-item="item.is_submenu_item"
+              data-class-active="item.is_active"
+              data-attr-data-ctx-action="item.action">{{ item.label }}</button>
+    </div>
+  </div>
+</body>
+</rml>

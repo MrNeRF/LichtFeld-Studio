@@ -16,8 +16,22 @@
 #include <expected>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace lfs::training {
+
+    inline constexpr std::string_view kCheckpointDirectoryName = "checkpoints";
+    inline constexpr std::string_view kCheckpointFilename = "checkpoint.resume";
+
+    [[nodiscard]] inline std::filesystem::path checkpoint_directory(
+        const std::filesystem::path& output_path) {
+        return output_path / kCheckpointDirectoryName;
+    }
+
+    [[nodiscard]] inline std::filesystem::path checkpoint_output_path(
+        const std::filesystem::path& output_path) {
+        return checkpoint_directory(output_path) / kCheckpointFilename;
+    }
 
     class IStrategy;
     class BilateralGrid;

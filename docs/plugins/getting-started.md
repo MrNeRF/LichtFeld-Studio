@@ -1,27 +1,70 @@
 # Plugin Developer Guide
 
-LichtFeld Studio plugins extend the application with custom panels, operators, toolbar tools, and more. Plugins are written in Python and live in `~/.lichtfeld/plugins/`.
+LichtFeld Studio plugins extend the application with panels, operators, tools, signals, and capabilities. Plugins live in `~/.lichtfeld/plugins/` and are just Python packages with a small manifest and entrypoint.
 
-## Quick Start
+## Learning path
+
+Read the examples in this order:
+
+| Step | Goal | Example |
+|---|---|---|
+| 1 | Pure immediate-mode panel with `draw(ui)` only | [`examples/01_draw_only.py`](examples/01_draw_only.py) |
+| 2 | Add shell, styling, and periodic updates without rewriting `draw(ui)` | [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py) |
+| 3 | Build a full hybrid panel with template, RCSS, data model, DOM hooks, and embedded `draw(ui)` | [`examples/03_hybrid_plugin/`](examples/03_hybrid_plugin/) |
+| 4 | Explore focused feature demos | [`examples/README.md`](examples/README.md) |
+| 5 | See an end-to-end multi-file plugin | [`examples/full_plugin/`](examples/full_plugin/) |
+
+The key idea is that `lf.ui.Panel` is one public base class that scales from the smallest `draw(ui)` panel to full retained/hybrid UI. You do not need to switch APIs or rewrite the panel body when you add advanced features.
+
+## Quick start
 
 ### Plugin directory structure
 
-```
+```text
 ~/.lichtfeld/plugins/my_plugin/
 ├── pyproject.toml       # Plugin manifest (required)
 ├── __init__.py          # Entry point with on_load/on_unload (required)
 ├── panels/
 │   ├── __init__.py
-│   └── main_panel.py
-├── operators/
+│   ├── main_panel.py
+│   ├── main_panel.rml   # Scaffolded for v1; optional to customize
+│   └── main_panel.rcss  # Scaffolded sibling stylesheet
+├── operators/           # Optional
 │   └── my_operator.py
-└── icons/               # Custom icons (PNG)
+└── icons/               # Optional PNG icons for custom tools
     └── my_icon.png
 ```
 
-### pyproject.toml manifest
+### Scaffold with CLI or Python
 
-Every plugin requires a `pyproject.toml` with `[tool.lichtfeld]` at its root:
+Create a plugin from the command line when you also want a venv and editor config:
+
+```bash
+LichtFeld-Studio plugin create my_plugin
+LichtFeld-Studio plugin check my_plugin
+LichtFeld-Studio plugin list
+```
+
+Create a plugin from Python when you only want the source package:
+
+```python
+import lichtfeld as lf
+
+path = lf.plugins.create("my_plugin")
+print(path)
+```
+
+Important scaffold behavior:
+
+- `lf.plugins.create()` writes `pyproject.toml`, `__init__.py`, `panels/__init__.py`, `panels/main_panel.py`, `panels/main_panel.rml`, and `panels/main_panel.rcss`.
+- `LichtFeld-Studio plugin create` writes the same source files and also adds `.venv/`, `.vscode/`, and `pyrightconfig.json`.
+- The scaffold is hybrid-ready, but you can ignore the retained files until you actually need custom DOM or standalone RCSS.
+
+That is intentional. Most plugins should still start by editing `draw(ui)` in `main_panel.py`; v1 just removes the later migration work when you decide to add a custom template.
+
+### `pyproject.toml`
+
+Every plugin needs `[project]` metadata and a `[tool.lichtfeld]` section:
 
 ```toml
 [project]
@@ -33,22 +76,36 @@ dependencies = []
 
 [tool.lichtfeld]
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 ```
 
-### Entry point
+Notes:
 
-`__init__.py` must define `on_load()` and `on_unload()`:
+- `name`, `version`, and `description` are required.
+- `hot_reload` is required.
+- `plugin_api`, `lichtfeld_version`, and `required_features` are required in v1.
+- Legacy `min_lichtfeld_version` / `max_lichtfeld_version` fields are removed and rejected.
+- Plugin-local Python dependencies go in `project.dependencies`.
+- Inspect the current host contract from Python with `lf.PLUGIN_API_VERSION`, `lf.plugins.API_VERSION`, and `lf.plugins.FEATURES`.
+
+### `__init__.py`
+
+Your entrypoint must define `on_load()` and `on_unload()`:
 
 ```python
 import lichtfeld as lf
-from .panels.main_panel import HelloPanel
+from .panels.main_panel import MainPanel
 
-_classes = [HelloPanel]
+_classes = [MainPanel]
+
 
 def on_load():
     for cls in _classes:
         lf.register_class(cls)
     lf.log.info("my_plugin loaded")
+
 
 def on_unload():
     for cls in reversed(_classes):
@@ -56,293 +113,379 @@ def on_unload():
     lf.log.info("my_plugin unloaded")
 ```
 
-### Minimal "Hello World" plugin
-
-**pyproject.toml**:
-```toml
-[project]
-name = "hello_world"
-version = "0.1.0"
-description = "Hello World example"
-dependencies = []
-
-[tool.lichtfeld]
-hot_reload = true
-```
-
-**__init__.py**:
-```python
-import lichtfeld as lf
-from lfs_plugins.types import Panel
-
-class HelloPanel(Panel):
-    label = "Hello World"
-    space = "MAIN_PANEL_TAB"
-    order = 200
-
-    def draw(self, layout):
-        layout.label("Hello from my plugin!")
-
-_classes = [HelloPanel]
-
-def on_load():
-    for cls in _classes:
-        lf.register_class(cls)
-
-def on_unload():
-    for cls in reversed(_classes):
-        lf.unregister_class(cls)
-```
-
----
-
 ## Panels
 
-Panels are UI elements that draw into designated spaces using the layout API.
+Panels are the main UI surface for most plugins. The same `lf.ui.Panel` class supports both immediate-mode and retained/hybrid UI.
 
-### Panel base class
+### Step 1: start with `draw(ui)`
+
+This is the smallest useful panel:
 
 ```python
-from lfs_plugins.types import Panel
+import lichtfeld as lf
 
-class MyPanel(Panel):
-    idname = "my_plugin.panel"  # Unique ID (default: module.qualname)
-    label = "My Panel"          # Display name
-    space = "MAIN_PANEL_TAB"        # Where it appears
-    order = 100                 # Sort order (lower = higher)
-    options = set()             # e.g. {"DEFAULT_CLOSED", "HIDE_HEADER"}
-    poll_deps = set()           # e.g. {"SCENE", "SELECTION", "TRAINING"}
+
+class HelloPanel(lf.ui.Panel):
+    id = "hello_world.main_panel"
+    label = "Hello World"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+    order = 200
+
+    def __init__(self):
+        self._clicks = 0
+
+    def draw(self, ui):
+        ui.heading("Hello from my plugin")
+        ui.text_disabled("This panel uses only draw(ui).")
+
+        if ui.button_styled(f"Greet ({self._clicks})", "primary"):
+            self._clicks += 1
+            lf.log.info("Hello, LichtFeld!")
+```
+
+That alone is enough to ship a plugin panel. Keep state on `self`, render with `draw(ui)`, and register the class in `on_load()`.
+
+See the full version in [`examples/01_draw_only.py`](examples/01_draw_only.py).
+
+### Panel attributes
+
+```python
+import lichtfeld as lf
+
+
+class MyPanel(lf.ui.Panel):
+    id = "my_plugin.panel"
+    label = "My Panel"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+    parent = ""
+    order = 100
+    options = set()
+    poll_dependencies = {
+        lf.ui.PollDependency.SCENE,
+        lf.ui.PollDependency.SELECTION,
+        lf.ui.PollDependency.TRAINING,
+    }
+    size = None
+    template = ""
+    style = ""
+    height_mode = lf.ui.PanelHeightMode.FILL
+    update_interval_ms = 100
 
     @classmethod
     def poll(cls, context) -> bool:
-        """Return False to hide the panel."""
         return True
 
-    def draw(self, layout):
-        """Draw panel contents using the layout API."""
-        layout.label("Content here")
+    def draw(self, ui):
+        ui.label("Content here")
 ```
 
-| Attribute   | Type       | Default               | Description                                      |
-|-------------|------------|-----------------------|--------------------------------------------------|
-| `idname`    | `str`      | `module.qualname`     | Unique panel identifier. Used for enable/disable, replacement, and API lookups. |
-| `label`     | `str`      | `""`                  | Display name shown in the UI                     |
-| `space`     | `str`      | `"FLOATING"`          | Where the panel renders (see table below)        |
-| `parent`    | `str`      | `""`                  | Parent tab idname — embeds as collapsible section (overrides `space`) |
-| `order`     | `int`      | `100`                 | Sort order within its space (lower = higher)     |
-| `options`   | `Set[str]` | `set()`               | `"DEFAULT_CLOSED"` (start hidden), `"HIDE_HEADER"` (no collapsing header) |
-| `poll_deps` | `Set[str]` | `set()` (= poll always) | Declare which state changes trigger `poll()` re-evaluation: `"SCENE"`, `"SELECTION"`, `"TRAINING"`. Empty means poll on every frame. |
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `id` | `str` | `module.qualname` | Unique panel identifier. Used for replacement, visibility, and API lookups. |
+| `label` | `str` | `""` | Display name in the UI. Falls back to `id` when empty. |
+| `space` | `lf.ui.PanelSpace` | `lf.ui.PanelSpace.MAIN_PANEL_TAB` | Where the panel appears when `parent` is empty. |
+| `parent` | `str` | `""` | Parent panel id. When set, the panel embeds as a collapsible section and must not also override `space`. |
+| `order` | `int` | `100` | Sort order within its space. Lower values appear earlier. |
+| `options` | `set[lf.ui.PanelOption]` | `set()` | Panel options such as `lf.ui.PanelOption.DEFAULT_CLOSED` and `lf.ui.PanelOption.HIDE_HEADER`. |
+| `poll_dependencies` | `set[lf.ui.PollDependency]` | `{SCENE, SELECTION, TRAINING}` | Which app-state changes should re-run `poll()`. |
+| `size` | `tuple[float, float] \| None` | `None` | Initial width/height hint, mainly useful for floating panels. |
+| `template` | `str \| os.PathLike[str]` | `""` | Optional retained RML template. Use an absolute path for plugin-local files. |
+| `style` | `str` | `""` | Optional inline RCSS appended to the retained document. This is RCSS text, not a file path. |
+| `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels. |
+| `update_interval_ms` | `int` | `100` | Update cadence for retained/hybrid `on_update()` work. |
+
+The panel API is strict in v1: use the enum values above, not string literals.
+
+Panel definitions are validated eagerly. Invalid enum values, removed legacy fields, retained-only settings in `VIEWPORT_OVERLAY`, and conflicting fields such as `parent` plus explicit `space` raise `ValueError`, `TypeError`, or `AttributeError` during `lf.register_class()`.
+
+### Step 2: add shell and retained behavior without rewriting `draw(ui)`
+
+The unified API is designed for progressive disclosure. You can keep `draw(ui)` as your content source and opt into advanced features on the same class:
+
+```python
+import lichtfeld as lf
+
+
+class StatusBarPanel(lf.ui.Panel):
+    id = "my_plugin.status"
+    label = "Build Up 2"
+    space = lf.ui.PanelSpace.STATUS_BAR
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+    update_interval_ms = 120
+    style = """
+body.status-bar-panel { padding: 0 12dp; }
+#im-root .im-label { color: #f3c96d; font-weight: bold; }
+"""
+
+    def __init__(self):
+        self._progress = 0.2
+
+    def draw(self, ui):
+        ui.label("STATUS")
+        ui.progress_bar(self._progress, f"{int(self._progress * 100)}%")
+
+    def on_update(self, doc):
+        del doc
+        self._progress = (self._progress + 0.02) % 1.0
+        return True
+```
+
+What changes here:
+
+- `style` adds inline RCSS.
+- `height_mode` controls how the retained shell sizes itself.
+- `on_update()` adds periodic behavior.
+- `draw(ui)` still renders the actual content.
+
+This is the normal upgrade path. You do not need to rewrite the panel as full DOM/RML just because you added styling or retained hooks.
+
+See the full version in [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py).
+
+### Retained shells and template resolution
+
+When a panel uses retained features, LichtFeld chooses a shell automatically if `template` is empty:
+
+| Space | Default retained shell |
+|---|---|
+| `FLOATING` | `rmlui/floating_window.rml` |
+| `STATUS_BAR` | `rmlui/status_bar_panel.rml` |
+| Other retained panel spaces | `rmlui/docked_panel.rml` |
+
+Built-in aliases:
+
+- `builtin:docked-panel`
+- `builtin:floating-window`
+- `builtin:status-bar`
+
+For plugin-local templates, prefer absolute paths:
+
+```python
+from pathlib import Path
+
+template = str(Path(__file__).resolve().with_name("main_panel.rml"))
+```
+
+When a template file exists at `main_panel.rml`, LichtFeld automatically looks for a sibling `main_panel.rcss` file and loads it as the base stylesheet for that document.
+
+### Which styling path should you use?
+
+| Goal | Best tool | Extra files |
+|---|---|---|
+| Start simple and ship quickly | `draw(ui)` plus built-in widgets and sub-layouts | None |
+| Tweak spacing, colors, or typography on a retained shell | `style` with inline RCSS | None |
+| Own the DOM structure and stylesheet | `template` plus sibling `.rml` and `.rcss` | `main_panel.rml`, `main_panel.rcss` |
+
+Use that ladder in order. The scaffold still starts with immediate-mode content on the first row even though the retained shell files are already present.
+
+### Step 3: go full hybrid
+
+Use a custom template when you want retained DOM structure, data binding, or direct event listeners, but still keep an embedded immediate-mode area when that is convenient.
+
+```python
+from pathlib import Path
+import lichtfeld as lf
+
+MODEL_NAME = "my_plugin_hybrid"
+
+
+class HybridPanel(lf.ui.Panel):
+    id = "my_plugin.hybrid"
+    label = "Hybrid"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+    template = str(Path(__file__).resolve().with_name("main_panel.rml"))
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+
+    def draw(self, ui):
+        ui.text_disabled("This block is rendered into #im-root.")
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model(MODEL_NAME)
+        if model is None:
+            return
+        model.bind_func("title", lambda: "Hybrid Panel")
+        self._handle = model.get_handle()
+
+    def on_mount(self, doc):
+        header = doc.get_element_by_id("header")
+        if header:
+            header.add_event_listener("click", lambda _ev: lf.log.info("Header clicked"))
+
+    def on_update(self, doc):
+        del doc
+        if getattr(self, "_handle", None):
+            self._handle.dirty_all()
+```
+
+Key retained hooks:
+
+- `on_bind_model(ctx)`: create and bind a retained data model before the document loads.
+- `on_mount(doc)`: wire DOM listeners or build dynamic DOM content after the document mounts.
+- `on_unmount(doc)`: clean up document-local state.
+- `on_update(doc)`: periodic updates while the panel is visible. Return `True` to mark content dirty.
+- `on_scene_changed(doc)`: respond to active scene generation changes.
+
+To mix retained and immediate content, include `<div id="im-root"></div>` somewhere in your template. `draw(ui)` will render into that node.
+
+See the complete multi-file example in [`examples/03_hybrid_plugin/`](examples/03_hybrid_plugin/).
 
 ### Panel spaces
 
-| Space             | Description                        |
-|-------------------|------------------------------------|
-| `MAIN_PANEL_TAB`  | Own tab in the right panel (default for plugins) |
-| `SIDE_PANEL`      | Right sidebar panel (legacy — prefer `parent` attribute) |
-| `VIEWPORT_OVERLAY`| Drawn over the 3D viewport         |
-| `SCENE_HEADER`    | Header area above the scene tree   |
-| `FLOATING`        | Free-floating window               |
-| `DOCKABLE`        | Dockable window                    |
-| `STATUS_BAR`      | Bottom status bar                  |
+| Space | Description |
+|---|---|
+| `MAIN_PANEL_TAB` | Own tab in the right panel. Default for plugin panels. |
+| `SIDE_PANEL` | Right sidebar panel. |
+| `VIEWPORT_OVERLAY` | Drawn over the 3D viewport. |
+| `SCENE_HEADER` | Header area above the scene tree. |
+| `FLOATING` | Free-floating window. |
+| `STATUS_BAR` | Bottom status bar. |
 
 ### Embedding in an existing tab
 
-Use `parent` to embed your panel as a collapsible section inside a built-in tab:
+Use `parent` to place your panel inside a built-in tab as a collapsible section:
 
 ```python
-class MyAnalysis(Panel):
+class MyAnalysis(lf.ui.Panel):
     label = "My Analysis"
-    parent = "lfs.rendering"  # Embed inside the Rendering tab
+    parent = "lfs.rendering"
     order = 200
 
-    def draw(self, layout):
-        layout.label("Analysis results here")
+    def draw(self, ui):
+        ui.label("Analysis results here")
 ```
 
-| `parent` value    | Effect                                  |
-|-------------------|-----------------------------------------|
-| `"lfs.rendering"` | Collapsible section inside Rendering tab |
-| `"lfs.training"`  | Collapsible section inside Training tab  |
+Common parent ids:
 
-When `parent` is set, `space` is ignored.
+| `parent` value | Effect |
+|---|---|
+| `"lfs.rendering"` | Collapsible section inside Rendering |
+| `"lfs.training"` | Collapsible section inside Training |
 
 ### Register and unregister
 
 ```python
 import lichtfeld as lf
 
-lf.register_class(MyPanel)      # Makes the panel visible
-lf.unregister_class(MyPanel)    # Removes the panel
+lf.register_class(MyPanel)
+lf.unregister_class(MyPanel)
 ```
 
 ### Panel replacement
 
-Registering a panel with the same `idname` as an existing panel replaces it entirely. This lets plugins override built-in panels:
+Registering a panel with the same `id` as an existing panel replaces it. This is how plugins override built-in panels:
 
 ```python
-from lfs_plugins.types import Panel
+import lichtfeld as lf
 
-class MyTrainingPanel(Panel):
-    idname = "lfs.training"      # same idname as the built-in training panel
+
+class MyTrainingPanel(lf.ui.Panel):
+    id = "lfs.training"
     label = "Training"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 20
 
-    def draw(self, layout):
-        layout.label("Custom training controls")
-        if layout.button("Train"):
-            ...
+    def draw(self, ui):
+        ui.label("Custom training controls")
 ```
 
-Third-party plugins load after built-ins, so the replacement takes effect automatically. The replaced panel keeps its slot in the UI.
+Third-party plugins load after built-ins, so the replacement takes effect automatically while keeping the same slot in the UI.
 
 ### Panel management API
 
 ```python
 import lichtfeld as lf
 
-lf.ui.set_panel_enabled("my_plugin.panel", False)  # Hide by idname
-lf.ui.is_panel_enabled("my_plugin.panel")           # Query visibility
+lf.ui.set_panel_enabled("my_plugin.panel", False)
+lf.ui.is_panel_enabled("my_plugin.panel")
 
-lf.ui.get_panel("my_plugin.panel")      # Returns dict with idname, label, order, enabled, space
+lf.ui.get_panel("my_plugin.panel")
 lf.ui.set_panel_label("my_plugin.panel", "New Name")
 lf.ui.set_panel_order("my_plugin.panel", 50)
-lf.ui.set_panel_space("my_plugin.panel", "FLOATING")
-lf.ui.set_panel_parent("my_plugin.panel", "lfs.rendering")  # Embed in Rendering tab
-lf.ui.get_panel_names("MAIN_PANEL_TAB")  # List panel idnames for a space
+lf.ui.set_panel_space("my_plugin.panel", lf.ui.PanelSpace.FLOATING)
+lf.ui.set_panel_parent("my_plugin.panel", "lfs.rendering")
+lf.ui.get_panel_names(lf.ui.PanelSpace.MAIN_PANEL_TAB)
 ```
 
-### Example: side panel with interactive widgets
-
-```python
-import lichtfeld as lf
-from lfs_plugins.types import Panel
-
-class SettingsPanel(Panel):
-    label = "Settings"
-    space = "MAIN_PANEL_TAB"
-    order = 50
-
-    def __init__(self):
-        self.opacity = 0.8
-        self.name = "Default"
-        self.enabled = True
-
-    def draw(self, layout):
-        layout.heading("Plugin Settings")
-
-        changed, self.enabled = layout.checkbox("Enable##settings", self.enabled)
-
-        if self.enabled:
-            changed, self.opacity = layout.slider_float(
-                "Opacity##settings", self.opacity, 0.0, 1.0
-            )
-            changed, self.name = layout.input_text("Name##settings", self.name)
-
-            layout.separator()
-
-            if layout.collapsing_header("Advanced", default_open=False):
-                layout.text_wrapped("Advanced settings go here.")
-                if layout.button("Reset All"):
-                    self.opacity = 0.8
-                    self.name = "Default"
-                    self.enabled = True
-```
+`lf.ui.get_panel()` returns a typed `lf.ui.PanelInfo | None`, and `lf.ui.get_main_panel_tabs()` returns `list[lf.ui.PanelSummary]`.
 
 ### Layout composition
 
-Sub-layouts let you compose UI structure declaratively. Each sub-layout is a context manager that positions its children automatically.
+The `ui` object passed to `draw()` exposes a large widget/layout API. Start with direct calls, then use sub-layouts when structure matters:
 
 ```python
-def draw(self, layout):
-    # Row: children placed side by side
-    with layout.row() as row:
-        row.button("A")
-        row.button("B")
+def draw(self, ui):
+    with ui.row() as row:
+        row.button("Action A")
+        row.button("Action B")
 
-    # Box: bordered container
-    with layout.box() as box:
+    with ui.column() as col:
+        col.label("Top")
+        col.label("Bottom")
+
+    with ui.box() as box:
         box.heading("Settings")
         box.prop(self, "opacity")
 
-    # Split: two-column layout
-    with layout.split(0.3) as split:
+    with ui.split(0.3) as split:
         split.label("Name")
         split.prop(self, "name")
 
-    # State cascading: disable all children
-    with layout.column() as col:
-        col.enabled = self.is_active
-        col.prop(self, "value")
-        with col.row() as row:  # inherits disabled state
-            row.button("Apply")
-            row.button("Cancel")
-
-    # Responsive grid
-    with layout.grid_flow(columns=3) as grid:
+    with ui.grid_flow(columns=3) as grid:
         for item in items:
             grid.button(item.name)
-
-    # Enum toggle buttons
-    with layout.row() as row:
-        row.prop_enum(self, "mode", "fast", "Fast")
-        row.prop_enum(self, "mode", "quality", "Quality")
 ```
 
-See [layout examples](examples/) for more patterns.
+See [examples/README.md](examples/README.md) for the recommended progression through the example files.
 
 ### Example: viewport overlay
 
 ```python
-from lfs_plugins.types import Panel
+import lichtfeld as lf
 from lfs_plugins.ui.state import AppState
 
-class StatsOverlay(Panel):
+
+class StatsOverlay(lf.ui.Panel):
     label = "Stats"
-    space = "VIEWPORT_OVERLAY"
+    space = lf.ui.PanelSpace.VIEWPORT_OVERLAY
     order = 10
 
     @classmethod
     def poll(cls, context) -> bool:
         return AppState.has_scene.value
 
-    def draw(self, layout):
+    def draw(self, ui):
         n = AppState.num_gaussians.value
-        layout.draw_text(10, 10, f"Gaussians: {n:,}", (1.0, 1.0, 1.0, 0.8))
+        ui.draw_text(10, 10, f"Gaussians: {n:,}", (1.0, 1.0, 1.0, 0.8))
 ```
-
----
 
 ### Displaying GPU tensors
 
-Use `image_tensor` to render a CUDA tensor directly in a panel — no manual texture management needed:
+Use `image_tensor` to render a CUDA tensor directly in a panel with no manual texture management:
 
 ```python
-class PreviewPanel(Panel):
+class PreviewPanel(lf.ui.Panel):
     label = "Preview"
-    space = "FLOATING"
+    space = lf.ui.PanelSpace.FLOATING
 
-    def draw(self, layout):
+    def draw(self, ui):
         tensor = lf.Tensor.rand([256, 256, 3], device="cuda")
-        layout.image_tensor("my_preview", tensor, (256, 256))
+        ui.image_tensor("my_preview", tensor, (256, 256))
 ```
 
 The `label` argument (`"my_preview"`) caches the underlying GL texture between frames. Passing a tensor with a different resolution automatically recreates the texture. The tensor must be `[H, W, 3]` (RGB) or `[H, W, 4]` (RGBA). CPU tensors and integer dtypes are converted automatically.
 
-For advanced use cases (sharing one texture across multiple widgets, explicit lifetime control), use `DynamicTexture`:
+For advanced use cases, use `DynamicTexture`:
 
 ```python
-class AdvancedPanel(Panel):
+class AdvancedPanel(lf.ui.Panel):
     label = "Advanced"
-    space = "FLOATING"
+    space = lf.ui.PanelSpace.FLOATING
 
     def __init__(self):
         self.tex = lf.ui.DynamicTexture()
 
-    def draw(self, layout):
+    def draw(self, ui):
         self.tex.update(my_tensor)
-        layout.image_texture(self.tex, (256, 256))
-        # Can also use self.tex.id with image() or image_button()
+        ui.image_texture(self.tex, (256, 256))
 ```
 
 See the [DynamicTexture API reference](api-reference.md#dynamictexture) for all properties and methods.
@@ -509,7 +652,9 @@ from lfs_plugins.types import Operator, Event
 class MeasureTool(Operator):
     label = "Measure Distance"
     description = "Click two points to measure distance"
-    options = {"UNDO"}
+    # Only set UNDO when the operator actually implements undo()/redo()
+    # or when all mutations go through history-aware scene APIs.
+    options = set()
 
     def __init__(self):
         super().__init__()
@@ -543,6 +688,9 @@ class MeasureTool(Operator):
     def cancel(self, context):
         self.start_pos = None
 ```
+
+If an operator performs custom side effects that are not already covered by the shared scene history,
+wrap them in `with lf.undo.transaction("My Change"):` or push a custom step with `lf.undo.push(...)`.
 
 ---
 
@@ -851,7 +999,7 @@ scene.notify_changed()
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.types import Panel, Operator
+from lfs_plugins.types import Operator
 
 class SceneInfo(Operator):
     label = "Print Scene Info"
@@ -972,13 +1120,12 @@ AppState.can_start_training       # ComputedSignal[bool]
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 from lfs_plugins.ui.state import AppState
 from lfs_plugins.ui.signals import Signal
 
-class TrainingMonitor(Panel):
+class TrainingMonitor(lf.ui.Panel):
     label = "Training Monitor"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 50
 
     def __init__(self):
@@ -997,22 +1144,22 @@ class TrainingMonitor(Panel):
     def poll(cls, context) -> bool:
         return AppState.has_trainer.value
 
-    def draw(self, layout):
-        layout.heading("Training Monitor")
+    def draw(self, ui):
+        ui.heading("Training Monitor")
 
         state = AppState.trainer_state.value
-        layout.label(f"State: {state}")
-        layout.label(f"Iteration: {AppState.iteration.value}")
-        layout.label(f"Loss: {AppState.loss.value:.6f}")
-        layout.label(f"Best Loss: {self.best_loss.value:.6f}")
-        layout.label(f"PSNR: {AppState.psnr.value:.2f}")
-        layout.label(f"Gaussians: {AppState.num_gaussians.value:,}")
+        ui.label(f"State: {state}")
+        ui.label(f"Iteration: {AppState.iteration.value}")
+        ui.label(f"Loss: {AppState.loss.value:.6f}")
+        ui.label(f"Best Loss: {self.best_loss.value:.6f}")
+        ui.label(f"PSNR: {AppState.psnr.value:.2f}")
+        ui.label(f"Gaussians: {AppState.num_gaussians.value:,}")
 
         progress = AppState.training_progress.value
-        layout.progress_bar(progress, f"{progress * 100:.1f}%")
+        ui.progress_bar(progress, f"{progress * 100:.1f}%")
 
         if self.loss_history:
-            layout.plot_lines(
+            ui.plot_lines(
                 "Loss##monitor",
                 self.loss_history[-200:],
                 0.0, max(self.loss_history[-200:]),
@@ -1163,7 +1310,6 @@ lf.save_checkpoint()
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 from lfs_plugins.ui.state import AppState
 
 class AutoSavePlugin:
@@ -1263,6 +1409,18 @@ Type stubs are generated at `build/src/python/typings/` and provide autocomplete
 - `lichtfeld.selection` - Selection types
 - `lichtfeld.plugins` - Plugin management
 
+The committed SDK stubs live in `src/python/stubs/` and are checked against the generated output during the build. If you intentionally change the Python API surface, refresh the committed stubs with:
+
+```bash
+cmake --build build --target refresh_python_stubs
+```
+
+You can also run the check explicitly with:
+
+```bash
+cmake --build build --target check_python_stubs
+```
+
 ### debugpy attach
 
 Add to your plugin's `on_load()` for VS Code debugging:
@@ -1296,8 +1454,17 @@ VS Code launch config:
 
 ```python
 import lichtfeld as lf
-path = lf.plugins.create("my_new_plugin")  # Creates from template
+
+path = lf.plugins.create("my_new_plugin")
 ```
+
+That Python API creates the minimal source package only. If you also want a plugin venv and editor config, use:
+
+```bash
+LichtFeld-Studio plugin create my_new_plugin
+```
+
+Both scaffold paths start with the same step-1 panel template and now include `main_panel.rml` and `main_panel.rcss` up front. You can ignore those files until you move into the custom-template styling path.
 
 ### Install from GitHub
 
@@ -1319,6 +1486,8 @@ lf.plugins.check_updates()
 lf.plugins.update("my_plugin")
 ```
 
+Registry installs use the same v1 compatibility contract as local plugins. A version is eligible only if its `plugin_api`, `lichtfeld_version`, and `required_features` match the current host.
+
 ### Manage plugins
 
 ```python
@@ -1338,5 +1507,8 @@ For publishing, ensure your `pyproject.toml` includes:
 - `name` - Unique plugin identifier
 - `version` - Semantic version (e.g., `"1.0.0"`)
 - `description` - Clear description of what the plugin does
-- `author` - Your name or organization
-- `packages` - Any Python dependencies
+- `authors` - Your name or organization
+- `dependencies` - Any Python dependencies
+- `plugin_api` - Supported plugin API range, such as `"~=1.0"` or `">=1,<2"`
+- `lichtfeld_version` - Supported host/runtime range, such as `">=0.4.2"`
+- `required_features` - Optional host features the plugin requires

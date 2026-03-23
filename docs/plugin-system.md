@@ -1,269 +1,235 @@
 # LichtFeld Plugin System
 
-A Python-based plugin system for LichtFeld Studio with per-plugin virtual environments, hot reload support, and dependency isolation.
+LichtFeld Studio plugins are Python packages discovered from `~/.lichtfeld/plugins/`. They can add panels, operators, hooks, tools, capabilities, and plugin-local dependencies.
 
-## Architecture
+## Filesystem layout
 
-```
+```text
 ~/.lichtfeld/
-├── plugins/                          # Plugin directory
-│   ├── simple_plugin/
-│   │   ├── pyproject.toml            # Manifest (required — discovery trigger)
-│   │   ├── .venv/                    # Isolated virtual environment
-│   │   └── __init__.py               # Entry point (on_load, on_unload)
-│   └── pytorch_plugin/
-│       ├── pyproject.toml            # Manifest (required)
-│       ├── .venv/                    # Isolated virtual environment
-│       └── __init__.py
-└── venv/                             # Global venv (existing)
+└── plugins/
+    └── my_plugin/
+        ├── pyproject.toml
+        ├── __init__.py
+        ├── .venv/                  # Created by the CLI scaffold or during dependency setup
+        ├── pyrightconfig.json      # Created by the CLI scaffold
+        ├── .vscode/                # Created by the CLI scaffold
+        └── panels/
+            ├── __init__.py
+            ├── main_panel.py
+            ├── main_panel.rml      # Scaffolded for v1; optional to customize
+            └── main_panel.rcss     # Scaffolded sibling stylesheet
 ```
 
-## Plugin Manifest (pyproject.toml)
+Discovery is manifest-driven: a plugin is discovered because it has a `pyproject.toml` with a `[tool.lichtfeld]` section.
 
-Every plugin **must** have a `pyproject.toml` with a `[tool.lichtfeld]` section — its existence is how LichtFeld discovers plugins.
+## Core pieces
+
+Current implementation lives in:
+
+| Path | Purpose |
+|---|---|
+| `src/python/lfs_plugins/` | Python-side plugin manager, installer, watcher, registry, settings, and templates |
+| `src/python/lfs/py_plugins.cpp` | `lichtfeld.plugins` bindings |
+| `src/python/lfs/py_ui*.cpp` | Unified panel and UI bindings |
+| `src/python/plugin_runner.cpp` | CLI `plugin` subcommand runner |
+| `src/core/argument_parser.cpp` | CLI parsing for `LichtFeld-Studio plugin ...` |
+
+## Lifecycle
+
+Plugin states:
+
+```text
+UNLOADED -> INSTALLING -> LOADING -> ACTIVE
+                \            \
+                 \            -> ERROR
+                  -> ERROR
+```
+
+Available states:
+
+- `UNLOADED`
+- `INSTALLING`
+- `LOADING`
+- `ACTIVE`
+- `ERROR`
+- `DISABLED`
+
+Inspect them from Python:
+
+```python
+import lichtfeld as lf
+
+state = lf.plugins.get_state("my_plugin")
+error = lf.plugins.get_error("my_plugin")
+traceback = lf.plugins.get_traceback("my_plugin")
+```
+
+## Scaffolding
+
+Two creation paths exist and they are intentionally different:
+
+### `lf.plugins.create(name)`
+
+Creates the v1 source package scaffold:
+
+```text
+pyproject.toml
+__init__.py
+panels/__init__.py
+panels/main_panel.py
+panels/main_panel.rml
+panels/main_panel.rcss
+```
+
+The generated panel still starts as immediate-mode `draw(ui)` content. The retained files are there so plugin authors can move into hybrid UI without reshaping the package later.
+
+### `LichtFeld-Studio plugin create <name>`
+
+Creates the same source files and then adds:
+
+- `.venv/`
+- `.vscode/settings.json`
+- `.vscode/launch.json`
+- `pyrightconfig.json`
+
+This is the convenience path for local development.
+
+### Why `.rml` and `.rcss` are generated in v1
+
+v1 intentionally ships a hybrid-ready scaffold. `main_panel.py` is still the first file you edit, but the sibling `main_panel.rml` and `main_panel.rcss` are already wired up with an `#im-root` mount point for embedded immediate widgets.
+
+## Compatibility contract
+
+The v1 plugin system is strict and does not preserve the old compatibility fields. Every plugin manifest must declare:
 
 ```toml
-[project]
-name = "my_plugin"
-version = "1.0.0"
-description = "Plugin description"
-authors = [{name = "Author Name"}]
-dependencies = [
-    "some-package>=1.0.0",
-]
-
 [tool.lichtfeld]
 hot_reload = true
-min_lichtfeld_version = "1.0.0"
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 ```
 
-## Dependencies
+Rules:
 
-All dependencies are declared in `[project].dependencies` and resolved via `uv`.
+- `plugin_api` targets the public plugin API contract.
+- `lichtfeld_version` targets the host application/runtime version.
+- `required_features` is a list of optional host features your plugin depends on.
+- Legacy `min_lichtfeld_version` / `max_lichtfeld_version` fields are removed in v1 and rejected.
 
-LichtFeld always uses its bundled Python for plugin environments:
+The runtime exposes the current host contract through:
 
-1. `uv venv <plugin_dir>/.venv --python <bundled_python> --no-managed-python --no-python-downloads`
-2. `uv sync --project <plugin_dir> --python <plugin_dir>/.venv/.../python --no-managed-python --no-python-downloads`
+- `lf.PLUGIN_API_VERSION`
+- `lf.plugins.API_VERSION`
+- `lf.plugins.FEATURES`
 
-This intentionally disables uv-managed Python and Python downloads, so plugins run against the same bundled runtime as the app.
+## Unified panel model
 
-For plugins that need packages from custom indexes (e.g., PyTorch CUDA wheels), add `[tool.uv.index]` and `[tool.uv.sources]` sections to the same `pyproject.toml`:
+`lf.ui.Panel` is the only public panel base class. It supports three common levels of complexity:
 
-```toml
-[project]
-name = "my-pytorch-plugin"
-version = "0.1.0"
-requires-python = ">=3.12"
-dependencies = ["torch>=2.6.0"]
+| Level | What you add | Typical files |
+|---|---|---|
+| Immediate | `draw(self, ui)` only | `main_panel.py` |
+| Mixed | `style`, `height_mode`, `on_update()`, `on_mount()`, `on_bind_model()` | `main_panel.py` |
+| Hybrid | `template` plus optional embedded `draw(ui)` | `main_panel.py`, `main_panel.rml`, `main_panel.rcss` |
 
-[tool.lichtfeld]
-hot_reload = true
+### Default retained shells
 
-[[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
-explicit = true
+If a panel uses retained features and leaves `template` empty, LichtFeld selects a shell automatically:
 
-[tool.uv.sources]
-torch = [{ index = "pytorch-cu124" }]
+- `FLOATING` -> `rmlui/floating_window.rml`
+- `STATUS_BAR` -> `rmlui/status_bar_panel.rml`
+- other retained panel spaces -> `rmlui/docked_panel.rml`
+
+Built-in template aliases:
+
+- `builtin:docked-panel`
+- `builtin:floating-window`
+- `builtin:status-bar`
+
+### Styling path
+
+Use these layers in order:
+
+1. Start with `draw(ui)` and the immediate widget API.
+2. Add `style` when you want retained shell tweaks without introducing a custom template.
+3. Add `template = str(Path(...))` and a sibling `.rcss` when you need custom DOM structure or a full stylesheet.
+
+Retained template rules:
+
+- plugin-local `template` values should be absolute paths
+- `style` is RCSS text, not a filename
+- a sibling `.rcss` file is loaded automatically for a plugin-local `.rml`
+- include `<div id="im-root"></div>` in the template when you want embedded `draw(ui)` content
+
+## Dependency isolation
+
+Plugin dependencies live in `[project].dependencies` inside the plugin's `pyproject.toml`.
+
+LichtFeld creates per-plugin virtual environments with its bundled Python and `uv`, using:
+
+1. `uv venv <plugin>/.venv --python <bundled_python> --no-managed-python --no-python-downloads`
+2. `uv sync --project <plugin> --python <plugin>/.venv/.../python --no-managed-python --no-python-downloads`
+
+This keeps plugin packages isolated while ensuring they run against the same Python runtime as the app.
+
+## Management surfaces
+
+### CLI
+
+The `plugin` subcommand currently supports:
+
+```text
+LichtFeld-Studio plugin create <name>
+LichtFeld-Studio plugin check <name>
+LichtFeld-Studio plugin list
 ```
 
-## Core Components
-
-### Phase 1 - Plugin System (`scripts/lfs_plugins/`)
-
-| File | Purpose |
-|------|---------|
-| `plugin.py` | PluginInfo, PluginInstance, PluginState dataclasses |
-| `errors.py` | PluginError, PluginLoadError, PluginDependencyError exceptions |
-| `installer.py` | Per-plugin venv creation and dependency installation via uv |
-| `manager.py` | PluginManager singleton with discover/load/unload/reload |
-| `watcher.py` | File polling for hot reload support |
-| `__init__.py` | Package exports |
-
-### C++ Bindings (`src/python/lfs/`)
-
-| File | Purpose |
-|------|---------|
-| `py_plugins.hpp` | Header for plugin bindings |
-| `py_plugins.cpp` | nanobind bindings exposing `lichtfeld.plugins` submodule |
-
-## Plugin States
-
-```
-UNLOADED → INSTALLING → LOADING → ACTIVE
-                ↓           ↓
-              ERROR       ERROR
-```
-
-- `UNLOADED` - Plugin discovered but not loaded
-- `INSTALLING` - Installing dependencies into plugin venv
-- `LOADING` - Importing plugin module
-- `ACTIVE` - Plugin loaded and running
-- `ERROR` - Error during install/load
-- `DISABLED` - Manually disabled by user
-
-## Usage
+The CLI is intentionally narrow. It handles scaffolding, validation, and discovery listing.
 
 ### Python API
 
-```python
-from lfs_plugins import PluginManager, PluginState
-
-mgr = PluginManager.instance()
-
-# Discover available plugins
-plugins = mgr.discover()
-for p in plugins:
-    print(f"{p.name} v{p.version}")
-
-# Load a plugin
-mgr.load("colmap")
-
-# Check state
-state = mgr.get_state("colmap")
-assert state == PluginState.ACTIVE
-
-# Hot reload
-mgr.reload("colmap")
-
-# Unload
-mgr.unload("colmap")
-
-# Load all user-enabled plugins
-mgr.load_all()
-
-# Hot reload file watcher
-mgr.start_watcher()  # Start watching for file changes
-mgr.stop_watcher()   # Stop watcher
-```
-
-### Via lichtfeld Module
+The richer management surface is exposed through `lichtfeld.plugins`:
 
 ```python
 import lichtfeld as lf
 
-plugins = lf.plugins.discover()
-lf.plugins.load("colmap")
-lf.plugins.reload("colmap")
-lf.plugins.unload("colmap")
+lf.plugins.discover()
+lf.plugins.load("my_plugin")
+lf.plugins.reload("my_plugin")
+lf.plugins.unload("my_plugin")
 lf.plugins.load_all()
 lf.plugins.start_watcher()
 lf.plugins.stop_watcher()
+lf.plugins.install("owner/repo")
+lf.plugins.update("my_plugin")
+lf.plugins.search("viewer")
+lf.plugins.install_from_registry("plugin_id")
+lf.plugins.check_updates()
 ```
 
-## Writing a Plugin
+## Validation and debugging
 
-### Minimal Plugin Structure
-
-```
-~/.lichtfeld/plugins/my_plugin/
-├── pyproject.toml
-└── __init__.py
-```
-
-### Entry Point (`__init__.py`)
-
-```python
-"""My Plugin for LichtFeld Studio."""
-
-import lichtfeld as lf
-
-def on_load():
-    """Called when plugin loads."""
-    # Register panels, callbacks, etc.
-    pass
-
-def on_unload():
-    """Called when plugin unloads."""
-    # Cleanup resources
-    pass
-```
-
-### Registering a GUI Panel
-
-```python
-import lichtfeld as lf
-from lfs_plugins.types import Panel
-
-class MyPanel(Panel):
-    label = "My Panel"
-    space = "MAIN_PANEL_TAB"
-    order = 10
-
-    def __init__(self):
-        self.value = 0
-
-    def draw(self, layout):
-        layout.label("Hello from plugin!")
-        if layout.button("Click me"):
-            self.value += 1
-        layout.label(f"Clicked: {self.value}")
-
-_classes = [MyPanel]
-
-def on_load():
-    for cls in _classes:
-        lf.register_class(cls)
-
-def on_unload():
-    for cls in reversed(_classes):
-        lf.unregister_class(cls)
-```
-
-## COLMAP Plugin
-
-The COLMAP plugin (`~/.lichtfeld/plugins/colmap/`) provides Structure-from-Motion reconstruction:
-
-### Files
-
-| File | Purpose |
-|------|---------|
-| `pyproject.toml` | Manifest with pycolmap dependency |
-| `utils.py` | ColmapConfig, ReconstructionResult dataclasses |
-| `features.py` | SIFT feature extraction |
-| `matching.py` | Feature matching (exhaustive/sequential/vocab_tree/spatial) |
-| `reconstruction.py` | Incremental SfM |
-| `runner.py` | ColmapJob background thread with progress tracking |
-| `pipeline.py` | Synchronous and async pipeline entry points |
-| `panels/reconstruction.py` | GUI panel for reconstruction workflow |
-
-### Usage
-
-```python
-# After plugin is loaded
-import colmap
-
-# Synchronous
-result = colmap.run_pipeline("path/to/images")
-print(f"Reconstructed {result.num_images} images, {result.num_points} points")
-
-# Asynchronous with callbacks
-job = colmap.run_pipeline_async(
-    "path/to/images",
-    on_progress=lambda stage, pct, msg: print(f"{stage}: {pct}% - {msg}"),
-    on_complete=lambda result: print(f"Done: {result.success}"),
-)
-
-# Cancel if needed
-job.cancel()
-```
-
-## Testing
+Quick checks:
 
 ```bash
-# Run plugin system tests
-PYTHONPATH="scripts:build" ./build/vcpkg_installed/x64-linux/tools/python3/python3.12 \
-    -m pytest tests/python/test_plugin_system.py -v
+LichtFeld-Studio plugin check my_plugin
+LichtFeld-Studio plugin list
 ```
 
-## Features
+Runtime logging:
 
-- **Plugin discovery** in `~/.lichtfeld/plugins/`
-- **Per-plugin virtual environments** with isolated dependencies
-- **Dependency installation** via uv package manager
-- **Hot reload** via file watcher (polling)
-- **Plugin lifecycle hooks** (`on_load`, `on_unload`)
-- **State tracking** with error reporting
-- **C++ bindings** via nanobind for use from lichtfeld module
+```python
+import lichtfeld as lf
+
+lf.log.debug("debug")
+lf.log.info("info")
+lf.log.warn("warn")
+lf.log.error("error")
+```
+
+## Where to go next
+
+- [docs/plugins/getting-started.md](plugins/getting-started.md) for the learning path
+- [docs/plugins/examples/README.md](plugins/examples/README.md) for progressive examples
+- [docs/plugins/api-reference.md](plugins/api-reference.md) for exact APIs

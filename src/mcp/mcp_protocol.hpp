@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <optional>
@@ -64,10 +66,21 @@ namespace lfs::mcp {
         std::vector<std::string> required;
     };
 
+    struct McpToolMetadata {
+        std::string category;
+        std::string kind = "command";
+        std::string runtime = "shared";
+        std::string thread_affinity = "any";
+        bool destructive = false;
+        bool long_running = false;
+        bool user_visible = true;
+    };
+
     struct McpTool {
         std::string name;
         std::string description;
         McpToolInputSchema input_schema;
+        McpToolMetadata metadata;
     };
 
     struct McpResource {
@@ -83,22 +96,22 @@ namespace lfs::mcp {
         std::variant<std::string, std::vector<uint8_t>> content;
     };
 
-    JsonRpcRequest parse_request(const std::string& input);
-    std::string serialize_response(const JsonRpcResponse& response);
-    std::string serialize_notification(const std::string& method, const json& params);
+    LFS_MCP_API JsonRpcRequest parse_request(const std::string& input);
+    LFS_MCP_API std::string serialize_response(const JsonRpcResponse& response);
+    LFS_MCP_API std::string serialize_notification(const std::string& method, const json& params);
 
-    json tool_to_json(const McpTool& tool);
-    json resource_to_json(const McpResource& resource);
-    json capabilities_to_json(const McpCapabilities& caps);
-    json initialize_result_to_json(const McpInitializeResult& result);
+    LFS_MCP_API json tool_to_json(const McpTool& tool);
+    LFS_MCP_API json resource_to_json(const McpResource& resource);
+    LFS_MCP_API json capabilities_to_json(const McpCapabilities& caps);
+    LFS_MCP_API json initialize_result_to_json(const McpInitializeResult& result);
 
-    JsonRpcResponse make_error_response(
+    LFS_MCP_API JsonRpcResponse make_error_response(
         const std::variant<int64_t, std::string>& id,
         int code,
         const std::string& message,
         const std::optional<json>& data = std::nullopt);
 
-    JsonRpcResponse make_success_response(
+    LFS_MCP_API JsonRpcResponse make_success_response(
         const std::variant<int64_t, std::string>& id,
         const json& result);
 

@@ -5,12 +5,21 @@
 import hashlib
 import json
 import logging
+import os
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import quote
 
+from .compat import (
+    LICHTFELD_VERSION,
+    PLUGIN_API_VERSION,
+    SUPPORTED_PLUGIN_FEATURES,
+    compatibility_errors,
+    validate_manifest_compatibility_fields,
+)
 from .errors import PluginNotFoundError, RegistryOfflineError, VersionNotFoundError
 
 try:
@@ -20,7 +29,10 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
-REGISTRY_URL = "https://lichtfeld.github.io/plugin-registry"
+DEFAULT_REGISTRY_URLS = (
+    "https://lichtfeld.io/plugin-registry",
+    "https://lichtfeld.github.io/plugin-registry",
+)
 CACHE_TTL_HOURS = 1
 HTTP_TIMEOUT_SEC = 10
 
@@ -49,8 +61,9 @@ class RegistryVersionInfo:
     """Version-specific metadata."""
 
     version: str
-    min_lichtfeld_version: str
-    max_lichtfeld_version: Optional[str]
+    plugin_api: str
+    lichtfeld_version: str
+    required_features: Tuple[str, ...] = field(default_factory=tuple)
     dependencies: Tuple[str, ...] = field(default_factory=tuple)
     checksum: str = ""
     download_url: str = ""
@@ -64,12 +77,16 @@ class RegistryClient:
         self._cache_dir = cache_dir or Path.home() / ".lichtfeld" / "cache" / "registry"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict] = None
+        override = os.environ.get("LICHTFELD_PLUGIN_REGISTRY_URL", "").strip()
+        self._registry_urls: Tuple[str, ...] = ((override,) if override else DEFAULT_REGISTRY_URLS)
 
     def search(
         self,
         query: str,
         compatible_only: bool = True,
-        lichtfeld_version: str = "1.0.0",
+        lichtfeld_version: str = LICHTFELD_VERSION,
+        plugin_api: str = PLUGIN_API_VERSION,
+        supported_features: Tuple[str, ...] = SUPPORTED_PLUGIN_FEATURES,
     ) -> List[RegistryPluginInfo]:
         """Search plugins by name, description, or keywords."""
         index = self._get_index()
@@ -79,79 +96,153 @@ class RegistryClient:
         for entry in index.get("plugins", []):
             searchable = f"{entry.get('name', '')} {entry.get('summary', '')} {' '.join(entry.get('keywords', []))}".lower()
             if query_lower in searchable:
-                results.append(
-                    RegistryPluginInfo(
-                        name=entry["name"],
-                        namespace=entry.get("namespace", "community"),
-                        display_name=entry.get("display_name", entry["name"]),
-                        description=entry.get("summary", ""),
-                        author=entry.get("author", ""),
-                        latest_version=entry.get("latest_version", "0.0.0"),
-                        keywords=tuple(entry.get("keywords", [])),
-                        downloads=entry.get("downloads", 0),
-                        repository=entry.get("repository"),
-                    )
+                info = RegistryPluginInfo(
+                    name=entry["name"],
+                    namespace=entry.get("namespace", "community"),
+                    display_name=entry.get("display_name", entry["name"]),
+                    description=entry.get("summary", ""),
+                    author=entry.get("author", ""),
+                    latest_version=entry.get("latest_version", "0.0.0"),
+                    keywords=tuple(entry.get("keywords", [])),
+                    downloads=entry.get("downloads", 0),
+                    repository=entry.get("repository"),
                 )
+                if compatible_only:
+                    try:
+                        self.resolve_version(
+                            info.full_id,
+                            None,
+                            lichtfeld_version,
+                            plugin_api=plugin_api,
+                            supported_features=supported_features,
+                        )
+                    except PluginNotFoundError:
+                        pass
+                    except VersionNotFoundError:
+                        continue
+                results.append(info)
         return results
 
     def get_plugin(self, plugin_id: str) -> Dict:
         """Get detailed plugin info from registry or cache."""
-        _, name = self._parse_id(plugin_id)
-        cache_path = self._cache_dir / "plugins" / f"{name}.json"
+        namespace, name = self._parse_id(plugin_id)
+        cache_path = self._plugin_cache_path(namespace, name)
 
         if cache_path.exists():
-            with open(cache_path) as f:
-                return json.load(f)
+            try:
+                with open(cache_path) as f:
+                    return json.load(f)
+            except Exception as exc:
+                _log.debug("Ignoring invalid registry cache '%s': %s", cache_path, exc)
 
-        url = f"{REGISTRY_URL}/plugins/{name}.json"
-        try:
-            data = self._fetch_json(url)
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "w") as f:
-                json.dump(data, f)
-            return data
-        except Exception as e:
-            raise PluginNotFoundError(f"Plugin '{plugin_id}' not found: {e}") from e
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        last_error: Exception | None = None
+        for url in self._plugin_detail_urls(namespace, name):
+            try:
+                data = self._fetch_json(url)
+                with open(cache_path, "w") as f:
+                    json.dump(data, f)
+                return data
+            except Exception as exc:
+                last_error = exc
+
+        raise PluginNotFoundError(f"Plugin '{plugin_id}' not found: {last_error}") from last_error
 
     def resolve_version(
         self,
         plugin_id: str,
         requested_version: Optional[str],
         lichtfeld_version: str,
+        *,
+        plugin_api: str = PLUGIN_API_VERSION,
+        supported_features: Tuple[str, ...] = SUPPORTED_PLUGIN_FEATURES,
     ) -> RegistryVersionInfo:
-        """Resolve best matching version for the given LichtFeld version."""
+        """Resolve the best matching version for the current host contract."""
         plugin = self.get_plugin(plugin_id)
         versions = plugin.get("versions", {})
+
+        if not versions:
+            raise VersionNotFoundError(f"No versions found for {plugin_id}")
 
         if requested_version:
             if requested_version not in versions:
                 raise VersionNotFoundError(f"Version {requested_version} not found for {plugin_id}")
             v = versions[requested_version]
+            issues = self._get_compatibility_issues(
+                v,
+                plugin_api=plugin_api,
+                lichtfeld_version=lichtfeld_version,
+                supported_features=supported_features,
+            )
+            if issues:
+                raise VersionNotFoundError(
+                    f"Version {requested_version} of {plugin_id} is incompatible: {'; '.join(issues)}"
+                )
         elif Version is None:
-            if not versions:
-                raise VersionNotFoundError(f"No versions found for {plugin_id}")
-            v = versions[max(versions.keys())]
+            compatible = [
+                (ver, info)
+                for ver, info in versions.items()
+                if not self._get_compatibility_issues(
+                    info,
+                    plugin_api=plugin_api,
+                    lichtfeld_version=lichtfeld_version,
+                    supported_features=supported_features,
+                )
+            ]
+            if not compatible:
+                raise VersionNotFoundError(
+                    f"No compatible version for plugin API {plugin_api} and LichtFeld {lichtfeld_version}"
+                )
+            compatible.sort(key=lambda item: item[0], reverse=True)
+            selected_version, v = compatible[0]
         else:
-            current = Version(lichtfeld_version)
             compatible = [
                 (Version(ver), info)
                 for ver, info in versions.items()
-                if Version(info.get("min_lichtfeld_version", "0.0.0")) <= current
-                and (not info.get("max_lichtfeld_version") or current <= Version(info["max_lichtfeld_version"]))
+                if not self._get_compatibility_issues(
+                    info,
+                    plugin_api=plugin_api,
+                    lichtfeld_version=lichtfeld_version,
+                    supported_features=supported_features,
+                )
             ]
             if not compatible:
-                raise VersionNotFoundError(f"No compatible version for LichtFeld {lichtfeld_version}")
+                raise VersionNotFoundError(
+                    f"No compatible version for plugin API {plugin_api} and LichtFeld {lichtfeld_version}"
+                )
             compatible.sort(key=lambda x: x[0], reverse=True)
-            v = compatible[0][1]
+            selected_version, v = compatible[0]
 
         return RegistryVersionInfo(
-            version=v.get("version", requested_version or "unknown"),
-            min_lichtfeld_version=v.get("min_lichtfeld_version", "0.0.0"),
-            max_lichtfeld_version=v.get("max_lichtfeld_version"),
+            version=v.get("version", requested_version or str(selected_version)),
+            plugin_api=v["plugin_api"],
+            lichtfeld_version=v["lichtfeld_version"],
+            required_features=tuple(v.get("required_features", [])),
             dependencies=tuple(v.get("dependencies", [])),
             checksum=v.get("checksum", ""),
             download_url=v.get("download_url", ""),
             git_ref=v.get("git_ref"),
+        )
+
+    def _get_compatibility_issues(
+        self,
+        version_info: Dict,
+        *,
+        plugin_api: str,
+        lichtfeld_version: str,
+        supported_features: Tuple[str, ...],
+    ) -> List[str]:
+        metadata_errors = validate_manifest_compatibility_fields(version_info)
+        if metadata_errors:
+            return [error.removeprefix("pyproject.toml: ") for error in metadata_errors]
+
+        return compatibility_errors(
+            version_info["plugin_api"],
+            version_info["lichtfeld_version"],
+            version_info["required_features"],
+            current_plugin_api=plugin_api,
+            current_lichtfeld_version=lichtfeld_version,
+            supported_features=supported_features,
         )
 
     def verify_checksum(self, path: Path, expected: str) -> bool:
@@ -175,7 +266,9 @@ class RegistryClient:
                     return self._index
 
         try:
-            self._index = self._fetch_json(f"{REGISTRY_URL}/index.json")
+            self._index = self._fetch_json_with_fallback(
+                [f"{base_url}/index.json" for base_url in self._registry_urls]
+            )
             with open(cache_path, "w") as f:
                 json.dump(self._index, f)
             timestamp_path.touch()
@@ -193,6 +286,41 @@ class RegistryClient:
         req = urllib.request.Request(url, headers={"User-Agent": "LichtFeld-PluginManager/1.0"})
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
             return json.loads(resp.read().decode())
+
+    def _fetch_json_with_fallback(self, urls: List[str]) -> Dict:
+        last_error: Exception | None = None
+        for url in urls:
+            try:
+                return self._fetch_json(url)
+            except Exception as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+    def _plugin_cache_path(self, namespace: str, name: str) -> Path:
+        safe_namespace = self._safe_cache_component(namespace)
+        safe_name = self._safe_cache_component(name)
+        return self._cache_dir / "plugins" / safe_namespace / f"{safe_name}.json"
+
+    def _plugin_detail_urls(self, namespace: str, name: str) -> Tuple[str, ...]:
+        namespace_q = quote(namespace, safe="")
+        name_q = quote(name, safe="")
+        full_id_q = quote(f"{namespace}:{name}", safe="")
+        urls = []
+        for base_url in self._registry_urls:
+            urls.extend([
+                f"{base_url}/plugins/{namespace_q}/{name_q}.json",
+                f"{base_url}/plugins/{full_id_q}.json",
+                f"{base_url}/plugins/{name_q}.json",
+            ])
+        deduped = []
+        for url in urls:
+            if url not in deduped:
+                deduped.append(url)
+        return tuple(deduped)
+
+    def _safe_cache_component(self, value: str) -> str:
+        return value.replace("/", "_").replace("\\", "_").replace(":", "_")
 
     def _parse_id(self, plugin_id: str) -> Tuple[str, str]:
         """Parse 'namespace:name' into (namespace, name). Defaults to 'lichtfeld' namespace."""

@@ -304,3 +304,48 @@ class TestCapabilityHandlerLifecycle:
 
         # New capability should exist
         assert capability_registry.has("test.dynamic")
+
+
+class TestCapabilityBrokerThreadLocal:
+    """Tests for CapabilityBroker thread-local circular call detection."""
+
+    def test_broker_circular_call_detected(self, capability_registry):
+        """Broker detects circular calls within the same thread."""
+        from lfs_plugins.context import CapabilityBroker
+
+        broker = CapabilityBroker(capability_registry)
+
+        def recursive_handler(args, ctx):
+            return broker.invoke("test.recursive")
+
+        capability_registry.register("test.recursive", recursive_handler, plugin_name="test")
+        result = broker.invoke("test.recursive")
+        assert result["success"] is False
+        assert "Circular" in result["error"]
+
+    def test_broker_no_false_positive_across_threads(self, capability_registry):
+        """Two threads invoking the same capability must not trigger false circular detection."""
+        from lfs_plugins.context import CapabilityBroker
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+
+        def slow_handler(args, ctx):
+            barrier.wait(timeout=5)
+            return {"value": "ok"}
+
+        capability_registry.register("test.slow_broker", slow_handler, plugin_name="test")
+
+        def worker(idx):
+            broker = CapabilityBroker(capability_registry)
+            results[idx] = broker.invoke("test.slow_broker")
+
+        t0 = threading.Thread(target=worker, args=(0,))
+        t1 = threading.Thread(target=worker, args=(1,))
+        t0.start()
+        t1.start()
+        t0.join(timeout=10)
+        t1.join(timeout=10)
+
+        assert results[0] is not None and results[0]["success"] is True
+        assert results[1] is not None and results[1]["success"] is True

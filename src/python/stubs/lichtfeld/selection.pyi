@@ -1,3 +1,5 @@
+"""Selection primitives for operators"""
+
 from collections.abc import Sequence
 import enum
 
@@ -64,7 +66,7 @@ def clear_rect_preview() -> None:
     """Clear rectangle selection preview"""
 
 def draw_polygon_preview(points: Sequence[tuple[float, float]], closed: bool = False, add_mode: bool = True) -> None:
-    """Draw polygon selection preview"""
+    """Draw polygon selection preview (render-space 2D points)"""
 
 def clear_polygon_preview() -> None:
     """Clear polygon selection preview"""
@@ -75,20 +77,27 @@ def draw_lasso_preview(points: Sequence[tuple[float, float]], add_mode: bool = T
 def clear_lasso_preview() -> None:
     """Clear lasso selection preview"""
 
-def set_output_screen_positions(enable: bool) -> None:
-    """Enable/disable screen positions output during rendering"""
-
 def has_screen_positions() -> bool:
     """Check if screen positions are available"""
 
 def get_screen_positions() -> lichtfeld.Tensor | None:
     """Get screen positions tensor [N, 2]"""
 
-def set_depth_filter(enabled: bool, depth_far: float = 100.0, frustum_half_width: float = 50.0) -> None:
-    """Set depth filter for selection (frustum-shaped filter in camera space)"""
+def set_depth_filter(enabled: bool, depth_far: float = 100.0, frustum_half_width: float = 50.0, depth_near: float = 0.0) -> None:
+    """Set selection depth filter in camera space."""
+
+def set_depth_filter_range(enabled: bool, depth_near: float = 0.0, depth_far: float = 100.0, frustum_half_width: float = 50.0) -> None:
+    """
+    Set selection depth filter range in camera space as (near, far, width).
+    """
 
 def get_depth_filter() -> tuple[bool, float, float]:
-    """Get depth filter state: (enabled, depth_far, frustum_half_width)"""
+    """Get depth filter state: (enabled, depth_far, frustum_half_width)."""
+
+def get_depth_filter_range() -> tuple[bool, float, float, float]:
+    """
+    Get selection depth filter state: (enabled, depth_near, depth_far, frustum_half_width).
+    """
 
 def set_crop_filter(enabled: bool) -> None:
     """Enable/disable crop box filtering for selection"""

@@ -227,6 +227,58 @@ TEST_F(InterleavedSliceCopyTest, NonContiguousSliceStrides) {
     }
 }
 
+// Test copy_ from CPU to non-contiguous CUDA slice (the actual bug: #675)
+TEST_F(InterleavedSliceCopyTest, CpuToStridedCudaCopy) {
+    const size_t N = 100;
+
+    // Source: contiguous CPU tensors (like random point cloud from blender loader)
+    Tensor pos_cpu = Tensor::rand({N, 3}, Device::CPU);
+    Tensor col_cpu = Tensor::rand({N, 3}, Device::CPU);
+
+    // Destination: CUDA interleaved buffer
+    Tensor interleaved = Tensor::zeros({N, 7}, Device::CUDA);
+    interleaved.slice(1, 0, 3).copy_(pos_cpu);
+    interleaved.slice(1, 3, 6).copy_(col_cpu);
+
+    auto result = interleaved.cpu();
+    auto pos_acc = pos_cpu.accessor<float, 2>();
+    auto res_acc = result.accessor<float, 2>();
+
+    for (size_t i = 0; i < N; ++i) {
+        EXPECT_FLOAT_EQ(res_acc(i, 0), pos_acc(i, 0)) << "Row " << i << " pos.x";
+        EXPECT_FLOAT_EQ(res_acc(i, 1), pos_acc(i, 1)) << "Row " << i << " pos.y";
+        EXPECT_FLOAT_EQ(res_acc(i, 2), pos_acc(i, 2)) << "Row " << i << " pos.z";
+    }
+
+    auto col_acc = col_cpu.accessor<float, 2>();
+    for (size_t i = 0; i < N; ++i) {
+        EXPECT_FLOAT_EQ(res_acc(i, 3), col_acc(i, 0)) << "Row " << i << " col.r";
+        EXPECT_FLOAT_EQ(res_acc(i, 4), col_acc(i, 1)) << "Row " << i << " col.g";
+        EXPECT_FLOAT_EQ(res_acc(i, 5), col_acc(i, 2)) << "Row " << i << " col.b";
+    }
+}
+
+// Test copy_ from CPU UInt8 to non-contiguous CUDA float slice (type + device conversion)
+TEST_F(InterleavedSliceCopyTest, CpuUint8ToStridedCudaFloatCopy) {
+    const size_t N = 50;
+
+    Tensor colors_u8 = Tensor::randint({N, 3}, 0, 256, Device::CPU, DataType::UInt8);
+    Tensor colors_f32 = colors_u8.to(DataType::Float32) / 255.0f;
+
+    Tensor interleaved = Tensor::zeros({N, 7}, Device::CUDA);
+    interleaved.slice(1, 3, 6).copy_(colors_f32);
+
+    auto result = interleaved.cpu();
+    auto col_acc = colors_f32.accessor<float, 2>();
+    auto res_acc = result.accessor<float, 2>();
+
+    for (size_t i = 0; i < N; ++i) {
+        EXPECT_NEAR(res_acc(i, 3), col_acc(i, 0), 1e-6f) << "Row " << i << " col.r";
+        EXPECT_NEAR(res_acc(i, 4), col_acc(i, 1), 1e-6f) << "Row " << i << " col.g";
+        EXPECT_NEAR(res_acc(i, 5), col_acc(i, 2), 1e-6f) << "Row " << i << " col.b";
+    }
+}
+
 // Large scale test
 TEST_F(InterleavedSliceCopyTest, LargeScale) {
     const size_t N = 100000;

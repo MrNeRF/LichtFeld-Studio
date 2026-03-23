@@ -1,3 +1,5 @@
+"""Mouse buttons"""
+
 
 
 LEFT: int = 0

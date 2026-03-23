@@ -1,0 +1,63 @@
+body {
+    font-family: Inter;
+    padding: 0;
+}
+
+.group-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 4dp;
+    cursor: pointer;
+    transition: background-color 0.1s quadratic-out;
+}
+
+.group-row:hover {
+    background-color: rgba(88, 91, 112, 77);
+}
+
+.group-row.active {
+    background-color: rgba(88, 91, 112, 128);
+}
+
+.group-row .lock-btn {
+    width: 20dp;
+    height: 20dp;
+    padding: 2dp;
+    flex-shrink: 0;
+    background-color: transparent;
+    border-width: 0;
+}
+
+.group-row .lock-btn img {
+    width: 14dp;
+    height: 14dp;
+}
+
+.group-row .color-swatch {
+    margin-right: 6dp;
+}
+
+.group-name {
+    flex: 1;
+    font-size: 10dp;
+    overflow: hidden;
+    white-space: nowrap;
+    background-color: transparent;
+    border-width: 0;
+    text-align: left;
+    padding: 0;
+}
+
+.color-picker-popup {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    padding: 4dp;
+    background-color: rgba(30, 30, 46, 230);
+    border-width: 1dp;
+    border-color: #585b70;
+}
+
+.color-picker-popup.visible {
+    display: block;
+}

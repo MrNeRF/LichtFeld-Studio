@@ -1,0 +1,44 @@
+<rml>
+<head>
+  <link type="text/template" href="docked_panel.rml"/>
+  <link type="text/rcss" href="selection_groups.rcss"/>
+</head>
+<body template="docked-panel" data-model="selection_groups">
+
+  <div class="section-header" id="hdr-groups">
+    <span class="section-arrow" id="arrow-groups">&#x25B6;</span>
+    <span id="title-groups">@tr:main_panel.selection_groups</span>
+  </div>
+  <div id="groups-section" class="section-content collapsed">
+    <button type="button" class="btn btn--secondary btn--full" id="btn-add-group">@tr:main_panel.add_group</button>
+    <div id="groups-list">
+      <div class="group-row"
+           data-for="group : groups"
+           data-class-active="group.active"
+           data-attr-data-gid="group.gid">
+        <button type="button"
+             class="icon-btn lock-btn"
+             data-action="lock"
+             data-attr-data-gid="group.gid">
+          <img data-attr-sprite="group.lock_sprite" />
+        </button>
+        <button type="button"
+             class="color-swatch"
+             data-action="color"
+             data-attr-data-gid="group.gid"
+             data-style-background-color="group.color_css"></button>
+        <button type="button"
+              class="group-name"
+              data-action="select"
+              data-attr-data-gid="group.gid">{{ group.label }}</button>
+      </div>
+    </div>
+    <span class="empty-message" id="no-groups-msg" data-if="show_empty_message">@tr:main_panel.no_selection_groups</span>
+  </div>
+
+  <div id="color-picker-popup" class="color-picker-popup">
+    <color-picker id="color-picker-el" />
+  </div>
+
+</body>
+</rml>

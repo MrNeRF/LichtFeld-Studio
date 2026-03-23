@@ -4,7 +4,7 @@
 
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -35,24 +35,24 @@ class ViewContext:
 class CapabilityBroker:
     """Broker for inter-capability invocation."""
 
-    _call_stack: Set[str] = set()
-    _lock = threading.Lock()
+    _local = threading.local()
 
     def __init__(self, registry: "CapabilityRegistry"):
         self._registry = registry
 
     def invoke(self, name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Invoke another capability."""
-        with CapabilityBroker._lock:
-            if name in CapabilityBroker._call_stack:
-                return {"success": False, "error": f"Circular call: {name}"}
-            CapabilityBroker._call_stack.add(name)
-
+        stack = getattr(CapabilityBroker._local, 'call_stack', None)
+        if stack is None:
+            stack = set()
+            CapabilityBroker._local.call_stack = stack
+        if name in stack:
+            return {"success": False, "error": f"Circular call: {name}"}
+        stack.add(name)
         try:
             return self._registry.invoke(name, args or {})
         finally:
-            with CapabilityBroker._lock:
-                CapabilityBroker._call_stack.discard(name)
+            stack.discard(name)
 
     def has(self, name: str) -> bool:
         return self._registry.has(name)
@@ -72,7 +72,16 @@ class PluginContext:
     @classmethod
     def build(cls, registry: "CapabilityRegistry", include_view: bool = True) -> "PluginContext":
         """Build context from current application state."""
-        import lichtfeld as lf
+        try:
+            import lichtfeld as lf
+        except ModuleNotFoundError as exc:
+            if exc.name != "lichtfeld":
+                raise
+            return cls(
+                scene=None,
+                view=None,
+                capabilities=CapabilityBroker(registry),
+            )
 
         # Get scene
         scene_ctx = None
@@ -87,7 +96,7 @@ class PluginContext:
         view_ctx = None
         if include_view:
             try:
-                viewport = lf.get_viewport_render()
+                viewport = lf.capture_viewport()
                 view_info = lf.get_current_view()
                 if viewport is not None and view_info is not None:
                     view_ctx = ViewContext(

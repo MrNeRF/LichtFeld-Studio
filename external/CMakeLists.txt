@@ -11,25 +11,12 @@ else()
     message(WARNING "ImGuizmo not found - gizmo controls unavailable")
 endif()
 
-# ImGuiColorTextEdit - Syntax highlighting text editor for ImGui (santaclose fork)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/ImGuiColorTextEdit/TextEditor.cpp")
-    message(STATUS "Adding ImGuiColorTextEdit from external/ImGuiColorTextEdit")
-    find_package(Boost REQUIRED COMPONENTS regex)
-    add_library(imgui_textedit STATIC
-        ImGuiColorTextEdit/TextEditor.cpp
-        ImGuiColorTextEdit/LanguageDefinitions.cpp
-    )
-    target_include_directories(imgui_textedit PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/ImGuiColorTextEdit
-    )
-    target_link_libraries(imgui_textedit PUBLIC imgui::imgui Boost::regex)
-    set_target_properties(imgui_textedit PROPERTIES
-        CXX_STANDARD 17
-        CXX_STANDARD_REQUIRED ON
-        POSITION_INDEPENDENT_CODE ON
-    )
+# Zep - embeddable editor core
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/zep/CMakeLists.txt")
+    message(STATUS "Adding Zep from external/zep")
+    add_subdirectory(zep EXCLUDE_FROM_ALL)
 else()
-    message(WARNING "ImGuiColorTextEdit not found at external/ImGuiColorTextEdit")
+    message(WARNING "Zep not found at external/zep")
 endif()
 
 # OpenMesh - Half-edge mesh data structure
@@ -44,6 +31,7 @@ else()
 endif()
 
 # nvImageCodec - GPU-accelerated image codec library
+find_package(Boost REQUIRED)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
     message(STATUS "Adding nvImageCodec")
     if(DEFINED DETECTED_COMPUTE_CAP)

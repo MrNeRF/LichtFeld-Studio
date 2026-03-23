@@ -334,15 +334,33 @@ class PropertyGroup:
         """Restore values after hot-reload (if cached)."""
         cached = PropertyGroup._value_cache.get(self.__class__.__name__)
         if cached:
+            descriptors = self._get_property_descriptors()
             for key, value in cached.items():
                 if key in self._property_values:
-                    self._property_values[key] = value
+                    prop = descriptors.get(key)
+                    if prop is not None:
+                        try:
+                            self._property_values[key] = prop.validate(value)
+                        except (ValueError, TypeError):
+                            pass
+                    else:
+                        self._property_values[key] = value
         runtime_cached = PropertyGroup._runtime_cache.get(self.__class__.__name__)
         if runtime_cached:
             self._runtime_properties = dict(runtime_cached)
             for name, prop in self._runtime_properties.items():
                 if name not in self._property_values:
                     self._property_values[name] = prop.default
+
+    @classmethod
+    def clear_cache(cls, class_name: str = "") -> None:
+        """Clear hot-reload value cache, optionally for a single class."""
+        if class_name:
+            cls._value_cache.pop(class_name, None)
+            cls._runtime_cache.pop(class_name, None)
+        else:
+            cls._value_cache.clear()
+            cls._runtime_cache.clear()
 
     def _init_properties(self) -> None:
         """Initialize property values from class-level Property descriptors."""

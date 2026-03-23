@@ -162,6 +162,7 @@ nanobind_add_module(
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp
     lfs/py_mesh2splat.cpp
+    lfs/py_splat_simplify.cpp
     lfs/openmesh/handles.cpp
     lfs/openmesh/io.cpp
     lfs/py_rendering.cpp
@@ -170,6 +171,11 @@ nanobind_add_module(
     lfs/py_pipeline.cpp
     lfs/py_prop_registry.cpp
     lfs/py_signals.cpp
+    lfs/py_rml.cpp
+    lfs/rml_python_panel_adapter.cpp
+    lfs/py_rml_im_mode_layout.cpp
+    lfs/rml_im_mode_layout.cpp
+    lfs/rml_im_mode_panel_adapter.cpp
 )
 
 set_target_properties(lfs_py PROPERTIES
@@ -184,27 +190,36 @@ target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
 )
 
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_PY_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_core,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering,lfs_sequencer>"
+    )
+else()
+    set(LFS_PY_INTERNAL_LINK_LIBS
+        lfs_core
+        lfs_event_bridge
+        lfs_geometry
+        lfs_visualizer
+        lfs_mcp
+        lfs_python_runtime
+        lfs_training
+        lfs_io
+        lfs_rendering
+        lfs_sequencer
+    )
+endif()
+
 target_link_libraries(lfs_py PRIVATE
-    lfs_core
-    lfs_event_bridge
-    lfs_geometry
-    lfs_visualizer
-    lfs_mcp
-    lfs_python_runtime
-    lfs_training
-    lfs_io
-    lfs_rendering
+    ${LFS_PY_INTERNAL_LINK_LIBS}
     $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
     $<IF:$<PLATFORM_ID:Windows>,OpenMeshTools,OpenMeshToolsStatic>
-    lfs_sequencer
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
-    $<$<PLATFORM_ID:Windows>:CUDA::cuda_driver>
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
-    $<$<PLATFORM_ID:Windows>:dxgi>
+    $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
 
 target_include_directories(lfs_py PRIVATE
@@ -274,6 +289,10 @@ endif()
 # Type stubs for IDE support (output to typings/ to avoid runtime conflicts)
 option(BUILD_PYTHON_STUBS "Generate Python type stubs (requires loading the module)" ON)
 if(BUILD_PYTHON_STUBS)
+    set(GENERATED_STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
+    set(COMMITTED_STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
+    set(PYTHON_STUB_WORKFLOW_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/manage_stubs.py")
+
     if(WIN32)
         # On Windows, we need to set PATH for DLL loading before running stubgen
         # Find the stubgen script (NB_DIR is set by find_package(nanobind))
@@ -313,14 +332,14 @@ sys.path.insert(0, r'$<TARGET_FILE_DIR:lfs_py>')
 # Run stubgen
 import runpy
 sys.argv = ['stubgen', '-m', 'lichtfeld',
-            '-M', r'${CMAKE_CURRENT_BINARY_DIR}/typings/lichtfeld/py.typed',
-            '-O', r'${CMAKE_CURRENT_BINARY_DIR}/typings',
+            '-M', r'${GENERATED_STUBS_DIR}/lichtfeld/py.typed',
+            '-O', r'${GENERATED_STUBS_DIR}',
             '-r']
 runpy.run_path(r'${NB_STUBGEN}', run_name='__main__')
 
 # Normalize CRLF -> LF and add space after comma in templates for consistency with linux
 import glob, pathlib, re
-for pyi in glob.glob(r'${CMAKE_CURRENT_BINARY_DIR}/typings/**/*.pyi', recursive=True):
+for pyi in glob.glob(r'${GENERATED_STUBS_DIR}/**/*.pyi', recursive=True):
     p = pathlib.Path(pyi)
     content = p.read_bytes().decode('utf-8').replace('\\r\\n', '\\n')
     # Add space after comma in C++ templates (e.g., VectorT<float,3> -> VectorT<float, 3>)
@@ -332,30 +351,50 @@ for pyi in glob.glob(r'${CMAKE_CURRENT_BINARY_DIR}/typings/**/*.pyi', recursive=
 ")
 
             add_custom_command(
-                OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/typings/lichtfeld/py.typed
+                OUTPUT ${GENERATED_STUBS_DIR}/lichtfeld/py.typed
                 COMMAND "${Python_EXECUTABLE}" "${STUBGEN_WRAPPER}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
                 DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}"
                 COMMENT "Generating Python stubs for lichtfeld (Windows)"
             )
-            add_custom_target(lichtfeld_stub ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/typings/lichtfeld/py.typed)
+            add_custom_target(lichtfeld_stub ALL DEPENDS ${GENERATED_STUBS_DIR}/lichtfeld/py.typed)
         endif()
     else()
         nanobind_add_stub(lichtfeld_stub
             MODULE lichtfeld
-            OUTPUT_PATH ${CMAKE_CURRENT_BINARY_DIR}/typings
+            OUTPUT_PATH ${GENERATED_STUBS_DIR}
             PYTHON_PATH ${CMAKE_CURRENT_BINARY_DIR}
             DEPENDS lfs_py
             RECURSIVE
-            MARKER_FILE ${CMAKE_CURRENT_BINARY_DIR}/typings/lichtfeld/py.typed
+            MARKER_FILE ${GENERATED_STUBS_DIR}/lichtfeld/py.typed
         )
     endif()
 
-    add_custom_command(TARGET lichtfeld_stub POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_BINARY_DIR}/typings/"
-            "${CMAKE_CURRENT_SOURCE_DIR}/stubs/"
-        COMMENT "Syncing stubs to source tree"
+    file(GLOB_RECURSE COMMITTED_STUB_FILES CONFIGURE_DEPENDS "${COMMITTED_STUBS_DIR}/*")
+
+    add_custom_target(refresh_python_stubs
+        COMMAND "${Python_EXECUTABLE}" "${PYTHON_STUB_WORKFLOW_SCRIPT}"
+            sync
+            --generated "${GENERATED_STUBS_DIR}"
+            --committed "${COMMITTED_STUBS_DIR}"
+        DEPENDS lichtfeld_stub "${PYTHON_STUB_WORKFLOW_SCRIPT}"
+        COMMENT "Syncing generated Python stubs into the source tree"
+        VERBATIM
+    )
+
+    add_custom_command(
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
+        COMMAND "${Python_EXECUTABLE}" "${PYTHON_STUB_WORKFLOW_SCRIPT}"
+            check
+            --generated "${GENERATED_STUBS_DIR}"
+            --committed "${COMMITTED_STUBS_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
+        DEPENDS lichtfeld_stub "${PYTHON_STUB_WORKFLOW_SCRIPT}" ${COMMITTED_STUB_FILES}
+        COMMENT "Checking committed Python stubs against generated stubs"
+        VERBATIM
+    )
+    add_custom_target(check_python_stubs ALL
+        DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
     )
 endif()
 
@@ -364,7 +403,18 @@ add_custom_target(lfs_plugins_copy ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins ${CMAKE_CURRENT_BINARY_DIR}/lfs_plugins
     COMMENT "Copying lfs_plugins Python module"
 )
-add_dependencies(lfs_py lfs_plugins_copy)
+
+add_custom_target(lfs_python_support_copy ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py
+        ${CMAKE_CURRENT_BINARY_DIR}/_lfs_panel_contract.py
+    COMMENT "Copying internal Python support modules"
+)
+
+add_dependencies(lfs_py lfs_plugins_copy lfs_python_support_copy)
+if(TARGET lichtfeld_stub)
+    add_dependencies(lichtfeld_stub lfs_python_support_copy)
+endif()
 
 # UV package manager for Python package installation support
 include(${CMAKE_SOURCE_DIR}/cmake/FetchUV.cmake)
@@ -405,16 +455,22 @@ if(BUILD_PORTABLE)
         DESTINATION "${CMAKE_INSTALL_BINDIR}"
         FILES_MATCHING PATTERN "*.py"
     )
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}"
+    )
 else()
     install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins"
         DESTINATION "${PYTHON_INSTALL_DIR}"
         FILES_MATCHING PATTERN "*.py"
     )
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py"
+        DESTINATION "${PYTHON_INSTALL_DIR}"
+    )
 endif()
 
 # Stubs: use generated when available, otherwise committed from source tree
 if(BUILD_PYTHON_STUBS)
-    set(STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
+    set(STUBS_DIR "${GENERATED_STUBS_DIR}")
 else()
     set(STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
 endif()

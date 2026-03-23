@@ -1,0 +1,51 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="scripts_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="scripts_panel">
+
+  <span class="section-label">@tr:scripts_panel.actions</span>
+  <div class="sp-actions">
+    <button class="btn btn--primary"
+            data-event-click="reload_all"
+            data-attrif-disabled="!has_scripts">@tr:scripts_panel.reload_all</button>
+    <button class="btn btn--secondary"
+            data-event-click="clear_all"
+            data-attrif-disabled="!has_scripts">@tr:scripts_panel.clear_all</button>
+  </div>
+
+  <div class="separator"></div>
+
+  <div data-if="show_empty_state">
+    <span class="empty-message">@tr:scripts_panel.no_scripts_loaded</span>
+    <span class="empty-message">@tr:scripts_panel.load_hint</span>
+  </div>
+
+  <div data-if="show_script_list">
+    <span class="section-label">@tr:scripts_panel.loaded_scripts</span>
+    <div class="separator"></div>
+
+    <div id="scripts-list" class="sp-list">
+      <div class="sp-script"
+           data-for="script : scripts"
+           data-class-disabled="!script.enabled"
+           data-class-border-error="script.has_error">
+        <div class="sp-script-header">
+          <label class="setting-label">
+            <input type="checkbox"
+                   data-attr-data-script-index="script.index"
+                   data-attrif-checked="script.enabled" />
+            <span class="sp-filename">{{ script.filename }}</span>
+          </label>
+          <button class="btn btn--secondary sp-reload-btn"
+                  data-attr-data-reload-index="script.index">@tr:scripts_panel.reload</button>
+        </div>
+        <span class="sp-path text-disabled"><span class="sp-meta-label">@tr:scripts_panel.path</span>: {{ script.path }}</span>
+        <span class="sp-error status-error" data-if="script.has_error"><span class="sp-meta-label">@tr:scripts_panel.error</span>: {{ script.error_message }}</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</rml>

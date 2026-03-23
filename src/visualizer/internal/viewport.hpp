@@ -289,6 +289,8 @@ class Viewport {
     };
 
 public:
+    static constexpr float INVALID_WORLD_POS = -1e10f;
+
     glm::ivec2 windowSize;
     glm::ivec2 frameBufferSize;
     CameraMotion camera;
@@ -338,10 +340,15 @@ public:
         return glm::perspective(fov_radians, aspect_ratio, near_plane, far_plane);
     }
 
+    [[nodiscard]] static bool isValidWorldPosition(const glm::vec3& world_pos) {
+        return world_pos.x != INVALID_WORLD_POS ||
+               world_pos.y != INVALID_WORLD_POS ||
+               world_pos.z != INVALID_WORLD_POS;
+    }
+
     // Unproject screen pixel to world position (returns INVALID_WORLD_POS if invalid)
     [[nodiscard]] glm::vec3 unprojectPixel(float screen_x, float screen_y, float depth,
                                            float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM) const {
-        constexpr float INVALID_WORLD_POS = -1e10f;
         constexpr float MAX_DEPTH = 1e9f;
 
         if (depth <= 0.0f || depth > MAX_DEPTH) {

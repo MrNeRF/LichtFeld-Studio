@@ -19,6 +19,10 @@
 #include <unordered_set>
 #include <vector>
 
+namespace lfs::io {
+    class PipelinedImageLoader;
+}
+
 namespace lfs::rendering {
 
     class CameraFrustumRenderer {
@@ -27,6 +31,8 @@ namespace lfs::rendering {
 
         CameraFrustumRenderer() = default;
         ~CameraFrustumRenderer();
+
+        void setImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
 
         Result<void> init();
         Result<void> render(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
@@ -38,7 +44,7 @@ namespace lfs::rendering {
                             const glm::mat4& scene_transform = glm::mat4(1.0f),
                             bool equirectangular_view = false,
                             const std::unordered_set<int>& disabled_uids = {},
-                            const std::unordered_set<int>& selected_uids = {});
+                            const std::unordered_set<int>& emphasized_uids = {});
 
         Result<int> pickCamera(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                const glm::vec2& mouse_pos,
@@ -49,8 +55,7 @@ namespace lfs::rendering {
                                float scale = 0.1f,
                                const glm::mat4& scene_transform = glm::mat4(1.0f));
 
-        void setHighlightedCamera(const int index) { highlighted_camera_ = index; }
-        [[nodiscard]] int getHighlightedCamera() const { return highlighted_camera_; }
+        void setFocusedCamera(const int index) { focused_camera_ = index; }
 
         void setShowImages(const bool show) { show_images_ = show; }
         [[nodiscard]] bool getShowImages() const { return show_images_; }
@@ -76,7 +81,7 @@ namespace lfs::rendering {
             uint32_t is_validation;
             uint32_t is_equirectangular;
             uint32_t is_training_disabled;
-            uint32_t is_selected;
+            uint32_t is_emphasized;
         };
 
         struct ThumbnailRequest {
@@ -105,7 +110,7 @@ namespace lfs::rendering {
                               const glm::vec3& view_position,
                               const glm::mat4& scene_transform,
                               const std::unordered_set<int>& disabled_uids = {},
-                              const std::unordered_set<int>& selected_uids = {});
+                              const std::unordered_set<int>& emphasized_uids = {});
 
         void updateInstanceVisibility(const glm::vec3& view_position);
 
@@ -141,6 +146,14 @@ namespace lfs::rendering {
         int picking_fbo_width_ = 0;
         int picking_fbo_height_ = 0;
 
+        GLuint picking_pbos_[2] = {0, 0};
+        int pbo_index_ = 0;
+        bool pbo_has_data_ = false;
+        int pbo_sample_w_ = 0;
+        int pbo_sample_h_ = 0;
+
+        int decodePickId(const float* pixels, int width, int height) const;
+
         // Instance data
         std::vector<InstanceData> cached_instances_;
         std::vector<int> camera_ids_;
@@ -148,7 +161,7 @@ namespace lfs::rendering {
 
         size_t num_face_indices_ = 0;
         size_t num_edge_indices_ = 0;
-        int highlighted_camera_ = -1;
+        int focused_camera_ = -1;
         bool initialized_ = false;
 
         // Cache invalidation
@@ -158,7 +171,7 @@ namespace lfs::rendering {
         glm::vec3 last_view_position_{0, 0, 0};
         glm::mat4 last_scene_transform_{1.0f};
         std::unordered_set<int> last_disabled_uids_;
-        std::unordered_set<int> last_selected_uids_;
+        std::unordered_set<int> last_emphasized_uids_;
 
         // Image preview
         bool show_images_ = true;
@@ -182,6 +195,8 @@ namespace lfs::rendering {
 
         std::thread thumbnail_loader_thread_;
         std::atomic<bool> thumbnail_loader_running_{false};
+        std::shared_ptr<lfs::io::PipelinedImageLoader> shared_loader_;
+        std::mutex shared_loader_mutex_;
     };
 
 } // namespace lfs::rendering

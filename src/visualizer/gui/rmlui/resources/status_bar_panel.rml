@@ -1,0 +1,12 @@
+<template name="status-bar-panel" content="content">
+<head>
+  <link type="text/rcss" href="components.rcss"/>
+  <link type="text/rcss" href="statusbar.rcss"/>
+  <link type="text/rcss" href="status_bar_panel.rcss"/>
+</head>
+<body id="body" class="status-bar-panel">
+  <div id="status-left">
+    <div id="content"></div>
+  </div>
+</body>
+</template>

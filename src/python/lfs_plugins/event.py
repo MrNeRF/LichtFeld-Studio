@@ -21,6 +21,11 @@ for i in range(26):
 for i in range(10):
     _KEY_NAMES[ui.key.NUM_0 + i] = str(i)
 
+for i in range(10):
+    kp_key = getattr(ui.key, f"KP_{i}", None)
+    if kp_key is not None:
+        _KEY_NAMES[kp_key] = str(i)
+
 for i in range(12):
     _KEY_NAMES[ui.key.F1 + i] = f"F{i+1}"
 

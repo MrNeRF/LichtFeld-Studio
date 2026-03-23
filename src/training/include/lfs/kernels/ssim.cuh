@@ -82,11 +82,31 @@ namespace lfs::training::kernels {
         SSIMContext ctx;
     };
 
+    // Lightweight workspace when only the per-pixel SSIM map is needed.
+    struct SSIMMapWorkspace {
+        lfs::core::Tensor ssim_map; // [N, C, H, W]
+        std::vector<size_t> allocated_shape;
+
+        void ensure_size(const std::vector<size_t>& shape) {
+            if (allocated_shape != shape) {
+                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
+                allocated_shape = shape;
+            }
+        }
+    };
+
     // Returns per-pixel SSIM map (same padding when apply_valid_padding=false)
     SSIMMapResult ssim_forward_map(
         const lfs::core::Tensor& img1,
         const lfs::core::Tensor& img2,
         bool apply_valid_padding = false);
+
+    // Computes a full-resolution error map [H, W] from SSIM without allocating backward buffers.
+    void ssim_error_map_forward(
+        const lfs::core::Tensor& img1,
+        const lfs::core::Tensor& img2,
+        SSIMMapWorkspace& workspace,
+        lfs::core::Tensor& error_map);
 
     // Manual SSIM backward (no autograd) - computes gradient w.r.t. img1
     lfs::core::Tensor ssim_backward(

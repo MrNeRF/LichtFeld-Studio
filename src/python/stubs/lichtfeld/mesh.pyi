@@ -1,3 +1,5 @@
+"""Mesh operations and OpenMesh bindings"""
+
 from collections.abc import Sequence
 from typing import Annotated, overload
 

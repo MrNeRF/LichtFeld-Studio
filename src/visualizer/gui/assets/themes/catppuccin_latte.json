@@ -82,7 +82,7 @@
   "fonts": {
     "regular_path": "Inter-Regular.ttf",
     "bold_path": "Inter-SemiBold.ttf",
-    "base_size": 14.0,
+    "base_size": 12.0,
     "small_size": 12.0,
     "large_size": 16.0,
     "heading_size": 18.0,

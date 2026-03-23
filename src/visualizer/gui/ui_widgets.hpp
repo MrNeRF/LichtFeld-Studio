@@ -29,6 +29,16 @@ namespace lfs::vis::gui::widgets {
     void DrawModeStatus(const UIContext& ctx);
 
     // Shadow drawing for floating panels
+    void DrawShadowRect(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                        float rounding = 6.0f, float alpha_scale = 1.0f,
+                        float blur_scale = 1.0f, float offset_scale = 1.0f);
+    void DrawFloatingWindowShadow(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                                  float rounding = 6.0f);
+    void DrawFloatingWindowShadow(const ImVec2& pos, const ImVec2& size, float rounding = 6.0f);
+    void DrawPopoverShadowOverlay(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                                  float rounding = 6.0f);
+    void DrawModalShadow(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                         float rounding = 6.0f);
     void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, float rounding = 6.0f);
 
     // Vignette effect for viewport

@@ -5,9 +5,11 @@
 #pragma once
 
 #include "core/events.hpp"
+#include "core/export.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "core/splat_simplify.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_export_options.hpp"
 #include <atomic>
@@ -30,7 +32,7 @@ namespace lfs::vis {
 
     namespace gui {
 
-        class AsyncTaskManager {
+        class LFS_VIS_API AsyncTaskManager {
         public:
             explicit AsyncTaskManager(VisualizerImpl* viewer);
             ~AsyncTaskManager();
@@ -48,6 +50,14 @@ namespace lfs::vis {
             [[nodiscard]] std::string getExportStage() const {
                 std::lock_guard lock(export_state_.mutex);
                 return export_state_.stage;
+            }
+            [[nodiscard]] std::string getExportError() const {
+                std::lock_guard lock(export_state_.mutex);
+                return export_state_.error;
+            }
+            [[nodiscard]] std::filesystem::path getExportPath() const {
+                std::lock_guard lock(export_state_.mutex);
+                return export_state_.path;
             }
             [[nodiscard]] lfs::core::ExportFormat getExportFormat() const {
                 std::lock_guard lock(export_state_.mutex);
@@ -105,6 +115,14 @@ namespace lfs::vis {
                 std::lock_guard lock(video_export_state_.mutex);
                 return video_export_state_.stage;
             }
+            [[nodiscard]] std::string getVideoExportError() const {
+                std::lock_guard lock(video_export_state_.mutex);
+                return video_export_state_.error;
+            }
+            [[nodiscard]] std::filesystem::path getVideoExportPath() const {
+                std::lock_guard lock(video_export_state_.mutex);
+                return video_export_state_.path;
+            }
             void cancelVideoExport();
 
             // Mesh to Splat conversion
@@ -122,6 +140,26 @@ namespace lfs::vis {
                 std::lock_guard lock(mesh2splat_state_.mutex);
                 return mesh2splat_state_.error;
             }
+            [[nodiscard]] std::string getMesh2SplatSourceName() const {
+                std::lock_guard lock(mesh2splat_state_.mutex);
+                return mesh2splat_state_.source_name;
+            }
+
+            // Splat simplification
+            void startSplatSimplify(const std::string& source_name,
+                                    const lfs::core::SplatSimplifyOptions& options);
+            void pollSplatSimplifyCompletion();
+            [[nodiscard]] bool isSplatSimplifyActive() const { return splat_simplify_state_.active.load(); }
+            [[nodiscard]] float getSplatSimplifyProgress() const { return splat_simplify_state_.progress.load(); }
+            [[nodiscard]] std::string getSplatSimplifyStage() const {
+                std::lock_guard lock(splat_simplify_state_.mutex);
+                return splat_simplify_state_.stage;
+            }
+            [[nodiscard]] std::string getSplatSimplifyError() const {
+                std::lock_guard lock(splat_simplify_state_.mutex);
+                return splat_simplify_state_.error;
+            }
+            void cancelSplatSimplify();
 
         private:
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -142,6 +180,7 @@ namespace lfs::vis {
                 lfs::core::ExportFormat format{lfs::core::ExportFormat::PLY};
                 std::string stage;
                 std::string error;
+                std::filesystem::path path;
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };
@@ -155,6 +194,7 @@ namespace lfs::vis {
                 std::atomic<int> total_frames{0};
                 std::string stage;
                 std::string error;
+                std::filesystem::path path;
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };
@@ -197,6 +237,22 @@ namespace lfs::vis {
 
             void executeMesh2SplatOnGlThread();
             void applyMesh2SplatResult();
+
+            struct SplatSimplifyState {
+                std::atomic<bool> active{false};
+                std::atomic<bool> cancel_requested{false};
+                std::atomic<bool> completed{false};
+                std::atomic<bool> apply_pending{false};
+                std::atomic<float> progress{0.0f};
+                mutable std::mutex mutex;
+                std::string stage;
+                std::string error;
+                std::string source_name;
+                std::string output_name;
+                std::unique_ptr<lfs::core::SplatData> result;
+                std::optional<std::jthread> thread;
+            };
+            SplatSimplifyState splat_simplify_state_;
         };
 
     } // namespace gui

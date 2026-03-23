@@ -4,8 +4,6 @@
 
 from typing import Optional
 
-import lichtfeld as lf
-
 from .tool_defs.builtin import BUILTIN_TOOLS, get_tool_by_id
 from .tool_defs.definition import ToolDef
 
@@ -49,6 +47,8 @@ class ToolRegistry:
         if not tool:
             return False
 
+        import lichtfeld as lf
+
         from .op_context import get_context
 
         context = get_context()
@@ -75,6 +75,8 @@ class ToolRegistry:
 
     @classmethod
     def clear_active(cls):
+        import lichtfeld as lf
+
         lf.ui.ops.cancel_modal()
         lf.ui.clear_gizmo()
         lf.ui.clear_active_operator()

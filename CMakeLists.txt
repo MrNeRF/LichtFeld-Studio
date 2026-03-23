@@ -86,30 +86,40 @@ option(BUILD_PORTABLE "Build portable distribution" OFF)
 if(BUILD_PORTABLE)
     set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    add_compile_definitions(LFS_BUILD_PORTABLE=1)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
 
-# Compiler cache (CUDA caching disabled on Windows due to nvcc compatibility issues)
-find_program(SCCACHE_PROGRAM sccache)
-find_program(CCACHE_PROGRAM ccache)
-if(SCCACHE_PROGRAM)
-    set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-    if(WIN32)
-        message(STATUS "Compiler cache: sccache (C/C++ only, CUDA uncached)")
+# Compiler cache is opt-in. Auto-enabling a broken local launcher can silently
+# poison object files and make the build non-reproducible.
+option(ENABLE_COMPILER_CACHE "Enable sccache/ccache compiler launchers when available" OFF)
+if(ENABLE_COMPILER_CACHE)
+    # CUDA caching disabled on Windows due to nvcc compatibility issues.
+    find_program(SCCACHE_PROGRAM sccache)
+    find_program(CCACHE_PROGRAM ccache)
+    if(SCCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+        if(WIN32)
+            message(STATUS "Compiler cache: sccache (C/C++ only, CUDA uncached)")
+        else()
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+            message(STATUS "Compiler cache: sccache")
+        endif()
+    elseif(CCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        if(WIN32)
+            message(STATUS "Compiler cache: ccache (C/C++ only, CUDA uncached)")
+        else()
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+            message(STATUS "Compiler cache: ccache")
+        endif()
     else()
-        set(CMAKE_CUDA_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-        message(STATUS "Compiler cache: sccache")
+        message(STATUS "Compiler cache: requested, but no launcher was found")
     endif()
-elseif(CCACHE_PROGRAM)
-    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    if(WIN32)
-        message(STATUS "Compiler cache: ccache (C/C++ only, CUDA uncached)")
-    else()
-        set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        message(STATUS "Compiler cache: ccache")
-    endif()
+else()
+    message(STATUS "Compiler cache: disabled")
 endif()
 
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
@@ -149,6 +159,19 @@ if(NVIDIA_SMI)
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     string(REGEX REPLACE "\n.*" "" DETECTED_COMPUTE_CAP "${DETECTED_COMPUTE_CAP}")
+
+    execute_process(
+            COMMAND ${NVIDIA_SMI} --query-gpu=driver_version --format=csv,noheader
+            OUTPUT_VARIABLE NVIDIA_DRIVER_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(REGEX REPLACE "\n.*" "" NVIDIA_DRIVER_VERSION "${NVIDIA_DRIVER_VERSION}")
+    message(STATUS "Detected NVIDIA driver: ${NVIDIA_DRIVER_VERSION}")
+    if(NVIDIA_DRIVER_VERSION VERSION_LESS "570")
+        message(FATAL_ERROR "NVIDIA driver ${NVIDIA_DRIVER_VERSION} is too old. "
+            "CUDA Toolkit 12.8 requires driver >= 570. "
+            "Please update: https://www.nvidia.com/drivers")
+    endif()
 
     message(STATUS "Detected GPU compute capability: ${DETECTED_COMPUTE_CAP}")
     if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.1)
@@ -233,6 +256,7 @@ find_package(SDL3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(imgui REQUIRED)
 find_package(implot REQUIRED)
+find_package(nfd CONFIG REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
 find_package(spdlog REQUIRED)
@@ -240,9 +264,9 @@ find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(OpenImageIO REQUIRED)
-find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(assimp REQUIRED)
+find_package(RmlUi CONFIG REQUIRED)
 
 # TORCH_CUDA_ARCH_LIST is already defined by Torch
 # use it here as the global default CUDA architecture list too
@@ -347,6 +371,11 @@ add_subdirectory(src/python)
 add_executable(${PROJECT_NAME}
     src/app/main.cpp
     src/app/application.cpp
+    src/app/mcp_gui_tools.cpp
+    src/app/mcp_operator_tools.cpp
+    src/app/mcp_runtime_tools.cpp
+    src/app/mcp_sequencer_tools.cpp
+    src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     src/app/splash_screen.cpp
     resources/lichtfeld-studio.rc
@@ -364,22 +393,38 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_BINARY_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/src/app/include  # For app headers
         ${CMAKE_CURRENT_SOURCE_DIR}/src              # For training/, visualizer/, etc.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/visualizer   # For internal visualizer headers used by GUI MCP
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/rendering/include  # For rendering headers (MCP GUI tools)
         ${CMAKE_CURRENT_SOURCE_DIR}/external         # For external headers
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/imguizmo
 
         ${CUDAToolkit_INCLUDE_DIRS}
         ${OPENGL_INCLUDE_DIRS}
 )
 
-target_link_libraries(${PROJECT_NAME}
-        PRIVATE
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_APP_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils>"
+    )
+else()
+    set(LFS_APP_INTERNAL_LINK_LIBS
         lfs_visualizer
         lfs_mcp
+        lfs_sequencer
+        lfs_rendering
         lfs_training
         lfs_geometry
         lfs_core
         lfs_io
+        lfs_video
         fastlfs_backend
         lfs_python_utils
+    )
+endif()
+
+target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+        ${LFS_APP_INTERNAL_LINK_LIBS}
 
         ${OPENGL_LIBRARIES}
         CUDA::cudart
@@ -389,6 +434,10 @@ target_link_libraries(${PROJECT_NAME}
         glad::glad
         SDL3::SDL3
 )
+
+# The app embeds Python and loads the nanobind module at runtime for panels,
+# menus, and operators. Keep the runtime artifact in lockstep with the app.
+add_dependencies(${PROJECT_NAME} lfs_py)
 
 # Copy nvImageCodec shared libraries next to executable for easy deployment
 if(TARGET nvimgcodec)
@@ -612,6 +661,9 @@ elseif(WIN32)
             RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
             RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}"
     )
+    if(MSVC)
+        target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+    endif()
 endif()
 
 # Build type configuration function
@@ -752,6 +804,7 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-lo
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-loading-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 # Plugin development documentation

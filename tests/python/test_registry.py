@@ -61,8 +61,9 @@ def mock_plugin_detail():
         "versions": {
             "1.2.0": {
                 "version": "1.2.0",
-                "min_lichtfeld_version": "1.0.0",
-                "max_lichtfeld_version": None,
+                "plugin_api": ">=1,<2",
+                "lichtfeld_version": ">=0.4.2",
+                "required_features": [],
                 "dependencies": ["pycolmap>=0.6.0"],
                 "checksum": "sha256:abc123",
                 "download_url": "https://example.com/colmap-1.2.0.tar.gz",
@@ -70,7 +71,9 @@ def mock_plugin_detail():
             },
             "1.1.0": {
                 "version": "1.1.0",
-                "min_lichtfeld_version": "0.9.0",
+                "plugin_api": ">=1,<2",
+                "lichtfeld_version": ">=0.9",
+                "required_features": [],
                 "dependencies": ["pycolmap>=0.5.0"],
                 "checksum": "sha256:def456",
                 "download_url": "https://example.com/colmap-1.1.0.tar.gz",
@@ -94,7 +97,7 @@ class TestRegistryClient:
         client = RegistryClient(cache_dir=registry_cache_dir)
 
         with patch.object(client, "_fetch_json", return_value=mock_registry_index):
-            results = client.search("colmap")
+            results = client.search("colmap", compatible_only=False)
 
         assert len(results) == 1
         assert results[0].name == "colmap"
@@ -111,7 +114,7 @@ class TestRegistryClient:
         client = RegistryClient(cache_dir=registry_cache_dir)
 
         with patch.object(client, "_fetch_json", return_value=mock_registry_index):
-            results = client.search("segmentation")
+            results = client.search("segmentation", compatible_only=False)
 
         assert len(results) == 1
         assert results[0].name == "sam-segmentation"
@@ -127,7 +130,7 @@ class TestRegistryClient:
         client = RegistryClient(cache_dir=registry_cache_dir)
 
         with patch.object(client, "_fetch_json", return_value=mock_registry_index):
-            results = client.search("reconstruction")
+            results = client.search("reconstruction", compatible_only=False)
 
         assert len(results) == 1
         assert results[0].name == "colmap"
@@ -143,7 +146,7 @@ class TestRegistryClient:
         client = RegistryClient(cache_dir=registry_cache_dir)
 
         with patch.object(client, "_fetch_json", return_value=mock_registry_index):
-            results = client.search("COLMAP")
+            results = client.search("COLMAP", compatible_only=False)
 
         assert len(results) == 1
         assert results[0].name == "colmap"
@@ -175,6 +178,46 @@ class TestRegistryClient:
         namespace, name = client._parse_id("colmap")
         assert namespace == "lichtfeld"
         assert name == "colmap"
+
+    def test_get_plugin_uses_namespaced_cache_keys(self, registry_cache_dir):
+        """Plugins with the same name in different namespaces should not collide in cache."""
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        official_detail = {
+            "name": "foo",
+            "namespace": "official",
+            "repository": "https://example.com/official/foo",
+            "versions": {},
+        }
+        community_detail = {
+            "name": "foo",
+            "namespace": "community",
+            "repository": "https://example.com/community/foo",
+            "versions": {},
+        }
+
+        def _fetch(url):
+            if url.endswith("/plugins/official/foo.json"):
+                return official_detail
+            if url.endswith("/plugins/community/foo.json"):
+                return community_detail
+            raise AssertionError(url)
+
+        with patch.object(client, "_fetch_json", side_effect=_fetch):
+            assert client.get_plugin("official:foo")["repository"] == official_detail["repository"]
+            assert client.get_plugin("community:foo")["repository"] == community_detail["repository"]
+
+        assert (registry_cache_dir / "plugins" / "official" / "foo.json").exists()
+        assert (registry_cache_dir / "plugins" / "community" / "foo.json").exists()
+
+        with patch.object(client, "_fetch_json", side_effect=AssertionError("cache should be used")):
+            assert client.get_plugin("official:foo")["repository"] == official_detail["repository"]
+            assert client.get_plugin("community:foo")["repository"] == community_detail["repository"]
 
 
 class TestVersionResolution:
@@ -210,6 +253,102 @@ class TestVersionResolution:
             version_info = client.resolve_version("colmap", None, "1.0.0")
 
         assert version_info.version == "1.2.0"
+        assert version_info.plugin_api == ">=1,<2"
+        assert version_info.lichtfeld_version == ">=0.4.2"
+
+    def test_resolve_version_rejects_incompatible_plugin_api(self, registry_cache_dir, mock_plugin_detail):
+        """Should reject registry versions that target a different plugin API major."""
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.errors import VersionNotFoundError
+        from lfs_plugins.registry import RegistryClient
+
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        incompatible_detail = json.loads(json.dumps(mock_plugin_detail))
+        incompatible_detail["versions"]["1.2.0"]["plugin_api"] = ">=2,<3"
+        incompatible_detail["versions"]["1.1.0"]["plugin_api"] = ">=2,<3"
+
+        with patch.object(client, "get_plugin", return_value=incompatible_detail):
+            with pytest.raises(VersionNotFoundError, match="plugin API 1.0"):
+                client.resolve_version("colmap", None, "1.0.0")
+
+    def test_search_compatible_only_filters_incompatible_plugins(self, registry_cache_dir, mock_registry_index, mock_plugin_detail):
+        """Should exclude registry entries without a compatible version."""
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        incompatible_detail = json.loads(json.dumps(mock_plugin_detail))
+        incompatible_detail["versions"]["1.2.0"]["required_features"] = ["future-ui.v2"]
+        incompatible_detail["versions"]["1.1.0"]["required_features"] = ["future-ui.v2"]
+
+        def _get_plugin(plugin_id):
+            if plugin_id.endswith("colmap"):
+                return mock_plugin_detail
+            return incompatible_detail
+
+        with patch.object(client, "_fetch_json", return_value=mock_registry_index):
+            with patch.object(client, "get_plugin", side_effect=_get_plugin):
+                results = client.search("")
+
+        assert [result.name for result in results] == ["colmap"]
+
+    def test_resolve_version_uses_namespaced_plugin_details(self, registry_cache_dir):
+        """Version resolution should fetch the matching namespaced plugin detail."""
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        official_detail = {
+            "name": "foo",
+            "namespace": "official",
+            "versions": {
+                "2.0.0": {
+                    "version": "2.0.0",
+                    "plugin_api": ">=1,<2",
+                    "lichtfeld_version": ">=0.4.2",
+                    "required_features": [],
+                    "checksum": "sha256:official",
+                    "download_url": "https://example.com/official/foo-2.0.0.tar.gz",
+                },
+            },
+        }
+        community_detail = {
+            "name": "foo",
+            "namespace": "community",
+            "versions": {
+                "1.0.0": {
+                    "version": "1.0.0",
+                    "plugin_api": ">=1,<2",
+                    "lichtfeld_version": ">=0.4.2",
+                    "required_features": [],
+                    "checksum": "sha256:community",
+                    "download_url": "https://example.com/community/foo-1.0.0.tar.gz",
+                },
+            },
+        }
+
+        def _fetch(url):
+            if url.endswith("/plugins/official/foo.json"):
+                return official_detail
+            if url.endswith("/plugins/community/foo.json"):
+                return community_detail
+            raise AssertionError(url)
+
+        with patch.object(client, "_fetch_json", side_effect=_fetch):
+            official = client.resolve_version("official:foo", None, "1.0.0")
+            community = client.resolve_version("community:foo", None, "1.0.0")
+
+        assert official.checksum == "sha256:official"
+        assert community.checksum == "sha256:community"
 
     def test_resolve_version_not_found(self, registry_cache_dir, mock_plugin_detail):
         """Should raise VersionNotFoundError for unknown version."""

@@ -1,7 +1,6 @@
 """Main analyzer panel with property inspection and filtering."""
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 from lfs_plugins.props import PropertyGroup, FloatProperty, EnumProperty, BoolProperty
 from lfs_plugins.ui.state import AppState
 from lfs_plugins.ui.signals import Signal
@@ -19,9 +18,9 @@ class AnalyzerSettings(PropertyGroup):
     auto_update = BoolProperty(default=False, name="Auto-update")
 
 
-class AnalyzerPanel(Panel):
+class AnalyzerPanel(lf.ui.Panel):
     label = "Gaussian Analyzer"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 45
 
     def __init__(self):
@@ -52,28 +51,28 @@ class AnalyzerPanel(Panel):
     def poll(cls, context) -> bool:
         return AppState.has_scene.value
 
-    def draw(self, layout):
-        layout.heading("Gaussian Analyzer")
+    def draw(self, ui):
+        ui.heading("Gaussian Analyzer")
 
-        layout.prop(self.settings, "property_name")
-        layout.prop(self.settings, "threshold")
-        layout.prop(self.settings, "auto_update")
+        ui.prop(self.settings, "property_name")
+        ui.prop(self.settings, "threshold")
+        ui.prop(self.settings, "auto_update")
 
-        layout.separator()
+        ui.separator()
 
-        if layout.button("Analyze", (-1, 0)):
+        if ui.button("Analyze", (-1, 0)):
             self._run_analysis()
 
         total = self.result_total.value
         if total > 0:
             count = self.result_count.value
             pct = count / total * 100
-            layout.label(f"Below threshold: {count:,} / {total:,} ({pct:.1f}%)")
-            layout.progress_bar(count / total)
+            ui.label(f"Below threshold: {count:,} / {total:,} ({pct:.1f}%)")
+            ui.progress_bar(count / total)
 
-        layout.separator()
+        ui.separator()
 
-        with layout.row() as row:
+        with ui.row() as row:
             if row.button("Select Filtered"):
                 self._select_filtered()
             if row.button_styled("Delete Filtered", "error"):

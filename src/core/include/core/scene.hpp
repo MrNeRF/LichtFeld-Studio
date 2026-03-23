@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -101,7 +102,7 @@ namespace lfs::core {
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         std::unique_ptr<KeyframeData> keyframe;
-        size_t gaussian_count = 0;
+        std::atomic<size_t> gaussian_count{0};
         glm::vec3 centroid{0.0f};
 
         std::shared_ptr<lfs::core::Camera> camera;
@@ -127,6 +128,21 @@ namespace lfs::core {
     class LFS_CORE_API Scene {
     public:
         using Node = SceneNode;
+
+        struct SelectionStateSnapshot {
+            std::shared_ptr<lfs::core::Tensor> mask;
+            std::vector<SelectionGroup> groups;
+            uint8_t active_group_id = 0;
+            uint8_t next_group_id = 1;
+            bool has_selection = false;
+        };
+
+        struct SelectionStateMetadata {
+            std::vector<SelectionGroup> groups;
+            uint8_t active_group_id = 0;
+            uint8_t next_group_id = 1;
+            bool has_selection = false;
+        };
 
         enum class MutationType : uint32_t {
             NODE_ADDED = 1 << 0,
@@ -166,6 +182,7 @@ namespace lfs::core {
         void removeNode(const std::string& name, bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         void setNodeVisibility(const std::string& name, bool visible);
+        void setNodeLocked(const std::string& name, bool locked);
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
         bool renameNode(const std::string& old_name, const std::string& new_name);
@@ -259,6 +276,9 @@ namespace lfs::core {
         void setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask);
         void clearSelection();
         bool hasSelection() const;
+        [[nodiscard]] SelectionStateMetadata captureSelectionStateMetadata() const;
+        [[nodiscard]] SelectionStateSnapshot captureSelectionState() const;
+        void restoreSelectionState(const SelectionStateSnapshot& snapshot);
 
         uint8_t addSelectionGroup(const std::string& name, const glm::vec3& color);
         void removeSelectionGroup(uint8_t id);
@@ -266,7 +286,7 @@ namespace lfs::core {
         void setSelectionGroupColor(uint8_t id, const glm::vec3& color);
         void setSelectionGroupLocked(uint8_t id, bool locked);
         [[nodiscard]] bool isSelectionGroupLocked(uint8_t id) const;
-        void setActiveSelectionGroup(uint8_t id) { active_selection_group_ = id; }
+        void setActiveSelectionGroup(uint8_t id);
         [[nodiscard]] uint8_t getActiveSelectionGroup() const { return active_selection_group_; }
         [[nodiscard]] const std::vector<SelectionGroup>& getSelectionGroups() const { return selection_groups_; }
         [[nodiscard]] const SelectionGroup* getSelectionGroup(uint8_t id) const;
@@ -277,6 +297,9 @@ namespace lfs::core {
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
         void setSceneCenter(lfs::core::Tensor scene_center);
         void setImagesHaveAlpha(bool have_alpha) { images_have_alpha_ = have_alpha; }
+
+        void setPointCloudModified(bool modified) { point_cloud_modified_ = modified; }
+        [[nodiscard]] bool isPointCloudModified() const { return point_cloud_modified_; }
 
         [[nodiscard]] std::shared_ptr<lfs::core::PointCloud> getInitialPointCloud() const { return initial_point_cloud_; }
         [[nodiscard]] const lfs::core::Tensor& getSceneCenter() const { return scene_center_; }
@@ -294,11 +317,13 @@ namespace lfs::core {
 
         [[nodiscard]] lfs::core::SplatData* getTrainingModel();
         [[nodiscard]] const lfs::core::SplatData* getTrainingModel() const;
+        [[nodiscard]] size_t getTrainingModelGaussianCount() const;
 
         void setTrainingModelNode(const std::string& name);
         [[nodiscard]] const std::string& getTrainingModelNodeName() const { return training_model_node_; }
 
         void setTrainingModel(std::unique_ptr<lfs::core::SplatData> splat_data, const std::string& name);
+        void syncTrainingModelTopology(size_t gaussian_count);
 
         size_t getNodeCount() const { return nodes_.size(); }
         size_t getTotalGaussianCount() const;
@@ -318,10 +343,10 @@ namespace lfs::core {
         }
 
         void invalidateCache() {
-            model_cache_valid_ = false;
-            transform_cache_valid_ = false;
+            model_cache_valid_.store(false, std::memory_order_release);
+            transform_cache_valid_.store(false, std::memory_order_release);
         }
-        void invalidateTransformCache() { transform_cache_valid_ = false; }
+        void invalidateTransformCache() { transform_cache_valid_.store(false, std::memory_order_release); }
         void markDirty() { invalidateCache(); }
         void markTransformDirty(NodeId node);
 
@@ -339,14 +364,15 @@ namespace lfs::core {
         mutable std::atomic<int> export_pin_count_{0};
         mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
-        mutable bool model_cache_valid_ = false;
+        mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
 
         mutable std::vector<glm::mat4> cached_transforms_;
-        mutable bool transform_cache_valid_ = false;
+        mutable std::atomic<bool> transform_cache_valid_{false};
         mutable bool consolidated_ = false;
         mutable std::vector<NodeId> consolidated_node_ids_;
 
+        mutable std::shared_mutex selection_mutex_;
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
         mutable bool has_selection_ = false;
 
@@ -367,6 +393,7 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::PointCloud> initial_point_cloud_;
         lfs::core::Tensor scene_center_;
         bool images_have_alpha_ = false;
+        bool point_cloud_modified_ = false;
         std::string training_model_node_;
     };
 

@@ -5,9 +5,15 @@
 #include "py_scene.hpp"
 #include "core/camera.hpp"
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/gui_capabilities.hpp"
+#include "visualizer/operation/undo_entry.hpp"
+#include "visualizer/operation/undo_history.hpp"
+#include "visualizer/scene/scene_manager.hpp"
+#include <algorithm>
 #include <nanobind/ndarray.h>
 
 namespace lfs::python {
@@ -92,9 +98,76 @@ namespace lfs::python {
         return m;
     }
 
+    void apply_node_transform_with_undo(const std::string& name,
+                                        const glm::mat4& transform,
+                                        core::Scene* scene) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            if (auto result = vis::cap::setTransformMatrix(*scene_manager, {name}, transform,
+                                                           "python.scene.set_node_transform");
+                !result) {
+                LOG_WARN("PyScene::set_node_transform fell back to direct update for '{}': {}",
+                         name, result.error());
+                scene_manager->setNodeTransform(name, transform);
+            }
+            return;
+        }
+
+        if (scene)
+            scene->setNodeTransform(name, transform);
+    }
+
+    void ensure_scene_manager_content_type(vis::SceneManager& scene_manager,
+                                           const vis::SceneManager::ContentType content_type) {
+        if (scene_manager.getContentType() == vis::SceneManager::ContentType::Empty) {
+            scene_manager.changeContentType(content_type);
+            set_application_scene(&scene_manager.getScene());
+        }
+    }
+
+    template <typename Mutator>
+    void apply_selection_state_with_undo(vis::SceneManager& scene_manager,
+                                         const std::string& undo_label,
+                                         Mutator&& mutator) {
+        auto snapshot = std::make_unique<vis::op::SceneSnapshot>(scene_manager, undo_label);
+        snapshot->captureSelection();
+        mutator(scene_manager.getScene());
+        snapshot->captureAfter();
+        vis::op::pushSceneSnapshotIfChanged(std::move(snapshot));
+    }
+
+    [[nodiscard]] vis::op::SceneGraphCaptureOptions scene_graph_history_options(
+        const bool include_selected_nodes = false,
+        const bool include_scene_context = true) {
+        return vis::op::SceneGraphCaptureOptions{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = include_selected_nodes,
+            .include_scene_context = include_scene_context,
+        };
+    }
+
+    void push_scene_graph_metadata_history(
+        vis::SceneManager& scene_manager,
+        std::string label,
+        const std::vector<vis::op::SceneGraphNodeMetadataSnapshot>& before,
+        const std::vector<vis::op::SceneGraphNodeMetadataSnapshot>& after) {
+        std::vector<vis::op::SceneGraphNodeMetadataDiff> diffs;
+        const size_t count = std::min(before.size(), after.size());
+        diffs.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            diffs.push_back(vis::op::SceneGraphNodeMetadataDiff{
+                .before = before[i],
+                .after = after[i],
+            });
+        }
+        if (!diffs.empty()) {
+            vis::op::undoHistory().push(
+                std::make_unique<vis::op::SceneGraphMetadataEntry>(scene_manager, std::move(label), std::move(diffs)));
+        }
+    }
+
     // PySceneNode implementation
     void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
-        node_->local_transform = ndarray_to_mat4(transform);
+        apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
     }
 
     nb::tuple PySceneNode::world_transform() const {
@@ -142,6 +215,8 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
 
+        if (scene_)
+            scene_->setPointCloudModified(true);
         return old_size - pc_->size();
     }
 
@@ -162,6 +237,8 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
 
+        if (scene_)
+            scene_->setPointCloudModified(true);
         return old_size - pc_->size();
     }
 
@@ -177,7 +254,7 @@ namespace lfs::python {
 
         const int64_t n = pc_->size();
         if (node_) {
-            node_->gaussian_count = n;
+            node_->gaussian_count.store(static_cast<size_t>(n), std::memory_order_release);
             if (n > 0) {
                 auto centroid = pc_->means.mean(0).cpu();
                 auto acc = centroid.accessor<float, 1>();
@@ -185,6 +262,7 @@ namespace lfs::python {
             }
         }
         if (scene_) {
+            scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
@@ -195,6 +273,7 @@ namespace lfs::python {
         assert(cols.shape()[0] == pc_->size());
         pc_->colors = cols.to(core::Device::CUDA);
         if (scene_) {
+            scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
@@ -210,6 +289,7 @@ namespace lfs::python {
             node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
         }
         if (scene_) {
+            scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
@@ -258,6 +338,22 @@ namespace lfs::python {
     }
 
     int32_t PyScene::add_group(const std::string& name, int32_t parent) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            std::string parent_name;
+            if (parent != core::NULL_NODE) {
+                const auto* parent_node = scene_->getNodeById(parent);
+                if (!parent_node) {
+                    return core::NULL_NODE;
+                }
+                parent_name = parent_node->name;
+            }
+
+            const auto created_name = scene_manager->addGroupNode(name, parent_name);
+            if (created_name.empty()) {
+                return core::NULL_NODE;
+            }
+            return scene_->getNodeIdByName(created_name);
+        }
         return scene_->addGroup(name, parent);
     }
 
@@ -271,6 +367,11 @@ namespace lfs::python {
                                const int sh_degree,
                                const float scene_scale,
                                const int32_t parent) {
+        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
+        if (auto* const scene_manager = get_scene_manager()) {
+            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
+        }
+
         auto splat = std::make_unique<core::SplatData>(
             sh_degree,
             means.tensor().clone(),
@@ -294,6 +395,15 @@ namespace lfs::python {
             .node_type = 0}
             .emit();
 
+        if (auto* const scene_manager = get_scene_manager()) {
+            ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::SplatFiles);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                *scene_manager,
+                "Add Splat",
+                std::move(*history_before),
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+        }
+
         return node_id;
     }
 
@@ -301,6 +411,11 @@ namespace lfs::python {
                                      const PyTensor& points,
                                      const PyTensor& colors,
                                      const int32_t parent) {
+        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
+        if (auto* const scene_manager = get_scene_manager()) {
+            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
+        }
+
         const auto& pts = points.tensor();
         const auto& cols = colors.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
@@ -308,7 +423,18 @@ namespace lfs::python {
         assert(pts.shape()[0] == cols.shape()[0]);
 
         auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
-        return scene_->addPointCloud(name, std::move(pc), parent);
+        const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
+
+        if (auto* const scene_manager = get_scene_manager()) {
+            ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::SplatFiles);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                *scene_manager,
+                "Add Point Cloud",
+                std::move(*history_before),
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+        }
+
+        return node_id;
     }
 
     int32_t PyScene::add_mesh(const std::string& name,
@@ -317,6 +443,11 @@ namespace lfs::python {
                               std::optional<PyTensor> colors,
                               std::optional<PyTensor> normals,
                               const int32_t parent) {
+        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
+        if (auto* const scene_manager = get_scene_manager()) {
+            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
+        }
+
         const auto& verts = vertices.tensor();
         const auto& idx = indices.tensor();
         assert(verts.shape().rank() == 2 && verts.shape()[1] == 3);
@@ -340,11 +471,38 @@ namespace lfs::python {
             mesh->compute_normals();
         }
 
-        return scene_->addMesh(name, std::move(mesh), parent);
+        const int32_t node_id = scene_->addMesh(name, std::move(mesh), parent);
+
+        if (auto* const scene_manager = get_scene_manager()) {
+            ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::SplatFiles);
+            if (const auto* node = scene_->getNodeById(node_id)) {
+                vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                    *scene_manager,
+                    "Add Mesh",
+                    std::move(*history_before),
+                    vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {node->name})));
+            }
+        }
+
+        return node_id;
     }
 
     int32_t PyScene::add_camera_group(const std::string& name, const int32_t parent, const size_t camera_count) {
-        return scene_->addCameraGroup(name, parent, camera_count);
+        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
+        if (auto* const scene_manager = get_scene_manager()) {
+            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
+        }
+
+        const int32_t node_id = scene_->addCameraGroup(name, parent, camera_count);
+        if (auto* const scene_manager = get_scene_manager()) {
+            ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::Dataset);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                *scene_manager,
+                "Add Camera Group",
+                std::move(*history_before),
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+        }
+        return node_id;
     }
 
     int32_t PyScene::add_camera(const std::string& name,
@@ -357,6 +515,11 @@ namespace lfs::python {
                                 int height,
                                 const std::string& image_path,
                                 int uid) {
+        std::optional<vis::op::SceneGraphStateSnapshot> history_before;
+        if (auto* const scene_manager = get_scene_manager()) {
+            history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
+        }
+
         const auto& R_tensor = R.tensor();
         const auto& T_tensor = T.tensor();
         assert(R_tensor.ndim() == 2 && R_tensor.size(0) == 3 && R_tensor.size(1) == 3);
@@ -378,18 +541,59 @@ namespace lfs::python {
             width, height,
             uid);
 
-        return scene_->addCamera(name, parent, std::move(camera));
+        const int32_t node_id = scene_->addCamera(name, parent, std::move(camera));
+        if (auto* const scene_manager = get_scene_manager()) {
+            ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::Dataset);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                *scene_manager,
+                "Add Camera",
+                std::move(*history_before),
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+        }
+        return node_id;
     }
 
     void PyScene::remove_node(const std::string& name, bool keep_children) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            scene_manager->removePLY(name, keep_children);
+            return;
+        }
         scene_->removeNode(name, keep_children);
     }
 
     bool PyScene::rename_node(const std::string& old_name, const std::string& new_name) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            return scene_manager->renamePLY(old_name, new_name);
+        }
         return scene_->renameNode(old_name, new_name);
     }
 
+    void PyScene::clear() {
+        if (auto* const scene_manager = get_scene_manager()) {
+            scene_manager->clear();
+            return;
+        }
+        scene_->clear();
+    }
+
     void PyScene::reparent(int32_t node_id, int32_t new_parent_id) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            const auto* node = scene_->getNodeById(node_id);
+            if (!node) {
+                return;
+            }
+
+            std::string new_parent_name;
+            if (new_parent_id != core::NULL_NODE) {
+                const auto* parent = scene_->getNodeById(new_parent_id);
+                if (!parent) {
+                    return;
+                }
+                new_parent_name = parent->name;
+            }
+            scene_manager->reparentNode(node->name, new_parent_name);
+            return;
+        }
         scene_->reparent(node_id, new_parent_id);
     }
 
@@ -433,12 +637,30 @@ namespace lfs::python {
         return result;
     }
 
+    void PyScene::set_camera_training_enabled(const std::string& name, bool enabled) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            const auto* node = scene_->getNode(name);
+            if (!node || node->training_enabled == enabled) {
+                return;
+            }
+            const auto before = vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {name});
+            scene_->setCameraTrainingEnabled(name, enabled);
+            push_scene_graph_metadata_history(
+                *scene_manager,
+                "Set Camera Training",
+                before,
+                vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {name}));
+            return;
+        }
+        scene_->setCameraTrainingEnabled(name, enabled);
+    }
+
     nb::tuple PyScene::get_world_transform(int32_t node_id) const {
         return mat4_to_tuple(scene_->getWorldTransform(node_id));
     }
 
     void PyScene::set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform) {
-        scene_->setNodeTransform(name, ndarray_to_mat4(transform));
+        apply_node_transform_with_undo(name, ndarray_to_mat4(transform), scene_);
     }
 
     void PyScene::set_node_transform_tensor(const std::string& name, const PyTensor& transform) {
@@ -453,7 +675,7 @@ namespace lfs::python {
                 m[j][i] = data[i * 4 + j];
             }
         }
-        scene_->setNodeTransform(name, m);
+        apply_node_transform_with_undo(name, m, scene_);
     }
 
     std::optional<PySplatData> PyScene::combined_model() {
@@ -468,6 +690,21 @@ namespace lfs::python {
         if (!model)
             return std::nullopt;
         return PySplatData(model);
+    }
+
+    void PyScene::set_training_model_node(const std::string& name) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            const auto options = scene_graph_history_options(false, true);
+            auto before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {}, options);
+            scene_->setTrainingModelNode(name);
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                *scene_manager,
+                "Set Training Model",
+                std::move(before),
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {}, options)));
+            return;
+        }
+        scene_->setTrainingModelNode(name);
     }
 
     std::optional<std::tuple<std::tuple<float, float, float>, std::tuple<float, float, float>>>
@@ -493,7 +730,52 @@ namespace lfs::python {
         return PyCropBox(data);
     }
 
+    int32_t PyScene::get_or_create_cropbox_for_splat(const int32_t splat_id) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            const core::NodeId existing_cropbox = scene_->getCropBoxForSplat(splat_id);
+            if (auto result = vis::cap::ensureCropBox(*scene_manager, get_rendering_manager(), splat_id);
+                result) {
+                return *result;
+            }
+
+            auto before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {});
+            const core::NodeId cropbox_id = scene_->getOrCreateCropBoxForSplat(splat_id);
+            if (cropbox_id != core::NULL_NODE && existing_cropbox == core::NULL_NODE) {
+                const auto* cropbox_node = scene_->getNodeById(cropbox_id);
+                const auto root_names = cropbox_node ? std::vector<std::string>{cropbox_node->name}
+                                                     : std::vector<std::string>{};
+                vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                    *scene_manager,
+                    "Add Crop Box",
+                    std::move(before),
+                    vis::op::SceneGraphPatchEntry::captureState(*scene_manager, root_names)));
+            }
+            return cropbox_id;
+        }
+        return scene_->getOrCreateCropBoxForSplat(splat_id);
+    }
+
     void PyScene::set_cropbox_data(const int32_t cropbox_id, const PyCropBox& data) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            vis::cap::CropBoxUpdate update;
+            update.min_bounds = data.data()->min;
+            update.max_bounds = data.data()->max;
+            update.has_inverse = true;
+            update.inverse = data.data()->inverse;
+            update.has_enabled = true;
+            update.enabled = data.data()->enabled;
+            if (auto result = vis::cap::updateCropBox(*scene_manager,
+                                                      scene_manager->getRenderingManager(),
+                                                      cropbox_id,
+                                                      update);
+                !result) {
+                LOG_WARN("PyScene::set_cropbox_data fell back to direct update for {}: {}",
+                         cropbox_id, result.error());
+            } else {
+                return;
+            }
+        }
+
         auto* scene_data = scene_->getCropBoxData(cropbox_id);
         if (scene_data) {
             *scene_data = *data.data();
@@ -508,11 +790,107 @@ namespace lfs::python {
     }
 
     uint8_t PyScene::add_selection_group(const std::string& name, std::tuple<float, float, float> color) {
+        uint8_t created_id = 0;
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(
+                *scene_manager, "selection_group.add",
+                [&](core::Scene& scene) {
+                    created_id = scene.addSelectionGroup(
+                        name, {std::get<0>(color), std::get<1>(color), std::get<2>(color)});
+                });
+            return created_id;
+        }
         return scene_->addSelectionGroup(name, {std::get<0>(color), std::get<1>(color), std::get<2>(color)});
     }
 
+    void PyScene::remove_selection_group(const uint8_t id) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(*scene_manager, "selection_group.remove",
+                                            [id](core::Scene& scene) { scene.removeSelectionGroup(id); });
+            return;
+        }
+        scene_->removeSelectionGroup(id);
+    }
+
+    void PyScene::rename_selection_group(const uint8_t id, const std::string& name) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(*scene_manager, "selection_group.rename",
+                                            [id, &name](core::Scene& scene) { scene.renameSelectionGroup(id, name); });
+            return;
+        }
+        scene_->renameSelectionGroup(id, name);
+    }
+
+    void PyScene::set_selection(const std::vector<size_t>& indices) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            std::vector<uint8_t> mask(scene_->getTotalGaussianCount(), 0);
+            for (const auto index : indices) {
+                if (index < mask.size()) {
+                    mask[index] = 1;
+                }
+            }
+            (void)scene_manager->applySelectionMask(mask);
+            return;
+        }
+        scene_->setSelection(indices);
+    }
+
+    void PyScene::set_selection_mask(const PyTensor& mask) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            const auto cpu_mask = mask.tensor().device() == core::Device::CUDA ? mask.tensor().cpu() : mask.tensor();
+            std::vector<uint8_t> values;
+            if (cpu_mask.dtype() == core::DataType::Bool) {
+                const auto bool_values = cpu_mask.to_vector_bool();
+                values.reserve(bool_values.size());
+                for (const bool value : bool_values)
+                    values.push_back(value ? 1 : 0);
+            } else {
+                values = cpu_mask.to_vector_uint8();
+            }
+            (void)scene_manager->applySelectionMask(values);
+            return;
+        }
+        scene_->setSelectionMask(std::make_shared<core::Tensor>(mask.tensor()));
+    }
+
+    void PyScene::clear_selection() {
+        if (auto* const scene_manager = get_scene_manager()) {
+            scene_manager->deselectAllGaussians();
+            return;
+        }
+        scene_->clearSelection();
+    }
+
     void PyScene::set_selection_group_color(uint8_t id, std::tuple<float, float, float> color) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(
+                *scene_manager, "selection_group.set_color",
+                [id, &color](core::Scene& scene) {
+                    scene.setSelectionGroupColor(id, {std::get<0>(color), std::get<1>(color), std::get<2>(color)});
+                });
+            return;
+        }
         scene_->setSelectionGroupColor(id, {std::get<0>(color), std::get<1>(color), std::get<2>(color)});
+    }
+
+    void PyScene::set_selection_group_locked(const uint8_t id, const bool locked) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(
+                *scene_manager, "selection_group.set_locked",
+                [id, locked](core::Scene& scene) { scene.setSelectionGroupLocked(id, locked); });
+            return;
+        }
+        scene_->setSelectionGroupLocked(id, locked);
+    }
+
+    void PyScene::set_active_selection_group(const uint8_t id) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(
+                *scene_manager, "selection_group.set_active",
+                [id](core::Scene& scene) { scene.setActiveSelectionGroup(id); });
+            return;
+        }
+        scene_->setActiveSelectionGroup(id);
     }
 
     std::vector<PySelectionGroup> PyScene::selection_groups() const {
@@ -527,8 +905,40 @@ namespace lfs::python {
         return result;
     }
 
+    void PyScene::clear_selection_group(const uint8_t id) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(*scene_manager, "selection_group.clear",
+                                            [id](core::Scene& scene) { scene.clearSelectionGroup(id); });
+            return;
+        }
+        scene_->clearSelectionGroup(id);
+    }
+
+    void PyScene::reset_selection_state() {
+        if (auto* const scene_manager = get_scene_manager()) {
+            apply_selection_state_with_undo(*scene_manager, "selection.reset_state",
+                                            [](core::Scene& scene) { scene.resetSelectionState(); });
+            return;
+        }
+        scene_->resetSelectionState();
+    }
+
     PyTensor PyScene::scene_center() const {
         return PyTensor(scene_->getSceneCenter(), false);
+    }
+
+    std::string PyScene::duplicate_node(const std::string& name) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            return scene_manager->duplicateNodeTree(name);
+        }
+        return scene_->duplicateNode(name);
+    }
+
+    std::string PyScene::merge_group(const std::string& group_name) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            return scene_manager->mergeGroupNode(group_name);
+        }
+        return scene_->mergeGroup(group_name);
     }
 
     void register_scene(nb::module_& m) {
@@ -887,6 +1297,7 @@ Returns:
             .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
+            .def_prop_rw("is_point_cloud_modified", &PyScene::is_point_cloud_modified, &PyScene::set_point_cloud_modified, "Whether the point cloud has been modified since loading")
             .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")
             // Counts
             .def_prop_ro("node_count", &PyScene::node_count, "Total number of nodes in the scene")

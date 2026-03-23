@@ -21,8 +21,14 @@
 #include "training/training_setup.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include "app/mcp_gui_tools.hpp"
+#include "io/video/video_encoder.hpp"
+#include "mcp/mcp_http_server.hpp"
+#include "mcp/mcp_tools.hpp"
 #include "python/runner.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
+#include "visualizer/gui/video_widget_interface.hpp"
+#include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <rasterization_api.h>
@@ -101,9 +107,6 @@ namespace lfs::app {
                     scene.setTrainingModelNode("Model");
 
                     checkpoint_params.resume_checkpoint = *params->resume_checkpoint;
-
-                    if (params->optimization.iterations != checkpoint_params.optimization.iterations)
-                        checkpoint_params.optimization.iterations = params->optimization.iterations;
 
                     auto trainer = std::make_unique<training::Trainer>(scene);
 
@@ -226,7 +229,14 @@ namespace lfs::app {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
 
-            if (params->optimization.no_splash) {
+            const bool disable_splash =
+#ifdef LFS_BUILD_PORTABLE
+                false;
+#else
+                params->optimization.no_splash;
+#endif
+
+            if (disable_splash) {
                 warmupCuda();
             } else {
                 SplashScreen::runWithDelay([]() { warmupCuda(); return 0; });
@@ -234,12 +244,20 @@ namespace lfs::app {
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 
+            lfs::gui::setVideoWidgetFactory([] {
+                return std::make_unique<lfs::gui::VideoExtractorDialog>();
+            });
+            lfs::gui::setVideoEncoderFactory([] {
+                return std::make_unique<lfs::io::video::VideoEncoder>();
+            });
+
             auto viewer = vis::Visualizer::create({
                 .title = "LichtFeld Studio",
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
                 .enable_cuda_interop = true,
+                .show_startup_overlay = !disable_splash,
                 .gut = params->optimization.gut,
             });
 
@@ -267,7 +285,22 @@ namespace lfs::app {
                 }
             }
 
+            mcp::register_core_tools();
+            mcp::register_core_resources();
+            register_gui_scene_tools(viewer.get());
+            register_gui_scene_resources(viewer.get());
+
+            mcp::McpHttpServer mcp_http({.enable_resources = true});
+            viewer->setShutdownRequestedCallback([&mcp_http]() {
+                mcp_http.stop();
+            });
+            if (!mcp_http.start())
+                LOG_ERROR("Failed to start MCP HTTP server");
+
             viewer->run();
+
+            mcp_http.stop();
+
             viewer.reset();
 
             core::Tensor::shutdown_memory_pool();
@@ -294,6 +327,15 @@ namespace lfs::app {
     } // namespace
 
     int Application::run(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+        // Pre-initialize CacheLoader for the exe module.
+        // On Windows, lfs_io (static lib) is linked into both the exe and
+        // lfs_visualizer.dll, giving each its own CacheLoader singleton.
+        // The callback below executes in the exe's context, so the exe's
+        // copy must be initialized before it is invoked.
+        lfs::io::CacheLoader::getInstance(
+            params->dataset.loading_params.use_cpu_memory,
+            params->dataset.loading_params.use_fs_cache);
+
         lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
             return lfs::io::CacheLoader::getInstance().load_cached_image(
                 p.path, {.resize_factor = p.resize_factor, .max_width = p.max_width, .cuda_stream = p.stream});

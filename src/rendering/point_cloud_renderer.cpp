@@ -184,8 +184,10 @@ namespace lfs::rendering {
         if (interleaved_cache_.size(0) != static_cast<int64_t>(num_points)) {
             interleaved_cache_ = Tensor::empty({num_points, 7}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
-        interleaved_cache_.slice(1, 0, 3).copy_(positions);
-        interleaved_cache_.slice(1, 3, 6).copy_(colors);
+        const auto pos_cuda = positions.cuda();
+        const auto col_cuda = colors.cuda();
+        interleaved_cache_.slice(1, 0, 3).copy_(pos_cuda);
+        interleaved_cache_.slice(1, 3, 6).copy_(col_cuda);
         if (transform_indices && transform_indices->size(0) == static_cast<int64_t>(num_points)) {
             interleaved_cache_.slice(1, 6, 7).copy_(transform_indices->unsqueeze(1));
         } else {

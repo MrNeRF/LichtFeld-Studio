@@ -70,6 +70,9 @@ description = ""
 [tool.lichtfeld]
 auto_start = false
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
     )
 

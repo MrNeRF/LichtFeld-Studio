@@ -1,7 +1,11 @@
 # Centralized icon management for Python plugins.
 # All icon loading defers to C++ which maintains a global cache.
 
-import lichtfeld as lf
+
+def _runtime():
+    import lichtfeld as lf
+
+    return lf
 
 
 def get_icon(name: str) -> int:
@@ -11,6 +15,7 @@ def get_icon(name: str) -> int:
     C++ maintains the cache - this is the preferred API for toolbar icons.
     """
     try:
+        lf = _runtime()
         return lf.load_icon(name)
     except Exception:
         return 0
@@ -23,6 +28,7 @@ def get_ui_icon(name: str) -> int:
     Returns the OpenGL texture ID, or 0 if loading failed.
     """
     try:
+        lf = _runtime()
         return lf.ui.load_icon(name)
     except Exception:
         return 0
@@ -34,6 +40,7 @@ def get_scene_icon(name: str) -> int:
     Returns the OpenGL texture ID, or 0 if loading failed.
     """
     try:
+        lf = _runtime()
         return lf.ui.load_scene_icon(name)
     except Exception:
         return 0
@@ -48,6 +55,7 @@ def get_plugin_icon(name: str, plugin_path: str, plugin_name: str) -> int:
     Returns the OpenGL texture ID, or 0 if loading failed.
     """
     try:
+        lf = _runtime()
         return lf.ui.load_plugin_icon(name, plugin_path, plugin_name)
     except Exception:
         return 0

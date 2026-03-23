@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "camera_frustum_renderer.hpp"
-#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "gl_state_guard.hpp"
-#include "io/nvcodec_image_loader.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace lfs::rendering {
@@ -19,7 +18,6 @@ namespace lfs::rendering {
         constexpr float MIN_RENDER_ALPHA = 0.01f;
         constexpr float WIREFRAME_WIDTH = 1.5f;
         constexpr int PICKING_SAMPLE_SIZE = 3;
-        constexpr int NVCODEC_DECODER_POOL_SIZE = 4;
         constexpr int INITIAL_TEXTURE_ARRAY_CAPACITY = 256;
         constexpr float EQUIRECTANGULAR_DISPLAY_FOV = 1.0472f; // 60 degrees
 
@@ -28,6 +26,9 @@ namespace lfs::rendering {
 
     CameraFrustumRenderer::~CameraFrustumRenderer() {
         stopThumbnailLoader();
+        if (picking_pbos_[0]) {
+            glDeleteBuffers(2, picking_pbos_);
+        }
     }
 
     void CameraFrustumRenderer::clearThumbnailCache() {
@@ -275,6 +276,16 @@ namespace lfs::rendering {
         if (status != GL_FRAMEBUFFER_COMPLETE) {
             return std::unexpected("Picking FBO incomplete");
         }
+
+        glGenBuffers(2, picking_pbos_);
+        for (auto& pbo : picking_pbos_) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+            glBufferData(GL_PIXEL_PACK_BUFFER,
+                         PICKING_SAMPLE_SIZE * PICKING_SAMPLE_SIZE * 3 * sizeof(float),
+                         nullptr, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
         return {};
     }
 
@@ -287,7 +298,7 @@ namespace lfs::rendering {
         const glm::vec3& view_position,
         const glm::mat4& scene_transform,
         const std::unordered_set<int>& disabled_uids,
-        const std::unordered_set<int>& selected_uids) {
+        const std::unordered_set<int>& emphasized_uids) {
 
         const bool needs_regeneration =
             cached_instances_.size() != cameras.size() ||
@@ -296,7 +307,7 @@ namespace lfs::rendering {
             last_eval_color_ != eval_color ||
             last_scene_transform_ != scene_transform ||
             last_disabled_uids_ != disabled_uids ||
-            last_selected_uids_ != selected_uids;
+            last_emphasized_uids_ != emphasized_uids;
 
         if (!needs_regeneration && !cached_instances_.empty()) {
             updateInstanceVisibility(view_position);
@@ -371,8 +382,8 @@ namespace lfs::rendering {
             if (is_disabled)
                 alpha *= 0.4f;
 
-            const bool is_selected = selected_uids.count(cam->uid()) > 0;
-            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, is_disabled ? 1u : 0u, is_selected ? 1u : 0u});
+            const bool is_emphasized = emphasized_uids.count(cam->uid()) > 0;
+            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, is_disabled ? 1u : 0u, is_emphasized ? 1u : 0u});
             camera_ids_.push_back(cam->uid());
         }
 
@@ -382,7 +393,7 @@ namespace lfs::rendering {
         last_view_position_ = view_position;
         last_scene_transform_ = scene_transform;
         last_disabled_uids_ = disabled_uids;
-        last_selected_uids_ = selected_uids;
+        last_emphasized_uids_ = emphasized_uids;
     }
 
     void CameraFrustumRenderer::updateInstanceVisibility(const glm::vec3& view_position) {
@@ -420,7 +431,7 @@ namespace lfs::rendering {
         const glm::mat4& scene_transform,
         const bool equirectangular_view,
         const std::unordered_set<int>& disabled_uids,
-        const std::unordered_set<int>& selected_uids) {
+        const std::unordered_set<int>& emphasized_uids) {
 
         if (!initialized_ || cameras.empty())
             return {};
@@ -428,7 +439,7 @@ namespace lfs::rendering {
         uploadReadyThumbnails();
 
         const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
-        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform, disabled_uids, selected_uids);
+        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform, disabled_uids, emphasized_uids);
 
         if (cached_instances_.empty())
             return {};
@@ -500,7 +511,7 @@ namespace lfs::rendering {
 
             glEnableVertexAttribArray(11);
             glVertexAttribIPointer(11, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                   reinterpret_cast<void*>(offsetof(InstanceData, is_selected)));
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_emphasized)));
             glVertexAttribDivisor(11, 1);
         };
 
@@ -519,16 +530,16 @@ namespace lfs::rendering {
 
         const glm::mat4 view_proj = projection * view;
 
-        const auto findHighlightIndex = [this](const std::vector<int>& indices) -> int {
+        const auto findFocusedIndex = [this](const std::vector<int>& indices) -> int {
             for (size_t i = 0; i < indices.size(); ++i) {
-                if (indices[i] == highlighted_camera_)
+                if (indices[i] == focused_camera_)
                     return static_cast<int>(i);
             }
             return -1;
         };
 
-        const int frustum_highlight = findHighlightIndex(frustum_indices);
-        const int sphere_highlight = findHighlightIndex(sphere_indices);
+        const int frustum_focus = findFocusedIndex(frustum_indices);
+        const int sphere_focus = findFocusedIndex(sphere_indices);
 
         if (show_images_) {
             for (size_t i = 0; i < frustum_instances.size() && i < frustum_cameras.size(); ++i)
@@ -557,7 +568,7 @@ namespace lfs::rendering {
             shader->set("cameraTextures", 0);
 
             if (!frustum_instances.empty()) {
-                shader->set("highlightIndex", frustum_highlight);
+                shader->set("focusIndex", frustum_focus);
                 VAOBinder vao_bind(vao_);
                 setupInstanceAttributes(frustum_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
@@ -567,7 +578,7 @@ namespace lfs::rendering {
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("highlightIndex", sphere_highlight);
+                shader->set("focusIndex", sphere_focus);
                 VAOBinder vao_bind(sphere_vao_);
                 setupInstanceAttributes(sphere_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
@@ -594,7 +605,7 @@ namespace lfs::rendering {
             glLineWidth(WIREFRAME_WIDTH);
 
             if (!frustum_instances.empty()) {
-                shader->set("highlightIndex", frustum_highlight);
+                shader->set("focusIndex", frustum_focus);
                 VAOBinder vao_bind(vao_);
                 setupInstanceAttributes(frustum_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
@@ -604,7 +615,7 @@ namespace lfs::rendering {
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("highlightIndex", sphere_highlight);
+                shader->set("focusIndex", sphere_focus);
                 VAOBinder vao_bind(sphere_vao_);
                 setupInstanceAttributes(sphere_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
@@ -651,13 +662,27 @@ namespace lfs::rendering {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, picking_fbo_width_, picking_fbo_height_, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
         }
 
+        const int pixel_x = std::clamp(static_cast<int>(mouse_pos.x - viewport_pos.x), 0, picking_fbo_width_ - 1);
+        const int pixel_y = std::clamp(static_cast<int>(viewport_size.y - (mouse_pos.y - viewport_pos.y)), 0, picking_fbo_height_ - 1);
+        const int read_x = std::max(0, pixel_x - 1);
+        const int read_y = std::max(0, pixel_y - 1);
+        const int read_width = std::min(PICKING_SAMPLE_SIZE, picking_fbo_width_ - read_x);
+        const int read_height = std::min(PICKING_SAMPLE_SIZE, picking_fbo_height_ - read_y);
+
         GLint current_fbo;
         GLint current_viewport[4];
+        GLboolean scissor_was_enabled;
+        GLint prev_scissor[4];
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
         glGetIntegerv(GL_VIEWPORT, current_viewport);
+        scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
+        glGetIntegerv(GL_SCISSOR_BOX, prev_scissor);
 
         glBindFramebuffer(GL_FRAMEBUFFER, picking_fbo_);
         glViewport(0, 0, picking_fbo_width_, picking_fbo_height_);
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(read_x, read_y, read_width, read_height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -710,7 +735,7 @@ namespace lfs::rendering {
 
             glEnableVertexAttribArray(11);
             glVertexAttribIPointer(11, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                   reinterpret_cast<void*>(offsetof(InstanceData, is_selected)));
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_emphasized)));
             glVertexAttribDivisor(11, 1);
         };
 
@@ -767,31 +792,39 @@ namespace lfs::rendering {
             }
         }
 
-        glFinish();
+        const int write_pbo = pbo_index_;
+        const int read_pbo = 1 - pbo_index_;
 
-        const int pixel_x = std::clamp(static_cast<int>(mouse_pos.x - viewport_pos.x), 0, picking_fbo_width_ - 1);
-        const int pixel_y = std::clamp(static_cast<int>(viewport_size.y - (mouse_pos.y - viewport_pos.y)), 0, picking_fbo_height_ - 1);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, picking_pbos_[write_pbo]);
+        const int sample_bytes = read_width * read_height * 3 * static_cast<int>(sizeof(float));
+        if (read_width != pbo_sample_w_ || read_height != pbo_sample_h_) {
+            glBufferData(GL_PIXEL_PACK_BUFFER, sample_bytes, nullptr, GL_STREAM_READ);
+        }
+        glReadPixels(read_x, read_y, read_width, read_height, GL_RGB, GL_FLOAT, nullptr);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-        const int read_x = std::max(0, pixel_x - 1);
-        const int read_y = std::max(0, pixel_y - 1);
-        const int read_width = std::min(PICKING_SAMPLE_SIZE, picking_fbo_width_ - read_x);
-        const int read_height = std::min(PICKING_SAMPLE_SIZE, picking_fbo_height_ - read_y);
-
-        std::vector<float> pixels(read_width * read_height * 3);
-        glReadPixels(read_x, read_y, read_width, read_height, GL_RGB, GL_FLOAT, pixels.data());
-
-        int center_idx = 0;
-        if (read_width == 3 && read_height == 3) {
-            center_idx = 4 * 3;
-        } else if (read_width >= 2 && read_height >= 2) {
-            center_idx = ((read_height / 2) * read_width + (read_width / 2)) * 3;
+        int id = -1;
+        if (pbo_has_data_) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, picking_pbos_[read_pbo]);
+            const auto* pixels = static_cast<const float*>(
+                glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY));
+            if (pixels) {
+                id = decodePickId(pixels, pbo_sample_w_, pbo_sample_h_);
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         }
 
-        const int id = (static_cast<int>(pixels[center_idx] * 255.0f + 0.5f) << 16 |
-                        static_cast<int>(pixels[center_idx + 1] * 255.0f + 0.5f) << 8 |
-                        static_cast<int>(pixels[center_idx + 2] * 255.0f + 0.5f)) -
-                       1;
+        pbo_sample_w_ = read_width;
+        pbo_sample_h_ = read_height;
+        pbo_index_ = read_pbo;
+        pbo_has_data_ = true;
 
+        if (scissor_was_enabled) {
+            glScissor(prev_scissor[0], prev_scissor[1], prev_scissor[2], prev_scissor[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
         glViewport(current_viewport[0], current_viewport[1], current_viewport[2], current_viewport[3]);
 
@@ -799,6 +832,19 @@ namespace lfs::rendering {
             return camera_ids_[id];
         }
         return -1;
+    }
+
+    int CameraFrustumRenderer::decodePickId(const float* pixels, const int width, const int height) const {
+        int center_idx = 0;
+        if (width == 3 && height == 3) {
+            center_idx = 4 * 3;
+        } else if (width >= 2 && height >= 2) {
+            center_idx = ((height / 2) * width + (width / 2)) * 3;
+        }
+        return (static_cast<int>(pixels[center_idx] * 255.0f + 0.5f) << 16 |
+                static_cast<int>(pixels[center_idx + 1] * 255.0f + 0.5f) << 8 |
+                static_cast<int>(pixels[center_idx + 2] * 255.0f + 0.5f)) -
+               1;
     }
 
     GLuint CameraFrustumRenderer::getOrLoadThumbnail(const lfs::core::Camera& camera) {
@@ -838,128 +884,80 @@ namespace lfs::rendering {
         }
     }
 
+    void CameraFrustumRenderer::setImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) {
+        std::lock_guard lock(shared_loader_mutex_);
+        shared_loader_ = std::move(loader);
+    }
+
     void CameraFrustumRenderer::thumbnailLoaderWorker() {
-        constexpr auto IDLE_TIMEOUT = std::chrono::seconds(5);
-        constexpr auto POLL_INTERVAL = std::chrono::milliseconds(500);
+        std::shared_ptr<lfs::io::PipelinedImageLoader> fallback;
 
-        std::unique_ptr<lfs::io::NvCodecImageLoader> nvcodec;
-        const bool nvcodec_supported = lfs::io::NvCodecImageLoader::is_available();
-        auto last_activity = std::chrono::steady_clock::now();
-
-        const auto create_nvcodec = [&]() -> bool {
-            if (nvcodec || !nvcodec_supported)
-                return nvcodec != nullptr;
-            try {
-                lfs::io::NvCodecImageLoader::Options opts;
-                opts.device_id = 0;
-                opts.decoder_pool_size = NVCODEC_DECODER_POOL_SIZE;
-                nvcodec = std::make_unique<lfs::io::NvCodecImageLoader>(opts);
-                return true;
-            } catch (const std::exception& e) {
-                LOG_WARN("nvImageCodec init failed: {}", e.what());
-                return false;
+        const auto get_loader = [&]() -> std::shared_ptr<lfs::io::PipelinedImageLoader> {
+            {
+                std::lock_guard lock(shared_loader_mutex_);
+                if (shared_loader_)
+                    return shared_loader_;
             }
+            if (!fallback) {
+                lfs::io::PipelinedLoaderConfig config;
+                config.io_threads = 0;
+                config.cold_process_threads = 0;
+                config.max_cache_bytes = 64ULL * 1024 * 1024;
+                fallback = std::make_shared<lfs::io::PipelinedImageLoader>(config);
+            }
+            return fallback;
         };
 
         while (thumbnail_loader_running_) {
             ThumbnailRequest request;
-            bool has_work = false;
 
             {
                 std::unique_lock lock(load_queue_mutex_);
-                load_queue_cv_.wait_for(lock, POLL_INTERVAL, [this] {
+                load_queue_cv_.wait(lock, [this] {
                     return !thumbnail_load_queue_.empty() || !thumbnail_loader_running_;
                 });
 
                 if (!thumbnail_loader_running_)
                     break;
 
-                if (!thumbnail_load_queue_.empty()) {
-                    request = std::move(thumbnail_load_queue_.front());
-                    thumbnail_load_queue_.pop();
-                    has_work = true;
-                    last_activity = std::chrono::steady_clock::now();
-                }
-            }
+                if (thumbnail_load_queue_.empty())
+                    continue;
 
-            // Release nvcodec after idle timeout to free CUDA resources for training
-            if (!has_work) {
-                if (nvcodec && (std::chrono::steady_clock::now() - last_activity) > IDLE_TIMEOUT) {
-                    LOG_DEBUG("Releasing idle thumbnail nvcodec");
-                    nvcodec.reset();
-                }
-                continue;
+                request = std::move(thumbnail_load_queue_.front());
+                thumbnail_load_queue_.pop();
             }
 
             LoadedThumbnail loaded;
             loaded.camera_uid = request.camera_uid;
 
             try {
-                std::string ext = request.image_path.extension().string();
-                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                auto loader = get_loader();
 
-                bool loaded_with_nvcodec = false;
-                const bool is_jpeg = (ext == ".jpg" || ext == ".jpeg");
+                lfs::io::LoadParams params;
+                params.max_width = THUMBNAIL_SIZE;
 
-                if (is_jpeg && create_nvcodec()) {
-                    try {
-                        const int max_dim = std::max(request.image_width, request.image_height);
-                        int pot_resize = 1;
-                        while (pot_resize * 2 <= max_dim / THUMBNAIL_SIZE) {
-                            pot_resize *= 2;
-                        }
+                auto tensor = loader->load_image_immediate(request.image_path, params);
+                assert(tensor.ndim() == 3);
 
-                        auto tensor = nvcodec->load_image_gpu(request.image_path, pot_resize, THUMBNAIL_SIZE);
-                        auto cpu_tensor = tensor.cpu().contiguous();
-                        const auto shape = cpu_tensor.shape();
-                        const int c = shape[0], h = shape[1], w = shape[2];
+                // float32 [C,H,W] on GPU → uint8 [H,W,C] on CPU with Y-flip
+                auto hwc = tensor.permute({1, 2, 0}).contiguous();
+                hwc = (hwc.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8).contiguous();
+                hwc = hwc.cpu().contiguous();
 
-                        if (c != 3)
-                            throw std::runtime_error("Expected 3 channels");
+                const int h = static_cast<int>(hwc.shape()[0]);
+                const int w = static_cast<int>(hwc.shape()[1]);
+                const int ch = static_cast<int>(hwc.shape()[2]);
+                assert(ch == 3);
 
-                        loaded.width = w;
-                        loaded.height = h;
-                        loaded.pixel_data.resize(w * h * 3);
+                loaded.width = w;
+                loaded.height = h;
+                loaded.pixel_data.resize(static_cast<size_t>(w) * h * 3);
 
-                        // CHW (channel-first) to HWC (interleaved) with Y-flip
-                        const float* src = cpu_tensor.ptr<float>();
-                        const int plane_size = h * w;
-                        const float* r_plane = src;
-                        const float* g_plane = src + plane_size;
-                        const float* b_plane = src + 2 * plane_size;
-
-                        for (int y = 0; y < h; ++y) {
-                            const int src_y = h - 1 - y;
-                            uint8_t* dst_row = loaded.pixel_data.data() + y * w * 3;
-                            const float* r_row = r_plane + src_y * w;
-                            const float* g_row = g_plane + src_y * w;
-                            const float* b_row = b_plane + src_y * w;
-
-                            for (int x = 0; x < w; ++x) {
-                                dst_row[x * 3] = static_cast<uint8_t>(std::clamp(r_row[x] * 255.0f, 0.0f, 255.0f));
-                                dst_row[x * 3 + 1] = static_cast<uint8_t>(std::clamp(g_row[x] * 255.0f, 0.0f, 255.0f));
-                                dst_row[x * 3 + 2] = static_cast<uint8_t>(std::clamp(b_row[x] * 255.0f, 0.0f, 255.0f));
-                            }
-                        }
-                        loaded_with_nvcodec = true;
-                    } catch (...) {}
-                }
-
-                if (!loaded_with_nvcodec) {
-                    auto [data, width, height, channels] = lfs::core::load_image(request.image_path, -1, THUMBNAIL_SIZE);
-                    if (!data)
-                        continue;
-
-                    loaded.width = width;
-                    loaded.height = height;
-                    loaded.pixel_data.resize(width * height * 3);
-
-                    for (int y = 0; y < height; ++y) {
-                        std::memcpy(loaded.pixel_data.data() + y * width * 3,
-                                    data + (height - 1 - y) * width * 3,
-                                    width * 3);
-                    }
-                    lfs::core::free_image(data);
+                const auto* src = hwc.ptr<uint8_t>();
+                const size_t row_bytes = static_cast<size_t>(w) * 3;
+                for (int y = 0; y < h; ++y) {
+                    std::memcpy(loaded.pixel_data.data() + y * row_bytes,
+                                src + (h - 1 - y) * row_bytes, row_bytes);
                 }
 
                 {

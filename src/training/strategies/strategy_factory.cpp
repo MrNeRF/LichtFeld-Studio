@@ -6,6 +6,7 @@
 #include "adc.hpp"
 #include "lfs.hpp"
 #include "core/logger.hpp"
+#include "improved_gs_plus.hpp"
 #include "mcmc.hpp"
 #include <format>
 #include <mutex>
@@ -35,6 +36,11 @@ namespace lfs::training {
         registry_["lfs"] = [](core::SplatData& model)
             -> std::expected<std::unique_ptr<IStrategy>, std::string> {
             return std::make_unique<LFS>(model);
+        };
+
+        registry_["igs+"] = [](core::SplatData& model)
+            -> std::expected<std::unique_ptr<IStrategy>, std::string> {
+            return std::make_unique<ImprovedGSPlus>(model);
         };
     }
 

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "tools/brush_tool.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "theme/theme.hpp"
 #include <imgui.h>
@@ -29,7 +30,7 @@ namespace lfs::vis::tools {
 
     void BrushTool::renderUI([[maybe_unused]] const lfs::vis::gui::UIContext& ui_ctx,
                              [[maybe_unused]] bool* p_open) {
-        if (!isEnabled() || !tool_context_ || ImGui::GetIO().WantCaptureMouse)
+        if (!isEnabled() || !tool_context_ || gui::guiFocusState().want_capture_mouse)
             return;
 
         const auto& t = theme();
@@ -64,10 +65,8 @@ namespace lfs::vis::tools {
     void BrushTool::onEnabledChanged(bool enabled) {
         if (tool_context_) {
             auto* const rm = tool_context_->getRenderingManager();
-            if (rm) {
-                rm->setOutputScreenPositions(enabled);
-                if (enabled)
-                    rm->markDirty(DirtyFlag::SELECTION);
+            if (rm && enabled) {
+                rm->markDirty(DirtyFlag::SELECTION);
             }
         }
     }

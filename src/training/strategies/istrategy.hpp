@@ -8,9 +8,16 @@
 #include "core/splat_data.hpp"
 #include "optimizer/render_output.hpp"
 #include <istream>
+#include <memory>
 #include <ostream>
 
+namespace lfs::io {
+    class PipelinedImageLoader;
+}
+
 namespace lfs::training {
+
+    class CameraDataset;
 
     /**
      * @brief Strategy interface for Gaussian splatting optimization.
@@ -23,6 +30,8 @@ namespace lfs::training {
         virtual ~IStrategy() = default;
 
         virtual void initialize(const lfs::core::param::OptimizationParameters& optimParams) = 0;
+
+        virtual void pre_step(int /*iter*/, RenderOutput& /*render_output*/) {}
 
         virtual void post_backward(int iter, RenderOutput& render_output) = 0;
 
@@ -50,5 +59,13 @@ namespace lfs::training {
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         virtual void reserve_optimizer_capacity(size_t capacity) = 0;
+
+        // Update the strategy's cached optimization parameters after checkpoint params are resolved.
+        virtual void set_optimization_params(const lfs::core::param::OptimizationParameters&) {}
+
+        // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
+        virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
+
+        virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
     };
 } // namespace lfs::training

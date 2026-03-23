@@ -7,7 +7,10 @@
 #include "mcp_protocol.hpp"
 #include "training/control/command_api.hpp"
 
+#include <expected>
 #include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -48,6 +51,37 @@ namespace lfs::mcp {
         mutable std::mutex mutex_;
     };
 
-    void register_builtin_tools();
+    class LFS_MCP_API ResourceRegistry {
+    public:
+        using ResourceHandler =
+            std::function<std::expected<std::vector<McpResourceContent>, std::string>(const std::string& uri)>;
+
+        static ResourceRegistry& instance();
+
+        void register_resource(McpResource resource, ResourceHandler handler);
+        void unregister_resource(const std::string& uri);
+
+        void register_resource_prefix(std::string uri_prefix, ResourceHandler handler);
+        void unregister_resource_prefix(const std::string& uri_prefix);
+
+        std::vector<McpResource> list_resources() const;
+        std::expected<std::vector<McpResourceContent>, std::string> read_resource(const std::string& uri) const;
+
+    private:
+        ResourceRegistry() = default;
+
+        struct RegisteredResource {
+            McpResource resource;
+            ResourceHandler handler;
+        };
+
+        std::unordered_map<std::string, RegisteredResource> resources_;
+        std::unordered_map<std::string, ResourceHandler> prefix_handlers_;
+        mutable std::mutex mutex_;
+    };
+
+    LFS_MCP_API void register_core_tools();
+    LFS_MCP_API void register_core_resources();
+    LFS_MCP_API void register_builtin_tools();
 
 } // namespace lfs::mcp

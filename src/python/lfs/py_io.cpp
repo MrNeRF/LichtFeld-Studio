@@ -16,8 +16,8 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
-#include "formats/ply.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "training/dataset.hpp"
@@ -138,7 +138,7 @@ namespace lfs::python {
                 auto result = loader->load(path, options);
                 if (!result) {
                     throw std::runtime_error(
-                        std::format("Failed to load '{}': {}", path.string(), result.error().format()));
+                        std::format("Failed to load '{}': {}", lfs::core::path_to_utf8(path), result.error().format()));
                 }
 
                 PyLoadResult py_result;
@@ -193,6 +193,21 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"), nb::arg("binary") = true, nb::arg("progress") = nb::none(),
             "Save splat data as PLY file");
+
+        m.def(
+            "save_point_cloud_ply",
+            [](const PyPointCloud& pc, const std::filesystem::path& path) {
+                if (!pc.data())
+                    throw std::runtime_error("Point cloud data must not be null");
+                io::PlySaveOptions options;
+                options.output_path = path;
+                options.binary = true;
+                auto result = io::save_ply(*pc.data(), options);
+                if (!result)
+                    throw std::runtime_error(std::format("Failed to save point cloud PLY: {}", result.error().format()));
+            },
+            nb::arg("point_cloud"), nb::arg("path"),
+            "Save a point cloud as PLY file (xyz + colors)");
 
         m.def(
             "save_sog",

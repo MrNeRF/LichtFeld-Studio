@@ -7,6 +7,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <deque>
+
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
 #include "py_cameras.hpp"
@@ -27,11 +29,14 @@
 #include "py_selection.hpp"
 #include "py_signals.hpp"
 #include "py_splat_data.hpp"
+#include "py_splat_simplify.hpp"
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
 #include "python/viewport_overlay.hpp"
+#include "visualizer/operation/undo_entry.hpp"
+#include "visualizer/operation/undo_history.hpp"
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
@@ -41,8 +46,10 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
+#include "py_rml.hpp"
 #include "python/python_runtime.hpp"
 
 #include "config.h"
@@ -55,6 +62,7 @@
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
@@ -739,6 +747,21 @@ NB_MODULE(lichtfeld, m) {
         },
         "Get the recent loss history as a list of floats");
 
+    m.def(
+        "push_loss_to_element",
+        [](lfs::python::PyRmlElement& elem, const std::vector<float>& data) -> nb::tuple {
+            auto* raw = elem.raw();
+            if (!raw)
+                return nb::make_tuple(0.0f, 1.0f);
+            auto* lg = dynamic_cast<lfs::vis::gui::LossGraphElement*>(raw);
+            if (!lg)
+                return nb::make_tuple(0.0f, 1.0f);
+            std::deque<float> deque(data.begin(), data.end());
+            lg->setData(deque);
+            return nb::make_tuple(lg->getDataMin(), lg->getDataMax());
+        },
+        "Push loss data to a loss-graph element, returns (data_min, data_max)");
+
     // Trainer status bar bindings
     m.def(
         "trainer_elapsed_seconds", []() -> float {
@@ -815,6 +838,26 @@ NB_MODULE(lichtfeld, m) {
             auto* scene = get_scene_internal();
             if (!scene)
                 return;
+            if (auto* sm = lfs::python::get_scene_manager()) {
+                const auto* node = scene->getNode(name);
+                if (!node || node->training_enabled == enabled)
+                    return;
+
+                const auto before = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*sm, {name});
+                scene->setCameraTrainingEnabled(name, enabled);
+                std::vector<lfs::vis::op::SceneGraphNodeMetadataDiff> diffs;
+                const auto after = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*sm, {name});
+                if (!before.empty() && !after.empty()) {
+                    diffs.push_back(lfs::vis::op::SceneGraphNodeMetadataDiff{
+                        .before = before.front(),
+                        .after = after.front(),
+                    });
+                    lfs::vis::op::undoHistory().push(
+                        std::make_unique<lfs::vis::op::SceneGraphMetadataEntry>(
+                            *sm, "Set Camera Training", std::move(diffs)));
+                }
+                return;
+            }
             scene->setCameraTrainingEnabled(name, enabled);
         },
         nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");
@@ -827,11 +870,9 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "select_node", [](const std::string& name) {
-            lfs::core::events::ui::NodeSelected{
-                .path = name,
-                .type = "PLY",
-                .metadata = {{"name", name}}}
-                .emit();
+            auto* sm = lfs::python::get_scene_manager();
+            if (sm)
+                sm->selectNode(name);
         },
         nb::arg("name"), "Select a scene node by name");
 
@@ -893,7 +934,11 @@ NB_MODULE(lichtfeld, m) {
                 return;
             glm::mat4 m;
             std::memcpy(&m[0][0], mat.data(), 16 * sizeof(float));
-            sm->setSelectedNodeTransform(m);
+            const auto target = sm->getSelectedNodeName();
+            if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {target}, m, "python.set_selected_node_transform"); !result) {
+                LOG_WARN("set_selected_node_transform fell back to direct update: {}", result.error());
+                sm->setSelectedNodeTransform(m);
+            }
         },
         nb::arg("matrix"), "Set transform matrix (16 floats, column-major) of selected node");
 
@@ -983,7 +1028,10 @@ NB_MODULE(lichtfeld, m) {
                 return;
             glm::mat4 transform;
             std::memcpy(&transform[0][0], mat.data(), 16 * sizeof(float));
-            sm->setNodeTransform(name, transform);
+            if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {name}, transform, "python.set_node_transform"); !result) {
+                LOG_WARN("set_node_transform fell back to direct update for '{}': {}", name, result.error());
+                sm->setNodeTransform(name, transform);
+            }
         },
         nb::arg("name"), nb::arg("matrix"), "Set node transform matrix (16 floats, column-major)");
 
@@ -1025,7 +1073,7 @@ NB_MODULE(lichtfeld, m) {
             const glm::vec3 translation(m[3]);
 
             glm::vec3 col0(m[0]), col1(m[1]), col2(m[2]);
-            const glm::vec3 scale(glm::length(col0), glm::length(col1), glm::length(col2));
+            glm::vec3 scale(glm::length(col0), glm::length(col1), glm::length(col2));
 
             if (scale.x > 0.0f)
                 col0 /= scale.x;
@@ -1033,6 +1081,12 @@ NB_MODULE(lichtfeld, m) {
                 col1 /= scale.y;
             if (scale.z > 0.0f)
                 col2 /= scale.z;
+
+            if (scale.x > 0.0f && scale.y > 0.0f && scale.z > 0.0f &&
+                glm::dot(col0, glm::cross(col1, col2)) < 0.0f) {
+                scale.x = -scale.x;
+                col0 = -col0;
+            }
 
             const glm::mat3 rot_mat(col0, col1, col2);
             const glm::quat quat = glm::quat_cast(rot_mat);
@@ -1213,6 +1267,7 @@ NB_MODULE(lichtfeld, m) {
 
     // Mesh-to-splat conversion (async, uses GL thread)
     lfs::python::register_mesh2splat(m);
+    lfs::python::register_splat_simplify(m);
 
     // Rendering functions (render_view, compute_screen_positions, etc.)
     lfs::python::register_rendering(m);
@@ -1266,6 +1321,7 @@ NB_MODULE(lichtfeld, m) {
 #endif
     build_info.attr("repo_url") = "https://github.com/MrNeRF/LichtFeld-Studio";
     build_info.attr("website_url") = "https://lichtfeld.io";
+    m.attr("PLUGIN_API_VERSION") = "1.0";
 
     lfs::python::register_commands(m);
     lfs::python::register_gizmos(m);
@@ -1342,6 +1398,18 @@ NB_MODULE(lichtfeld, m) {
             return lfs::python::get_scene_generation();
         },
         "Get current scene generation counter (for validity checking)");
+
+    m.def(
+        "get_scene_mutation_flags", []() -> uint32_t {
+            return lfs::python::get_scene_mutation_flags();
+        },
+        "Get accumulated scene mutation flags");
+
+    m.def(
+        "consume_scene_mutation_flags", []() -> uint32_t {
+            return lfs::python::consume_scene_mutation_flags();
+        },
+        "Get and clear accumulated scene mutation flags");
 
     // Run a Python script file
     m.def(
@@ -1425,8 +1493,9 @@ NB_MODULE(lichtfeld, m) {
                     std::string info = std::format("[{}{}] {} ({}, id={})",
                                                    vis, lock, node->name, type_name, node->id);
 
-                    if (node->gaussian_count > 0) {
-                        info += std::format(" [{} splats]", node->gaussian_count);
+                    const size_t gaussian_count = node->gaussian_count.load(std::memory_order_acquire);
+                    if (gaussian_count > 0) {
+                        info += std::format(" [{} splats]", gaussian_count);
                     }
 
                     nb::print(nb::str("{}{}").format(indent, info));
@@ -1549,7 +1618,16 @@ Mesh-to-Splat:
   lf.mesh_to_splat("name")       - Convert mesh to splats (async)
   lf.is_mesh2splat_active()      - Check if conversion is running
   lf.get_mesh2splat_progress()   - Get progress (0.0-1.0)
+  lf.get_mesh2splat_stage()      - Get current stage text
   lf.get_mesh2splat_error()      - Get error message
+
+Splat Simplify:
+  lf.simplify_splats("name")         - Simplify a splat node into a new output node
+  lf.cancel_splat_simplify()         - Cancel the active simplify job
+  lf.is_splat_simplify_active()      - Check if simplification is running
+  lf.get_splat_simplify_progress()   - Get progress (0.0-1.0)
+  lf.get_splat_simplify_stage()      - Get current stage text
+  lf.get_splat_simplify_error()      - Get error message
 
 Camera Control:
   lf.get_camera()          - Get current camera state (eye, target, up, fov)
@@ -1673,7 +1751,10 @@ Example:
         "on_post_step", "on_pre_optimizer_step", "on_training_end",
         // Mesh-to-splat conversion
         "mesh_to_splat", "is_mesh2splat_active",
-        "get_mesh2splat_progress", "get_mesh2splat_error",
+        "get_mesh2splat_progress", "get_mesh2splat_stage", "get_mesh2splat_error",
+        // Splat simplify
+        "simplify_splats", "cancel_splat_simplify", "is_splat_simplify_active",
+        "get_splat_simplify_progress", "get_splat_simplify_stage", "get_splat_simplify_error",
         // Animation
         "on_frame", "stop_animation",
         // Utilities

@@ -200,6 +200,24 @@ TEST_F(FusedL1SSIMTest, NoValidPadding) {
     EXPECT_FALSE(std::isinf(grad_max));
 }
 
+TEST_F(FusedL1SSIMTest, ErrorMapForwardMatchesSSIMReduction) {
+    const int N = 1, C = 3, H = 64, W = 64;
+    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+
+    auto ssim_result = ssim_forward_map(img1, img2, /*apply_valid_padding=*/false);
+    auto expected_error = Tensor::empty({H, W}, Device::CUDA);
+    launch_ssim_to_error_map(ssim_result.ssim_map, expected_error);
+
+    SSIMMapWorkspace workspace;
+    Tensor actual_error;
+    ssim_error_map_forward(img1, img2, workspace, actual_error);
+
+    auto diff = (actual_error - expected_error).abs();
+    EXPECT_LT(diff.max().item<float>(), 1e-6f);
+    EXPECT_LT(diff.mean().item<float>(), 1e-7f);
+}
+
 // Test 3D input (no batch dimension)
 TEST_F(FusedL1SSIMTest, ThreeDimensionalInput) {
     const int C = 3, H = 64, W = 64;

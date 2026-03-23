@@ -5,7 +5,6 @@ tables, collapsing headers, and property binding.
 """
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 from lfs_plugins.props import (
     PropertyGroup,
     FloatProperty,
@@ -35,9 +34,9 @@ class DemoSettings(PropertyGroup):
     )
 
 
-class DemoPanel(Panel):
+class DemoPanel(lf.ui.Panel):
     label = "Widget Demo"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 150
 
     def __init__(self):
@@ -48,79 +47,79 @@ class DemoPanel(Panel):
         self.selected_item = 0
         self.search_text = ""
 
-    def draw(self, layout):
+    def draw(self, ui):
         # --- Text widgets ---
-        if layout.collapsing_header("Text Widgets", default_open=True):
-            layout.heading("Heading")
-            layout.label("Normal label")
-            layout.text_wrapped(
+        if ui.collapsing_header("Text Widgets", default_open=True):
+            ui.heading("Heading")
+            ui.label("Normal label")
+            ui.text_wrapped(
                 "This is wrapped text that will flow to multiple lines "
                 "when the panel is narrow enough."
             )
-            layout.text_colored("Colored text", (1.0, 0.3, 0.3, 1.0))
-            layout.text_disabled("Disabled text")
-            layout.bullet_text("Bullet point")
+            ui.text_colored("Colored text", (1.0, 0.3, 0.3, 1.0))
+            ui.text_disabled("Disabled text")
+            ui.bullet_text("Bullet point")
 
         # --- Buttons ---
-        if layout.collapsing_header("Buttons", default_open=True):
-            if layout.button("Standard Button", (-1, 0)):
+        if ui.collapsing_header("Buttons", default_open=True):
+            if ui.button("Standard Button", (-1, 0)):
                 self.counter += 1
-            layout.label(f"Clicked {self.counter} times")
+            ui.label(f"Clicked {self.counter} times")
 
-            with layout.row() as row:
+            with ui.row() as row:
                 row.button_styled("Success", "success", (100, 0))
                 row.button_styled("Error", "error", (100, 0))
 
-            if layout.small_button("Small"):
+            if ui.small_button("Small"):
                 lf.log.info("Small button clicked")
 
         # --- Input widgets ---
-        if layout.collapsing_header("Input Widgets", default_open=True):
+        if ui.collapsing_header("Input Widgets", default_open=True):
             # Property binding (auto-generates correct widget)
-            layout.prop(self.settings, "opacity")
-            layout.prop(self.settings, "iterations")
-            layout.prop(self.settings, "enabled")
-            layout.prop(self.settings, "label_text")
-            layout.prop(self.settings, "mode")
-            layout.prop(self.settings, "color")
+            ui.prop(self.settings, "opacity")
+            ui.prop(self.settings, "iterations")
+            ui.prop(self.settings, "enabled")
+            ui.prop(self.settings, "label_text")
+            ui.prop(self.settings, "mode")
+            ui.prop(self.settings, "color")
 
         # --- Manual widgets ---
-        if layout.collapsing_header("Manual Widgets", default_open=False):
-            changed, self.search_text = layout.input_text_with_hint(
+        if ui.collapsing_header("Manual Widgets", default_open=False):
+            changed, self.search_text = ui.input_text_with_hint(
                 "##search", "Search...", self.search_text
             )
 
-            changed, self.selected_item = layout.combo(
+            changed, self.selected_item = ui.combo(
                 "Select Item", self.selected_item, self.items
             )
 
-            layout.separator()
-            layout.progress_bar(0.65, "65%")
+            ui.separator()
+            ui.progress_bar(0.65, "65%")
 
         # --- Table ---
-        if layout.collapsing_header("Table", default_open=False):
-            if layout.begin_table("demo_table", 3):
-                layout.table_setup_column("Name")
-                layout.table_setup_column("Value")
-                layout.table_setup_column("Status")
-                layout.table_headers_row()
+        if ui.collapsing_header("Table", default_open=False):
+            if ui.begin_table("demo_table", 3):
+                ui.table_setup_column("Name")
+                ui.table_setup_column("Value")
+                ui.table_setup_column("Status")
+                ui.table_headers_row()
 
                 for i, item in enumerate(self.items):
-                    layout.table_next_row()
-                    layout.table_next_column()
-                    layout.label(item)
-                    layout.table_next_column()
-                    layout.label(str(i * 10))
-                    layout.table_next_column()
-                    layout.text_colored(
+                    ui.table_next_row()
+                    ui.table_next_column()
+                    ui.label(item)
+                    ui.table_next_column()
+                    ui.label(str(i * 10))
+                    ui.table_next_column()
+                    ui.text_colored(
                         "Active" if i % 2 == 0 else "Idle",
                         (0.3, 1.0, 0.3, 1.0) if i % 2 == 0 else (0.6, 0.6, 0.6, 1.0),
                     )
-                layout.end_table()
+                ui.end_table()
 
         # --- Disabled region ---
-        if layout.collapsing_header("Conditional UI", default_open=False):
-            with layout.column() as col:
+        if ui.collapsing_header("Conditional UI", default_open=False):
+            with ui.column() as col:
                 col.enabled = self.settings.enabled
                 col.label("This section is disabled when 'Enabled' is unchecked")
                 col.button("Disabled Button")

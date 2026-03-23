@@ -15,32 +15,121 @@ lf.unregister_class(cls)         # Unregister a Panel, Operator, or Menu class
 
 ---
 
+## Scrub Controls
+
+```python
+from lfs_plugins import ScrubFieldController, ScrubFieldSpec
+```
+
+Retained panels can use these helpers to turn a range slider row (`input.setting-slider`) into a scrub field:
+
+- Drag horizontally on the scrub field to scrub values.
+- Click the numeric text area to type a value directly.
+- The controller keeps the displayed value in sync and applies clamping, snapping, and fill width updates.
+
+```python
+SCRUB_FIELD_SPECS = {
+    "quality": ScrubFieldSpec(min_value=0.0, max_value=1.0, step=0.01, fmt="%.2f"),
+}
+
+class MyPanel(lf.ui.Panel):
+    # ...
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("my_panel")
+        if model is None:
+            return
+        model.bind("quality", lambda: f"{self._quality:.2f}", self._set_quality)
+
+    def __init__(self):
+        self._scrub_fields = ScrubFieldController(
+            SCRUB_FIELD_SPECS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
+
+    def on_mount(self, doc):
+        self._scrub_fields.mount(doc)
+
+    def on_unmount(self, doc):
+        self._scrub_fields.unmount()
+
+    def on_update(self, doc):
+        return self._scrub_fields.sync_all()
+```
+
+Each scrubbed `data-value` still needs a normal `model.bind(...)` entry. The controller upgrades the range input UI, but it does not create data-model variables for you.
+
+`ScrubFieldSpec` fields are `min_value`, `max_value`, `step`, `fmt`,
+`data_type` (default `float`), and `pixels_per_step` (unused in the current controller implementation).
+
 ## Panel
 
 ```python
-from lfs_plugins.types import Panel
+import lichtfeld as lf
+# lf.ui.Panel is the base class for all panels
 ```
 
-| Attribute   | Type       | Default           | Description                          |
-|-------------|------------|-------------------|--------------------------------------|
-| `idname`    | `str`      | `module.qualname` | Unique panel identifier              |
-| `label`     | `str`      | `""`              | Display name (`idname` fallback when empty) |
-| `space`     | `str`      | `"FLOATING"`      | Panel space (see below)              |
-| `parent`    | `str`      | `""`              | Parent tab idname — embeds as collapsible section (overrides `space`) |
-| `order`     | `int`      | `100`             | Sort order (lower = higher)          |
-| `options`   | `Set[str]` | `set()`           | `"DEFAULT_CLOSED"`, `"HIDE_HEADER"` |
-| `poll_deps` | `Set[str]` | `{"SCENE","SELECTION","TRAINING"}` | Which state changes trigger `poll()` |
+| Attribute | Type | Default | Description |
+|---|---|---|---|
+| `id` | `str` | `module.qualname` | Unique panel identifier |
+| `label` | `str` | `""` | Display name (`id` fallback when empty) |
+| `space` | `lf.ui.PanelSpace` | `lf.ui.PanelSpace.MAIN_PANEL_TAB` | Panel space (see below) |
+| `parent` | `str` | `""` | Parent panel id. Embeds as a collapsible section; embedded panels must not override `space` |
+| `order` | `int` | `100` | Sort order (lower = higher) |
+| `options` | `set[lf.ui.PanelOption]` | `set()` | `DEFAULT_CLOSED`, `HIDE_HEADER` |
+| `poll_dependencies` | `set[lf.ui.PollDependency]` | `{SCENE, SELECTION, TRAINING}` | Which state changes trigger `poll()` |
+| `size` | `tuple[float, float] \| None` | `None` | Initial width/height hint, mainly for floating panels |
+| `template` | `str \| os.PathLike[str]` | `""` | Retained RML template. Use an absolute path for plugin-local files |
+| `style` | `str` | `""` | Inline RCSS appended to the retained document |
+| `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels |
+| `update_interval_ms` | `int` | `100` | Cadence for retained/hybrid `on_update()` work |
 
-| Method               | Returns | Description                      |
-|----------------------|---------|----------------------------------|
-| `poll(cls, context)` | `bool`  | Classmethod. Show/hide condition |
-| `draw(self, layout)` | `None`  | Render panel via layout API      |
+| Method | Returns | Description |
+|---|---|---|
+| `poll(cls, context)` | `bool` | Classmethod. Show/hide condition |
+| `draw(self, ui)` | `None` | Immediate-mode content |
+| `on_bind_model(self, ctx)` | `None` | Bind retained data models before document load |
+| `on_mount(self, doc)` | `None` | Called once after the retained document mounts |
+| `on_unmount(self, doc)` | `None` | Called before the retained document is destroyed |
+| `on_update(self, doc)` | `None \| bool` | Periodic retained update. Return `True` to mark content dirty |
+| `on_scene_changed(self, doc)` | `None` | Called when the active scene generation changes |
 
-Registering a panel with the same `idname` as an existing panel replaces it (see [Panel replacement](getting-started.md#panel-replacement)).
+Registering a panel with the same `id` as an existing panel replaces it (see [Panel replacement](getting-started.md#panel-replacement)).
+
+`lf.ui.Panel` is unified: a panel can start as `draw(ui)` only and later add `template`, `style`, `height_mode`, or retained hooks without switching base classes or rewriting the panel body.
+
+Panel definitions are validated during `lf.register_class()`. Invalid enum values, removed legacy field names, unsupported retained features on `VIEWPORT_OVERLAY`, or conflicting embedded-panel fields raise `ValueError`, `TypeError`, or `AttributeError`.
+
+The panel API is strict in v1: use the enum values above, not string literals.
 
 ### Panel spaces
 
-`MAIN_PANEL_TAB`, `SIDE_PANEL`, `VIEWPORT_OVERLAY`, `SCENE_HEADER`, `FLOATING`, `DOCKABLE`, `STATUS_BAR`
+`MAIN_PANEL_TAB`, `SIDE_PANEL`, `VIEWPORT_OVERLAY`, `SCENE_HEADER`, `FLOATING`, `STATUS_BAR`
+
+### Retained shell behavior
+
+If a panel uses retained features and `template` is empty, LichtFeld selects a shell automatically:
+
+- `FLOATING` -> `rmlui/floating_window.rml`
+- `STATUS_BAR` -> `rmlui/status_bar_panel.rml`
+- Other retained panel spaces -> `rmlui/docked_panel.rml`
+
+Built-in template aliases:
+
+- `builtin:docked-panel`
+- `builtin:floating-window`
+- `builtin:status-bar`
+
+### Panel styling guide
+
+| Goal | Use | Notes |
+|---|---|---|
+| Minimal panel | `draw(self, ui)` | No extra files needed |
+| Light retained styling | `style` | Inline RCSS text, not a path |
+| Full custom retained UI | `template` | Use an absolute path for plugin-local `.rml` |
+| Hybrid panel | `template` plus `draw(ui)` | Render immediate content into `<div id="im-root"></div>` |
+
+When a plugin-local template file such as `main_panel.rml` is present, LichtFeld automatically loads a sibling `main_panel.rcss` stylesheet if it exists.
 
 ---
 
@@ -591,9 +680,11 @@ class PluginInfo:
     author: str = ""
     entry_point: str = "__init__"
     dependencies: list[str] = []
-    auto_start: bool = False  # deprecated, ignored — use user settings via load_on_startup
+    auto_start: bool = False
     hot_reload: bool = True
-    min_lichtfeld_version: str = ""
+    plugin_api: str = ""
+    lichtfeld_version: str = ""
+    required_features: list[str] = []
 ```
 
 ### PluginState
@@ -608,11 +699,41 @@ class PluginState(Enum):
     DISABLED = "disabled"
 ```
 
+### `lichtfeld.plugins` convenience API
+
+```python
+import lichtfeld as lf
+```
+
+| Function | Returns | Description |
+|---|---|---|
+| `lf.plugins.discover()` | `list[PluginInfo]` | Discover plugins in `~/.lichtfeld/plugins/` |
+| `lf.plugins.load(name)` | `bool` | Load a plugin |
+| `lf.plugins.unload(name)` | `bool` | Unload a plugin |
+| `lf.plugins.reload(name)` | `bool` | Reload a plugin |
+| `lf.plugins.load_all()` | `dict[str, bool]` | Load all user-enabled plugins |
+| `lf.plugins.start_watcher()` | `None` | Start the hot-reload watcher |
+| `lf.plugins.stop_watcher()` | `None` | Stop the hot-reload watcher |
+| `lf.plugins.get_state(name)` | `PluginState \| None` | Read plugin state |
+| `lf.plugins.get_error(name)` | `str \| None` | Read the last plugin error |
+| `lf.plugins.get_traceback(name)` | `str \| None` | Read the full traceback |
+| `lf.plugins.create(name)` | `str` | Create the v1 source scaffold in `~/.lichtfeld/plugins/<name>` |
+
+`lf.plugins.create()` writes the source package, including `panels/main_panel.py`, `panels/main_panel.rml`, and `panels/main_panel.rcss`. If you want a scaffold that also adds `.venv`, `.vscode`, and `pyrightconfig.json`, use the CLI command `LichtFeld-Studio plugin create <name>`.
+
+Runtime compatibility constants:
+
+| Constant | Type | Description |
+|---|---|---|
+| `lf.PLUGIN_API_VERSION` | `str` | Host plugin API version |
+| `lf.plugins.API_VERSION` | `str` | Same plugin API version through the plugin namespace |
+| `lf.plugins.FEATURES` | `list[str]` | Supported optional plugin features on this host |
+
 ---
 
 ## Layout API
 
-The `layout` object is passed to `Panel.draw()` and provides all UI widget methods. It wraps ImGui.
+The `ui` object passed to `Panel.draw()` provides the immediate widget API used by both simple and hybrid panels. Depending on the panel space and shell, it may be rendered through the direct viewport path or the immediate-mode RML bridge, but the Python widget surface stays the same.
 
 ### Text
 
@@ -683,7 +804,7 @@ The `layout` object is passed to `Panel.draw()` and provides all UI widget metho
 
 | Method                                              | Returns              | Description              |
 |-----------------------------------------------------|----------------------|--------------------------|
-| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker  |
+| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker. `dialog_title` is accepted for compatibility and currently ignored. |
 
 ### Property Binding
 
@@ -741,14 +862,14 @@ The `layout` object is passed to `Panel.draw()` and provides all UI widget metho
 `image_tensor` is the simplest way to display a GPU tensor — it internally manages a `DynamicTexture` cached by `label`. The tensor must be `[H, W, 3]` or `[H, W, 4]` (RGB/RGBA). CPU tensors and non-float32 dtypes are converted automatically.
 
 ```python
-layout.image_tensor("preview", my_tensor, (256, 256))
+ui.image_tensor("preview", my_tensor, (256, 256))
 ```
 
 For full control (e.g. reusing one texture across multiple draw calls), use `DynamicTexture` directly:
 
 ```python
 tex = lf.ui.DynamicTexture(tensor)   # or DynamicTexture() + tex.update(tensor)
-layout.image_texture(tex, (256, 256))
+ui.image_texture(tex, (256, 256))
 ```
 
 ---
@@ -937,7 +1058,7 @@ Create composable sub-layouts with automatic widget positioning and state cascad
 | `grid_flow(columns=0, even_columns=True, even_rows=True)` | `SubLayout` | Responsive grid         |
 | `prop_enum(data, prop_id, value, text='')`          | `bool`      | Enum toggle button              |
 
-`SubLayout` is a context manager. Use `with layout.row() as row:` to enter the layout, then call widget methods on `row` instead of `layout`. Sub-layouts nest arbitrarily.
+`SubLayout` is a context manager. Use `with ui.row() as row:` to enter the layout, then call widget methods on `row` instead of `ui`. Sub-layouts nest arbitrarily.
 
 #### SubLayout state properties
 
@@ -950,23 +1071,23 @@ Create composable sub-layouts with automatic widget positioning and state cascad
 #### Example
 
 ```python
-def draw(self, layout):
-    with layout.row() as row:
+def draw(self, ui):
+    with ui.row() as row:
         row.prop_enum(self, "mode", "fast", "Fast")
         row.prop_enum(self, "mode", "quality", "Quality")
 
-    with layout.box() as box:
+    with ui.box() as box:
         box.heading("Settings")
         box.prop(self, "opacity")
 
-    with layout.column() as col:
+    with ui.column() as col:
         col.enabled = self.is_active
         col.prop(self, "value")
         with col.row() as row:
             row.button("Apply")
             row.button("Cancel")
 
-    with layout.grid_flow(columns=3) as grid:
+    with ui.grid_flow(columns=3) as grid:
         for item in items:
             with grid.box() as cell:
                 cell.label(item.name)
@@ -1218,7 +1339,12 @@ lf.save_config_file(path: str)
 
 ```python
 lf.undo.push(name: str, undo: Callable, redo: Callable, validate: Callable | None = None)
+lf.undo.transaction(name: str = "Grouped Changes") -> Transaction
+lf.undo.stack() -> dict
 ```
+
+- `lf.undo.transaction(...)` groups multiple undoable mutations into one history step.
+- `lf.undo.stack()` returns structured undo/redo items with `id`, `label`, `source`, `scope`, and `estimated_bytes`.
 
 ### UI Functions
 
@@ -1233,14 +1359,15 @@ lf.undo.push(name: str, undo: Callable, redo: Callable, validate: Callable | Non
 | `lf.ui.get_languages()`                     | `list[tuple[str, str]]` | Available languages  |
 | `lf.ui.set_theme(name)`                     | `None`           | Theme switch (`dark`/`light`) |
 | `lf.ui.get_theme()`                         | `str`            | Active theme name          |
-| `lf.ui.set_panel_enabled(idname, enabled)`  | `None`           | Toggle panel by idname     |
-| `lf.ui.is_panel_enabled(idname)`            | `bool`           | Panel enabled state        |
-| `lf.ui.get_panel_names(space='FLOATING')`   | `list[str]`      | Panel idnames for a space  |
-| `lf.ui.get_panel(idname)`                   | `dict or None`   | Panel info (`idname`, `label`, `order`, `enabled`, `space`) |
-| `lf.ui.set_panel_label(idname, label)`      | `bool`           | Change panel display name  |
-| `lf.ui.set_panel_order(idname, order)`      | `bool`           | Change panel sort order    |
-| `lf.ui.set_panel_space(idname, space)`      | `bool`           | Move panel to a different space |
-| `lf.ui.set_panel_parent(idname, parent)`    | `bool`           | Embed panel inside a tab as collapsible section |
+| `lf.ui.set_panel_enabled(panel_id, enabled)`  | `None`           | Toggle panel by id         |
+| `lf.ui.is_panel_enabled(panel_id)`            | `bool`           | Panel enabled state        |
+| `lf.ui.get_panel_names(space=lf.ui.PanelSpace.FLOATING)` | `list[str]` | Panel ids for a space |
+| `lf.ui.get_panel(panel_id)`                   | `lf.ui.PanelInfo \| None`   | Typed panel info |
+| `lf.ui.get_main_panel_tabs()`                 | `list[lf.ui.PanelSummary]` | Typed summaries for main-panel tabs |
+| `lf.ui.set_panel_label(panel_id, label)`      | `bool`           | Change panel display name  |
+| `lf.ui.set_panel_order(panel_id, order)`      | `bool`           | Change panel sort order    |
+| `lf.ui.set_panel_space(panel_id, space)`      | `bool`           | Move panel to a different space (`lf.ui.PanelSpace`) |
+| `lf.ui.set_panel_parent(panel_id, parent)`    | `bool`           | Embed panel inside a tab as collapsible section |
 | `lf.ui.ops.invoke(op_id, **kwargs)`         | `OperatorReturnValue` | Invoke operator       |
 | `lf.ui.ops.poll(op_id)`                     | `bool`           | Operator poll              |
 | `lf.ui.ops.cancel_modal()`                  | `None`           | Cancel modal operator      |
@@ -1271,6 +1398,8 @@ lf.undo.push(name: str, undo: Callable, redo: Callable, validate: Callable | Non
 | `lf.ui.save_sog_file_dialog(default_name='export.sog')`   | `str` |
 | `lf.ui.save_spz_file_dialog(default_name='export.spz')`   | `str` |
 | `lf.ui.save_html_file_dialog(default_name='viewer.html')` | `str` |
+
+`lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.
 
 ### UI Hooks
 
@@ -1390,9 +1519,13 @@ dependencies = []            # list[string], optional - Python packages (PEP 508
 [tool.lichtfeld]
 hot_reload = true            # bool, required
 entry_point = "__init__"     # string, optional - Module to load (default: __init__)
-min_lichtfeld_version = ""   # string, optional - Minimum LichtFeld version
+plugin_api = ">=1,<2"        # string, required - Supported plugin API range (PEP 440)
+lichtfeld_version = ">=0.4.2"  # string, required - Supported host app/runtime range (PEP 440)
+required_features = []       # list[string], required - Optional host features this plugin needs
 author = ""                  # string, optional - Author fallback (if no [project].authors)
 ```
+
+v1 is strict. Legacy `min_lichtfeld_version` / `max_lichtfeld_version` fields are removed and rejected.
 
 ---
 

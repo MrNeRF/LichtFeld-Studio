@@ -30,6 +30,15 @@ protected:
     }
 };
 
+namespace {
+    bool formatterUnavailable(const lfs::python::FormatResult& result) {
+        return !result.success &&
+               (result.error.find("uv not found") != std::string::npos ||
+                result.error.find("Failed to create venv for black") != std::string::npos ||
+                result.error.find("ImportError") != std::string::npos);
+    }
+} // namespace
+
 TEST_F(PythonIntegrationTest, InitializationSucceeds) {
     // Just verify that initialization doesn't throw
     EXPECT_NO_THROW(lfs::python::ensure_initialized());
@@ -49,6 +58,39 @@ TEST_F(PythonIntegrationTest, OutputRedirectCanBeInstalled) {
 TEST_F(PythonIntegrationTest, EmptyScriptListSucceeds) {
     auto result = lfs::python::run_scripts({});
     EXPECT_TRUE(result.has_value()) << "Empty script list should succeed";
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodePreservesValidBlockIndentation) {
+    const auto result = lfs::python::format_python_code("if True:\n    print('x')\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "if True:\n    print(\"x\")\n");
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodeDedentsIndentedSnippet) {
+    const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code, "if True:\n    print(\"x\")\n");
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodeRepairsUnexpectedTopLevelIndent) {
+    const auto result = lfs::python::format_python_code(
+        "import lichtfeld as lf\n    scene = lf.get_scene()\nprint('hello world')\n");
+
+    if (formatterUnavailable(result)) {
+        GTEST_SKIP() << result.error;
+    }
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.code.find("\n    scene = lf.get_scene()"), std::string::npos);
+    EXPECT_NE(result.code.find("scene = lf.get_scene()"), std::string::npos);
+    EXPECT_NE(result.code.find("print(\"hello world\")"), std::string::npos);
 }
 
 // NOTE: Tests that actually execute Python scripts require the lichtfeld module

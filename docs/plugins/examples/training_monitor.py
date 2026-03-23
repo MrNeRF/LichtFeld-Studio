@@ -5,7 +5,6 @@ checkpoints at configurable intervals.
 """
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 from lfs_plugins.props import PropertyGroup, IntProperty, BoolProperty
 from lfs_plugins.ui.state import AppState
 from lfs_plugins.ui.signals import Signal
@@ -16,9 +15,9 @@ class MonitorSettings(PropertyGroup):
     auto_save_enabled = BoolProperty(default=False, name="Auto-save Enabled")
 
 
-class TrainingMonitorPanel(Panel):
+class TrainingMonitorPanel(lf.ui.Panel):
     label = "Training Monitor"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 40
 
     def __init__(self):
@@ -52,61 +51,61 @@ class TrainingMonitorPanel(Panel):
     def poll(cls, context) -> bool:
         return AppState.has_trainer.value
 
-    def draw(self, layout):
+    def draw(self, ui):
         state = AppState.trainer_state.value
 
         # Status header
         if state == "running":
-            layout.text_colored("Training", (0.3, 1.0, 0.3, 1.0))
+            ui.text_colored("Training", (0.3, 1.0, 0.3, 1.0))
         elif state == "paused":
-            layout.text_colored("Paused", (1.0, 0.8, 0.2, 1.0))
+            ui.text_colored("Paused", (1.0, 0.8, 0.2, 1.0))
         else:
-            layout.label(f"State: {state}")
+            ui.label(f"State: {state}")
 
         # Progress
         iteration = AppState.iteration.value
         max_iter = AppState.max_iterations.value
         progress = iteration / max_iter if max_iter > 0 else 0.0
-        layout.progress_bar(progress, f"{iteration:,} / {max_iter:,}")
+        ui.progress_bar(progress, f"{iteration:,} / {max_iter:,}")
 
-        layout.separator()
+        ui.separator()
 
         # Statistics
-        layout.label(f"Loss: {AppState.loss.value:.6f}")
-        layout.label(f"PSNR: {AppState.psnr.value:.2f} dB")
-        layout.label(f"Gaussians: {AppState.num_gaussians.value:,}")
+        ui.label(f"Loss: {AppState.loss.value:.6f}")
+        ui.label(f"PSNR: {AppState.psnr.value:.2f} dB")
+        ui.label(f"Gaussians: {AppState.num_gaussians.value:,}")
 
         best = self.best_loss.value
         if best < float("inf"):
-            layout.label(f"Best Loss: {best:.6f} (iter {self.best_iteration.value})")
+            ui.label(f"Best Loss: {best:.6f} (iter {self.best_iteration.value})")
 
         # Loss plot
         if self.loss_history:
             recent = self.loss_history[-500:]
-            layout.separator()
-            layout.label("Loss History")
+            ui.separator()
+            ui.label("Loss History")
             scale_max = max(recent) * 1.1
-            layout.plot_lines("##loss", recent, 0.0, scale_max, (0, 100))
+            ui.plot_lines("##loss", recent, 0.0, scale_max, (0, 100))
 
         # Auto-save settings
-        layout.separator()
-        if layout.collapsing_header("Auto-save", default_open=False):
-            layout.prop(self.settings, "auto_save_enabled")
+        ui.separator()
+        if ui.collapsing_header("Auto-save", default_open=False):
+            ui.prop(self.settings, "auto_save_enabled")
             if self.settings.auto_save_enabled:
-                layout.prop(self.settings, "auto_save_interval")
+                ui.prop(self.settings, "auto_save_interval")
                 if self.last_auto_save > 0:
-                    layout.text_disabled(f"Last save: iter {self.last_auto_save}")
+                    ui.text_disabled(f"Last save: iter {self.last_auto_save}")
 
         # Manual controls
-        layout.separator()
+        ui.separator()
         if state == "running":
-            if layout.button("Pause", (-1, 0)):
+            if ui.button("Pause", (-1, 0)):
                 lf.pause_training()
         elif state == "paused":
-            if layout.button("Resume", (-1, 0)):
+            if ui.button("Resume", (-1, 0)):
                 lf.resume_training()
 
-        if layout.button("Save Checkpoint", (-1, 0)):
+        if ui.button("Save Checkpoint", (-1, 0)):
             lf.save_checkpoint()
             lf.log.info("Checkpoint saved manually")
 

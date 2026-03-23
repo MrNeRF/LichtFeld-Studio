@@ -72,18 +72,27 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
 )
 
 add_library(lfs_video STATIC
-        video/video_export_options.hpp
+        include/io/video/video_encoder_interface.hpp
+        include/io/video/video_export_options.hpp
         video/video_encoder.hpp
         video/video_encoder.cpp
         video/color_convert.cuh
         video/color_convert.cu
+        video_frame_extractor.hpp
+        video_frame_extractor.cpp
+        video_player.hpp
+        video_player.cpp
 )
 
 target_include_directories(lfs_video
         PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
         PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/core/include
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/external
 )
 
 target_link_libraries(lfs_video
@@ -137,6 +146,7 @@ add_library(lfs_io STATIC
         formats/spz.cpp
 
         # Concrete loader implementations
+        loaders/loader_utils.hpp
         loaders/ply_loader.hpp
         loaders/ply_loader.cpp
         loaders/colmap_loader.hpp
@@ -162,23 +172,14 @@ add_library(lfs_io STATIC
         stb_image_impl.cpp
         tinyply.cpp
 
-        # Video frame extraction
-        video_frame_extractor.hpp
-        video_frame_extractor.cpp
-
-        # Video playback for preview
-        video_player.hpp
-        video_player.cpp
 )
 
 # Set include directories
-# Public interface is ONLY what's in src/io/include/ - all implementation is private
 target_include_directories(lfs_io
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
         PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_SOURCE_DIR}/external/nvImageCodec/include
@@ -226,7 +227,6 @@ add_dependencies(lfs_io lfs_io_cuda)
 target_link_libraries(lfs_io
         PUBLIC
         lfs_core            # Link to modular core library for SplatData, Camera, etc.
-        lfs_video           # Video encoding for sequencer export
         PRIVATE
         TBB::tbb
         spdlog::spdlog
@@ -240,7 +240,6 @@ target_link_libraries(lfs_io
         assimp::assimp         # Multi-format mesh import
         $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
         spz_lib                # Niantic SPZ compressed format
-        PkgConfig::FFMPEG
 )
 
 # Link nvImageCodec if available

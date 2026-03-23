@@ -122,7 +122,7 @@ namespace lfs::vis::terminal {
         bool needs_redraw_ = true;
         bool is_focused_ = false;
         bool read_only_ = false;
-        std::mutex mutex_;
+        mutable std::mutex mutex_;
 
         // Read buffer
         char read_buffer_[4096];

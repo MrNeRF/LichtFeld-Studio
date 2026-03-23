@@ -4,17 +4,16 @@ Copy this directory to ~/.lichtfeld/plugins/hello_world/ and add a pyproject.tom
 """
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel
 
 
-class HelloPanel(Panel):
+class HelloPanel(lf.ui.Panel):
     label = "Hello World"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 200
 
-    def draw(self, layout):
-        layout.label("Hello from my plugin!")
-        if layout.button("Greet"):
+    def draw(self, ui):
+        ui.label("Hello from my plugin!")
+        if ui.button("Greet"):
             lf.log.info("Hello, LichtFeld!")
 
 

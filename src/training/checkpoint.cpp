@@ -15,6 +15,36 @@
 
 namespace lfs::training {
 
+    namespace {
+        constexpr char kCheckpointTempSuffix[] = ".tmp";
+
+        std::filesystem::path checkpoint_temp_path(const std::filesystem::path& checkpoint_path) {
+            auto temp_path = checkpoint_path;
+            temp_path += kCheckpointTempSuffix;
+            return temp_path;
+        }
+
+        std::expected<void, std::string> replace_checkpoint_file(
+            const std::filesystem::path& checkpoint_path,
+            const std::filesystem::path& temp_checkpoint_path) {
+
+            std::error_code ec;
+            std::filesystem::remove(checkpoint_path, ec);
+            if (ec) {
+                return std::unexpected("Failed to remove existing checkpoint file '" +
+                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
+            }
+
+            std::filesystem::rename(temp_checkpoint_path, checkpoint_path, ec);
+            if (ec) {
+                return std::unexpected("Failed to replace checkpoint file '" +
+                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
+            }
+
+            return {};
+        }
+    } // namespace
+
     using lfs::core::CHECKPOINT_MAGIC;
     using lfs::core::CHECKPOINT_VERSION;
     using lfs::core::CheckpointFlags;
@@ -36,7 +66,9 @@ namespace lfs::training {
                 return std::unexpected("Cannot save checkpoint: output path is empty");
             }
 
-            const auto checkpoint_dir = path / "checkpoints";
+            const auto checkpoint_dir = checkpoint_directory(path);
+            const auto checkpoint_path = checkpoint_output_path(path);
+            const auto temp_checkpoint_path = checkpoint_temp_path(checkpoint_path);
 
             // Create checkpoint directory with error checking
             std::error_code ec;
@@ -45,8 +77,6 @@ namespace lfs::training {
                 return std::unexpected("Failed to create checkpoint directory '" +
                                        lfs::core::path_to_utf8(checkpoint_dir) + "': " + ec.message());
             }
-
-            const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
 
             const auto& model = strategy.get_model();
 
@@ -114,8 +144,9 @@ namespace lfs::training {
             }
 
             std::ofstream file;
-            if (!lfs::core::open_file_for_write(checkpoint_path, std::ios::binary, file)) {
-                return std::unexpected("Failed to open checkpoint file: " + lfs::core::path_to_utf8(checkpoint_path));
+            if (!lfs::core::open_file_for_write(temp_checkpoint_path, std::ios::binary, file)) {
+                return std::unexpected("Failed to open checkpoint file: " +
+                                       lfs::core::path_to_utf8(temp_checkpoint_path));
             }
 
             CheckpointHeader header{};
@@ -177,6 +208,14 @@ namespace lfs::training {
             header.params_json_size = static_cast<uint64_t>(params_end - params_pos);
             file.seekp(header_pos);
             file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+            file.close();
+            if (!file) {
+                return std::unexpected("Failed to finalize checkpoint file: " +
+                                       lfs::core::path_to_utf8(temp_checkpoint_path));
+            }
+
+            if (auto replace_result = replace_checkpoint_file(checkpoint_path, temp_checkpoint_path); !replace_result)
+                return std::unexpected(replace_result.error());
 
             std::string extras;
             if (bilateral_grid)
@@ -229,6 +268,35 @@ namespace lfs::training {
                 return std::unexpected("Strategy mismatch: '" + saved_type +
                                        "' vs '" + strategy.strategy_type() + "'");
             }
+
+            // Load params from checkpoint up front so strategy internals can be synced before deserialization.
+            const auto strategy_state_pos = file.tellg();
+            if (header.params_json_size > 0) {
+                file.seekg(static_cast<std::streamoff>(header.params_json_offset));
+                std::string params_str(header.params_json_size, '\0');
+                file.read(params_str.data(), static_cast<std::streamsize>(header.params_json_size));
+
+                const auto cli_data_path = params.dataset.data_path;
+                const auto cli_output_path = params.dataset.output_path;
+
+                const auto params_json = nlohmann::json::parse(params_str);
+                if (params_json.contains("optimization")) {
+                    params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json["optimization"]);
+                    if (params_json.contains("dataset")) {
+                        params.dataset = lfs::core::param::DatasetConfig::from_json(params_json["dataset"]);
+                    }
+                } else {
+                    params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
+                }
+
+                if (!cli_data_path.empty())
+                    params.dataset.data_path = cli_data_path;
+                if (!cli_output_path.empty())
+                    params.dataset.output_path = cli_output_path;
+            }
+            strategy.set_optimization_params(params.optimization);
+            file.clear();
+            file.seekg(strategy_state_pos);
 
             // Model and strategy state
             strategy.get_model().deserialize(file);
@@ -292,40 +360,12 @@ namespace lfs::training {
                 LOG_WARN("PPISP controller pool requested but not in checkpoint - using fresh state");
             }
 
-            // Reserve capacity for MCMC densification
+            // Reserve capacity for densification after the checkpoint params are resolved.
             const size_t max_cap = static_cast<size_t>(params.optimization.max_cap);
             if (max_cap > strategy.get_model().size()) {
                 LOG_DEBUG("Reserving capacity: {} (current: {})", max_cap, strategy.get_model().size());
                 strategy.get_model().reserve_capacity(max_cap);
                 strategy.reserve_optimizer_capacity(max_cap);
-            }
-
-            // Load params from checkpoint, preserving CLI overrides
-            if (header.params_json_size > 0) {
-                file.seekg(static_cast<std::streamoff>(header.params_json_offset));
-                std::string params_str(header.params_json_size, '\0');
-                file.read(params_str.data(), static_cast<std::streamsize>(header.params_json_size));
-
-                const auto cli_data_path = params.dataset.data_path;
-                const auto cli_output_path = params.dataset.output_path;
-                const auto cli_iterations = params.optimization.iterations;
-
-                const auto params_json = nlohmann::json::parse(params_str);
-                if (params_json.contains("optimization")) {
-                    params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json["optimization"]);
-                    if (params_json.contains("dataset")) {
-                        params.dataset = lfs::core::param::DatasetConfig::from_json(params_json["dataset"]);
-                    }
-                } else {
-                    params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
-                }
-
-                if (!cli_data_path.empty())
-                    params.dataset.data_path = cli_data_path;
-                if (!cli_output_path.empty())
-                    params.dataset.output_path = cli_output_path;
-                if (cli_iterations > 0)
-                    params.optimization.iterations = cli_iterations;
             }
 
             LOG_INFO("Checkpoint loaded: {} ({} Gaussians, iter {})",

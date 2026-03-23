@@ -1,0 +1,22 @@
+<rml>
+<head>
+    <link type="text/rcss" href="modal_overlay.rcss"/>
+    <link type="text/rcss" href="components.rcss"/>
+</head>
+<body id="body">
+    <div id="modal-backdrop" class="modal-backdrop"></div>
+    <div id="modal-dialog" class="modal-dialog">
+        <div id="modal-title" class="modal-title"></div>
+        <div class="modal-sep"></div>
+        <form id="modal-form">
+            <div id="modal-content" class="modal-content"></div>
+            <div id="modal-input-row" class="modal-input-row">
+                <input id="modal-input" type="text" />
+            </div>
+            <div class="modal-sep"></div>
+            <div id="modal-button-row" class="modal-button-row"></div>
+            <input class="submit-proxy" type="submit" />
+        </form>
+    </div>
+</body>
+</rml>

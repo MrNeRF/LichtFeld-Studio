@@ -1,330 +1,220 @@
 # Plugin Developer Workflow
 
-This guide covers the plugin development workflow using a portable LichtFeld Studio distribution.
+This guide explains the current plugin scaffolding workflow and the intended UI progression from a single `draw(ui)` file to full retained RML/RCSS.
 
-## Distribution Contents
+## Scaffold paths
 
-The portable build includes everything needed for plugin development:
+There are two supported ways to create a plugin:
 
-```
-dist/
-├── bin/
-│   ├── LichtFeld-Studio      # Main application
-│   └── uv                    # Package manager for plugin dependencies
-├── lib/python/
-│   ├── lichtfeld.abi3.so     # Python bindings module
-│   ├── lfs_plugins/          # Plugin infrastructure
-│   └── lichtfeld/            # Type stubs for IDE support
-└── share/doc/LichtFeld-Studio/
-    ├── PYTHON_API.md         # Complete API reference
-    ├── plugin-system.md      # Architecture documentation
-    └── plugin-use-cases.md   # Example implementations
+### CLI scaffold
+
+```bash
+LichtFeld-Studio plugin create my_plugin
 ```
 
-## Creating a Plugin
+This creates the minimal plugin package and also adds local development helpers:
 
-### 1. Scaffold a New Plugin
+```text
+~/.lichtfeld/plugins/my_plugin/
+├── .venv/
+├── .vscode/
+│   ├── launch.json
+│   └── settings.json
+├── pyproject.toml
+├── pyrightconfig.json
+├── __init__.py
+└── panels/
+    ├── __init__.py
+    ├── main_panel.py
+    ├── main_panel.rml
+    └── main_panel.rcss
+```
 
-From the app's Python console or a startup script:
+Useful companion commands:
+
+```bash
+LichtFeld-Studio plugin check my_plugin
+LichtFeld-Studio plugin list
+```
+
+### Python scaffold
 
 ```python
 import lichtfeld as lf
 
 path = lf.plugins.create("my_plugin")
-print(f"Plugin created at: {path}")
+print(path)
 ```
 
-This creates the following structure:
+This creates only the plugin package itself:
 
-```
+```text
 ~/.lichtfeld/plugins/my_plugin/
-├── pyproject.toml           # Plugin manifest
-├── __init__.py              # Entry point (on_load/on_unload hooks)
+├── pyproject.toml
+├── __init__.py
 └── panels/
     ├── __init__.py
-    └── main_panel.py        # Example UI panel
+    ├── main_panel.py
+    ├── main_panel.rml
+    └── main_panel.rcss
 ```
 
-### 2. Plugin Manifest
+## Why the scaffold now creates `.rml` and `.rcss`
 
-Edit `pyproject.toml` to configure your plugin:
-
-```toml
-[project]
-name = "my_plugin"
-version = "1.0.0"
-description = "My awesome plugin"
-authors = [{name = "Your Name"}]
-dependencies = [
-    "numpy>=1.20.0",
-    "pillow>=9.0.0",
-]
-
-[tool.lichtfeld]
-hot_reload = true
-min_lichtfeld_version = "1.0.0"
-```
-
-### 3. Entry Point
-
-Edit `__init__.py`:
+The v1 scaffold is intentionally hybrid-ready. The generated panel still starts as a simple immediate-mode `draw(ui)` panel, but it also includes a sibling RML/RCSS shell so authors can move into retained layout without reshaping the package later:
 
 ```python
 import lichtfeld as lf
-from .panels.main_panel import MainPanel
 
-_classes = [MainPanel]
 
-def on_load():
-    """Called when plugin is loaded."""
-    for cls in _classes:
-        lf.register_class(cls)
-    lf.log.info("my_plugin loaded")
-
-def on_unload():
-    """Called when plugin is unloaded."""
-    for cls in reversed(_classes):
-        lf.unregister_class(cls)
-    lf.log.info("my_plugin unloaded")
-```
-
-### 4. UI Panel
-
-Edit `panels/main_panel.py`:
-
-```python
-from lfs_plugins.types import Panel
-
-class MainPanel(Panel):
+class MainPanel(lf.ui.Panel):
+    id = "my_plugin.main_panel"
     label = "My Plugin"
-    space = "MAIN_PANEL_TAB"
-    order = 200
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
-    def __init__(self):
-        self.counter = 0
-
-    def draw(self, layout):
-        layout.label("Hello from my_plugin!")
-
-        if layout.button("Click Me"):
-            self.counter += 1
-
-        layout.label(f"Count: {self.counter}")
+    def draw(self, ui):
+        ui.heading("Hello")
+        ui.text_disabled("Start simple and keep state on self.")
 ```
 
-## Development Workflow
+The default scaffold keeps `draw(ui)` as the content source and mounts it into `<div id="im-root"></div>` inside `main_panel.rml`. You can ignore the retained files until you need them, but they are already wired correctly for v1.
 
-### Loading and Testing
+## Styling progression
+
+### 1. Immediate-only panel
+
+Stay in `main_panel.py` when you only need widgets, layout composition, and panel-local state.
+
+Typical tools:
+
+- `draw(self, ui)`
+- `button_styled()`
+- `row()`, `column()`, `box()`, `grid_flow()`
+- `push_style_var()` and `push_style_color()` for local widget overrides
+
+### 2. Mixed panel with inline RCSS
+
+When you want retained shell styling but still want Python to generate the content, add `style`, `height_mode`, or retained hooks on the same panel class:
+
+```python
+class StatusPanel(lf.ui.Panel):
+    id = "my_plugin.status"
+    label = "Status"
+    space = lf.ui.PanelSpace.STATUS_BAR
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+    style = """
+body.status-bar-panel { padding: 0 12dp; }
+#im-root .im-label { color: #f3c96d; font-weight: bold; }
+"""
+
+    def draw(self, ui):
+        ui.label("Ready")
+```
+
+Notes:
+
+- `style` is inline RCSS text, not a file path.
+- `STATUS_BAR` automatically gets the status-bar shell.
+- `draw(ui)` still provides the actual panel content.
+
+### 3. Hybrid panel with template and stylesheet
+
+Add a template when you need custom DOM structure, model binding, or direct document event handling:
+
+```python
+from pathlib import Path
+
+
+class HybridPanel(lf.ui.Panel):
+    id = "my_plugin.hybrid"
+    label = "Hybrid"
+    template = str(Path(__file__).resolve().with_name("main_panel.rml"))
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+
+    def draw(self, ui):
+        ui.text_disabled("Rendered into #im-root")
+```
+
+Important details:
+
+- Use an absolute path for plugin-local `template` values.
+- A sibling `main_panel.rcss` is scaffolded and loaded automatically with `main_panel.rml`.
+- Keep `<div id="im-root"></div>` in the template if you want embedded `draw(ui)` content.
+
+## Development loop
+
+Load and reload from the app:
 
 ```python
 import lichtfeld as lf
 
-# Discover all plugins
 lf.plugins.discover()
-
-# Load your plugin
 lf.plugins.load("my_plugin")
-
-# Enable hot reload (watches for file changes)
+lf.plugins.reload("my_plugin")
 lf.plugins.start_watcher()
 ```
 
-With hot reload enabled:
-1. Edit your plugin code
-2. Save the file
-3. Plugin automatically reloads
-
-### Manual Reload
-
-```python
-lf.plugins.reload("my_plugin")
-```
-
-### Checking Plugin State
+Inspect failures:
 
 ```python
 state = lf.plugins.get_state("my_plugin")
-print(state)  # PluginState.ACTIVE, PluginState.ERROR, etc.
-
-# If there's an error
 error = lf.plugins.get_error("my_plugin")
 traceback = lf.plugins.get_traceback("my_plugin")
 ```
 
-### Unloading
+Unload when needed:
 
 ```python
 lf.plugins.unload("my_plugin")
 ```
 
-## Adding Dependencies
+## Dependencies
 
-Plugins have isolated virtual environments. Dependencies are specified in `pyproject.toml` under `[project].dependencies`.
-
-LichtFeld creates plugin venvs with bundled Python only (`uv venv --python <bundled_python> --no-managed-python --no-python-downloads`) and then runs `uv sync` against that venv.
+Declare plugin dependencies in `pyproject.toml`:
 
 ```toml
 [project]
 dependencies = [
-    "numpy>=1.20.0",
-    "scipy>=1.7.0",
-    "torch>=2.0.0",
+    "numpy>=1.26",
 ]
 ```
 
-On plugin load, dependencies are installed to `~/.lichtfeld/plugins/my_plugin/.venv/`.
+Plugin environments are isolated per plugin. The CLI scaffold creates `.venv` immediately. The Python scaffold creates only the source files; dependency installation still happens through the plugin system when the plugin is loaded.
 
-## IDE Setup
+## Compatibility manifest
 
-### Type Stubs for Autocompletion
+The v1 release requires an explicit compatibility contract in `[tool.lichtfeld]`:
 
-The distribution includes type stubs in `lib/python/lichtfeld/`. Configure your IDE to find them:
-
-**VS Code** (`settings.json`):
-```json
-{
-    "python.analysis.extraPaths": [
-        "/path/to/dist/lib/python"
-    ]
-}
+```toml
+[tool.lichtfeld]
+hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 ```
 
-**PyCharm**:
-1. Right-click `lib/python/` directory
-2. Mark Directory as → Sources Root
+Rules:
 
-### Copying Stubs to Plugin
+- `plugin_api` targets the public plugin API surface, not the plugin's own package version.
+- `lichtfeld_version` targets the host application/runtime version.
+- `required_features` lists optional host features the plugin needs. Inspect the runtime surface with `lf.plugins.API_VERSION`, `lf.plugins.FEATURES`, or `lf.PLUGIN_API_VERSION`.
+- `LichtFeld-Studio plugin check` validates these fields and rejects incompatible plugins before load time.
+- Legacy `min_lichtfeld_version` / `max_lichtfeld_version` fields are removed in v1 and are not supported.
 
-Alternatively, copy stubs into your plugin for portability:
+## IDE support
 
-```bash
-cp -r dist/lib/python/lichtfeld ~/.lichtfeld/plugins/my_plugin/typings/
-```
+`LichtFeld-Studio plugin create` also writes:
 
-Then in your IDE, add `typings/` to the Python path.
+- `.vscode/settings.json`
+- `.vscode/launch.json`
+- `pyrightconfig.json`
 
-## Plugin APIs
+Those files point the editor at the plugin venv and the LichtFeld typings.
 
-### Core Management
+If you scaffold through `lf.plugins.create()`, configure your IDE manually or run the CLI scaffold path for new plugins when you want a ready-made editor setup.
 
-```python
-lf.plugins.discover()              # Find plugins in ~/.lichtfeld/plugins/
-lf.plugins.load("name")            # Load a plugin
-lf.plugins.unload("name")          # Unload a plugin
-lf.plugins.reload("name")          # Reload a plugin
-lf.plugins.load_all()              # Load all user-enabled plugins
-lf.plugins.list_loaded()           # List active plugins
-```
+## Recommended reading order
 
-### Hot Reload
-
-```python
-lf.plugins.start_watcher()         # Monitor plugin files for changes
-lf.plugins.stop_watcher()          # Stop monitoring
-```
-
-### UI Panels
-
-```python
-lf.register_class(MyPanel)       # Register panel, operator, or menu
-lf.unregister_class(MyPanel)     # Unregister
-```
-
-### Persistent Settings
-
-```python
-settings = lf.plugins.settings("my_plugin")
-settings.set("key", value)
-value = settings.get("key", default=None)
-settings.update({"key1": val1, "key2": val2})
-settings.delete("key")
-```
-
-Settings are stored in `~/.lichtfeld/plugins/my_plugin/settings.json`.
-
-### Cross-Plugin Capabilities
-
-Register a capability:
-```python
-lf.plugins.register_capability(
-    name="my_feature",
-    handler=my_handler_function,
-    description="What this does",
-    schema={"properties": {...}, "required": [...]},
-    plugin_name="my_plugin",
-)
-```
-
-Invoke another plugin's capability:
-```python
-result = lf.plugins.invoke("other_feature", {"arg1": value})
-```
-
-Query capabilities:
-```python
-lf.plugins.has_capability("name")
-lf.plugins.list_capabilities()
-```
-
-## Installing from GitHub
-
-```python
-# Install from GitHub URL
-lf.plugins.install("https://github.com/user/my-lichtfeld-plugin")
-
-# Install from plugin registry
-lf.plugins.install_from_registry("plugin_id", version="1.0.0")
-
-# Check for updates
-lf.plugins.check_updates()
-
-# Update a plugin
-lf.plugins.update("my_plugin")
-```
-
-## Distribution
-
-### Sharing Your Plugin
-
-Package your plugin directory:
-```bash
-cd ~/.lichtfeld/plugins
-zip -r my_plugin.zip my_plugin/
-```
-
-Users install by extracting to their `~/.lichtfeld/plugins/` directory.
-
-### Plugin Structure Requirements
-
-Minimum required files:
-```
-my_plugin/
-├── pyproject.toml   # Required: manifest
-└── __init__.py      # Required: entry point with on_load/on_unload
-```
-
-## Debugging
-
-### Logging
-
-```python
-lf.log.debug("Debug message")    # Only shown with --log-level debug
-lf.log.info("Info message")      # Default level
-lf.log.warn("Warning message")
-lf.log.error("Error message")
-```
-
-### Error Handling
-
-```python
-state = lf.plugins.get_state("my_plugin")
-if state == lf.plugins.PluginState.ERROR:
-    print(lf.plugins.get_error("my_plugin"))
-    print(lf.plugins.get_traceback("my_plugin"))
-```
-
-## Further Reading
-
-- [PYTHON_API.md](PYTHON_API.md) - Complete API reference
-- [plugin-system.md](plugin-system.md) - Architecture and internals
-- [plugin-use-cases.md](plugin-use-cases.md) - Real-world examples
+1. Read [docs/plugins/getting-started.md](plugins/getting-started.md).
+2. Walk through [docs/plugins/examples/README.md](plugins/examples/README.md).
+3. Use [docs/plugins/api-reference.md](plugins/api-reference.md) for exact panel, hook, and widget APIs.

@@ -1,0 +1,78 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="dataset_import_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="dataset_import">
+
+  <span class="impdlg-subtitle text-muted">@tr:load_dataset_popup.configure_paths</span>
+  <div class="separator"></div>
+
+  <form id="dataset-import-form" class="impdlg-form">
+    <div class="impdlg-info-row">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.images_dir</span>
+      <div class="impdlg-info-main">
+        <span class="impdlg-value text-default">{{images_path}}</span>
+        <span class="impdlg-meta text-muted">{{images_count_text}}</span>
+      </div>
+    </div>
+
+    <div class="impdlg-info-row">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.sparse_dir</span>
+      <div class="impdlg-info-main">
+        <span class="impdlg-value text-default">{{sparse_path}}</span>
+      </div>
+    </div>
+
+    <div class="impdlg-info-row" data-if="show_masks">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.masks_dir</span>
+      <div class="impdlg-info-main">
+        <span class="impdlg-value text-default">{{masks_path}}</span>
+        <span class="impdlg-meta text-muted">{{mask_count_text}}</span>
+      </div>
+    </div>
+
+    <div class="separator"></div>
+
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.output_dir</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="output_path" />
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_output">@tr:common.browse</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.init_file</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="init_path" />
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_init">@tr:common.browse</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.ppisp_sidecar</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="ppisp_sidecar_path" />
+          <button type="button" class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_ppisp_sidecar">@tr:common.browse</button>
+        </div>
+      </div>
+    </div>
+
+    <span class="impdlg-note text-muted">@tr:load_dataset_popup.help_text</span>
+
+    <div class="impdlg-buttons">
+      <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="do_cancel">@tr:common.cancel</button>
+      <button type="button" class="btn btn--primary impdlg-action-btn"
+              data-attrif-disabled="!can_load" data-event-click="do_load">@tr:common.load</button>
+    </div>
+    <input class="submit-proxy" type="submit" />
+  </form>
+
+</body>
+</rml>

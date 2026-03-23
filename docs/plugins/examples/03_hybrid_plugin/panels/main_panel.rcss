@@ -1,0 +1,69 @@
+body {
+    font-family: Inter;
+    padding: 16dp;
+    margin: 0;
+    background-color: rgba(22, 25, 32, 245);
+    color: #eef2f7;
+}
+
+.hero {
+    display: flex;
+    justify-content: space-between;
+    gap: 12dp;
+    align-items: flex-start;
+    padding-bottom: 12dp;
+}
+
+.hero-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+}
+
+.hero-step {
+    color: #f0c674;
+    font-size: 10dp;
+    font-weight: bold;
+}
+
+.hero-title {
+    font-size: 18dp;
+    font-weight: bold;
+}
+
+.hero-note,
+.micro-copy {
+    color: #cbd5e1;
+    font-size: 11dp;
+}
+
+.info-pill {
+    min-height: 28dp;
+    padding: 4dp 12dp;
+    border-radius: 999dp;
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 24);
+    background-color: rgba(255, 255, 255, 12);
+    color: #eef2f7;
+}
+
+.card {
+    display: flex;
+    flex-direction: column;
+    gap: 10dp;
+    margin-top: 12dp;
+    padding: 14dp;
+    border-radius: 12dp;
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 24);
+    background-color: rgba(255, 255, 255, 10);
+}
+
+.card-title {
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.hybrid-input {
+    min-width: 220dp;
+}

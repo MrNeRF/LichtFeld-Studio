@@ -12,6 +12,22 @@
 #include <stdexcept>
 
 namespace lfs::vis {
+    namespace {
+        std::filesystem::path displayParentPath(const std::filesystem::path& path) {
+            const auto parent = path.parent_path();
+            if (!parent.empty()) {
+                return parent;
+            }
+
+            std::error_code ec;
+            const auto absolute = std::filesystem::absolute(path, ec);
+            if (!ec) {
+                return absolute.parent_path();
+            }
+
+            return {};
+        }
+    } // namespace
 
     DataLoadingService::DataLoadingService(SceneManager* scene_manager)
         : scene_manager_(scene_manager) {
@@ -48,10 +64,16 @@ namespace lfs::vis {
         if (scene_manager_->getContentType() == SceneManager::ContentType::Dataset) {
             scene_manager_->clear();
         }
-        scene_manager_->changeContentType(SceneManager::ContentType::SplatFiles);
 
-        const std::string name = lfs::core::path_to_utf8(path.stem());
-        scene_manager_->addSplatFile(path, name);
+        if (scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
+            const std::string name = lfs::core::path_to_utf8(path.stem());
+            scene_manager_->addSplatFile(path, name);
+            return;
+        }
+
+        // First import into an empty scene must take the full load path so SceneLoaded,
+        // application-scene binding, and UI state all refresh together.
+        scene_manager_->loadSplatFile(path);
     }
 
     void DataLoadingService::handleLoadCheckpointForTrainingCommand(
@@ -124,7 +146,7 @@ namespace lfs::vis {
 
             LOG_INFO("Successfully loaded PLY: {} (from: {})",
                      lfs::core::path_to_utf8(path.filename()),
-                     lfs::core::path_to_utf8(path.parent_path()));
+                     lfs::core::path_to_utf8(displayParentPath(path)));
 
             return {};
         } catch (const std::exception& e) {
@@ -145,7 +167,7 @@ namespace lfs::vis {
 
             LOG_INFO("Successfully loaded SOG: {} (from: {})",
                      lfs::core::path_to_utf8(path.filename()),
-                     lfs::core::path_to_utf8(path.parent_path()));
+                     lfs::core::path_to_utf8(displayParentPath(path)));
 
             return {};
         } catch (const std::exception& e) {
@@ -248,9 +270,7 @@ namespace lfs::vis {
 
         // Load through scene manager (it emits DatasetLoadCompleted event on success/failure)
         LOG_DEBUG("Passing dataset to scene manager with parameters");
-        scene_manager_->loadDataset(path, params_);
-
-        return {};
+        return scene_manager_->loadDataset(path, params_);
     }
 
     void DataLoadingService::clearScene() {

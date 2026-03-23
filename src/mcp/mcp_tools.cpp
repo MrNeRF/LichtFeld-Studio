@@ -7,6 +7,7 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
 
+#include <algorithm>
 #include <cassert>
 
 namespace lfs::mcp {
@@ -42,6 +43,11 @@ namespace lfs::mcp {
         return inst;
     }
 
+    ResourceRegistry& ResourceRegistry::instance() {
+        static ResourceRegistry inst;
+        return inst;
+    }
+
     void ToolRegistry::register_tool(McpTool tool, ToolHandler handler) {
         std::lock_guard lock(mutex_);
         std::string name = tool.name;
@@ -60,18 +66,97 @@ namespace lfs::mcp {
         for (const auto& [name, reg] : tools_) {
             result.push_back(reg.tool);
         }
+        std::sort(result.begin(), result.end(), [](const McpTool& a, const McpTool& b) {
+            return a.name < b.name;
+        });
         return result;
     }
 
     json ToolRegistry::call_tool(const std::string& name, const json& arguments) {
-        std::lock_guard lock(mutex_);
-
-        auto it = tools_.find(name);
-        if (it == tools_.end()) {
-            return json{{"error", "Tool not found: " + name}};
+        ToolHandler handler;
+        std::vector<std::string> required;
+        {
+            std::lock_guard lock(mutex_);
+            auto it = tools_.find(name);
+            if (it == tools_.end())
+                return json{{"error", "Tool not found: " + name}};
+            handler = it->second.handler;
+            required = it->second.tool.input_schema.required;
         }
 
-        return it->second.handler(arguments);
+        for (const auto& field : required) {
+            if (!arguments.contains(field))
+                return json{{"error", "Missing required parameter: " + field}};
+        }
+
+        return handler(arguments);
+    }
+
+    void ResourceRegistry::register_resource(McpResource resource, ResourceHandler handler) {
+        std::lock_guard lock(mutex_);
+        const std::string uri = resource.uri;
+        resources_[uri] = RegisteredResource{std::move(resource), handler};
+    }
+
+    void ResourceRegistry::unregister_resource(const std::string& uri) {
+        std::lock_guard lock(mutex_);
+        resources_.erase(uri);
+    }
+
+    void ResourceRegistry::register_resource_prefix(std::string uri_prefix, ResourceHandler handler) {
+        std::lock_guard lock(mutex_);
+        const std::string prefix = uri_prefix;
+        prefix_handlers_[prefix] = handler;
+    }
+
+    void ResourceRegistry::unregister_resource_prefix(const std::string& uri_prefix) {
+        std::lock_guard lock(mutex_);
+        prefix_handlers_.erase(uri_prefix);
+    }
+
+    std::vector<McpResource> ResourceRegistry::list_resources() const {
+        std::lock_guard lock(mutex_);
+        std::vector<McpResource> result;
+        result.reserve(resources_.size());
+        for (const auto& [uri, reg] : resources_) {
+            result.push_back(reg.resource);
+        }
+        std::sort(result.begin(), result.end(), [](const McpResource& a, const McpResource& b) {
+            return a.uri < b.uri;
+        });
+        return result;
+    }
+
+    std::expected<std::vector<McpResourceContent>, std::string> ResourceRegistry::read_resource(const std::string& uri) const {
+        ResourceHandler handler;
+        {
+            std::lock_guard lock(mutex_);
+            if (const auto it = resources_.find(uri); it != resources_.end()) {
+                handler = it->second.handler;
+            }
+            if (!handler) {
+                for (const auto& [key, reg] : resources_) {
+                    if (reg.resource.uri == uri && reg.handler) {
+                        handler = reg.handler;
+                        break;
+                    }
+                }
+            }
+            if (!handler) {
+                size_t best_prefix_len = 0;
+                for (const auto& [prefix, prefix_handler] : prefix_handlers_) {
+                    if (!uri.starts_with(prefix) || prefix.size() < best_prefix_len)
+                        continue;
+                    best_prefix_len = prefix.size();
+                    handler = prefix_handler;
+                }
+            }
+        }
+
+        if (!handler)
+            return std::unexpected("Unknown resource URI: " + uri);
+
+        return handler(uri);
     }
 
     json ToolRegistry::arg_type_to_json_schema(training::ArgType type) const {
@@ -107,6 +192,8 @@ namespace lfs::mcp {
         std::string target_str = target_to_string(op.target);
         tool.name = target_str + "." + op.name;
         tool.description = op.description;
+        tool.metadata.category = target_str;
+        tool.metadata.kind = "command";
 
         json properties;
         std::vector<std::string> required;
@@ -254,14 +341,15 @@ namespace lfs::mcp {
         LOG_INFO("Generated {} MCP tools from CommandCenter", ops.size());
     }
 
-    void register_builtin_tools() {
+    void register_core_tools() {
         auto& registry = ToolRegistry::instance();
 
         registry.register_tool(
             McpTool{
                 .name = "training.get_state",
                 .description = "Get current training state snapshot",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "training", .kind = "query"}},
             [](const json&) -> json {
                 auto* cc = event::command_center();
                 if (!cc) {
@@ -283,7 +371,8 @@ namespace lfs::mcp {
             McpTool{
                 .name = "training.list_operations",
                 .description = "List all available CommandCenter operations",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "training", .kind = "query"}},
             [](const json&) -> json {
                 auto* cc = event::command_center();
                 if (!cc) {
@@ -312,7 +401,7 @@ namespace lfs::mcp {
                     result.push_back(op_json);
                 }
 
-                return result;
+                return json{{"operations", result}};
             });
 
         registry.register_tool(
@@ -349,6 +438,93 @@ namespace lfs::mcp {
             });
 
         registry.generate_from_command_center();
+    }
+
+    void register_core_resources() {
+        auto& registry = ResourceRegistry::instance();
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://scene/state",
+                .name = "Training State",
+                .description = "Current training state snapshot (iteration, loss, gaussians)",
+                .mime_type = "application/json"},
+            [](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                json content;
+                if (auto* cc = event::command_center()) {
+                    auto snapshot = cc->snapshot();
+                    content["iteration"] = snapshot.iteration;
+                    content["max_iterations"] = snapshot.max_iterations;
+                    content["num_gaussians"] = snapshot.num_gaussians;
+                    content["loss"] = snapshot.loss;
+                    content["is_running"] = snapshot.is_running;
+                    content["is_paused"] = snapshot.is_paused;
+                    content["is_refining"] = snapshot.is_refining;
+                } else {
+                    content["error"] = "Training system not initialized";
+                }
+
+                return std::vector<McpResourceContent>{
+                    McpResourceContent{
+                        .uri = uri,
+                        .mime_type = "application/json",
+                        .content = content.dump(2)}};
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://training/loss_curve",
+                .name = "Loss Curve",
+                .description = "Training loss history",
+                .mime_type = "application/json"},
+            [](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                json content;
+                if (auto* cc = event::command_center()) {
+                    auto history = cc->loss_history();
+                    json points = json::array();
+                    for (const auto& p : history) {
+                        points.push_back(json{{"iteration", p.iteration}, {"loss", p.loss}});
+                    }
+                    content["points"] = std::move(points);
+                    content["count"] = history.size();
+                } else {
+                    content["error"] = "Training system not initialized";
+                }
+
+                return std::vector<McpResourceContent>{
+                    McpResourceContent{
+                        .uri = uri,
+                        .mime_type = "application/json",
+                        .content = content.dump(2)}};
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://gaussians/stats",
+                .name = "Gaussian Statistics",
+                .description = "Statistics about the Gaussian model",
+                .mime_type = "application/json"},
+            [](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                json content;
+                if (auto* cc = event::command_center()) {
+                    auto snapshot = cc->snapshot();
+                    content["count"] = snapshot.num_gaussians;
+                    content["is_refining"] = snapshot.is_refining;
+                } else {
+                    content["error"] = "Training system not initialized";
+                }
+
+                return std::vector<McpResourceContent>{
+                    McpResourceContent{
+                        .uri = uri,
+                        .mime_type = "application/json",
+                        .content = content.dump(2)}};
+            });
+    }
+
+    void register_builtin_tools() {
+        register_core_tools();
+        register_core_resources();
         register_scene_tools();
     }
 

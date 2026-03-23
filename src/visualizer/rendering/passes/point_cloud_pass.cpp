@@ -3,17 +3,18 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_pass.hpp"
+#include "../model_renderability.hpp"
+#include "../viewport_request_builder.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "scene/scene_manager.hpp"
 #include <cassert>
-#include <glad/glad.h>
 
 namespace lfs::vis {
 
     bool PointCloudPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
-        if (ctx.model && ctx.model->size() > 0)
+        if (hasRenderableGaussians(ctx.model))
             return false;
         if (!ctx.scene_manager)
             return false;
@@ -109,57 +110,40 @@ namespace lfs::vis {
             point_cloud_transform = scene_state.model_transforms[0];
         }
         const std::vector<glm::mat4> pc_transforms = {point_cloud_transform};
+        const auto pc_request = buildPointCloudRenderRequest(ctx, ctx.render_size, pc_transforms);
 
-        const auto viewport_data = ctx.makeViewportData();
-
-        std::optional<lfs::rendering::BoundingBox> crop_box;
-        bool crop_inverse = false;
-        bool crop_desaturate = false;
-        for (const auto& cb : scene_state.cropboxes) {
-            if (!cb.data || (!cb.data->enabled && !ctx.settings.show_crop_box))
-                continue;
-            crop_box = lfs::rendering::BoundingBox{
-                .min = cb.data->min,
-                .max = cb.data->max,
-                .transform = glm::inverse(cb.world_transform)};
-            crop_inverse = cb.data->inverse;
-            crop_desaturate = ctx.settings.show_crop_box && !ctx.settings.use_crop_box && ctx.settings.desaturate_cropping;
-            break;
+        if (ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
+            res.gt_context && res.gt_context->valid()) {
+            renderToTexture(engine, ctx, res, *point_cloud_to_render, pc_transforms, pc_request,
+                            res.gt_context->dimensions);
+            return;
         }
 
-        const lfs::rendering::RenderRequest pc_request{
-            .viewport = viewport_data,
-            .scaling_modifier = ctx.settings.scaling_modifier,
-            .mip_filter = ctx.settings.mip_filter,
-            .sh_degree = 0,
-            .background_color = ctx.settings.background_color,
-            .crop_box = crop_box,
-            .point_cloud_mode = true,
-            .voxel_size = ctx.settings.voxel_size,
-            .equirectangular = ctx.settings.equirectangular,
-            .model_transforms = &pc_transforms,
-            .crop_inverse = crop_inverse,
-            .crop_desaturate = crop_desaturate};
+        renderToTexture(engine, ctx, res, *point_cloud_to_render, pc_transforms, pc_request,
+                        ctx.render_size);
+    }
 
-        auto render_result = engine.renderPointCloud(*point_cloud_to_render, pc_request);
-        if (render_result) {
-            res.cached_result = *render_result;
-            res.cached_result_size = ctx.render_size;
+    void PointCloudPass::renderToTexture(lfs::rendering::RenderingEngine& engine,
+                                         const FrameContext& /*ctx*/,
+                                         FrameResources& res,
+                                         const lfs::core::PointCloud& point_cloud,
+                                         const std::vector<glm::mat4>& pc_transforms,
+                                         const lfs::rendering::PointCloudRenderRequest& request,
+                                         const glm::ivec2 render_size) {
+        auto request_for_texture = request;
+        request_for_texture.frame_view.size = render_size;
+        request_for_texture.scene.model_transforms = &pc_transforms;
 
-            glViewport(ctx.viewport_pos.x, ctx.viewport_pos.y, ctx.render_size.x, ctx.render_size.y);
-            glClearColor(ctx.settings.background_color.r, ctx.settings.background_color.g,
-                         ctx.settings.background_color.b, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-            const auto present_result = engine.presentToScreen(
-                res.cached_result, ctx.viewport_pos, res.cached_result_size);
-            if (present_result) {
-                res.splats_presented = true;
-            } else {
-                LOG_ERROR("Failed to present point cloud: {}", present_result.error());
-            }
+        auto gpu_frame_result = engine.renderPointCloudGpuFrame(point_cloud, request_for_texture);
+        if (gpu_frame_result) {
+            res.cached_metadata = {};
+            res.cached_gpu_frame = *gpu_frame_result;
+            res.cached_result_size = render_size;
         } else {
-            LOG_ERROR("Failed to render point cloud: {}", render_result.error());
+            LOG_ERROR("Failed to render point cloud GPU frame: {}", gpu_frame_result.error());
+            res.cached_metadata = {};
+            res.cached_gpu_frame.reset();
+            res.cached_result_size = {0, 0};
         }
     }
 

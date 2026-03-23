@@ -4,7 +4,7 @@ Demonstrates node operations, transforms, selection, and splat data access.
 """
 
 import lichtfeld as lf
-from lfs_plugins.types import Panel, Operator
+from lfs_plugins.types import Operator
 from lfs_plugins.props import FloatProperty, FloatVectorProperty, StringProperty
 
 
@@ -136,9 +136,9 @@ class FilterByOpacity(Operator):
         return {"FINISHED"}
 
 
-class SceneToolsPanel(Panel):
+class SceneToolsPanel(lf.ui.Panel):
     label = "Scene Tools"
-    space = "MAIN_PANEL_TAB"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
     order = 120
 
     def __init__(self):
@@ -148,42 +148,42 @@ class SceneToolsPanel(Panel):
     def poll(cls, context) -> bool:
         return lf.has_scene()
 
-    def draw(self, layout):
+    def draw(self, ui):
         scene = lf.get_scene()
-        layout.heading("Scene Tools")
+        ui.heading("Scene Tools")
 
         # Scene info
-        layout.label(f"Nodes: {len(scene.get_nodes())}")
-        layout.label(f"Gaussians: {scene.total_gaussian_count:,}")
+        ui.label(f"Nodes: {len(scene.get_nodes())}")
+        ui.label(f"Gaussians: {scene.total_gaussian_count:,}")
 
-        layout.separator()
+        ui.separator()
 
         # Node operations
-        if layout.collapsing_header("Node Operations", default_open=True):
+        if ui.collapsing_header("Node Operations", default_open=True):
             has_sel = lf.has_selection()
 
-            layout.begin_disabled(not has_sel)
-            if layout.button("Duplicate Selected", (-1, 0)):
+            ui.begin_disabled(not has_sel)
+            if ui.button("Duplicate Selected", (-1, 0)):
                 lf.ui.ops.invoke(DuplicateNodeOp._class_id())
-            layout.end_disabled()
+            ui.end_disabled()
 
-            if layout.button("Create Group", (-1, 0)):
+            if ui.button("Create Group", (-1, 0)):
                 lf.ui.ops.invoke(CreateGroupOp._class_id())
 
-            if layout.button("Print Splat Info", (-1, 0)):
+            if ui.button("Print Splat Info", (-1, 0)):
                 lf.ui.ops.invoke(SplatInfoOp._class_id())
 
         # Selection tools
-        if layout.collapsing_header("Selection", default_open=True):
-            changed, self.filter_threshold = layout.slider_float(
+        if ui.collapsing_header("Selection", default_open=True):
+            changed, self.filter_threshold = ui.slider_float(
                 "Opacity Threshold##filter", self.filter_threshold, 0.0, 1.0
             )
-            if layout.button("Select Low Opacity", (-1, 0)):
+            if ui.button("Select Low Opacity", (-1, 0)):
                 op = FilterByOpacity()
                 op.threshold = self.filter_threshold
                 op.execute(None)
 
-            if layout.button("Clear Selection", (-1, 0)):
+            if ui.button("Clear Selection", (-1, 0)):
                 scene.clear_selection()
                 lf.deselect_all()
 

@@ -86,6 +86,58 @@ namespace lfs::io {
             return available;
         }
 
+        [[nodiscard]] bool load_params_need_processing(const LoadParams& params) {
+            return params.resize_factor > 1 || params.max_width > 0 || params.undistort != nullptr;
+        }
+
+        [[nodiscard]] std::string make_base_cache_key(const std::filesystem::path& path) {
+            return lfs::core::path_to_utf8(path);
+        }
+
+        void apply_requested_undistort(lfs::core::Tensor& tensor, const LoadParams& params) {
+            if (!params.undistort)
+                return;
+
+            const auto scaled = lfs::core::scale_undistort_params(
+                *params.undistort,
+                static_cast<int>(tensor.shape()[2]),
+                static_cast<int>(tensor.shape()[1]));
+            tensor = lfs::core::undistort_image(tensor, scaled, nullptr);
+        }
+
+        [[nodiscard]] bool is_jpeg_file_signature(const std::filesystem::path& path) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file))
+                return false;
+
+            std::array<uint8_t, 3> signature{};
+            if (!file.read(reinterpret_cast<char*>(signature.data()),
+                           static_cast<std::streamsize>(signature.size()))) {
+                return false;
+            }
+
+            return signature[0] == 0xFF && signature[1] == 0xD8 && signature[2] == 0xFF;
+        }
+
+        [[nodiscard]] lfs::core::Tensor decode_cached_rgb_tensor(
+            NvCodecImageLoader& nvcodec,
+            const std::shared_ptr<std::vector<uint8_t>>& jpeg_data,
+            const LoadParams& params,
+            const bool cached_blob_is_base) {
+            auto tensor = nvcodec.load_image_from_memory_gpu(
+                *jpeg_data,
+                cached_blob_is_base ? params.resize_factor : 1,
+                cached_blob_is_base ? params.max_width : 0,
+                params.cuda_stream);
+            if (!tensor.is_valid() || tensor.numel() == 0)
+                return {};
+
+            if (cached_blob_is_base)
+                apply_requested_undistort(tensor, params);
+
+            return tensor;
+        }
+
         std::tuple<uint8_t*, int, int> load_grayscale_stb(const std::filesystem::path& path) {
             int w, h, c;
             uint8_t* const data = stbi_load(lfs::core::path_to_utf8(path).c_str(), &w, &h, &c, 1);
@@ -237,6 +289,144 @@ namespace lfs::io {
         return s;
     }
 
+    lfs::core::Tensor PipelinedImageLoader::load_image_immediate(
+        const std::filesystem::path& path, const LoadParams& params) {
+        const auto cache_key = make_cache_key(path, params);
+        const auto base_key = make_base_cache_key(path);
+        auto decode_cached_hit = [&](const std::shared_ptr<std::vector<uint8_t>>& jpeg_data,
+                                     const bool cached_blob_is_base) -> lfs::core::Tensor {
+            if (!is_nvcodec_available())
+                return {};
+
+            try {
+                auto& nvcodec = get_nvcodec_loader();
+                auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_data, params, cached_blob_is_base);
+                if (tensor.is_valid() && tensor.numel() > 0)
+                    return tensor;
+            } catch (...) {}
+            return {};
+        };
+
+        if (auto jpeg_data = load_cached_jpeg_blob(cache_key)) {
+            if (auto tensor = decode_cached_hit(jpeg_data, false);
+                tensor.is_valid() && tensor.numel() > 0) {
+                return tensor;
+            }
+        }
+
+        if (auto jpeg_data = load_cached_jpeg_blob(base_key)) {
+            if (auto tensor = decode_cached_hit(jpeg_data, true);
+                tensor.is_valid() && tensor.numel() > 0) {
+                return tensor;
+            }
+        }
+
+        const bool needs_requested_processing = load_params_need_processing(params);
+        const bool is_original_jpeg = is_jpeg_file_signature(path);
+        lfs::core::Tensor decoded;
+
+        if (is_original_jpeg) {
+            auto data = std::make_shared<std::vector<uint8_t>>(read_file(path));
+            put_in_jpeg_cache(base_key, data);
+            save_to_fs_cache(base_key, *data);
+
+            if (is_nvcodec_available()) {
+                try {
+                    auto& nvcodec = get_nvcodec_loader();
+                    auto tensor = decode_cached_rgb_tensor(nvcodec, data, params, true);
+                    if (tensor.is_valid() && tensor.numel() > 0)
+                        return tensor;
+                } catch (const std::exception& e) {
+                    LOG_DEBUG("[PipelinedImageLoader] Immediate JPEG decode fallback for {}: {}",
+                              lfs::core::path_to_utf8(path), e.what());
+                }
+            }
+        } else {
+            const std::string path_str = lfs::core::path_to_utf8(path);
+            int w = 0, h = 0, ch = 0;
+            unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
+            const bool used_stbi = (img_data != nullptr);
+            if (img_data) {
+                ch = 3;
+            } else {
+                auto [oiio_data, ow, oh, oc] = lfs::core::load_image(path, 1, 0);
+                if (!oiio_data)
+                    throw std::runtime_error("Failed to decode image: " + path_str);
+                img_data = oiio_data;
+                w = ow;
+                h = oh;
+                ch = oc;
+            }
+
+            const size_t H = static_cast<size_t>(h);
+            const size_t W = static_cast<size_t>(w);
+            const size_t C = static_cast<size_t>(ch);
+
+            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                img_data, lfs::core::TensorShape({H, W, C}),
+                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+            auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+            if (used_stbi)
+                stbi_image_free(img_data);
+            else
+                lfs::core::free_image(img_data);
+
+            decoded = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({C, H, W}),
+                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            cuda::launch_uint8_hwc_to_float32_chw(
+                reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
+                reinterpret_cast<float*>(decoded.data_ptr()),
+                H, W, C, nullptr);
+
+            if (is_nvcodec_available()) {
+                try {
+                    auto& nvcodec = get_nvcodec_loader();
+                    auto jpeg_bytes = nvcodec.encode_to_jpeg(decoded, config_.cache_jpeg_quality, nullptr);
+                    save_to_fs_cache(base_key, jpeg_bytes);
+                    auto jpeg_shared = std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes));
+                    put_in_jpeg_cache(base_key, jpeg_shared);
+
+                    if (needs_requested_processing) {
+                        auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_shared, params, true);
+                        if (tensor.is_valid() && tensor.numel() > 0)
+                            return tensor;
+                    }
+                } catch (const std::exception& e) {
+                    LOG_DEBUG("[PipelinedImageLoader] Immediate cache write skipped for {}: {}",
+                              lfs::core::path_to_utf8(path), e.what());
+                }
+            }
+        }
+
+        if (!decoded.is_valid() || decoded.numel() == 0 || needs_requested_processing) {
+            auto [img_data, rw, rh, rc] = lfs::core::load_image(
+                path, params.resize_factor, params.max_width);
+            if (!img_data) {
+                throw std::runtime_error("Failed to decode image: " + lfs::core::path_to_utf8(path));
+            }
+
+            const size_t H = static_cast<size_t>(rh);
+            const size_t W = static_cast<size_t>(rw);
+            const size_t C = static_cast<size_t>(rc);
+            auto cpu_tensor = lfs::core::Tensor::from_blob(
+                img_data, lfs::core::TensorShape({H, W, C}),
+                lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+            auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+            lfs::core::free_image(img_data);
+            decoded = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({C, H, W}),
+                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            cuda::launch_uint8_hwc_to_float32_chw(
+                reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
+                reinterpret_cast<float*>(decoded.data_ptr()),
+                H, W, C, nullptr);
+        }
+
+        apply_requested_undistort(decoded, params);
+        return decoded;
+    }
+
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (params.undistort)
@@ -281,6 +471,44 @@ namespace lfs::io {
         return buffer;
     }
 
+    std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::load_cached_jpeg_blob(
+        const std::string& cache_key) {
+        if (auto cached = get_from_jpeg_cache(cache_key))
+            return cached;
+
+        if (!config_.use_filesystem_cache)
+            return {};
+
+        const auto fs_path = get_fs_cache_path(cache_key);
+        auto done_path = fs_path;
+        done_path += ".done";
+        if (!std::filesystem::exists(fs_path) || !std::filesystem::exists(done_path))
+            return {};
+
+        try {
+            auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
+            put_in_jpeg_cache(cache_key, data);
+            return data;
+        } catch (const std::exception& e) {
+            LOG_DEBUG("[PipelinedImageLoader] Cache read skipped for key {}: {}", cache_key, e.what());
+            return {};
+        }
+    }
+
+    std::optional<PipelinedImageLoader::CachedJpegHit> PipelinedImageLoader::find_cached_jpeg(
+        const std::string& cache_key,
+        const std::string& base_key) {
+        if (auto cached = load_cached_jpeg_blob(cache_key)) {
+            return CachedJpegHit{.data = std::move(cached), .from_base_key = false};
+        }
+
+        if (auto cached = load_cached_jpeg_blob(base_key)) {
+            return CachedJpegHit{.data = std::move(cached), .from_base_key = true};
+        }
+
+        return std::nullopt;
+    }
+
     std::shared_ptr<std::vector<uint8_t>> PipelinedImageLoader::get_from_jpeg_cache(const std::string& cache_key) {
         std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
         const auto it = jpeg_cache_.find(cache_key);
@@ -293,6 +521,10 @@ namespace lfs::io {
     void PipelinedImageLoader::put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data) {
         std::lock_guard<std::mutex> lock(jpeg_cache_mutex_);
         const size_t size = data->size();
+        if (const auto it = jpeg_cache_.find(cache_key); it != jpeg_cache_.end()) {
+            jpeg_cache_bytes_ -= it->second.size_bytes;
+            jpeg_cache_.erase(it);
+        }
         evict_jpeg_cache_if_needed(size);
         jpeg_cache_[cache_key] = JpegCacheEntry{std::move(data), std::chrono::steady_clock::now(), size};
         jpeg_cache_bytes_ += size;
@@ -456,50 +688,16 @@ namespace lfs::io {
             result.undistort = request.undistort;
 
             try {
-                if (auto cached = get_from_jpeg_cache(result.cache_key)) {
-                    result.jpeg_data = cached;
+                const bool needs_requested_processing = load_params_need_processing(request.params);
+                const auto base_key = make_base_cache_key(request.path);
+
+                if (auto cached = find_cached_jpeg(result.cache_key, base_key)) {
+                    result.jpeg_data = std::move(cached->data);
                     result.is_cache_hit = true;
+                    result.needs_processing = cached->from_base_key && needs_requested_processing;
                     hot_queue_.push(std::move(result));
                     std::lock_guard<std::mutex> lock(stats_mutex_);
                     ++stats_.hot_path_hits;
-                } else if (config_.use_filesystem_cache) {
-                    const auto fs_path = get_fs_cache_path(result.cache_key);
-                    auto done_path = fs_path;
-                    done_path += ".done";
-                    if (std::filesystem::exists(fs_path) && std::filesystem::exists(done_path)) {
-                        auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
-                        put_in_jpeg_cache(result.cache_key, data);
-                        result.jpeg_data = data;
-                        result.is_cache_hit = true;
-                        hot_queue_.push(std::move(result));
-                        std::lock_guard<std::mutex> lock(stats_mutex_);
-                        ++stats_.hot_path_hits;
-                    } else {
-                        result.raw_bytes = read_file(request.path);
-                        result.is_original_jpeg = is_jpeg_data(result.raw_bytes);
-                        result.is_cache_hit = false;
-
-                        {
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            stats_.total_bytes_read += result.raw_bytes.size();
-                        }
-
-                        const bool needs_processing = (request.params.resize_factor > 1 || request.params.max_width > 0 || request.params.undistort);
-                        if (result.is_original_jpeg && !needs_processing) {
-                            auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
-                            put_in_jpeg_cache(result.cache_key, data);
-                            result.jpeg_data = data;
-                            result.is_cache_hit = true;
-                            hot_queue_.push(std::move(result));
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            ++stats_.hot_path_hits;
-                        } else {
-                            result.needs_processing = true;
-                            cold_queue_.push(std::move(result));
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            ++stats_.cold_path_misses;
-                        }
-                    }
                 } else {
                     result.raw_bytes = read_file(request.path);
                     result.is_original_jpeg = is_jpeg_data(result.raw_bytes);
@@ -510,8 +708,7 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    const bool needs_processing = (request.params.resize_factor > 1 || request.params.max_width > 0 || request.params.undistort);
-                    if (result.is_original_jpeg && !needs_processing) {
+                    if (result.is_original_jpeg && !needs_requested_processing) {
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
                         put_in_jpeg_cache(result.cache_key, data);
                         result.jpeg_data = data;
@@ -651,11 +848,9 @@ namespace lfs::io {
 
                 for (size_t i = 0; i < batch.size(); ++i) {
                     try {
-                        std::vector<uint8_t> jpeg_data(*batch[i].jpeg_data);
-
                         if (batch[i].is_mask) {
                             auto mask_tensor = nvcodec.load_image_from_memory_gpu(
-                                jpeg_data, 1, 0, nullptr, DecodeFormat::Grayscale);
+                                *batch[i].jpeg_data, 1, 0, nullptr, DecodeFormat::Grayscale);
 
                             if (!mask_tensor.is_valid() || mask_tensor.numel() == 0) {
                                 LOG_WARN("[PipelinedImageLoader] GPU mask decode failed for {}",
@@ -666,12 +861,33 @@ namespace lfs::io {
                             try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
 
                         } else {
-                            auto tensor = nvcodec.load_image_from_memory_gpu(jpeg_data, 1, 0, nullptr);
+                            const bool decode_from_base_cache = batch[i].needs_processing;
+                            auto tensor = nvcodec.load_image_from_memory_gpu(
+                                *batch[i].jpeg_data,
+                                decode_from_base_cache ? batch[i].params.resize_factor : 1,
+                                decode_from_base_cache ? batch[i].params.max_width : 0,
+                                batch[i].params.cuda_stream);
 
                             if (!tensor.is_valid() || tensor.numel() == 0) {
                                 LOG_WARN("[PipelinedImageLoader] GPU decode failed for {}",
                                          lfs::core::path_to_utf8(batch[i].path));
                                 throw std::runtime_error("Invalid tensor");
+                            }
+
+                            if (decode_from_base_cache) {
+                                apply_requested_undistort(tensor, batch[i].params);
+
+                                try {
+                                    auto jpeg_bytes = nvcodec.encode_to_jpeg(
+                                        tensor, config_.cache_jpeg_quality, batch[i].params.cuda_stream);
+                                    save_to_fs_cache(batch[i].cache_key, jpeg_bytes);
+                                    put_in_jpeg_cache(
+                                        batch[i].cache_key,
+                                        std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
+                                } catch (const std::exception& e) {
+                                    LOG_DEBUG("[PipelinedImageLoader] Derived cache write skipped for {}: {}",
+                                              lfs::core::path_to_utf8(batch[i].path), e.what());
+                                }
                             }
 
                             try_complete_pair(batch[i].sequence_id, std::move(tensor), std::nullopt, nullptr);
@@ -802,12 +1018,14 @@ namespace lfs::io {
                     if (is_nvcodec_available()) {
                         try {
                             auto rgb_jpeg = nvcodec.encode_to_jpeg(rgb, config_.cache_jpeg_quality, nullptr);
+                            save_to_fs_cache(item.cache_key, rgb_jpeg);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(rgb_jpeg)));
 
                             const auto alpha_key = make_mask_cache_key(item.path, item.params);
                             auto alpha_jpeg = nvcodec.encode_grayscale_to_jpeg(
                                 alpha, config_.cache_jpeg_quality, nullptr);
+                            save_to_fs_cache(alpha_key, alpha_jpeg);
                             put_in_jpeg_cache(alpha_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
                         } catch (const std::exception&) {
@@ -895,6 +1113,7 @@ namespace lfs::io {
                         try {
                             auto jpeg_bytes = nvcodec.encode_grayscale_to_jpeg(
                                 mask_tensor, config_.cache_jpeg_quality, nullptr);
+                            save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
                         } catch (const std::exception&) {
@@ -965,6 +1184,7 @@ namespace lfs::io {
                         try {
                             auto jpeg_bytes = nvcodec.encode_to_jpeg(
                                 decoded, config_.cache_jpeg_quality, nullptr);
+                            save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
                         } catch (const std::exception&) {

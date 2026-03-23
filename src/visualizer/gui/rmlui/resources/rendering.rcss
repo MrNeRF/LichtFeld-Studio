@@ -1,0 +1,148 @@
+/* Rendering panel — panel-specific styles only.
+ * Shared widget styles are in components.rcss (auto-included via applyTheme). */
+
+body {
+    font-family: Inter;
+    padding: 0;
+    bottom: 0;
+}
+
+#content-wrap {
+    min-width: 0;
+    height: 0;
+    flex-grow: 1;
+    padding: 6dp;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#content {
+    min-width: 0;
+}
+
+.setting-group {
+    margin-bottom: 0;
+}
+
+.rendering-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin-top: 2dp;
+    padding: 6dp 0 0;
+    border-top-width: 1dp;
+    border-top-color: rgba(137, 180, 250, 84);
+    color: #f5f7ff;
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+.rendering-panel-title-icon {
+    width: 14dp;
+    height: 14dp;
+    image-color: #89b4fa;
+    flex-shrink: 0;
+}
+
+.rendering-panel-block {
+    margin-top: 4dp;
+}
+
+.rendering-subsection {
+    margin-top: 0;
+}
+
+.rendering-subsection > .section-header {
+    margin-top: 0;
+}
+
+.rendering-subsection-title {
+    padding-top: 6dp;
+    border-top-width: 1dp;
+    border-top-color: rgba(137, 180, 250, 32);
+    margin: 2dp 0 4dp;
+    color: #a6adc8;
+    font-size: 10dp;
+    font-weight: bold;
+}
+
+.color-picker-popup {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    padding: 4dp;
+    background-color: rgba(30, 30, 46, 230);
+    border-width: 1dp;
+    border-color: #585b70;
+}
+
+.color-picker-popup.visible {
+    display: block;
+}
+
+.rendering-simplify-stats {
+    display: flex;
+    gap: 8dp;
+    margin: 8dp 0 4dp;
+}
+
+.rendering-simplify-stat {
+    flex-grow: 1;
+    min-width: 0;
+    padding: 10dp 12dp;
+    border-width: 1dp;
+    border-color: rgba(166, 173, 200, 36);
+    border-radius: 10dp;
+    background-color: rgba(24, 26, 37, 190);
+}
+
+.rendering-simplify-stat__label {
+    display: block;
+    margin-bottom: 4dp;
+    color: #a6adc8;
+    font-size: 9dp;
+    text-transform: uppercase;
+    letter-spacing: 0.6dp;
+}
+
+.rendering-simplify-stat__value {
+    display: block;
+    color: #f5f7ff;
+    font-size: 16dp;
+    font-weight: bold;
+}
+
+.rendering-simplify-actions {
+    display: flex;
+    gap: 8dp;
+    margin-top: 8dp;
+}
+
+.rendering-simplify-actions > .btn {
+    flex-grow: 1;
+}
+
+.rendering-simplify-progress {
+    position: relative;
+    margin-top: 10dp;
+}
+
+.rendering-simplify-progress > progress {
+    width: 100%;
+}
+
+.rendering-simplify-progress > .progress__text {
+    position: absolute;
+    top: 50%;
+    right: 8dp;
+    transform: translateY(-50%);
+}
+
+.rendering-simplify-stage {
+    margin-top: 4dp;
+}
+
+.rendering-simplify-error {
+    margin-top: 8dp;
+    color: #f38ba8;
+}

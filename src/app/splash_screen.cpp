@@ -121,6 +121,7 @@ void main() {
             stbi_set_flip_vertically_on_load(true);
             const std::string path_utf8 = lfs::core::path_to_utf8(path);
             unsigned char* const data = stbi_load(path_utf8.c_str(), &img.width, &img.height, &channels, 4);
+            stbi_set_flip_vertically_on_load(false);
             if (!data)
                 return img;
 

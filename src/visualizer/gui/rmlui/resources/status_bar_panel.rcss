@@ -1,0 +1,18 @@
+body.status-bar-panel {
+    width: 100%;
+    height: 100%;
+    padding: 0 8dp;
+    margin: 0;
+    background-color: transparent;
+    overflow: hidden;
+}
+
+body.status-bar-panel #content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    width: 100%;
+    min-height: 100%;
+    overflow: hidden;
+}

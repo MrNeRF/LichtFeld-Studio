@@ -1,0 +1,31 @@
+body {
+    font-family: Inter;
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+#menu-region {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 0;
+}
+
+#right-panel-region {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+}
+
+#status-region {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 0;
+
+}

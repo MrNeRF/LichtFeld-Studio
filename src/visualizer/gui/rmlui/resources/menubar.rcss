@@ -1,0 +1,134 @@
+div {
+    display: block;
+}
+
+body {
+    font-family: Inter;
+    font-size: 12dp;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    background-color: transparent;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+}
+
+#menu-items {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex: none;
+    height: 30dp;
+    min-height: 30dp;
+    max-height: 30dp;
+}
+
+.menu-label {
+    padding: 8dp 12dp;
+    cursor: pointer;
+}
+
+#bottom-border {
+    display: none;
+}
+
+#dropdown-overlay {
+    display: none;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#dropdown-overlay.visible {
+    display: block;
+}
+
+#dropdown-container {
+    display: none;
+    position: absolute;
+}
+
+#dropdown-container.visible {
+    display: block;
+}
+
+.dropdown-popup {
+    display: flex;
+    flex-direction: column;
+    padding: 4dp 0;
+    min-width: 140dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+}
+
+.menu-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 4dp 12dp;
+    cursor: pointer;
+}
+
+.menu-item:hover {
+    cursor: pointer;
+}
+
+.menu-item.disabled {
+    cursor: default;
+}
+
+.menu-item-label {
+    cursor: default;
+}
+
+.menu-item-label:hover {
+    background-color: transparent;
+}
+
+.menu-item .checkmark {
+    width: 16dp;
+    margin-left: 4dp;
+    text-align: center;
+}
+
+.menu-item .label {
+    flex: 1;
+}
+
+.menu-item .shortcut {
+    margin-left: 24dp;
+}
+
+.menu-item .submenu-arrow {
+    margin-left: 12dp;
+    width: 10dp;
+    text-align: right;
+}
+
+.menu-separator {
+    height: 1dp;
+    margin: 4dp 8dp;
+}
+
+.submenu-container {
+    position: relative;
+}
+
+.submenu-popup {
+    display: none;
+    position: absolute;
+    top: -4dp;
+    left: 100%;
+    flex-direction: column;
+    padding: 4dp 0;
+    min-width: 120dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+}
+
+.submenu-container:hover > .submenu-popup {
+    display: flex;
+}

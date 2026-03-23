@@ -1,0 +1,69 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+#include "gui/rmlui/rml_fbo.hpp"
+#include <chrono>
+#include <cstddef>
+#include <glm/glm.hpp>
+#include <string>
+
+namespace Rml {
+    class Context;
+    class ElementDocument;
+    class Element;
+} // namespace Rml
+
+namespace lfs::vis {
+    struct Theme;
+}
+namespace lfs::vis::gui {
+
+    class RmlUIManager;
+    struct PanelInputState;
+
+    class RmlViewportOverlay {
+    public:
+        void init(RmlUIManager* mgr);
+        void shutdown();
+        void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
+        void render();
+        void compositeToScreen(int screen_w, int screen_h) const;
+        void processInput(const PanelInputState& input);
+        bool wantsInput() const { return wants_input_; }
+        [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
+
+    private:
+        bool updateTheme();
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
+        void ensureBodyDataModelBound(Rml::Element* body);
+        bool shouldRunDocumentHooks(bool force) const;
+
+        RmlUIManager* rml_manager_ = nullptr;
+        Rml::Context* rml_context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+
+        RmlFBO fbo_;
+
+        glm::vec2 vp_pos_{0, 0};
+        glm::vec2 vp_size_{0, 0};
+        glm::vec2 screen_origin_{0, 0};
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
+        std::string base_rcss_;
+        bool wants_input_ = false;
+        bool doc_registered_ = false;
+        bool render_needed_ = true;
+        bool animation_active_ = false;
+        bool mouse_pos_valid_ = false;
+        int last_mouse_x_ = 0;
+        int last_mouse_y_ = 0;
+        int last_render_w_ = 0;
+        int last_render_h_ = 0;
+        std::chrono::steady_clock::time_point last_document_hook_run_{};
+        static constexpr auto kDocumentHookPollInterval = std::chrono::milliseconds(100);
+    };
+
+} // namespace lfs::vis::gui

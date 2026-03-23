@@ -17,7 +17,7 @@ namespace lfs::vis {
 
         [[nodiscard]] const char* name() const override { return "PointCloudPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
-            return DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT;
+            return DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::SPLIT_VIEW | DirtyFlag::VIEWPORT;
         }
 
         [[nodiscard]] bool shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const override;
@@ -29,6 +29,14 @@ namespace lfs::vis {
         void resetCache();
 
     private:
+        void renderToTexture(lfs::rendering::RenderingEngine& engine,
+                             const FrameContext& ctx,
+                             FrameResources& res,
+                             const lfs::core::PointCloud& point_cloud,
+                             const std::vector<glm::mat4>& pc_transforms,
+                             const lfs::rendering::PointCloudRenderRequest& request,
+                             glm::ivec2 render_size);
+
         std::unique_ptr<lfs::core::PointCloud> cached_filtered_point_cloud_;
         const lfs::core::PointCloud* cached_source_point_cloud_ = nullptr;
         glm::mat4 cached_cropbox_transform_{1.0f};

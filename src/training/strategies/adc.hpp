@@ -53,6 +53,9 @@ namespace lfs::training {
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;
+        void set_optimization_params(const lfs::core::param::OptimizationParameters& params) override {
+            _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        }
 
         // Get count of active (non-free) Gaussians
         size_t active_count() const;

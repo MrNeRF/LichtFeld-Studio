@@ -1,0 +1,29 @@
+<rml>
+<head>
+  <link type="text/rcss" href="main_panel.rcss"/>
+</head>
+<body id="body" data-model="hybrid_panel_demo" class="hybrid-demo">
+  <div class="hero">
+    <div class="hero-copy">
+      <span class="hero-step">Hybrid panel</span>
+      <span class="hero-title">Template + model + DOM hooks + draw(ui)</span>
+      <span class="hero-note">{{summary}}</span>
+    </div>
+    <button id="info-pill" class="info-pill" data-event-click="cycle_mode">{{mode}}</button>
+  </div>
+
+  <div class="card">
+    <div class="setting-row">
+      <input type="text" class="hybrid-input" data-value="project_name" />
+      <span class="prop-label">Project</span>
+    </div>
+    <span class="micro-copy">Clock: {{clock}}</span>
+    <span class="micro-copy">Scene changes: {{scene_changes}}</span>
+  </div>
+
+  <div class="card">
+    <span class="card-title">Embedded draw(ui)</span>
+    <div id="im-root"></div>
+  </div>
+</body>
+</rml>

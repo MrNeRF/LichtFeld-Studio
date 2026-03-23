@@ -1,0 +1,120 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="image_preview.rcss"/>
+</head>
+<body template="floating-window" data-model="image_preview">
+
+  <div id="main-area">
+    <div id="filmstrip">
+      <div class="thumb-item"
+           data-for="thumb : thumbs"
+           data-class-selected="thumb.selected"
+           data-attr-data-index="thumb.index"
+           data-style-decorator="thumb.decorator">
+        <span class="thumb-index">{{ thumb.label }}</span>
+      </div>
+    </div>
+    <div id="image-container">
+      <div id="image-viewport">
+        <div id="main-image-a" class="image-layer"></div>
+        <div id="main-image-b" class="image-layer hidden"></div>
+        <div id="mask-overlay"></div>
+        <span id="no-image-text"></span>
+      </div>
+      <div class="nav-arrow" id="nav-prev">&#x25C0;</div>
+      <div class="nav-arrow" id="nav-next">&#x25B6;</div>
+    </div>
+    <div id="sidebar">
+      <div class="sidebar-header-ip">
+        <span class="sidebar-header-label-ip" id="sidebar-file-header"></span>
+        <span id="sidebar-filename"></span>
+      </div>
+      <div class="sidebar-section-ip">
+        <span class="section-label-ip" id="sidebar-image-label"></span>
+        <div class="meta-row">
+          <div class="meta-item">
+            <span class="meta-key" id="meta-width-label"></span>
+            <span class="meta-val-accent" id="sidebar-width"></span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-key" id="meta-height-label"></span>
+            <span class="meta-val-accent" id="sidebar-height"></span>
+          </div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-item">
+            <span class="meta-key" id="meta-megapixels-label"></span>
+            <span class="meta-val" id="sidebar-mp"></span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-key" id="meta-aspect-label"></span>
+            <span class="meta-val" id="sidebar-aspect"></span>
+          </div>
+        </div>
+        <div class="meta-row">
+          <div class="meta-item">
+            <span class="meta-key" id="meta-channels-label"></span>
+            <span class="meta-val" id="sidebar-channels"></span>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-section-ip">
+        <span class="section-label-ip" id="sidebar-storage-label"></span>
+        <div class="meta-row">
+          <div class="meta-item">
+            <span class="meta-key" id="meta-format-label"></span>
+            <span class="meta-val" id="sidebar-format"></span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-key" id="meta-size-label"></span>
+            <span class="meta-val" id="sidebar-size"></span>
+          </div>
+        </div>
+        <div class="meta-full-ip">
+          <div class="meta-path-row">
+            <span class="meta-key" id="meta-path-label"></span>
+            <span class="btn-copy" id="btn-copy-path"><img class="btn-copy-icon" src="../icon/copy.png"/></span>
+          </div>
+          <span class="meta-val-secondary" id="sidebar-filepath"></span>
+        </div>
+      </div>
+      <div class="sidebar-section-ip">
+        <span class="section-label-ip" id="sidebar-view-label"></span>
+        <div class="sidebar-check-row">
+          <input type="checkbox" id="cb-fit" checked/>
+          <label for="cb-fit" id="cb-fit-label"></label>
+        </div>
+      </div>
+      <div class="sidebar-section-ip" id="sidebar-mask-section">
+        <span class="section-label-ip" id="sidebar-mask-label"></span>
+        <span id="sidebar-mask-name"></span>
+        <div class="sidebar-check-row" id="mask-check-row">
+          <input type="checkbox" id="cb-mask"/>
+          <label for="cb-mask" id="cb-mask-label"></label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="status-bar">
+    <span class="status-item" id="st-w"></span>
+    <span class="status-item" id="st-h"></span>
+    <span class="status-item" id="st-ch"></span>
+    <span class="status-item" id="st-zoom"></span>
+    <span class="status-keys">
+      <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label" id="hk-navigate"></span></span>
+      <span class="hk"><span class="hk-key">F</span><span class="hk-label" id="hk-fit"></span></span>
+      <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
+      <span class="hk"><span class="hk-key">+ &#x2212; / Scroll</span><span class="hk-label" id="hk-zoom"></span></span>
+      <span class="hk"><span class="hk-key">I</span><span class="hk-label" id="hk-info"></span></span>
+      <span class="hk"><span class="hk-key">T</span><span class="hk-label" id="hk-thumbnails"></span></span>
+      <span class="hk"><span class="hk-key">M</span><span class="hk-label" id="hk-mask"></span></span>
+      <span class="hk"><span class="hk-key">R</span><span class="hk-label" id="hk-reset"></span></span>
+      <span class="hk"><span class="hk-key">Esc</span><span class="hk-label" id="hk-close"></span></span>
+    </span>
+    <span class="status-counter" id="st-counter"></span>
+  </div>
+
+</body>
+</rml>

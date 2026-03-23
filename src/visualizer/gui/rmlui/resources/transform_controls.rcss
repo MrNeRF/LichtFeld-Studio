@@ -1,0 +1,42 @@
+body {
+    font-family: Inter;
+    padding: 0;
+}
+
+.setting-row {
+    padding: 1dp 6dp;
+}
+
+.prop-label {
+    width: 16dp;
+    min-width: 16dp;
+    margin-left: 0;
+}
+
+.info-row {
+    padding: 2dp 6dp;
+}
+
+.info-label {
+    font-size: 10dp;
+    color: #cdd6f4;
+}
+
+.info-sublabel {
+    font-size: 11dp;
+    color: #a6adc8;
+    margin-left: 8dp;
+}
+
+.axis-label {
+    font-size: 11dp;
+    color: #a6adc8;
+    padding: 2dp 6dp 0;
+}
+
+.scale-separator {
+    margin-top: 4dp;
+    padding-top: 4dp;
+    border-top-width: 1dp;
+    border-color: rgba(88, 91, 112, 77);
+}

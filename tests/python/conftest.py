@@ -10,11 +10,16 @@ import pytest
 # Find the build directory and add to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
+SOURCE_MODULE_PATH = PROJECT_ROOT / "src" / "python"
 
-# Add the Python module location to sys.path
+# Add the source Python modules first so tests exercise the working tree.
+if SOURCE_MODULE_PATH.exists():
+    sys.path.insert(0, str(SOURCE_MODULE_PATH))
+
+# Keep built modules available for compiled extensions like `lichtfeld`.
 MODULE_PATH = BUILD_DIR / "src" / "python"
 if MODULE_PATH.exists():
-    sys.path.insert(0, str(MODULE_PATH))
+    sys.path.insert(1 if SOURCE_MODULE_PATH.exists() else 0, str(MODULE_PATH))
 
 
 def pytest_configure(config):

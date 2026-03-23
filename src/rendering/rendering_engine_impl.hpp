@@ -7,11 +7,13 @@
 #include "axes_renderer.hpp"
 #include "bbox_renderer.hpp"
 #include "camera_frustum_renderer.hpp"
+#include "cuda_gl_interop.hpp"
 #include "depth_compositor.hpp"
 #include "ellipsoid_renderer.hpp"
 #include "grid_renderer.hpp"
 #include "mesh_renderer.hpp"
 #include "pivot_renderer.hpp"
+#include "render_target_pool.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_pipeline.hpp"
 #include "screen_renderer.hpp"
@@ -30,15 +32,35 @@ namespace lfs::rendering {
         void shutdown() override;
         bool isInitialized() const override;
 
-        Result<RenderResult> renderGaussians(
+        Result<GaussianGpuFrameResult> renderGaussiansGpuFrame(
             const lfs::core::SplatData& splat_data,
-            const RenderRequest& request) override;
+            const ViewportRenderRequest& request) override;
 
-        Result<RenderResult> renderPointCloud(
+        Result<GaussianImageResult> renderGaussiansImage(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request) override;
+
+        Result<std::optional<int>> queryHoveredGaussianId(
+            const lfs::core::SplatData& splat_data,
+            const HoveredGaussianQueryRequest& request) override;
+
+        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
+            const lfs::core::SplatData& splat_data,
+            const ScreenPositionRenderRequest& request) override;
+
+        Result<GpuFrame> renderPointCloudGpuFrame(
+            const lfs::core::SplatData& splat_data,
+            const PointCloudRenderRequest& request) override;
+
+        Result<PointCloudImageResult> renderPointCloudImage(
+            const lfs::core::SplatData& splat_data,
+            const PointCloudRenderRequest& request) override;
+
+        Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::PointCloud& point_cloud,
-            const RenderRequest& request) override;
+            const PointCloudRenderRequest& request) override;
 
-        Result<RenderResult> renderSplitView(
+        Result<SplitViewFrameResult> renderSplitViewGpuFrame(
             const SplitViewRequest& request) override;
 
         Result<void> renderMesh(
@@ -54,14 +76,22 @@ namespace lfs::rendering {
         bool hasMeshRender() const override;
         void resetMeshFrameState() override { mesh_rendered_this_frame_ = false; }
 
-        Result<void> compositeMeshAndSplat(
-            const RenderResult& splat_result,
+        Result<GpuFrame> materializeGpuFrame(
+            const std::shared_ptr<lfs::core::Tensor>& image,
+            const FrameMetadata& metadata,
+            const glm::ivec2& viewport_size) override;
+
+        Result<std::shared_ptr<lfs::core::Tensor>> readbackGpuFrameColor(
+            const GpuFrame& frame) override;
+
+        Result<void> compositeMeshAndGpuFrame(
+            const GpuFrame& splat_frame,
             const glm::ivec2& viewport_size) override;
 
         Result<void> presentMeshOnly() override;
 
-        Result<void> presentToScreen(
-            const RenderResult& result,
+        Result<void> presentGpuFrame(
+            const GpuFrame& frame,
             const glm::ivec2& viewport_pos,
             const glm::ivec2& viewport_size) override;
 
@@ -106,35 +136,37 @@ namespace lfs::rendering {
 
         void setViewportGizmoHover(int axis) override;
 
-        Result<void> renderCameraFrustumsWithHighlight(
+        Result<void> renderCameraFrustums(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const ViewportData& viewport,
-            float scale,
-            const glm::vec3& train_color,
-            const glm::vec3& eval_color,
-            int highlight_index,
-            const glm::mat4& scene_transform = glm::mat4(1.0f),
-            bool equirectangular_view = false,
-            const std::unordered_set<int>& disabled_uids = {},
-            const std::unordered_set<int>& selected_uids = {}) override;
+            const CameraFrustumRenderRequest& request) override;
 
         Result<int> pickCameraFrustum(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const glm::vec2& mouse_pos,
-            const glm::vec2& viewport_pos,
-            const glm::vec2& viewport_size,
-            const ViewportData& viewport,
-            float scale,
-            const glm::mat4& scene_transform = glm::mat4(1.0f)) override;
+            const CameraFrustumPickRequest& request) override;
 
         void clearFrustumCache() override;
+        void setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) override;
 
     private:
+        Result<RenderingPipeline::ImageRenderResult> renderGaussiansRasterResult(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request);
+        [[nodiscard]] static FrameMetadata makeFrameMetadata(const RenderingPipeline::ImageRenderResult& result);
+        Result<GpuFrame> uploadRenderResultToGpuFrame(
+            const RenderingPipeline::ImageRenderResult& result,
+            const glm::ivec2& viewport_size);
+        void invalidatePresentUploadCache();
+        [[nodiscard]] bool ensureHoveredDepthQueryBuffersAllocated();
         Result<void> initializeShaders();
+        Result<void> ensureRenderResultUploaded(
+            const std::shared_ptr<const Tensor>& image,
+            const FrameMetadata& metadata,
+            const glm::ivec2& viewport_size);
         glm::mat4 createProjectionMatrix(const ViewportData& viewport) const;
         glm::mat4 createViewMatrix(const ViewportData& viewport) const;
 
         RenderingPipeline pipeline_;
+        RenderTargetPool render_target_pool_;
         std::shared_ptr<ScreenQuadRenderer> screen_renderer_;
         std::unique_ptr<SplitViewRenderer> split_view_renderer_;
 
@@ -162,6 +194,15 @@ namespace lfs::rendering {
         float last_presented_far_plane_ = 0.0f;
         bool last_presented_orthographic_ = false;
         bool has_present_upload_cache_ = false;
+        unsigned long long* hovered_depth_id_device_ = nullptr;
+        unsigned long long* hovered_depth_id_host_ = nullptr;
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        std::unique_ptr<CudaGLInteropTexture> gpu_frame_readback_interop_;
+        unsigned int gpu_frame_readback_source_ = 0;
+        glm::ivec2 gpu_frame_readback_size_{0, 0};
+#endif
+        FBO gpu_frame_readback_fbo_;
     };
 
 } // namespace lfs::rendering

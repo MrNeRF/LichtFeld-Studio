@@ -4,6 +4,7 @@
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include <chrono>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <random>
@@ -213,6 +214,48 @@ TEST_F(TensorMatrixTest, BatchMatMulBroadcast) {
     auto torch_result = torch::matmul(torch_a, torch_b);
 
     compare_tensors(custom_result, torch_result, 1e-3f, 1e-4f, "BatchMatMul_Broadcast");
+}
+
+TEST_F(TensorMatrixTest, BatchMatMulLargeRowCount) {
+    constexpr size_t batch = 3;
+    constexpr size_t rows = 1'100'000;
+    constexpr size_t inner = 3;
+    constexpr size_t cols = 3;
+
+    std::vector<float> data_a(batch * rows * inner);
+    std::vector<float> data_b(batch * inner * cols);
+
+    for (size_t i = 0; i < data_a.size(); ++i) {
+        data_a[i] = static_cast<float>((static_cast<int>(i % 17) - 8) * 0.0625f);
+    }
+    for (size_t i = 0; i < data_b.size(); ++i) {
+        data_b[i] = static_cast<float>((static_cast<int>(i % 7) - 3) * 0.125f);
+    }
+
+    auto custom_a = Tensor::from_vector(data_a, {batch, rows, inner}, Device::CUDA);
+    auto custom_b = Tensor::from_vector(data_b, {batch, inner, cols}, Device::CUDA);
+
+    auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA))
+                       .reshape({static_cast<int64_t>(batch),
+                                 static_cast<int64_t>(rows),
+                                 static_cast<int64_t>(inner)});
+    auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA))
+                       .reshape({static_cast<int64_t>(batch),
+                                 static_cast<int64_t>(inner),
+                                 static_cast<int64_t>(cols)});
+
+    cudaGetLastError();
+
+    auto custom_result = custom_a.bmm(custom_b);
+    const cudaError_t sync_err = cudaDeviceSynchronize();
+    EXPECT_EQ(sync_err, cudaSuccess) << cudaGetErrorString(sync_err);
+
+    const cudaError_t last_err = cudaGetLastError();
+    EXPECT_EQ(last_err, cudaSuccess) << cudaGetErrorString(last_err);
+
+    auto torch_result = torch::bmm(torch_a, torch_b);
+
+    compare_tensors(custom_result, torch_result, 1e-4f, 1e-5f, "BatchMatMul_LargeRowCount");
 }
 
 // ============= Transpose Tests =============

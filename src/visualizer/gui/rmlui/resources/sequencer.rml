@@ -1,0 +1,114 @@
+<rml>
+<head>
+    <link type="text/rcss" href="sequencer.rcss"/>
+</head>
+<body id="body">
+    <div id="panel">
+        <div id="transport-row">
+            <div id="left-controls">
+                <div id="btn-camera-path" class="transport-btn toggle text" data-tooltip="tooltip.seq_camera_path">
+                    <img class="transport-icon cam-path-icon" src="../icon/sequencer/camera-path.png" />
+                    <span class="transport-label cam-path-label">Path</span>
+                </div>
+                <div class="transport-sep"></div>
+                <div id="transport">
+                    <div id="btn-skip-back" class="transport-btn" data-tooltip="tooltip.seq_first">
+                        <img class="transport-icon" src="../icon/sequencer/skip-back.png" />
+                    </div>
+                    <div id="btn-stop" class="transport-btn" data-tooltip="tooltip.seq_stop">
+                        <img class="transport-icon" src="../icon/sequencer/stop.png" />
+                    </div>
+                    <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play">
+                        <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
+                    </div>
+                    <div id="btn-skip-forward" class="transport-btn" data-tooltip="tooltip.seq_last">
+                        <img class="transport-icon" src="../icon/sequencer/skip-forward.png" />
+                    </div>
+                    <div id="btn-loop" class="transport-btn" data-tooltip="tooltip.seq_loop_off">
+                        <img class="transport-icon" src="../icon/sequencer/loop.png" />
+                    </div>
+                    <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add">
+                        <img class="transport-icon" src="../icon/sequencer/plus.png" />
+                    </div>
+                </div>
+                <div id="time-display">
+                    <span id="current-time">0:00.00</span>
+                    <span id="duration"></span>
+                </div>
+                <div class="transport-sep"></div>
+                <div id="btn-speed" class="transport-btn text speed-group" data-tooltip="tooltip.seq_speed">
+                    <span id="speed-label" class="speed-val">1x</span>
+                    <span class="speed-text">Speed</span>
+                    <span class="dropdown-arrow">&#x25be;</span>
+                </div>
+                <div id="btn-snap" class="transport-btn toggle text snap-toggle" data-tooltip="tooltip.seq_snap">
+                    <div class="snap-check"></div>
+                    <span class="transport-label">Snap</span>
+                    <span class="ctx-indicator">&#x25E2;</span>
+                </div>
+                <div class="transport-sep"></div>
+                <div id="btn-follow" class="transport-btn toggle" data-tooltip="tooltip.seq_follow">
+                    <img class="transport-icon" src="../icon/sequencer/follow.png" />
+                </div>
+                <div id="btn-film-strip" class="transport-btn toggle" data-tooltip="tooltip.seq_film_strip">
+                    <img class="transport-icon" src="../icon/sequencer/film-strip.png" />
+                </div>
+                <div id="btn-preview" class="transport-btn toggle" data-tooltip="tooltip.seq_pip_preview">
+                    <img class="transport-icon" src="../icon/sequencer/preview.png" />
+                    <span class="ctx-indicator">&#x25E2;</span>
+                </div>
+                <div id="btn-equirect" class="transport-btn toggle text wide" data-tooltip="tooltip.equirectangular">
+                    <span class="transport-label">Pano</span>
+                </div>
+            </div>
+            <div id="right-controls">
+                <div id="btn-save-path" class="transport-btn text" data-tooltip="tooltip.seq_save_path">
+                    <span class="transport-label">Save Path&#x2026;</span>
+                </div>
+                <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
+                    <span class="transport-label">Load Path&#x2026;</span>
+                </div>
+                <div class="transport-sep"></div>
+                <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
+                    <span id="format-label" class="transport-label">YouTube 1080p</span>
+                    <span class="dropdown-arrow">&#x25be;</span>
+                    <span class="ctx-indicator">&#x25E2;</span>
+                </div>
+                <span id="resolution-info" class="transport-info">1920x1080</span>
+                <span class="transport-info quality-group">Q</span>
+                <div id="quality-scrub" class="scrub-field" data-tooltip="tooltip.seq_quality">
+                    <div id="quality-fill" class="scrub-field-fill"></div>
+                    <span id="quality-display" class="scrub-field-display">18</span>
+                    <input id="quality-input" class="scrub-field-input" type="text" />
+                </div>
+                <div class="transport-sep"></div>
+                <div id="btn-export" class="transport-btn text primary" data-tooltip="tooltip.seq_export">
+                    <img class="transport-icon export-icon" src="../icon/sequencer/export.png" />
+                    <span class="transport-label export-label">Export</span>
+                </div>
+                <div class="transport-sep"></div>
+                <div id="btn-clear" class="transport-btn text error" data-tooltip="tooltip.seq_clear">
+                    <img class="transport-icon clear-icon" src="../icon/scene/trash.png" />
+                    <span class="transport-label clear-label">Clear</span>
+                    <span class="ctx-indicator">&#x25E2;</span>
+                </div>
+            </div>
+        </div>
+        <div id="header">
+            <div id="timeline">
+                <div id="ruler"></div>
+                <div id="track-area">
+                    <div id="track-bar">
+                        <span id="hint"></span>
+                    </div>
+                    <div id="keyframes"></div>
+                    <div id="playhead">
+                        <div id="playhead-handle"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="easing-stripe"></div>
+    </div>
+</body>
+</rml>

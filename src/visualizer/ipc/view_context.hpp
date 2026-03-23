@@ -42,11 +42,14 @@ namespace lfs::vis {
 
     using GetViewCallback = std::function<std::optional<ViewInfo>()>;
     using GetViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
+    using CaptureViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
 
     LFS_VIS_API void set_view_callback(GetViewCallback callback);
     LFS_VIS_API void set_viewport_render_callback(GetViewportRenderCallback callback);
+    LFS_VIS_API void set_capture_viewport_render_callback(CaptureViewportRenderCallback callback);
     [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_current_view_info();
     [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> get_viewport_render();
+    [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> capture_viewport_render();
 
     LFS_VIS_API void set_set_view_callback(SetViewCallback callback);
     LFS_VIS_API void set_set_fov_callback(SetFovCallback callback);
@@ -79,7 +82,7 @@ namespace lfs::vis {
         bool show_rings = false;
         float ring_width = 0.01f;
         bool show_center_markers = false;
-        bool show_camera_frustums = true;
+        bool show_camera_frustums = false;
         float camera_frustum_scale = 0.25f;
         std::array<float, 3> train_camera_color{1.0f, 1.0f, 1.0f};
         std::array<float, 3> eval_camera_color{1.0f, 0.0f, 0.0f};

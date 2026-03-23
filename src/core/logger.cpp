@@ -69,7 +69,8 @@ namespace lfs::core {
 
         class ColorSink final : public spdlog::sinks::base_sink<std::mutex> {
         public:
-            explicit ColorSink(const std::string& filter = "") {
+            explicit ColorSink(const std::string& filter = "", FILE* target = stdout)
+                : target_(target) {
                 if (!filter.empty()) {
                     try {
                         // If it looks like regex, use as-is; otherwise convert glob to regex
@@ -98,7 +99,12 @@ namespace lfs::core {
                 }
 
                 const auto time_t_val = std::chrono::system_clock::to_time_t(msg.time);
-                const auto tm = *std::localtime(&time_t_val);
+                std::tm tm{};
+#ifdef WIN32
+                localtime_s(&tm, &time_t_val);
+#else
+                localtime_r(&time_t_val, &tm);
+#endif
                 const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         msg.time.time_since_epoch())
                                         .count() %
@@ -158,17 +164,18 @@ namespace lfs::core {
                     }
                 }
 
-                std::printf("[%02d:%02d:%02d.%03d] %s[%s]%s %.*s:%d  %s\n",
-                            tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(millis),
-                            color, level_str, ANSI_RESET,
-                            static_cast<int>(filename.size()), filename.data(), msg.source.line,
-                            output_msg.c_str());
-                std::fflush(stdout);
+                std::fprintf(target_, "[%02d:%02d:%02d.%03d] %s[%s]%s %.*s:%d  %s\n",
+                             tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(millis),
+                             color, level_str, ANSI_RESET,
+                             static_cast<int>(filename.size()), filename.data(), msg.source.line,
+                             output_msg.c_str());
+                std::fflush(target_);
             }
 
-            void flush_() override { std::fflush(stdout); }
+            void flush_() override { std::fflush(target_); }
 
         private:
+            FILE* target_;
             std::array<std::string, 7> colors_;
             std::optional<std::regex> filter_regex_;
         };
@@ -232,12 +239,12 @@ namespace lfs::core {
     }
 
     void Logger::init(const LogLevel console_level, const std::string& log_file,
-                      const std::string& filter_pattern) {
+                      const std::string& filter_pattern, const bool use_stderr) {
         std::lock_guard lock(impl_->mutex);
 
         std::vector<spdlog::sink_ptr> sinks;
 
-        auto console_sink = std::make_shared<ColorSink>(filter_pattern);
+        auto console_sink = std::make_shared<ColorSink>(filter_pattern, use_stderr ? stderr : stdout);
         console_sink->set_level(to_spdlog_level(console_level));
         sinks.push_back(console_sink);
 

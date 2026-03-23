@@ -1,0 +1,10 @@
+<template name="docked-panel" content="content">
+<head>
+  <link type="text/rcss" href="components.rcss"/>
+</head>
+<body id="body" class="docked-panel">
+<div id="content-wrap">
+  <div id="content"></div>
+</div>
+</body>
+</template>

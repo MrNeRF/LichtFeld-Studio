@@ -1,0 +1,88 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="plugin_marketplace.rcss"/>
+</head>
+<body template="floating-window" data-model="plugin_marketplace">
+  <div id="main-area">
+    <span class="status-text status-info">@tr:plugin_marketplace.title_line</span>
+    <span class="mp-warning-text">@tr:plugin_marketplace.warning_body</span>
+
+    <div class="separator"></div>
+
+    <!-- Filter / Sort controls -->
+    <div class="mp-controls">
+      <span class="text-disabled">@tr:plugin_marketplace.filter_label</span>
+      <select data-value="filter_idx" class="mp-select">
+        <option value="0">@tr:plugin_marketplace.filter.all</option>
+        <option value="1">@tr:plugin_marketplace.filter.installed</option>
+        <option value="2">@tr:plugin_marketplace.filter.not_installed</option>
+      </select>
+      <span class="text-disabled mp-sort-label">@tr:plugin_marketplace.sort_label</span>
+      <select data-value="sort_idx" class="mp-select-sort">
+        <option value="0">@tr:plugin_marketplace.sort.popularity_desc</option>
+        <option value="1">@tr:plugin_marketplace.sort.popularity_asc</option>
+        <option value="2">@tr:plugin_marketplace.sort.name_asc</option>
+        <option value="3">@tr:plugin_marketplace.sort.name_desc</option>
+      </select>
+    </div>
+
+    <!-- Manual URL install -->
+    <div class="mp-manual-section">
+      <span class="text-disabled">@tr:plugin_manager.github_url_or_shorthand</span>
+      <form id="manual-install-form">
+        <div class="mp-manual-row">
+          <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
+          <button id="btn-install-url" type="button" class="btn btn--success mp-install-btn" data-event-click="do_install_url">@tr:plugin_manager.button.install_plugin</button>
+        </div>
+        <div id="manual-feedback" class="card-feedback hidden">
+          <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
+          <span id="manual-feedback-progress-text" class="card-progress-text hidden"></span>
+          <span id="manual-feedback-success" class="status-text status-success hidden"></span>
+          <span id="manual-feedback-error" class="status-text status-error hidden"></span>
+        </div>
+        <input class="submit-proxy" type="submit" />
+      </form>
+
+      <!-- Supported formats (collapsible) -->
+      <div id="formats-header" class="section-header mp-formats-header">
+        <span class="section-arrow" id="formats-arrow">&#x25B6;</span>
+        <span>@tr:plugin_manager.supported_formats</span>
+      </div>
+      <div id="formats-content" class="section-content collapsed">
+        <div class="mp-format-item">https://github.com/owner/repo</div>
+        <div class="mp-format-item">github:owner/repo</div>
+        <div class="mp-format-item">owner/repo</div>
+      </div>
+    </div>
+
+    <div class="separator"></div>
+
+    <!-- Empty state -->
+    <div id="empty-state" class="hidden">
+      <span class="text-disabled">@tr:plugin_marketplace.no_plugins</span>
+      <span class="text-disabled">@tr:plugin_marketplace.edit_list_hint</span>
+    </div>
+
+    <!-- Card grid (rendered dynamically by the panel controller) -->
+    <div id="card-grid" class="card-grid"></div>
+  </div>
+
+  <div id="status-bar">
+    <span class="status-item" id="catalog-status">@tr:plugin_marketplace.loading</span>
+  </div>
+
+  <!-- Uninstall confirmation overlay -->
+  <div id="confirm-overlay" class="confirm-overlay hidden">
+    <div class="confirm-dialog">
+      <span id="confirm-message" class="confirm-message"></span>
+      <div class="separator"></div>
+      <div class="confirm-buttons">
+        <button class="btn btn--secondary" data-event-click="confirm_no">@tr:plugin_marketplace.confirm_uninstall_no</button>
+        <button class="btn btn--error" data-event-click="confirm_yes">@tr:plugin_marketplace.confirm_uninstall_yes</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</rml>

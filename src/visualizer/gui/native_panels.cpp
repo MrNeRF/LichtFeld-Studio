@@ -7,65 +7,36 @@
 #include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/startup_overlay.hpp"
-#include "gui/windows/file_browser.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer_impl.hpp"
-#include "windows/disk_space_error_dialog.hpp"
-#include "windows/video_extractor_dialog.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
 
 namespace lfs::vis::gui::native_panels {
 
-    FileBrowserPanel::FileBrowserPanel(FileBrowser* browser, bool* visible)
-        : browser_(browser),
-          visible_(visible) {}
-
-    void FileBrowserPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
-        browser_->render(visible_);
-    }
-
-    bool FileBrowserPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return visible_ && *visible_;
-    }
-
-    VideoExtractorPanel::VideoExtractorPanel(lfs::gui::VideoExtractorDialog* dialog)
-        : dialog_(dialog) {}
+    VideoExtractorPanel::VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget)
+        : widget_(widget) {}
 
     void VideoExtractorPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
-        if (!dialog_->render())
+        if (!widget_ || !widget_->render())
             PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
     }
 
-    DiskSpaceErrorPanel::DiskSpaceErrorPanel(DiskSpaceErrorDialog* dialog)
-        : dialog_(dialog) {}
-
-    void DiskSpaceErrorPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
-        dialog_->render();
-    }
-
-    bool DiskSpaceErrorPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return dialog_->isOpen();
-    }
-
-    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, ImFont* font, const bool* drag_hovering)
+    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)
         : overlay_(overlay),
-          font_(font),
           drag_hovering_(drag_hovering) {}
 
     void StartupOverlayPanel::draw(const PanelDrawContext& ctx) {
         if (ctx.viewport)
-            overlay_->render(*ctx.viewport, font_, drag_hovering_ ? *drag_hovering_ : false);
+            overlay_->render(*ctx.viewport, drag_hovering_ ? *drag_hovering_ : false);
     }
 
     bool StartupOverlayPanel::poll(const PanelDrawContext& ctx) {
@@ -99,8 +70,11 @@ namespace lfs::vis::gui::native_panels {
     }
 
     bool SequencerPanel::poll(const PanelDrawContext& ctx) {
-        return !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
-               !ctx.ui->editor->isToolsDisabled() && layout_->isShowSequencer();
+        const bool is_enabled = !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
+                                !ctx.ui->editor->isToolsDisabled() && layout_->isShowSequencer();
+        if (!is_enabled && seq_)
+            seq_->setSequencerEnabled(false);
+        return is_enabled;
     }
 
     NodeTransformGizmoPanel::NodeTransformGizmoPanel(GizmoManager* gizmo)

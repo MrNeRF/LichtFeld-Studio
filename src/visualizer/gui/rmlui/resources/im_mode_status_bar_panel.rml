@@ -1,0 +1,12 @@
+<rml>
+<head>
+  <link type="text/template" href="status_bar_panel.rml"/>
+  <link type="text/rcss" href="im_mode_panel.rcss"/>
+</head>
+<body template="status-bar-panel">
+  <div id="im-root"></div>
+  <div id="im-tooltip" class="im-tooltip"></div>
+  <div id="im-popup-backdrop" class="im-popup-backdrop"></div>
+  <div id="im-popup-dialog" class="im-popup-dialog"></div>
+</body>
+</rml>

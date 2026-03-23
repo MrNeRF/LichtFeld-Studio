@@ -1531,6 +1531,11 @@ namespace lfs::core {
             return *this;
         }
 
+        // Strided destination, contiguous source (cross-device: move src to dst device first)
+        if (!dst_contig && src_contig && device_ != other.device_) {
+            return copy_from(other.to(device_));
+        }
+
         // Fallback: materialize non-contiguous source
         if (!src_contig) {
             return copy_from(other.contiguous());
@@ -2220,6 +2225,11 @@ namespace lfs::core {
             std::vector<uint8_t> result(numel());
 
             if (device_ == Device::CUDA) {
+                if (stream()) {
+                    CHECK_CUDA(cudaStreamSynchronize(stream()));
+                } else {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
                 CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
                 std::memcpy(result.data(), data_ptr(), bytes());
@@ -2233,6 +2243,11 @@ namespace lfs::core {
             std::vector<uint8_t> result(numel());
 
             if (device_ == Device::CUDA) {
+                if (stream()) {
+                    CHECK_CUDA(cudaStreamSynchronize(stream()));
+                } else {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
                 CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
                 const unsigned char* src = ptr<unsigned char>();

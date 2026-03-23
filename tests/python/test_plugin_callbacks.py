@@ -62,6 +62,9 @@ description = ""
 [tool.lichtfeld]
 auto_start = false
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
     )
 
@@ -203,6 +206,9 @@ description = ""
 [tool.lichtfeld]
 auto_start = false
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_a_dir / "__init__.py").write_text(
@@ -232,6 +238,9 @@ description = ""
 [tool.lichtfeld]
 auto_start = false
 hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []
 """
         )
         (plugin_b_dir / "__init__.py").write_text(

@@ -41,6 +41,7 @@ namespace lfs::python {
             try {
                 nb::object signal = g_app_state.attr(signal_name);
                 signal.attr("value") = value;
+                request_redraw();
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to set signal '{}': {}", signal_name, e.what());
             }
@@ -104,6 +105,7 @@ namespace lfs::python {
                 nb::object gen_signal = g_app_state.attr("scene_generation");
                 int current = nb::cast<int>(gen_signal.attr("value"));
                 gen_signal.attr("value") = current + 1;
+                request_redraw();
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to increment scene_generation: {}", e.what());
             }
@@ -123,6 +125,7 @@ namespace lfs::python {
                 nb::object gen_signal = g_app_state.attr("selection_generation");
                 int current = nb::cast<int>(gen_signal.attr("value"));
                 gen_signal.attr("value") = current + 1;
+                request_redraw();
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to increment selection_generation: {}", e.what());
             }

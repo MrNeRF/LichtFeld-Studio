@@ -1,0 +1,10 @@
+[project]
+name = "hybrid_panel_demo"
+version = "0.1.0"
+description = "Progressive hybrid panel example for the plugin docs"
+
+[tool.lichtfeld]
+hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []

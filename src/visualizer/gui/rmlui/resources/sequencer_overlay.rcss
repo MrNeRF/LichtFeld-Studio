@@ -1,0 +1,101 @@
+body {
+    font-family: Inter;
+    display: block;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    width: 100%;
+    height: 100%;
+}
+
+.backdrop {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.edit-popup {
+    display: none;
+    position: absolute;
+    z-index: 101;
+    width: 220dp;
+    padding: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.popup-title {
+    display: block;
+    font-size: 10dp;
+    margin-bottom: 6dp;
+}
+
+.popup-sep {
+    display: block;
+    height: 1dp;
+    margin: 4dp 0 8dp 0;
+}
+
+.popup-buttons {
+    display: flex;
+    gap: 4dp;
+    margin-top: 8dp;
+}
+
+.popup-buttons .btn {
+    flex: 1;
+}
+
+.edit-popup input[type="text"] {
+    width: 100%;
+}
+
+.overlay-panel {
+    display: none;
+    position: absolute;
+    padding: 8dp 8dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.kf-edit-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8dp;
+    margin-bottom: 2dp;
+}
+
+#kf-edit-overlay {
+    width: 200dp;
+}
+
+#kf-edit-label {
+    display: block;
+    flex: 1;
+    font-size: 10dp;
+}
+
+.kf-close-btn {
+    min-width: 44dp;
+    text-align: center;
+}
+
+#kf-edit-delta {
+    display: block;
+    font-size: 11dp;
+    margin-bottom: 4dp;
+}
+
+#kf-edit-buttons {
+    display: flex;
+    gap: 4dp;
+    margin-top: 4dp;
+}
+
+#kf-edit-buttons .btn {
+    flex: 1;
+}

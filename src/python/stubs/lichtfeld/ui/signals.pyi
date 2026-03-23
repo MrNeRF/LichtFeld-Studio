@@ -1,3 +1,5 @@
+"""Signal bridge for reactive UI updates"""
+
 
 
 def init() -> None:

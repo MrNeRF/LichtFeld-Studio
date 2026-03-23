@@ -1,0 +1,56 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="about.rcss"/>
+</head>
+<body template="floating-window" data-model="about">
+
+  <span class="panel-title">@tr:about.title</span>
+  <div class="separator"></div>
+
+  <div class="description">@tr:about.description</div>
+  <div class="separator"></div>
+
+  <span class="section-label">@tr:about.build_info</span>
+  <div class="info-table">
+    <div class="info-row">
+      <span class="info-key">@tr:about.build_info.version</span>
+      <span class="info-val">{{version}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">@tr:about.build_info.commit</span>
+      <span class="info-val">{{commit}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">@tr:about.build_info.build_type</span>
+      <span class="info-val">{{build_type}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">@tr:about.build_info.platform</span>
+      <span class="info-val">{{platform}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">@tr:about.build_info.cuda_gl_interop</span>
+      <span class="info-val">{{cuda_gl_interop}}</span>
+    </div>
+  </div>
+
+  <span class="section-label">@tr:about.links</span>
+  <div class="link-row">
+    <span class="link-label">@tr:about.repository</span>
+    <button type="button" id="link-repo" class="link-url">{{repo_url}}</button>
+  </div>
+  <div class="link-row">
+    <span class="link-label">@tr:about.website</span>
+    <button type="button" id="link-website" class="link-url">{{website_url}}</button>
+  </div>
+
+  <div class="separator"></div>
+  <div class="footer">
+    <span class="footer-text">@tr:about.authors</span>
+    <span class="footer-sep">@tr:about.separator</span>
+    <span class="footer-text">@tr:about.license</span>
+  </div>
+
+</body>
+</rml>

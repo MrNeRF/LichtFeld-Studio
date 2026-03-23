@@ -1,0 +1,107 @@
+div {
+    display: block;
+}
+
+body {
+    font-family: Inter;
+    font-size: 10dp;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+}
+
+#overlay-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28dp 40dp;
+    border-radius: 12dp;
+    border-width: 1dp;
+    background-color: rgba(0, 0, 0, 0);
+    border-color: rgba(0, 0, 0, 0);
+}
+
+#supported-text {
+    margin-top: 20dp;
+}
+
+#core11-logo {
+    margin-top: 10dp;
+}
+
+#social-row {
+    display: flex;
+    align-items: center;
+    gap: 24dp;
+    margin-top: 16dp;
+}
+
+.social-link {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.social-link:hover span {
+    text-decoration: underline;
+}
+
+.social-icon {
+    width: 20dp;
+    height: 20dp;
+    margin-right: 6dp;
+}
+
+.heart-icon {
+    image-color: rgb(220, 50, 50);
+}
+
+#lang-row {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    margin-top: 14dp;
+}
+
+#lang-select {
+    width: 140dp;
+}
+
+#click-hint {
+    margin-top: 12dp;
+}
+
+select {
+    font-size: 10dp;
+    padding: 2dp 6dp;
+    border-width: 1dp;
+}
+
+selectbox {
+    border-width: 1dp;
+    max-height: 200dp;
+    overflow-y: auto;
+}
+
+selectbox option {
+    padding: 2dp 6dp;
+    font-size: 10dp;
+}
+
+selectbox scrollbarvertical {
+    width: 10dp;
+}
+
+selectbox scrollbarvertical slidertrack {
+    background-color: rgba(30, 30, 46, 128);
+}
+
+selectbox scrollbarvertical sliderbar {
+    background-color: rgba(108, 112, 134, 160);
+}
+
+selectbox scrollbarvertical sliderbar:hover {
+    background-color: rgba(137, 180, 250, 200);
+}

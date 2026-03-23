@@ -6,65 +6,40 @@
 
 #include "gui/panel_registry.hpp"
 
-struct ImFont;
-
 namespace lfs::vis::gui {
 
-    class FileBrowser;
-    class DiskSpaceErrorDialog;
     class StartupOverlay;
     class GizmoManager;
     class GuiManager;
     class SequencerUIManager;
     class PanelLayoutManager;
+    class RmlStatusBar;
 
 } // namespace lfs::vis::gui
 
 namespace lfs::gui {
-    class VideoExtractorDialog;
+    class IVideoExtractorWidget;
 }
 
 namespace lfs::vis::gui::native_panels {
 
-    class FileBrowserPanel : public IPanel {
-    public:
-        FileBrowserPanel(FileBrowser* browser, bool* visible);
-        void draw(const PanelDrawContext& ctx) override;
-        bool poll(const PanelDrawContext& ctx) override;
-
-    private:
-        FileBrowser* browser_;
-        bool* visible_;
-    };
-
     class VideoExtractorPanel : public IPanel {
     public:
-        explicit VideoExtractorPanel(lfs::gui::VideoExtractorDialog* dialog);
+        explicit VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget);
         void draw(const PanelDrawContext& ctx) override;
 
     private:
-        lfs::gui::VideoExtractorDialog* dialog_;
-    };
-
-    class DiskSpaceErrorPanel : public IPanel {
-    public:
-        explicit DiskSpaceErrorPanel(DiskSpaceErrorDialog* dialog);
-        void draw(const PanelDrawContext& ctx) override;
-        bool poll(const PanelDrawContext& ctx) override;
-
-    private:
-        DiskSpaceErrorDialog* dialog_;
+        lfs::gui::IVideoExtractorWidget* widget_;
     };
 
     class StartupOverlayPanel : public IPanel {
     public:
-        StartupOverlayPanel(StartupOverlay* overlay, ImFont* font, const bool* drag_hovering);
+        StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering);
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
 
     private:
         StartupOverlay* overlay_;
-        ImFont* font_;
         const bool* drag_hovering_;
     };
 

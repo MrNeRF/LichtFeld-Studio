@@ -3,7 +3,7 @@
 """Edit menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu
+from .layouts.menus import register_menu, menu_action, menu_separator
 
 
 @register_menu
@@ -14,19 +14,26 @@ class EditMenu:
     location = "MENU_BAR"
     order = 20
 
-    def draw(self, layout):
-        if layout.menu_item(lf.ui.tr("menu.edit.input_settings")):
-            lf.ui.set_panel_enabled("lfs.input_settings", True)
-
-        layout.separator()
-
-        if layout.begin_menu(lf.ui.tr("preferences.language")):
-            current = lf.ui.get_current_language()
-            for lang_code, lang_name in lf.ui.get_languages():
-                is_selected = lang_code == current
-                if layout.menu_item_toggle(lang_name, "", is_selected):
-                    lf.ui.set_language(lang_code)
-            layout.end_menu()
+    def menu_items(self):
+        return [
+            menu_action(
+                "Undo",
+                lf.undo.undo,
+                shortcut="Ctrl+Z",
+                enabled=lf.undo.can_undo(),
+            ),
+            menu_action(
+                "Redo",
+                lf.undo.redo,
+                shortcut="Ctrl+Shift+Z",
+                enabled=lf.undo.can_redo(),
+            ),
+            menu_separator(),
+            menu_action(
+                lf.ui.tr("menu.edit.input_settings"),
+                lambda: lf.ui.set_panel_enabled("lfs.input_settings", True),
+            ),
+        ]
 
 
 def register():

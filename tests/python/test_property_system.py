@@ -165,54 +165,21 @@ class TestOptimizationParams:
 
 
 class TestPanelPrefix:
-    """Tests for panel_* prefix (backward compatibility with bl_*)."""
+    """Tests for the unified Panel API."""
 
-    def test_panel_class_with_panel_prefix(self, lf):
-        """Panel with panel_label should register correctly."""
+    def test_panel_class_registers(self, lf):
+        """Panel subclass should register correctly."""
 
-        class TestPanel:
-            panel_label = "Test Panel"
-            panel_space = "SIDE_PANEL"
-            panel_order = 50
+        class TestPanel(lf.ui.Panel):
+            label = "Test Panel"
+            space = lf.ui.PanelSpace.SIDE_PANEL
+            order = 50
 
             def draw(self, layout):
                 layout.label("Hello")
 
-        # Should not raise - use lf.ui submodule
-        lf.ui.register_panel(TestPanel)
-        lf.ui.unregister_panel(TestPanel)
-
-    def test_panel_class_with_bl_prefix(self, lf):
-        """Panel with bl_label (legacy) should still work."""
-
-        class LegacyPanel:
-            bl_label = "Legacy Panel"
-            bl_space = "SIDE_PANEL"
-            bl_order = 99
-
-            def draw(self, layout):
-                layout.label("Legacy")
-
-        # Should not raise (backward compat)
-        lf.ui.register_panel(LegacyPanel)
-        lf.ui.unregister_panel(LegacyPanel)
-
-    def test_panel_prefix_precedence(self, lf):
-        """panel_* should take precedence over bl_*."""
-
-        class MixedPanel:
-            panel_label = "New Style"
-            bl_label = "Old Style"  # Should be ignored
-            panel_space = "FLOATING"
-
-            def draw(self, layout):
-                pass
-
-        # Register and verify it uses panel_label
-        lf.ui.register_panel(MixedPanel)
-        # The panel should be registered with "New Style" label
-        # We can only verify this indirectly by not crashing
-        lf.ui.unregister_panel(MixedPanel)
+        lf.register_class(TestPanel)
+        lf.unregister_class(TestPanel)
 
 
 class TestPanelRegistry:
@@ -221,51 +188,137 @@ class TestPanelRegistry:
     def test_register_unregister(self, lf):
         """Basic register/unregister cycle."""
 
-        class SimplePanel:
-            panel_label = "Simple"
-            panel_space = "FLOATING"
+        class SimplePanel(lf.ui.Panel):
+            label = "Simple"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def draw(self, layout):
                 pass
 
-        lf.ui.register_panel(SimplePanel)
-        lf.ui.unregister_panel(SimplePanel)
+        lf.register_class(SimplePanel)
+        lf.unregister_class(SimplePanel)
 
     def test_duplicate_register_updates(self, lf):
         """Re-registering a panel with same label should update it."""
 
-        class UpdatePanel:
-            panel_label = "Updatable"
-            panel_space = "SIDE_PANEL"
+        class UpdatePanel(lf.ui.Panel):
+            label = "Updatable"
+            space = lf.ui.PanelSpace.SIDE_PANEL
 
             def draw(self, layout):
                 layout.label("Version 1")
 
-        lf.ui.register_panel(UpdatePanel)
+        lf.register_class(UpdatePanel)
 
         # Re-register with updated draw
-        class UpdatePanel:
-            panel_label = "Updatable"
-            panel_space = "SIDE_PANEL"
+        class UpdatePanel(lf.ui.Panel):
+            label = "Updatable"
+            space = lf.ui.PanelSpace.SIDE_PANEL
 
             def draw(self, layout):
                 layout.label("Version 2")
 
-        lf.ui.register_panel(UpdatePanel)  # Should not raise
-        lf.ui.unregister_panel(UpdatePanel)
+        lf.register_class(UpdatePanel)  # Should not raise
+        lf.unregister_class(UpdatePanel)
 
     def test_unregister_nonexistent_is_safe(self, lf):
         """Unregistering a non-registered panel should not crash."""
 
-        class NeverRegistered:
-            panel_label = "Never"
-            panel_space = "FLOATING"
+        class NeverRegistered(lf.ui.Panel):
+            label = "Never"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def draw(self, layout):
                 pass
 
         # Should not raise
-        lf.ui.unregister_panel(NeverRegistered)
+        lf.unregister_class(NeverRegistered)
+
+    def test_typed_panel_attributes_register(self, lf):
+        class TypedPanel(lf.ui.Panel):
+            id = "tests.typed_panel"
+            label = "Typed"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+            options = {lf.ui.PanelOption.HIDE_HEADER}
+            poll_dependencies = {
+                lf.ui.PollDependency.SCENE,
+                lf.ui.PollDependency.SELECTION,
+            }
+
+            def draw(self, layout):
+                del layout
+
+        lf.register_class(TypedPanel)
+        try:
+            info = lf.ui.get_panel("tests.typed_panel")
+            assert info is not None
+            assert info.id == "tests.typed_panel"
+            assert info.label == "Typed"
+            assert info.space == lf.ui.PanelSpace.MAIN_PANEL_TAB
+            assert info.options == {lf.ui.PanelOption.HIDE_HEADER}
+            assert info.poll_dependencies == {
+                lf.ui.PollDependency.SCENE,
+                lf.ui.PollDependency.SELECTION,
+            }
+            tabs = lf.ui.get_main_panel_tabs()
+            assert any(tab.id == "tests.typed_panel" for tab in tabs)
+        finally:
+            lf.unregister_class(TypedPanel)
+
+    def test_invalid_panel_space_raises(self, lf):
+        class InvalidSpacePanel(lf.ui.Panel):
+            label = "Bad"
+            space = "FLOATING"
+
+            def draw(self, layout):
+                del layout
+
+        with pytest.raises(TypeError, match="space"):
+            lf.register_class(InvalidSpacePanel)
+
+    def test_string_height_mode_is_rejected(self, lf):
+        class InvalidHeightModePanel(lf.ui.Panel):
+            label = "Bad Height"
+            height_mode = "content"
+
+            def draw(self, layout):
+                del layout
+
+        with pytest.raises(TypeError, match="height_mode"):
+            lf.register_class(InvalidHeightModePanel)
+
+    def test_parent_space_conflict_raises(self, lf):
+        class EmbeddedPanel(lf.ui.Panel):
+            label = "Embedded"
+            parent = "lfs.rendering"
+            space = lf.ui.PanelSpace.FLOATING
+
+            def draw(self, layout):
+                del layout
+
+        with pytest.raises(ValueError, match="parent"):
+            lf.register_class(EmbeddedPanel)
+
+    def test_removed_legacy_panel_fields_raise(self, lf):
+        class LegacyIdPanel(lf.ui.Panel):
+            idname = "tests.legacy"
+            label = "Legacy"
+
+            def draw(self, layout):
+                del layout
+
+        with pytest.raises(AttributeError, match="idname"):
+            lf.register_class(LegacyIdPanel)
+
+        class LegacyDepsPanel(lf.ui.Panel):
+            label = "Legacy Deps"
+            poll_deps = {lf.ui.PollDependency.SCENE}
+
+            def draw(self, layout):
+                del layout
+
+        with pytest.raises(AttributeError, match="poll_deps"):
+            lf.register_class(LegacyDepsPanel)
 
 
 class TestPropertyCallbacks:
@@ -341,9 +394,9 @@ class TestUILayout:
 
     def test_panel_registration_implies_layout_works(self, lf):
         """Register/unregister panel verifies layout binding works."""
-        class LayoutTestPanel:
-            panel_label = "Layout Test"
-            panel_space = "FLOATING"
+        class LayoutTestPanel(lf.ui.Panel):
+            label = "Layout Test"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
             def draw(self, layout):
                 # These would work if we had ImGui context:
@@ -352,5 +405,5 @@ class TestUILayout:
                 # layout.prop(params, "means_lr")
                 pass
 
-        lf.ui.register_panel(LayoutTestPanel)
-        lf.ui.unregister_panel(LayoutTestPanel)
+        lf.register_class(LayoutTestPanel)
+        lf.unregister_class(LayoutTestPanel)

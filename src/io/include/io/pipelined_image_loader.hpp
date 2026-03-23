@@ -120,6 +120,9 @@ namespace lfs::io {
         std::optional<ReadyImage> try_get();
         std::optional<ReadyImage> try_get_for(std::chrono::milliseconds timeout);
 
+        lfs::core::Tensor load_image_immediate(
+            const std::filesystem::path& path, const LoadParams& params);
+
         size_t ready_count() const;
         size_t in_flight_count() const;
         void clear();
@@ -144,6 +147,11 @@ namespace lfs::io {
             bool alpha_as_mask = false;
             MaskParams alpha_mask_params;
             const lfs::core::UndistortParams* undistort = nullptr;
+        };
+
+        struct CachedJpegHit {
+            std::shared_ptr<std::vector<uint8_t>> data;
+            bool from_base_key = false;
         };
 
         // Pairing buffer: wait for both image and mask before output
@@ -231,6 +239,9 @@ namespace lfs::io {
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
         void save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data);
+        std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
+        std::optional<CachedJpegHit> find_cached_jpeg(const std::string& cache_key,
+                                                      const std::string& base_key);
 
         std::shared_ptr<std::vector<uint8_t>> get_from_jpeg_cache(const std::string& cache_key);
         void put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data);

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lichtfeld": {
+      "command": "python3",
+      "args": [
+        "scripts/lichtfeld_mcp_bridge.py"
+      ]
+    }
+  }
+}

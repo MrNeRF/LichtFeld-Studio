@@ -8,9 +8,277 @@
 #include "core/point_cloud.hpp"
 #include "framebuffer_factory.hpp"
 #include "geometry/bounding_box.hpp"
+#include "gl_state_guard.hpp"
 #include "rendering/render_constants.hpp"
+#include <cuda_runtime.h>
+#include <limits>
+#include <vector>
 
 namespace lfs::rendering {
+
+    namespace {
+        struct GaussianRasterResources {
+            std::unique_ptr<lfs::geometry::BoundingBox> temp_crop_box;
+            Tensor crop_box_transform_tensor;
+            Tensor crop_box_min_tensor;
+            Tensor crop_box_max_tensor;
+            Tensor ellipsoid_transform_tensor;
+            Tensor ellipsoid_radii_tensor;
+            Tensor view_volume_transform_tensor;
+            Tensor view_volume_min_tensor;
+            Tensor view_volume_max_tensor;
+        };
+
+        void applyCropBoxToPipeline(RenderingPipeline::RasterRequest& pipeline_req,
+                                    const std::optional<GaussianScopedBoxFilter>& crop_region,
+                                    GaussianRasterResources& resources) {
+            if (!crop_region.has_value()) {
+                return;
+            }
+
+            resources.temp_crop_box = std::make_unique<lfs::geometry::BoundingBox>();
+            resources.temp_crop_box->setBounds(crop_region->bounds.min, crop_region->bounds.max);
+
+            lfs::geometry::EuclideanTransform transform(crop_region->bounds.transform);
+            resources.temp_crop_box->setworld2BBox(transform);
+
+            pipeline_req.crop_box = resources.temp_crop_box.get();
+
+            const glm::mat4& w2b = crop_region->bounds.transform;
+            std::vector<float> transform_data(16);
+            for (int row = 0; row < 4; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    transform_data[row * 4 + col] = w2b[col][row];
+                }
+            }
+            resources.crop_box_transform_tensor =
+                Tensor::from_vector(transform_data, {4, 4}, lfs::core::Device::CPU).cuda();
+
+            std::vector<float> min_data = {
+                crop_region->bounds.min.x,
+                crop_region->bounds.min.y,
+                crop_region->bounds.min.z};
+            resources.crop_box_min_tensor =
+                Tensor::from_vector(min_data, {3}, lfs::core::Device::CPU).cuda();
+
+            std::vector<float> max_data = {
+                crop_region->bounds.max.x,
+                crop_region->bounds.max.y,
+                crop_region->bounds.max.z};
+            resources.crop_box_max_tensor =
+                Tensor::from_vector(max_data, {3}, lfs::core::Device::CPU).cuda();
+
+            pipeline_req.crop_box_transform = &resources.crop_box_transform_tensor;
+            pipeline_req.crop_box_min = &resources.crop_box_min_tensor;
+            pipeline_req.crop_box_max = &resources.crop_box_max_tensor;
+            pipeline_req.crop_inverse = crop_region->inverse;
+            pipeline_req.crop_desaturate = crop_region->desaturate;
+            pipeline_req.crop_parent_node_index = crop_region->parent_node_index;
+        }
+
+        void applyEllipsoidToPipeline(RenderingPipeline::RasterRequest& pipeline_req,
+                                      const std::optional<GaussianScopedEllipsoidFilter>& ellipsoid_region,
+                                      GaussianRasterResources& resources) {
+            if (!ellipsoid_region.has_value()) {
+                return;
+            }
+
+            const glm::mat4& w2e = ellipsoid_region->bounds.transform;
+            std::vector<float> transform_data(16);
+            for (int row = 0; row < 4; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    transform_data[row * 4 + col] = w2e[col][row];
+                }
+            }
+            resources.ellipsoid_transform_tensor =
+                Tensor::from_vector(transform_data, {4, 4}, lfs::core::Device::CPU).cuda();
+
+            std::vector<float> radii_data = {
+                ellipsoid_region->bounds.radii.x,
+                ellipsoid_region->bounds.radii.y,
+                ellipsoid_region->bounds.radii.z};
+            resources.ellipsoid_radii_tensor =
+                Tensor::from_vector(radii_data, {3}, lfs::core::Device::CPU).cuda();
+
+            pipeline_req.ellipsoid_transform = &resources.ellipsoid_transform_tensor;
+            pipeline_req.ellipsoid_radii = &resources.ellipsoid_radii_tensor;
+            pipeline_req.ellipsoid_inverse = ellipsoid_region->inverse;
+            pipeline_req.ellipsoid_desaturate = ellipsoid_region->desaturate;
+            pipeline_req.ellipsoid_parent_node_index = ellipsoid_region->parent_node_index;
+        }
+
+        void applyViewVolumeToPipeline(RenderingPipeline::RasterRequest& pipeline_req,
+                                       const std::optional<BoundingBox>& view_volume,
+                                       GaussianRasterResources& resources) {
+            if (!view_volume.has_value()) {
+                return;
+            }
+
+            const glm::mat4& w2b = view_volume->transform;
+            std::vector<float> transform_data(16);
+            for (int row = 0; row < 4; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    transform_data[row * 4 + col] = w2b[col][row];
+                }
+            }
+            resources.view_volume_transform_tensor =
+                Tensor::from_vector(transform_data, {4, 4}, lfs::core::Device::CPU).cuda();
+
+            std::vector<float> min_data = {view_volume->min.x, view_volume->min.y, view_volume->min.z};
+            resources.view_volume_min_tensor =
+                Tensor::from_vector(min_data, {3}, lfs::core::Device::CPU).cuda();
+
+            std::vector<float> max_data = {view_volume->max.x, view_volume->max.y, view_volume->max.z};
+            resources.view_volume_max_tensor =
+                Tensor::from_vector(max_data, {3}, lfs::core::Device::CPU).cuda();
+
+            pipeline_req.view_volume_transform = &resources.view_volume_transform_tensor;
+            pipeline_req.view_volume_min = &resources.view_volume_min_tensor;
+            pipeline_req.view_volume_max = &resources.view_volume_max_tensor;
+        }
+
+        [[nodiscard]] RenderingPipeline::RasterRequest makeGaussianPipelineRequest(
+            const ViewportRenderRequest& request) {
+            return RenderingPipeline::RasterRequest{
+                .view_rotation = request.frame_view.rotation,
+                .view_translation = request.frame_view.translation,
+                .viewport_size = request.frame_view.size,
+                .focal_length_mm = request.frame_view.focal_length_mm,
+                .scaling_modifier = request.scaling_modifier,
+                .antialiasing = request.antialiasing,
+                .mip_filter = request.mip_filter,
+                .sh_degree = request.sh_degree,
+                .render_mode = RenderMode::RGB,
+                .crop_box = nullptr,
+                .background_color = request.frame_view.background_color,
+                .voxel_size = 0.01f,
+                .gut = request.gut,
+                .equirectangular = request.equirectangular,
+                .show_rings = request.overlay.markers.show_rings,
+                .ring_width = request.overlay.markers.ring_width,
+                .show_center_markers = request.overlay.markers.show_center_markers,
+                .model_transforms = request.scene.model_transforms ? *request.scene.model_transforms
+                                                                   : std::vector<glm::mat4>{},
+                .transform_indices = request.scene.transform_indices,
+                .selection_mask = request.overlay.emphasis.mask,
+                .cursor_active = request.overlay.cursor.enabled,
+                .cursor_x = request.overlay.cursor.cursor.x,
+                .cursor_y = request.overlay.cursor.cursor.y,
+                .cursor_radius = request.overlay.cursor.radius,
+                .preview_selection_add_mode = request.overlay.emphasis.transient_mask.additive,
+                .preview_selection_tensor = request.overlay.emphasis.transient_mask.mask,
+                .cursor_saturation_preview = request.overlay.cursor.saturation_preview,
+                .cursor_saturation_amount = request.overlay.cursor.saturation_amount,
+                .hovered_depth_id = nullptr,
+                .focused_gaussian_id = request.overlay.emphasis.focused_gaussian_id,
+                .far_plane = request.frame_view.far_plane,
+                .emphasized_node_mask = request.overlay.emphasis.emphasized_node_mask,
+                .node_visibility_mask = request.scene.node_visibility_mask,
+                .dim_non_emphasized = request.overlay.emphasis.dim_non_emphasized,
+                .emphasis_flash_intensity = request.overlay.emphasis.flash_intensity,
+                .orthographic = request.frame_view.orthographic,
+                .ortho_scale = request.frame_view.ortho_scale};
+        }
+
+        [[nodiscard]] RenderingPipeline::RasterRequest makeHoveredGaussianQueryPipelineRequest(
+            const HoveredGaussianQueryRequest& request,
+            unsigned long long* const hovered_depth_id) {
+            return RenderingPipeline::RasterRequest{
+                .view_rotation = request.frame_view.rotation,
+                .view_translation = request.frame_view.translation,
+                .viewport_size = request.frame_view.size,
+                .focal_length_mm = request.frame_view.focal_length_mm,
+                .scaling_modifier = request.scaling_modifier,
+                .antialiasing = false,
+                .mip_filter = request.mip_filter,
+                .sh_degree = request.sh_degree,
+                .render_mode = RenderMode::RGB,
+                .crop_box = nullptr,
+                .background_color = request.frame_view.background_color,
+                .voxel_size = 0.01f,
+                .gut = request.gut,
+                .equirectangular = request.equirectangular,
+                .show_rings = false,
+                .ring_width = 0.0f,
+                .show_center_markers = false,
+                .model_transforms = request.scene.model_transforms ? *request.scene.model_transforms
+                                                                   : std::vector<glm::mat4>{},
+                .transform_indices = request.scene.transform_indices,
+                .selection_mask = nullptr,
+                .cursor_active = true,
+                .cursor_x = request.cursor.x,
+                .cursor_y = request.cursor.y,
+                .cursor_radius = 0.0f,
+                .preview_selection_add_mode = true,
+                .preview_selection_tensor = nullptr,
+                .cursor_saturation_preview = false,
+                .cursor_saturation_amount = 0.0f,
+                .hovered_depth_id = hovered_depth_id,
+                .focused_gaussian_id = -1,
+                .far_plane = request.frame_view.far_plane,
+                .emphasized_node_mask = {},
+                .node_visibility_mask = request.scene.node_visibility_mask,
+                .dim_non_emphasized = false,
+                .emphasis_flash_intensity = 0.0f,
+                .orthographic = request.frame_view.orthographic,
+                .ortho_scale = request.frame_view.ortho_scale};
+        }
+
+        [[nodiscard]] PointCloudCropParams makePointCloudCropParams(const PointCloudRenderRequest& request) {
+            PointCloudCropParams crop_params;
+            if (request.filters.crop_box.has_value()) {
+                crop_params.enabled = true;
+                crop_params.transform = request.filters.crop_box->transform;
+                crop_params.min = request.filters.crop_box->min;
+                crop_params.max = request.filters.crop_box->max;
+                crop_params.inverse = request.filters.crop_inverse;
+                crop_params.desaturate = request.filters.crop_desaturate;
+            }
+            return crop_params;
+        }
+
+        [[nodiscard]] RenderingPipeline::RasterRequest makePointCloudPipelineRequest(
+            const PointCloudRenderRequest& request) {
+            return RenderingPipeline::RasterRequest{
+                .view_rotation = request.frame_view.rotation,
+                .view_translation = request.frame_view.translation,
+                .viewport_size = request.frame_view.size,
+                .focal_length_mm = request.frame_view.focal_length_mm,
+                .scaling_modifier = request.render.scaling_modifier,
+                .antialiasing = false,
+                .mip_filter = false,
+                .sh_degree = 0,
+                .render_mode = RenderMode::RGB,
+                .crop_box = nullptr,
+                .background_color = request.frame_view.background_color,
+                .voxel_size = request.render.voxel_size,
+                .gut = false,
+                .equirectangular = request.render.equirectangular,
+                .show_rings = false,
+                .ring_width = 0.0f,
+                .show_center_markers = false,
+                .model_transforms = request.scene.model_transforms ? *request.scene.model_transforms
+                                                                   : std::vector<glm::mat4>{},
+                .transform_indices = request.scene.transform_indices,
+                .selection_mask = nullptr,
+                .cursor_active = false,
+                .cursor_x = 0.0f,
+                .cursor_y = 0.0f,
+                .cursor_radius = 0.0f,
+                .preview_selection_add_mode = true,
+                .preview_selection_tensor = nullptr,
+                .cursor_saturation_preview = false,
+                .cursor_saturation_amount = 0.0f,
+                .hovered_depth_id = nullptr,
+                .focused_gaussian_id = -1,
+                .far_plane = request.frame_view.far_plane,
+                .emphasized_node_mask = {},
+                .orthographic = request.frame_view.orthographic,
+                .ortho_scale = request.frame_view.ortho_scale,
+                .point_cloud_crop_params = makePointCloudCropParams(request)};
+        }
+
+    } // namespace
 
     RenderingEngineImpl::RenderingEngineImpl() {
         LOG_DEBUG("Initializing RenderingEngineImpl");
@@ -30,6 +298,8 @@ namespace lfs::rendering {
 
         LOG_INFO("Initializing rendering engine...");
 
+        pipeline_.setRenderTargetPool(&render_target_pool_);
+        mesh_renderer_.setRenderTargetPool(&render_target_pool_);
         screen_renderer_ = std::make_shared<ScreenQuadRenderer>(getPreferredFrameBufferMode());
 
         split_view_renderer_ = std::make_unique<SplitViewRenderer>();
@@ -114,14 +384,23 @@ namespace lfs::rendering {
     void RenderingEngineImpl::shutdown() {
         LOG_DEBUG("Shutting down rendering engine");
         quad_shader_ = ManagedShader();
-        last_presented_image_.reset();
-        last_presented_depth_.reset();
-        last_presented_external_depth_texture_ = 0;
-        last_presented_depth_is_ndc_ = false;
-        last_presented_near_plane_ = 0.0f;
-        last_presented_far_plane_ = 0.0f;
-        last_presented_orthographic_ = false;
-        has_present_upload_cache_ = false;
+        invalidatePresentUploadCache();
+        if (hovered_depth_id_device_) {
+            cudaFree(hovered_depth_id_device_);
+            hovered_depth_id_device_ = nullptr;
+        }
+        if (hovered_depth_id_host_) {
+            cudaFreeHost(hovered_depth_id_host_);
+            hovered_depth_id_host_ = nullptr;
+        }
+#ifdef CUDA_GL_INTEROP_ENABLED
+        gpu_frame_readback_interop_.reset();
+        gpu_frame_readback_source_ = 0;
+        gpu_frame_readback_size_ = {0, 0};
+#endif
+        gpu_frame_readback_fbo_ = FBO();
+        pipeline_.resetResources();
+        render_target_pool_.clear();
         screen_renderer_.reset();
         split_view_renderer_.reset();
         viewport_gizmo_.shutdown();
@@ -144,252 +423,336 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<RenderResult> RenderingEngineImpl::renderGaussians(
+    Result<RenderingPipeline::ImageRenderResult> RenderingEngineImpl::renderGaussiansRasterResult(
         const lfs::core::SplatData& splat_data,
-        const RenderRequest& request) {
+        const ViewportRenderRequest& request) {
 
         if (!isInitialized()) {
             LOG_ERROR("Rendering engine not initialized");
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
-            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
             return std::unexpected("Invalid viewport dimensions");
         }
 
-        LOG_TRACE("Rendering gaussians with viewport {}x{}", request.viewport.size.x, request.viewport.size.y);
+        LOG_TRACE("Rendering gaussians with viewport {}x{}",
+                  request.frame_view.size.x, request.frame_view.size.y);
 
-        RenderingPipeline::RenderRequest pipeline_req{
-            .view_rotation = request.viewport.rotation,
-            .view_translation = request.viewport.translation,
-            .viewport_size = request.viewport.size,
-            .focal_length_mm = request.viewport.focal_length_mm,
-            .scaling_modifier = request.scaling_modifier,
-            .antialiasing = request.antialiasing,
-            .mip_filter = request.mip_filter,
-            .sh_degree = request.sh_degree,
-            .render_mode = RenderMode::RGB,
-            .crop_box = nullptr,
-            .background_color = request.background_color,
-            .point_cloud_mode = request.point_cloud_mode,
-            .voxel_size = request.voxel_size,
-            .gut = request.gut,
-            .equirectangular = request.equirectangular,
-            .show_rings = request.show_rings,
-            .ring_width = request.ring_width,
-            .show_center_markers = request.show_center_markers,
-            .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
-            .transform_indices = request.transform_indices,
-            .selection_mask = request.selection_mask,
-            .output_screen_positions = request.output_screen_positions,
-            .brush_active = request.brush_active,
-            .brush_x = request.brush_x,
-            .brush_y = request.brush_y,
-            .brush_radius = request.brush_radius,
-            .brush_add_mode = request.brush_add_mode,
-            .brush_selection_tensor = request.brush_selection_tensor,
-            .brush_saturation_mode = request.brush_saturation_mode,
-            .brush_saturation_amount = request.brush_saturation_amount,
-            .selection_mode_rings = request.selection_mode_rings,
-            .hovered_depth_id = request.hovered_depth_id,
-            .highlight_gaussian_id = request.highlight_gaussian_id,
-            .far_plane = request.far_plane,
-            .selected_node_mask = request.selected_node_mask,
-            .node_visibility_mask = request.node_visibility_mask,
-            .desaturate_unselected = request.desaturate_unselected,
-            .selection_flash_intensity = request.selection_flash_intensity,
-            .orthographic = request.orthographic,
-            .ortho_scale = request.ortho_scale};
+        auto pipeline_req = makeGaussianPipelineRequest(request);
+        GaussianRasterResources raster_resources;
+        applyCropBoxToPipeline(pipeline_req, request.filters.crop_region, raster_resources);
+        applyEllipsoidToPipeline(pipeline_req, request.filters.ellipsoid_region, raster_resources);
+        applyViewVolumeToPipeline(pipeline_req, request.filters.view_volume, raster_resources);
 
-        std::unique_ptr<lfs::geometry::BoundingBox> temp_crop_box;
-        Tensor crop_box_transform_tensor, crop_box_min_tensor, crop_box_max_tensor;
-        if (request.crop_box.has_value()) {
-            temp_crop_box = std::make_unique<lfs::geometry::BoundingBox>();
-            temp_crop_box->setBounds(request.crop_box->min, request.crop_box->max);
-
-            lfs::geometry::EuclideanTransform transform(request.crop_box->transform);
-            temp_crop_box->setworld2BBox(transform);
-
-            pipeline_req.crop_box = temp_crop_box.get();
-
-            const glm::mat4& w2b = request.crop_box->transform;
-            std::vector<float> transform_data(16);
-            for (int row = 0; row < 4; ++row) {
-                for (int col = 0; col < 4; ++col) {
-                    transform_data[row * 4 + col] = w2b[col][row];
-                }
-            }
-            crop_box_transform_tensor = Tensor::from_vector(transform_data, {4, 4}, lfs::core::Device::CPU).cuda();
-
-            std::vector<float> min_data = {request.crop_box->min.x, request.crop_box->min.y, request.crop_box->min.z};
-            crop_box_min_tensor = Tensor::from_vector(min_data, {3}, lfs::core::Device::CPU).cuda();
-
-            std::vector<float> max_data = {request.crop_box->max.x, request.crop_box->max.y, request.crop_box->max.z};
-            crop_box_max_tensor = Tensor::from_vector(max_data, {3}, lfs::core::Device::CPU).cuda();
-
-            pipeline_req.crop_box_transform = &crop_box_transform_tensor;
-            pipeline_req.crop_box_min = &crop_box_min_tensor;
-            pipeline_req.crop_box_max = &crop_box_max_tensor;
-            pipeline_req.crop_inverse = request.crop_inverse;
-            pipeline_req.crop_desaturate = request.crop_desaturate;
-            pipeline_req.crop_parent_node_index = request.crop_parent_node_index;
-        }
-
-        Tensor ellipsoid_transform_tensor, ellipsoid_radii_tensor;
-        if (request.ellipsoid.has_value()) {
-            const glm::mat4& w2e = request.ellipsoid->transform;
-            std::vector<float> transform_data(16);
-            for (int row = 0; row < 4; ++row) {
-                for (int col = 0; col < 4; ++col) {
-                    transform_data[row * 4 + col] = w2e[col][row];
-                }
-            }
-            ellipsoid_transform_tensor = Tensor::from_vector(transform_data, {4, 4}, lfs::core::Device::CPU).cuda();
-
-            std::vector<float> radii_data = {request.ellipsoid->radii.x, request.ellipsoid->radii.y, request.ellipsoid->radii.z};
-            ellipsoid_radii_tensor = Tensor::from_vector(radii_data, {3}, lfs::core::Device::CPU).cuda();
-
-            pipeline_req.ellipsoid_transform = &ellipsoid_transform_tensor;
-            pipeline_req.ellipsoid_radii = &ellipsoid_radii_tensor;
-            pipeline_req.ellipsoid_inverse = request.ellipsoid_inverse;
-            pipeline_req.ellipsoid_desaturate = request.ellipsoid_desaturate;
-            pipeline_req.ellipsoid_parent_node_index = request.ellipsoid_parent_node_index;
-        }
-
-        Tensor depth_filter_transform_tensor, depth_filter_min_tensor, depth_filter_max_tensor;
-        if (request.depth_filter.has_value()) {
-            const glm::mat4& w2b = request.depth_filter->transform;
-            std::vector<float> transform_data(16);
-            for (int row = 0; row < 4; ++row) {
-                for (int col = 0; col < 4; ++col) {
-                    transform_data[row * 4 + col] = w2b[col][row];
-                }
-            }
-            depth_filter_transform_tensor = Tensor::from_vector(transform_data, {4, 4}, lfs::core::Device::CPU).cuda();
-
-            std::vector<float> min_data = {request.depth_filter->min.x, request.depth_filter->min.y, request.depth_filter->min.z};
-            depth_filter_min_tensor = Tensor::from_vector(min_data, {3}, lfs::core::Device::CPU).cuda();
-
-            std::vector<float> max_data = {request.depth_filter->max.x, request.depth_filter->max.y, request.depth_filter->max.z};
-            depth_filter_max_tensor = Tensor::from_vector(max_data, {3}, lfs::core::Device::CPU).cuda();
-
-            pipeline_req.depth_filter_transform = &depth_filter_transform_tensor;
-            pipeline_req.depth_filter_min = &depth_filter_min_tensor;
-            pipeline_req.depth_filter_max = &depth_filter_max_tensor;
-        }
-
-        auto pipeline_result = pipeline_.render(splat_data, pipeline_req);
+        auto pipeline_result = pipeline_.renderGaussianImage(splat_data, pipeline_req);
 
         if (!pipeline_result) {
             LOG_ERROR("Pipeline render failed: {}", pipeline_result.error());
             return std::unexpected(pipeline_result.error());
         }
 
-        RenderResult result{
-            .image = std::make_shared<Tensor>(pipeline_result->image),
-            .depth = std::make_shared<Tensor>(pipeline_result->depth),
-            .screen_positions = pipeline_result->screen_positions.is_valid()
-                                    ? std::make_shared<Tensor>(pipeline_result->screen_positions)
-                                    : nullptr,
-            .valid = true,
-            .depth_is_ndc = pipeline_result->depth_is_ndc,
-            .external_depth_texture = pipeline_result->external_depth_texture,
-            .near_plane = pipeline_result->near_plane,
-            .far_plane = pipeline_result->far_plane,
-            .orthographic = pipeline_result->orthographic};
-
-        return result;
+        return *pipeline_result;
     }
 
-    Result<RenderResult> RenderingEngineImpl::renderPointCloud(
-        const lfs::core::PointCloud& point_cloud,
-        const RenderRequest& request) {
+    FrameMetadata RenderingEngineImpl::makeFrameMetadata(const RenderingPipeline::ImageRenderResult& result) {
+        return FrameMetadata{
+            .depth = result.depth.is_valid() ? std::make_shared<Tensor>(result.depth) : nullptr,
+            .valid = result.valid,
+            .depth_is_ndc = result.depth_is_ndc,
+            .external_depth_texture = result.external_depth_texture,
+            .near_plane = result.near_plane,
+            .far_plane = result.far_plane,
+            .orthographic = result.orthographic};
+    }
+
+    Result<GpuFrame> RenderingEngineImpl::uploadRenderResultToGpuFrame(
+        const RenderingPipeline::ImageRenderResult& result,
+        const glm::ivec2& viewport_size) {
+        if (auto upload_result = RenderingPipeline::uploadToScreen(result, *screen_renderer_, viewport_size);
+            !upload_result) {
+            invalidatePresentUploadCache();
+            return std::unexpected(upload_result.error());
+        }
+
+        invalidatePresentUploadCache();
+
+        const glm::vec2 texcoord_scale = screen_renderer_->getTexcoordScale();
+        const GLuint uploaded_depth_texture =
+            result.external_depth_texture != 0
+                ? result.external_depth_texture
+                : (result.depth.is_valid() ? screen_renderer_->getUploadedDepthTexture() : 0);
+
+        return GpuFrame{
+            .color = {.id = screen_renderer_->getUploadedColorTexture(),
+                      .size = viewport_size,
+                      .texcoord_scale = texcoord_scale},
+            .depth = {.id = uploaded_depth_texture,
+                      .size = viewport_size,
+                      .texcoord_scale = texcoord_scale},
+            .depth_is_ndc = result.depth_is_ndc,
+            .near_plane = result.near_plane,
+            .far_plane = result.far_plane,
+            .orthographic = result.orthographic};
+    }
+
+    Result<GaussianGpuFrameResult> RenderingEngineImpl::renderGaussiansGpuFrame(
+        const lfs::core::SplatData& splat_data,
+        const ViewportRenderRequest& request) {
+        auto raster_result = renderGaussiansRasterResult(splat_data, request);
+        if (!raster_result) {
+            return std::unexpected(raster_result.error());
+        }
+
+        auto gpu_frame = uploadRenderResultToGpuFrame(*raster_result, request.frame_view.size);
+        if (!gpu_frame) {
+            return std::unexpected(gpu_frame.error());
+        }
+
+        return GaussianGpuFrameResult{
+            .frame = *gpu_frame,
+            .metadata = makeFrameMetadata(*raster_result)};
+    }
+
+    Result<GaussianImageResult> RenderingEngineImpl::renderGaussiansImage(
+        const lfs::core::SplatData& splat_data,
+        const ViewportRenderRequest& request) {
+
+        auto raster_result = renderGaussiansRasterResult(splat_data, request);
+        if (!raster_result) {
+            return std::unexpected(raster_result.error());
+        }
+
+        auto image = std::make_shared<Tensor>(std::move(raster_result->image));
+        return GaussianImageResult{
+            .image = std::move(image),
+            .metadata = makeFrameMetadata(*raster_result)};
+    }
+
+    Result<GpuFrame> RenderingEngineImpl::renderPointCloudGpuFrame(
+        const lfs::core::SplatData& splat_data,
+        const PointCloudRenderRequest& request) {
 
         if (!isInitialized()) {
             LOG_ERROR("Rendering engine not initialized");
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
-            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
             return std::unexpected("Invalid viewport dimensions");
         }
 
-        LOG_TRACE("Rendering point cloud with viewport {}x{}", request.viewport.size.x, request.viewport.size.y);
+        LOG_TRACE("Rendering splat-backed point cloud GPU frame with viewport {}x{}",
+                  request.frame_view.size.x, request.frame_view.size.y);
 
-        PointCloudCropParams crop_params;
-        if (request.crop_box.has_value()) {
-            crop_params.enabled = true;
-            crop_params.transform = request.crop_box->transform;
-            crop_params.min = request.crop_box->min;
-            crop_params.max = request.crop_box->max;
-            crop_params.inverse = request.crop_inverse;
-            crop_params.desaturate = request.crop_desaturate;
+        auto pipeline_req = makePointCloudPipelineRequest(request);
+        auto pipeline_result = pipeline_.renderPointCloudGpuFrame(splat_data, pipeline_req);
+        if (!pipeline_result) {
+            LOG_ERROR("Splat-backed point cloud GPU-frame render failed: {}", pipeline_result.error());
+            return std::unexpected(pipeline_result.error());
         }
 
-        RenderingPipeline::RenderRequest pipeline_req{
-            .view_rotation = request.viewport.rotation,
-            .view_translation = request.viewport.translation,
-            .viewport_size = request.viewport.size,
-            .focal_length_mm = request.viewport.focal_length_mm,
-            .scaling_modifier = request.scaling_modifier,
+        return *pipeline_result;
+    }
+
+    Result<PointCloudImageResult> RenderingEngineImpl::renderPointCloudImage(
+        const lfs::core::SplatData& splat_data,
+        const PointCloudRenderRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
+            return std::unexpected("Invalid viewport dimensions");
+        }
+
+        LOG_TRACE("Rendering splat-backed point cloud image with viewport {}x{}",
+                  request.frame_view.size.x, request.frame_view.size.y);
+
+        auto pipeline_req = makePointCloudPipelineRequest(request);
+        auto pipeline_result = pipeline_.renderPointCloudImage(splat_data, pipeline_req);
+        if (!pipeline_result) {
+            LOG_ERROR("Splat-backed point cloud image render failed: {}", pipeline_result.error());
+            return std::unexpected(pipeline_result.error());
+        }
+
+        auto image = std::make_shared<Tensor>(std::move(pipeline_result->image));
+        return PointCloudImageResult{
+            .image = std::move(image),
+            .metadata = makeFrameMetadata(*pipeline_result)};
+    }
+
+    bool RenderingEngineImpl::ensureHoveredDepthQueryBuffersAllocated() {
+        if (!hovered_depth_id_device_) {
+            if (cudaMalloc(&hovered_depth_id_device_, sizeof(unsigned long long)) != cudaSuccess) {
+                LOG_WARN("Failed to allocate hovered-depth device buffer");
+                hovered_depth_id_device_ = nullptr;
+                return false;
+            }
+        }
+
+        if (!hovered_depth_id_host_) {
+            if (cudaMallocHost(&hovered_depth_id_host_, sizeof(unsigned long long)) != cudaSuccess) {
+                LOG_WARN("Failed to allocate hovered-depth host buffer");
+                if (hovered_depth_id_device_) {
+                    cudaFree(hovered_depth_id_device_);
+                    hovered_depth_id_device_ = nullptr;
+                }
+                hovered_depth_id_host_ = nullptr;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    Result<std::optional<int>> RenderingEngineImpl::queryHoveredGaussianId(
+        const lfs::core::SplatData& splat_data,
+        const HoveredGaussianQueryRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
+            return std::unexpected("Invalid viewport dimensions");
+        }
+
+        if (!ensureHoveredDepthQueryBuffersAllocated()) {
+            return std::unexpected("Failed to allocate hovered-depth query buffers");
+        }
+
+        constexpr auto NO_HOVERED_RESULT = std::numeric_limits<unsigned long long>::max();
+        if (cudaMemset(hovered_depth_id_device_, 0xFF, sizeof(unsigned long long)) != cudaSuccess) {
+            return std::unexpected("Failed to reset hovered-depth query buffer");
+        }
+
+        auto pipeline_req = makeHoveredGaussianQueryPipelineRequest(request, hovered_depth_id_device_);
+        GaussianRasterResources raster_resources;
+        applyCropBoxToPipeline(pipeline_req, request.filters.crop_region, raster_resources);
+        applyEllipsoidToPipeline(pipeline_req, request.filters.ellipsoid_region, raster_resources);
+        applyViewVolumeToPipeline(pipeline_req, request.filters.view_volume, raster_resources);
+
+        auto pipeline_result = pipeline_.renderGaussianImage(splat_data, pipeline_req);
+        if (!pipeline_result) {
+            return std::unexpected(pipeline_result.error());
+        }
+
+        if (cudaMemcpy(hovered_depth_id_host_, hovered_depth_id_device_,
+                       sizeof(unsigned long long), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            return std::unexpected("Failed to read back hovered-depth query result");
+        }
+
+        const unsigned long long packed = *hovered_depth_id_host_;
+        if (packed == NO_HOVERED_RESULT) {
+            return std::optional<int>{};
+        }
+
+        return std::optional<int>{static_cast<int>(packed & 0xFFFFFFFFu)};
+    }
+
+    Result<std::shared_ptr<lfs::core::Tensor>> RenderingEngineImpl::renderGaussianScreenPositions(
+        const lfs::core::SplatData& splat_data,
+        const ScreenPositionRenderRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
+            return std::unexpected("Invalid viewport dimensions");
+        }
+
+        RenderingPipeline::RasterRequest pipeline_req{
+            .view_rotation = request.frame_view.rotation,
+            .view_translation = request.frame_view.translation,
+            .viewport_size = request.frame_view.size,
+            .focal_length_mm = request.frame_view.focal_length_mm,
+            .scaling_modifier = 1.0f,
             .antialiasing = false,
             .mip_filter = false,
             .sh_degree = 0,
             .render_mode = RenderMode::RGB,
             .crop_box = nullptr,
-            .background_color = request.background_color,
-            .point_cloud_mode = true,
-            .voxel_size = request.voxel_size,
+            .background_color = request.frame_view.background_color,
+            .voxel_size = 0.01f,
             .gut = false,
             .equirectangular = request.equirectangular,
             .show_rings = false,
             .ring_width = 0.0f,
             .show_center_markers = false,
-            .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
-            .transform_indices = nullptr,
+            .model_transforms = request.scene.model_transforms ? *request.scene.model_transforms
+                                                               : std::vector<glm::mat4>{},
+            .transform_indices = request.scene.transform_indices,
             .selection_mask = nullptr,
-            .output_screen_positions = false,
-            .brush_active = false,
-            .brush_x = 0.0f,
-            .brush_y = 0.0f,
-            .brush_radius = 0.0f,
-            .brush_add_mode = true,
-            .brush_selection_tensor = nullptr,
-            .brush_saturation_mode = false,
-            .brush_saturation_amount = 0.0f,
-            .selection_mode_rings = false,
+            .cursor_active = false,
+            .cursor_x = 0.0f,
+            .cursor_y = 0.0f,
+            .cursor_radius = 0.0f,
+            .preview_selection_add_mode = true,
+            .preview_selection_tensor = nullptr,
+            .cursor_saturation_preview = false,
+            .cursor_saturation_amount = 0.0f,
             .hovered_depth_id = nullptr,
-            .highlight_gaussian_id = -1,
-            .far_plane = DEFAULT_FAR_PLANE,
-            .selected_node_mask = {},
-            .point_cloud_crop_params = crop_params};
+            .focused_gaussian_id = -1,
+            .far_plane = request.frame_view.far_plane,
+            .emphasized_node_mask = {},
+            .node_visibility_mask = request.scene.node_visibility_mask,
+            .orthographic = request.frame_view.orthographic,
+            .ortho_scale = request.frame_view.ortho_scale};
 
-        auto pipeline_result = pipeline_.renderRawPointCloud(point_cloud, pipeline_req);
+        auto screen_positions = pipeline_.renderScreenPositions(splat_data, pipeline_req);
+        if (!screen_positions) {
+            LOG_ERROR("Screen-position render failed: {}", screen_positions.error());
+            return std::unexpected(screen_positions.error());
+        }
 
+        return std::make_shared<Tensor>(std::move(*screen_positions));
+    }
+
+    Result<GpuFrame> RenderingEngineImpl::renderPointCloudGpuFrame(
+        const lfs::core::PointCloud& point_cloud,
+        const PointCloudRenderRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
+            return std::unexpected("Invalid viewport dimensions");
+        }
+
+        LOG_TRACE("Rendering point cloud GPU frame with viewport {}x{}",
+                  request.frame_view.size.x, request.frame_view.size.y);
+
+        auto pipeline_req = makePointCloudPipelineRequest(request);
+        auto pipeline_result = pipeline_.renderRawPointCloudGpuFrame(point_cloud, pipeline_req);
         if (!pipeline_result) {
-            LOG_ERROR("Pipeline render failed: {}", pipeline_result.error());
+            LOG_ERROR("Point cloud GPU-frame render failed: {}", pipeline_result.error());
             return std::unexpected(pipeline_result.error());
         }
 
-        RenderResult result{
-            .image = std::make_shared<Tensor>(pipeline_result->image),
-            .depth = std::make_shared<Tensor>(pipeline_result->depth),
-            .screen_positions = nullptr,
-            .valid = true,
-            .depth_is_ndc = pipeline_result->depth_is_ndc,
-            .external_depth_texture = pipeline_result->external_depth_texture,
-            .near_plane = pipeline_result->near_plane,
-            .far_plane = pipeline_result->far_plane,
-            .orthographic = pipeline_result->orthographic};
-
-        return result;
+        return *pipeline_result;
     }
 
-    Result<RenderResult> RenderingEngineImpl::renderSplitView(
+    Result<SplitViewFrameResult> RenderingEngineImpl::renderSplitViewGpuFrame(
         const SplitViewRequest& request) {
 
         if (!isInitialized()) {
@@ -402,40 +765,203 @@ namespace lfs::rendering {
             return std::unexpected("Split view renderer not initialized");
         }
 
-        LOG_TRACE("Rendering split view with {} panels", request.panels.size());
+        LOG_TRACE("Rendering split view GPU frame with {} panels", request.panels.size());
 
-        return split_view_renderer_->render(request, pipeline_, *screen_renderer_, quad_shader_);
+        return split_view_renderer_->renderGpuFrame(request, render_target_pool_, *this);
     }
 
-    Result<void> RenderingEngineImpl::presentToScreen(
-        const RenderResult& result,
-        const glm::ivec2& viewport_pos,
+    Result<GpuFrame> RenderingEngineImpl::materializeGpuFrame(
+        const std::shared_ptr<Tensor>& image,
+        const FrameMetadata& metadata,
         const glm::ivec2& viewport_size) {
-        LOG_TIMER_TRACE("RenderingEngineImpl::presentToScreen");
+        LOG_TIMER_TRACE("RenderingEngineImpl::materializeGpuFrame");
 
         if (!isInitialized()) {
             LOG_ERROR("Rendering engine not initialized");
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (!result.image) {
-            LOG_ERROR("Invalid render result - image is null");
-            return std::unexpected("Invalid render result");
+        if (!image) {
+            LOG_ERROR("Invalid frame payload - image is null");
+            return std::unexpected("Invalid frame payload");
         }
 
-        LOG_TRACE("Presenting to screen at ({}, {}) size {}x{}",
+        if (auto upload_result = ensureRenderResultUploaded(image, metadata, viewport_size); !upload_result) {
+            LOG_ERROR("Failed to materialize GPU frame: {}", upload_result.error());
+            return std::unexpected(upload_result.error());
+        }
+
+        const glm::vec2 texcoord_scale = screen_renderer_->getTexcoordScale();
+        const GLuint uploaded_depth_texture =
+            metadata.external_depth_texture != 0
+                ? metadata.external_depth_texture
+                : (metadata.depth ? screen_renderer_->getUploadedDepthTexture() : 0);
+
+        return GpuFrame{
+            .color = {.id = screen_renderer_->getUploadedColorTexture(),
+                      .size = viewport_size,
+                      .texcoord_scale = texcoord_scale},
+            .depth = {.id = uploaded_depth_texture,
+                      .size = viewport_size,
+                      .texcoord_scale = texcoord_scale},
+            .depth_is_ndc = metadata.depth_is_ndc,
+            .near_plane = metadata.near_plane,
+            .far_plane = metadata.far_plane,
+            .orthographic = metadata.orthographic};
+    }
+
+    Result<std::shared_ptr<Tensor>> RenderingEngineImpl::readbackGpuFrameColor(
+        const GpuFrame& frame) {
+        LOG_TIMER_TRACE("RenderingEngineImpl::readbackGpuFrameColor");
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!frame.valid()) {
+            LOG_ERROR("Invalid GPU frame");
+            return std::unexpected("Invalid GPU frame");
+        }
+
+        const int width = frame.color.size.x;
+        const int height = frame.color.size.y;
+        if (width <= 0 || height <= 0) {
+            LOG_ERROR("Invalid GPU frame size: {}x{}", width, height);
+            return std::unexpected("Invalid GPU frame size");
+        }
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        if (!gpu_frame_readback_interop_) {
+            gpu_frame_readback_interop_ = std::make_unique<CudaGLInteropTexture>();
+        }
+
+        if (gpu_frame_readback_source_ != frame.color.id || gpu_frame_readback_size_ != frame.color.size) {
+            if (auto init_result = gpu_frame_readback_interop_->initForReading(frame.color.id, width, height); init_result) {
+                gpu_frame_readback_source_ = frame.color.id;
+                gpu_frame_readback_size_ = frame.color.size;
+            } else {
+                LOG_WARN("Failed to initialize CUDA-GL viewport readback interop: {}", init_result.error());
+                gpu_frame_readback_interop_.reset();
+                gpu_frame_readback_source_ = 0;
+                gpu_frame_readback_size_ = {0, 0};
+            }
+        }
+
+        if (gpu_frame_readback_interop_ &&
+            gpu_frame_readback_source_ == frame.color.id &&
+            gpu_frame_readback_size_ == frame.color.size) {
+            Tensor image_hwc;
+            if (auto read_result = gpu_frame_readback_interop_->readToTensor(image_hwc, width, height); read_result) {
+                return std::make_shared<Tensor>(image_hwc.permute({2, 0, 1}).contiguous());
+            }
+
+            LOG_WARN("CUDA-GL viewport readback failed, falling back to glReadPixels");
+            gpu_frame_readback_interop_.reset();
+            gpu_frame_readback_source_ = 0;
+            gpu_frame_readback_size_ = {0, 0};
+        }
+#endif
+
+        if (!gpu_frame_readback_fbo_) {
+            GLuint fbo_id = 0;
+            glGenFramebuffers(1, &fbo_id);
+            gpu_frame_readback_fbo_ = FBO(fbo_id);
+        }
+        if (!gpu_frame_readback_fbo_) {
+            LOG_ERROR("Failed to allocate viewport readback framebuffer");
+            return std::unexpected("Failed to allocate viewport readback framebuffer");
+        }
+
+        GLFramebufferGuard framebuffer_guard;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, gpu_frame_readback_fbo_.get());
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, frame.color.id, 0);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Viewport readback framebuffer incomplete");
+            return std::unexpected("Viewport readback framebuffer incomplete");
+        }
+
+        std::vector<float> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
+        glReadPixels(0, 0, width, height, GL_RGB, GL_FLOAT, pixels.data());
+        const GLenum readback_error = glGetError();
+
+        if (readback_error != GL_NO_ERROR) {
+            LOG_ERROR("Viewport readback failed with GL error {}", static_cast<unsigned int>(readback_error));
+            return std::unexpected("Viewport readback failed");
+        }
+
+        auto image_cpu = Tensor::from_vector(
+            pixels,
+            {static_cast<size_t>(height), static_cast<size_t>(width), 3},
+            lfs::core::Device::CPU);
+
+        return std::make_shared<Tensor>(image_cpu.permute({2, 0, 1}).cuda());
+    }
+
+    void RenderingEngineImpl::invalidatePresentUploadCache() {
+        last_presented_image_.reset();
+        last_presented_depth_.reset();
+        last_presented_external_depth_texture_ = 0;
+        last_presented_depth_is_ndc_ = false;
+        last_presented_near_plane_ = 0.0f;
+        last_presented_far_plane_ = 0.0f;
+        last_presented_orthographic_ = false;
+        has_present_upload_cache_ = false;
+    }
+
+    Result<void> RenderingEngineImpl::presentGpuFrame(
+        const GpuFrame& frame,
+        const glm::ivec2& viewport_pos,
+        const glm::ivec2& viewport_size) {
+        LOG_TIMER_TRACE("RenderingEngineImpl::presentGpuFrame");
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!frame.valid()) {
+            LOG_ERROR("Invalid GPU frame");
+            return std::unexpected("Invalid GPU frame");
+        }
+
+        LOG_TRACE("Presenting GPU frame at ({}, {}) size {}x{}",
                   viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
 
-        // Pointer-identity cache: renderGaussians() creates a new shared_ptr per frame,
-        // so distinct renders always have distinct pointers. Same pointer == same content.
-        const bool same_image_ptr = (last_presented_image_.get() == result.image.get());
-        const bool same_depth_ptr = (!result.depth && !last_presented_depth_) ||
-                                    (result.depth && last_presented_depth_.get() == result.depth.get());
-        const bool same_depth_tex = (last_presented_external_depth_texture_ == result.external_depth_texture);
-        const bool same_depth_mode = (last_presented_depth_is_ndc_ == result.depth_is_ndc);
-        const bool same_near = (last_presented_near_plane_ == result.near_plane);
-        const bool same_far = (last_presented_far_plane_ == result.far_plane);
-        const bool same_projection = (last_presented_orthographic_ == result.orthographic);
+        DepthParams params = screen_renderer_->getDepthParams();
+        params.near_plane = frame.near_plane;
+        params.far_plane = frame.far_plane;
+        params.orthographic = frame.orthographic;
+        params.has_depth = frame.depth.valid();
+        params.depth_is_ndc = frame.depth_is_ndc;
+        params.external_depth_texture = frame.depth.valid() ? frame.depth.id : 0;
+
+        return screen_renderer_->renderTexture(
+            quad_shader_,
+            frame.color.id,
+            params,
+            frame.color.texcoord_scale,
+            frame.depth.valid() ? frame.depth.id : 0);
+    }
+
+    Result<void> RenderingEngineImpl::ensureRenderResultUploaded(
+        const std::shared_ptr<const Tensor>& image,
+        const FrameMetadata& metadata,
+        const glm::ivec2& viewport_size) {
+        // Pointer-identity cache: explicit tensor-producing gaussian entry points create
+        // a new shared_ptr per render, so distinct renders always have distinct pointers.
+        // Same pointer == same content.
+        const bool same_image_ptr = (last_presented_image_.get() == image.get());
+        const bool same_depth_ptr = (!metadata.depth && !last_presented_depth_) ||
+                                    (metadata.depth && last_presented_depth_.get() == metadata.depth.get());
+        const bool same_depth_tex = (last_presented_external_depth_texture_ == metadata.external_depth_texture);
+        const bool same_depth_mode = (last_presented_depth_is_ndc_ == metadata.depth_is_ndc);
+        const bool same_near = (last_presented_near_plane_ == metadata.near_plane);
+        const bool same_far = (last_presented_far_plane_ == metadata.far_plane);
+        const bool same_projection = (last_presented_orthographic_ == metadata.orthographic);
 
         const bool needs_upload = !has_present_upload_cache_ ||
                                   !same_image_ptr ||
@@ -446,37 +972,36 @@ namespace lfs::rendering {
                                   !same_far ||
                                   !same_projection;
 
-        if (needs_upload) {
-            RenderingPipeline::RenderResult internal_result;
-            internal_result.image = *result.image;
-            internal_result.depth = result.depth ? *result.depth : Tensor();
-            internal_result.valid = true;
-            internal_result.depth_is_ndc = result.depth_is_ndc;
-            internal_result.external_depth_texture = result.external_depth_texture;
-            internal_result.near_plane = result.near_plane;
-            internal_result.far_plane = result.far_plane;
-            internal_result.orthographic = result.orthographic;
-
-            if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
-                !upload_result) {
-                has_present_upload_cache_ = false;
-                LOG_ERROR("Failed to upload to screen: {}", upload_result.error());
-                return upload_result;
-            }
-
-            last_presented_image_ = result.image;
-            last_presented_depth_ = result.depth;
-            last_presented_external_depth_texture_ = result.external_depth_texture;
-            last_presented_depth_is_ndc_ = result.depth_is_ndc;
-            last_presented_near_plane_ = result.near_plane;
-            last_presented_far_plane_ = result.far_plane;
-            last_presented_orthographic_ = result.orthographic;
-            has_present_upload_cache_ = true;
-        } else {
+        if (!needs_upload) {
             LOG_TRACE("Skipping screen upload (unchanged frame payload)");
+            return {};
         }
 
-        return screen_renderer_->render(quad_shader_);
+        RenderingPipeline::ImageRenderResult internal_result;
+        internal_result.image = *image;
+        internal_result.depth = metadata.depth ? *metadata.depth : Tensor();
+        internal_result.valid = true;
+        internal_result.depth_is_ndc = metadata.depth_is_ndc;
+        internal_result.external_depth_texture = metadata.external_depth_texture;
+        internal_result.near_plane = metadata.near_plane;
+        internal_result.far_plane = metadata.far_plane;
+        internal_result.orthographic = metadata.orthographic;
+
+        if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
+            !upload_result) {
+            invalidatePresentUploadCache();
+            return upload_result;
+        }
+
+        last_presented_image_ = image;
+        last_presented_depth_ = metadata.depth;
+        last_presented_external_depth_texture_ = metadata.external_depth_texture;
+        last_presented_depth_is_ndc_ = metadata.depth_is_ndc;
+        last_presented_near_plane_ = metadata.near_plane;
+        last_presented_far_plane_ = metadata.far_plane;
+        last_presented_orthographic_ = metadata.orthographic;
+        has_present_upload_cache_ = true;
+        return {};
     }
 
     Result<void> RenderingEngineImpl::renderGrid(
@@ -618,52 +1143,47 @@ namespace lfs::rendering {
         }
     }
 
-    Result<void> RenderingEngineImpl::renderCameraFrustumsWithHighlight(
+    Result<void> RenderingEngineImpl::renderCameraFrustums(
         const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-        const ViewportData& viewport,
-        float scale,
-        const glm::vec3& train_color,
-        const glm::vec3& eval_color,
-        int highlight_index,
-        const glm::mat4& scene_transform,
-        bool equirectangular_view,
-        const std::unordered_set<int>& disabled_uids,
-        const std::unordered_set<int>& selected_uids) {
+        const CameraFrustumRenderRequest& request) {
 
         if (!camera_frustum_renderer_.isInitialized()) {
             return {};
         }
 
-        camera_frustum_renderer_.setHighlightedCamera(highlight_index);
+        camera_frustum_renderer_.setFocusedCamera(request.focused_index);
 
-        auto view = createViewMatrix(viewport);
-        auto proj = createProjectionMatrix(viewport);
+        auto view = createViewMatrix(request.viewport);
+        auto proj = createProjectionMatrix(request.viewport);
 
-        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view, disabled_uids, selected_uids);
+        return camera_frustum_renderer_.render(
+            cameras, view, proj, request.scale, request.train_color, request.eval_color,
+            request.scene_transform, request.equirectangular_view,
+            request.disabled_uids, request.emphasized_uids);
     }
 
     Result<int> RenderingEngineImpl::pickCameraFrustum(
         const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-        const glm::vec2& mouse_pos,
-        const glm::vec2& viewport_pos,
-        const glm::vec2& viewport_size,
-        const ViewportData& viewport,
-        float scale,
-        const glm::mat4& scene_transform) {
+        const CameraFrustumPickRequest& request) {
 
         if (!camera_frustum_renderer_.isInitialized()) {
             return -1;
         }
 
-        auto view = createViewMatrix(viewport);
-        auto proj = createProjectionMatrix(viewport);
+        auto view = createViewMatrix(request.viewport);
+        auto proj = createProjectionMatrix(request.viewport);
 
         return camera_frustum_renderer_.pickCamera(
-            cameras, mouse_pos, viewport_pos, viewport_size, view, proj, scale, scene_transform);
+            cameras, request.mouse_pos, request.viewport_pos, request.viewport_size, view, proj,
+            request.scale, request.scene_transform);
     }
 
     void RenderingEngineImpl::clearFrustumCache() {
         camera_frustum_renderer_.clearThumbnailCache();
+    }
+
+    void RenderingEngineImpl::setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) {
+        camera_frustum_renderer_.setImageLoader(std::move(loader));
     }
 
     glm::mat4 RenderingEngineImpl::createViewMatrix(const ViewportData& viewport) const {
@@ -731,8 +1251,8 @@ namespace lfs::rendering {
         return mesh_rendered_this_frame_ && mesh_renderer_.isInitialized();
     }
 
-    Result<void> RenderingEngineImpl::compositeMeshAndSplat(
-        const RenderResult& splat_result,
+    Result<void> RenderingEngineImpl::compositeMeshAndGpuFrame(
+        const GpuFrame& splat_frame,
         const glm::ivec2& viewport_size) {
 
         if (!depth_compositor_.isInitialized())
@@ -741,23 +1261,22 @@ namespace lfs::rendering {
         if (!mesh_rendered_this_frame_)
             return {};
 
-        const GLuint splat_color = screen_renderer_->getUploadedColorTexture();
-        const GLuint splat_depth = screen_renderer_->getUploadedDepthTexture();
+        if (!splat_frame.valid())
+            return std::unexpected("Invalid GPU frame");
 
-        if (splat_color == 0 || splat_depth == 0)
-            return {};
-
-        const glm::vec2 splat_tc_scale = screen_renderer_->getTexcoordScale();
+        if (!splat_frame.depth.valid())
+            return std::unexpected("GPU frame missing depth texture");
 
         return depth_compositor_.composite(
-            splat_color, splat_depth,
+            splat_frame.color.id,
+            splat_frame.depth.id,
             mesh_renderer_.getColorTexture(),
             mesh_renderer_.getDepthTexture(),
-            splat_result.near_plane,
-            splat_result.far_plane,
+            splat_frame.near_plane,
+            splat_frame.far_plane,
             true,
-            splat_tc_scale,
-            splat_result.depth_is_ndc);
+            splat_frame.color.texcoord_scale,
+            splat_frame.depth_is_ndc);
     }
 
     Result<void> RenderingEngineImpl::presentMeshOnly() {

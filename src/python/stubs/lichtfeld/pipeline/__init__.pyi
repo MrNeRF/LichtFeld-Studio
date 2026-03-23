@@ -1,11 +1,8 @@
+"""Compositional operations system"""
+
 from typing import overload
 
-from . import (
-    edit as edit,
-    select as select,
-    transform as transform,
-    undo as undo
-)
+from . import edit as edit, select as select, transform as transform
 
 
 class Stage:

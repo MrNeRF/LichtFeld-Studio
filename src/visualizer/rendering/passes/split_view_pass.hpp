@@ -25,7 +25,7 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] std::optional<lfs::rendering::SplitViewRequest>
-        buildSplitViewRequest(const FrameContext& ctx, const FrameResources& res);
+        buildSplitViewRequest(const FrameContext& ctx, const FrameResources& res, SplitViewInfo& split_info);
     };
 
 } // namespace lfs::vis

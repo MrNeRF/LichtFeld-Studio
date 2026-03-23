@@ -15,6 +15,37 @@
 
 namespace lfs::vis {
 
+    namespace {
+        bool eventTargetsWindow(const SDL_Event& event, const SDL_WindowID target_window_id) {
+            if (target_window_id == 0)
+                return true;
+
+            switch (event.type) {
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+                return event.window.windowID == target_window_id;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                return event.button.windowID == target_window_id;
+            case SDL_EVENT_MOUSE_MOTION:
+                return event.motion.windowID == target_window_id;
+            case SDL_EVENT_MOUSE_WHEEL:
+                return event.wheel.windowID == target_window_id;
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP:
+                return event.key.windowID == target_window_id;
+            case SDL_EVENT_TEXT_INPUT:
+                return event.text.windowID == target_window_id;
+            case SDL_EVENT_DROP_FILE:
+            case SDL_EVENT_DROP_COMPLETE:
+                return event.drop.windowID == target_window_id;
+            default:
+                return true;
+            }
+        }
+    } // namespace
+
     void* WindowManager::callback_handler_ = nullptr;
 
     WindowManager::WindowManager(const std::string& title, const int width, const int height,
@@ -35,6 +66,14 @@ namespace lfs::vis {
             SDL_DestroyWindow(window_);
         }
         SDL_Quit();
+    }
+
+    void WindowManager::setInputController(InputController* ic) {
+        input_controller_ = ic;
+        input_router_.setInputController(ic);
+        if (input_controller_) {
+            input_controller_->setInputRouter(&input_router_);
+        }
     }
 
     bool WindowManager::init() {
@@ -122,29 +161,38 @@ namespace lfs::vis {
     }
 
     void WindowManager::pollEvents() {
+        frame_input_.beginFrame();
         const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
+        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (imgui_ready)
                 ImGui_ImplSDL3_ProcessEvent(&event);
+            frame_input_.processEvent(event, main_window_id);
             processEvent(event);
         }
+        frame_input_.finalize(window_);
     }
 
     void WindowManager::waitEvents(double timeout_seconds) {
+        frame_input_.beginFrame();
         const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
+        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
             if (imgui_ready)
                 ImGui_ImplSDL3_ProcessEvent(&event);
+            frame_input_.processEvent(event, main_window_id);
             processEvent(event);
             while (SDL_PollEvent(&event)) {
                 if (imgui_ready)
                     ImGui_ImplSDL3_ProcessEvent(&event);
+                frame_input_.processEvent(event, main_window_id);
                 processEvent(event);
             }
         }
+        frame_input_.finalize(window_);
     }
 
     bool WindowManager::shouldClose() const {
@@ -171,23 +219,32 @@ namespace lfs::vis {
     }
 
     void WindowManager::processEvent(const SDL_Event& event) {
+        const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+
         switch (event.type) {
         case SDL_EVENT_QUIT:
             should_close_ = true;
             break;
 
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             should_close_ = true;
             break;
 
         case SDL_EVENT_WINDOW_FOCUS_LOST:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             lfs::core::events::internal::WindowFocusLost{}.emit();
+            input_router_.onWindowFocusLost();
             if (input_controller_) {
                 input_controller_->onWindowFocusLost();
             }
             break;
 
         case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (window_) {
                 const float scale = SDL_GetWindowDisplayScale(window_);
                 lfs::core::events::internal::DisplayScaleChanged{.scale = scale}.emit();
@@ -196,21 +253,29 @@ namespace lfs::vis {
 
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (!input_controller_)
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
+            input_router_.beginMouseButton(action, event.button.x, event.button.y);
             input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
+            input_router_.endMouseButton(action);
             break;
         }
 
         case SDL_EVENT_MOUSE_MOTION:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (input_controller_) {
                 input_controller_->handleMouseMove(event.motion.x, event.motion.y);
             }
             break;
 
         case SDL_EVENT_MOUSE_WHEEL:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (input_controller_) {
                 input_controller_->handleScroll(event.wheel.x, event.wheel.y);
             }
@@ -218,9 +283,11 @@ namespace lfs::vis {
 
         case SDL_EVENT_KEY_DOWN:
         case SDL_EVENT_KEY_UP: {
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (!input_controller_)
                 break;
-            const int key = input::sdlKeycodeToAppKey(event.key.key);
+            const int key = input::sdlScancodeToAppKey(event.key.scancode);
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
@@ -230,12 +297,16 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_DROP_FILE:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (event.drop.data) {
                 pending_drop_files_.emplace_back(event.drop.data);
             }
             break;
 
         case SDL_EVENT_DROP_COMPLETE:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (input_controller_ && !pending_drop_files_.empty()) {
                 input_controller_->handleFileDrop(pending_drop_files_);
                 pending_drop_files_.clear();

@@ -1,0 +1,306 @@
+/* Plugin Marketplace panel styles
+ * No hardcoded colors — all colors inherit from theme pipeline. */
+
+/* Warning text — hardcoded fallback; no theme-generated .status-warning exists. */
+.mp-warning-text {
+    display: block;
+    color: #f9e2af;
+    font-size: 12dp;
+    margin-bottom: 4dp;
+}
+
+#content-wrap {
+    padding: 0;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+#content {
+    width: 100%;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+#main-area {
+    flex: 1;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    min-width: 0;
+    min-height: 0;
+    padding: 8dp;
+}
+
+/* ── Controls row ─────────────────────────────────────── */
+
+.mp-controls {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin-bottom: 6dp;
+}
+
+.mp-select {
+    min-width: 120dp;
+}
+
+.mp-sort-label {
+    margin-left: 4dp;
+}
+
+.mp-select-sort {
+    min-width: 150dp;
+}
+
+/* ── Manual URL install ───────────────────────────────── */
+
+.mp-manual-section {
+    margin-bottom: 4dp;
+}
+
+.mp-manual-row {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    margin-top: 4dp;
+}
+
+.mp-url-input {
+    flex: 1;
+    min-width: 120dp;
+}
+
+.mp-install-btn {
+    flex-shrink: 0;
+}
+
+.mp-formats-header {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    margin-top: 4dp;
+    gap: 4dp;
+}
+
+.mp-format-item {
+    font-size: 12dp;
+    padding: 1dp 0 1dp 18dp;
+}
+
+/* ── Card grid ────────────────────────────────────────── */
+
+.card-grid {
+    display: block;
+    min-width: 0;
+    margin-bottom: 8dp;
+}
+
+.card-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0;
+    margin-bottom: 12dp;
+    min-width: 0;
+}
+
+.card-row--single {
+    justify-content: center;
+    gap: 12dp;
+}
+
+/* ── Plugin card ──────────────────────────────────────── */
+
+.plugin-card {
+    width: 220dp;
+    flex-shrink: 0;
+    height: 220dp;
+    border-width: 1dp;
+    padding: 8dp;
+    display: flex;
+    flex-direction: column;
+    transition: background-color 0.18s quadratic-out;
+    background-color: transparent;
+}
+
+.plugin-card--placeholder {
+    visibility: hidden;
+    pointer-events: none;
+}
+
+#status-bar {
+    display: flex;
+    align-items: center;
+    height: 24dp;
+    padding: 0 10dp;
+    flex-shrink: 0;
+    border-top-width: 1dp;
+}
+
+.status-item {
+    font-size: 10dp;
+    margin-right: 16dp;
+    letter-spacing: 0.5dp;
+}
+
+.plugin-card:hover {
+    background-color: rgba(137, 180, 250, 24);
+}
+
+.plugin-card.card--in-progress { border-color: #89b4fa; }
+.plugin-card.card--success     { border-color: #a6e3a1; }
+.plugin-card.card--error       { border-color: #f38ba8; }
+
+/* ── Card info area ───────────────────────────────────── */
+
+.card-info {
+    cursor: pointer;
+    flex: 1;
+    min-height: 0;
+    height: 144dp;
+    overflow: hidden;
+}
+
+.card-name {
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.card-version {
+    font-size: 12dp;
+    margin-left: 6dp;
+}
+
+.card-repo {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-metrics {
+    font-size: 11dp;
+    display: block;
+    margin-top: 2dp;
+}
+
+.card-tags {
+    font-size: 11dp;
+    display: block;
+}
+
+.card-local {
+    font-size: 11dp;
+    display: block;
+}
+
+.card-status {
+    font-size: 12dp;
+    display: block;
+    margin-top: 2dp;
+}
+
+.card-error {
+    font-size: 12dp;
+    display: block;
+}
+
+.card-description {
+    display: block;
+    margin-top: 2dp;
+    max-height: 42dp;
+    overflow: hidden;
+}
+
+/* ── Card buttons ─────────────────────────────────────── */
+
+.card-buttons {
+    display: flex;
+    gap: 6dp;
+    margin-top: 4dp;
+    min-height: 22dp;
+}
+
+.card-buttons .btn {
+    flex: 1;
+    font-size: 12dp;
+    padding: 2dp 4dp;
+}
+
+.card-startup-row,
+.card-git-row {
+    display: flex;
+    align-items: center;
+    margin-top: 4dp;
+    min-height: 18dp;
+}
+
+.card-startup-label {
+    font-size: 11dp;
+}
+
+/* ── Card feedback ────────────────────────────────────── */
+
+.card-feedback {
+    margin-top: 4dp;
+}
+
+.card-progress {
+    display: block;
+    width: 100%;
+    height: 14dp;
+}
+
+.card-progress-text {
+    font-size: 11dp;
+    display: block;
+}
+
+/* ── Confirm overlay ──────────────────────────────────── */
+
+.confirm-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 120);
+    backdrop-filter: blur(3dp);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 50;
+}
+
+.confirm-overlay.hidden {
+    display: none;
+}
+
+.confirm-dialog {
+    border-width: 1dp;
+    padding: 16dp;
+    min-width: 280dp;
+    max-width: 380dp;
+}
+
+.confirm-message {
+    display: block;
+    font-size: 11dp;
+    text-align: center;
+    margin-bottom: 8dp;
+}
+
+.confirm-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 8dp;
+    margin-top: 8dp;
+}
+
+.confirm-buttons .btn {
+    min-width: 80dp;
+}

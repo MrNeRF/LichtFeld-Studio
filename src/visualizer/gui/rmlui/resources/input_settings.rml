@@ -1,0 +1,71 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="input_settings.rcss"/>
+</head>
+<body template="floating-window" data-model="input_settings">
+
+  <!-- Profile selection -->
+  <div class="is-section">
+    <div class="is-row">
+      <span class="is-label">@tr:input_settings.active_profile</span>
+      <select id="profile-select" class="is-select" data-value="profile_idx"
+              data-class-is-disabled-overlay="is_capturing">
+        <option data-for="profile : profiles" data-attr-value="profile.index">{{ profile.label }}</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Tool mode selection -->
+  <div class="is-section">
+    <span class="is-section-title">@tr:input_settings.tool_mode</span>
+    <span class="is-hint">@tr:input_settings.select_tool_mode</span>
+    <div class="is-row">
+      <select id="mode-select" class="is-select" data-value="mode_idx"
+              data-class-is-disabled-overlay="is_capturing">
+        <option data-for="mode : tool_modes" data-attr-value="mode.index">{{ mode.label }}</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Bindings -->
+  <div class="is-section">
+    <span class="is-section-title">@tr:input_settings.current_bindings</span>
+    <span class="is-hint" id="bindings-hint">{{bindings_hint}}</span>
+    <div id="bindings-table" class="is-bindings-table">
+      <div data-for="row : binding_rows">
+        <span class="is-binding-section" data-if="row.is_section">{{ row.section_title }}</span>
+        <div class="is-binding-row" data-if="!row.is_section">
+          <span class="is-action-name">{{ row.action_name }}</span>
+          <span data-attr-class="row.desc_class">{{ row.desc_text }}</span>
+          <button data-attr-class="'btn ' + row.button_class + ' is-rebind-btn'"
+                  data-attr-data-btn-action="row.button_action"
+                  data-attr-data-action-id="row.action_id"
+                  data-attr-data-mode-id="row.mode_id">{{ row.button_label }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Action buttons -->
+  <div class="is-buttons">
+    <button class="btn btn--success" data-event-click="save_profile">@tr:input_settings.save_current_profile</button>
+    <button class="btn btn--error" data-event-click="reset_default">@tr:input_settings.reset_to_default</button>
+  </div>
+  <div class="is-buttons">
+    <button class="btn btn--secondary" data-event-click="export_profile">@tr:input_settings.export</button>
+    <button class="btn btn--secondary" data-event-click="import_profile">@tr:input_settings.import</button>
+  </div>
+
+  <!-- Hints -->
+  <span class="is-hint">@tr:input_settings.save_hint</span>
+  <span class="is-hint">@tr:input_settings.double_click_hint</span>
+
+</body>
+</rml>

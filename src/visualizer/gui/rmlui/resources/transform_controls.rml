@@ -1,0 +1,106 @@
+<rml>
+<head>
+  <link type="text/template" href="docked_panel.rml"/>
+  <link type="text/rcss" href="transform_controls.rcss"/>
+</head>
+<body template="docked-panel" data-model="transform_controls">
+
+  <div id="transform-wrap" class="hidden">
+
+    <div class="section-header" id="hdr-transform">
+      <span class="section-arrow" id="arrow-transform">&#x25B6;</span>
+      <span>{{tool_label}}</span>
+    </div>
+
+    <div id="transform-section" class="section-content collapsed">
+      <div class="info-row" data-if="is_single">
+        <span class="info-label">{{node_name}}</span>
+      </div>
+      <div class="info-row" data-if="is_multi">
+        <span class="info-label">{{multi_label}}</span>
+        <span class="info-sublabel">Space: World</span>
+      </div>
+
+      <!-- Translate -->
+      <div data-if="show_translate">
+        <div class="axis-label">Position</div>
+        <div class="setting-row">
+          <span class="prop-label">X</span>
+          <input type="text" class="number-input" id="pos-x" data-value="pos_x_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('pos_x', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('pos_x', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">Y</span>
+          <input type="text" class="number-input" id="pos-y" data-value="pos_y_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('pos_y', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('pos_y', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">Z</span>
+          <input type="text" class="number-input" id="pos-z" data-value="pos_z_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('pos_z', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('pos_z', 1)">+</button>
+        </div>
+      </div>
+
+      <!-- Rotate -->
+      <div data-if="show_rotate">
+        <div class="axis-label">Rotation (degrees)</div>
+        <div class="setting-row">
+          <span class="prop-label">X</span>
+          <input type="text" class="number-input" id="rot-x" data-value="rot_x_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('rot_x', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('rot_x', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">Y</span>
+          <input type="text" class="number-input" id="rot-y" data-value="rot_y_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('rot_y', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('rot_y', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">Z</span>
+          <input type="text" class="number-input" id="rot-z" data-value="rot_z_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('rot_z', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('rot_z', 1)">+</button>
+        </div>
+      </div>
+
+      <!-- Scale -->
+      <div data-if="show_scale">
+        <div class="axis-label">Scale</div>
+        <div class="setting-row">
+          <span class="prop-label">U</span>
+          <input type="text" class="number-input" id="scale-u" data-value="scale_u_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_u', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_u', 1)">+</button>
+        </div>
+        <div class="setting-row scale-separator">
+          <span class="prop-label">X</span>
+          <input type="text" class="number-input" id="scale-x" data-value="scale_x_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_x', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_x', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">Y</span>
+          <input type="text" class="number-input" id="scale-y" data-value="scale_y_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_y', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_y', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">Z</span>
+          <input type="text" class="number-input" id="scale-z" data-value="scale_z_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_z', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_z', 1)">+</button>
+        </div>
+      </div>
+
+      <button class="btn btn--secondary btn--full"
+              data-event-click="action('reset')">{{reset_label}}</button>
+    </div>
+
+  </div>
+
+</body>
+</rml>

@@ -3,7 +3,9 @@
 
 #pragma once
 
-#include "video_export_options.hpp"
+#include "io/video/video_encoder_interface.hpp"
+#include "io/video/video_export_options.hpp"
+
 #include <expected>
 #include <filesystem>
 #include <memory>
@@ -14,7 +16,7 @@ namespace lfs::io::video {
 
     class VideoEncoderImpl;
 
-    class VideoEncoder {
+    class VideoEncoder : public IVideoEncoder {
     public:
         VideoEncoder();
         ~VideoEncoder();
@@ -24,10 +26,9 @@ namespace lfs::io::video {
         VideoEncoder(VideoEncoder&&) noexcept;
         VideoEncoder& operator=(VideoEncoder&&) noexcept;
 
-        // Initialize encoder with output path and options
         [[nodiscard]] std::expected<void, std::string> open(
             const std::filesystem::path& output_path,
-            const VideoExportOptions& options);
+            const VideoExportOptions& options) override;
 
         // Write RGBA frame from CPU memory
         [[nodiscard]] std::expected<void, std::string> writeFrame(
@@ -35,16 +36,13 @@ namespace lfs::io::video {
             int width,
             int height);
 
-        // Write RGBA frame directly from GPU memory (zero-copy path)
-        // Uses NVENC hardware encoding if available, falls back to x264 with CUDA color conversion
         [[nodiscard]] std::expected<void, std::string> writeFrameGpu(
             const void* rgba_gpu_ptr,
             int width,
             int height,
-            void* cuda_stream = nullptr);
+            void* cuda_stream = nullptr) override;
 
-        // Finalize and close video file
-        [[nodiscard]] std::expected<void, std::string> close();
+        [[nodiscard]] std::expected<void, std::string> close() override;
 
         [[nodiscard]] bool isOpen() const;
 

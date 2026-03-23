@@ -1,84 +1,45 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Image preview panel with modern UI: filmstrip, info sidebar, and status bar."""
+"""Image preview panel using RmlUI floating window."""
 
+import time
+from math import gcd
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import lichtfeld as lf
 from .types import Panel
+from .rml_keys import (
+    KI_1, KI_ADD, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I, KI_LEFT,
+    KI_M, KI_OEM_MINUS, KI_OEM_PLUS, KI_R, KI_RIGHT, KI_SPACE, KI_SUBTRACT,
+    KI_T, KI_UP,
+)
 
 ZOOM_MIN = 0.1
 ZOOM_MAX = 10.0
-ZOOM_FACTOR = 1.08
-
-FILMSTRIP_THUMB_SIZE = 64
-FILMSTRIP_PADDING = 4.0
-FILMSTRIP_WIDTH = FILMSTRIP_THUMB_SIZE + FILMSTRIP_PADDING * 2
-
-SIDEBAR_WIDTH = 180.0
-SIDEBAR_PADDING = 8.0
-
-TITLE_BAR_HEIGHT = 28.0
-STATUS_BAR_HEIGHT = 24.0
-
-OVERLAY_TINT = (1.0, 0.2, 0.2, 0.5)
+PRECISE_SCROLL_STEP = 32.0
+CROSSFADE_DURATION = 0.2
+SCROLL_DURATION = 0.15
+FILMSTRIP_WINDOW = 40
+THUMB_MAX_PX = 256
 
 _instance = None
+_RML_PATH_SAFE_CHARS = "/:._-~"
 
 
-def tr(key):
-    result = lf.ui.tr(key)
-    return result if result else key
-
-
-class ThumbnailCache:
-    """LRU cache for thumbnail textures."""
-
-    MAX_CACHED = 50
-    THUMB_SIZE = 64
-
-    def __init__(self):
-        self._cache: dict[str, tuple[int, int, int]] = {}
-        self._lru: list[str] = []
-
-    def get(self, path: str) -> Optional[tuple[int, int, int]]:
-        if path in self._cache:
-            self._lru.remove(path)
-            self._lru.append(path)
-            return self._cache[path]
-        return None
-
-    def load(self, path: str) -> tuple[int, int, int]:
-        if path in self._cache:
-            return self.get(path)
-
-        while len(self._cache) >= self.MAX_CACHED:
-            old = self._lru.pop(0)
-            lf.ui.release_texture(self._cache[old][0])
-            del self._cache[old]
-
-        tex_id, w, h = lf.ui.load_thumbnail(path, self.THUMB_SIZE)
-        self._cache[path] = (tex_id, w, h)
-        self._lru.append(path)
-        return (tex_id, w, h)
-
-    def clear(self):
-        for tex_id, _, _ in self._cache.values():
-            if tex_id:
-                lf.ui.release_texture(tex_id)
-        self._cache.clear()
-        self._lru.clear()
+def _encode_rml_path(path: Path | str) -> str:
+    return quote(str(path), safe=_RML_PATH_SAFE_CHARS)
 
 
 class ImagePreviewPanel(Panel):
-    """Modern image preview with filmstrip, info sidebar, and status bar."""
-
-    idname = "lfs.image_preview"
+    id = "lfs.image_preview"
     label = "Image Preview"
-    space = "FLOATING"
+    space = lf.ui.PanelSpace.FLOATING
     order = 98
-    options = {"DEFAULT_CLOSED"}
+    template = "rmlui/image_preview.rml"
+    size = (900, 600)
+    update_interval_ms = 16
 
     def __init__(self):
         global _instance
@@ -86,518 +47,854 @@ class ImagePreviewPanel(Panel):
 
         self._image_paths: list[Path] = []
         self._mask_paths: list[Optional[Path]] = []
+        self._camera_uids: list[int] = []
         self._current_index = 0
 
-        self._current_texture: Optional[tuple[int, int, int]] = None
-        self._overlay_texture: Optional[tuple[int, int, int]] = None
-        self._thumbnail_cache = ThumbnailCache()
-
         self._zoom = 1.0
-        self._pan_x = 0.0
-        self._pan_y = 0.0
         self._fit_to_window = True
         self._show_info = True
         self._show_filmstrip = True
         self._show_overlay = False
 
-        self._focus_next_frame = False
-        self._filmstrip_scroll = 0.0
+        self._pan_x = 0.0
+        self._pan_y = 0.0
+        self._dragging = False
+        self._drag_start_x = 0.0
+        self._drag_start_y = 0.0
+        self._drag_start_pan_x = 0.0
+        self._drag_start_pan_y = 0.0
+        self._hover_image = False
 
-    def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]], start_index: int):
+        self._doc = None
+        self._dirty = True
+        self._prev_image_index = -1
+
+        self._active_layer = "a"
+        self._crossfade_pending = False
+        self._crossfade_start = 0.0
+
+        self._scroll_target = None
+        self._scroll_origin = 0.0
+        self._scroll_start_time = 0.0
+
+        self._image_info_cache: dict[str, tuple[int, int, int]] = {}
+        self._last_training_params: tuple[int, int, bool] = (1, 0, False)
+        self._decorator_cache: dict[str, str] = {}
+
+    def _get_title(self) -> str:
+        if self._image_paths:
+            dirname = self._image_paths[0].parent.name
+            return f"{dirname} \u00b7 {self._current_index + 1} / {len(self._image_paths)}"
+        return lf.ui.tr("image_preview.title")
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("image_preview")
+        if model is None:
+            return
+
+        model.bind_func("panel_label", lambda: self._get_title())
+        model.bind_record_list("thumbs")
+        self._handle = model.get_handle()
+
+    def on_mount(self, doc):
+        super().on_mount(doc)
+        self._doc = doc
+
+        for eid, handler in [
+            ("nav-prev", lambda _ev: self._navigate(-1)),
+            ("nav-next", lambda _ev: self._navigate(1)),
+            ("btn-copy-path", lambda _ev: self._copy_path_to_clipboard()),
+        ]:
+            el = doc.get_element_by_id(eid)
+            if el:
+                el.add_event_listener("click", handler)
+
+        cb_fit = doc.get_element_by_id("cb-fit")
+        if cb_fit:
+            cb_fit.add_event_listener("change", self._on_fit_checkbox_change)
+
+        cb_mask = doc.get_element_by_id("cb-mask")
+        if cb_mask:
+            cb_mask.add_event_listener("change", self._on_mask_checkbox_change)
+
+        filmstrip = doc.get_element_by_id("filmstrip")
+        if filmstrip:
+            filmstrip.add_event_listener("click", self._on_filmstrip_click)
+            filmstrip.add_event_listener("mousescroll", self._on_precise_scroll)
+
+        sidebar = doc.get_element_by_id("sidebar")
+        if sidebar:
+            sidebar.add_event_listener("mousescroll", self._on_precise_scroll)
+
+        img_container = doc.get_element_by_id("image-container")
+        if img_container:
+            img_container.add_event_listener("mousescroll", self._on_wheel)
+            img_container.add_event_listener("mousedown", self._on_img_mousedown)
+            img_container.add_event_listener("mouseup", self._on_img_mouseup)
+            img_container.add_event_listener("mousemove", self._on_img_mousemove)
+            img_container.add_event_listener("mouseover", self._on_img_mouseover)
+            img_container.add_event_listener("mouseout", self._on_img_mouseout)
+
+        wf = doc.get_element_by_id("window-frame")
+
+        doc.add_event_listener("keydown", self._on_keydown)
+        doc.add_event_listener("resize", self._on_layout_resize)
+        if wf:
+            wf.add_event_listener("keydown", self._on_keydown)
+
+        self._decorator_cache = {}
+        self._dirty = True
+
+    def on_update(self, doc):
+        if not self._fit_to_window and self._image_paths and self._hover_image:
+            lf.ui.set_mouse_cursor_hand()
+
+        current_params = self._get_training_params()
+        if current_params != self._last_training_params:
+            self._last_training_params = current_params
+            self._dirty = True
+
+        needs_redraw = False
+
+        if self._crossfade_pending:
+            if time.monotonic() - self._crossfade_start >= CROSSFADE_DURATION:
+                self._finalize_crossfade(doc)
+            needs_redraw = True
+
+        if self._scroll_target is not None:
+            self._tick_scroll(doc)
+            needs_redraw = True
+
+        if self._dirty:
+            self._dirty = False
+            self._refresh_ui(doc)
+            return True
+
+        return needs_redraw
+
+    def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
+             start_index: int, camera_uids: list[int] | None = None):
         if not image_paths:
             return
 
-        self._release_textures()
-        self._image_paths = image_paths
-        self._mask_paths = mask_paths if mask_paths else [None] * len(image_paths)
+        self._image_paths = [p.resolve() for p in image_paths]
+        self._mask_paths = [p.resolve() if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
+        self._camera_uids = camera_uids if camera_uids is not None else [-1] * len(image_paths)
         self._current_index = min(start_index, len(image_paths) - 1)
-        self._zoom = 1.0
+        self._last_training_params = self._get_training_params()
+        self._reset_view()
+        self._dirty = True
+        self._prev_image_index = -1
+        self._crossfade_pending = False
+        self._scroll_target = None
+        self._decorator_cache = {}
+
+    def _reset_pan(self):
         self._pan_x = 0.0
         self._pan_y = 0.0
+        self._dragging = False
+
+    def _reset_view(self):
+        self._zoom = 1.0
         self._fit_to_window = True
-        self._focus_next_frame = True
-        self._filmstrip_scroll = 0.0
+        self._reset_pan()
 
-        lf.ui.request_keyboard_capture("ImagePreview")
-        self._load_current()
-        self._preload_adjacent()
-
-    def close(self):
-        lf.ui.release_keyboard_capture("ImagePreview")
-        self._release_textures()
-        self._thumbnail_cache.clear()
-        self._image_paths.clear()
-        self._mask_paths.clear()
-
-    def _release_textures(self):
-        if self._current_texture and self._current_texture[0]:
-            lf.ui.release_texture(self._current_texture[0])
-        self._current_texture = None
-
-        if self._overlay_texture and self._overlay_texture[0]:
-            lf.ui.release_texture(self._overlay_texture[0])
-        self._overlay_texture = None
-
-    def _load_current(self):
-        if self._current_texture and self._current_texture[0]:
-            lf.ui.release_texture(self._current_texture[0])
-            self._current_texture = None
-
-        if not self._image_paths:
-            return
-
-        path = str(self._image_paths[self._current_index])
-
-        if lf.ui.is_preload_ready(path):
-            tex_id, w, h = lf.ui.get_preloaded_texture(path)
+    def _refresh_immediately(self):
+        if self._doc:
+            self._dirty = False
+            self._refresh_ui(self._doc)
         else:
-            tex_id, w, h = lf.ui.load_image_texture(path)
-
-        if tex_id:
-            self._current_texture = (tex_id, w, h)
-
-        self._load_overlay()
-
-    def _load_overlay(self):
-        if self._overlay_texture and self._overlay_texture[0]:
-            lf.ui.release_texture(self._overlay_texture[0])
-            self._overlay_texture = None
-
-        if self._current_index >= len(self._mask_paths):
-            return
-
-        mask_path = self._mask_paths[self._current_index]
-        if not mask_path or not mask_path.exists():
-            return
-
-        tex_id, w, h = lf.ui.load_image_texture(str(mask_path))
-        if tex_id:
-            self._overlay_texture = (tex_id, w, h)
-
-    def _preload_adjacent(self):
-        for offset in [1, -1]:
-            idx = self._current_index + offset
-            if 0 <= idx < len(self._image_paths):
-                lf.ui.preload_image_async(str(self._image_paths[idx]))
-
-    def _has_valid_overlay(self) -> bool:
-        if self._current_index >= len(self._mask_paths):
-            return False
-        mask_path = self._mask_paths[self._current_index]
-        return mask_path is not None and mask_path.exists() and self._overlay_texture is not None
-
-    def _calculate_display_size(self, available_w: float, available_h: float) -> tuple[float, float]:
-        if not self._current_texture:
-            return (0.0, 0.0)
-
-        _, img_w, img_h = self._current_texture
-
-        if self._fit_to_window:
-            scale_x = available_w / img_w
-            scale_y = available_h / img_h
-            scale = min(scale_x, scale_y) * 0.95
-            return (img_w * scale * self._zoom, img_h * scale * self._zoom)
-        else:
-            return (img_w * self._zoom, img_h * self._zoom)
+            self._dirty = True
 
     def _navigate(self, delta: int):
         new_idx = self._current_index + delta
         if 0 <= new_idx < len(self._image_paths):
             self._current_index = new_idx
-            self._load_current()
-            self._preload_adjacent()
-            self._ensure_filmstrip_visible()
+            self._reset_pan()
+            self._refresh_immediately()
 
     def _go_to_image(self, index: int):
         if 0 <= index < len(self._image_paths):
             self._current_index = index
-            self._pan_x = 0.0
-            self._pan_y = 0.0
-            self._load_current()
-            self._preload_adjacent()
-            self._ensure_filmstrip_visible()
+            self._reset_pan()
+            self._refresh_immediately()
 
-    def _ensure_filmstrip_visible(self):
-        item_height = FILMSTRIP_THUMB_SIZE + FILMSTRIP_PADDING
-        target_y = self._current_index * item_height
-        self._filmstrip_scroll = max(0, target_y - item_height * 2)
+    def _toggle_fit(self):
+        self._fit_to_window = not self._fit_to_window
+        if self._fit_to_window:
+            self._reset_view()
+        self._dirty = True
+
+    def _copy_path_to_clipboard(self):
+        if self._image_paths:
+            lf.ui.set_clipboard_text(str(self._image_paths[self._current_index]))
+
+    def _zoom_in(self):
+        self._zoom = min(ZOOM_MAX, self._zoom * 1.25)
+        self._fit_to_window = False
+        self._dirty = True
+
+    def _zoom_out(self):
+        self._zoom = max(ZOOM_MIN, self._zoom / 1.25)
+        self._fit_to_window = False
+        self._dirty = True
+
+    def _has_valid_overlay(self) -> bool:
+        if self._current_index >= len(self._mask_paths):
+            return False
+        mask_path = self._mask_paths[self._current_index]
+        return mask_path is not None and mask_path.exists()
+
+    def _close_panel(self):
+        lf.ui.set_panel_enabled("lfs.image_preview", False)
+
+    def _get_image_info(self, path: Path) -> tuple[int, int, int]:
+        key = str(path)
+        if key not in self._image_info_cache:
+            try:
+                self._image_info_cache[key] = lf.ui.get_image_info(key)
+            except Exception:
+                self._image_info_cache[key] = (0, 0, 0)
+        return self._image_info_cache[key]
+
+    @staticmethod
+    def _format_aspect_ratio(w: int, h: int) -> str:
+        if w <= 0 or h <= 0:
+            return ""
+        d = gcd(w, h)
+        rw, rh = w // d, h // d
+        if rw > 30 or rh > 30:
+            ratio = w / h
+            common = {
+                (16, 9), (16, 10), (4, 3), (3, 2), (21, 9),
+                (1, 1), (5, 4), (3, 1), (2, 1),
+            }
+            best = min(common, key=lambda r: abs(r[0] / r[1] - ratio))
+            if abs(best[0] / best[1] - ratio) < 0.05:
+                return f"{best[0]}:{best[1]}"
+            return f"{w / h:.2f}:1"
+        return f"{rw}:{rh}"
+
+    def _get_training_params(self) -> tuple[int, int, bool]:
+        try:
+            dp = lf.dataset_params()
+            if dp.has_params():
+                op = lf.optimization_params()
+                return (dp.resize_factor, dp.max_width, op.undistort)
+        except Exception:
+            pass
+        return (1, 0, False)
+
+    def _make_preview_url(self, path: Path, cam_uid: int,
+                          thumb: int = 0, preview_mw: int = 0) -> str:
+        rf, mw, ud = self._last_training_params
+        return (f"preview://cam={cam_uid}&thumb={thumb}"
+                f"&rf={rf}&mw={mw}&pmw={preview_mw}"
+                f"&ud={1 if ud else 0}&path={_encode_rml_path(path)}")
+
+    def _on_filmstrip_click(self, event):
+        el = event.target()
+        while el:
+            idx_str = el.get_attribute("data-index", "")
+            if idx_str:
+                self._go_to_image(int(idx_str))
+                return
+            el = el.parent()
+
+    def _on_fit_checkbox_change(self, _event):
+        cb = self._doc.get_element_by_id("cb-fit") if self._doc else None
+        if cb:
+            self._fit_to_window = cb.has_attribute("checked")
+            if self._fit_to_window:
+                self._reset_view()
+            self._dirty = True
+
+    def _on_mask_checkbox_change(self, _event):
+        cb = self._doc.get_element_by_id("cb-mask") if self._doc else None
+        if cb:
+            self._show_overlay = cb.has_attribute("checked")
+            self._dirty = True
+
+    def _on_precise_scroll(self, event):
+        scroll_el = event.current_target()
+        if not scroll_el:
+            return
+
+        try:
+            wheel_delta = float(event.get_parameter("wheel_delta_y", "0"))
+        except (TypeError, ValueError):
+            return
+
+        max_scroll = max(0.0, scroll_el.scroll_height - scroll_el.client_height)
+        if max_scroll <= 0.0:
+            event.stop_propagation()
+            return
+
+        new_scroll = min(max(scroll_el.scroll_top + wheel_delta * PRECISE_SCROLL_STEP, 0.0), max_scroll)
+        if abs(new_scroll - scroll_el.scroll_top) > 0.01:
+            scroll_el.scroll_top = new_scroll
+
+        event.stop_propagation()
+
+    def _on_wheel(self, event):
+        delta = float(event.get_parameter("wheel_delta_y", "0"))
+        if delta == 0:
+            return
+        event.stop_propagation()
+        if delta > 0:
+            self._zoom = min(ZOOM_MAX, self._zoom * 1.15)
+        else:
+            self._zoom = max(ZOOM_MIN, self._zoom / 1.15)
+        self._fit_to_window = False
+        self._dirty = True
+
+    def _on_img_mousedown(self, event):
+        if self._fit_to_window:
+            return
+        button = int(event.get_parameter("button", "0"))
+        if button != 0:
+            return
+        self._dragging = True
+        self._drag_start_x = float(event.get_parameter("mouse_x", "0"))
+        self._drag_start_y = float(event.get_parameter("mouse_y", "0"))
+        self._drag_start_pan_x = self._pan_x
+        self._drag_start_pan_y = self._pan_y
+
+    def _on_img_mouseup(self, _event):
+        self._dragging = False
+
+    def _on_img_mousemove(self, event):
+        if not self._dragging:
+            return
+        mx = float(event.get_parameter("mouse_x", "0"))
+        my = float(event.get_parameter("mouse_y", "0"))
+        self._pan_x = self._drag_start_pan_x + (mx - self._drag_start_x)
+        self._pan_y = self._drag_start_pan_y + (my - self._drag_start_y)
+        self._dirty = True
+
+    def _on_img_mouseover(self, _event):
+        self._hover_image = True
+
+    def _on_img_mouseout(self, _event):
+        self._hover_image = False
+        self._dragging = False
+
+    def _on_layout_resize(self, _event):
+        self._dirty = True
+
+    def _get_active_layer_id(self):
+        return "main-image-a" if self._active_layer == "a" else "main-image-b"
+
+    def _get_inactive_layer_id(self):
+        return "main-image-b" if self._active_layer == "a" else "main-image-a"
+
+    def _apply_zoom(self, img_el, path: Path):
+        viewport = self._doc.get_element_by_id("image-viewport") if self._doc else None
+        w, h, _ = self._get_image_info(path)
+        if not viewport or w <= 0 or h <= 0:
+            return
+
+        vw = max(1, viewport.client_width)
+        vh = max(1, viewport.client_height)
+
+        if self._fit_to_window:
+            scale = min(1.0, vw / w, vh / h)
+        else:
+            scale = self._zoom
+
+        dw = max(1, int(round(w * scale)))
+        dh = max(1, int(round(h * scale)))
+
+        ox = (vw - dw) * 0.5
+        oy = (vh - dh) * 0.5
+        if not self._fit_to_window:
+            ox += self._pan_x
+            oy += self._pan_y
+
+        img_el.set_property("width", f"{dw}dp")
+        img_el.set_property("height", f"{dh}dp")
+        img_el.set_property("max-width", "none")
+        img_el.set_property("max-height", "none")
+        img_el.set_property("left", f"{int(round(ox))}dp")
+        img_el.set_property("top", f"{int(round(oy))}dp")
+        img_el.remove_property("margin-left")
+        img_el.remove_property("margin-top")
+
+    def _get_main_preview_max_width(self, doc, path: Path) -> int:
+        if not self._fit_to_window:
+            return 0
+
+        viewport = doc.get_element_by_id("image-viewport") if doc else None
+        if not viewport:
+            return 0
+
+        vw = viewport.client_width
+        vh = viewport.client_height
+        if vw <= 1 or vh <= 1:
+            return 0
+
+        preview_max = max(vw, vh) * 1.25
+
+        w, h, _ = self._get_image_info(path)
+        if w > 0 and h > 0:
+            preview_max = min(preview_max, max(w, h))
+
+        return max(512, (int(preview_max) + 255) // 256 * 256)
+
+    def _set_decorator(self, element, cache_key: str, decorator: str):
+        if not element:
+            self._decorator_cache.pop(cache_key, None)
+            return
+
+        if self._decorator_cache.get(cache_key) != decorator:
+            element.set_property("decorator", decorator)
+            self._decorator_cache[cache_key] = decorator
+
+    # -- UI refresh --
+
+    def _refresh_ui(self, doc):
+        has_images = bool(self._image_paths)
+
+        self._update_localized_labels(doc)
+        self._update_main_image(doc, has_images)
+        self._update_filmstrip(doc, has_images)
+        self._update_sidebar(doc, has_images)
+        self._update_nav_arrows(doc, has_images)
+        self._update_status(doc, has_images)
+
+        if hasattr(self, '_handle'):
+            self._handle.dirty("panel_label")
+
+    def _update_main_image(self, doc, has_images: bool):
+        layer_a = doc.get_element_by_id("main-image-a")
+        layer_b = doc.get_element_by_id("main-image-b")
+        mask_img = doc.get_element_by_id("mask-overlay")
+        no_text = doc.get_element_by_id("no-image-text")
+
+        if not has_images:
+            for layer in (layer_a, layer_b):
+                if layer:
+                    layer.set_attribute("class", "image-layer hidden")
+            self._set_decorator(layer_a, "main-image-a", "none")
+            self._set_decorator(layer_b, "main-image-b", "none")
+            if mask_img:
+                mask_img.set_attribute("class", "")
+            self._set_decorator(mask_img, "mask-overlay", "none")
+            if no_text:
+                no_text.set_attribute("class", "")
+                no_text.set_text(lf.ui.tr("image_preview.no_images_loaded"))
+            self._prev_image_index = -1
+            self._crossfade_pending = False
+            return
+
+        path = self._image_paths[self._current_index]
+        uid = self._camera_uids[self._current_index] if self._current_index < len(self._camera_uids) else -1
+        preview_mw = self._get_main_preview_max_width(doc, path)
+        preview_dec = f"image({self._make_preview_url(path, uid, preview_mw=preview_mw)})"
+        active_layer = doc.get_element_by_id(self._get_active_layer_id())
+        inactive_layer = doc.get_element_by_id(self._get_inactive_layer_id())
+
+        if no_text:
+            no_text.set_attribute("class", "hidden")
+
+        if self._prev_image_index == -1:
+            if active_layer:
+                self._set_decorator(active_layer, self._get_active_layer_id(), preview_dec)
+                active_layer.set_attribute("class", "image-layer")
+                self._apply_zoom(active_layer, path)
+            if inactive_layer:
+                inactive_layer.set_attribute("class", "image-layer hidden")
+                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), "none")
+            self._prev_image_index = self._current_index
+        elif self._prev_image_index != self._current_index:
+            if self._crossfade_pending and inactive_layer:
+                inactive_layer.set_attribute("class", "image-layer hidden")
+                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), "none")
+
+            if inactive_layer:
+                self._set_decorator(inactive_layer, self._get_inactive_layer_id(), preview_dec)
+                inactive_layer.set_attribute("class", "image-layer")
+                self._apply_zoom(inactive_layer, path)
+            if active_layer:
+                active_layer.set_attribute("class", "image-layer fading-out")
+
+            self._active_layer = "b" if self._active_layer == "a" else "a"
+            self._crossfade_pending = True
+            self._crossfade_start = time.monotonic()
+            self._prev_image_index = self._current_index
+        else:
+            if active_layer:
+                self._set_decorator(active_layer, self._get_active_layer_id(), preview_dec)
+                self._apply_zoom(active_layer, path)
+
+        active_layer = doc.get_element_by_id(self._get_active_layer_id())
+        show_mask = self._show_overlay and self._has_valid_overlay()
+        if mask_img:
+            if show_mask:
+                mask_path = self._mask_paths[self._current_index]
+                self._set_decorator(mask_img, "mask-overlay",
+                                    f"image({_encode_rml_path(mask_path)})")
+                mask_img.set_attribute("class", "visible")
+                self._apply_zoom(mask_img, path)
+            else:
+                mask_img.set_attribute("class", "")
+                self._set_decorator(mask_img, "mask-overlay", "none")
+
+    def _finalize_crossfade(self, doc):
+        outgoing_id = self._get_inactive_layer_id()
+        outgoing = doc.get_element_by_id(outgoing_id)
+        if outgoing:
+            outgoing.set_attribute("class", "image-layer hidden")
+            self._set_decorator(outgoing, outgoing_id, "none")
+        self._crossfade_pending = False
+
+    def _update_filmstrip(self, doc, has_images: bool):
+        filmstrip = doc.get_element_by_id("filmstrip")
+        if not filmstrip:
+            return
+
+        if not self._show_filmstrip:
+            filmstrip.set_attribute("class", "hidden")
+            return
+        filmstrip.set_attribute("class", "")
+
+        if not has_images:
+            self._handle.update_record_list("thumbs", [])
+            return
+
+        half = FILMSTRIP_WINDOW // 2
+        n = len(self._image_paths)
+        lo = max(0, self._current_index - half)
+        hi = min(n, self._current_index + half)
+
+        records = []
+        for i, path in enumerate(self._image_paths):
+            if lo <= i < hi:
+                uid = self._camera_uids[i] if i < len(self._camera_uids) else -1
+                dec = f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)})"
+            else:
+                dec = "none"
+            records.append({
+                "index": i,
+                "label": f"{i + 1:02d}",
+                "selected": i == self._current_index,
+                "decorator": dec,
+            })
+        self._handle.update_record_list("thumbs", records)
+
+        self._scroll_filmstrip_smooth(filmstrip, self._current_index)
+
+    def _scroll_filmstrip_smooth(self, filmstrip, index: int):
+        children = filmstrip.children()
+        if index < 0 or index >= len(children):
+            return
+        el = children[index]
+        item_top = el.offset_top
+        item_bot = item_top + el.offset_height
+        view_h = filmstrip.client_height
+        if view_h <= 0:
+            return
+        st = filmstrip.scroll_top
+        if item_top < st:
+            target = item_top
+        elif item_bot > st + view_h:
+            target = item_bot - view_h
+        else:
+            return
+        self._scroll_target = target
+        self._scroll_origin = st
+        self._scroll_start_time = time.monotonic()
+
+    def _tick_scroll(self, doc):
+        filmstrip = doc.get_element_by_id("filmstrip")
+        if not filmstrip:
+            self._scroll_target = None
+            return
+        t = min(1.0, (time.monotonic() - self._scroll_start_time) / SCROLL_DURATION)
+        t = t * (2.0 - t)
+        filmstrip.scroll_top = self._scroll_origin + (self._scroll_target - self._scroll_origin) * t
+        if t >= 1.0:
+            self._scroll_target = None
+
+    def _update_nav_arrows(self, doc, has_images: bool):
+        prev_el = doc.get_element_by_id("nav-prev")
+        next_el = doc.get_element_by_id("nav-next")
+
+        if not has_images or len(self._image_paths) <= 1:
+            if prev_el:
+                prev_el.set_attribute("class", "nav-arrow hidden")
+            if next_el:
+                next_el.set_attribute("class", "nav-arrow hidden")
+            return
+
+        if prev_el:
+            cls = "nav-arrow hidden" if self._current_index == 0 else "nav-arrow"
+            prev_el.set_attribute("class", cls)
+        if next_el:
+            cls = "nav-arrow hidden" if self._current_index >= len(self._image_paths) - 1 else "nav-arrow"
+            next_el.set_attribute("class", cls)
+
+    def _update_localized_labels(self, doc):
+        tr = lf.ui.tr
+
+        for element_id, text in {
+            "meta-width-label": tr("image_preview.width_label"),
+            "meta-height-label": tr("image_preview.height_label"),
+            "meta-megapixels-label": tr("image_preview.megapixels_label"),
+            "meta-aspect-label": tr("image_preview.aspect_label"),
+            "meta-channels-label": tr("image_preview.channels_label"),
+            "meta-format-label": tr("image_preview.format_label"),
+            "meta-size-label": tr("image_preview.size_label"),
+            "meta-path-label": tr("image_preview.path_label"),
+            "hk-navigate": tr("image_preview.navigate"),
+            "hk-fit": tr("image_preview.fit"),
+            "hk-zoom": tr("image_preview.zoom"),
+            "hk-info": tr("image_preview.info"),
+            "hk-thumbnails": tr("image_preview.thumbnails"),
+            "hk-mask": tr("image_preview.mask"),
+            "hk-reset": tr("common.reset"),
+            "hk-close": tr("common.close"),
+        }.items():
+            _set_text(doc, element_id, text)
+
+        copy_btn = doc.get_element_by_id("btn-copy-path")
+        if copy_btn:
+            copy_btn.set_attribute("title", tr("image_preview.copy_full_path"))
+
+    def _update_sidebar(self, doc, has_images: bool):
+        sidebar = doc.get_element_by_id("sidebar")
+        if not sidebar:
+            return
+
+        if not self._show_info:
+            sidebar.set_attribute("class", "hidden")
+            return
+        sidebar.set_attribute("class", "")
+
+        tr = lf.ui.tr
+
+        _set_text(doc, "sidebar-file-header", tr("image_preview.file_section"))
+        _set_text(doc, "sidebar-image-label", tr("image_preview.image_section"))
+        _set_text(doc, "sidebar-storage-label", tr("image_preview.storage_section"))
+        _set_text(doc, "sidebar-view-label", tr("image_preview.view_section"))
+
+        if has_images:
+            path = self._image_paths[self._current_index]
+            ext = path.suffix[1:].upper() if path.suffix else "?"
+            w, h, c = self._get_image_info(path)
+
+            _set_text(doc, "sidebar-filename", path.name)
+
+            if w > 0 and h > 0:
+                _set_text(doc, "sidebar-width", str(w))
+                _set_text(doc, "sidebar-height", str(h))
+                mp = (w * h) / 1_000_000
+                _set_text(doc, "sidebar-mp", f"{mp:.1f} MP")
+                _set_text(doc, "sidebar-aspect", self._format_aspect_ratio(w, h))
+            else:
+                for eid in ("sidebar-width", "sidebar-height", "sidebar-mp", "sidebar-aspect"):
+                    _set_text(doc, eid, "")
+
+            _set_text(doc, "sidebar-channels", self._get_channel_label(c))
+
+            _set_text(doc, "sidebar-format", ext)
+            if path.exists():
+                _set_text(doc, "sidebar-size", self._format_size(path.stat().st_size))
+            else:
+                _set_text(doc, "sidebar-size", "")
+
+            full_path = str(path)
+            display_dir = str(path.parent)
+            if len(display_dir) > 30:
+                display_dir = "..." + display_dir[-27:]
+            _set_text(doc, "sidebar-filepath", display_dir)
+            filepath_el = doc.get_element_by_id("sidebar-filepath")
+            if filepath_el:
+                filepath_el.set_attribute("title", full_path)
+        else:
+            _set_text(doc, "sidebar-filename", "")
+            for eid in ("sidebar-width", "sidebar-height", "sidebar-mp",
+                        "sidebar-aspect", "sidebar-channels", "sidebar-format",
+                        "sidebar-size", "sidebar-filepath"):
+                _set_text(doc, eid, "")
+
+        cb_fit = doc.get_element_by_id("cb-fit")
+        if cb_fit:
+            is_checked = cb_fit.has_attribute("checked")
+            if self._fit_to_window and not is_checked:
+                cb_fit.set_attribute("checked", "")
+            elif not self._fit_to_window and is_checked:
+                cb_fit.remove_attribute("checked")
+        _set_text(doc, "cb-fit-label", tr("image_preview.fit_to_window"))
+
+        has_mask = self._has_valid_overlay()
+        mask_section = doc.get_element_by_id("sidebar-mask-section")
+
+        if has_mask:
+            if mask_section:
+                mask_section.set_attribute("class", "sidebar-section-ip")
+            _set_text(doc, "sidebar-mask-label", tr("image_preview.mask_section"))
+            name = self._mask_paths[self._current_index].name
+            _set_text(doc, "sidebar-mask-name", name)
+            cb_mask = doc.get_element_by_id("cb-mask")
+            if cb_mask:
+                is_checked = cb_mask.has_attribute("checked")
+                if self._show_overlay and not is_checked:
+                    cb_mask.set_attribute("checked", "")
+                elif not self._show_overlay and is_checked:
+                    cb_mask.remove_attribute("checked")
+            _set_text(doc, "cb-mask-label", tr("image_preview.show_mask_overlay"))
+        else:
+            if mask_section:
+                mask_section.set_attribute("class", "sidebar-section-ip hidden")
+
+    def _update_status(self, doc, has_images: bool):
+        ids = ("st-w", "st-h", "st-ch", "st-zoom", "st-counter")
+        if not has_images:
+            for sid in ids:
+                _set_text(doc, sid, "")
+            return
+
+        path = self._image_paths[self._current_index]
+        w, h, c = self._get_image_info(path)
+
+        _set_text(doc, "st-w", f"W {w}" if w > 0 else "")
+        _set_text(doc, "st-h", f"H {h}" if h > 0 else "")
+        _set_text(doc, "st-ch", f"CH {c}")
+        _set_text(doc, "st-zoom", f"{lf.ui.tr('image_preview.zoom')} {self._get_zoom_display()}")
+        _set_text(doc, "st-counter", f"{self._current_index + 1} / {len(self._image_paths)}")
+
+    # -- Keyboard --
+
+    def _on_keydown(self, event):
+        key = int(event.get_parameter("key_identifier", "0"))
+
+        if key == KI_LEFT or key == KI_UP:
+            self._navigate(-1)
+            event.stop_propagation()
+        elif key == KI_RIGHT or key == KI_DOWN:
+            self._navigate(1)
+            event.stop_propagation()
+        elif key == KI_HOME:
+            self._go_to_image(0)
+            event.stop_propagation()
+        elif key == KI_END:
+            self._go_to_image(len(self._image_paths) - 1)
+            event.stop_propagation()
+        elif key == KI_F:
+            self._toggle_fit()
+            event.stop_propagation()
+        elif key == KI_I:
+            self._show_info = not self._show_info
+            self._dirty = True
+            event.stop_propagation()
+        elif key == KI_T:
+            self._show_filmstrip = not self._show_filmstrip
+            self._dirty = True
+            event.stop_propagation()
+        elif key == KI_M:
+            if self._has_valid_overlay():
+                self._show_overlay = not self._show_overlay
+                self._dirty = True
+            event.stop_propagation()
+        elif key == KI_1:
+            self._zoom = 1.0
+            self._fit_to_window = False
+            self._reset_pan()
+            self._dirty = True
+            event.stop_propagation()
+        elif key == KI_OEM_PLUS or key == KI_ADD:
+            self._zoom_in()
+            event.stop_propagation()
+        elif key == KI_OEM_MINUS or key == KI_SUBTRACT:
+            self._zoom_out()
+            event.stop_propagation()
+        elif key == KI_SPACE:
+            if self._fit_to_window:
+                self._fit_to_window = False
+                self._zoom = 1.0
+                self._reset_pan()
+            else:
+                self._reset_view()
+            self._dirty = True
+            event.stop_propagation()
+        elif key == KI_R:
+            self._reset_view()
+            self._dirty = True
+            event.stop_propagation()
+        elif key == KI_ESCAPE:
+            self._close_panel()
+            event.stop_propagation()
+
+    # -- Helpers --
 
     def _get_zoom_display(self) -> str:
-        if self._fit_to_window and self._current_texture:
-            return tr("image_preview.fit")
+        if self._fit_to_window:
+            return lf.ui.tr("image_preview.fit")
         return f"{self._zoom * 100:.0f}%"
 
-    def _format_size(self, size_bytes: int) -> str:
+    @staticmethod
+    def _get_channel_label(channels: int) -> str:
+        if channels == 1:
+            return lf.ui.tr("image_preview.channel_gray")
+        if channels == 2:
+            return lf.ui.tr("image_preview.channel_gray_alpha")
+        if channels == 3:
+            return "RGB"
+        if channels == 4:
+            return "RGBA"
+        return str(channels)
+
+    @staticmethod
+    def _format_size(size_bytes: int) -> str:
         if size_bytes >= 1024 * 1024:
             return f"{size_bytes / (1024 * 1024):.1f} MB"
         elif size_bytes >= 1024:
             return f"{size_bytes / 1024:.0f} KB"
         return f"{size_bytes} B"
 
-    def _get_aspect_ratio_name(self, w: int, h: int) -> str:
-        if h == 0:
-            return tr("common.na")
-        aspect = w / h
-        if abs(aspect - 16 / 9) < 0.02:
-            return "16:9"
-        elif abs(aspect - 4 / 3) < 0.02:
-            return "4:3"
-        elif abs(aspect - 3 / 2) < 0.02:
-            return "3:2"
-        elif abs(aspect - 1.0) < 0.02:
-            return "1:1"
-        elif abs(aspect - 21 / 9) < 0.02:
-            return "21:9"
-        return f"{aspect:.2f}"
 
-    def _close_panel(self):
-        self.close()
-        lf.ui.set_panel_enabled("lfs.image_preview", False)
+def _set_text(doc, element_id: str, text: str):
+    el = doc.get_element_by_id(element_id)
+    if el:
+        el.set_text(text)
 
-    def draw(self, layout):
-        if not self._image_paths:
-            layout.text_colored(tr("image_preview.no_images_loaded"), (0.6, 0.6, 0.6, 1.0))
-            return
 
-        theme = lf.ui.theme()
-        scale = layout.get_dpi_scale()
-
-        content_w, content_h = layout.get_content_region_avail()
-
-        nav_h = TITLE_BAR_HEIGHT * scale
-        status_h = STATUS_BAR_HEIGHT * scale
-        filmstrip_w = FILMSTRIP_WIDTH * scale if self._show_filmstrip else 0
-        sidebar_w = SIDEBAR_WIDTH * scale if self._show_info else 0
-
-        image_area_y = nav_h
-        image_area_h = content_h - nav_h - status_h
-
-        self._draw_nav_bar(layout, theme, content_w, nav_h, scale)
-
-        layout.set_cursor_pos((0, nav_h))
-        self._draw_filmstrip(layout, theme, filmstrip_w, image_area_h, scale)
-
-        image_area_x = filmstrip_w
-        image_area_w = content_w - filmstrip_w - sidebar_w
-        self._draw_image_area(layout, theme, image_area_x, image_area_y, image_area_w, image_area_h, scale)
-
-        if self._show_info:
-            sidebar_x = content_w - sidebar_w
-            layout.set_cursor_pos((sidebar_x, nav_h))
-            self._draw_sidebar(layout, theme, sidebar_w, image_area_h, scale)
-
-        layout.set_cursor_pos((0, content_h - status_h))
-        self._draw_status_bar(layout, theme, content_w, status_h, scale)
-
-        if layout.is_window_hovered() or layout.is_window_focused():
-            layout.capture_mouse_from_app(True)
-
-        self._handle_keyboard()
-
-    def _draw_nav_bar(self, layout, theme, width: float, height: float, scale: float):
-        padding = SIDEBAR_PADDING * scale
-        text_height = layout.get_text_line_height()
-        v_center = (height - text_height) / 2
-
-        layout.set_cursor_pos((0, 0))
-        layout.push_style_color("ChildBg", theme.palette.surface_bright)
-
-        if layout.begin_child("##NavBar", (width, height), border=False):
-            layout.set_cursor_pos((padding, v_center))
-
-            if layout.small_button("<"):
-                self._navigate(-1)
-            layout.same_line()
-            if layout.small_button(">"):
-                self._navigate(1)
-
-            layout.same_line(spacing=padding)
-            filename = self._image_paths[self._current_index].name if self._image_paths else ""
-            layout.label(f"{filename}  ({self._current_index + 1}/{len(self._image_paths)})")
-
-        layout.end_child()
-        layout.pop_style_color()
-
-    def _draw_filmstrip(self, layout, theme, width: float, height: float, scale: float):
-        if width <= 0:
-            return
-
-        padding = FILMSTRIP_PADDING * scale
-        thumb_size = FILMSTRIP_THUMB_SIZE * scale
-        item_height = thumb_size + padding
-
-        layout.push_style_color("ChildBg", theme.palette.surface)
-        layout.push_style_var_vec2("WindowPadding", (padding, padding))
-
-        if layout.begin_child("##Filmstrip", (width, height), border=False):
-            total_height = len(self._image_paths) * item_height
-            max_scroll = max(0, total_height - height + padding)
-
-            if layout.is_window_hovered():
-                wheel = layout.get_mouse_wheel()
-                if wheel != 0.0:
-                    self._filmstrip_scroll -= wheel * item_height * 3
-                    self._filmstrip_scroll = max(0, min(self._filmstrip_scroll, max_scroll))
-
-            visible_start = max(0, int(self._filmstrip_scroll / item_height))
-            visible_end = min(len(self._image_paths), int((self._filmstrip_scroll + height) / item_height) + 1)
-
-            for i in range(visible_start, visible_end):
-                y_pos = padding + i * item_height - self._filmstrip_scroll
-
-                layout.set_cursor_pos((padding, y_pos))
-                layout.push_id_int(i)
-
-                is_selected = i == self._current_index
-                if is_selected:
-                    layout.push_style_color("Button", theme.palette.primary_dim)
-                    layout.push_style_color("ButtonHovered", theme.palette.primary)
-                    layout.push_style_color("ButtonActive", theme.palette.primary)
-
-                path_str = str(self._image_paths[i])
-                thumb_data = self._thumbnail_cache.get(path_str)
-                if thumb_data is None:
-                    thumb_data = self._thumbnail_cache.load(path_str)
-
-                tex_id, tw, th = thumb_data
-                if tex_id:
-                    if layout.image_button(f"##thumb{i}", tex_id, (thumb_size, thumb_size)):
-                        self._go_to_image(i)
-                else:
-                    if layout.button(f"##thumb{i}", (thumb_size, thumb_size)):
-                        self._go_to_image(i)
-
-                if layout.is_item_hovered():
-                    layout.set_tooltip(self._image_paths[i].name)
-
-                if is_selected:
-                    layout.pop_style_color(3)
-
-                layout.pop_id()
-
-        layout.end_child()
-        layout.pop_style_var()
-        layout.pop_style_color()
-
-    def _draw_image_area(self, layout, theme, x: float, y: float, width: float, height: float, scale: float):
-        layout.set_cursor_pos((x, y))
-        layout.push_style_color("ChildBg", theme.palette.background)
-
-        if layout.begin_child("##ImageArea", (width, height), border=False):
-            if not self._current_texture:
-                cw, ch = layout.get_content_region_avail()
-                layout.set_cursor_pos((cw / 2 - 40, ch / 2))
-                layout.label(tr("image_preview.no_image"))
-            else:
-                cw, ch = layout.get_content_region_avail()
-                display_w, display_h = self._calculate_display_size(cw, ch)
-
-                x_offset = (cw - display_w) / 2 + self._pan_x
-                y_offset = (ch - display_h) / 2 + self._pan_y
-
-                layout.set_cursor_pos((0, 0))
-                layout.invisible_button("##ImageInteract", (cw, ch))
-                is_hovered = layout.is_item_hovered()
-                is_active = layout.is_item_active()
-
-                layout.set_cursor_pos((x_offset, y_offset))
-                tex_id, _, _ = self._current_texture
-                layout.image(tex_id, (display_w, display_h))
-
-                if self._show_overlay and self._has_valid_overlay():
-                    layout.set_cursor_pos((x_offset, y_offset))
-                    overlay_tex_id, _, _ = self._overlay_texture
-                    layout.image(overlay_tex_id, (display_w, display_h), OVERLAY_TINT)
-
-                self._handle_image_input(layout, is_hovered, is_active)
-
-        layout.end_child()
-        layout.pop_style_color()
-
-    def _draw_sidebar(self, layout, theme, width: float, height: float, scale: float):
-        padding = SIDEBAR_PADDING * scale
-
-        layout.push_style_color("ChildBg", theme.palette.surface)
-        layout.push_style_var_vec2("WindowPadding", (padding, padding))
-        layout.push_style_var_vec2("ItemSpacing", (4 * scale, 2 * scale))
-
-        if layout.begin_child("##Sidebar", (width, height), border=False):
-            label_color = theme.palette.text_dim
-            content_width = width - padding * 3
-
-            layout.indent(padding)
-
-            if self._current_texture:
-                _, w, h = self._current_texture
-                mp = (w * h) / 1e6
-
-                layout.text_colored(lf.ui.tr("image_preview.image_section"), label_color)
-                layout.label(f"{w} x {h}")
-                layout.label(f"{mp:.1f} MP · {self._get_aspect_ratio_name(w, h)}")
-
-                layout.spacing()
-                layout.separator()
-                layout.spacing()
-
-            if self._image_paths:
-                path = self._image_paths[self._current_index]
-                ext = path.suffix[1:].upper() if path.suffix else "?"
-
-                layout.text_colored(lf.ui.tr("image_preview.file_section"), label_color)
-                if path.exists():
-                    size_str = self._format_size(path.stat().st_size)
-                    layout.label(f"{size_str} · {ext}")
-                else:
-                    layout.label(ext)
-
-                parent_str = str(path.parent)
-                max_chars = int(content_width / (6 * scale))
-                if len(parent_str) > max_chars:
-                    parent_str = "..." + parent_str[-(max_chars - 3):]
-                layout.text_colored(parent_str, label_color)
-
-                layout.spacing()
-                layout.separator()
-                layout.spacing()
-
-            layout.text_colored(lf.ui.tr("image_preview.view_section"), label_color)
-            layout.label(f"{tr('image_preview.zoom')}: {self._get_zoom_display()}")
-            changed, self._fit_to_window = layout.checkbox(lf.ui.tr("image_preview.fit_to_window"), self._fit_to_window)
-
-            if self._has_valid_overlay():
-                layout.spacing()
-                layout.separator()
-                layout.spacing()
-
-                layout.text_colored(lf.ui.tr("image_preview.mask_section"), label_color)
-                changed, self._show_overlay = layout.checkbox(lf.ui.tr("image_preview.show_mask_overlay"), self._show_overlay)
-                mask_path = self._mask_paths[self._current_index]
-                if mask_path:
-                    name = mask_path.name
-                    max_chars = int(content_width / (6 * scale))
-                    if len(name) > max_chars:
-                        name = name[:max_chars - 3] + "..."
-                    layout.text_colored(name, label_color)
-
-            layout.unindent(padding)
-
-        layout.end_child()
-        layout.pop_style_var(2)
-        layout.pop_style_color()
-
-    def _draw_status_bar(self, layout, theme, width: float, height: float, scale: float):
-        padding = SIDEBAR_PADDING * scale
-        text_height = layout.get_text_line_height()
-        v_center = (height - text_height) / 2
-
-        layout.push_style_color("ChildBg", theme.palette.surface_bright)
-
-        if layout.begin_child("##StatusBar", (width, height), border=False):
-            layout.set_cursor_pos((padding, v_center))
-
-            if self._current_texture:
-                _, w, h = self._current_texture
-                mp = (w * h) / 1e6
-                size_str = ""
-                if self._image_paths:
-                    path = self._image_paths[self._current_index]
-                    if path.exists():
-                        size_str = f" · {self._format_size(path.stat().st_size)}"
-                layout.label(f"{w}x{h} · {mp:.1f} MP{size_str}")
-
-            zoom_text = f"{tr('image_preview.zoom')}: {self._get_zoom_display()}"
-            fit_label = tr("image_preview.fit")
-            fit_text_w, _ = layout.calc_text_size(fit_label)
-            fit_btn_width = max(30 * scale, fit_text_w + 12 * scale)
-            zoom_width, _ = layout.calc_text_size(zoom_text)
-            right_content_width = zoom_width + fit_btn_width + padding * 3
-
-            layout.same_line(offset=width - right_content_width)
-            layout.label(zoom_text)
-
-            layout.same_line()
-            if layout.small_button(fit_label):
-                self._fit_to_window = True
-                self._zoom = 1.0
-
-        layout.end_child()
-        layout.pop_style_color()
-
-    def _handle_image_input(self, layout, is_hovered: bool, is_active: bool):
-        if not layout.is_window_hovered():
-            return
-
-        if is_hovered:
-            wheel = layout.get_mouse_wheel()
-            if wheel != 0.0:
-                old_zoom = self._zoom
-                if wheel > 0:
-                    self._zoom = min(ZOOM_MAX, self._zoom * ZOOM_FACTOR)
-                else:
-                    self._zoom = max(ZOOM_MIN, self._zoom / ZOOM_FACTOR)
-                if old_zoom != self._zoom:
-                    self._fit_to_window = False
-
-            if layout.is_mouse_double_clicked(0):
-                self._zoom = 1.0
-                self._pan_x = 0.0
-                self._pan_y = 0.0
-                self._fit_to_window = True
-
-        if is_active and layout.is_mouse_dragging(0):
-            dx, dy = layout.get_mouse_delta()
-            self._pan_x += dx
-            self._pan_y += dy
-
-    def _handle_keyboard(self):
-        if lf.ui.is_key_pressed(lf.ui.Key.LEFT, repeat=False):
-            self._navigate(-1)
-        if lf.ui.is_key_pressed(lf.ui.Key.RIGHT, repeat=False):
-            self._navigate(1)
-        if lf.ui.is_key_pressed(lf.ui.Key.UP, repeat=False):
-            self._navigate(-1)
-        if lf.ui.is_key_pressed(lf.ui.Key.DOWN, repeat=False):
-            self._navigate(1)
-        if lf.ui.is_key_pressed(lf.ui.Key.HOME):
-            self._go_to_image(0)
-        if lf.ui.is_key_pressed(lf.ui.Key.END):
-            self._go_to_image(len(self._image_paths) - 1)
-
-        if lf.ui.is_key_pressed(lf.ui.Key.F):
-            self._fit_to_window = not self._fit_to_window
-        if lf.ui.is_key_pressed(lf.ui.Key.I):
-            self._show_info = not self._show_info
-        if lf.ui.is_key_pressed(lf.ui.Key.T):
-            self._show_filmstrip = not self._show_filmstrip
-        if lf.ui.is_key_pressed(lf.ui.Key.M) and self._has_valid_overlay():
-            self._show_overlay = not self._show_overlay
-
-        if lf.ui.is_key_pressed(lf.ui.Key._1):
-            self._zoom = 1.0
-            self._fit_to_window = False
-        if lf.ui.is_key_pressed(lf.ui.Key.EQUAL):
-            self._zoom = min(ZOOM_MAX, self._zoom * 1.25)
-            self._fit_to_window = False
-        if lf.ui.is_key_pressed(lf.ui.Key.MINUS):
-            self._zoom = max(ZOOM_MIN, self._zoom / 1.25)
-            self._fit_to_window = False
-        if lf.ui.is_key_pressed(lf.ui.Key.SPACE):
-            if self._fit_to_window:
-                self._fit_to_window = False
-                self._zoom = 1.0
-            else:
-                self._fit_to_window = True
-
-        if lf.ui.is_key_pressed(lf.ui.Key.R):
-            self._zoom = 1.0
-            self._pan_x = 0.0
-            self._pan_y = 0.0
-        if lf.ui.is_key_pressed(lf.ui.Key.ESCAPE):
-            self._close_panel()
-
-
-def open_image_preview(image_paths: list[Path], mask_paths: list[Path], start_index: int):
-    """Public API to open image preview with specific images."""
+def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
+                       start_index: int, camera_uids: list[int] | None = None):
     if _instance:
-        _instance.open(image_paths, mask_paths, start_index)
+        _instance.open(image_paths, mask_paths, start_index, camera_uids)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
+
+
+def open_camera_preview_by_uid(cam_uid: int):
+    scene = lf.get_scene()
+    if not scene:
+        return
+    target = None
+    for node in scene.get_nodes():
+        if node.type == lf.scene.NodeType.CAMERA and node.camera_uid == cam_uid:
+            target = node
+            break
+    if not target or not target.image_path:
+        return
+
+    parent = scene.get_node_by_id(target.parent_id) if target.parent_id >= 0 else None
+    child_ids = parent.children if parent else [n.id for n in scene.get_nodes() if n.type == lf.scene.NodeType.CAMERA]
+
+    image_paths = []
+    mask_paths = []
+    camera_uids = []
+    start_index = 0
+    for cid in child_ids:
+        child = scene.get_node_by_id(cid)
+        if not child or child.type != lf.scene.NodeType.CAMERA or not child.image_path:
+            continue
+        if child.id == target.id:
+            start_index = len(image_paths)
+        image_paths.append(Path(child.image_path))
+        mask_paths.append(Path(child.mask_path) if child.mask_path else None)
+        camera_uids.append(child.camera_uid)
+
+    if image_paths:
+        open_image_preview(image_paths, mask_paths, start_index, camera_uids)
