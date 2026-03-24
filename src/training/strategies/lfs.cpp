@@ -5,6 +5,7 @@
 #include "lfs.hpp"
 #include "core/logger.hpp"
 #include "edge_rasterizer.hpp"
+#include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 #include "kernels/lfs_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
@@ -445,6 +446,7 @@ namespace lfs::training {
         const size_t sh_rest = (_splat_data->shN().is_valid() && _splat_data->shN().ndim() >= 2)
                                    ? _splat_data->shN().shape()[1]
                                    : 0;
+        const int shN_dim = static_cast<int>(sh_rest * 3);
 
         auto child_means = Tensor::empty({K, 3}, Device::CUDA);
         auto child_log_scales = Tensor::empty({K, 3}, Device::CUDA);
@@ -458,21 +460,22 @@ namespace lfs::training {
             child_shN = Tensor::empty({K, 0, 3}, Device::CUDA);
         }
 
-        lfs_strategy::launch_lfs_split_inplace(
-            split_indices.ptr<int64_t>(),
+        kernels::launch_long_axis_split_gaussians_inplace(
             _splat_data->means().ptr<float>(),
-            _splat_data->scaling_raw().ptr<float>(),
-            _splat_data->opacity_raw().ptr<float>(),
             _splat_data->rotation_raw().ptr<float>(),
+            _splat_data->scaling_raw().ptr<float>(),
             _splat_data->sh0().ptr<float>(),
-            sh_rest > 0 ? _splat_data->shN().ptr<float>() : nullptr,
+            shN_dim > 0 ? _splat_data->shN().ptr<float>() : nullptr,
+            _splat_data->opacity_raw().ptr<float>(),
             child_means.ptr<float>(),
-            child_log_scales.ptr<float>(),
-            child_raw_opacities.ptr<float>(),
             child_rotations.ptr<float>(),
+            child_log_scales.ptr<float>(),
             child_sh0.ptr<float>(),
-            sh_rest > 0 ? child_shN.ptr<float>() : nullptr,
-            K, sh_rest);
+            shN_dim > 0 ? child_shN.ptr<float>() : nullptr,
+            child_raw_opacities.ptr<float>(),
+            split_indices.ptr<int64_t>(),
+            static_cast<int>(K),
+            shN_dim);
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);

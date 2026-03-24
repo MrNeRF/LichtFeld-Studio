@@ -17,34 +17,6 @@ namespace lfs::training::lfs_strategy {
     };
 
     /**
-     * Long-axis split matching the fixed IGS+ child-generation rule.
-     *
-     * Per split:
-     *   1. Opacity revision: sigmoid(raw) * 0.6
-     *   2. Offset: ±0.5σ_max along the longest axis, rotated by quaternion
-     *   3. Scale: longest *= 0.5, others *= 0.85
-     *   4. Parent/child are written symmetrically around the original mean
-     *
-     */
-    void launch_lfs_split_inplace(
-        const int64_t* split_indices,
-        float* means,
-        float* log_scales,
-        float* raw_opacities,
-        const float* rotations,
-        const float* sh0,
-        const float* shN,
-        float* child_means,
-        float* child_log_scales,
-        float* child_raw_opacities,
-        float* child_rotations,
-        float* child_sh0,
-        float* child_shN,
-        size_t K,
-        size_t sh_rest,
-        void* stream = nullptr);
-
-    /**
      * Per-iteration exploration noise for low-opacity splats.
      *
      * weight = (1 - sigmoid(raw_opac))^150 * visible * lr_mean * noise_weight
@@ -138,13 +110,6 @@ namespace lfs::training::lfs_strategy {
         float* a,
         const float* b,
         size_t N,
-        void* stream = nullptr);
-
-    void launch_sobel_edge_map(
-        const float* image,
-        float* edge_map,
-        int C, int H, int W,
-        float floor_value = 0.1f,
         void* stream = nullptr);
 
 } // namespace lfs::training::lfs_strategy
