@@ -5,13 +5,14 @@
 #pragma once
 
 #include "../render_pass.hpp"
+#include "core/export.hpp"
 #include "core/point_cloud.hpp"
 #include <glm/glm.hpp>
 #include <memory>
 
 namespace lfs::vis {
 
-    class PointCloudPass final : public RenderPass {
+    class LFS_VIS_API PointCloudPass final : public RenderPass {
     public:
         PointCloudPass() = default;
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "rendering_types.hpp"
+#include "core/export.hpp"
 #include <mutex>
 #include <optional>
 
@@ -13,7 +14,7 @@ namespace lfs::vis {
     class SceneManager;
     struct FrameResources;
 
-    class SplitViewService {
+    class LFS_VIS_API SplitViewService {
     public:
         struct GTToggleResult {
             bool enabled = false;

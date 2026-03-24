@@ -5,11 +5,12 @@
 #pragma once
 
 #include "../render_pass.hpp"
+#include "core/export.hpp"
 #include <glm/glm.hpp>
 
 namespace lfs::vis {
 
-    class SplatRasterPass final : public RenderPass {
+    class LFS_VIS_API SplatRasterPass final : public RenderPass {
     public:
         SplatRasterPass() = default;
 

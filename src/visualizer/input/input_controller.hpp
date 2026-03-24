@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/events.hpp"
+#include "core/export.hpp"
 #include "core/services.hpp"
 #include "input/input_bindings.hpp"
 #include "input/input_types.hpp"
@@ -31,7 +32,7 @@ namespace lfs::vis {
     } // namespace tools
     class ToolContext;
 
-    class InputController {
+    class LFS_VIS_API InputController {
     public:
         InputController(SDL_Window* window, Viewport& viewport);
         ~InputController();
