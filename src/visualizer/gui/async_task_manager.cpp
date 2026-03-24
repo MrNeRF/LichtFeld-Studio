@@ -217,6 +217,7 @@ namespace lfs::vis::gui {
                 .min = render_settings.depth_filter_min,
                 .max = render_settings.depth_filter_max,
                 .transform = render_settings.depth_filter_transform.inv().toMat4()};
+            filters.cull_outside_view_volume = render_settings.hide_outside_depth_box;
         }
     }
 

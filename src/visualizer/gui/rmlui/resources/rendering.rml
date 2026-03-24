@@ -219,6 +219,12 @@
         <input type="checkbox" data-checked="desaturate_cropping" />
       </label>
     </div>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">{{label_hide_outside_depth_box}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="hide_outside_depth_box" />
+      </label>
+    </div>
 
     <div class="setting-row setting-row--aligned">
       <span class="setting-row__label-col">{{label_selection_color_committed}}</span>

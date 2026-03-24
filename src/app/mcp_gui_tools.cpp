@@ -598,6 +598,7 @@ namespace lfs::app {
                                  {"use_ellipsoid", settings.use_ellipsoid},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
+                                 {"hide_outside_depth_box", settings.hide_outside_depth_box},
                                  {"crop_filter_for_selection", settings.crop_filter_for_selection},
                                  {"apply_appearance_correction", settings.apply_appearance_correction},
                                  {"ppisp_mode", settings.ppisp_mode},
@@ -726,6 +727,7 @@ namespace lfs::app {
             set_bool("use_ellipsoid", settings.use_ellipsoid);
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
+            set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
             set_bool("crop_filter_for_selection", settings.crop_filter_for_selection);
             set_bool("apply_appearance_correction", settings.apply_appearance_correction);
             set_int("ppisp_mode", settings.ppisp_mode);

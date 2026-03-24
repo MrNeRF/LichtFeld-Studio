@@ -91,6 +91,7 @@ namespace lfs::rendering {
         const Tensor* view_volume_transform = nullptr,
         const Tensor* view_volume_min = nullptr,
         const Tensor* view_volume_max = nullptr,
+        bool view_volume_cull = false,
         const Tensor* deleted_mask = nullptr,
         unsigned long long* hovered_depth_id = nullptr,
         int focused_gaussian_id = -1,

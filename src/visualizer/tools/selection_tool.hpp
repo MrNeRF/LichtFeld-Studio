@@ -64,8 +64,8 @@ namespace lfs::vis::tools {
         // Depth filter
         bool depth_filter_enabled_ = false;
         float depth_near_ = 0.0f;
-        float depth_far_ = 100.0f;
-        float frustum_half_width_ = 50.0f;
+        float depth_far_ = DEFAULT_DEPTH_FAR;
+        float frustum_half_width_ = DEFAULT_FRUSTUM_HALF_WIDTH;
 
         // Crop filter
         bool crop_filter_enabled_ = false;
@@ -74,6 +74,8 @@ namespace lfs::vis::tools {
         static constexpr float DEPTH_MAX = 1000.0f;
         static constexpr float WIDTH_MIN = 0.1f;
         static constexpr float WIDTH_MAX = 10000.0f;
+        static constexpr float DEFAULT_DEPTH_FAR = 5.3f;
+        static constexpr float DEFAULT_FRUSTUM_HALF_WIDTH = 1.35f;
 
         void drawDepthFrustum(const ToolContext& ctx) const;
         void applySelectionFilterSettings(const ToolContext& ctx) const;

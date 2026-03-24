@@ -20,6 +20,35 @@ namespace lfs::vis {
 
         const auto viewport = ctx.makeViewportData();
 
+        if (settings.depth_filter_enabled) {
+            const lfs::rendering::BoundingBox depth_box{
+                .min = settings.depth_filter_min,
+                .max = settings.depth_filter_max,
+                .transform = settings.depth_filter_transform.inv().toMat4()};
+
+            constexpr glm::vec3 DEPTH_BOX_OUTLINE_COLOR{0.0f, 0.0f, 0.0f};
+            constexpr float DEPTH_BOX_OUTLINE_WIDTH = 9.0f;
+            if (auto result =
+                    engine.renderBoundingBox(depth_box, viewport, DEPTH_BOX_OUTLINE_COLOR, DEPTH_BOX_OUTLINE_WIDTH);
+                !result) {
+                LOG_WARN("Failed to render depth selection box outline: {}", result.error());
+            }
+
+            constexpr glm::vec3 DEPTH_BOX_GLOW_COLOR{1.0f, 1.0f, 1.0f};
+            constexpr float DEPTH_BOX_GLOW_WIDTH = 6.0f;
+            if (auto result = engine.renderBoundingBox(depth_box, viewport, DEPTH_BOX_GLOW_COLOR, DEPTH_BOX_GLOW_WIDTH);
+                !result) {
+                LOG_WARN("Failed to render depth selection box glow: {}", result.error());
+            }
+
+            constexpr glm::vec3 DEPTH_BOX_COLOR{1.0f, 1.0f, 1.0f};
+            constexpr float DEPTH_BOX_LINE_WIDTH = 4.5f;
+            if (auto result = engine.renderBoundingBox(depth_box, viewport, DEPTH_BOX_COLOR, DEPTH_BOX_LINE_WIDTH);
+                !result) {
+                LOG_WARN("Failed to render depth selection box: {}", result.error());
+            }
+        }
+
         if (settings.show_crop_box && ctx.scene_manager) {
             const auto visible_cropboxes = ctx.scene_manager->getScene().getVisibleCropBoxes();
             const core::NodeId selected_cropbox_id = ctx.scene_manager->getSelectedNodeCropBoxId();

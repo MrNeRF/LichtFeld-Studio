@@ -109,6 +109,7 @@ namespace lfs::rendering {
         const float* view_volume_transform = nullptr,
         const float3* view_volume_min = nullptr,
         const float3* view_volume_max = nullptr,
+        bool view_volume_cull = false,
         const bool* deleted_mask = nullptr,
         unsigned long long* hovered_depth_id = nullptr,
         int focused_gaussian_id = -1,

@@ -9,7 +9,7 @@
 namespace lfs::vis {
 
     // Bump this after updating proxy conversions when RenderSettings layout changes.
-    inline constexpr size_t kRenderSettingsExpectedSize = 360;
+    inline constexpr size_t kRenderSettingsExpectedSize = 368;
     static_assert(sizeof(RenderSettings) == kRenderSettingsExpectedSize,
                   "RenderSettings layout changed — update proxy conversions in render_settings_convert.hpp, "
                   "then bump kRenderSettingsExpectedSize.");
@@ -33,6 +33,7 @@ namespace lfs::vis {
         p.use_ellipsoid = s.use_ellipsoid;
         p.desaturate_unselected = s.desaturate_unselected;
         p.desaturate_cropping = s.desaturate_cropping;
+        p.hide_outside_depth_box = s.hide_outside_depth_box;
         p.crop_filter_for_selection = s.crop_filter_for_selection;
         p.apply_appearance_correction = s.apply_appearance_correction;
         p.ppisp_mode = static_cast<int>(s.ppisp_mode);
@@ -93,6 +94,7 @@ namespace lfs::vis {
         s.use_ellipsoid = p.use_ellipsoid;
         s.desaturate_unselected = p.desaturate_unselected;
         s.desaturate_cropping = p.desaturate_cropping;
+        s.hide_outside_depth_box = p.hide_outside_depth_box;
         s.crop_filter_for_selection = p.crop_filter_for_selection;
         s.apply_appearance_correction = p.apply_appearance_correction;
         s.ppisp_mode = static_cast<RenderSettings::PPISPMode>(p.ppisp_mode);

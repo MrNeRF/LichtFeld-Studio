@@ -109,6 +109,7 @@ namespace lfs::rendering {
 
         void applyViewVolumeToPipeline(RenderingPipeline::RasterRequest& pipeline_req,
                                        const std::optional<BoundingBox>& view_volume,
+                                       const bool view_volume_cull,
                                        GaussianRasterResources& resources) {
             if (!view_volume.has_value()) {
                 return;
@@ -135,6 +136,7 @@ namespace lfs::rendering {
             pipeline_req.view_volume_transform = &resources.view_volume_transform_tensor;
             pipeline_req.view_volume_min = &resources.view_volume_min_tensor;
             pipeline_req.view_volume_max = &resources.view_volume_max_tensor;
+            pipeline_req.view_volume_cull = view_volume_cull;
         }
 
         [[nodiscard]] RenderingPipeline::RasterRequest makeGaussianPipelineRequest(
@@ -445,7 +447,8 @@ namespace lfs::rendering {
         GaussianRasterResources raster_resources;
         applyCropBoxToPipeline(pipeline_req, request.filters.crop_region, raster_resources);
         applyEllipsoidToPipeline(pipeline_req, request.filters.ellipsoid_region, raster_resources);
-        applyViewVolumeToPipeline(pipeline_req, request.filters.view_volume, raster_resources);
+        applyViewVolumeToPipeline(
+            pipeline_req, request.filters.view_volume, request.filters.cull_outside_view_volume, raster_resources);
 
         auto pipeline_result = pipeline_.renderGaussianImage(splat_data, pipeline_req);
 
@@ -642,7 +645,8 @@ namespace lfs::rendering {
         GaussianRasterResources raster_resources;
         applyCropBoxToPipeline(pipeline_req, request.filters.crop_region, raster_resources);
         applyEllipsoidToPipeline(pipeline_req, request.filters.ellipsoid_region, raster_resources);
-        applyViewVolumeToPipeline(pipeline_req, request.filters.view_volume, raster_resources);
+        applyViewVolumeToPipeline(
+            pipeline_req, request.filters.view_volume, request.filters.cull_outside_view_volume, raster_resources);
 
         auto pipeline_result = pipeline_.renderGaussianImage(splat_data, pipeline_req);
         if (!pipeline_result) {

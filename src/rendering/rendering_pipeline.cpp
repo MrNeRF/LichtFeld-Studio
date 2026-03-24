@@ -300,6 +300,7 @@ namespace lfs::rendering {
                                                    request.ellipsoid_transform, request.ellipsoid_radii,
                                                    request.ellipsoid_inverse, request.ellipsoid_desaturate, request.ellipsoid_parent_node_index,
                                                    request.view_volume_transform, request.view_volume_min, request.view_volume_max,
+                                                   request.view_volume_cull,
                                                    deleted_mask_ptr,
                                                    request.hovered_depth_id,
                                                    request.focused_gaussian_id,

@@ -93,6 +93,7 @@ namespace lfs::rendering {
         std::optional<GaussianScopedBoxFilter> crop_region;
         std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
         std::optional<BoundingBox> view_volume;
+        bool cull_outside_view_volume = false;
     };
 
     struct GaussianMarkerOverlayState {

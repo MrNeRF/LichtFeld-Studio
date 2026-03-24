@@ -19,6 +19,18 @@
 
 namespace lfs::vis::tools {
 
+    namespace {
+
+        [[nodiscard]] float depthBoxHalfHeight(const ToolContext& ctx, const float half_width) {
+            const auto& bounds = ctx.getViewportBounds();
+            const float aspect = (bounds.height > 0.0f)
+                                     ? std::max(bounds.width / bounds.height, 0.1f)
+                                     : 1.0f;
+            return std::max(half_width / aspect, 0.05f);
+        }
+
+    } // namespace
+
     SelectionTool::SelectionTool() = default;
 
     bool SelectionTool::initialize(const ToolContext& ctx) {
@@ -98,8 +110,8 @@ namespace lfs::vis::tools {
 
     void SelectionTool::resetDepthFilter() {
         depth_near_ = 0.0f;
-        depth_far_ = 100.0f;
-        frustum_half_width_ = 50.0f;
+        depth_far_ = DEFAULT_DEPTH_FAR;
+        frustum_half_width_ = DEFAULT_FRUSTUM_HALF_WIDTH;
         if (tool_context_ && isEnabled() && depth_filter_enabled_) {
             applySelectionFilterSettings(*tool_context_);
         }
@@ -144,44 +156,23 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::drawDepthFrustum(const ToolContext& ctx) const {
-        constexpr float BAR_HEIGHT = 8.0f;
-        constexpr float BAR_WIDTH = 200.0f;
         const auto& t = theme();
-
         const auto& bounds = ctx.getViewportBounds();
-        const float bar_x = bounds.x + 10.0f;
-        const float bar_y = bounds.y + bounds.height - 45.0f;
-
+        const float text_x = bounds.x + 10.0f;
+        const float text_y = bounds.y + bounds.height - 42.0f;
+        const float half_height = depthBoxHalfHeight(ctx, frustum_half_width_);
         ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
 
-        draw_list->AddRectFilled({bar_x, bar_y}, {bar_x + BAR_WIDTH, bar_y + BAR_HEIGHT}, t.progress_bar_bg_u32());
-
-        const float log_range = std::log10(DEPTH_MAX) - std::log10(DEPTH_MIN);
-        const auto depth_to_pos = [&](const float depth) {
-            if (depth <= 0.0f) {
-                return bar_x;
-            }
-            return bar_x + (std::log10(std::clamp(depth, DEPTH_MIN, DEPTH_MAX)) - std::log10(DEPTH_MIN)) /
-                               log_range * BAR_WIDTH;
-        };
-        const float near_pos = depth_to_pos(depth_near_);
-        const float far_pos = depth_to_pos(depth_far_);
-
-        draw_list->AddRectFilled({near_pos, bar_y}, {far_pos, bar_y + BAR_HEIGHT}, t.progress_bar_fill_u32());
-        draw_list->AddLine({near_pos, bar_y - 2}, {near_pos, bar_y + BAR_HEIGHT + 2}, t.overlay_text_u32(), 1.5f);
-        draw_list->AddLine({far_pos, bar_y - 3}, {far_pos, bar_y + BAR_HEIGHT + 3}, t.progress_marker_u32(), 2.0f);
-
-        char info_text[96];
-        snprintf(info_text, sizeof(info_text), "Near: %.2f  Far: %.1f  Width: %.1f",
-                 depth_near_, depth_far_, frustum_half_width_ * 2.0f);
-        const ImVec2 text_pos(bar_x, bar_y - 20.0f);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_pos.x + 1, text_pos.y + 1},
+        char info_text[128];
+        snprintf(info_text, sizeof(info_text), "Depth Box  Near %.2f  Far %.1f  Size %.1f x %.1f",
+                 depth_near_, depth_far_, frustum_half_width_ * 2.0f, half_height * 2.0f);
+        draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_x + 1.0f, text_y + 1.0f},
                            t.overlay_shadow_u32(), info_text);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, text_pos, t.overlay_text_u32(), info_text);
-
-        draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {bar_x, bar_y + BAR_HEIGHT + 5.0f},
+        draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_x, text_y},
+                           t.overlay_text_u32(), info_text);
+        draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {text_x, text_y + 18.0f},
                            t.overlay_hint_u32(),
-                           "Ctrl+Alt+D: toggle | Alt+Shift+Scroll: near | Alt+Scroll: far | Ctrl+Alt+Scroll: width");
+                           "Ctrl+Alt+D toggle | Alt+Shift+Scroll near | Alt+Scroll far | Ctrl+Alt+Scroll size");
     }
 
     void SelectionTool::applySelectionFilterSettings(const ToolContext& ctx) const {
@@ -200,9 +191,10 @@ namespace lfs::vis::tools {
         if (depth_filter_enabled_) {
             const auto& viewport = ctx.getViewport();
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
+            const float half_height = depthBoxHalfHeight(ctx, frustum_half_width_);
             settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
-            settings.depth_filter_min = glm::vec3(-frustum_half_width_, -10000.0f, depth_near_);
-            settings.depth_filter_max = glm::vec3(frustum_half_width_, 10000.0f, depth_far_);
+            settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, depth_near_);
+            settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, depth_far_);
         }
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION);

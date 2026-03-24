@@ -92,11 +92,12 @@ namespace lfs::vis {
                 return;
             }
 
-            filters.view_volume = lfs::rendering::BoundingBox{
-                .min = ctx.settings.depth_filter_min,
-                .max = ctx.settings.depth_filter_max,
-                .transform = ctx.settings.depth_filter_transform.inv().toMat4()};
-        }
+        filters.view_volume = lfs::rendering::BoundingBox{
+            .min = ctx.settings.depth_filter_min,
+            .max = ctx.settings.depth_filter_max,
+            .transform = ctx.settings.depth_filter_transform.inv().toMat4()};
+        filters.cull_outside_view_volume = ctx.settings.hide_outside_depth_box;
+    }
 
     } // namespace
 

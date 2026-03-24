@@ -84,6 +84,7 @@ namespace lfs::rendering::kernels::forward {
         const float* view_volume_transform,
         const float3* view_volume_min,
         const float3* view_volume_max,
+        const bool view_volume_cull,
         const bool* deleted_mask,
         const int focused_gaussian_id,
         unsigned long long* hovered_depth_id,
@@ -159,6 +160,7 @@ namespace lfs::rendering::kernels::forward {
 
         // Crop box test (on transformed position, scoped to parent splat)
         bool outside_crop = false;
+        bool outside_view_volume = false;
         const int gaussian_node_idx = (transform_indices != nullptr) ? transform_indices[global_idx] : -1;
         if (active && crop_box_transform != nullptr) {
             const bool applies = (crop_parent_node_index < 0) || (gaussian_node_idx == crop_parent_node_index);
@@ -197,7 +199,7 @@ namespace lfs::rendering::kernels::forward {
             }
         }
 
-        // View-volume filter (desaturate only, no culling)
+        // View-volume filter for interactive selection constraints.
         if (active && view_volume_transform != nullptr) {
             const float3 dmin = *view_volume_min;
             const float3 dmax = *view_volume_max;
@@ -208,8 +210,13 @@ namespace lfs::rendering::kernels::forward {
             const bool inside = dx >= dmin.x && dx <= dmax.x &&
                                 dy >= dmin.y && dy <= dmax.y &&
                                 dz >= dmin.z && dz <= dmax.z;
-            if (!inside)
-                outside_crop = true;
+            if (!inside) {
+                outside_view_volume = true;
+                if (view_volume_cull) {
+                    primitive_mean2d[primitive_idx] = make_float2(-10000.0f, -10000.0f);
+                    active = false;
+                }
+            }
         }
 
         // Mark unselected nodes for desaturation
@@ -380,7 +387,7 @@ namespace lfs::rendering::kernels::forward {
             global_idx, active_sh_bases, total_bases_sh_rest);
 
         // Brush hit test
-        const bool selectable = !outside_crop;
+        const bool selectable = !(outside_crop || outside_view_volume);
         bool under_brush = false;
         if (cursor_active) {
             const float dx = mean2d.x - cursor_x;
@@ -403,7 +410,7 @@ namespace lfs::rendering::kernels::forward {
             color.z = fmaxf(0.0f, fminf(1.0f, lum + sat * (color.z - lum)));
         }
 
-        // Depth filter: dim outside gaussians
+        // Visual dimming applies only to explicit dim/desaturate modes.
         if (outside_crop) {
             constexpr float DEPTH_FILTER_BRIGHTNESS = 0.25f;
             const float lum = 0.2126f * color.x + 0.7152f * color.y + 0.0722f * color.z;
@@ -449,7 +456,7 @@ namespace lfs::rendering::kernels::forward {
 
         primitive_color[primitive_idx] = color;
         primitive_depth[primitive_idx] = depth;
-        primitive_outside_crop[primitive_idx] = outside_crop;
+        primitive_outside_crop[primitive_idx] = outside_crop || outside_view_volume;
         primitive_selection_status[primitive_idx] = sel_status;
         primitive_global_idx[primitive_idx] = global_idx;
 

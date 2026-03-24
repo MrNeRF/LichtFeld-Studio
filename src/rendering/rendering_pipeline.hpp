@@ -74,10 +74,11 @@ namespace lfs::rendering {
             bool ellipsoid_inverse = false;
             bool ellipsoid_desaturate = false;
             int ellipsoid_parent_node_index = -1;
-            // View-volume filter (desaturate only, no culling)
+            // View-volume filter used by the selection depth box.
             const Tensor* view_volume_transform = nullptr;
             const Tensor* view_volume_min = nullptr;
             const Tensor* view_volume_max = nullptr;
+            bool view_volume_cull = false;
             const Tensor* deleted_mask = nullptr; // Soft deletion mask [N], true = skip
             // Hover query output
             unsigned long long* hovered_depth_id = nullptr;

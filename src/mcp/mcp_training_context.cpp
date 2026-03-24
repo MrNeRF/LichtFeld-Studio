@@ -232,6 +232,7 @@ namespace lfs::mcp {
                     nullptr, // depth_filter_transform
                     nullptr, // depth_filter_min
                     nullptr, // depth_filter_max
+                    false,   // view_volume_cull
                     nullptr, // deleted_mask
                     hovered_depth_id_device,
                     -1); // highlight_gaussian_id
