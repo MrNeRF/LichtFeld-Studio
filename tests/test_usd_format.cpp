@@ -9,6 +9,7 @@
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/usd.hpp"
+#include "io/loaders/usd_loader.hpp"
 #include <pxr/usd/sdf/path.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/boundable.h>
@@ -244,6 +245,54 @@ namespace {
         auto loaded_result = load_usd(usd_path);
         ASSERT_FALSE(loaded_result.has_value());
         EXPECT_NE(loaded_result.error().find("multiple OpenUSD ParticleField prims"), std::string::npos);
+    }
+
+    TEST_F(UsdFormatTest, ShortShPayloadFallsBackToDegreeZero) {
+        const fs::path usd_path = temp_dir / "short_sh.usda";
+        auto stage = pxr::UsdStage::CreateNew(usd_path.string());
+        ASSERT_TRUE(stage);
+
+        auto splat = pxr::UsdVolParticleField3DGaussianSplat::Define(stage, pxr::SdfPath("/GaussianSplats"));
+        ASSERT_TRUE(splat);
+        stage->SetDefaultPrim(splat.GetPrim());
+
+        ASSERT_TRUE(splat.CreatePositionsAttr().Set(pxr::VtArray<pxr::GfVec3f>{pxr::GfVec3f(1.0f, 2.0f, 3.0f)}));
+        ASSERT_TRUE(splat.CreateRadianceSphericalHarmonicsDegreeAttr().Set(3));
+        ASSERT_TRUE(splat.CreateRadianceSphericalHarmonicsCoefficientsAttr().Set(
+            pxr::VtArray<pxr::GfVec3f>{pxr::GfVec3f(0.25f, -0.5f, 0.75f)}));
+        ASSERT_TRUE(stage->GetRootLayer()->Save());
+
+        auto loaded_result = load_usd(usd_path);
+        ASSERT_TRUE(loaded_result.has_value()) << loaded_result.error();
+        EXPECT_EQ(loaded_result->get_max_sh_degree(), 0);
+
+        const auto sh0 = loaded_result->sh0().contiguous().to(Device::CPU);
+        const auto* const sh0_ptr = static_cast<const float*>(sh0.data_ptr());
+        EXPECT_FLOAT_EQ(sh0_ptr[0], 0.0f);
+        EXPECT_FLOAT_EQ(sh0_ptr[1], 0.0f);
+        EXPECT_FLOAT_EQ(sh0_ptr[2], 0.0f);
+    }
+
+    TEST_F(UsdFormatTest, LoaderValidateOnlyUsesLightweightStageValidation) {
+        const fs::path usd_path = temp_dir / "validate_only.usda";
+        auto stage = pxr::UsdStage::CreateNew(usd_path.string());
+        ASSERT_TRUE(stage);
+
+        auto splat = pxr::UsdVolParticleField3DGaussianSplat::Define(stage, pxr::SdfPath("/GaussianSplats"));
+        ASSERT_TRUE(splat);
+        stage->SetDefaultPrim(splat.GetPrim());
+        ASSERT_TRUE(splat.CreatePositionsAttr().Set(
+            pxr::VtArray<pxr::GfVec3f>{pxr::GfVec3f(1.0f, 2.0f, 3.0f), pxr::GfVec3f(4.0f, 5.0f, 6.0f)}));
+        ASSERT_TRUE(stage->GetRootLayer()->Save());
+
+        USDLoader loader;
+        auto result = loader.load(usd_path, {.validate_only = true});
+        ASSERT_TRUE(result.has_value()) << result.error().message;
+        EXPECT_EQ(result->loader_used, "OpenUSD");
+        const auto splat_data = std::get_if<std::shared_ptr<SplatData>>(&result->data);
+        ASSERT_NE(splat_data, nullptr);
+        EXPECT_EQ(*splat_data, nullptr);
+        EXPECT_EQ(result->scene_center.numel(), 3);
     }
 
 } // namespace

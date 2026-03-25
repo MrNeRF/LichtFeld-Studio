@@ -536,6 +536,7 @@ namespace lfs::io {
                              "ignoring it and falling back to neutral degree-0 radiance",
                              num_gaussians,
                              resolved_sh_degree);
+                    sh_degree = 0;
                 } else {
                     if (authored_coeff_triplets > required_coeff_triplets) {
                         LOG_WARN("USD SH coefficient array is longer than expected; truncating to {} coefficients",
@@ -597,6 +598,84 @@ namespace lfs::io {
             maybe_apply_stage_linear_units(prim.GetStage(), splat_data);
             return splat_data;
         }
+
+        std::expected<void, std::string> validate_particlefield_prim(const pxr::UsdPrim& prim) {
+            std::optional<std::vector<float>> positions;
+            std::optional<std::vector<float>> rotations;
+            std::optional<std::vector<float>> scales;
+            std::optional<std::vector<float>> opacities;
+            std::optional<std::vector<float>> sh_coeffs;
+            pxr::UsdAttribute sh_degree_attr;
+
+            if (prim.IsA<pxr::UsdVolParticleField3DGaussianSplat>()) {
+                const pxr::UsdVolParticleField3DGaussianSplat schema(prim);
+                positions = read_vec3_array(schema.GetPositionsAttr(), schema.GetPositionshAttr());
+                rotations = read_quaternion_array(schema.GetOrientationsAttr(), schema.GetOrientationshAttr());
+                scales = read_vec3_array(schema.GetScalesAttr(), schema.GetScaleshAttr());
+                opacities = read_scalar_array(schema.GetOpacitiesAttr(), schema.GetOpacitieshAttr());
+                sh_coeffs = read_vec3_array(
+                    schema.GetRadianceSphericalHarmonicsCoefficientsAttr(),
+                    schema.GetRadianceSphericalHarmonicsCoefficientshAttr());
+                sh_degree_attr = schema.GetRadianceSphericalHarmonicsDegreeAttr();
+            } else {
+                const pxr::UsdVolParticleFieldPositionAttributeAPI position_api(prim);
+                const pxr::UsdVolParticleFieldOrientationAttributeAPI orientation_api(prim);
+                const pxr::UsdVolParticleFieldScaleAttributeAPI scale_api(prim);
+                const pxr::UsdVolParticleFieldOpacityAttributeAPI opacity_api(prim);
+                const pxr::UsdVolParticleFieldSphericalHarmonicsAttributeAPI sh_api(prim);
+
+                positions = read_vec3_array(position_api.GetPositionsAttr(), position_api.GetPositionshAttr());
+                rotations = read_quaternion_array(
+                    orientation_api.GetOrientationsAttr(),
+                    orientation_api.GetOrientationshAttr());
+                scales = read_vec3_array(scale_api.GetScalesAttr(), scale_api.GetScaleshAttr());
+                opacities = read_scalar_array(opacity_api.GetOpacitiesAttr(), opacity_api.GetOpacitieshAttr());
+                sh_coeffs = read_vec3_array(
+                    sh_api.GetRadianceSphericalHarmonicsCoefficientsAttr(),
+                    sh_api.GetRadianceSphericalHarmonicsCoefficientshAttr());
+                sh_degree_attr = sh_api.GetRadianceSphericalHarmonicsDegreeAttr();
+            }
+
+            if (!positions || positions->empty()) {
+                return std::unexpected(std::format(
+                    "USD prim {} does not contain ParticleField positions",
+                    prim.GetPath().GetString()));
+            }
+
+            if (positions->size() % 3 != 0) {
+                return std::unexpected("Malformed USD positions attribute");
+            }
+
+            const size_t num_gaussians = positions->size() / 3;
+            if (rotations && rotations->size() != num_gaussians * 4) {
+                return std::unexpected("Malformed USD orientations attribute");
+            }
+            if (scales && scales->size() != num_gaussians * 3) {
+                return std::unexpected("Malformed USD scales attribute");
+            }
+            if (opacities && opacities->size() != num_gaussians) {
+                return std::unexpected("Malformed USD opacities attribute");
+            }
+
+            if (sh_degree_attr && sh_degree_attr.HasAuthoredValueOpinion()) {
+                int authored_degree = 0;
+                if (!sh_degree_attr.Get(&authored_degree)) {
+                    return std::unexpected("Malformed USD SH degree attribute");
+                }
+                if (authored_degree < 0 || authored_degree > MAX_SUPPORTED_SH_DEGREE) {
+                    return std::unexpected(std::format(
+                        "Unsupported USD spherical harmonics degree {}. LichtFeld Studio supports degrees 0-{}.",
+                        authored_degree,
+                        MAX_SUPPORTED_SH_DEGREE));
+                }
+            }
+
+            if (sh_coeffs && !sh_coeffs->empty() && sh_coeffs->size() % 3 != 0) {
+                return std::unexpected("Malformed USD SH coefficient attribute");
+            }
+
+            return {};
+        }
     } // namespace
 
     std::expected<SplatData, std::string> load_usd(const std::filesystem::path& filepath) {
@@ -622,6 +701,27 @@ namespace lfs::io {
                  particlefield_prim->GetTypeName().GetString());
 
         return load_particlefield_prim(*particlefield_prim);
+    }
+
+    std::expected<void, std::string> validate_usd(const std::filesystem::path& filepath) {
+        LOG_INFO("Validating USD file: {}", lfs::core::path_to_utf8(filepath));
+
+        const auto stage = pxr::UsdStage::Open(lfs::core::path_to_utf8(filepath));
+        if (!stage) {
+            return std::unexpected(std::format(
+                "Failed to open USD stage: {}",
+                lfs::core::path_to_utf8(filepath)));
+        }
+
+        const auto particlefield_prim = find_particlefield_prim(stage);
+        if (!particlefield_prim) {
+            return std::unexpected(std::format(
+                "{}: {}",
+                lfs::core::path_to_utf8(filepath),
+                particlefield_prim.error()));
+        }
+
+        return validate_particlefield_prim(*particlefield_prim);
     }
 
     Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options) {

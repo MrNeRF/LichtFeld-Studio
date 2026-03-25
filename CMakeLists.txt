@@ -645,22 +645,39 @@ if(UNIX)
                 INSTALL_RPATH_USE_LINK_PATH FALSE
         )
     else()
-        set(_lichtfeld_runtime_rpath
+        set(_lichtfeld_runtime_rpath_common
                 "$ORIGIN"
                 "$ORIGIN/lib"
                 "${CUDAToolkit_LIBRARY_DIR}"
         )
+        set(_lichtfeld_runtime_rpath_release "${_lichtfeld_runtime_rpath_common}")
+        set(_lichtfeld_runtime_rpath_debug "${_lichtfeld_runtime_rpath_common}")
         if(DEFINED VCPKG_TARGET_TRIPLET)
-            foreach(_vcpkg_runtime_dir
-                    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib"
-                    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib")
-                if(EXISTS "${_vcpkg_runtime_dir}")
-                    list(APPEND _lichtfeld_runtime_rpath "${_vcpkg_runtime_dir}")
-                endif()
-            endforeach()
+            set(_vcpkg_release_runtime_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib")
+            if(EXISTS "${_vcpkg_release_runtime_dir}")
+                list(APPEND _lichtfeld_runtime_rpath_release "${_vcpkg_release_runtime_dir}")
+                list(APPEND _lichtfeld_runtime_rpath_debug "${_vcpkg_release_runtime_dir}")
+            endif()
+
+            set(_vcpkg_debug_runtime_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib")
+            if(EXISTS "${_vcpkg_debug_runtime_dir}")
+                list(APPEND _lichtfeld_runtime_rpath_debug "${_vcpkg_debug_runtime_dir}")
+            endif()
         endif()
-        list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath)
-        list(JOIN _lichtfeld_runtime_rpath ":" _lichtfeld_runtime_rpath_string)
+
+        list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_release)
+        list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_debug)
+        list(JOIN _lichtfeld_runtime_rpath_release ":" _lichtfeld_runtime_rpath_release_string)
+        list(JOIN _lichtfeld_runtime_rpath_debug ":" _lichtfeld_runtime_rpath_debug_string)
+
+        if(CMAKE_CONFIGURATION_TYPES)
+            set(_lichtfeld_runtime_rpath_string
+                    "$<$<CONFIG:Debug>:${_lichtfeld_runtime_rpath_debug_string}>$<$<NOT:$<CONFIG:Debug>>:${_lichtfeld_runtime_rpath_release_string}>")
+        elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_debug_string}")
+        else()
+            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_release_string}")
+        endif()
 
         set_target_properties(${PROJECT_NAME} PROPERTIES
                 INSTALL_RPATH "${_lichtfeld_runtime_rpath_string}"

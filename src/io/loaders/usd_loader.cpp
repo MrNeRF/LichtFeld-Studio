@@ -45,10 +45,10 @@ namespace lfs::io {
         if (options.validate_only) {
             LOG_DEBUG("Validation only mode for USD: {}", lfs::core::path_to_utf8(path));
 
-            auto splat_result = load_usd(path);
-            if (!splat_result) {
+            auto validation_result = validate_usd(path);
+            if (!validation_result) {
                 return make_error(ErrorCode::INVALID_HEADER,
-                                  std::format("Invalid USD gaussian file: {}", splat_result.error()),
+                                  std::format("Invalid USD gaussian file: {}", validation_result.error()),
                                   path);
             }
 

@@ -195,6 +195,7 @@ set(TEST_FILES
     test_sog_html_export.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
+    test_converter_usd.cpp
     test_usd_format.cpp
     test_unicode_paths_windows.cpp
     test_interleaved_slice_copy.cpp
@@ -290,6 +291,7 @@ endforeach()
 list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
     ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/converter.cpp
 )
 
 # Build benchmark sources list
@@ -319,6 +321,7 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/tests
     ${CMAKE_SOURCE_DIR}/src/training   # For training headers
     ${CMAKE_SOURCE_DIR}/src            # For module headers
+    ${CMAKE_SOURCE_DIR}/src/app/include
     ${CMAKE_SOURCE_DIR}/src/visualizer # For visualizer-relative headers (e.g. gui/ui_widgets.hpp)
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
     ${NB_DIR}/include

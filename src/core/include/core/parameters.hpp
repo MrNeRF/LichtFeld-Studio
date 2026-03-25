@@ -204,7 +204,9 @@ namespace lfs::core {
                                   SOG,
                                   SPZ,
                                   HTML,
-                                  USD };
+                                  USD,
+                                  USDA,
+                                  USDC };
 
         // Parameters for the convert command
         struct LFS_CORE_API ConvertParameters {

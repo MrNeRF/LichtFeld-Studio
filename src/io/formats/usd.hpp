@@ -14,5 +14,6 @@ namespace lfs::io {
 
     // Load OpenUSD Gaussian ParticleField data (.usd/.usda/.usdc/.usdz)
     std::expected<SplatData, std::string> load_usd(const std::filesystem::path& filepath);
+    std::expected<void, std::string> validate_usd(const std::filesystem::path& filepath);
 
 } // namespace lfs::io

@@ -745,8 +745,12 @@ namespace {
             return OutputFormat::SPZ;
         if (str == "html" || str == ".html")
             return OutputFormat::HTML;
-        if (str == "usd" || str == ".usd" || str == "usda" || str == ".usda" || str == "usdc" || str == ".usdc")
+        if (str == "usd" || str == ".usd")
             return OutputFormat::USD;
+        if (str == "usda" || str == ".usda")
+            return OutputFormat::USDA;
+        if (str == "usdc" || str == ".usdc")
+            return OutputFormat::USDC;
         return std::nullopt;
     }
 } // namespace
@@ -821,7 +825,7 @@ Commands:
     ::args::Positional<std::string> input(parser, "input", "Input file or directory");
     ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
     ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
-    ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html", {'f', "format"});
+    ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc", {'f', "format"});
     ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
     ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
 
