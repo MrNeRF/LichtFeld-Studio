@@ -4,7 +4,7 @@
     "file": "파일",
     "file.new_project": "새 프로젝트",
     "file.import_dataset": "데이터셋 가져오기",
-    "file.import_ply": "PLY, SOG, SPZ 가져오기",
+    "file.import_ply": "PLY, SOG, SPZ, USD 가져오기",
     "file.import_mesh": "메시 가져오기",
     "file.import_checkpoint": "체크포인트 가져오기",
     "file.import_config": "설정 가져오기",
@@ -320,6 +320,7 @@
     "format.ply_standard": "PLY (표준)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
+    "format.usd_openusd": "USD (OpenUSD)",
     "format.html_viewer": "HTML 뷰어",
     "select_models": "모델 선택:",
     "all": "전체",
@@ -826,10 +827,10 @@
     "supported_by": "지원:",
     "click_to_continue": "계속하려면 아무 곳이나 클릭",
     "drop_files_title": "시작하려면 파일을 여기에 드롭하세요",
-    "drop_files_subtitle": "PLY, SOG, COLMAP 데이터셋 또는 프로젝트 파일",
+    "drop_files_subtitle": "PLY, SOG, SPZ, USD, COLMAP 데이터셋 또는 프로젝트 파일",
     "drop_files_hint": "또는 파일 > 데이터셋 가져오기 / PLY 가져오기 사용",
     "drop_to_import": "가져오려면 드롭",
-    "drop_to_import_subtitle": "PLY, SOG, COLMAP 데이터셋 또는 프로젝트"
+    "drop_to_import_subtitle": "PLY, SOG, SPZ, USD, COLMAP 데이터셋 또는 프로젝트"
   },
   "axis": {
     "x": "X:",

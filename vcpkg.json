@@ -41,6 +41,7 @@
     },
     "spdlog",
     "tbb",
+    "usd",
     {
       "name": "python3",
       "features": [

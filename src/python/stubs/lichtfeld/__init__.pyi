@@ -259,7 +259,9 @@ def force_exit() -> None:
     """Force immediate application exit (bypasses confirmation)."""
 
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int) -> None:
-    """Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML."""
+    """
+    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD.
+    """
 
 def save_config_file(path: str) -> None:
     """Save current training configuration to a JSON file."""

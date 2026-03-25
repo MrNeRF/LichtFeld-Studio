@@ -4,7 +4,7 @@
     "file": "File",
     "file.new_project": "New Project",
     "file.import_dataset": "Import Dataset",
-    "file.import_ply": "Import PLY, SOG, SPZ",
+    "file.import_ply": "Import PLY, SOG, SPZ, USD",
     "file.import_mesh": "Import Mesh",
     "file.import_checkpoint": "Import Checkpoint",
     "file.import_config": "Import Config",
@@ -320,6 +320,7 @@
     "format.ply_standard": "PLY (Standard)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
+    "format.usd_openusd": "USD (OpenUSD)",
     "format.html_viewer": "HTML Viewer",
     "select_models": "Select Models:",
     "all": "All",
@@ -838,10 +839,10 @@
     "supported_by": "Supported by",
     "click_to_continue": "Click anywhere to continue",
     "drop_files_title": "Drop files here to get started",
-    "drop_files_subtitle": "PLY, SOG, COLMAP dataset, or Project file",
+    "drop_files_subtitle": "PLY, SOG, SPZ, USD, COLMAP dataset, or Project file",
     "drop_files_hint": "Or use File > Import Dataset / Import Ply",
     "drop_to_import": "Drop to Import",
-    "drop_to_import_subtitle": "PLY, SOG, COLMAP dataset, or Project"
+    "drop_to_import_subtitle": "PLY, SOG, SPZ, USD, COLMAP dataset, or Project"
   },
   "axis": {
     "x": "X:",

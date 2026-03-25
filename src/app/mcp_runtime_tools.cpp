@@ -216,6 +216,8 @@ namespace lfs::app {
                 return "spz";
             case core::ExportFormat::HTML_VIEWER:
                 return "html_viewer";
+            case core::ExportFormat::USD:
+                return "usd";
             }
             return "unknown";
         }

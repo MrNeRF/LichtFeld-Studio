@@ -265,6 +265,7 @@ find_package(WebP REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
@@ -644,8 +645,25 @@ if(UNIX)
                 INSTALL_RPATH_USE_LINK_PATH FALSE
         )
     else()
+        set(_lichtfeld_runtime_rpath
+                "$ORIGIN"
+                "$ORIGIN/lib"
+                "${CUDAToolkit_LIBRARY_DIR}"
+        )
+        if(DEFINED VCPKG_TARGET_TRIPLET)
+            foreach(_vcpkg_runtime_dir
+                    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib"
+                    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib")
+                if(EXISTS "${_vcpkg_runtime_dir}")
+                    list(APPEND _lichtfeld_runtime_rpath "${_vcpkg_runtime_dir}")
+                endif()
+            endforeach()
+        endif()
+        list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath)
+        list(JOIN _lichtfeld_runtime_rpath ":" _lichtfeld_runtime_rpath_string)
+
         set_target_properties(${PROJECT_NAME} PROPERTIES
-                INSTALL_RPATH "$ORIGIN:$ORIGIN/lib:${CUDAToolkit_LIBRARY_DIR}"
+                INSTALL_RPATH "${_lichtfeld_runtime_rpath_string}"
                 BUILD_WITH_INSTALL_RPATH TRUE
                 INSTALL_RPATH_USE_LINK_PATH TRUE
         )

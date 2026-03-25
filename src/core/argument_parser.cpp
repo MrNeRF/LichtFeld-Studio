@@ -745,6 +745,8 @@ namespace {
             return OutputFormat::SPZ;
         if (str == "html" || str == ".html")
             return OutputFormat::HTML;
+        if (str == "usd" || str == ".usd" || str == ".usda" || str == ".usdc")
+            return OutputFormat::USD;
         return std::nullopt;
     }
 } // namespace
@@ -862,7 +864,7 @@ Commands:
         if (const auto fmt = parseFormat(::args::get(format))) {
             params.format = *fmt;
         } else {
-            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, html", ::args::get(format)));
+            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd", ::args::get(format)));
         }
     } else if (!params.output_path.empty()) {
         if (const auto fmt = parseFormat(params.output_path.extension().string())) {

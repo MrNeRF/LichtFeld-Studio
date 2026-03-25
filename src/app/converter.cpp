@@ -83,6 +83,7 @@ namespace lfs::app {
             case param::OutputFormat::SOG: return ".sog";
             case param::OutputFormat::SPZ: return ".spz";
             case param::OutputFormat::HTML: return ".html";
+            case param::OutputFormat::USD: return ".usd";
             }
             return ".ply";
         }
@@ -155,6 +156,9 @@ namespace lfs::app {
                 break;
             case param::OutputFormat::HTML:
                 result = lfs::io::export_html(*splat, {.output_path = output, .kmeans_iterations = params.sog_iterations});
+                break;
+            case param::OutputFormat::USD:
+                result = lfs::io::save_usd(*splat, {.output_path = output});
                 break;
             }
 

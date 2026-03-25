@@ -1397,6 +1397,7 @@ lf.undo.stack() -> dict
 | `lf.ui.save_ply_file_dialog(default_name='export.ply')`   | `str` |
 | `lf.ui.save_sog_file_dialog(default_name='export.sog')`   | `str` |
 | `lf.ui.save_spz_file_dialog(default_name='export.spz')`   | `str` |
+| `lf.ui.save_usd_file_dialog(default_name='export.usd')`   | `str` |
 | `lf.ui.save_html_file_dialog(default_name='viewer.html')` | `str` |
 
 `lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.

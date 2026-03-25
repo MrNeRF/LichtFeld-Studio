@@ -247,6 +247,19 @@ namespace lfs::python {
             "Save splat data as SPZ compressed file");
 
         m.def(
+            "save_usd",
+            [](const PySplatData& data, const std::filesystem::path& path) {
+                io::UsdSaveOptions options;
+                options.output_path = path;
+
+                auto result = io::save_usd(*data.data(), options);
+                if (!result)
+                    throw std::runtime_error(std::format("Failed to save USD: {}", result.error().format()));
+            },
+            nb::arg("data"), nb::arg("path"),
+            "Save splat data as OpenUSD gaussian file");
+
+        m.def(
             "export_html",
             [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, nb::object progress) {
                 io::HtmlExportOptions options;

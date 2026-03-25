@@ -195,6 +195,7 @@ set(TEST_FILES
     test_sog_html_export.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
+    test_usd_format.cpp
     test_unicode_paths_windows.cpp
     test_interleaved_slice_copy.cpp
     test_adc_tensor_ops.cpp

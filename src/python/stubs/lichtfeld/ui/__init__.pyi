@@ -1857,7 +1857,7 @@ def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str
 
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
-    Open a file dialog to select a PLY file. Returns empty string if cancelled.
+    Open a file dialog to select a splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
     """
 
 def open_mesh_file_dialog(start_dir: str = '') -> str:
@@ -1898,6 +1898,11 @@ def save_sog_file_dialog(default_name: str = 'export') -> str:
 def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
+    """
+
+def save_usd_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for USD files. Returns empty string if cancelled.
     """
 
 def save_html_file_dialog(default_name: str = 'viewer') -> str:

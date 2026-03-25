@@ -4,7 +4,7 @@
     "file": "ファイル",
     "file.new_project": "新規プロジェクト",
     "file.import_dataset": "データセットをインポート",
-    "file.import_ply": "PLY, SOG, SPZをインポート",
+    "file.import_ply": "PLY, SOG, SPZ, USDをインポート",
     "file.import_mesh": "メッシュをインポート",
     "file.import_checkpoint": "チェックポイントをインポート",
     "file.import_config": "設定をインポート",
@@ -320,6 +320,7 @@
     "format.ply_standard": "PLY (標準)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
+    "format.usd_openusd": "USD (OpenUSD)",
     "format.html_viewer": "HTMLビューアー",
     "select_models": "モデルを選択:",
     "all": "すべて",
@@ -826,10 +827,10 @@
     "supported_by": "サポート",
     "click_to_continue": "クリックして続行",
     "drop_files_title": "ファイルをここにドロップして開始",
-    "drop_files_subtitle": "PLY、SOG、COLMAPデータセット、またはプロジェクトファイル",
+    "drop_files_subtitle": "PLY、SOG、SPZ、USD、COLMAPデータセット、またはプロジェクトファイル",
     "drop_files_hint": "または ファイル > データセットをインポート / PLYをインポート を使用",
     "drop_to_import": "ドロップしてインポート",
-    "drop_to_import_subtitle": "PLY、SOG、COLMAPデータセット、またはプロジェクト"
+    "drop_to_import_subtitle": "PLY、SOG、SPZ、USD、COLMAPデータセット、またはプロジェクト"
   },
   "axis": {
     "x": "X:",

@@ -203,7 +203,8 @@ namespace lfs::core {
         enum class OutputFormat { PLY,
                                   SOG,
                                   SPZ,
-                                  HTML };
+                                  HTML,
+                                  USD };
 
         // Parameters for the convert command
         struct LFS_CORE_API ConvertParameters {

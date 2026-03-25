@@ -144,6 +144,8 @@ add_library(lfs_io STATIC
         formats/html_viewer_resources.hpp
         formats/spz.hpp
         formats/spz.cpp
+        formats/usd.hpp
+        formats/usd.cpp
 
         # Concrete loader implementations
         loaders/loader_utils.hpp
@@ -157,6 +159,8 @@ add_library(lfs_io STATIC
         loaders/sogs_loader.cpp
         loaders/spz_loader.hpp
         loaders/spz_loader.cpp
+        loaders/usd_loader.hpp
+        loaders/usd_loader.cpp
         loaders/checkpoint_loader.hpp
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
@@ -238,6 +242,7 @@ target_link_libraries(lfs_io
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
+        usdVol                 # OpenUSD Gaussian ParticleField import
         $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
         spz_lib                # Niantic SPZ compressed format
 )

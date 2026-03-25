@@ -4,7 +4,7 @@
     "file": "Bestand",
     "file.new_project": "Nieuw Project",
     "file.import_dataset": "Dataset Importeren",
-    "file.import_ply": "PLY, SOG, SPZ Importeren",
+    "file.import_ply": "PLY, SOG, SPZ, USD Importeren",
     "file.import_mesh": "Mesh Importeren",
     "file.import_checkpoint": "Controlepunt Importeren",
     "file.import_config": "Configuratie Importeren",
@@ -320,6 +320,7 @@
     "format.ply_standard": "PLY (Standaard)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
+    "format.usd_openusd": "USD (OpenUSD)",
     "format.html_viewer": "HTML Viewer",
     "select_models": "Selecteer Modellen:",
     "all": "Alle",
@@ -826,10 +827,10 @@
     "supported_by": "Ondersteund door",
     "click_to_continue": "Klik ergens om door te gaan",
     "drop_files_title": "Sleep bestanden hierheen om te beginnen",
-    "drop_files_subtitle": "PLY, SOG, COLMAP dataset of Projectbestand",
+    "drop_files_subtitle": "PLY, SOG, SPZ, USD, COLMAP dataset of Projectbestand",
     "drop_files_hint": "Of gebruik Bestand > Dataset Importeren / PLY Importeren",
     "drop_to_import": "Loslaten om te importeren",
-    "drop_to_import_subtitle": "PLY, SOG, COLMAP dataset of Project"
+    "drop_to_import_subtitle": "PLY, SOG, SPZ, USD, COLMAP dataset of Project"
   },
   "axis": {
     "x": "X:",

@@ -93,4 +93,18 @@ namespace lfs::io {
      */
     [[nodiscard]] LFS_IO_API Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options);
 
+    // ============================================================================
+    // USD Export (OpenUSD Gaussian ParticleField)
+    // ============================================================================
+
+    struct UsdSaveOptions {
+        std::filesystem::path output_path;
+    };
+
+    /**
+     * @brief Save SplatData to OpenUSD Gaussian ParticleField format
+     * @return Result<void> - success or Error with details
+     */
+    [[nodiscard]] LFS_IO_API Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options);
+
 } // namespace lfs::io

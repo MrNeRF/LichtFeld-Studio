@@ -4,7 +4,7 @@
     "file": "文件",
     "file.new_project": "新建项目",
     "file.import_dataset": "导入数据集",
-    "file.import_ply": "导入PLY, SOG, SPZ",
+    "file.import_ply": "导入PLY, SOG, SPZ, USD",
     "file.import_mesh": "导入网格",
     "file.import_checkpoint": "导入检查点",
     "file.import_config": "导入配置",
@@ -320,6 +320,7 @@
     "format.ply_standard": "PLY（标准）",
     "format.sog_supersplat": "SOG（SuperSplat）",
     "format.spz_niantic": "SPZ（Niantic）",
+    "format.usd_openusd": "USD (OpenUSD)",
     "format.html_viewer": "HTML查看器",
     "select_models": "选择模型：",
     "all": "全部",
@@ -826,10 +827,10 @@
     "supported_by": "支持：",
     "click_to_continue": "点击任意位置继续",
     "drop_files_title": "将文件拖放到此处开始",
-    "drop_files_subtitle": "PLY、SOG、COLMAP数据集或项目文件",
+    "drop_files_subtitle": "PLY、SOG、SPZ、USD、COLMAP数据集或项目文件",
     "drop_files_hint": "或使用 文件 > 导入数据集 / 导入PLY",
     "drop_to_import": "放下以导入",
-    "drop_to_import_subtitle": "PLY、SOG、COLMAP数据集或项目"
+    "drop_to_import_subtitle": "PLY、SOG、SPZ、USD、COLMAP数据集或项目"
   },
   "axis": {
     "x": "X：",

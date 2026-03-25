@@ -356,6 +356,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* FORMAT_PLY_STANDARD = "export.format.ply_standard";
         inline constexpr const char* FORMAT_SOG_SUPERSPLAT = "export.format.sog_supersplat";
         inline constexpr const char* FORMAT_SPZ_NIANTIC = "export.format.spz_niantic";
+        inline constexpr const char* FORMAT_USD_OPENUSD = "export.format.usd_openusd";
         inline constexpr const char* FORMAT_HTML_VIEWER = "export.format.html_viewer";
         inline constexpr const char* SELECT_MODELS = "export.select_models";
         inline constexpr const char* ALL = "export.all";

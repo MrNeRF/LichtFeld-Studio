@@ -3605,7 +3605,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3752,7 +3753,7 @@ namespace lfs::python {
                 return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
-            "Open a file dialog to select a PLY file. Returns empty string if cancelled.");
+            "Open a file dialog to select a splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.");
 
         m.def(
             "open_mesh_file_dialog",
@@ -3831,6 +3832,15 @@ namespace lfs::python {
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
+
+        m.def(
+            "save_usd_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveUsdFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for USD files. Returns empty string if cancelled.");
 
         m.def(
             "save_html_file_dialog",

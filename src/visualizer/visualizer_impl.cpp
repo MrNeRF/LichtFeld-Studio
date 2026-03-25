@@ -364,9 +364,12 @@ namespace lfs::vis {
                 state.progress = tasks.getExportProgress();
                 state.stage = tasks.getExportStage();
                 const auto fmt = tasks.getExportFormat();
-                state.format = fmt == core::ExportFormat::PLY   ? "PLY"
-                               : fmt == core::ExportFormat::SOG ? "SOG"
-                                                                : "file";
+                state.format = fmt == core::ExportFormat::PLY           ? "PLY"
+                               : fmt == core::ExportFormat::SOG         ? "SOG"
+                               : fmt == core::ExportFormat::SPZ         ? "SPZ"
+                               : fmt == core::ExportFormat::HTML_VIEWER ? "HTML"
+                               : fmt == core::ExportFormat::USD         ? "USD"
+                                                                        : "file";
                 return state;
             },
             []() {

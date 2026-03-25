@@ -721,6 +721,17 @@ namespace lfs::vis::gui {
                     }
                     break;
                 }
+                case ExportFormat::USD: {
+                    update_progress(0.1f, "Writing USD");
+                    const lfs::io::UsdSaveOptions options{.output_path = path};
+                    if (auto result = lfs::io::save_usd(*splat_data, options); result) {
+                        success = true;
+                        update_progress(1.0f, "Complete");
+                    } else {
+                        error_msg = result.error().message;
+                    }
+                    break;
+                }
                 }
 
                 if (success) {
