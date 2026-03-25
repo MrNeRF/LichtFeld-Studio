@@ -9,9 +9,12 @@
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/usd.hpp"
+#include <pxr/usd/sdf/path.h>
 #include <pxr/usd/usd/stage.h>
 #include <pxr/usd/usdGeom/boundable.h>
 #include <pxr/usd/usdGeom/metrics.h>
+#include <pxr/usd/usdGeom/xform.h>
+#include <pxr/usd/usdVol/particleField3DGaussianSplat.h>
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -92,6 +95,14 @@ namespace {
                 std::move(rotation),
                 std::move(opacity),
                 0.5f);
+        }
+
+        static void author_positions_only_field(const pxr::UsdStageRefPtr& stage,
+                                                const std::string& prim_path,
+                                                const std::vector<pxr::GfVec3f>& positions) {
+            auto splat = pxr::UsdVolParticleField3DGaussianSplat::Define(stage, pxr::SdfPath(prim_path));
+            ASSERT_TRUE(splat);
+            ASSERT_TRUE(splat.CreatePositionsAttr().Set(pxr::VtArray<pxr::GfVec3f>(positions.begin(), positions.end())));
         }
     };
 
@@ -192,6 +203,47 @@ namespace {
         EXPECT_FLOAT_EQ(extent[1][0], -0.25f);
         EXPECT_FLOAT_EQ(extent[1][1], 1.5f);
         EXPECT_FLOAT_EQ(extent[1][2], 0.0f);
+    }
+
+    TEST_F(UsdFormatTest, ImportPrefersDefaultPrimSubtreeAndAppliesStageUnits) {
+        const fs::path usd_path = temp_dir / "default_prim.usda";
+        auto stage = pxr::UsdStage::CreateNew(usd_path.string());
+        ASSERT_TRUE(stage);
+
+        pxr::UsdGeomSetStageUpAxis(stage, pxr::UsdGeomTokens->y);
+        pxr::UsdGeomSetStageMetersPerUnit(stage, 2.0);
+
+        auto asset_root = pxr::UsdGeomXform::Define(stage, pxr::SdfPath("/Asset"));
+        ASSERT_TRUE(asset_root);
+        stage->SetDefaultPrim(asset_root.GetPrim());
+
+        author_positions_only_field(stage, "/Asset/Chosen", {pxr::GfVec3f(1.0f, 2.0f, 3.0f)});
+        author_positions_only_field(stage, "/Other", {pxr::GfVec3f(100.0f, 200.0f, 300.0f)});
+
+        ASSERT_TRUE(stage->GetRootLayer()->Save());
+
+        auto loaded_result = load_usd(usd_path);
+        ASSERT_TRUE(loaded_result.has_value()) << loaded_result.error();
+
+        const auto means = loaded_result->means().contiguous().to(Device::CPU);
+        const auto* const means_ptr = static_cast<const float*>(means.data_ptr());
+        EXPECT_FLOAT_EQ(means_ptr[0], 2.0f);
+        EXPECT_FLOAT_EQ(means_ptr[1], 4.0f);
+        EXPECT_FLOAT_EQ(means_ptr[2], 6.0f);
+    }
+
+    TEST_F(UsdFormatTest, RejectsAmbiguousMultiPrimStagesWithoutDefaultPrim) {
+        const fs::path usd_path = temp_dir / "ambiguous.usda";
+        auto stage = pxr::UsdStage::CreateNew(usd_path.string());
+        ASSERT_TRUE(stage);
+
+        author_positions_only_field(stage, "/First", {pxr::GfVec3f(1.0f, 0.0f, 0.0f)});
+        author_positions_only_field(stage, "/Second", {pxr::GfVec3f(2.0f, 0.0f, 0.0f)});
+        ASSERT_TRUE(stage->GetRootLayer()->Save());
+
+        auto loaded_result = load_usd(usd_path);
+        ASSERT_FALSE(loaded_result.has_value());
+        EXPECT_NE(loaded_result.error().find("multiple OpenUSD ParticleField prims"), std::string::npos);
     }
 
 } // namespace

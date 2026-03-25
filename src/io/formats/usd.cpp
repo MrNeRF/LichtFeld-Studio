@@ -144,13 +144,78 @@ namespace lfs::io {
             return std::nullopt;
         }
 
-        pxr::UsdPrim find_particlefield_prim(const pxr::UsdStageRefPtr& stage) {
-            for (const auto& prim : pxr::UsdPrimRange(stage->GetPseudoRoot())) {
+        std::vector<pxr::UsdPrim> collect_particlefield_prims(const pxr::UsdPrim& root) {
+            std::vector<pxr::UsdPrim> prims;
+            for (const auto& prim : pxr::UsdPrimRange(root)) {
                 if (prim.IsA<pxr::UsdVolParticleField>()) {
-                    return prim;
+                    prims.push_back(prim);
                 }
             }
-            return {};
+            return prims;
+        }
+
+        std::string collect_particlefield_paths(const std::vector<pxr::UsdPrim>& prims) {
+            if (prims.empty()) {
+                return "none";
+            }
+
+            std::string result;
+            bool first = true;
+            for (const auto& prim : prims) {
+                if (!first) {
+                    result += ", ";
+                }
+                result += prim.GetPath().GetString();
+                first = false;
+            }
+            return result;
+        }
+
+        std::string collect_stage_prim_types(const pxr::UsdStageRefPtr& stage);
+
+        std::expected<pxr::UsdPrim, std::string> find_particlefield_prim(const pxr::UsdStageRefPtr& stage) {
+            const pxr::UsdPrim default_prim = stage->GetDefaultPrim();
+            std::vector<pxr::UsdPrim> default_candidates;
+            if (default_prim) {
+                if (default_prim.IsA<pxr::UsdVolParticleField>()) {
+                    return default_prim;
+                }
+
+                default_candidates = collect_particlefield_prims(default_prim);
+                if (default_candidates.size() == 1) {
+                    return default_candidates.front();
+                }
+                if (default_candidates.size() > 1) {
+                    return std::unexpected(std::format(
+                        "Default prim {} contains multiple OpenUSD ParticleField prims: {}",
+                        default_prim.GetPath().GetString(),
+                        collect_particlefield_paths(default_candidates)));
+                }
+            }
+
+            const auto stage_candidates = collect_particlefield_prims(stage->GetPseudoRoot());
+            if (stage_candidates.empty()) {
+                return std::unexpected(std::format(
+                    "No OpenUSD ParticleField prim found in stage. Prim types in stage: {}",
+                    collect_stage_prim_types(stage)));
+            }
+
+            if (stage_candidates.size() > 1) {
+                if (default_prim) {
+                    return std::unexpected(std::format(
+                        "Default prim {} does not resolve to a unique OpenUSD ParticleField. "
+                        "Candidate ParticleField prims in stage: {}",
+                        default_prim.GetPath().GetString(),
+                        collect_particlefield_paths(stage_candidates)));
+                }
+
+                return std::unexpected(std::format(
+                    "Stage contains multiple OpenUSD ParticleField prims and no default prim. "
+                    "Candidate ParticleField prims: {}",
+                    collect_particlefield_paths(stage_candidates)));
+            }
+
+            return stage_candidates.front();
         }
 
         std::string collect_stage_prim_types(const pxr::UsdStageRefPtr& stage) {
@@ -215,6 +280,22 @@ namespace lfs::io {
 
             LOG_INFO("Applying composed USD transform for prim {}", prim.GetPath().GetString());
             lfs::core::transform(splat_data, to_glm_matrix(world_matrix));
+        }
+
+        void maybe_apply_stage_linear_units(const pxr::UsdStageRefPtr& stage, SplatData& splat_data) {
+            const double meters_per_unit = pxr::UsdGeomGetStageMetersPerUnit(stage);
+            if (std::abs(meters_per_unit - 1.0) < 1e-9) {
+                return;
+            }
+
+            glm::mat4 scale_matrix(1.0f);
+            const float scale = static_cast<float>(meters_per_unit);
+            scale_matrix[0][0] = scale;
+            scale_matrix[1][1] = scale;
+            scale_matrix[2][2] = scale;
+
+            LOG_INFO("Applying USD stage metersPerUnit {} as a uniform import scale", meters_per_unit);
+            lfs::core::transform(splat_data, scale_matrix);
         }
 
         std::vector<float> make_identity_quaternions(const size_t count) {
@@ -513,6 +594,7 @@ namespace lfs::io {
                 SCENE_SCALE);
 
             maybe_apply_world_transform(prim, splat_data);
+            maybe_apply_stage_linear_units(prim.GetStage(), splat_data);
             return splat_data;
         }
     } // namespace
@@ -530,16 +612,16 @@ namespace lfs::io {
         const auto particlefield_prim = find_particlefield_prim(stage);
         if (!particlefield_prim) {
             return std::unexpected(std::format(
-                "No OpenUSD ParticleField prim found in {}. Prim types in stage: {}",
+                "{}: {}",
                 lfs::core::path_to_utf8(filepath),
-                collect_stage_prim_types(stage)));
+                particlefield_prim.error()));
         }
 
         LOG_INFO("Found USD gaussian prim: {} ({})",
-                 particlefield_prim.GetPath().GetString(),
-                 particlefield_prim.GetTypeName().GetString());
+                 particlefield_prim->GetPath().GetString(),
+                 particlefield_prim->GetTypeName().GetString());
 
-        return load_particlefield_prim(particlefield_prim);
+        return load_particlefield_prim(*particlefield_prim);
     }
 
     Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options) {

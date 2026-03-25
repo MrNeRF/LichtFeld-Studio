@@ -61,7 +61,7 @@ namespace {
             ::args::ArgumentParser parser(
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
-                "convert -- Convert between .ply, .sog, .spz, .html\n"
+                "convert -- Convert between .ply, .sog, .spz, .usd/.usda/.usdc, .html\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -83,7 +83,7 @@ namespace {
             ::args::Group mode_group(parser, "MODE SELECTION:");
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
-            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from checkpoint file", {"resume"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -95,7 +95,7 @@ namespace {
             ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data", {'d', "data-path"});
             ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Path to output", {'o', "output-path"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
-            ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .resume)", {"init"});
+            ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -731,8 +731,8 @@ namespace {
         "  LichtFeld-Studio convert ./splats/ -f sog --sh-degree 2\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .spz, .resume (checkpoint)\n"
-        "  Output: .ply, .sog, .spz, .html\n"
+        "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
+        "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -745,7 +745,7 @@ namespace {
             return OutputFormat::SPZ;
         if (str == "html" || str == ".html")
             return OutputFormat::HTML;
-        if (str == "usd" || str == ".usd" || str == ".usda" || str == ".usdc")
+        if (str == "usd" || str == ".usd" || str == "usda" || str == ".usda" || str == "usdc" || str == ".usdc")
             return OutputFormat::USD;
         return std::nullopt;
     }
@@ -864,7 +864,7 @@ Commands:
         if (const auto fmt = parseFormat(::args::get(format))) {
             params.format = *fmt;
         } else {
-            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd", ::args::get(format)));
+            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc", ::args::get(format)));
         }
     } else if (!params.output_path.empty()) {
         if (const auto fmt = parseFormat(params.output_path.extension().string())) {

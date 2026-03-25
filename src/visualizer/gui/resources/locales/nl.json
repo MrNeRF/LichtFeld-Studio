@@ -1069,7 +1069,7 @@
   },
   "file_association": {
     "title": "Instellen als standaardtoepassing",
-    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat-bestanden (.ply, .sog, .spz)?",
+    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat-bestanden (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz)?",
     "yes": "Ja",
     "not_now": "Niet nu",
     "dont_ask": "Niet meer vragen",

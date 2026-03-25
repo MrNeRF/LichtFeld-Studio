@@ -1069,7 +1069,7 @@
   },
   "file_association": {
     "title": "Set as Default Application",
-    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz)?",
+    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz)?",
     "yes": "Yes",
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",

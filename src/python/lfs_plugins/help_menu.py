@@ -18,7 +18,7 @@ class GettingStartedOperator(Operator):
 
 class SetDefaultAppOperator(Operator):
     label = "file_association.menu_register"
-    description = "Register as default viewer for .ply, .sog, .spz files"
+    description = "Register as default viewer for splat files (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz)"
 
     def execute(self, context) -> set:
         lf.ui.register_file_associations()

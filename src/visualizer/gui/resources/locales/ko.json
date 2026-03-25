@@ -1069,7 +1069,7 @@
   },
   "file_association": {
     "title": "기본 응용 프로그램으로 설정",
-    "message": "LichtFeld Studio를 스플랫 파일(.ply, .sog, .spz)의 기본 응용 프로그램으로 설정하시겠습니까?",
+    "message": "LichtFeld Studio를 스플랫 파일(.ply, .sog, .spz, .usd, .usda, .usdc, .usdz)의 기본 응용 프로그램으로 설정하시겠습니까?",
     "yes": "예",
     "not_now": "나중에",
     "dont_ask": "다시 묻지 않기",

@@ -1069,7 +1069,7 @@
   },
   "file_association": {
     "title": "既定のアプリケーションに設定",
-    "message": "LichtFeld Studioをスプラットファイル（.ply、.sog、.spz）の既定のアプリケーションに設定しますか？",
+    "message": "LichtFeld Studioをスプラットファイル（.ply、.sog、.spz、.usd、.usda、.usdc、.usdz）の既定のアプリケーションに設定しますか？",
     "yes": "はい",
     "not_now": "後で",
     "dont_ask": "今後表示しない",

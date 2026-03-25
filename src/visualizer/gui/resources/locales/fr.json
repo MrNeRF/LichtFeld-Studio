@@ -1069,7 +1069,7 @@
   },
   "file_association": {
     "title": "Définir comme application par défaut",
-    "message": "Souhaitez-vous définir LichtFeld Studio comme application par défaut pour les fichiers splat (.ply, .sog, .spz) ?",
+    "message": "Souhaitez-vous définir LichtFeld Studio comme application par défaut pour les fichiers splat (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz) ?",
     "yes": "Oui",
     "not_now": "Pas maintenant",
     "dont_ask": "Ne plus demander",

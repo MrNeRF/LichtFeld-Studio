@@ -1069,7 +1069,7 @@
   },
   "file_association": {
     "title": "设为默认应用程序",
-    "message": "是否将 LichtFeld Studio 设为 Splat 文件（.ply、.sog、.spz）的默认应用程序？",
+    "message": "是否将 LichtFeld Studio 设为 Splat 文件（.ply、.sog、.spz、.usd、.usda、.usdc、.usdz）的默认应用程序？",
     "yes": "是",
     "not_now": "暂时不",
     "dont_ask": "不再询问",

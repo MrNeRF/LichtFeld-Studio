@@ -4662,19 +4662,19 @@ namespace lfs::python {
             "register_file_associations", []() -> bool {
                 return lfs::vis::gui::registerFileAssociations();
             },
-            "Register LichtFeld Studio as default handler for .ply, .sog, .spz files (Windows only)");
+            "Register LichtFeld Studio as default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz files (Windows only)");
 
         m.def(
             "unregister_file_associations", []() -> bool {
                 return lfs::vis::gui::unregisterFileAssociations();
             },
-            "Remove LichtFeld Studio file associations for .ply, .sog, .spz (Windows only)");
+            "Remove LichtFeld Studio file associations for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)");
 
         m.def(
             "are_file_associations_registered", []() -> bool {
                 return lfs::vis::gui::areFileAssociationsRegistered();
             },
-            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz (Windows only)");
+            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)");
 
         m.def("get_pivot_mode", &get_pivot_mode, "Get pivot mode (0=Origin, 1=Bounds)");
 

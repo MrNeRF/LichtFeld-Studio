@@ -24,10 +24,14 @@ namespace lfs::vis::gui {
             const wchar_t* friendly_name;
         };
 
-        constexpr std::array<ExtInfo, 3> EXTENSIONS = {{
+        constexpr std::array<ExtInfo, 7> EXTENSIONS = {{
             {L".ply", L"LichtFeldStudio.ply", L"PLY Point Cloud"},
             {L".sog", L"LichtFeldStudio.sog", L"SOG Gaussian Splat"},
             {L".spz", L"LichtFeldStudio.spz", L"SPZ Gaussian Splat"},
+            {L".usd", L"LichtFeldStudio.usd", L"USD Gaussian Splat"},
+            {L".usda", L"LichtFeldStudio.usda", L"USDA Gaussian Splat"},
+            {L".usdc", L"LichtFeldStudio.usdc", L"USDC Gaussian Splat"},
+            {L".usdz", L"LichtFeldStudio.usdz", L"USDZ Gaussian Splat"},
         }};
 
         bool setRegString(HKEY parent, const std::wstring& subkey, const std::wstring& value_name,
