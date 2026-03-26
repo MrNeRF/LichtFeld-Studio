@@ -37,10 +37,8 @@ namespace lfs::vis::tools {
         [[nodiscard]] bool isDepthFilterEnabled() const { return depth_filter_enabled_; }
         void setDepthFilterEnabled(bool enabled);
         void toggleDepthFilter() { setDepthFilterEnabled(!depth_filter_enabled_); }
-        void resetDepthFilter();
-        void adjustDepthNear(float scale);
         void adjustDepthFar(float scale);
-        void adjustDepthWidth(float scale);
+        void syncDepthFilterToCamera();
 
         // Crop filter (use scene crop box/ellipsoid as selection filter)
         [[nodiscard]] bool isCropFilterEnabled() const { return crop_filter_enabled_; }
@@ -72,8 +70,6 @@ namespace lfs::vis::tools {
 
         static constexpr float DEPTH_MIN = 0.01f;
         static constexpr float DEPTH_MAX = 1000.0f;
-        static constexpr float WIDTH_MIN = 0.1f;
-        static constexpr float WIDTH_MAX = 10000.0f;
         static constexpr float DEFAULT_DEPTH_FAR = 5.3f;
         static constexpr float DEFAULT_FRUSTUM_HALF_WIDTH = 1.35f;
 

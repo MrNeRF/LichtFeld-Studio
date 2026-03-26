@@ -108,31 +108,6 @@ namespace lfs::vis::tools {
         applySelectionFilterSettings(*tool_context_);
     }
 
-    void SelectionTool::resetDepthFilter() {
-        depth_near_ = 0.0f;
-        depth_far_ = DEFAULT_DEPTH_FAR;
-        frustum_half_width_ = DEFAULT_FRUSTUM_HALF_WIDTH;
-        if (tool_context_ && isEnabled() && depth_filter_enabled_) {
-            applySelectionFilterSettings(*tool_context_);
-        }
-    }
-
-    void SelectionTool::adjustDepthNear(const float scale) {
-        if (scale > 1.0f) {
-            const float current = (depth_near_ > 0.0f) ? depth_near_ : DEPTH_MIN;
-            depth_near_ = current * scale;
-        } else if (depth_near_ <= DEPTH_MIN) {
-            depth_near_ = 0.0f;
-        } else {
-            depth_near_ *= scale;
-        }
-
-        depth_near_ = std::clamp(depth_near_, 0.0f, std::max(0.0f, depth_far_ - DEPTH_MIN));
-        if (tool_context_ && isEnabled() && depth_filter_enabled_) {
-            applySelectionFilterSettings(*tool_context_);
-        }
-    }
-
     void SelectionTool::adjustDepthFar(const float scale) {
         depth_far_ = std::clamp(depth_far_ * scale, std::max(DEPTH_MIN, depth_near_ + DEPTH_MIN), DEPTH_MAX);
         if (tool_context_ && isEnabled() && depth_filter_enabled_) {
@@ -140,11 +115,12 @@ namespace lfs::vis::tools {
         }
     }
 
-    void SelectionTool::adjustDepthWidth(const float scale) {
-        frustum_half_width_ = std::clamp(frustum_half_width_ * scale, WIDTH_MIN * 0.5f, WIDTH_MAX * 0.5f);
-        if (tool_context_ && isEnabled() && depth_filter_enabled_) {
-            applySelectionFilterSettings(*tool_context_);
+    void SelectionTool::syncDepthFilterToCamera() {
+        if (!tool_context_ || !isEnabled() || !depth_filter_enabled_) {
+            return;
         }
+
+        applySelectionFilterSettings(*tool_context_);
     }
 
     void SelectionTool::setCropFilterEnabled(const bool enabled) {
@@ -172,7 +148,7 @@ namespace lfs::vis::tools {
                            t.overlay_text_u32(), info_text);
         draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {text_x, text_y + 18.0f},
                            t.overlay_hint_u32(),
-                           "Ctrl+Alt+D toggle | Alt+Shift+Scroll near | Alt+Scroll far | Ctrl+Alt+Scroll size");
+                           "X toggle | Alt+Scroll depth");
     }
 
     void SelectionTool::applySelectionFilterSettings(const ToolContext& ctx) const {

@@ -49,6 +49,9 @@ ACTION_NAMES = (
     "SELECT_MODE_LASSO",
     "SELECT_MODE_RINGS",
     "TOGGLE_DEPTH_MODE",
+    "TOGGLE_SELECTION_DEPTH_FILTER",
+    "TOGGLE_SELECTION_CROP_FILTER",
+    "DEPTH_ADJUST_NEAR",
     "DEPTH_ADJUST_FAR",
     "DEPTH_ADJUST_SIDE",
     "CYCLE_BRUSH_MODE",
@@ -243,3 +246,23 @@ def test_input_settings_language_change_rebuilds_and_dirties_all(input_settings_
     assert panel._handle.records["profiles"][0]["label"] == "Default"
     assert panel._handle.records["tool_modes"][0]["label"] == "Mode GLOBAL"
     assert panel._handle.records["binding_rows"][0]["is_section"] is True
+
+
+def test_input_settings_selection_mode_shows_only_streamlined_depth_actions(input_settings_module):
+    module, _state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+
+    panel._rebuild_binding_rows(module.lf.keymap.ToolMode.SELECTION)
+
+    action_ids = {
+        row["action_id"]
+        for row in panel._handle.records["binding_rows"]
+        if not row["is_section"]
+    }
+
+    assert str(module.lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER.value) in action_ids
+    assert str(module.lf.keymap.Action.DEPTH_ADJUST_FAR.value) in action_ids
+    assert str(module.lf.keymap.Action.TOGGLE_DEPTH_MODE.value) not in action_ids
+    assert str(module.lf.keymap.Action.DEPTH_ADJUST_NEAR.value) not in action_ids
+    assert str(module.lf.keymap.Action.DEPTH_ADJUST_SIDE.value) not in action_ids
