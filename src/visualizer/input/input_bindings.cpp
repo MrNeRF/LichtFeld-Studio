@@ -20,7 +20,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 6; // Version 6 collapses depth-box wheel controls to a single Alt+Scroll adjustment.
+        constexpr int PROFILE_VERSION = 5; // Version 5 collapses depth-box wheel controls to a single Alt+Scroll adjustment.
 
         [[nodiscard]] bool isSelectionDepthAction(const Action action) {
             switch (action) {

@@ -54,7 +54,7 @@ namespace lfs::vis::input {
         // View
         TOGGLE_SPLIT_VIEW,
         TOGGLE_GT_COMPARISON,
-        TOGGLE_DEPTH_MODE,
+        TOGGLE_DEPTH_MODE, // Deprecated: migrated to TOGGLE_SELECTION_DEPTH_FILTER on load
         CYCLE_PLY,
         // Editing
         DELETE_SELECTED, // Delete selected Gaussians (selection tool)
@@ -68,7 +68,7 @@ namespace lfs::vis::input {
         PASTE_SELECTION,
         // Depth filter
         DEPTH_ADJUST_FAR,
-        DEPTH_ADJUST_SIDE,
+        DEPTH_ADJUST_SIDE, // Deprecated: migrated to DEPTH_ADJUST_FAR on load
         TOGGLE_SELECTION_DEPTH_FILTER,
         TOGGLE_SELECTION_CROP_FILTER,
         // Tools
@@ -109,8 +109,7 @@ namespace lfs::vis::input {
         TOOL_ALIGN,
         // Pie menu
         PIE_MENU,
-        // Selection depth filter
-        DEPTH_ADJUST_NEAR,
+        DEPTH_ADJUST_NEAR, // Deprecated: migrated to DEPTH_ADJUST_FAR on load
     };
 
     enum class ShortcutScope : uint8_t {

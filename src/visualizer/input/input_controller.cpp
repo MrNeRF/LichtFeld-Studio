@@ -898,9 +898,7 @@ namespace lfs::vis {
         const int mods = getModifierKeys();
         const input::Action scroll_action = bindings_.getActionForScroll(getCurrentToolMode(), mods);
         if (selection_tool_ && selection_tool_->isEnabled()) {
-            if ((scroll_action == input::Action::DEPTH_ADJUST_NEAR ||
-                 scroll_action == input::Action::DEPTH_ADJUST_FAR ||
-                 scroll_action == input::Action::DEPTH_ADJUST_SIDE) &&
+            if (scroll_action == input::Action::DEPTH_ADJUST_FAR &&
                 selection_tool_->isDepthFilterEnabled()) {
                 selection_tool_->adjustDepthFar((yoff > 0) ? 1.1f : 0.9f);
                 return;
@@ -1103,7 +1101,6 @@ namespace lfs::vis {
                 }
                 return;
 
-            case input::Action::TOGGLE_DEPTH_MODE:
             case input::Action::TOGGLE_SELECTION_DEPTH_FILTER:
                 if (selection_tool_ && selection_tool_->isEnabled()) {
                     selection_tool_->toggleDepthFilter();

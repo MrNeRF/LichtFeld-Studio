@@ -91,6 +91,7 @@ LOCALE_KEY = {
     "point_cloud_mode": "main_panel.point_cloud_mode",
     "desaturate_unselected": "main_panel.desaturate_unselected",
     "desaturate_cropping": "main_panel.desaturate_cropping",
+    "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
     "equirectangular": "main_panel.equirectangular",
     "gut": "main_panel.gut_mode",
     "mip_filter": "main_panel.mip_filter",
