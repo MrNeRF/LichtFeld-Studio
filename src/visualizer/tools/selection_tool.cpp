@@ -94,6 +94,7 @@ namespace lfs::vis::tools {
         }
 
         if (enabled) {
+            syncDepthFilterRenderMode(*tool_context_);
             applySelectionFilterSettings(*tool_context_);
         } else {
             clearSelectionRenderState(*tool_context_);
@@ -101,10 +102,16 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::setDepthFilterEnabled(const bool enabled) {
+        if (depth_filter_enabled_ == enabled) {
+            return;
+        }
+
         depth_filter_enabled_ = enabled;
         if (!tool_context_ || !isEnabled()) {
             return;
         }
+
+        syncDepthFilterRenderMode(*tool_context_);
         applySelectionFilterSettings(*tool_context_);
     }
 
@@ -149,6 +156,40 @@ namespace lfs::vis::tools {
         draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {text_x, text_y + 18.0f},
                            t.overlay_hint_u32(),
                            "X toggle | Alt+Scroll depth");
+    }
+
+    void SelectionTool::syncDepthFilterRenderMode(const ToolContext& ctx) {
+        auto* const rm = ctx.getRenderingManager();
+        if (!rm) {
+            return;
+        }
+
+        auto settings = rm->getSettings();
+
+        if (depth_filter_enabled_) {
+            if (!depth_filter_render_mode_snapshot_.valid) {
+                depth_filter_render_mode_snapshot_.valid = true;
+                depth_filter_render_mode_snapshot_.point_cloud_mode = settings.point_cloud_mode;
+                depth_filter_render_mode_snapshot_.show_rings = settings.show_rings;
+                depth_filter_render_mode_snapshot_.show_center_markers = settings.show_center_markers;
+            }
+
+            settings.point_cloud_mode = false;
+            settings.show_rings = false;
+            settings.show_center_markers = true;
+            rm->updateSettings(settings);
+            return;
+        }
+
+        if (!depth_filter_render_mode_snapshot_.valid) {
+            return;
+        }
+
+        settings.point_cloud_mode = depth_filter_render_mode_snapshot_.point_cloud_mode;
+        settings.show_rings = depth_filter_render_mode_snapshot_.show_rings;
+        settings.show_center_markers = depth_filter_render_mode_snapshot_.show_center_markers;
+        depth_filter_render_mode_snapshot_.valid = false;
+        rm->updateSettings(settings);
     }
 
     void SelectionTool::applySelectionFilterSettings(const ToolContext& ctx) const {

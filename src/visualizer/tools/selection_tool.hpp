@@ -52,6 +52,13 @@ namespace lfs::vis::tools {
         void onEnabledChanged(bool enabled) override;
 
     private:
+        struct RenderModeSnapshot {
+            bool valid = false;
+            bool point_cloud_mode = false;
+            bool show_rings = false;
+            bool show_center_markers = false;
+        };
+
         glm::vec2 last_mouse_pos_{0.0f};
         float brush_radius_ = 20.0f;
         const ToolContext* tool_context_ = nullptr;
@@ -64,6 +71,7 @@ namespace lfs::vis::tools {
         float depth_near_ = 0.0f;
         float depth_far_ = DEFAULT_DEPTH_FAR;
         float frustum_half_width_ = DEFAULT_FRUSTUM_HALF_WIDTH;
+        RenderModeSnapshot depth_filter_render_mode_snapshot_;
 
         // Crop filter
         bool crop_filter_enabled_ = false;
@@ -76,6 +84,7 @@ namespace lfs::vis::tools {
         void drawDepthFrustum(const ToolContext& ctx) const;
         void applySelectionFilterSettings(const ToolContext& ctx) const;
         void clearSelectionRenderState(const ToolContext& ctx) const;
+        void syncDepthFilterRenderMode(const ToolContext& ctx);
 
         // Input bindings
         const input::InputBindings* input_bindings_ = nullptr;
