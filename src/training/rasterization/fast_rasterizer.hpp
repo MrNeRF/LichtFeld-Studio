@@ -75,7 +75,8 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& grad_alpha_extra = {},
-        const lfs::core::Tensor& pixel_error_map = {});
+        const lfs::core::Tensor& pixel_error_map = {},
+        DensificationType densification_type = DensificationType::None);
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

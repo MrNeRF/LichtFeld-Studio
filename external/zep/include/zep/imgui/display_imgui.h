@@ -42,7 +42,6 @@ namespace Zep {
         virtual NVec2f GetTextSize(const uint8_t* pBegin, const uint8_t* pEnd = nullptr) const override {
             // This is the code from ImGui internals; we can't call GetTextSize, because it doesn't return the correct 'advance' formula, which we
             // need as we draw one character at a time...
-            const float font_size = m_pFont->FontSize;
             ImVec2 text_size = m_pFont->CalcTextSizeA(float(GetPixelHeight()), FLT_MAX, FLT_MAX, (const char*)pBegin, (const char*)pEnd, NULL);
             if (text_size.x == 0.0) {
                 // Make invalid characters a default fixed_size

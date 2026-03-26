@@ -60,6 +60,98 @@ namespace {
         return downscale_resample_nch(src_rgb, w, h, nw, nh, 3, nthreads);
     }
 
+    lfs::core::Tensor normalize_image_for_save(lfs::core::Tensor image) {
+        if (image.ndim() == 4)
+            image = image.squeeze(0); // [B,C,H,W] -> [C,H,W]
+        if (image.ndim() == 3 && image.shape()[0] <= 4)
+            image = image.permute({1, 2, 0}); // [C,H,W] -> [H,W,C]
+        image = image.to(lfs::core::Device::CPU).to(lfs::core::DataType::Float32).contiguous();
+        return image;
+    }
+
+    lfs::core::Tensor prepare_image_for_write(lfs::core::Tensor image) {
+        auto normalized = normalize_image_for_save(std::move(image));
+        return (normalized.clamp(0, 1) * 255.0f)
+            .to(lfs::core::DataType::UInt8)
+            .to(lfs::core::Device::CPU)
+            .contiguous();
+    }
+
+    lfs::core::Tensor prepare_image_grid_for_write(const std::vector<lfs::core::Tensor>& images,
+                                                   bool horizontal,
+                                                   int separator_width) {
+        if (images.empty())
+            throw std::runtime_error("No images provided");
+        if (images.size() == 1)
+            return prepare_image_for_write(images[0]);
+
+        std::vector<lfs::core::Tensor> xs;
+        xs.reserve(images.size());
+        for (const auto& image : images)
+            xs.push_back(prepare_image_for_write(image));
+
+        lfs::core::Tensor sep;
+        if (separator_width > 0) {
+            const auto& ref = xs[0];
+            const auto sep_shape = horizontal
+                                       ? lfs::core::TensorShape({ref.shape()[0], static_cast<size_t>(separator_width), ref.shape()[2]})
+                                       : lfs::core::TensorShape({static_cast<size_t>(separator_width), ref.shape()[1], ref.shape()[2]});
+            sep = lfs::core::Tensor::full(sep_shape, 255.0f, ref.device(), ref.dtype());
+        }
+
+        lfs::core::Tensor combo = xs[0];
+        for (size_t i = 1; i < xs.size(); ++i) {
+            combo = (separator_width > 0)
+                        ? lfs::core::Tensor::cat({combo, sep, xs[i]}, horizontal ? 1 : 0)
+                        : lfs::core::Tensor::cat({combo, xs[i]}, horizontal ? 1 : 0);
+        }
+        return combo.contiguous();
+    }
+
+    void write_prepared_image(const std::filesystem::path& path, const lfs::core::Tensor& image) {
+        init_oiio();
+        if (image.ndim() != 3)
+            throw std::runtime_error("save_image: expected a 3D HxWxC tensor");
+        if (image.device() != lfs::core::Device::CPU)
+            throw std::runtime_error("save_image: expected CPU tensor");
+        if (image.dtype() != lfs::core::DataType::UInt8)
+            throw std::runtime_error("save_image: expected uint8 tensor");
+
+        const auto prepared = image.contiguous();
+        const int height = static_cast<int>(prepared.shape()[0]);
+        const int width = static_cast<int>(prepared.shape()[1]);
+        int channels = static_cast<int>(prepared.shape()[2]);
+        if (channels < 1 || channels > 4)
+            throw std::runtime_error("save_image: channels must be in [1..4]");
+
+        const std::string path_utf8 = lfs::core::path_to_utf8(path);
+        LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
+
+        auto out = OIIO::ImageOutput::create(path_utf8);
+        if (!out) {
+            throw std::runtime_error("ImageOutput::create failed for " + path_utf8 + " : " + OIIO::geterror());
+        }
+
+        OIIO::ImageSpec spec(width, height, channels, OIIO::TypeDesc::UINT8);
+
+        auto ext = path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (ext == ".jpg" || ext == ".jpeg")
+            spec.attribute("CompressionQuality", 95);
+
+        if (!out->open(path_utf8, spec)) {
+            auto e = out->geterror();
+            throw std::runtime_error("open('" + path_utf8 + "') failed: " + (e.empty() ? OIIO::geterror() : e));
+        }
+
+        if (!out->write_image(OIIO::TypeDesc::UINT8, prepared.ptr<uint8_t>())) {
+            auto e = out->geterror();
+            out->close();
+            throw std::runtime_error("write_image failed: " + (e.empty() ? OIIO::geterror() : e));
+        }
+        out->close();
+    }
+
 } // namespace
 
 namespace lfs::core {
@@ -397,52 +489,7 @@ namespace lfs::core {
     }
 
     void save_image(const std::filesystem::path& path, lfs::core::Tensor image) {
-        init_oiio();
-
-        // Normalize to HxWxC, uint8 on CPU
-        image = image.clone().to(lfs::core::Device::CPU).to(lfs::core::DataType::Float32);
-        if (image.ndim() == 4)
-            image = image.squeeze(0); // [B,C,H,W] -> [C,H,W]
-        if (image.ndim() == 3 && image.shape()[0] <= 4)
-            image = image.permute({1, 2, 0}); // [C,H,W]->[H,W,C]
-        image = image.contiguous();
-
-        const int height = (int)image.shape()[0];
-        const int width = (int)image.shape()[1];
-        int channels = (int)image.shape()[2];
-        if (channels < 1 || channels > 4)
-            throw std::runtime_error("save_image: channels must be in [1..4]");
-
-        const std::string path_utf8 = lfs::core::path_to_utf8(path);
-        LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
-
-        auto img_uint8 = (image.clamp(0, 1) * 255.0f).to(lfs::core::DataType::UInt8).contiguous();
-
-        // Prepare OIIO output
-        auto out = OIIO::ImageOutput::create(path_utf8);
-        if (!out) {
-            throw std::runtime_error("ImageOutput::create failed for " + path_utf8 + " : " + OIIO::geterror());
-        }
-
-        OIIO::ImageSpec spec(width, height, channels, OIIO::TypeDesc::UINT8);
-
-        // Set JPEG quality if needed
-        auto ext = path.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
-        if (ext == ".jpg" || ext == ".jpeg")
-            spec.attribute("CompressionQuality", 95);
-
-        if (!out->open(path_utf8, spec)) {
-            auto e = out->geterror();
-            throw std::runtime_error("open('" + path_utf8 + "') failed: " + (e.empty() ? OIIO::geterror() : e));
-        }
-
-        if (!out->write_image(OIIO::TypeDesc::UINT8, img_uint8.ptr<uint8_t>())) {
-            auto e = out->geterror();
-            out->close();
-            throw std::runtime_error("write_image failed: " + (e.empty() ? OIIO::geterror() : e));
-        }
-        out->close();
+        write_prepared_image(path, prepare_image_for_write(std::move(image)));
     }
 
     void save_image(const std::filesystem::path& path,
@@ -451,41 +498,7 @@ namespace lfs::core {
                     int separator_width) {
         if (images.empty())
             throw std::runtime_error("No images provided");
-        if (images.size() == 1) {
-            lfs::core::save_image(path, images[0]);
-            return;
-        }
-
-        // Convert all images to HWC float on CPU
-        std::vector<lfs::core::Tensor> xs;
-        xs.reserve(images.size());
-        for (size_t idx = 0; idx < images.size(); ++idx) {
-            auto img = images[idx].clone().to(lfs::core::Device::CPU).to(lfs::core::DataType::Float32);
-            if (img.ndim() == 4)
-                img = img.squeeze(0);
-            if (img.ndim() == 3 && img.shape()[0] <= 4)
-                img = img.permute({1, 2, 0});
-            xs.push_back(img.contiguous());
-        }
-
-        // Separator (white)
-        lfs::core::Tensor sep;
-        if (separator_width > 0) {
-            const auto& ref = xs[0];
-            sep = horizontal
-                      ? lfs::core::Tensor::ones(lfs::core::TensorShape({ref.shape()[0], (size_t)separator_width, ref.shape()[2]}), ref.device(), ref.dtype())
-                      : lfs::core::Tensor::ones(lfs::core::TensorShape({(size_t)separator_width, ref.shape()[1], ref.shape()[2]}), ref.device(), ref.dtype());
-        }
-
-        // Concatenate
-        lfs::core::Tensor combo = xs[0];
-        for (size_t i = 1; i < xs.size(); ++i) {
-            combo = (separator_width > 0)
-                        ? lfs::core::Tensor::cat({combo, sep, xs[i]}, horizontal ? 1 : 0)
-                        : lfs::core::Tensor::cat({combo, xs[i]}, horizontal ? 1 : 0);
-        }
-
-        lfs::core::save_image(path, combo);
+        write_prepared_image(path, prepare_image_grid_for_write(images, horizontal, separator_width));
     }
 
     void free_image(unsigned char* img) { std::free(img); }
@@ -562,21 +575,47 @@ namespace lfs::core {
 
 namespace lfs::core::image_io {
 
+    namespace {
+        std::atomic<BatchImageSaver*> g_batch_image_saver{nullptr};
+    }
+
     BatchImageSaver& BatchImageSaver::instance() {
         static BatchImageSaver instance;
         return instance;
     }
 
-    BatchImageSaver::BatchImageSaver(size_t num_workers)
-        : num_workers_(std::min(num_workers, std::min(size_t(8), size_t(std::thread::hardware_concurrency())))) {
+    BatchImageSaver* BatchImageSaver::try_instance() {
+        return g_batch_image_saver.load(std::memory_order_acquire);
+    }
 
-        LOG_INFO("[BatchImageSaver] Starting with {} worker threads", num_workers_);
+    void BatchImageSaver::wait_all_if_initialized() {
+        if (auto* saver = try_instance()) {
+            saver->wait_all();
+        }
+    }
+
+    size_t BatchImageSaver::pending_count_if_initialized() {
+        if (auto* saver = try_instance()) {
+            return saver->pending_count();
+        }
+        return 0;
+    }
+
+    BatchImageSaver::BatchImageSaver(size_t num_workers)
+        : num_workers_(std::max(size_t(1), std::min(num_workers, std::min(size_t(8), size_t(std::thread::hardware_concurrency()))))),
+          max_pending_tasks_(num_workers_) {
+
+        g_batch_image_saver.store(this, std::memory_order_release);
+        LOG_INFO("[BatchImageSaver] Starting with {} worker threads (max pending tasks: {})", num_workers_, max_pending_tasks_);
         for (size_t i = 0; i < num_workers_; ++i) {
             workers_.emplace_back(&BatchImageSaver::worker_thread, this);
         }
     }
 
-    BatchImageSaver::~BatchImageSaver() { shutdown(); }
+    BatchImageSaver::~BatchImageSaver() {
+        shutdown();
+        g_batch_image_saver.store(nullptr, std::memory_order_release);
+    }
 
     void BatchImageSaver::shutdown() {
         {
@@ -587,6 +626,7 @@ namespace lfs::core::image_io {
             LOG_INFO("[BatchImageSaver] Shutting down...");
         }
         cv_.notify_all();
+        cv_space_.notify_all();
 
         for (auto& w : workers_)
             if (w.joinable())
@@ -606,18 +646,8 @@ namespace lfs::core::image_io {
         }
         SaveTask t;
         t.path = path;
-        t.image = image.clone();
-        t.is_multi = false;
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            if (stop_) {
-                lfs::core::save_image(path, image);
-                return;
-            }
-            task_queue_.push(std::move(t));
-            active_tasks_++;
-        }
-        cv_.notify_one();
+        t.images.push_back(prepare_image_for_write(std::move(image)));
+        enqueue_task(std::move(t));
     }
 
     void BatchImageSaver::queue_save_multiple(const std::filesystem::path& path,
@@ -630,23 +660,8 @@ namespace lfs::core::image_io {
         }
         SaveTask t;
         t.path = path;
-        t.images.reserve(images.size());
-        for (const auto& img : images)
-            t.images.push_back(img.clone());
-        t.is_multi = true;
-        t.horizontal = horizontal;
-        t.separator_width = separator_width;
-
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            if (stop_) {
-                lfs::core::save_image(path, images, horizontal, separator_width);
-                return;
-            }
-            task_queue_.push(std::move(t));
-            active_tasks_++;
-        }
-        cv_.notify_one();
+        t.images.push_back(prepare_image_grid_for_write(images, horizontal, separator_width));
+        enqueue_task(std::move(t));
     }
 
     void BatchImageSaver::wait_all() {
@@ -677,19 +692,34 @@ namespace lfs::core::image_io {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
                 active_tasks_--;
             }
+            cv_space_.notify_all();
             cv_finished_.notify_all();
         }
     }
 
     void BatchImageSaver::process_task(const SaveTask& t) {
         try {
-            if (t.is_multi) {
-                lfs::core::save_image(t.path, t.images, t.horizontal, t.separator_width);
-            } else {
-                lfs::core::save_image(t.path, t.image);
-            }
+            assert(!t.images.empty());
+            write_prepared_image(t.path, t.images[0]);
         } catch (const std::exception& e) {
             LOG_ERROR("[BatchImageSaver] Error saving {}: {}", lfs::core::path_to_utf8(t.path), e.what());
         }
+    }
+
+    void BatchImageSaver::enqueue_task(SaveTask task) {
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            cv_space_.wait(lock, [this] {
+                return stop_ || (task_queue_.size() + active_tasks_) < max_pending_tasks_;
+            });
+            if (stop_) {
+                assert(!task.images.empty());
+                write_prepared_image(task.path, task.images[0]);
+                return;
+            }
+            task_queue_.push(std::move(task));
+            active_tasks_++;
+        }
+        cv_.notify_one();
     }
 } // namespace lfs::core::image_io

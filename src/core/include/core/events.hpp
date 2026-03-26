@@ -21,7 +21,8 @@ namespace lfs::core {
     enum class ExportFormat { PLY,
                               SOG,
                               SPZ,
-                              HTML_VIEWER };
+                              HTML_VIEWER,
+                              USD };
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \

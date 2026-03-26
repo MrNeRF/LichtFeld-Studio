@@ -356,6 +356,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* FORMAT_PLY_STANDARD = "export.format.ply_standard";
         inline constexpr const char* FORMAT_SOG_SUPERSPLAT = "export.format.sog_supersplat";
         inline constexpr const char* FORMAT_SPZ_NIANTIC = "export.format.spz_niantic";
+        inline constexpr const char* FORMAT_USD_OPENUSD = "export.format.usd_openusd";
         inline constexpr const char* FORMAT_HTML_VIEWER = "export.format.html_viewer";
         inline constexpr const char* SELECT_MODELS = "export.select_models";
         inline constexpr const char* ALL = "export.all";
@@ -594,6 +595,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NO_SAVE_STEPS = "training_panel.no_save_steps";
         inline constexpr const char* SPARSITY = "training_panel.sparsity";
         inline constexpr const char* PRUNING_GROWING = "training_panel.pruning_growing";
+        inline constexpr const char* LFS_PARAMS = "training_panel.lfs_params";
     } // namespace TrainingPanel
 
     namespace Tooltip {

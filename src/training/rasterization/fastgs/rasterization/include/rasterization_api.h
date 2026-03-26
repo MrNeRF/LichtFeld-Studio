@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "rasterization_config.h"
 #include <cstddef> // Added for size_t
 #include <cstdint>
 #include <tuple>
@@ -107,7 +108,8 @@ namespace fast_lfs::rasterization {
         float focal_y,
         float center_x,
         float center_y,
-        bool mip_filter = false);
+        bool mip_filter = false,
+        DensificationType densification_type = DensificationType::None);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

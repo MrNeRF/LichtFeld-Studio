@@ -329,7 +329,7 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::vector<DialogFilter> pointCloudFilters() {
-            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".spz"})};
+            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".spz", ".usd", ".usda", ".usdc", ".usdz"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> meshFilters() {
@@ -459,6 +459,17 @@ namespace lfs::vis::gui {
                                       defaultPath,
                                       defaultName,
                                       ".spz"),
+                  result);
+        return result;
+    }
+
+    std::filesystem::path SaveUsdFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("USD Files", ".usd"),
+                                      defaultPath,
+                                      defaultName,
+                                      ".usd"),
                   result);
         return result;
     }

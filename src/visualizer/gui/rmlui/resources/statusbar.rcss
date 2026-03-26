@@ -112,6 +112,16 @@ body {
     margin-right: 4dp;
 }
 
+#gpu-model {
+    display: block;
+    min-width: 0;
+    max-width: 220dp;
+    margin-right: 6dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 #lfs-mem {
     margin-right: 0;
 }

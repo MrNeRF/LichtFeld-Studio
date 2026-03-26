@@ -1010,6 +1010,11 @@ namespace lfs::core {
         return *arena_;
     }
 
+    RasterizerMemoryArena* GlobalArenaManager::try_get_arena() {
+        std::lock_guard<std::mutex> lock(init_mutex_);
+        return arena_.get();
+    }
+
     void GlobalArenaManager::reset() {
         std::lock_guard<std::mutex> lock(init_mutex_);
         arena_.reset();

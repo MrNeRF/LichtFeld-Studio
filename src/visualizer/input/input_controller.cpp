@@ -1373,7 +1373,8 @@ namespace lfs::vis {
                     LOG_INFO("Loading config via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
                     return;
                 }
-            } else if (ext == ".ply" || ext == ".sog" || ext == ".spz") {
+            } else if (ext == ".ply" || ext == ".sog" || ext == ".spz" ||
+                       ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
                 splat_files.push_back(filepath);
             } else if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb" ||
                        ext == ".stl" || ext == ".dae" || ext == ".3ds") {
@@ -1419,7 +1420,7 @@ namespace lfs::vis {
             }
         }
 
-        // Load splat files (PLY, SOG, or SPZ)
+        // Load splat and mesh files supported by the generic loader path.
         for (const auto& splat : splat_files) {
             cmd::LoadFile{.path = splat, .is_dataset = false}.emit();
             LOG_INFO("Loading {} via drag-and-drop: {}",
@@ -1432,7 +1433,8 @@ namespace lfs::vis {
         }
 
         if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path) {
-            static constexpr auto SUPPORTED_FORMATS = "Supported formats: .ply, .sog, .spz, .obj, .fbx, .gltf, .glb, .stl, .dae, .json, .resume, or dataset directories";
+            static constexpr auto SUPPORTED_FORMATS =
+                "Supported formats: .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .json, .resume, or dataset directories";
             LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
             state::FileDropFailed{.files = unrecognized_files, .error = SUPPORTED_FORMATS}.emit();
         }

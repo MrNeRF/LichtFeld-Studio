@@ -525,7 +525,7 @@ namespace lfs::training {
 
         // Wait for all images to be saved before computing final timing
         if (_params.optimization.enable_save_eval_images) {
-            const auto pending = lfs::core::image_io::BatchImageSaver::instance().pending_count();
+            const auto pending = lfs::core::image_io::BatchImageSaver::pending_count_if_initialized();
             if (pending > 0) {
                 lfs::core::image_io::wait_for_pending_saves();
             }

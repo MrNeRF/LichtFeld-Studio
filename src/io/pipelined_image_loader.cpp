@@ -22,7 +22,7 @@ namespace lfs::io {
     namespace {
 
         constexpr int CACHE_HASH_LENGTH = 8;
-        constexpr int DECODER_POOL_SIZE = 8;
+        constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
 
         std::string generate_cache_hash() {
             static constexpr char HEX_CHARS[] = "0123456789abcdef";
@@ -61,15 +61,25 @@ namespace lfs::io {
             return instance;
         }
 
-        NvCodecImageLoader& get_nvcodec_loader() {
+        size_t& get_nvcodec_pool_size() {
+            static size_t configured_pool_size = 0;
+            return configured_pool_size;
+        }
+
+        NvCodecImageLoader& get_nvcodec_loader(size_t decoder_pool_size) {
             std::lock_guard<std::mutex> lock(get_nvcodec_mutex());
             auto& instance = get_nvcodec_instance();
-            if (!instance) {
+            auto& configured_pool_size = get_nvcodec_pool_size();
+            const size_t requested_pool_size = decoder_pool_size > 0 ? decoder_pool_size : DEFAULT_DECODER_POOL_SIZE;
+
+            if (!instance || configured_pool_size != requested_pool_size) {
+                instance.reset();
                 NvCodecImageLoader::Options opts;
                 opts.device_id = 0;
-                opts.decoder_pool_size = DECODER_POOL_SIZE;
+                opts.decoder_pool_size = requested_pool_size;
                 opts.enable_fallback = true;
                 instance = std::make_unique<NvCodecImageLoader>(opts);
+                configured_pool_size = requested_pool_size;
             }
             return *instance;
         }
@@ -77,6 +87,7 @@ namespace lfs::io {
         void reset_nvcodec_loader() {
             std::lock_guard<std::mutex> lock(get_nvcodec_mutex());
             get_nvcodec_instance().reset();
+            get_nvcodec_pool_size() = 0;
         }
 
         bool is_nvcodec_available() {
@@ -299,7 +310,7 @@ namespace lfs::io {
                 return {};
 
             try {
-                auto& nvcodec = get_nvcodec_loader();
+                auto& nvcodec = get_nvcodec_loader(config_.decoder_pool_size);
                 auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_data, params, cached_blob_is_base);
                 if (tensor.is_valid() && tensor.numel() > 0)
                     return tensor;
@@ -332,7 +343,7 @@ namespace lfs::io {
 
             if (is_nvcodec_available()) {
                 try {
-                    auto& nvcodec = get_nvcodec_loader();
+                    auto& nvcodec = get_nvcodec_loader(config_.decoder_pool_size);
                     auto tensor = decode_cached_rgb_tensor(nvcodec, data, params, true);
                     if (tensor.is_valid() && tensor.numel() > 0)
                         return tensor;
@@ -381,7 +392,7 @@ namespace lfs::io {
 
             if (is_nvcodec_available()) {
                 try {
-                    auto& nvcodec = get_nvcodec_loader();
+                    auto& nvcodec = get_nvcodec_loader(config_.decoder_pool_size);
                     auto jpeg_bytes = nvcodec.encode_to_jpeg(decoded, config_.cache_jpeg_quality, nullptr);
                     save_to_fs_cache(base_key, jpeg_bytes);
                     auto jpeg_shared = std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes));
@@ -844,7 +855,7 @@ namespace lfs::io {
                 continue;
 
             try {
-                auto& nvcodec = get_nvcodec_loader();
+                auto& nvcodec = get_nvcodec_loader(config_.decoder_pool_size);
 
                 for (size_t i = 0; i < batch.size(); ++i) {
                     try {
@@ -969,7 +980,7 @@ namespace lfs::io {
             }
 
             try {
-                auto& nvcodec = get_nvcodec_loader();
+                auto& nvcodec = get_nvcodec_loader(config_.decoder_pool_size);
 
                 if (item.alpha_as_mask) {
                     auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(

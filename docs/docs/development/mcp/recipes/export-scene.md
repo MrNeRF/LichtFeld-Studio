@@ -4,7 +4,7 @@ sidebar_position: 5
 
 # Export Scene
 
-Use this flow when you need to export one or more scene nodes to `PLY`, `SOG`, `SPZ`, or the standalone HTML viewer.
+Use this flow when you need to export one or more scene nodes to `PLY`, `SOG`, `SPZ`, `USD`, or the standalone HTML viewer.
 
 ## Sequence
 
@@ -30,6 +30,7 @@ Other export entry points:
 
 - `scene.export_sog`
 - `scene.export_spz`
+- `scene.export_usd`
 - `scene.export_html`
 
 ## Status And Cancellation

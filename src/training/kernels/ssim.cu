@@ -11,34 +11,6 @@
 namespace cg = cooperative_groups;
 
 namespace {
-
-    // ------------------------------------------
-    // Utility: Copy rectangular crop from src to dst
-    // ------------------------------------------
-    __global__ void copy_crop_kernel(
-        const float* __restrict__ src,
-        float* __restrict__ dst,
-        int N, int C, int H, int W,
-        int crop_h, int crop_w,
-        int start_h, int start_w) {
-
-        int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        int total = N * C * crop_h * crop_w;
-
-        if (idx < total) {
-            int w = idx % crop_w;
-            int h = (idx / crop_w) % crop_h;
-            int c = (idx / (crop_w * crop_h)) % C;
-            int n = idx / (crop_w * crop_h * C);
-
-            int src_h = h + start_h;
-            int src_w = w + start_w;
-
-            int src_idx = n * (C * H * W) + c * (H * W) + src_h * W + src_w;
-            dst[idx] = src[src_idx];
-        }
-    }
-
     // ------------------------------------------
     // Constant Memory for Gaussian Coefficients
     // ------------------------------------------
@@ -453,9 +425,7 @@ namespace {
     }
 
     // Fused L1+SSIM Forward Kernel
-    // loss = (1-ssim_weight)*|img1-img2| + ssim_weight*(1-SSIM)
     __global__ void fusedL1SSIMForwardCUDA(
-        float ssim_weight,
         int H,
         int W,
         int CH,
@@ -463,7 +433,6 @@ namespace {
         float C2,
         const float* __restrict__ img1,
         const float* __restrict__ img2,
-        float* __restrict__ loss_map,
         float* __restrict__ dm_dmu1,
         float* __restrict__ dm_dsigma1_sq,
         float* __restrict__ dm_dsigma12,
@@ -478,8 +447,6 @@ namespace {
 
         __shared__ float sTile[SHARED_Y][SHARED_X][2];
         __shared__ float xconv[CONV_Y][CONV_X][5];
-
-        const float l1_weight = 1.0f - ssim_weight;
 
         for (int c = 0; c < CH; ++c) {
             // 1) Load tile + halo into shared memory
@@ -507,11 +474,6 @@ namespace {
                 }
             }
             block.sync();
-
-            // L1 loss from shared memory
-            float l1_loss = fabsf(
-                sTile[block.thread_index().y + HALO][block.thread_index().x + HALO][0] -
-                sTile[block.thread_index().y + HALO][block.thread_index().x + HALO][1]);
 
             // 2) Horizontal convolution
             {
@@ -642,9 +604,6 @@ namespace {
 
                     int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
 
-                    // Combined loss: (1-w)*L1 + w*(1-SSIM)
-                    loss_map[global_idx] = l1_weight * l1_loss + ssim_weight * (1.0f - ssim_val);
-
                     if (ssim_map)
                         ssim_map[global_idx] = ssim_val;
 
@@ -670,9 +629,10 @@ namespace {
         int CH,
         float C1,
         float C2,
+        float grad_per_pixel,
+        bool apply_valid_padding,
         const float* __restrict__ img1,
         const float* __restrict__ img2,
-        const float* __restrict__ dL_dmap,
         float* __restrict__ dL_dimg1,
         const float* __restrict__ dm_dmu1,
         const float* __restrict__ dm_dsigma1_sq,
@@ -713,7 +673,16 @@ namespace {
                     for (int col = lane_id; col < SHARED_X; col += 32) {
                         int gx = start_x + col - HALO;
 
-                        float chain = get_pix_value(dL_dmap, bIdx, c, gy, gx, CH, H, W);
+                        float chain = 0.0f;
+                        if (gx >= 0 && gx < W && gy >= 0 && gy < H) {
+                            const bool inside_valid_region =
+                                !apply_valid_padding ||
+                                (H <= 10 || W <= 10) ||
+                                (gx >= 5 && gx < W - 5 && gy >= 5 && gy < H - 5);
+                            if (inside_valid_region) {
+                                chain = grad_per_pixel;
+                            }
+                        }
                         float vmu = get_pix_value(dm_dmu1, bIdx, c, gy, gx, CH, H, W);
                         float vs1 = get_pix_value(dm_dsigma1_sq, bIdx, c, gy, gx, CH, H, W);
                         float vs12 = get_pix_value(dm_dsigma12, bIdx, c, gy, gx, CH, H, W);
@@ -800,7 +769,14 @@ namespace {
 
                 // L1 gradient: sign(p1 - p2) * l1_weight * chain
                 int out_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
-                float chain_local = get_pix_value(dL_dmap, bIdx, c, pix_y, pix_x, CH, H, W);
+                float chain_local = 0.0f;
+                const bool inside_valid_region =
+                    !apply_valid_padding ||
+                    (H <= 10 || W <= 10) ||
+                    (pix_x >= 5 && pix_x < W - 5 && pix_y >= 5 && pix_y < H - 5);
+                if (inside_valid_region) {
+                    chain_local = grad_per_pixel;
+                }
                 float sign_grad = (p1 == p2) ? 0.0f : copysignf(1.0f, p1 - p2);
                 float grad_l1 = l1_weight * sign_grad * chain_local;
 
@@ -813,7 +789,6 @@ namespace {
 
     // Masked Fused L1+SSIM Forward Kernel
     __global__ void maskedFusedL1SSIMForwardCUDA(
-        float ssim_weight,
         int H,
         int W,
         int CH,
@@ -821,8 +796,6 @@ namespace {
         float C2,
         const float* __restrict__ img1,
         const float* __restrict__ img2,
-        const float* __restrict__ mask, // [H, W] single channel
-        float* __restrict__ loss_map,
         float* __restrict__ dm_dmu1,
         float* __restrict__ dm_dsigma1_sq,
         float* __restrict__ dm_dsigma12,
@@ -837,14 +810,6 @@ namespace {
 
         __shared__ float sTile[SHARED_Y][SHARED_X][2];
         __shared__ float xconv[CONV_Y][CONV_X][5];
-
-        const float l1_weight = 1.0f - ssim_weight;
-
-        // Get mask value for this pixel
-        float mask_val = 0.0f;
-        if (pix_x < W && pix_y < H) {
-            mask_val = mask[pix_y * W + pix_x];
-        }
 
         for (int c = 0; c < CH; ++c) {
             // 1) Load tile
@@ -872,10 +837,6 @@ namespace {
                 }
             }
             block.sync();
-
-            float l1_loss = fabsf(
-                sTile[block.thread_index().y + HALO][block.thread_index().x + HALO][0] -
-                sTile[block.thread_index().y + HALO][block.thread_index().x + HALO][1]);
 
             // 2) Horizontal convolution
             {
@@ -1003,10 +964,6 @@ namespace {
                     float ssim_val = (C_ * D_) / (A * B);
 
                     int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
-
-                    // Masked combined loss: multiply by mask
-                    float combined = l1_weight * l1_loss + ssim_weight * (1.0f - ssim_val);
-                    loss_map[global_idx] = combined * mask_val;
 
                     if (ssim_map)
                         ssim_map[global_idx] = ssim_val;
@@ -1483,29 +1440,14 @@ namespace lfs::training::kernels {
         int h = H;
         int w = W;
 
-        // Compute mean efficiently without .contiguous() allocation
-        lfs::core::Tensor ssim_value_tensor;
-        if (apply_valid_padding && H > 10 && W > 10) {
-            // Use custom kernel to copy cropped region directly to pre-allocated buffer
-            // This avoids the 8.6GB .contiguous() allocation that .slice().mean() causes!
-            int crop_h = H - 10;
-            int crop_w = W - 10;
-            int total = N * C * crop_h * crop_w;
-            int threads = 256;
-            int blocks = (total + threads - 1) / threads;
-
-            copy_crop_kernel<<<blocks, threads>>>(
-                workspace.ssim_map.ptr<float>(),
-                workspace.ssim_map_cropped.ptr<float>(),
-                N, C, H, W,
-                crop_h, crop_w,
-                5, 5); // start_h=5, start_w=5
-
-            ssim_value_tensor = workspace.ssim_map_cropped.mean();
-        } else {
-            // No cropping needed
-            ssim_value_tensor = workspace.ssim_map.mean();
-        }
+        launch_fused_ssim_mean_device(
+            workspace.ssim_map.ptr<float>(),
+            workspace.reduction_temp.ptr<float>(),
+            workspace.reduction_result.ptr<float>(),
+            N, C, H, W,
+            apply_valid_padding,
+            workspace.ssim_map.stream());
+        lfs::core::Tensor ssim_value_tensor = workspace.reduction_result.clone();
 
         // Save context for backward (reference workspace buffers, not copies!)
         SSIMContext ctx;
@@ -1610,32 +1552,24 @@ namespace lfs::training::kernels {
         const dim3 block(BLOCK_X, BLOCK_Y);
 
         fusedL1SSIMForwardCUDA<<<grid, block>>>(
-            ssim_weight, H, W, C, C1, C2,
+            H, W, C, C1, C2,
             img1.ptr<float>(), img2.ptr<float>(),
-            workspace.loss_map.ptr<float>(),
             workspace.dm_dmu1.ptr<float>(),
             workspace.dm_dsigma1_sq.ptr<float>(),
             workspace.dm_dsigma12.ptr<float>(),
             workspace.ssim_map.ptr<float>());
 
-        // Compute mean loss (with valid padding if requested)
-        lfs::core::Tensor loss_scalar;
-        if (apply_valid_padding && H > 10 && W > 10) {
-            const int crop_h = H - 10;
-            const int crop_w = W - 10;
-            const int total = N * C * crop_h * crop_w;
-            const int threads = 256;
-            const int blocks = (total + threads - 1) / threads;
-
-            copy_crop_kernel<<<blocks, threads>>>(
-                workspace.loss_map.ptr<float>(),
-                workspace.loss_map_cropped.ptr<float>(),
-                N, C, H, W, crop_h, crop_w, 5, 5);
-
-            loss_scalar = workspace.loss_map_cropped.mean();
-        } else {
-            loss_scalar = workspace.loss_map.mean();
-        }
+        launch_fused_l1_ssim_mean_device(
+            img1.ptr<float>(),
+            img2.ptr<float>(),
+            workspace.ssim_map.ptr<float>(),
+            ssim_weight,
+            workspace.reduction_temp.ptr<float>(),
+            workspace.reduction_result.ptr<float>(),
+            N, C, H, W,
+            apply_valid_padding,
+            workspace.ssim_map.stream());
+        lfs::core::Tensor loss_scalar = workspace.reduction_result.clone();
 
         FusedL1SSIMContext ctx{
             .img1 = img1,
@@ -1671,15 +1605,6 @@ namespace lfs::training::kernels {
         const size_t numel = N * C * grad_h * grad_w;
         const float grad_per_pixel = 1.0f / static_cast<float>(numel);
 
-        // Create gradient map (dL/d(loss_map))
-        auto dL_dmap = lfs::core::Tensor::zeros(ctx.img1.shape(), lfs::core::Device::CUDA);
-        if (ctx.apply_valid_padding && ctx.H > 10 && ctx.W > 10) {
-            auto cropped = dL_dmap.slice(2, 5, ctx.H - 5).slice(3, 5, ctx.W - 5);
-            cropped.fill_(grad_per_pixel, nullptr);
-        } else {
-            dL_dmap.fill_(grad_per_pixel, nullptr);
-        }
-
         workspace.grad_img.zero_();
 
         const dim3 grid((ctx.W + BLOCK_X - 1) / BLOCK_X, (ctx.H + BLOCK_Y - 1) / BLOCK_Y, N);
@@ -1687,8 +1612,9 @@ namespace lfs::training::kernels {
 
         fusedL1SSIMBackwardCUDA<<<grid, block>>>(
             ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
+            grad_per_pixel, ctx.apply_valid_padding,
             ctx.img1.ptr<float>(), ctx.img2.ptr<float>(),
-            dL_dmap.ptr<float>(), workspace.grad_img.ptr<float>(),
+            workspace.grad_img.ptr<float>(),
             ctx.dm_dmu1.ptr<float>(), ctx.dm_dsigma1_sq.ptr<float>(),
             ctx.dm_dsigma12.ptr<float>());
 
@@ -1732,21 +1658,28 @@ namespace lfs::training::kernels {
         const dim3 block(BLOCK_X, BLOCK_Y);
 
         maskedFusedL1SSIMForwardCUDA<<<grid, block>>>(
-            ssim_weight, H, W, C, C1, C2,
-            img1.ptr<float>(), img2.ptr<float>(), mask_2d.ptr<float>(),
-            workspace.loss_map.ptr<float>(),
+            H, W, C, C1, C2,
+            img1.ptr<float>(), img2.ptr<float>(),
             workspace.dm_dmu1.ptr<float>(),
             workspace.dm_dsigma1_sq.ptr<float>(),
             workspace.dm_dsigma12.ptr<float>(),
             workspace.ssim_map.ptr<float>());
 
-        // Compute masked mean: sum(loss_map) / (mask_sum * C)
-        // Note: loss_map already has mask applied per-pixel
-        const float loss_sum = workspace.loss_map.sum().item<float>();
-        const float mask_sum = mask_2d.sum().item<float>() * static_cast<float>(C) + SSIM_EPSILON;
-        const float loss_value = loss_sum / mask_sum;
+        const auto stream = workspace.ssim_map.stream();
+        launch_masked_fused_l1_ssim_mean_device(
+            img1.ptr<float>(),
+            img2.ptr<float>(),
+            workspace.ssim_map.ptr<float>(),
+            mask_2d.ptr<float>(),
+            ssim_weight,
+            workspace.reduction_temp.ptr<float>(),
+            workspace.masked_loss.ptr<float>(),
+            workspace.mask_sum.ptr<float>(),
+            N, C, H, W,
+            stream);
 
-        auto loss_scalar = lfs::core::Tensor::full({1}, loss_value, lfs::core::Device::CUDA);
+        auto loss_scalar = workspace.masked_loss.clone();
+        const float mask_sum = workspace.mask_sum.item<float>();
 
         MaskedFusedL1SSIMContext ctx{
             .img1 = img1,

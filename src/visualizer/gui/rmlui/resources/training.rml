@@ -65,6 +65,7 @@
         <select data-value="strategy">
           <option value="mcmc">{{label_strategy_mcmc}}</option>
           <option value="adc">{{label_strategy_adc}}</option>
+          <option value="lfs">{{label_strategy_lfs}}</option>
           <option value="igs+">{{label_strategy_igs_plus}}</option>
         </select>
       </div>

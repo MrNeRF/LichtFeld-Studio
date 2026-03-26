@@ -347,6 +347,9 @@ namespace lfs::training {
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;
 
+        // Reusable buffer for Sobel edge map (lfs edge-importance densification)
+        core::Tensor edge_map_buffer_;
+
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
 
@@ -368,6 +371,14 @@ namespace lfs::training {
         std::atomic<bool> ready_to_start_{false};
         std::atomic<bool> initialized_{false};
         std::atomic<bool> shutdown_complete_{false};
+
+        // Env-gated VRAM tracing used for benchmark/debug runs.
+        bool memory_breakdown_enabled_ = false;
+        bool memory_breakdown_logged_init_ = false;
+        bool memory_breakdown_logged_train_setup_ = false;
+        bool memory_breakdown_logged_first_batch_ = false;
+        bool memory_breakdown_logged_first_raster_ = false;
+        bool memory_breakdown_logged_first_step_ = false;
 
         // Current training state
         std::atomic<int> current_iteration_{0};

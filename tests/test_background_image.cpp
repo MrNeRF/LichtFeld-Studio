@@ -180,6 +180,74 @@ TEST_F(BackgroundImageTest, BackgroundBlendWithImage_MatchesSolidColorUniform) {
     EXPECT_LT((output_image - output_color).abs().max().item<float>(), 1e-5f);
 }
 
+TEST_F(BackgroundImageTest, BackgroundBlendRoundTripInPlace_SolidColor) {
+    constexpr int H = 8, W = 8;
+    const auto raw_image = createGradientImage(3, H, W);
+
+    auto alpha_cpu = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CPU, DataType::Float32);
+    float* alpha_ptr = alpha_cpu.ptr<float>();
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            alpha_ptr[y * W + x] = 0.2f + 0.6f * static_cast<float>(x + y) / static_cast<float>((H - 1) + (W - 1));
+        }
+    }
+    const auto alpha = alpha_cpu.to(Device::CUDA);
+
+    auto bg_color_cpu = Tensor::empty({3}, Device::CPU, DataType::Float32);
+    float* bg_ptr = bg_color_cpu.ptr<float>();
+    bg_ptr[0] = 0.1f;
+    bg_ptr[1] = 0.4f;
+    bg_ptr[2] = 0.7f;
+    const auto bg_color = bg_color_cpu.to(Device::CUDA);
+
+    auto buffer = raw_image.clone();
+    lfs::training::kernels::launch_fused_background_blend(
+        buffer.ptr<float>(), alpha.ptr<float>(), bg_color.ptr<float>(),
+        buffer.ptr<float>(), H, W, nullptr);
+    lfs::training::kernels::launch_fused_background_unblend(
+        buffer.ptr<float>(), alpha.ptr<float>(), bg_color.ptr<float>(),
+        H, W, nullptr);
+    cudaDeviceSynchronize();
+
+    EXPECT_LT((buffer - raw_image).abs().max().item<float>(), 1e-5f);
+}
+
+TEST_F(BackgroundImageTest, BackgroundBlendRoundTripInPlace_BackgroundImage) {
+    constexpr int H = 8, W = 8;
+    const auto raw_image = createGradientImage(3, H, W);
+
+    auto alpha_cpu = Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CPU, DataType::Float32);
+    float* alpha_ptr = alpha_cpu.ptr<float>();
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            alpha_ptr[y * W + x] = 0.1f + 0.8f * static_cast<float>(y) / static_cast<float>(H - 1);
+        }
+    }
+    const auto alpha = alpha_cpu.to(Device::CUDA);
+
+    auto bg_image_cpu = Tensor::empty({3, H, W}, Device::CPU, DataType::Float32);
+    float* bg_ptr = bg_image_cpu.ptr<float>();
+    for (int c = 0; c < 3; ++c) {
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                bg_ptr[c * H * W + y * W + x] = 0.05f * static_cast<float>(c + 1) + 0.01f * static_cast<float>(x + y);
+            }
+        }
+    }
+    const auto bg_image = bg_image_cpu.to(Device::CUDA);
+
+    auto buffer = raw_image.clone();
+    lfs::training::kernels::launch_fused_background_blend_with_image(
+        buffer.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
+        buffer.ptr<float>(), H, W, nullptr);
+    lfs::training::kernels::launch_fused_background_unblend_with_image(
+        buffer.ptr<float>(), alpha.ptr<float>(), bg_image.ptr<float>(),
+        H, W, nullptr);
+    cudaDeviceSynchronize();
+
+    EXPECT_LT((buffer - raw_image).abs().max().item<float>(), 1e-5f);
+}
+
 TEST_F(BackgroundImageTest, GradAlphaWithImage_ZeroGradImage) {
     constexpr int H = 64, W = 64;
     const auto grad_image = createTestImage(3, H, W, 0.0f);

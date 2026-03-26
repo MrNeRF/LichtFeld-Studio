@@ -23,8 +23,9 @@ namespace lfs::training::kernels {
         lfs::core::Tensor dL_dmap;  // [N, C, H, W]
         lfs::core::Tensor dL_dimg1; // [N, C, H, W]
 
-        // Cropped buffer for efficient mean computation (avoids .contiguous() allocation)
-        lfs::core::Tensor ssim_map_cropped; // [N, C, H-10, W-10] contiguous buffer
+        // Tiny reduction buffers for valid-padding mean computation
+        lfs::core::Tensor reduction_temp;   // [<=1024]
+        lfs::core::Tensor reduction_result; // [1]
 
         // Track allocated size
         std::vector<size_t> allocated_shape;
@@ -39,12 +40,8 @@ namespace lfs::training::kernels {
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dL_dmap = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dL_dimg1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-
-                // Allocate cropped buffer (10 pixels smaller in H and W for valid padding)
-                if (shape.size() == 4 && shape[2] > 10 && shape[3] > 10) {
-                    std::vector<size_t> cropped_shape = {shape[0], shape[1], shape[2] - 10, shape[3] - 10};
-                    ssim_map_cropped = lfs::core::Tensor::empty(lfs::core::TensorShape(cropped_shape), lfs::core::Device::CUDA);
-                }
+                reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
+                reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
 
                 allocated_shape = shape;
             }
@@ -130,8 +127,6 @@ namespace lfs::training::kernels {
 
     // Workspace for fused L1+SSIM (extends SSIMWorkspace)
     struct FusedL1SSIMWorkspace {
-        // Forward pass buffers
-        lfs::core::Tensor loss_map;      // [N, C, H, W] per-pixel combined loss
         lfs::core::Tensor ssim_map;      // [N, C, H, W] per-pixel SSIM values (optional output)
         lfs::core::Tensor dm_dmu1;       // [N, C, H, W] SSIM partial derivative
         lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] SSIM partial derivative
@@ -140,8 +135,9 @@ namespace lfs::training::kernels {
         // Backward pass buffer
         lfs::core::Tensor grad_img; // [N, C, H, W] combined gradient
 
-        // Cropped buffer for mean computation
-        lfs::core::Tensor loss_map_cropped; // [N, C, H-10, W-10]
+        // Tiny reduction buffers for valid-padding mean computation
+        lfs::core::Tensor reduction_temp;   // [<=1024]
+        lfs::core::Tensor reduction_result; // [1]
 
         // Track allocated size
         std::vector<size_t> allocated_shape;
@@ -149,17 +145,13 @@ namespace lfs::training::kernels {
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
-                loss_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-
-                if (shape.size() == 4 && shape[2] > 10 && shape[3] > 10) {
-                    std::vector<size_t> cropped = {shape[0], shape[1], shape[2] - 10, shape[3] - 10};
-                    loss_map_cropped = lfs::core::Tensor::empty(lfs::core::TensorShape(cropped), lfs::core::Device::CUDA);
-                }
+                reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
+                reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
                 allocated_shape = shape;
             }
         }
@@ -195,26 +187,26 @@ namespace lfs::training::kernels {
     // ============================================================================
 
     struct MaskedFusedL1SSIMWorkspace {
-        lfs::core::Tensor loss_map;      // [N, C, H, W]
-        lfs::core::Tensor ssim_map;      // [N, C, H, W] per-pixel SSIM values (optional output)
-        lfs::core::Tensor dm_dmu1;       // [N, C, H, W]
-        lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W]
-        lfs::core::Tensor dm_dsigma12;   // [N, C, H, W]
-        lfs::core::Tensor grad_img;      // [N, C, H, W]
-        lfs::core::Tensor masked_loss;   // [1] scalar
-        lfs::core::Tensor mask_sum;      // [1] scalar
+        lfs::core::Tensor ssim_map;       // [N, C, H, W] per-pixel SSIM values (optional output)
+        lfs::core::Tensor dm_dmu1;        // [N, C, H, W]
+        lfs::core::Tensor dm_dsigma1_sq;  // [N, C, H, W]
+        lfs::core::Tensor dm_dsigma12;    // [N, C, H, W]
+        lfs::core::Tensor grad_img;       // [N, C, H, W]
+        lfs::core::Tensor reduction_temp; // [<=2048], split into loss and mask partial sums
+        lfs::core::Tensor masked_loss;    // [1] scalar
+        lfs::core::Tensor mask_sum;       // [1] scalar
 
         std::vector<size_t> allocated_shape;
 
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
-                loss_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
                 masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
                 mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
                 allocated_shape = shape;

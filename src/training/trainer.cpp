@@ -18,6 +18,8 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/tensor/internal/gpu_slab_allocator.hpp"
+#include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
@@ -31,17 +33,21 @@
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include "training/kernels/lfs_kernels.hpp"
 
 #include <filesystem>
 #include <fstream>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cuda_runtime.h>
 #include <expected>
 #include <memory>
 #include <numeric>
 #include <nvtx3/nvToolsExt.h>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -50,6 +56,228 @@
 namespace lfs::training {
 
     namespace {
+        constexpr double BYTES_PER_MIB = 1024.0 * 1024.0;
+        constexpr double BYTES_PER_GIB = 1024.0 * 1024.0 * 1024.0;
+
+        [[nodiscard]] bool env_flag_enabled(const char* name) {
+            const char* raw = std::getenv(name);
+            if (!raw) {
+                return false;
+            }
+
+            const std::string_view value(raw);
+            if (value.empty()) {
+                return false;
+            }
+
+            return value != "0" && value != "false" && value != "FALSE" &&
+                   value != "off" && value != "OFF" &&
+                   value != "no" && value != "NO";
+        }
+
+        [[nodiscard]] double bytes_to_mib(const size_t bytes) {
+            return static_cast<double>(bytes) / BYTES_PER_MIB;
+        }
+
+        [[nodiscard]] double bytes_to_gib(const size_t bytes) {
+            return static_cast<double>(bytes) / BYTES_PER_GIB;
+        }
+
+        [[nodiscard]] size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
+            if (!tensor.is_valid()) {
+                return 0;
+            }
+
+            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
+                return tensor.bytes();
+            }
+
+            size_t row_elems = 1;
+            if (tensor.ndim() > 1) {
+                for (size_t dim = 1; dim < tensor.ndim(); ++dim) {
+                    row_elems *= tensor.shape()[dim];
+                }
+            }
+
+            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+        }
+
+        template <typename Entries>
+        void add_tensor_entry(Entries& entries, std::string label, const lfs::core::Tensor& tensor) {
+            const size_t bytes = tensor_reserved_bytes(tensor);
+            if (bytes > 0) {
+                entries.emplace_back(std::move(label), bytes);
+            }
+        }
+
+        template <typename Entries>
+        [[nodiscard]] size_t sum_entry_bytes(const Entries& entries) {
+            size_t total = 0;
+            for (const auto& [_, bytes] : entries) {
+                total += bytes;
+            }
+            return total;
+        }
+
+        template <typename Entries>
+        void log_entry_bytes(std::string_view label, Entries entries) {
+            std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.second > rhs.second;
+            });
+
+            for (const auto& [name, bytes] : entries) {
+                LOG_INFO("[MEM] {} {} = {:.2f} MiB", label, name, bytes_to_mib(bytes));
+            }
+
+            const size_t total = sum_entry_bytes(entries);
+            LOG_INFO("[MEM] {} total = {:.2f} MiB ({:.2f} GiB)",
+                     label, bytes_to_mib(total), bytes_to_gib(total));
+        }
+
+        [[nodiscard]] size_t photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
+            std::vector<std::pair<std::string, size_t>> entries;
+
+            const auto& fused = photometric_loss.fused_workspace();
+            add_tensor_entry(entries, "fused.ssim_map", fused.ssim_map);
+            add_tensor_entry(entries, "fused.dm_dmu1", fused.dm_dmu1);
+            add_tensor_entry(entries, "fused.dm_dsigma1_sq", fused.dm_dsigma1_sq);
+            add_tensor_entry(entries, "fused.dm_dsigma12", fused.dm_dsigma12);
+            add_tensor_entry(entries, "fused.grad_img", fused.grad_img);
+            add_tensor_entry(entries, "fused.reduction_temp", fused.reduction_temp);
+            add_tensor_entry(entries, "fused.reduction_result", fused.reduction_result);
+
+            const auto& ssim = photometric_loss.ssim_workspace();
+            add_tensor_entry(entries, "ssim.ssim_map", ssim.ssim_map);
+            add_tensor_entry(entries, "ssim.dm_dmu1", ssim.dm_dmu1);
+            add_tensor_entry(entries, "ssim.dm_dsigma1_sq", ssim.dm_dsigma1_sq);
+            add_tensor_entry(entries, "ssim.dm_dsigma12", ssim.dm_dsigma12);
+            add_tensor_entry(entries, "ssim.dL_dmap", ssim.dL_dmap);
+            add_tensor_entry(entries, "ssim.dL_dimg1", ssim.dL_dimg1);
+            add_tensor_entry(entries, "ssim.reduction_temp", ssim.reduction_temp);
+            add_tensor_entry(entries, "ssim.reduction_result", ssim.reduction_result);
+
+            return sum_entry_bytes(entries);
+        }
+
+        [[nodiscard]] size_t masked_fused_workspace_bytes(const kernels::MaskedFusedL1SSIMWorkspace& workspace) {
+            std::vector<std::pair<std::string, size_t>> entries;
+            add_tensor_entry(entries, "masked.ssim_map", workspace.ssim_map);
+            add_tensor_entry(entries, "masked.dm_dmu1", workspace.dm_dmu1);
+            add_tensor_entry(entries, "masked.dm_dsigma1_sq", workspace.dm_dsigma1_sq);
+            add_tensor_entry(entries, "masked.dm_dsigma12", workspace.dm_dsigma12);
+            add_tensor_entry(entries, "masked.grad_img", workspace.grad_img);
+            add_tensor_entry(entries, "masked.masked_loss", workspace.masked_loss);
+            add_tensor_entry(entries, "masked.mask_sum", workspace.mask_sum);
+            return sum_entry_bytes(entries);
+        }
+
+        [[nodiscard]] size_t ssim_map_workspace_bytes(const kernels::SSIMMapWorkspace& workspace) {
+            return tensor_reserved_bytes(workspace.ssim_map);
+        }
+
+        [[nodiscard]] size_t bg_image_cache_bytes(const std::unordered_map<uint64_t, lfs::core::Tensor>& cache) {
+            size_t total = 0;
+            for (const auto& [_, tensor] : cache) {
+                total += tensor_reserved_bytes(tensor);
+            }
+            return total;
+        }
+
+        [[nodiscard]] size_t splat_tensor_bytes(const lfs::core::SplatData& splat) {
+            std::vector<std::pair<std::string, size_t>> entries;
+            add_tensor_entry(entries, "means", splat.means());
+            add_tensor_entry(entries, "sh0", splat.sh0());
+            add_tensor_entry(entries, "shN", splat.shN());
+            add_tensor_entry(entries, "scaling", splat.scaling_raw());
+            add_tensor_entry(entries, "rotation", splat.rotation_raw());
+            add_tensor_entry(entries, "opacity", splat.opacity_raw());
+            add_tensor_entry(entries, "deleted", splat.deleted());
+            add_tensor_entry(entries, "densification_info", splat._densification_info);
+            return sum_entry_bytes(entries);
+        }
+
+        [[nodiscard]] size_t optimizer_state_bytes(const AdamOptimizer& optimizer) {
+            size_t total = 0;
+            for (const auto type : AdamOptimizer::all_param_types()) {
+                const auto* state = optimizer.get_state(type);
+                if (!state) {
+                    continue;
+                }
+                total += tensor_reserved_bytes(state->grad);
+                total += tensor_reserved_bytes(state->exp_avg);
+                total += tensor_reserved_bytes(state->exp_avg_sq);
+            }
+            return total;
+        }
+
+        struct VramSnapshot {
+            size_t gpu_used = 0;
+            size_t gpu_total = 0;
+            size_t mempool_used = 0;
+            size_t mempool_reserved = 0;
+            size_t bucket_cached = 0;
+            size_t slab_reserved = 0;
+            std::optional<lfs::core::RasterizerMemoryArena::MemoryInfo> arena;
+        };
+
+        [[nodiscard]] VramSnapshot capture_vram_snapshot(const bool synchronize) {
+            if (synchronize) {
+                cudaDeviceSynchronize();
+            }
+
+            VramSnapshot snapshot;
+            size_t gpu_free = 0;
+            cudaMemGetInfo(&gpu_free, &snapshot.gpu_total);
+            snapshot.gpu_used = snapshot.gpu_total - gpu_free;
+
+#if CUDART_VERSION >= 12080
+            int device = 0;
+            if (cudaGetDevice(&device) == cudaSuccess) {
+                cudaMemPool_t pool;
+                if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
+                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &snapshot.mempool_used);
+                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &snapshot.mempool_reserved);
+                }
+            }
+#endif
+
+            snapshot.bucket_cached =
+                lfs::core::SizeBucketedPool::instance().stats().bytes_cached.load(std::memory_order_relaxed);
+            snapshot.slab_reserved =
+                lfs::core::GPUSlabAllocator::instance().stats().total_slab_memory;
+
+            if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+                snapshot.arena = arena->get_memory_info();
+            }
+
+            return snapshot;
+        }
+
+        void log_vram_snapshot(std::string_view label, const VramSnapshot& snapshot) {
+            LOG_INFO("[MEM] {} gpu_used={:.2f} MiB ({:.2f} GiB) / total={:.2f} GiB",
+                     label,
+                     bytes_to_mib(snapshot.gpu_used),
+                     bytes_to_gib(snapshot.gpu_used),
+                     bytes_to_gib(snapshot.gpu_total));
+            LOG_INFO("[MEM] {} mempool_used={:.2f} MiB, mempool_reserved={:.2f} MiB, slab_reserved={:.2f} MiB, bucket_cached={:.2f} MiB",
+                     label,
+                     bytes_to_mib(snapshot.mempool_used),
+                     bytes_to_mib(snapshot.mempool_reserved),
+                     bytes_to_mib(snapshot.slab_reserved),
+                     bytes_to_mib(snapshot.bucket_cached));
+
+            if (snapshot.arena) {
+                LOG_INFO("[MEM] {} arena_capacity={:.2f} MiB, arena_current={:.2f} MiB, arena_peak={:.2f} MiB, arena_reallocs={}",
+                         label,
+                         bytes_to_mib(snapshot.arena->arena_capacity),
+                         bytes_to_mib(snapshot.arena->current_usage),
+                         bytes_to_mib(snapshot.arena->peak_usage),
+                         snapshot.arena->num_reallocations);
+            } else {
+                LOG_INFO("[MEM] {} arena=not_created", label);
+            }
+        }
+
         void syncTrainingSceneTopology(lfs::core::Scene* const scene,
                                        const lfs::core::SplatData& model) {
             if (!scene) {
@@ -91,6 +319,88 @@ namespace lfs::training {
         template <typename Fn>
         ScopeGuard<Fn> makeScopeGuard(Fn fn) {
             return ScopeGuard<Fn>(std::move(fn));
+        }
+
+        struct PipelineMemoryEstimate {
+            size_t max_image_bytes = 0;
+            bool masks_possible = false;
+        };
+
+        [[nodiscard]] PipelineMemoryEstimate estimatePipelineMemory(
+            const std::shared_ptr<CameraDataset>& dataset) {
+            PipelineMemoryEstimate estimate;
+            if (!dataset) {
+                return estimate;
+            }
+
+            for (const auto& cam : dataset->get_cameras()) {
+                if (!cam) {
+                    continue;
+                }
+
+                const size_t width = static_cast<size_t>(std::max(cam->image_width(), 0));
+                const size_t height = static_cast<size_t>(std::max(cam->image_height(), 0));
+                if (width > 0 && height > 0) {
+                    estimate.max_image_bytes = std::max(
+                        estimate.max_image_bytes,
+                        width * height * size_t{3} * sizeof(float));
+                }
+
+                estimate.masks_possible = estimate.masks_possible || cam->has_mask() || cam->has_alpha();
+            }
+
+            return estimate;
+        }
+
+        [[nodiscard]] lfs::io::PipelinedLoaderConfig tunePipelinedLoaderConfig(
+            lfs::io::PipelinedLoaderConfig config,
+            const std::shared_ptr<CameraDataset>& dataset) {
+            const auto estimate = estimatePipelineMemory(dataset);
+            if (estimate.max_image_bytes == 0) {
+                config.decoder_pool_size = std::min(config.decoder_pool_size, config.jpeg_batch_size);
+                return config;
+            }
+
+            size_t free_bytes = 0;
+            size_t total_bytes = 0;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || free_bytes == 0 || total_bytes == 0) {
+                config.decoder_pool_size = std::min(config.decoder_pool_size, config.jpeg_batch_size);
+                return config;
+            }
+
+            const size_t per_ready_image_bytes = estimate.max_image_bytes +
+                                                 (estimate.masks_possible ? estimate.max_image_bytes / 3 : 0);
+            constexpr size_t MIN_PIPELINE_BUDGET_BYTES = 256ULL * 1024 * 1024;
+            constexpr size_t MAX_PIPELINE_BUDGET_BYTES = 512ULL * 1024 * 1024;
+            const size_t target_pipeline_budget =
+                std::clamp(free_bytes / 32, MIN_PIPELINE_BUDGET_BYTES, MAX_PIPELINE_BUDGET_BYTES);
+
+            const size_t recommended_prefetch = std::clamp(
+                target_pipeline_budget / std::max<size_t>(per_ready_image_bytes, 1),
+                size_t{2},
+                config.prefetch_count);
+
+            if (recommended_prefetch < config.prefetch_count) {
+                LOG_INFO(
+                    "Reducing image pipeline depth {} -> {} (largest image {:.1f} MB, free VRAM {:.1f} GB)",
+                    config.prefetch_count,
+                    recommended_prefetch,
+                    estimate.max_image_bytes / (1024.0 * 1024.0),
+                    free_bytes / (1024.0 * 1024.0 * 1024.0));
+                config.prefetch_count = recommended_prefetch;
+            }
+
+            config.jpeg_batch_size = std::min(
+                config.jpeg_batch_size,
+                std::max<size_t>(1, config.prefetch_count));
+            config.output_queue_size = std::min(
+                config.output_queue_size,
+                std::max<size_t>(1, config.prefetch_count / 2));
+            config.decoder_pool_size = std::min(
+                std::max<size_t>(1, config.decoder_pool_size),
+                std::max<size_t>(1, config.jpeg_batch_size));
+
+            return config;
         }
 
         PPISPRenderOverrides toRenderOverrides(const PPISPViewportOverrides& ov) {
@@ -787,6 +1097,12 @@ namespace lfs::training {
 
         try {
             params_ = params;
+            memory_breakdown_enabled_ = env_flag_enabled("LFS_MEM_BREAKDOWN");
+            memory_breakdown_logged_init_ = false;
+            memory_breakdown_logged_train_setup_ = false;
+            memory_breakdown_logged_first_batch_ = false;
+            memory_breakdown_logged_first_raster_ = false;
+            memory_breakdown_logged_first_step_ = false;
 
             // Create DatasetConfig for lfs::training::CameraDataset
             lfs::training::DatasetConfig dataset_config;
@@ -1067,6 +1383,72 @@ namespace lfs::training {
             }
 
             initialized_ = true;
+
+            if (memory_breakdown_enabled_ && !memory_breakdown_logged_init_) {
+                const auto snapshot = capture_vram_snapshot(true);
+                log_vram_snapshot("after_trainer_initialize", snapshot);
+
+                std::vector<std::pair<std::string, size_t>> direct_entries;
+                const auto& initialized_splat = strategy_->get_model();
+                add_tensor_entry(direct_entries, "splat.means", initialized_splat.means());
+                add_tensor_entry(direct_entries, "splat.sh0", initialized_splat.sh0());
+                add_tensor_entry(direct_entries, "splat.shN", initialized_splat.shN());
+                add_tensor_entry(direct_entries, "splat.scaling", initialized_splat.scaling_raw());
+                add_tensor_entry(direct_entries, "splat.rotation", initialized_splat.rotation_raw());
+                add_tensor_entry(direct_entries, "splat.opacity", initialized_splat.opacity_raw());
+                add_tensor_entry(direct_entries, "splat.deleted", initialized_splat.deleted());
+                add_tensor_entry(direct_entries, "splat.densification_info", initialized_splat._densification_info);
+                log_entry_bytes("direct_splat", direct_entries);
+
+                std::vector<std::pair<std::string, size_t>> optimizer_entries;
+                for (const auto type : AdamOptimizer::all_param_types()) {
+                    const auto* state = strategy_->get_optimizer().get_state(type);
+                    if (!state) {
+                        continue;
+                    }
+                    const std::string prefix = std::string("optimizer.") +
+                                               (type == ParamType::Means      ? "means"
+                                                : type == ParamType::Sh0      ? "sh0"
+                                                : type == ParamType::ShN      ? "shN"
+                                                : type == ParamType::Scaling  ? "scaling"
+                                                : type == ParamType::Rotation ? "rotation"
+                                                                              : "opacity");
+                    add_tensor_entry(optimizer_entries, prefix + ".grad", state->grad);
+                    add_tensor_entry(optimizer_entries, prefix + ".exp_avg", state->exp_avg);
+                    add_tensor_entry(optimizer_entries, prefix + ".exp_avg_sq", state->exp_avg_sq);
+                }
+                log_entry_bytes("direct_optimizer", optimizer_entries);
+
+                std::vector<std::pair<std::string, size_t>> trainer_entries;
+                add_tensor_entry(trainer_entries, "trainer.background", background_);
+                add_tensor_entry(trainer_entries, "trainer.bg_mix_buffer", bg_mix_buffer_);
+                add_tensor_entry(trainer_entries, "trainer.bg_image_base", bg_image_base_);
+                add_tensor_entry(trainer_entries, "trainer.random_bg_buffer", random_bg_buffer_);
+                add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
+                add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
+                add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
+                if (const size_t cache_bytes = bg_image_cache_bytes(bg_image_cache_); cache_bytes > 0) {
+                    trainer_entries.emplace_back("trainer.bg_image_cache", cache_bytes);
+                }
+                if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
+                    trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
+                }
+                if (const size_t bytes = masked_fused_workspace_bytes(masked_fused_workspace_); bytes > 0) {
+                    trainer_entries.emplace_back("trainer.masked_fused_workspace", bytes);
+                }
+                if (const size_t bytes = ssim_map_workspace_bytes(densification_ssim_workspace_); bytes > 0) {
+                    trainer_entries.emplace_back("trainer.densification_ssim_workspace", bytes);
+                }
+                log_entry_bytes("pool_backed_trainer", trainer_entries);
+
+                LOG_INFO("[MEM] model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
+                         strategy_->get_model().size(),
+                         strategy_->get_model().means().capacity(),
+                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
+                                      optimizer_state_bytes(strategy_->get_optimizer())));
+                memory_breakdown_logged_init_ = true;
+            }
+
             LOG_INFO("Trainer initialization complete");
             return {};
         } catch (const std::exception& e) {
@@ -1126,7 +1508,7 @@ namespace lfs::training {
         LOG_DEBUG("Trainer shutdown");
         stop_requested_ = true;
 
-        lfs::core::image_io::BatchImageSaver::instance().wait_all();
+        lfs::core::image_io::wait_for_pending_saves();
 
         if (callback_stream_) {
             cudaStreamSynchronize(callback_stream_);
@@ -1514,9 +1896,16 @@ namespace lfs::training {
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
             const bool use_pixel_error_densification =
-                (params_.optimization.strategy == "mcmc" ||
-                 params_.optimization.strategy == "igs+");
+                (params_.optimization.strategy == "mcmc") ||
+                (params_.optimization.strategy == "igs+") ||
+                (params_.optimization.strategy == "lfs" &&
+                 params_.optimization.use_error_map);
             const bool use_ssim_error = use_pixel_error_densification;
+            DensificationType densification_type = DensificationType::None;
+            if (params_.optimization.strategy == "mcmc")
+                densification_type = DensificationType::MCMC;
+            else if (params_.optimization.strategy == "lfs")
+                densification_type = DensificationType::LFS;
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -1747,7 +2136,7 @@ namespace lfs::training {
                     // Final tonemapping: clamp to [0, 1] for loss computation.
                     // This is redundant when PPISP is active (CRF already clamps), but ensures
                     // valid output range for bilateral grids and raw rasterizer output.
-                    corrected_image = corrected_image.clamp(0.0f, 1.0f);
+                    corrected_image.clamp_(0.0f, 1.0f);
 
                     nvtxRangePush("compute_photometric_loss");
                     lfs::core::Tensor tile_loss;
@@ -1821,7 +2210,9 @@ namespace lfs::training {
                                 if (!densification_error_map_.is_valid() ||
                                     densification_error_map_.shape()[0] != H ||
                                     densification_error_map_.shape()[1] != W) {
-                                    densification_error_map_ = core::Tensor::empty({H, W}, core::Device::CUDA);
+                                    densification_error_map_ = core::Tensor::empty(
+                                        {static_cast<size_t>(H), static_cast<size_t>(W)},
+                                        core::Device::CUDA);
                                 }
                                 lfs::training::kernels::launch_ssim_to_error_map(ssim_map, densification_error_map_);
                                 tile_error_map = densification_error_map_;
@@ -1853,8 +2244,88 @@ namespace lfs::training {
                         if (use_mask &&
                             (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
                              params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
-                            tile_error_map = (tile_error_map * mask_tile).contiguous();
+                            tile_error_map.mul_(mask_tile);
                         }
+                    }
+
+                    if (tile_error_map.is_valid() && params_.optimization.strategy == "lfs") {
+                        const float map_mean = tile_error_map.mean().item();
+                        if (map_mean > 1e-6f)
+                            tile_error_map.div_(map_mean);
+                    }
+
+                    if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_raster_ && fast_ctx) {
+                        const auto snapshot = capture_vram_snapshot(true);
+                        log_vram_snapshot("during_first_fastgs_tile", snapshot);
+
+                        const size_t n_primitives = static_cast<size_t>(strategy_->get_model().size());
+                        const size_t grad_mean2d_helper_bytes = n_primitives * 2 * sizeof(float);
+                        const size_t grad_conic_helper_bytes = n_primitives * 3 * sizeof(float);
+
+                        std::vector<std::pair<std::string, size_t>> fastgs_entries;
+                        if (fast_ctx->forward_ctx.per_primitive_buffers_size > 0) {
+                            fastgs_entries.emplace_back("fastgs.per_primitive_buffers",
+                                                        fast_ctx->forward_ctx.per_primitive_buffers_size);
+                        }
+                        if (fast_ctx->forward_ctx.per_tile_buffers_size > 0) {
+                            fastgs_entries.emplace_back("fastgs.per_tile_buffers",
+                                                        fast_ctx->forward_ctx.per_tile_buffers_size);
+                        }
+                        if (fast_ctx->forward_ctx.per_instance_buffers_size > 0) {
+                            fastgs_entries.emplace_back("fastgs.per_instance_buffers",
+                                                        fast_ctx->forward_ctx.per_instance_buffers_size);
+                        }
+                        if (fast_ctx->forward_ctx.per_bucket_buffers_size > 0) {
+                            fastgs_entries.emplace_back("fastgs.per_bucket_buffers",
+                                                        fast_ctx->forward_ctx.per_bucket_buffers_size);
+                        }
+                        fastgs_entries.emplace_back("fastgs.grad_mean2d_helper", grad_mean2d_helper_bytes);
+                        fastgs_entries.emplace_back("fastgs.grad_conic_helper", grad_conic_helper_bytes);
+                        fastgs_entries.emplace_back("render.output_image", tensor_reserved_bytes(output.image));
+                        fastgs_entries.emplace_back("render.output_alpha", tensor_reserved_bytes(output.alpha));
+                        fastgs_entries.emplace_back("train.gt_tile", tensor_reserved_bytes(gt_tile));
+                        if (bg_image.is_valid() && !bg_image.is_empty()) {
+                            fastgs_entries.emplace_back("train.background_image", tensor_reserved_bytes(bg_image));
+                        }
+                        if (tile_error_map.is_valid()) {
+                            fastgs_entries.emplace_back("train.tile_error_map", tensor_reserved_bytes(tile_error_map));
+                        }
+                        log_entry_bytes("first_fastgs_tile_live", fastgs_entries);
+
+                        std::vector<std::pair<std::string, size_t>> trainer_entries;
+                        if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
+                            trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
+                        }
+                        if (const size_t bytes = masked_fused_workspace_bytes(masked_fused_workspace_); bytes > 0) {
+                            trainer_entries.emplace_back("trainer.masked_fused_workspace", bytes);
+                        }
+                        if (const size_t bytes = ssim_map_workspace_bytes(densification_ssim_workspace_); bytes > 0) {
+                            trainer_entries.emplace_back("trainer.densification_ssim_workspace", bytes);
+                        }
+                        add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
+                        add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
+                        add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
+                        log_entry_bytes("trainer_pool_backed_live", trainer_entries);
+
+                        if (auto loader = getActiveImageLoader()) {
+                            const auto stats = loader->get_stats();
+                            LOG_INFO("[MEM] first_fastgs_tile loader output_queue={}, pending_pairs={}, hot_queue={}, cold_queue={}, prefetch_queue={}",
+                                     stats.output_queue_size,
+                                     stats.pending_pairs_count,
+                                     stats.hot_queue_size,
+                                     stats.cold_queue_size,
+                                     stats.prefetch_queue_size);
+                        }
+
+                        LOG_INFO("[MEM] fastgs counts visible_primitives={}, instances={}, buckets={}, image={}x{}, tile_mode={}, num_tiles={}",
+                                 fast_ctx->forward_ctx.n_visible_primitives,
+                                 fast_ctx->forward_ctx.n_instances,
+                                 fast_ctx->forward_ctx.n_buckets,
+                                 output.width,
+                                 output.height,
+                                 params_.optimization.tile_mode,
+                                 num_tiles);
+                        memory_breakdown_logged_first_raster_ = true;
                     }
 
                     loss_tensor_gpu = loss_tensor_gpu + tile_loss;
@@ -1892,7 +2363,8 @@ namespace lfs::training {
                     } else {
                         fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                 strategy_->get_optimizer(), tile_grad_alpha,
-                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
+                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                densification_type);
                     }
                     nvtxRangePop();
                 }
@@ -2154,6 +2626,29 @@ namespace lfs::training {
                 lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PostStep, ctx);
             }
 
+            if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_step_) {
+                const auto snapshot = capture_vram_snapshot(true);
+                log_vram_snapshot("after_first_train_step", snapshot);
+                LOG_INFO("[MEM] after_first_train_step model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
+                         strategy_->get_model().size(),
+                         strategy_->get_model().means().capacity(),
+                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
+                                      optimizer_state_bytes(strategy_->get_optimizer())));
+                memory_breakdown_logged_first_step_ = true;
+            }
+
+            if (memory_breakdown_enabled_ && iter > 1 && (iter % 1000) == 0) {
+                const auto label = std::format("after_step_{}", iter);
+                const auto snapshot = capture_vram_snapshot(true);
+                log_vram_snapshot(label, snapshot);
+                LOG_INFO("[MEM] {} model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
+                         label,
+                         strategy_->get_model().size(),
+                         strategy_->get_model().means().capacity(),
+                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
+                                      optimizer_state_bytes(strategy_->get_optimizer())));
+            }
+
             // Return Continue if we should continue training
             if (iter < params_.optimization.iterations && !stop_requested_.load() && !stop_token.stop_requested()) {
                 return StepResult::Continue;
@@ -2236,6 +2731,8 @@ namespace lfs::training {
                 LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
             }
 
+            pipelined_config = tunePipelinedLoaderConfig(pipelined_config, train_dataset_);
+
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
             PipelinedMaskConfig mask_pipeline_config;
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
@@ -2261,6 +2758,20 @@ namespace lfs::training {
             updateGTLoadConfigSnapshot();
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
+
+            if (memory_breakdown_enabled_ && !memory_breakdown_logged_train_setup_) {
+                const auto snapshot = capture_vram_snapshot(true);
+                log_vram_snapshot("after_dataloader_setup", snapshot);
+                const auto stats = train_dataloader->get_stats();
+                LOG_INFO("[MEM] dataloader setup in_flight={}, output_queue={}, pending_pairs={}, hot_queue={}, cold_queue={}, prefetch_queue={}",
+                         train_dataloader->get_loader_shared()->in_flight_count(),
+                         stats.output_queue_size,
+                         stats.pending_pairs_count,
+                         stats.hot_queue_size,
+                         stats.cold_queue_size,
+                         stats.prefetch_queue_size);
+                memory_breakdown_logged_train_setup_ = true;
+            }
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
@@ -2291,6 +2802,25 @@ namespace lfs::training {
 
                 // Store pipelined mask for use in train_step
                 pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
+
+                if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_batch_) {
+                    const auto snapshot = capture_vram_snapshot(true);
+                    log_vram_snapshot("after_first_batch_fetch", snapshot);
+                    const auto stats = train_dataloader->get_stats();
+                    const size_t channels = gt_image.ndim() > 2 ? gt_image.shape()[0] : 1;
+                    const size_t height = gt_image.ndim() > 2 ? gt_image.shape()[1] : gt_image.shape()[0];
+                    const size_t width = gt_image.ndim() > 2 ? gt_image.shape()[2] : gt_image.shape()[1];
+                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
+                             channels,
+                             height,
+                             width,
+                             bytes_to_mib(tensor_reserved_bytes(gt_image)),
+                             bytes_to_mib(tensor_reserved_bytes(pipelined_mask_)),
+                             stats.output_queue_size,
+                             stats.pending_pairs_count,
+                             train_dataloader->get_loader_shared()->in_flight_count());
+                    memory_breakdown_logged_first_batch_ = true;
+                }
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {

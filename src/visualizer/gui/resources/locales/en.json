@@ -4,7 +4,7 @@
     "file": "File",
     "file.new_project": "New Project",
     "file.import_dataset": "Import Dataset",
-    "file.import_ply": "Import PLY, SOG, SPZ",
+    "file.import_ply": "Import PLY, SOG, SPZ, USD",
     "file.import_mesh": "Import Mesh",
     "file.import_checkpoint": "Import Checkpoint",
     "file.import_config": "Import Config",
@@ -240,6 +240,7 @@
     "value.not_set": "(not set)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.adc": "ADC",
+    "options.strategy.lfs": "LFS",
     "options.strategy.igs_plus": "IGS+",
     "options.tile.full": "1 (Full)",
     "options.tile.half": "2 (Half)",
@@ -320,6 +321,7 @@
     "format.ply_standard": "PLY (Standard)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
+    "format.usd_openusd": "USD (OpenUSD)",
     "format.html_viewer": "HTML Viewer",
     "select_models": "Select Models:",
     "all": "All",
@@ -567,6 +569,7 @@
     "iters_per_sec": "iters/sec",
     "sparsity": "Sparsity Settings",
     "pruning_growing": "Pruning/Growing",
+    "lfs_params": "LFS Parameters",
     "color_red_prefix": "R:",
     "color_green_prefix": "G:",
     "color_blue_prefix": "B:"
@@ -838,10 +841,10 @@
     "supported_by": "Supported by",
     "click_to_continue": "Click anywhere to continue",
     "drop_files_title": "Drop files here to get started",
-    "drop_files_subtitle": "PLY, SOG, COLMAP dataset, or Project file",
+    "drop_files_subtitle": "PLY, SOG, SPZ, USD, COLMAP dataset, or Project file",
     "drop_files_hint": "Or use File > Import Dataset / Import Ply",
     "drop_to_import": "Drop to Import",
-    "drop_to_import_subtitle": "PLY, SOG, COLMAP dataset, or Project"
+    "drop_to_import_subtitle": "PLY, SOG, SPZ, USD, COLMAP dataset, or Project"
   },
   "axis": {
     "x": "X:",
@@ -1068,7 +1071,7 @@
   },
   "file_association": {
     "title": "Set as Default Application",
-    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz)?",
+    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz)?",
     "yes": "Yes",
     "not_now": "Not Now",
     "dont_ask": "Don't Ask Again",

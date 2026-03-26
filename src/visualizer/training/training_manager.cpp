@@ -8,6 +8,7 @@
 #include "core/parameter_manager.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
+#include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
 #include "training/training_setup.hpp"
 #include <cstring>
@@ -251,6 +252,10 @@ namespace lfs::vis {
                 }
                 return false;
             }
+
+            // Match headless mode: release init-time cached pool allocations before the
+            // first training batch spins up image decoders and render workspaces.
+            lfs::core::Tensor::trim_memory_pool();
         }
 
         {

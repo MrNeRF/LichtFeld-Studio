@@ -1147,7 +1147,7 @@ namespace lfs::python {
             ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, BOX_BORDER_SIZE);
             const std::string id = "##pybox_" + std::to_string(parent_->next_box_id());
             ImGui::BeginChild(id.c_str(), {0, 0},
-                              ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY);
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
             break;
         }
         case LayoutType::GridFlow: {
@@ -1894,7 +1894,7 @@ namespace lfs::python {
                                nb::object color, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
         ImFont* const font = ImGui::GetFont();
-        dl->AddText(font, font->FontSize, ImVec2(x, y), tuple_to_color32(color), text.c_str());
+        dl->AddText(font, ImGui::GetFontSize(), ImVec2(x, y), tuple_to_color32(color), text.c_str());
     }
 
     void PyUILayout::draw_window_rect_filled(float x0, float y0, float x1, float y1,
@@ -1933,7 +1933,7 @@ namespace lfs::python {
                                       nb::object color) {
         auto* const dl = ImGui::GetWindowDrawList();
         ImFont* const font = ImGui::GetFont();
-        dl->AddText(font, font->FontSize, ImVec2(x, y), tuple_to_color32(color), text.c_str());
+        dl->AddText(font, ImGui::GetFontSize(), ImVec2(x, y), tuple_to_color32(color), text.c_str());
     }
 
     void PyUILayout::draw_window_triangle_filled(float x0, float y0, float x1, float y1, float x2, float y2,
@@ -2761,7 +2761,7 @@ namespace lfs::python {
     }
 
     bool PyUILayout::begin_child(const std::string& id, std::tuple<float, float> size, bool border) {
-        return ImGui::BeginChild(id.c_str(), {std::get<0>(size), std::get<1>(size)}, border ? ImGuiChildFlags_Border : ImGuiChildFlags_None);
+        return ImGui::BeginChild(id.c_str(), {std::get<0>(size), std::get<1>(size)}, border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None);
     }
 
     void PyUILayout::end_child() {
@@ -3752,7 +3752,7 @@ namespace lfs::python {
                 return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
-            "Open a file dialog to select a PLY file. Returns empty string if cancelled.");
+            "Open a file dialog to select a splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.");
 
         m.def(
             "open_mesh_file_dialog",
@@ -3831,6 +3831,15 @@ namespace lfs::python {
             },
             nb::arg("default_name") = "export",
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
+
+        m.def(
+            "save_usd_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveUsdFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for USD files. Returns empty string if cancelled.");
 
         m.def(
             "save_html_file_dialog",
@@ -4652,19 +4661,19 @@ namespace lfs::python {
             "register_file_associations", []() -> bool {
                 return lfs::vis::gui::registerFileAssociations();
             },
-            "Register LichtFeld Studio as default handler for .ply, .sog, .spz files (Windows only)");
+            "Register LichtFeld Studio as default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz files (Windows only)");
 
         m.def(
             "unregister_file_associations", []() -> bool {
                 return lfs::vis::gui::unregisterFileAssociations();
             },
-            "Remove LichtFeld Studio file associations for .ply, .sog, .spz (Windows only)");
+            "Remove LichtFeld Studio file associations for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)");
 
         m.def(
             "are_file_associations_registered", []() -> bool {
                 return lfs::vis::gui::areFileAssociationsRegistered();
             },
-            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz (Windows only)");
+            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)");
 
         m.def("get_pivot_mode", &get_pivot_mode, "Get pivot mode (0=Origin, 1=Bounds)");
 

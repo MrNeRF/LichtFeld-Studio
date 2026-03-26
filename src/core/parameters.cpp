@@ -50,6 +50,7 @@ namespace lfs::core {
             reset_every = apply(reset_every);
             refine_every = apply(refine_every);
             sh_degree_interval = apply(sh_degree_interval);
+            grow_until_iter = apply(grow_until_iter);
 
             for (auto* steps : {&eval_steps, &save_steps}) {
                 std::set<size_t> unique;
@@ -88,9 +89,11 @@ namespace lfs::core {
             nlohmann::json opt_json;
             opt_json["iterations"] = iterations;
             opt_json["means_lr"] = means_lr;
+            opt_json["means_lr_end"] = means_lr_end;
             opt_json["shs_lr"] = shs_lr;
             opt_json["opacity_lr"] = opacity_lr;
             opt_json["scaling_lr"] = scaling_lr;
+            opt_json["scaling_lr_end"] = scaling_lr_end;
             opt_json["rotation_lr"] = rotation_lr;
             opt_json["lambda_dssim"] = lambda_dssim;
             opt_json["min_opacity"] = min_opacity;
@@ -165,6 +168,17 @@ namespace lfs::core {
             opt_json["mask_threshold"] = mask_threshold;
             opt_json["use_alpha_as_mask"] = use_alpha_as_mask;
 
+            // LFS strategy parameters
+            opt_json["growth_grad_threshold"] = growth_grad_threshold;
+            opt_json["grow_fraction"] = grow_fraction;
+            opt_json["grow_until_iter"] = grow_until_iter;
+            opt_json["opacity_decay"] = opacity_decay;
+            opt_json["scale_decay"] = scale_decay;
+            opt_json["means_noise_weight"] = means_noise_weight;
+            opt_json["bounds_percentile"] = bounds_percentile;
+            opt_json["use_error_map"] = use_error_map;
+            opt_json["use_edge_map"] = use_edge_map;
+
             return opt_json;
         }
 
@@ -209,6 +223,31 @@ namespace lfs::core {
             return p;
         }
 
+        OptimizationParameters OptimizationParameters::lfs_defaults() {
+            auto p = OptimizationParameters{};
+            p.strategy = "lfs";
+            p.refine_every = 200;
+            p.start_refine = 0;
+            p.stop_refine = 28'500;
+            p.max_cap = 5'000'000;
+            p.min_opacity = 1.0f / 255.0f;
+            p.grad_threshold = 0.003f;
+            p.means_lr = 2e-5f;
+            p.means_lr_end = 2e-7f;
+            p.opacity_lr = 0.012f;
+            p.scaling_lr = 7e-3f;
+            p.scaling_lr_end = 5e-3f;
+            p.rotation_lr = 2e-3f;
+            p.shs_lr = 2e-3f;
+            p.lambda_dssim = 0.2f;
+            p.revised_opacity = true;
+            p.opacity_reg = 0.0f;
+            p.scale_reg = 0.0f;
+            p.use_error_map = true;
+            p.use_edge_map = true;
+            return p;
+        }
+
         OptimizationParameters OptimizationParameters::igs_plus_defaults() {
             auto p = OptimizationParameters{};
             p.strategy = "igs+";
@@ -233,9 +272,15 @@ namespace lfs::core {
             OptimizationParameters params;
             params.iterations = json["iterations"];
             params.means_lr = json["means_lr"];
+            if (json.contains("means_lr_end")) {
+                params.means_lr_end = json["means_lr_end"];
+            }
             params.shs_lr = json["shs_lr"];
             params.opacity_lr = json["opacity_lr"];
             params.scaling_lr = json["scaling_lr"];
+            if (json.contains("scaling_lr_end")) {
+                params.scaling_lr_end = json["scaling_lr_end"];
+            }
             params.rotation_lr = json["rotation_lr"];
             params.lambda_dssim = json["lambda_dssim"];
             params.min_opacity = json["min_opacity"];
@@ -263,7 +308,7 @@ namespace lfs::core {
 
             if (json.contains("strategy")) {
                 std::string strategy = json["strategy"];
-                if (strategy == "mcmc" || strategy == "adc" || strategy == "igs+") {
+                if (strategy == "mcmc" || strategy == "adc" || strategy == "lfs" || strategy == "igs+") {
                     params.strategy = strategy;
                 } else {
                     LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);
@@ -454,6 +499,35 @@ namespace lfs::core {
             }
             if (json.contains("use_alpha_as_mask")) {
                 params.use_alpha_as_mask = json["use_alpha_as_mask"];
+            }
+
+            // LFS strategy parameters
+            if (json.contains("growth_grad_threshold")) {
+                params.growth_grad_threshold = json["growth_grad_threshold"];
+            }
+            if (json.contains("grow_fraction")) {
+                params.grow_fraction = json["grow_fraction"];
+            }
+            if (json.contains("grow_until_iter")) {
+                params.grow_until_iter = json["grow_until_iter"];
+            }
+            if (json.contains("opacity_decay")) {
+                params.opacity_decay = json["opacity_decay"];
+            }
+            if (json.contains("scale_decay")) {
+                params.scale_decay = json["scale_decay"];
+            }
+            if (json.contains("means_noise_weight")) {
+                params.means_noise_weight = json["means_noise_weight"];
+            }
+            if (json.contains("bounds_percentile")) {
+                params.bounds_percentile = json["bounds_percentile"];
+            }
+            if (json.contains("use_error_map")) {
+                params.use_error_map = json["use_error_map"];
+            }
+            if (json.contains("use_edge_map")) {
+                params.use_edge_map = json["use_edge_map"];
             }
 
             return params;

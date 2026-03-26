@@ -162,6 +162,7 @@ namespace lfs::core {
     public:
         static GlobalArenaManager& instance();
         RasterizerMemoryArena& get_arena();
+        RasterizerMemoryArena* try_get_arena();
         void reset();
 
     private:

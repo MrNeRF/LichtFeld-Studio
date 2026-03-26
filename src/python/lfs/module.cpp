@@ -712,7 +712,7 @@ NB_MODULE(lichtfeld, m) {
             lfs::python::invoke_export(format, path, node_names, sh_degree);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML.");
+        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD.");
 
     m.def(
         "save_config_file",
