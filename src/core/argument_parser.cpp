@@ -728,6 +728,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             params->optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
         else if (strategy == "igs+")
             params->optimization = lfs::core::param::OptimizationParameters::igs_plus_defaults();
+        else if (strategy == "mcmc")
+            params->optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
         else
             params->optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
     }
