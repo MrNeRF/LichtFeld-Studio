@@ -166,11 +166,11 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Capture the current scene. Omit camera_index to grab the live viewport; pass camera_index to render from a dataset camera.",
+                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport region only"}}},
                         {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
                         {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
                     .required = {}},

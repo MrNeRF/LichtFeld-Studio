@@ -708,6 +708,7 @@ namespace lfs::vis {
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
         std::vector<WorkItem> pending_work;
+        std::vector<WorkItem> pending_render_work;
         {
             std::lock_guard lock(work_queue_mutex_);
             if (shutdown_started_)
@@ -715,9 +716,14 @@ namespace lfs::vis {
             shutdown_started_ = true;
             accepting_work_ = false;
             pending_work.swap(work_queue_);
+            pending_render_work.swap(render_work_queue_);
         }
 
         for (auto& work : pending_work) {
+            if (work.cancel)
+                work.cancel();
+        }
+        for (auto& work : pending_render_work) {
             if (work.cancel)
                 work.cancel();
         }
@@ -1106,6 +1112,27 @@ namespace lfs::vis {
         if (resize_done)
             glFinish();
 
+        {
+            std::vector<WorkItem> render_work;
+            {
+                std::lock_guard lock(work_queue_mutex_);
+                render_work.swap(render_work_queue_);
+            }
+            if (!render_work.empty()) {
+                processing_render_work_ = true;
+                try {
+                    for (auto& item : render_work) {
+                        if (item.run)
+                            item.run();
+                    }
+                } catch (...) {
+                    processing_render_work_ = false;
+                    throw;
+                }
+                processing_render_work_ = false;
+            }
+        }
+
         window_manager_->swapBuffers();
 
         python::flush_signals();
@@ -1286,6 +1313,20 @@ namespace lfs::vis {
         if (!accepting_work_)
             return false;
         work_queue_.push_back(std::move(work));
+        return true;
+    }
+
+    bool VisualizerImpl::postRenderWork(WorkItem work) {
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            if (!accepting_work_)
+                return false;
+            render_work_queue_.push_back(std::move(work));
+        }
+
+        if (window_manager_)
+            window_manager_->requestRedraw();
+
         return true;
     }
 
