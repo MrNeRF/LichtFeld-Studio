@@ -209,6 +209,7 @@ namespace lfs::core {
         struct LFS_CORE_API DatasetConfig {
             std::filesystem::path data_path = "";
             std::filesystem::path output_path = "";
+            std::string output_name = "";
             std::string images = "images";
             int resize_factor = -1;
             int test_every = 8;
@@ -260,6 +261,7 @@ namespace lfs::core {
         struct LFS_CORE_API ConvertParameters {
             std::filesystem::path input_path;
             std::filesystem::path output_path; // Empty = derive from input
+            std::filesystem::path output_name; // Empty = splat_ + number of steps
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;

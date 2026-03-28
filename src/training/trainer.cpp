@@ -1622,7 +1622,7 @@ namespace lfs::training {
 
         if (save_requested_.exchange(false)) {
             LOG_INFO("Saving checkpoint and PLY at iteration {}...", iter);
-            save_ply(params_.dataset.output_path, iter, /*join=*/false);
+            save_ply(params_.dataset.output_path, "", iter, /*join=*/false);
             auto result = save_checkpoint(iter);
             if (result) {
                 const auto checkpoint_path = lfs::training::checkpoint_output_path(params_.dataset.output_path);
@@ -1638,7 +1638,7 @@ namespace lfs::training {
         if (stop_requested_.load()) {
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
             LOG_DEBUG("Saving final model...");
-            save_ply(params_.dataset.output_path, iter, /*join=*/true);
+            save_ply(params_.dataset.output_path, params_.dataset.output_name, iter, /*join=*/true);
             is_running_ = false;
         }
     }
@@ -2885,7 +2885,7 @@ namespace lfs::training {
             // Final save if not already saved by stop request
             if (!stop_requested_.load() && !stop_token.stop_requested()) {
                 auto final_path = params_.dataset.output_path;
-                save_ply(final_path, params_.optimization.iterations, /*join=*/true);
+                save_ply(final_path, params_.dataset.output_name, params_.optimization.iterations, /*join=*/true);
             }
 
             if (progress_) {
@@ -2931,9 +2931,12 @@ namespace lfs::training {
         }
     }
 
-    void Trainer::save_ply(const std::filesystem::path& save_path, const int iter_num, const bool join_threads) {
+    void Trainer::save_ply(const std::filesystem::path& save_path, const std::string& filename, const int iter_num, const bool join_threads) {
+
+        std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
+
         const lfs::io::PlySaveOptions ply_options{
-            .output_path = save_path / ("splat_" + std::to_string(iter_num) + ".ply"),
+            .output_path = ply_output_path,
             .binary = true,
             .async = !join_threads};
 
@@ -3055,7 +3058,7 @@ namespace lfs::training {
     }
 
     void Trainer::save_final_ply_and_checkpoint(const int iteration) {
-        save_ply(params_.dataset.output_path, iteration, /*join=*/true);
+        save_ply(params_.dataset.output_path, params_.dataset.output_name, iteration, /*join=*/true);
     }
 
     std::expected<int, std::string> Trainer::load_checkpoint(const std::filesystem::path& checkpoint_path) {

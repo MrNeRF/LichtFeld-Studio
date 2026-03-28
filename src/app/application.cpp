@@ -69,6 +69,8 @@ namespace lfs::app {
                         checkpoint_params.dataset.data_path = params->dataset.data_path;
                     if (!params->dataset.output_path.empty())
                         checkpoint_params.dataset.output_path = params->dataset.output_path;
+                    if (!params->dataset.output_name.empty())
+                        checkpoint_params.dataset.output_name = params->dataset.output_name;
 
                     if (checkpoint_params.dataset.data_path.empty()) {
                         LOG_ERROR("Checkpoint has no dataset path and none provided via --data-path");
