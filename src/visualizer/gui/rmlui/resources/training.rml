@@ -359,6 +359,12 @@
             <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', 1)">+</button>
           </div>
+          <div class="setting-row" data-if="dep_mrnf" data-tooltip="training.tooltip.grow_until_iter">
+            <span class="prop-label">{{label_grow_until_iter}}</span>
+            <input type="text" class="number-input" data-value="grow_until_iter_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', 1)">+</button>
+          </div>
           <div class="setting-row" data-tooltip="training.tooltip.gradient_thr">
             <span class="prop-label">{{label_grad_threshold}}</span>
             <input type="text" class="number-input" data-value="grad_threshold_str" />

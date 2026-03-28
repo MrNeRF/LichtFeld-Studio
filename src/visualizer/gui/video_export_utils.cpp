@@ -5,7 +5,10 @@
 #include "gui/video_export_utils.hpp"
 #include "rendering/render_constants.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/training_manager.hpp"
 #include <format>
+#include <optional>
+#include <shared_mutex>
 
 namespace lfs::vis::gui {
 
@@ -101,12 +104,24 @@ namespace lfs::vis::gui {
             return glm::mat4(1.0f);
         }
 
+        [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
+            const lfs::vis::SceneManager& scene_manager) {
+            std::optional<std::shared_lock<std::shared_mutex>> lock;
+            if (const auto* tm = scene_manager.getTrainerManager()) {
+                if (const auto* trainer = tm->getTrainer()) {
+                    lock.emplace(trainer->getRenderMutex());
+                }
+            }
+            return lock;
+        }
+
     } // namespace
 
     std::expected<VideoExportSceneSnapshot, std::string> captureVideoExportSceneSnapshot(
         const lfs::vis::SceneManager& scene_manager) {
         VideoExportSceneSnapshot snapshot;
 
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const auto render_state = scene_manager.buildRenderState();
         const auto& scene = scene_manager.getScene();
 

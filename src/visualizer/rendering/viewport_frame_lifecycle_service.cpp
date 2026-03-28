@@ -72,10 +72,10 @@ namespace lfs::vis {
                                                                const SplitViewMode split_view_mode) const {
         DirtyMask dirty = 0;
         if (!has_viewport_output &&
-            (has_renderable_content || split_view_mode != SplitViewMode::Disabled)) {
+            (has_renderable_content || splitViewEnabled(split_view_mode))) {
             dirty |= DirtyFlag::ALL;
         }
-        if (split_view_mode != SplitViewMode::Disabled) {
+        if (splitViewEnabled(split_view_mode)) {
             dirty |= DirtyFlag::SPLIT_VIEW;
         }
         return dirty;

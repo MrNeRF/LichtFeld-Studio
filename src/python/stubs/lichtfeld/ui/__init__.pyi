@@ -2506,7 +2506,9 @@ def get_current_camera_id() -> int:
     """Get current camera ID for GT comparison"""
 
 def get_split_view_mode() -> str:
-    """Get split view mode (none, gt_comparison, ply_comparison)"""
+    """
+    Get split view mode (none, gt_comparison, ply_comparison, independent_dual)
+    """
 
 def get_speed_overlay() -> tuple[float, float, float, float]:
     """

@@ -41,7 +41,8 @@ namespace lfs::vis {
         [[nodiscard]] float sampleLinearDepthAt(int x,
                                                 int y,
                                                 const glm::ivec2& fallback_viewport_size,
-                                                const lfs::rendering::RenderingEngine* engine) const;
+                                                const lfs::rendering::RenderingEngine* engine,
+                                                std::optional<SplitViewPanelId> panel = std::nullopt) const;
 
     private:
         void invalidateCapture();

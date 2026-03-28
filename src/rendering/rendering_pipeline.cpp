@@ -119,6 +119,210 @@ namespace lfs::rendering {
         return renderGaussianImageResult(model, request, nullptr);
     }
 
+    Result<RenderingPipeline::DualImageRenderResult> RenderingPipeline::renderGaussianImagePair(
+        const lfs::core::SplatData& model,
+        const std::array<RasterRequest, 2>& requests) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderGaussianImagePair");
+
+        for (const auto& request : requests) {
+            if (request.viewport_size.x <= 0 || request.viewport_size.y <= 0 ||
+                request.viewport_size.x > 16384 || request.viewport_size.y > 16384) {
+                LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport_size.x, request.viewport_size.y);
+                return std::unexpected("Invalid viewport dimensions");
+            }
+        }
+
+        if (requests[0].gut || requests[1].gut ||
+            requests[0].equirectangular || requests[1].equirectangular) {
+            LOG_DEBUG(
+                "Falling back to independent dual gaussian renders because gut/equirectangular mode is not supported by the paired raster path");
+            DualImageRenderResult fallback;
+            for (size_t i = 0; i < fallback.views.size(); ++i) {
+                auto result = renderGaussianImageResult(model, requests[i], nullptr);
+                if (!result) {
+                    return std::unexpected(result.error());
+                }
+                fallback.views[i] = std::move(*result);
+            }
+            return fallback;
+        }
+
+        const size_t gaussian_count = static_cast<size_t>(model.size());
+
+        auto bg_data = background_.ptr<float>();
+        if (bg_data && background_.device() == lfs::core::Device::CUDA) {
+            float bg_values[3] = {
+                requests[0].background_color.r,
+                requests[0].background_color.g,
+                requests[0].background_color.b};
+            cudaMemcpy(bg_data, bg_values, 3 * sizeof(float), cudaMemcpyHostToDevice);
+        }
+
+        std::array<lfs::core::Camera, 2> cameras;
+        for (size_t i = 0; i < cameras.size(); ++i) {
+            auto camera_result = createCamera(requests[i]);
+            if (!camera_result) {
+                return std::unexpected(camera_result.error());
+            }
+            cameras[i] = std::move(*camera_result);
+        }
+
+        std::unique_ptr<Tensor> model_transforms_tensor;
+        if (!requests[0].model_transforms.empty()) {
+            std::vector<float> transform_data(requests[0].model_transforms.size() * 16);
+            for (size_t i = 0; i < requests[0].model_transforms.size(); ++i) {
+                const auto& mat = requests[0].model_transforms[i];
+                for (int row = 0; row < 4; ++row) {
+                    for (int col = 0; col < 4; ++col) {
+                        transform_data[i * 16 + row * 4 + col] = mat[col][row];
+                    }
+                }
+            }
+            model_transforms_tensor = std::make_unique<Tensor>(
+                Tensor::from_vector(transform_data,
+                                    {requests[0].model_transforms.size(), 4, 4},
+                                    lfs::core::Device::CPU)
+                    .cuda());
+        }
+
+        std::unique_ptr<Tensor> transform_indices_cuda;
+        Tensor* transform_indices_ptr = nullptr;
+        if (requests[0].transform_indices && requests[0].transform_indices->is_valid()) {
+            if (requests[0].transform_indices->device() == lfs::core::Device::CUDA) {
+                transform_indices_ptr = requests[0].transform_indices.get();
+            } else {
+                transform_indices_cuda = std::make_unique<Tensor>(requests[0].transform_indices->cuda());
+                transform_indices_ptr = transform_indices_cuda.get();
+            }
+        }
+        if (!tensorMatchesGaussianCount(transform_indices_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring transform_indices with stale size: model has {}, tensor has {}",
+                     gaussian_count, transform_indices_ptr->numel());
+            transform_indices_ptr = nullptr;
+            transform_indices_cuda.reset();
+        }
+
+        std::unique_ptr<Tensor> selection_mask_cuda;
+        Tensor* selection_mask_ptr = nullptr;
+        if (requests[0].selection_mask && requests[0].selection_mask->is_valid()) {
+            if (requests[0].selection_mask->device() == lfs::core::Device::CUDA) {
+                selection_mask_ptr = requests[0].selection_mask.get();
+            } else {
+                selection_mask_cuda = std::make_unique<Tensor>(requests[0].selection_mask->cuda());
+                selection_mask_ptr = selection_mask_cuda.get();
+            }
+        }
+        if (!tensorMatchesGaussianCount(selection_mask_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring selection_mask with stale size: model has {}, tensor has {}",
+                     gaussian_count, selection_mask_ptr->numel());
+            selection_mask_ptr = nullptr;
+            selection_mask_cuda.reset();
+        }
+
+        Tensor* preview_selection_ptr = requests[0].preview_selection_tensor;
+        if (!tensorMatchesGaussianCount(preview_selection_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring preview_selection_tensor with stale size: model has {}, tensor has {}",
+                     gaussian_count, preview_selection_ptr->numel());
+            preview_selection_ptr = nullptr;
+        }
+        // The dual path can render the live brush highlight from each view's cursor state
+        // without mutating the shared transient mask. Suppress the shared write when both
+        // views have active cursors so two streams never race on the same preview buffer.
+        if (preview_selection_ptr != nullptr &&
+            requests[0].cursor_active &&
+            requests[1].cursor_active) {
+            LOG_TRACE("Disabling shared preview_selection_tensor for batched dual render with two active cursors");
+            preview_selection_ptr = nullptr;
+        }
+
+        const Tensor* deleted_mask_ptr = requests[0].deleted_mask;
+        if (!tensorMatchesGaussianCount(deleted_mask_ptr, gaussian_count)) {
+            LOG_WARN("Ignoring deleted_mask with stale size: model has {}, tensor has {}",
+                     gaussian_count, deleted_mask_ptr->numel());
+            deleted_mask_ptr = nullptr;
+        }
+
+        const int effective_sh_degree = std::clamp(requests[0].sh_degree, 0, model.get_max_sh_degree());
+        if (effective_sh_degree != requests[0].sh_degree) {
+            LOG_TRACE("Clamped requested SH degree {} to model max {}", requests[0].sh_degree, effective_sh_degree);
+        }
+
+        try {
+            DualRasterizeTensorRequest dual_request{
+                .sh_degree_override = effective_sh_degree,
+                .show_rings = requests[0].show_rings,
+                .ring_width = requests[0].ring_width,
+                .model_transforms = model_transforms_tensor.get(),
+                .transform_indices = transform_indices_ptr,
+                .selection_mask = selection_mask_ptr,
+                .preview_selection_add_mode = requests[0].preview_selection_add_mode,
+                .preview_selection_out = preview_selection_ptr,
+                .show_center_markers = requests[0].show_center_markers,
+                .crop_box_transform = requests[0].crop_box_transform,
+                .crop_box_min = requests[0].crop_box_min,
+                .crop_box_max = requests[0].crop_box_max,
+                .crop_inverse = requests[0].crop_inverse,
+                .crop_desaturate = requests[0].crop_desaturate,
+                .crop_parent_node_index = requests[0].crop_parent_node_index,
+                .ellipsoid_transform = requests[0].ellipsoid_transform,
+                .ellipsoid_radii = requests[0].ellipsoid_radii,
+                .ellipsoid_inverse = requests[0].ellipsoid_inverse,
+                .ellipsoid_desaturate = requests[0].ellipsoid_desaturate,
+                .ellipsoid_parent_node_index = requests[0].ellipsoid_parent_node_index,
+                .view_volume_transform = requests[0].view_volume_transform,
+                .view_volume_min = requests[0].view_volume_min,
+                .view_volume_max = requests[0].view_volume_max,
+                .view_volume_cull = requests[0].view_volume_cull,
+                .deleted_mask = deleted_mask_ptr,
+                .far_plane = requests[0].far_plane,
+                .emphasized_node_mask = requests[0].emphasized_node_mask,
+                .dim_non_emphasized = requests[0].dim_non_emphasized,
+                .node_visibility_mask = requests[0].node_visibility_mask,
+                .emphasis_flash_intensity = requests[0].emphasis_flash_intensity,
+                .orthographic = requests[0].orthographic,
+                .ortho_scale = requests[0].ortho_scale,
+                .mip_filter = requests[0].mip_filter,
+                .view_states =
+                    std::array<DualRasterizeTensorViewState, 2>{
+                        DualRasterizeTensorViewState{
+                            .cursor_active = requests[0].cursor_active,
+                            .cursor_x = requests[0].cursor_x,
+                            .cursor_y = requests[0].cursor_y,
+                            .cursor_radius = requests[0].cursor_radius,
+                            .cursor_saturation_preview = requests[0].cursor_saturation_preview,
+                            .cursor_saturation_amount = requests[0].cursor_saturation_amount,
+                            .hovered_depth_id = requests[0].hovered_depth_id,
+                            .focused_gaussian_id = requests[0].focused_gaussian_id},
+                        DualRasterizeTensorViewState{
+                            .cursor_active = requests[1].cursor_active,
+                            .cursor_x = requests[1].cursor_x,
+                            .cursor_y = requests[1].cursor_y,
+                            .cursor_radius = requests[1].cursor_radius,
+                            .cursor_saturation_preview = requests[1].cursor_saturation_preview,
+                            .cursor_saturation_amount = requests[1].cursor_saturation_amount,
+                            .hovered_depth_id = requests[1].hovered_depth_id,
+                            .focused_gaussian_id = requests[1].focused_gaussian_id}}};
+
+            auto render_output = rasterize_tensor_pair(cameras, model, background_, dual_request);
+
+            DualImageRenderResult result;
+            for (size_t i = 0; i < result.views.size(); ++i) {
+                result.views[i] = ImageRenderResult{
+                    .image = std::move(render_output.images[i]),
+                    .depth = std::move(render_output.depths[i]),
+                    .valid = true,
+                    .far_plane = requests[i].far_plane,
+                    .orthographic = requests[i].orthographic};
+            }
+
+            return result;
+        } catch (const std::exception& e) {
+            LOG_ERROR("Batched rasterization failed: {}", e.what());
+            return std::unexpected(std::format("Batched rasterization failed: {}", e.what()));
+        }
+    }
+
     Result<RenderingPipeline::ImageRenderResult> RenderingPipeline::renderPointCloudImage(
         const lfs::core::SplatData& model,
         const RasterRequest& request) {

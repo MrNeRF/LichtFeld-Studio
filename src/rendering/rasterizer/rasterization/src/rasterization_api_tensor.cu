@@ -7,8 +7,15 @@
 #include "rasterization_api_tensor.h"
 #include "rasterization_config.h"
 #include <algorithm>
+#include <array>
+#include <cassert>
+#include <condition_variable>
+#include <exception>
 #include <functional>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <thread>
 #include <tuple>
 
 #include <thrust/copy.h>
@@ -18,6 +25,187 @@
 #include <thrust/iterator/counting_iterator.h>
 
 namespace lfs::rendering {
+
+    namespace {
+
+        [[noreturn]] void throw_cuda_runtime_error(const char* operation, const cudaError_t error) {
+            throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(error));
+        }
+
+        class CachedDualForwardExecutor {
+        public:
+            using Task = std::function<void(cudaStream_t)>;
+
+            static CachedDualForwardExecutor& instance() {
+                static CachedDualForwardExecutor executor;
+                return executor;
+            }
+
+            void run(std::array<Task, 2> tasks, const int device) {
+                std::lock_guard<std::mutex> run_lock(run_mutex_);
+
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    pending_tasks_ = tasks.size();
+                    for (size_t i = 0; i < tasks.size(); ++i) {
+                        states_[i].task = std::move(tasks[i]);
+                        states_[i].device = device;
+                        states_[i].error = nullptr;
+                        states_[i].has_task = true;
+                    }
+                }
+
+                task_cv_.notify_all();
+
+                std::unique_lock<std::mutex> lock(mutex_);
+                done_cv_.wait(lock, [&]() { return pending_tasks_ == 0; });
+
+                std::exception_ptr first_error;
+                for (const auto& state : states_) {
+                    if (state.error) {
+                        first_error = state.error;
+                        break;
+                    }
+                }
+                lock.unlock();
+
+                if (first_error) {
+                    std::rethrow_exception(first_error);
+                }
+            }
+
+        private:
+            struct WorkerState {
+                Task task;
+                std::exception_ptr error;
+                cudaStream_t stream = nullptr;
+                int stream_device = -1;
+                int device = -1;
+                bool has_task = false;
+            };
+
+            CachedDualForwardExecutor() {
+                for (size_t i = 0; i < workers_.size(); ++i) {
+                    workers_[i] = std::thread([this, i]() { worker_loop(i); });
+                }
+            }
+
+            ~CachedDualForwardExecutor() {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    stop_ = true;
+                }
+                task_cv_.notify_all();
+
+                for (auto& worker : workers_) {
+                    if (worker.joinable()) {
+                        worker.join();
+                    }
+                }
+            }
+
+            void worker_loop(const size_t index) {
+                for (;;) {
+                    Task task;
+                    int device = -1;
+
+                    {
+                        std::unique_lock<std::mutex> lock(mutex_);
+                        task_cv_.wait(lock, [&]() {
+                            return stop_ || states_[index].has_task;
+                        });
+
+                        if (stop_ && !states_[index].has_task) {
+                            break;
+                        }
+
+                        task = std::move(states_[index].task);
+                        device = states_[index].device;
+                        states_[index].has_task = false;
+                        states_[index].error = nullptr;
+                    }
+
+                    std::exception_ptr error;
+                    try {
+                        ensure_stream(index, device);
+                        task(states_[index].stream);
+                    } catch (...) {
+                        error = std::current_exception();
+                    }
+
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        states_[index].error = error;
+                        if (pending_tasks_ > 0) {
+                            --pending_tasks_;
+                            if (pending_tasks_ == 0) {
+                                done_cv_.notify_one();
+                            }
+                        }
+                    }
+                }
+
+                destroy_stream(index);
+            }
+
+            void ensure_stream(const size_t index, const int device) {
+                if (const cudaError_t set_device_err = cudaSetDevice(device); set_device_err != cudaSuccess) {
+                    throw_cuda_runtime_error("cudaSetDevice", set_device_err);
+                }
+
+                auto& state = states_[index];
+                if (state.stream != nullptr && state.stream_device == device) {
+                    return;
+                }
+
+                if (state.stream != nullptr) {
+                    if (state.stream_device >= 0) {
+                        cudaSetDevice(state.stream_device);
+                    }
+                    cudaStreamDestroy(state.stream);
+                    state.stream = nullptr;
+                    state.stream_device = -1;
+
+                    if (const cudaError_t reset_device_err = cudaSetDevice(device); reset_device_err != cudaSuccess) {
+                        throw_cuda_runtime_error("cudaSetDevice", reset_device_err);
+                    }
+                }
+
+                cudaStream_t stream = nullptr;
+                if (const cudaError_t create_err = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                    create_err != cudaSuccess) {
+                    throw_cuda_runtime_error("cudaStreamCreateWithFlags", create_err);
+                }
+
+                state.stream = stream;
+                state.stream_device = device;
+            }
+
+            void destroy_stream(const size_t index) noexcept {
+                auto& state = states_[index];
+                if (state.stream == nullptr) {
+                    return;
+                }
+
+                if (state.stream_device >= 0) {
+                    cudaSetDevice(state.stream_device);
+                }
+                cudaStreamDestroy(state.stream);
+                state.stream = nullptr;
+                state.stream_device = -1;
+            }
+
+            std::mutex run_mutex_;
+            std::mutex mutex_;
+            std::condition_variable task_cv_;
+            std::condition_variable done_cv_;
+            std::array<WorkerState, 2> states_;
+            std::array<std::thread, 2> workers_;
+            size_t pending_tasks_ = 0;
+            bool stop_ = false;
+        };
+
+    } // namespace
 
     inline std::function<char*(size_t)> resize_function_wrapper_tensor(Tensor& t) {
         return [&t](size_t N) -> char* {
@@ -45,6 +233,7 @@ namespace lfs::rendering {
         const bool* ptr = nullptr;
         int count = 0;
 
+        GpuBoolMask() = default;
         explicit GpuBoolMask(const std::vector<bool>& mask) : count(static_cast<int>(mask.size())) {
             if (count > 0) {
                 std::vector<uint8_t> data(count);
@@ -142,6 +331,155 @@ namespace lfs::rendering {
         }
     };
 
+    struct PreparedForwardSharedInputs {
+        PreparedModelTransforms prepared_transforms;
+        const float* model_transforms_ptr = nullptr;
+        int num_transforms = 0;
+
+        Tensor transform_indices_contig;
+        const int* transform_indices_ptr = nullptr;
+
+        Tensor selection_mask_contig;
+        const uint8_t* selection_mask_ptr = nullptr;
+
+        bool* preview_selection_ptr = nullptr;
+
+        Tensor crop_box_transform_contig;
+        Tensor crop_box_min_contig;
+        Tensor crop_box_max_contig;
+        const float* crop_box_transform_ptr = nullptr;
+        const float3* crop_box_min_ptr = nullptr;
+        const float3* crop_box_max_ptr = nullptr;
+
+        Tensor ellipsoid_transform_contig;
+        Tensor ellipsoid_radii_contig;
+        const float* ellipsoid_transform_ptr = nullptr;
+        const float3* ellipsoid_radii_ptr = nullptr;
+
+        Tensor view_volume_transform_contig;
+        Tensor view_volume_min_contig;
+        Tensor view_volume_max_contig;
+        const float* view_volume_transform_ptr = nullptr;
+        const float3* view_volume_min_ptr = nullptr;
+        const float3* view_volume_max_ptr = nullptr;
+
+        Tensor deleted_mask_contig;
+        const bool* deleted_mask_ptr = nullptr;
+
+        Tensor emphasized_node_mask_tensor;
+        const bool* emphasized_node_mask_ptr = nullptr;
+        int num_selected_nodes = 0;
+
+        GpuBoolMask visibility_mask;
+        ComputedVisibleIndices computed_visible;
+        const int* visible_indices_ptr = nullptr;
+        int actual_visible_count = 0;
+    };
+
+    [[nodiscard]] PreparedForwardSharedInputs prepare_forward_shared_inputs(
+        const int n_primitives,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices,
+        const Tensor* selection_mask,
+        Tensor* preview_selection_out,
+        const Tensor* crop_box_transform,
+        const Tensor* crop_box_min,
+        const Tensor* crop_box_max,
+        const Tensor* ellipsoid_transform,
+        const Tensor* ellipsoid_radii,
+        const Tensor* view_volume_transform,
+        const Tensor* view_volume_min,
+        const Tensor* view_volume_max,
+        const Tensor* deleted_mask,
+        const std::vector<bool>& emphasized_node_mask,
+        const std::vector<bool>& node_visibility_mask,
+        cudaStream_t stream = nullptr) {
+
+        PreparedForwardSharedInputs prepared;
+
+        prepared.prepared_transforms = PreparedModelTransforms::from(model_transforms);
+        prepared.model_transforms_ptr = prepared.prepared_transforms.ptr;
+        prepared.num_transforms = prepared.prepared_transforms.count;
+
+        if (transform_indices != nullptr && transform_indices->is_valid() && transform_indices->numel() > 0) {
+            prepared.transform_indices_contig = transform_indices->is_contiguous() ? *transform_indices : transform_indices->contiguous();
+            prepared.transform_indices_ptr = prepared.transform_indices_contig.ptr<int>();
+        }
+
+        if (selection_mask != nullptr && selection_mask->is_valid() && selection_mask->numel() > 0) {
+            prepared.selection_mask_contig = selection_mask->is_contiguous() ? *selection_mask : selection_mask->contiguous();
+            prepared.selection_mask_ptr = prepared.selection_mask_contig.ptr<uint8_t>();
+        }
+
+        prepared.preview_selection_ptr = (preview_selection_out && preview_selection_out->is_valid())
+                                             ? preview_selection_out->ptr<bool>()
+                                             : nullptr;
+
+        if (crop_box_transform != nullptr && crop_box_transform->is_valid() &&
+            crop_box_min != nullptr && crop_box_min->is_valid() &&
+            crop_box_max != nullptr && crop_box_max->is_valid()) {
+            prepared.crop_box_transform_contig = crop_box_transform->is_contiguous() ? *crop_box_transform : crop_box_transform->contiguous();
+            prepared.crop_box_min_contig = crop_box_min->is_contiguous() ? *crop_box_min : crop_box_min->contiguous();
+            prepared.crop_box_max_contig = crop_box_max->is_contiguous() ? *crop_box_max : crop_box_max->contiguous();
+            prepared.crop_box_transform_ptr = prepared.crop_box_transform_contig.ptr<float>();
+            prepared.crop_box_min_ptr = reinterpret_cast<const float3*>(prepared.crop_box_min_contig.ptr<float>());
+            prepared.crop_box_max_ptr = reinterpret_cast<const float3*>(prepared.crop_box_max_contig.ptr<float>());
+        }
+
+        if (ellipsoid_transform != nullptr && ellipsoid_transform->is_valid() &&
+            ellipsoid_radii != nullptr && ellipsoid_radii->is_valid()) {
+            prepared.ellipsoid_transform_contig = ellipsoid_transform->is_contiguous() ? *ellipsoid_transform : ellipsoid_transform->contiguous();
+            prepared.ellipsoid_radii_contig = ellipsoid_radii->is_contiguous() ? *ellipsoid_radii : ellipsoid_radii->contiguous();
+            prepared.ellipsoid_transform_ptr = prepared.ellipsoid_transform_contig.ptr<float>();
+            prepared.ellipsoid_radii_ptr = reinterpret_cast<const float3*>(prepared.ellipsoid_radii_contig.ptr<float>());
+        }
+
+        if (view_volume_transform != nullptr && view_volume_transform->is_valid() &&
+            view_volume_min != nullptr && view_volume_min->is_valid() &&
+            view_volume_max != nullptr && view_volume_max->is_valid()) {
+            prepared.view_volume_transform_contig = view_volume_transform->is_contiguous() ? *view_volume_transform : view_volume_transform->contiguous();
+            prepared.view_volume_min_contig = view_volume_min->is_contiguous() ? *view_volume_min : view_volume_min->contiguous();
+            prepared.view_volume_max_contig = view_volume_max->is_contiguous() ? *view_volume_max : view_volume_max->contiguous();
+            prepared.view_volume_transform_ptr = prepared.view_volume_transform_contig.ptr<float>();
+            prepared.view_volume_min_ptr = reinterpret_cast<const float3*>(prepared.view_volume_min_contig.ptr<float>());
+            prepared.view_volume_max_ptr = reinterpret_cast<const float3*>(prepared.view_volume_max_contig.ptr<float>());
+        }
+
+        if (deleted_mask != nullptr && deleted_mask->is_valid() && deleted_mask->numel() > 0) {
+            prepared.deleted_mask_contig = deleted_mask->is_contiguous() ? *deleted_mask : deleted_mask->contiguous();
+            prepared.deleted_mask_ptr = prepared.deleted_mask_contig.ptr<bool>();
+        }
+
+        prepared.num_selected_nodes = static_cast<int>(emphasized_node_mask.size());
+        if (prepared.num_selected_nodes > 0) {
+            std::vector<uint8_t> mask_data(static_cast<size_t>(prepared.num_selected_nodes));
+            std::transform(emphasized_node_mask.begin(), emphasized_node_mask.end(),
+                           mask_data.begin(), [](const bool value) -> uint8_t { return value ? 1 : 0; });
+            prepared.emphasized_node_mask_tensor = Tensor::from_blob(
+                                                       mask_data.data(),
+                                                       {static_cast<size_t>(prepared.num_selected_nodes)},
+                                                       lfs::core::Device::CPU,
+                                                       lfs::core::DataType::UInt8)
+                                                       .cuda();
+            prepared.emphasized_node_mask_ptr =
+                reinterpret_cast<const bool*>(prepared.emphasized_node_mask_tensor.ptr<uint8_t>());
+        }
+
+        prepared.visibility_mask = GpuBoolMask(node_visibility_mask);
+        prepared.computed_visible = ComputedVisibleIndices::compute(
+            n_primitives,
+            prepared.transform_indices_ptr ? &prepared.transform_indices_contig : nullptr,
+            node_visibility_mask,
+            prepared.visibility_mask,
+            stream);
+        prepared.visible_indices_ptr = prepared.computed_visible.count > 0
+                                           ? prepared.computed_visible.tensor.ptr<int>()
+                                           : nullptr;
+        prepared.actual_visible_count = static_cast<int>(prepared.computed_visible.count);
+
+        return prepared;
+    }
+
     std::tuple<Tensor, Tensor, Tensor>
     forward_wrapper_tensor(
         const Tensor& means,
@@ -222,204 +560,311 @@ namespace lfs::rendering {
         // Coordinate with training: wait for training, use shared arena
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
         arena.set_rendering_active(true);
-        arena.wait_for_training();
-        uint64_t frame_id = arena.begin_frame(true); // true = from_rendering
-        auto arena_allocator = arena.get_allocator(frame_id);
+        bool frame_started = false;
+        uint64_t frame_id = 0;
 
-        const std::function<char*(size_t)> per_primitive_buffers_func = arena_allocator;
-        const std::function<char*(size_t)> per_tile_buffers_func = arena_allocator;
-        const std::function<char*(size_t)> per_instance_buffers_func = arena_allocator;
+        try {
+            frame_id = arena.begin_frame(true); // true = from_rendering
+            frame_started = true;
+            auto arena_allocator = arena.get_allocator(frame_id);
 
-        Tensor w2c_contig = w2c.is_contiguous() ? w2c : w2c.contiguous();
-        Tensor cam_pos_contig = cam_position.is_contiguous() ? cam_position : cam_position.contiguous();
+            const std::function<char*(size_t)> per_primitive_buffers_func = arena_allocator;
+            const std::function<char*(size_t)> per_tile_buffers_func = arena_allocator;
+            const std::function<char*(size_t)> per_instance_buffers_func = arena_allocator;
 
-        const auto prepared_transforms = PreparedModelTransforms::from(model_transforms);
-        const float* model_transforms_ptr = prepared_transforms.ptr;
-        const int num_transforms = prepared_transforms.count;
+            Tensor w2c_contig = w2c.is_contiguous() ? w2c : w2c.contiguous();
+            Tensor cam_pos_contig = cam_position.is_contiguous() ? cam_position : cam_position.contiguous();
 
-        // Prepare transform indices pointer
-        const int* transform_indices_ptr = nullptr;
-        Tensor transform_indices_contig;
-        if (transform_indices != nullptr && transform_indices->is_valid() && transform_indices->numel() > 0) {
-            transform_indices_contig = transform_indices->is_contiguous() ? *transform_indices : transform_indices->contiguous();
-            transform_indices_ptr = transform_indices_contig.ptr<int>();
+            const auto prepared_inputs = prepare_forward_shared_inputs(
+                n_primitives,
+                model_transforms,
+                transform_indices,
+                selection_mask,
+                preview_selection_out,
+                crop_box_transform,
+                crop_box_min,
+                crop_box_max,
+                ellipsoid_transform,
+                ellipsoid_radii,
+                view_volume_transform,
+                view_volume_min,
+                view_volume_max,
+                deleted_mask,
+                emphasized_node_mask,
+                node_visibility_mask);
+
+            // Prepare screen positions output buffer if requested
+            float2* screen_positions_ptr = nullptr;
+            if (screen_positions_out != nullptr) {
+                *screen_positions_out = Tensor::empty({static_cast<size_t>(n_primitives), 2},
+                                                      lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                screen_positions_ptr = reinterpret_cast<float2*>(screen_positions_out->ptr<float>());
+            }
+
+            forward(
+                per_primitive_buffers_func,
+                per_tile_buffers_func,
+                per_instance_buffers_func,
+                reinterpret_cast<const float3*>(means.ptr<float>()),
+                reinterpret_cast<const float3*>(scales_raw.ptr<float>()),
+                reinterpret_cast<const float4*>(rotations_raw.ptr<float>()),
+                opacities_raw.ptr<float>(),
+                reinterpret_cast<const float3*>(sh_coefficients_0.ptr<float>()),
+                reinterpret_cast<const float3*>(sh_coefficients_rest.ptr<float>()),
+                reinterpret_cast<const float4*>(w2c_contig.ptr<float>()),
+                reinterpret_cast<const float3*>(cam_pos_contig.ptr<float>()),
+                image.ptr<float>(),
+                alpha.ptr<float>(),
+                depth.ptr<float>(),
+                n_primitives,
+                active_sh_bases,
+                total_bases_sh_rest,
+                width,
+                height,
+                focal_x,
+                focal_y,
+                center_x,
+                center_y,
+                near_plane,
+                far_plane,
+                show_rings,
+                ring_width,
+                prepared_inputs.model_transforms_ptr,
+                prepared_inputs.transform_indices_ptr,
+                prepared_inputs.num_transforms,
+                prepared_inputs.selection_mask_ptr,
+                screen_positions_ptr,
+                cursor_active,
+                cursor_x,
+                cursor_y,
+                cursor_radius,
+                preview_selection_add_mode,
+                prepared_inputs.preview_selection_ptr,
+                cursor_saturation_preview,
+                cursor_saturation_amount,
+                show_center_markers,
+                prepared_inputs.crop_box_transform_ptr,
+                prepared_inputs.crop_box_min_ptr,
+                prepared_inputs.crop_box_max_ptr,
+                crop_inverse,
+                crop_desaturate,
+                crop_parent_node_index,
+                prepared_inputs.ellipsoid_transform_ptr,
+                prepared_inputs.ellipsoid_radii_ptr,
+                ellipsoid_inverse,
+                ellipsoid_desaturate,
+                ellipsoid_parent_node_index,
+                prepared_inputs.view_volume_transform_ptr,
+                prepared_inputs.view_volume_min_ptr,
+                prepared_inputs.view_volume_max_ptr,
+                view_volume_cull,
+                prepared_inputs.deleted_mask_ptr,
+                hovered_depth_id,
+                focused_gaussian_id,
+                prepared_inputs.emphasized_node_mask_ptr,
+                prepared_inputs.num_selected_nodes,
+                dim_non_emphasized,
+                prepared_inputs.visibility_mask.ptr,
+                prepared_inputs.visibility_mask.count,
+                emphasis_flash_intensity,
+                orthographic,
+                ortho_scale,
+                mip_filter,
+                prepared_inputs.visible_indices_ptr,
+                prepared_inputs.actual_visible_count);
+
+            arena.end_frame(frame_id, true); // true = from_rendering
+            frame_started = false;
+            arena.set_rendering_active(false);
+
+            return {std::move(image), std::move(alpha), std::move(depth)};
+        } catch (...) {
+            if (frame_started) {
+                arena.end_frame(frame_id, true);
+            }
+            arena.set_rendering_active(false);
+            throw;
+        }
+    }
+
+    std::array<ForwardWrapperTensorResult, 2> forward_wrapper_tensor_dual(
+        const Tensor& means,
+        const Tensor& scales_raw,
+        const Tensor& rotations_raw,
+        const Tensor& opacities_raw,
+        const Tensor& sh_coefficients_0,
+        const Tensor& sh_coefficients_rest,
+        const std::array<ForwardWrapperTensorViewState, 2>& views,
+        const ForwardWrapperTensorSharedParams& shared) {
+
+        check_tensor_input(config::debug, means, "means");
+        check_tensor_input(config::debug, scales_raw, "scales_raw");
+        check_tensor_input(config::debug, rotations_raw, "rotations_raw");
+        check_tensor_input(config::debug, opacities_raw, "opacities_raw");
+        check_tensor_input(config::debug, sh_coefficients_0, "sh_coefficients_0");
+        check_tensor_input(config::debug, sh_coefficients_rest, "sh_coefficients_rest");
+
+        const int n_primitives = static_cast<int>(means.size(0));
+        const int total_bases_sh_rest = static_cast<int>(sh_coefficients_rest.size(1));
+        const std::vector<bool> empty_mask;
+        const std::vector<bool>& emphasized_node_mask =
+            shared.emphasized_node_mask ? *shared.emphasized_node_mask : empty_mask;
+        const std::vector<bool>& node_visibility_mask =
+            shared.node_visibility_mask ? *shared.node_visibility_mask : empty_mask;
+
+        std::array<ForwardWrapperTensorResult, 2> outputs;
+        for (size_t i = 0; i < outputs.size(); ++i) {
+            outputs[i].image = Tensor::empty(
+                {3, static_cast<size_t>(views[i].height), static_cast<size_t>(views[i].width)},
+                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            outputs[i].alpha = Tensor::empty(
+                {1, static_cast<size_t>(views[i].height), static_cast<size_t>(views[i].width)},
+                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            outputs[i].depth = Tensor::empty(
+                {1, static_cast<size_t>(views[i].height), static_cast<size_t>(views[i].width)},
+                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
 
-        // Prepare selection mask pointer
-        const uint8_t* selection_mask_ptr = nullptr;
-        Tensor selection_mask_contig;
-        if (selection_mask != nullptr && selection_mask->is_valid() && selection_mask->numel() > 0) {
-            selection_mask_contig = selection_mask->is_contiguous() ? *selection_mask : selection_mask->contiguous();
-            selection_mask_ptr = selection_mask_contig.ptr<uint8_t>();
+        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+        arena.set_rendering_active(true);
+        bool frame_started = false;
+        uint64_t frame_id = 0;
+        try {
+            frame_id = arena.begin_frame(true);
+            frame_started = true;
+            auto arena_allocator = arena.get_allocator(frame_id);
+
+            const auto cleanup = [&]() {
+                arena.end_frame(frame_id, true);
+                frame_started = false;
+                arena.set_rendering_active(false);
+            };
+
+            const auto prepared_inputs = prepare_forward_shared_inputs(
+                n_primitives,
+                shared.model_transforms,
+                shared.transform_indices,
+                shared.selection_mask,
+                shared.preview_selection_out,
+                shared.crop_box_transform,
+                shared.crop_box_min,
+                shared.crop_box_max,
+                shared.ellipsoid_transform,
+                shared.ellipsoid_radii,
+                shared.view_volume_transform,
+                shared.view_volume_min,
+                shared.view_volume_max,
+                shared.deleted_mask,
+                emphasized_node_mask,
+                node_visibility_mask);
+
+            std::array<Tensor, 2> w2c_contig;
+            std::array<Tensor, 2> cam_pos_contig;
+
+            int device = 0;
+            if (const cudaError_t get_device_err = cudaGetDevice(&device); get_device_err != cudaSuccess) {
+                throw_cuda_runtime_error("cudaGetDevice", get_device_err);
+            }
+
+            for (size_t i = 0; i < views.size(); ++i) {
+                w2c_contig[i] = views[i].w2c.is_contiguous() ? views[i].w2c : views[i].w2c.contiguous();
+                cam_pos_contig[i] = views[i].cam_position.is_contiguous()
+                                        ? views[i].cam_position
+                                        : views[i].cam_position.contiguous();
+            }
+
+            assert(
+                prepared_inputs.preview_selection_ptr == nullptr ||
+                !(views[0].cursor_active && views[1].cursor_active));
+
+            std::array<CachedDualForwardExecutor::Task, 2> tasks;
+            for (size_t i = 0; i < views.size(); ++i) {
+                tasks[i] = [&, i](cudaStream_t stream) {
+                    forward(
+                        arena_allocator,
+                        arena_allocator,
+                        arena_allocator,
+                        reinterpret_cast<const float3*>(means.ptr<float>()),
+                        reinterpret_cast<const float3*>(scales_raw.ptr<float>()),
+                        reinterpret_cast<const float4*>(rotations_raw.ptr<float>()),
+                        opacities_raw.ptr<float>(),
+                        reinterpret_cast<const float3*>(sh_coefficients_0.ptr<float>()),
+                        reinterpret_cast<const float3*>(sh_coefficients_rest.ptr<float>()),
+                        reinterpret_cast<const float4*>(w2c_contig[i].ptr<float>()),
+                        reinterpret_cast<const float3*>(cam_pos_contig[i].ptr<float>()),
+                        outputs[i].image.ptr<float>(),
+                        outputs[i].alpha.ptr<float>(),
+                        outputs[i].depth.ptr<float>(),
+                        n_primitives,
+                        shared.active_sh_bases,
+                        total_bases_sh_rest,
+                        views[i].width,
+                        views[i].height,
+                        views[i].focal_x,
+                        views[i].focal_y,
+                        views[i].center_x,
+                        views[i].center_y,
+                        shared.near_plane,
+                        shared.far_plane,
+                        shared.show_rings,
+                        shared.ring_width,
+                        prepared_inputs.model_transforms_ptr,
+                        prepared_inputs.transform_indices_ptr,
+                        prepared_inputs.num_transforms,
+                        prepared_inputs.selection_mask_ptr,
+                        nullptr,
+                        views[i].cursor_active,
+                        views[i].cursor_x,
+                        views[i].cursor_y,
+                        views[i].cursor_radius,
+                        shared.preview_selection_add_mode,
+                        prepared_inputs.preview_selection_ptr,
+                        views[i].cursor_saturation_preview,
+                        views[i].cursor_saturation_amount,
+                        shared.show_center_markers,
+                        prepared_inputs.crop_box_transform_ptr,
+                        prepared_inputs.crop_box_min_ptr,
+                        prepared_inputs.crop_box_max_ptr,
+                        shared.crop_inverse,
+                        shared.crop_desaturate,
+                        shared.crop_parent_node_index,
+                        prepared_inputs.ellipsoid_transform_ptr,
+                        prepared_inputs.ellipsoid_radii_ptr,
+                        shared.ellipsoid_inverse,
+                        shared.ellipsoid_desaturate,
+                        shared.ellipsoid_parent_node_index,
+                        prepared_inputs.view_volume_transform_ptr,
+                        prepared_inputs.view_volume_min_ptr,
+                        prepared_inputs.view_volume_max_ptr,
+                        shared.view_volume_cull,
+                        prepared_inputs.deleted_mask_ptr,
+                        views[i].hovered_depth_id,
+                        views[i].focused_gaussian_id,
+                        prepared_inputs.emphasized_node_mask_ptr,
+                        prepared_inputs.num_selected_nodes,
+                        shared.dim_non_emphasized,
+                        prepared_inputs.visibility_mask.ptr,
+                        prepared_inputs.visibility_mask.count,
+                        shared.emphasis_flash_intensity,
+                        shared.orthographic,
+                        shared.ortho_scale,
+                        shared.mip_filter,
+                        prepared_inputs.visible_indices_ptr,
+                        prepared_inputs.actual_visible_count,
+                        stream);
+                };
+            }
+
+            CachedDualForwardExecutor::instance().run(std::move(tasks), device);
+            cleanup();
+            return outputs;
+        } catch (...) {
+            if (frame_started) {
+                arena.end_frame(frame_id, true);
+            }
+            arena.set_rendering_active(false);
+            throw;
         }
-
-        // Prepare screen positions output buffer if requested
-        float2* screen_positions_ptr = nullptr;
-        if (screen_positions_out != nullptr) {
-            *screen_positions_out = Tensor::empty({static_cast<size_t>(n_primitives), 2},
-                                                  lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            screen_positions_ptr = reinterpret_cast<float2*>(screen_positions_out->ptr<float>());
-        }
-
-        // Preview-selection tensor (used by rectangle/lasso/polygon modes regardless of cursor state)
-        bool* const preview_selection_ptr = (preview_selection_out && preview_selection_out->is_valid())
-                                                ? preview_selection_out->ptr<bool>()
-                                                : nullptr;
-
-        // Prepare crop box parameters
-        const float* crop_box_transform_ptr = nullptr;
-        const float3* crop_box_min_ptr = nullptr;
-        const float3* crop_box_max_ptr = nullptr;
-        Tensor crop_box_transform_contig, crop_box_min_contig, crop_box_max_contig;
-        if (crop_box_transform != nullptr && crop_box_transform->is_valid() &&
-            crop_box_min != nullptr && crop_box_min->is_valid() &&
-            crop_box_max != nullptr && crop_box_max->is_valid()) {
-            crop_box_transform_contig = crop_box_transform->is_contiguous() ? *crop_box_transform : crop_box_transform->contiguous();
-            crop_box_min_contig = crop_box_min->is_contiguous() ? *crop_box_min : crop_box_min->contiguous();
-            crop_box_max_contig = crop_box_max->is_contiguous() ? *crop_box_max : crop_box_max->contiguous();
-            crop_box_transform_ptr = crop_box_transform_contig.ptr<float>();
-            crop_box_min_ptr = reinterpret_cast<const float3*>(crop_box_min_contig.ptr<float>());
-            crop_box_max_ptr = reinterpret_cast<const float3*>(crop_box_max_contig.ptr<float>());
-        }
-
-        // Prepare ellipsoid parameters
-        const float* ellipsoid_transform_ptr = nullptr;
-        const float3* ellipsoid_radii_ptr = nullptr;
-        Tensor ellipsoid_transform_contig, ellipsoid_radii_contig;
-        if (ellipsoid_transform != nullptr && ellipsoid_transform->is_valid() &&
-            ellipsoid_radii != nullptr && ellipsoid_radii->is_valid()) {
-            ellipsoid_transform_contig = ellipsoid_transform->is_contiguous() ? *ellipsoid_transform : ellipsoid_transform->contiguous();
-            ellipsoid_radii_contig = ellipsoid_radii->is_contiguous() ? *ellipsoid_radii : ellipsoid_radii->contiguous();
-            ellipsoid_transform_ptr = ellipsoid_transform_contig.ptr<float>();
-            ellipsoid_radii_ptr = reinterpret_cast<const float3*>(ellipsoid_radii_contig.ptr<float>());
-        }
-
-        // Prepare view-volume filter parameters
-        const float* view_volume_transform_ptr = nullptr;
-        const float3* view_volume_min_ptr = nullptr;
-        const float3* view_volume_max_ptr = nullptr;
-        Tensor view_volume_transform_contig, view_volume_min_contig, view_volume_max_contig;
-        if (view_volume_transform != nullptr && view_volume_transform->is_valid() &&
-            view_volume_min != nullptr && view_volume_min->is_valid() &&
-            view_volume_max != nullptr && view_volume_max->is_valid()) {
-            view_volume_transform_contig = view_volume_transform->is_contiguous() ? *view_volume_transform : view_volume_transform->contiguous();
-            view_volume_min_contig = view_volume_min->is_contiguous() ? *view_volume_min : view_volume_min->contiguous();
-            view_volume_max_contig = view_volume_max->is_contiguous() ? *view_volume_max : view_volume_max->contiguous();
-            view_volume_transform_ptr = view_volume_transform_contig.ptr<float>();
-            view_volume_min_ptr = reinterpret_cast<const float3*>(view_volume_min_contig.ptr<float>());
-            view_volume_max_ptr = reinterpret_cast<const float3*>(view_volume_max_contig.ptr<float>());
-        }
-
-        // Prepare deleted mask pointer
-        const bool* deleted_mask_ptr = nullptr;
-        Tensor deleted_mask_contig;
-        if (deleted_mask != nullptr && deleted_mask->is_valid() && deleted_mask->numel() > 0) {
-            deleted_mask_contig = deleted_mask->is_contiguous() ? *deleted_mask : deleted_mask->contiguous();
-            deleted_mask_ptr = deleted_mask_contig.ptr<bool>();
-        }
-
-        // Emphasized node mask (small, typically < 20 nodes)
-        const bool* emphasized_node_mask_ptr = nullptr;
-        Tensor emphasized_node_mask_tensor;
-        const int num_selected_nodes = static_cast<int>(emphasized_node_mask.size());
-        if (num_selected_nodes > 0) {
-            // vector<bool> is not contiguous, convert to uint8_t
-            std::vector<uint8_t> mask_data(num_selected_nodes);
-            std::transform(emphasized_node_mask.begin(), emphasized_node_mask.end(),
-                           mask_data.begin(), [](bool b) { return b ? 1 : 0; });
-            emphasized_node_mask_tensor = Tensor::from_blob(
-                                              mask_data.data(), {static_cast<size_t>(num_selected_nodes)},
-                                              lfs::core::Device::CPU, lfs::core::DataType::UInt8)
-                                              .cuda();
-            emphasized_node_mask_ptr = reinterpret_cast<const bool*>(emphasized_node_mask_tensor.ptr<uint8_t>());
-        }
-
-        const GpuBoolMask visibility_mask(node_visibility_mask);
-
-        // Compute visible_indices from transform_indices + node_visibility_mask on GPU
-        auto computed_visible = ComputedVisibleIndices::compute(
-            n_primitives, transform_indices, node_visibility_mask, visibility_mask);
-        const int* visible_indices_ptr = computed_visible.count > 0
-                                             ? computed_visible.tensor.ptr<int>()
-                                             : nullptr;
-        const int actual_visible_count = static_cast<int>(computed_visible.count);
-
-        forward(
-            per_primitive_buffers_func,
-            per_tile_buffers_func,
-            per_instance_buffers_func,
-            reinterpret_cast<const float3*>(means.ptr<float>()),
-            reinterpret_cast<const float3*>(scales_raw.ptr<float>()),
-            reinterpret_cast<const float4*>(rotations_raw.ptr<float>()),
-            opacities_raw.ptr<float>(),
-            reinterpret_cast<const float3*>(sh_coefficients_0.ptr<float>()),
-            reinterpret_cast<const float3*>(sh_coefficients_rest.ptr<float>()),
-            reinterpret_cast<const float4*>(w2c_contig.ptr<float>()),
-            reinterpret_cast<const float3*>(cam_pos_contig.ptr<float>()),
-            image.ptr<float>(),
-            alpha.ptr<float>(),
-            depth.ptr<float>(),
-            n_primitives,
-            active_sh_bases,
-            total_bases_sh_rest,
-            width,
-            height,
-            focal_x,
-            focal_y,
-            center_x,
-            center_y,
-            near_plane,
-            far_plane,
-            show_rings,
-            ring_width,
-            model_transforms_ptr,
-            transform_indices_ptr,
-            num_transforms,
-            selection_mask_ptr,
-            screen_positions_ptr,
-            cursor_active,
-            cursor_x,
-            cursor_y,
-            cursor_radius,
-            preview_selection_add_mode,
-            preview_selection_ptr,
-            cursor_saturation_preview,
-            cursor_saturation_amount,
-            show_center_markers,
-            crop_box_transform_ptr,
-            crop_box_min_ptr,
-            crop_box_max_ptr,
-            crop_inverse,
-            crop_desaturate,
-            crop_parent_node_index,
-            ellipsoid_transform_ptr,
-            ellipsoid_radii_ptr,
-            ellipsoid_inverse,
-            ellipsoid_desaturate,
-            ellipsoid_parent_node_index,
-            view_volume_transform_ptr,
-            view_volume_min_ptr,
-            view_volume_max_ptr,
-            view_volume_cull,
-            deleted_mask_ptr,
-            hovered_depth_id,
-            focused_gaussian_id,
-            emphasized_node_mask_ptr,
-            num_selected_nodes,
-            dim_non_emphasized,
-            visibility_mask.ptr,
-            visibility_mask.count,
-            emphasis_flash_intensity,
-            orthographic,
-            ortho_scale,
-            mip_filter,
-            visible_indices_ptr,
-            actual_visible_count);
-
-        arena.end_frame(frame_id, true); // true = from_rendering
-        arena.set_rendering_active(false);
-
-        return {std::move(image), std::move(alpha), std::move(depth)};
     }
 
     void brush_select_tensor(

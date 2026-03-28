@@ -1117,27 +1117,7 @@ namespace lfs::python {
                             return;
 
                         const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
-                        const auto scale = [ratio](const size_t v) {
-                            return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
-                        };
-                        opt.iterations = scale(opt.iterations);
-                        opt.start_refine = scale(opt.start_refine);
-                        opt.reset_every = scale(opt.reset_every);
-                        opt.stop_refine = scale(opt.stop_refine);
-                        opt.refine_every = scale(opt.refine_every);
-                        opt.sh_degree_interval = scale(opt.sh_degree_interval);
-
-                        auto scale_vec = [ratio](std::vector<size_t>& steps) {
-                            std::set<size_t> unique;
-                            for (const auto& s : steps) {
-                                size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(s) * ratio));
-                                if (scaled > 0)
-                                    unique.insert(scaled);
-                            }
-                            steps.assign(unique.begin(), unique.end());
-                        };
-                        scale_vec(opt.eval_steps);
-                        scale_vec(opt.save_steps);
+                        opt.scale_steps(ratio);
                     });
                 },
                 nb::arg("new_scaler"),

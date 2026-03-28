@@ -40,6 +40,10 @@ namespace lfs::rendering {
             const lfs::core::SplatData& splat_data,
             const ViewportRenderRequest& request) override;
 
+        Result<DualGaussianImageResult> renderGaussiansImagePair(
+            const lfs::core::SplatData& splat_data,
+            const std::array<ViewportRenderRequest, 2>& requests) override;
+
         Result<std::optional<int>> queryHoveredGaussianId(
             const lfs::core::SplatData& splat_data,
             const HoveredGaussianQueryRequest& request) override;
@@ -151,6 +155,9 @@ namespace lfs::rendering {
         Result<RenderingPipeline::ImageRenderResult> renderGaussiansRasterResult(
             const lfs::core::SplatData& splat_data,
             const ViewportRenderRequest& request);
+        Result<RenderingPipeline::DualImageRenderResult> renderGaussiansRasterResultPair(
+            const lfs::core::SplatData& splat_data,
+            const std::array<ViewportRenderRequest, 2>& requests);
         [[nodiscard]] static FrameMetadata makeFrameMetadata(const RenderingPipeline::ImageRenderResult& result);
         Result<GpuFrame> uploadRenderResultToGpuFrame(
             const RenderingPipeline::ImageRenderResult& result,

@@ -41,6 +41,10 @@ namespace lfs::core::events::ui {
     struct RenderSettingsChanged;
 } // namespace lfs::core::events::ui
 
+namespace lfs::core::events::cmd {
+    struct ToggleIndependentSplitView;
+} // namespace lfs::core::events::cmd
+
 namespace lfs::vis {
     class SceneManager;
 
@@ -117,6 +121,69 @@ namespace lfs::vis {
 
         void advanceSplitOffset();
         SplitViewInfo getSplitViewInfo() const;
+        [[nodiscard]] bool isSplitViewActive() const;
+        [[nodiscard]] bool isGTComparisonActive() const;
+        [[nodiscard]] bool isIndependentSplitViewActive() const;
+        [[nodiscard]] float getSplitPosition() const;
+        [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
+                                                                  const glm::vec2& viewport_size) const;
+        void setFocusedSplitPanel(SplitViewPanelId panel) { split_view_service_.setFocusedPanel(panel); }
+        [[nodiscard]] SplitViewPanelId getFocusedSplitPanel() const { return split_view_service_.focusedPanel(); }
+        [[nodiscard]] Viewport& resolvePanelViewport(Viewport& primary_viewport,
+                                                     SplitViewPanelId panel = SplitViewPanelId::Left);
+        [[nodiscard]] const Viewport& resolvePanelViewport(const Viewport& primary_viewport,
+                                                           SplitViewPanelId panel = SplitViewPanelId::Left) const;
+        [[nodiscard]] Viewport& resolveFocusedViewport(Viewport& primary_viewport);
+        [[nodiscard]] const Viewport& resolveFocusedViewport(const Viewport& primary_viewport) const;
+
+        struct ViewerPanelInfo {
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+            const Viewport* viewport = nullptr;
+            float x = 0.0f;
+            float y = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+            int render_width = 0;
+            int render_height = 0;
+
+            [[nodiscard]] bool valid() const {
+                return viewport != nullptr &&
+                       width > 0.0f &&
+                       height > 0.0f &&
+                       render_width > 0 &&
+                       render_height > 0;
+            }
+        };
+        struct MutableViewerPanelInfo {
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+            Viewport* viewport = nullptr;
+            float x = 0.0f;
+            float y = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+            int render_width = 0;
+            int render_height = 0;
+
+            [[nodiscard]] bool valid() const {
+                return viewport != nullptr &&
+                       width > 0.0f &&
+                       height > 0.0f &&
+                       render_width > 0 &&
+                       render_height > 0;
+            }
+        };
+        [[nodiscard]] std::optional<MutableViewerPanelInfo> resolveViewerPanel(
+            Viewport& primary_viewport,
+            const glm::vec2& viewport_pos,
+            const glm::vec2& viewport_size,
+            std::optional<glm::vec2> screen_point = std::nullopt,
+            std::optional<SplitViewPanelId> panel_override = std::nullopt);
+        [[nodiscard]] std::optional<ViewerPanelInfo> resolveViewerPanel(
+            const Viewport& primary_viewport,
+            const glm::vec2& viewport_pos,
+            const glm::vec2& viewport_size,
+            std::optional<glm::vec2> screen_point = std::nullopt,
+            std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
 
         struct ContentBounds {
             float x, y, width, height;
@@ -142,7 +209,7 @@ namespace lfs::vis {
         int pickCameraFrustum(const glm::vec2& mouse_pos);
 
         // Depth buffer access for tools (returns camera-space depth at pixel, or -1 if invalid)
-        float getDepthAtPixel(int x, int y) const;
+        float getDepthAtPixel(int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
         glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
@@ -152,9 +219,14 @@ namespace lfs::vis {
 
         void setCursorPreviewState(bool active, float x, float y, float radius, bool add_mode = true,
                                    lfs::core::Tensor* selection_tensor = nullptr,
-                                   bool saturation_mode = false, float saturation_amount = 0.0f);
+                                   bool saturation_mode = false, float saturation_amount = 0.0f,
+                                   std::optional<SplitViewPanelId> panel = std::nullopt,
+                                   int focused_gaussian_id = -1);
         void clearCursorPreviewState();
         [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
+        [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
+            return viewport_overlay_service_.cursorPreview().panel;
+        }
         void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
             const auto& cursor = viewport_overlay_service_.cursorPreview();
             x = cursor.x;
@@ -164,9 +236,13 @@ namespace lfs::vis {
         }
 
         // Rectangle preview
-        void setRectPreview(float x0, float y0, float x1, float y1, bool add_mode = true);
+        void setRectPreview(float x0, float y0, float x1, float y1, bool add_mode = true,
+                            std::optional<SplitViewPanelId> panel = std::nullopt);
         void clearRectPreview();
         [[nodiscard]] bool isRectPreviewActive() const { return viewport_overlay_service_.isRectPreviewActive(); }
+        [[nodiscard]] std::optional<SplitViewPanelId> getRectPreviewPanel() const {
+            return viewport_overlay_service_.rectPanel();
+        }
         void getRectPreview(float& x0, float& y0, float& x1, float& y1, bool& add_mode) const {
             x0 = viewport_overlay_service_.rectX0();
             y0 = viewport_overlay_service_.rectY0();
@@ -176,12 +252,17 @@ namespace lfs::vis {
         }
 
         // Polygon preview (render-space points, same coordinate system as screen_positions output)
-        void setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode = true);
+        void setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed,
+                               bool add_mode = true, std::optional<SplitViewPanelId> panel = std::nullopt);
         // Interactive polygon preview in world-space coordinates.
         void setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points, bool closed,
-                                         bool add_mode = true);
+                                         bool add_mode = true,
+                                         std::optional<SplitViewPanelId> panel = std::nullopt);
         void clearPolygonPreview();
         [[nodiscard]] bool isPolygonPreviewActive() const { return viewport_overlay_service_.isPolygonPreviewActive(); }
+        [[nodiscard]] std::optional<SplitViewPanelId> getPolygonPreviewPanel() const {
+            return viewport_overlay_service_.polygonPanel();
+        }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const {
             return viewport_overlay_service_.polygonPoints();
         }
@@ -195,9 +276,13 @@ namespace lfs::vis {
         }
 
         // Lasso preview
-        void setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode = true);
+        void setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode = true,
+                             std::optional<SplitViewPanelId> panel = std::nullopt);
         void clearLassoPreview();
         [[nodiscard]] bool isLassoPreviewActive() const { return viewport_overlay_service_.isLassoPreviewActive(); }
+        [[nodiscard]] std::optional<SplitViewPanelId> getLassoPreviewPanel() const {
+            return viewport_overlay_service_.lassoPanel();
+        }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const {
             return viewport_overlay_service_.lassoPoints();
         }
@@ -245,8 +330,10 @@ namespace lfs::vis {
         bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
     private:
+        void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
         void setupEventHandlers();
         void handleToggleSplitView();
+        void handleToggleIndependentSplitView(const lfs::core::events::cmd::ToggleIndependentSplitView& event);
         void handleToggleGTComparison();
         void handleGoToCamView(int cam_id);
         void handleSplitPositionChanged(float position);

@@ -17,9 +17,6 @@ def register_builtin_panels():
         from .training_panel import TrainingPanel
         lf.register_class(TrainingPanel)
 
-        from .scene_panel import ScenePanel
-        lf.register_class(ScenePanel)
-
         from .import_panels import DatasetImportPanel, ResumeCheckpointPanel
         lf.register_class(DatasetImportPanel)
         lf.ui.set_panel_enabled("lfs.dataset_import", False)
@@ -71,10 +68,6 @@ def register_builtin_panels():
         from .scripts_panel import ScriptsPanel
         lf.register_class(ScriptsPanel)
         lf.ui.set_panel_enabled("lfs.scripts", False)
-
-        from .history_panel import HistoryPanel
-        lf.register_class(HistoryPanel)
-        lf.ui.set_panel_enabled("lfs.history", False)
 
         from .input_settings_panel import InputSettingsPanel
         lf.register_class(InputSettingsPanel)

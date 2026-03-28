@@ -15,6 +15,33 @@ namespace lfs::vis {
         return gt_context_ && gt_context_->valid();
     }
 
+    bool SplitViewService::isActive(const RenderSettings& settings) const {
+        return splitViewEnabled(settings.split_view_mode);
+    }
+
+    bool SplitViewService::isGTComparisonActive(const RenderSettings& settings) const {
+        return splitViewUsesGTComparison(settings.split_view_mode);
+    }
+
+    bool SplitViewService::isIndependentDualActive(const RenderSettings& settings) const {
+        return splitViewUsesIndependentPanels(settings.split_view_mode);
+    }
+
+    std::optional<std::array<SplitViewPanelLayout, 2>>
+    SplitViewService::panelLayouts(const RenderSettings& settings, const int total_width) const {
+        if (!isIndependentDualActive(settings) || total_width <= 0) {
+            return std::nullopt;
+        }
+        return makeSplitViewPanelLayouts(total_width, settings.split_position);
+    }
+
+    std::optional<int> SplitViewService::dividerPixel(const RenderSettings& settings, const int total_width) const {
+        if (!isActive(settings) || total_width <= 0) {
+            return std::nullopt;
+        }
+        return splitViewDividerPixel(total_width, settings.split_position);
+    }
+
     std::optional<glm::ivec2> SplitViewService::gtContentDimensions() const {
         if (!hasValidGTContext()) {
             return std::nullopt;
@@ -25,6 +52,7 @@ namespace lfs::vis {
     void SplitViewService::clear() {
         clearGTContext();
         pre_gt_equirectangular_ = false;
+        focused_panel_ = SplitViewPanelId::Left;
         std::lock_guard<std::mutex> lock(info_mutex_);
         current_info_ = {};
     }
@@ -33,59 +61,107 @@ namespace lfs::vis {
         gt_context_.reset();
     }
 
-    bool SplitViewService::togglePLYComparison(RenderSettings& settings) {
-        const bool enabled = settings.split_view_mode != SplitViewMode::PLYComparison;
-        settings.split_view_mode = enabled ? SplitViewMode::PLYComparison : SplitViewMode::Disabled;
-        settings.split_view_offset = 0;
-        return enabled;
-    }
+    SplitViewService::ModeChangeResult SplitViewService::transitionToMode(RenderSettings& settings,
+                                                                          const SplitViewMode target_mode,
+                                                                          const Viewport* const primary_viewport,
+                                                                          const GTExitBehavior gt_exit_behavior) {
+        const SplitViewMode previous_mode = settings.split_view_mode;
+        ModeChangeResult result{
+            .previous_mode = previous_mode,
+            .current_mode = previous_mode,
+            .mode_changed = false,
+            .clear_viewport_output = false,
+            .restore_equirectangular = std::nullopt,
+        };
 
-    SplitViewService::GTToggleResult SplitViewService::toggleGTComparison(RenderSettings& settings) {
-        GTToggleResult result;
-        if (settings.split_view_mode == SplitViewMode::GTComparison) {
-            settings.split_view_mode = SplitViewMode::Disabled;
-            settings.equirectangular = pre_gt_equirectangular_;
-            result.restore_equirectangular = pre_gt_equirectangular_;
-            clearGTContext();
+        if (previous_mode == target_mode) {
             return result;
         }
 
-        pre_gt_equirectangular_ = settings.equirectangular;
-        settings.split_view_mode = SplitViewMode::GTComparison;
-        result.enabled = true;
+        const bool previous_gt = splitViewUsesGTComparison(previous_mode);
+        const bool target_gt = splitViewUsesGTComparison(target_mode);
+        if (!previous_gt && target_gt) {
+            pre_gt_equirectangular_ = settings.equirectangular;
+        } else if (previous_gt && !target_gt && gt_exit_behavior == GTExitBehavior::RestorePrevious) {
+            settings.equirectangular = pre_gt_equirectangular_;
+            result.restore_equirectangular = pre_gt_equirectangular_;
+        }
+
+        clearGTContext();
+        settings.split_view_mode = target_mode;
+        result.current_mode = target_mode;
+        result.mode_changed = true;
+        result.clear_viewport_output = splitViewEnabled(previous_mode) && !splitViewEnabled(target_mode);
+
+        if (splitViewUsesPLYComparison(target_mode) || splitViewUsesPLYComparison(previous_mode)) {
+            settings.split_view_offset = 0;
+        }
+
+        if (target_mode == SplitViewMode::IndependentDual) {
+            if (primary_viewport) {
+                secondary_viewport_ = *primary_viewport;
+            }
+            focused_panel_ = SplitViewPanelId::Left;
+        } else if (previous_mode == SplitViewMode::IndependentDual) {
+            focused_panel_ = SplitViewPanelId::Left;
+        }
+
         return result;
     }
 
-    void SplitViewService::handleSceneLoaded(RenderSettings& settings) {
-        clearGTContext();
+    SplitViewService::ModeChangeResult SplitViewService::toggleMode(RenderSettings& settings,
+                                                                    const SplitViewMode target_mode,
+                                                                    const Viewport* const primary_viewport) {
+        const SplitViewMode next_mode =
+            settings.split_view_mode == target_mode ? SplitViewMode::Disabled : target_mode;
+        return transitionToMode(settings, next_mode, primary_viewport, GTExitBehavior::RestorePrevious);
+    }
+
+    SplitViewService::ModeChangeResult SplitViewService::handleSceneLoaded(RenderSettings& settings) {
+        auto result = transitionToMode(
+            settings,
+            isGTComparisonActive(settings) ? SplitViewMode::Disabled : settings.split_view_mode,
+            nullptr,
+            GTExitBehavior::PreserveCurrent);
         {
             std::lock_guard<std::mutex> lock(info_mutex_);
             current_info_ = {};
         }
-        if (settings.split_view_mode == SplitViewMode::GTComparison) {
-            settings.split_view_mode = SplitViewMode::Disabled;
-        }
+        clearGTContext();
+        return result;
     }
 
-    void SplitViewService::handleSceneCleared(RenderSettings& settings) {
+    SplitViewService::ModeChangeResult SplitViewService::handleSceneCleared(RenderSettings& settings) {
+        auto result = transitionToMode(
+            settings,
+            SplitViewMode::Disabled,
+            nullptr,
+            GTExitBehavior::PreserveCurrent);
         clear();
-        settings.split_view_mode = SplitViewMode::Disabled;
         settings.split_view_offset = 0;
+        result.current_mode = SplitViewMode::Disabled;
+        result.clear_viewport_output = result.clear_viewport_output || splitViewEnabled(result.previous_mode);
+        return result;
     }
 
-    bool SplitViewService::handlePLYRemoved(RenderSettings& settings, SceneManager* scene_manager) {
-        if (settings.split_view_mode != SplitViewMode::PLYComparison || !scene_manager) {
-            return false;
+    SplitViewService::ModeChangeResult SplitViewService::handlePLYRemoved(RenderSettings& settings,
+                                                                          SceneManager* scene_manager) {
+        if (!splitViewUsesPLYComparison(settings.split_view_mode) || !scene_manager) {
+            return {};
         }
 
         const auto visible_nodes = scene_manager->getScene().getVisibleNodes();
         if (visible_nodes.size() >= 2) {
-            return false;
+            return {};
         }
 
-        settings.split_view_mode = SplitViewMode::Disabled;
+        auto result = transitionToMode(
+            settings,
+            SplitViewMode::Disabled,
+            nullptr,
+            GTExitBehavior::PreserveCurrent);
         settings.split_view_offset = 0;
-        return true;
+        return result;
     }
 
     void SplitViewService::advanceSplitOffset(RenderSettings& settings) {
@@ -111,7 +187,7 @@ namespace lfs::vis {
                                                       bool& request_viewport_prerender) {
         request_viewport_prerender = false;
 
-        if (settings.split_view_mode != SplitViewMode::GTComparison ||
+        if (!isGTComparisonActive(settings) ||
             current_camera_id < 0 ||
             !has_renderable_content ||
             !scene_manager) {

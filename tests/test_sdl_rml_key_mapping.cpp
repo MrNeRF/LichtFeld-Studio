@@ -37,6 +37,13 @@ namespace {
         EXPECT_EQ(lfs::vis::input::appKeyToSdlScancode(lfs::vis::input::KEY_KP_ENTER), SDL_SCANCODE_KP_ENTER);
     }
 
+    TEST(SdlKeyMappingTest, LayoutAwareKeycodesMapToAppKeys) {
+        EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_A), lfs::vis::input::KEY_A);
+        EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_Z), lfs::vis::input::KEY_Z);
+        EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_RETURN), lfs::vis::input::KEY_ENTER);
+        EXPECT_EQ(lfs::vis::input::sdlKeycodeToAppKey(SDLK_KP_PLUS), lfs::vis::input::KEY_KP_ADD);
+    }
+
     TEST(SdlRmlKeyMappingTest, ModifierTranslationPreservesMeta) {
         const int mods = lfs::vis::gui::sdlModsToRml(
             true, false, true, true);

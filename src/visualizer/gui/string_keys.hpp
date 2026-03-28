@@ -439,6 +439,19 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ZOOM = "controls.zoom";
     } // namespace Controls
 
+    namespace StatusBar {
+        inline constexpr const char* GT_COMPARE = "status_bar.gt_compare";
+        inline constexpr const char* CAMERA = "status_bar.camera";
+        inline constexpr const char* GROUND_TRUTH = "status_bar.ground_truth";
+        inline constexpr const char* GROUND_TRUTH_EXCLUDED = "status_bar.ground_truth_excluded";
+        inline constexpr const char* RENDERED = "status_bar.rendered";
+        inline constexpr const char* SPLIT_VIEW = "status_bar.split_view";
+        inline constexpr const char* PRIMARY_VIEW = "status_bar.primary_view";
+        inline constexpr const char* SECONDARY_VIEW = "status_bar.secondary_view";
+        inline constexpr const char* GPU = "status_bar.gpu";
+        inline constexpr const char* STRATEGY_DEFAULT = "status_bar.strategy_default";
+    } // namespace StatusBar
+
     namespace Preferences {
         inline constexpr const char* TITLE = "preferences.title";
         inline constexpr const char* LANGUAGE = "preferences.language";

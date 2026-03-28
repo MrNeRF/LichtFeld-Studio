@@ -18,10 +18,23 @@ namespace lfs::rendering {
             std::optional<FrameMetadata>& right_render_metadata,
             const float split_position) {
             FrameMetadata result{
-                .depth = left_render_metadata ? std::move(left_render_metadata->depth) : nullptr,
-                .depth_right = right_render_metadata ? std::move(right_render_metadata->depth) : nullptr,
-                .valid = true,
-                .split_position = split_position};
+                .depth_panels =
+                    {FramePanelMetadata{
+                         .depth = left_render_metadata && left_render_metadata->depth_panel_count > 0
+                                      ? std::move(left_render_metadata->depth_panels[0].depth)
+                                      : nullptr,
+                         .start_position = 0.0f,
+                         .end_position = split_position,
+                     },
+                     FramePanelMetadata{
+                         .depth = right_render_metadata && right_render_metadata->depth_panel_count > 0
+                                      ? std::move(right_render_metadata->depth_panels[0].depth)
+                                      : nullptr,
+                         .start_position = split_position,
+                         .end_position = 1.0f,
+                     }},
+                .depth_panel_count = 2,
+                .valid = true};
 
             if (left_render_metadata) {
                 result.depth_is_ndc = left_render_metadata->depth_is_ndc;
@@ -45,7 +58,7 @@ namespace lfs::rendering {
             const FrameMetadata& metadata) {
             return RenderingPipeline::ImageRenderResult{
                 .image = image ? *image : Tensor(),
-                .depth = metadata.depth ? *metadata.depth : Tensor(),
+                .depth = metadata.primaryDepth() ? *metadata.primaryDepth() : Tensor(),
                 .valid = image && image->is_valid(),
                 .depth_is_ndc = metadata.depth_is_ndc,
                 .external_depth_texture = metadata.external_depth_texture,
@@ -141,7 +154,7 @@ namespace lfs::rendering {
     Result<SplitViewRenderer::PanelRenderOutput> SplitViewRenderer::renderPanelContent(
         const size_t panel_index,
         const SplitViewPanel& panel,
-        const glm::ivec2& output_size,
+        const glm::ivec2& panel_size,
         RenderingEngine& engine) {
 
         switch (panel.content.type) {
@@ -151,16 +164,20 @@ namespace lfs::rendering {
                 return std::unexpected("Model3D panel has no model");
             }
 
-            const std::vector<glm::mat4> model_transforms{panel.content.model_transform};
-
             RenderingPipeline::ImageRenderResult upload_result;
             FrameMetadata metadata;
             if (panel.content.point_cloud_render.has_value()) {
                 const auto& render_state = *panel.content.point_cloud_render;
+                std::vector<glm::mat4> model_transforms_storage;
+                auto scene = render_state.scene;
+                if (!scene.model_transforms) {
+                    model_transforms_storage = {panel.content.model_transform};
+                    scene.model_transforms = &model_transforms_storage;
+                }
                 PointCloudRenderRequest point_cloud_request{
                     .frame_view = render_state.frame_view,
                     .render = render_state.render,
-                    .scene = {.model_transforms = &model_transforms},
+                    .scene = scene,
                     .filters = render_state.filters};
 
                 auto render_result = engine.renderPointCloudImage(*panel.content.model, point_cloud_request);
@@ -178,6 +195,12 @@ namespace lfs::rendering {
                 }
 
                 const auto& render_state = *panel.content.gaussian_render;
+                std::vector<glm::mat4> model_transforms_storage;
+                auto scene = render_state.scene;
+                if (!scene.model_transforms) {
+                    model_transforms_storage = {panel.content.model_transform};
+                    scene.model_transforms = &model_transforms_storage;
+                }
                 ViewportRenderRequest gaussian_request{
                     .frame_view = render_state.frame_view,
                     .scaling_modifier = render_state.scaling_modifier,
@@ -186,10 +209,7 @@ namespace lfs::rendering {
                     .sh_degree = render_state.sh_degree,
                     .gut = render_state.gut,
                     .equirectangular = render_state.equirectangular,
-                    .scene =
-                        {.model_transforms = &model_transforms,
-                         .transform_indices = nullptr,
-                         .node_visibility_mask = {}},
+                    .scene = scene,
                     .filters = render_state.filters,
                     .overlay = render_state.overlay};
 
@@ -208,7 +228,7 @@ namespace lfs::rendering {
                 return std::unexpected(upload_renderer.error());
             }
 
-            if (auto result = RenderingPipeline::uploadToScreen(upload_result, **upload_renderer, output_size);
+            if (auto result = RenderingPipeline::uploadToScreen(upload_result, **upload_renderer, panel_size);
                 !result) {
                 LOG_ERROR("Failed to upload model panel {}: {}", panel_index, result.error());
                 return std::unexpected(result.error());
@@ -240,6 +260,78 @@ namespace lfs::rendering {
         }
     }
 
+    Result<std::array<SplitViewRenderer::PanelRenderOutput, 2>> SplitViewRenderer::renderBatchedGaussianPanels(
+        const SplitViewRequest& request,
+        RenderingEngine& engine) {
+
+        const auto* model = request.panels[0].content.model;
+        if (model == nullptr || request.panels[1].content.model != model) {
+            return std::unexpected("Batched split render requires a shared model");
+        }
+
+        std::array<ViewportRenderRequest, 2> gaussian_requests;
+        std::array<glm::ivec2, 2> panel_sizes;
+        std::array<std::vector<glm::mat4>, 2> model_transforms_storage;
+
+        for (size_t i = 0; i < request.panels.size(); ++i) {
+            const auto& panel = request.panels[i];
+            if (panel.content.type != PanelContentType::Model3D ||
+                !panel.content.gaussian_render.has_value() ||
+                panel.content.point_cloud_render.has_value()) {
+                return std::unexpected("Batched split render requires gaussian Model3D panels");
+            }
+
+            const auto& render_state = *panel.content.gaussian_render;
+            auto scene = render_state.scene;
+            if (!scene.model_transforms) {
+                model_transforms_storage[i] = {panel.content.model_transform};
+                scene.model_transforms = &model_transforms_storage[i];
+            }
+
+            gaussian_requests[i] = ViewportRenderRequest{
+                .frame_view = render_state.frame_view,
+                .scaling_modifier = render_state.scaling_modifier,
+                .antialiasing = render_state.antialiasing,
+                .mip_filter = render_state.mip_filter,
+                .sh_degree = render_state.sh_degree,
+                .gut = render_state.gut,
+                .equirectangular = render_state.equirectangular,
+                .scene = scene,
+                .filters = render_state.filters,
+                .overlay = render_state.overlay};
+            panel_sizes[i] = render_state.frame_view.size;
+        }
+
+        auto render_result = engine.renderGaussiansImagePair(*model, gaussian_requests);
+        if (!render_result) {
+            LOG_ERROR("Failed to render batched gaussian split view: {}", render_result.error());
+            return std::unexpected(render_result.error());
+        }
+
+        std::array<PanelRenderOutput, 2> outputs;
+        for (size_t i = 0; i < outputs.size(); ++i) {
+            auto upload_renderer = ensurePanelUploadRenderer(i);
+            if (!upload_renderer) {
+                return std::unexpected(upload_renderer.error());
+            }
+
+            const auto upload_result = makeUploadResult((*render_result)[i].image, (*render_result)[i].metadata);
+            if (auto result = RenderingPipeline::uploadToScreen(upload_result, **upload_renderer, panel_sizes[i]);
+                !result) {
+                LOG_ERROR("Failed to upload batched model panel {}: {}", i, result.error());
+                return std::unexpected(result.error());
+            }
+
+            outputs[i] = PanelRenderOutput{
+                .texture_id = (*upload_renderer)->getUploadedColorTexture(),
+                .texcoord_scale = (*upload_renderer)->getTexcoordScale(),
+                .metadata = (*render_result)[i].metadata,
+                .flip_y = false};
+        }
+
+        return outputs;
+    }
+
     Result<SplitViewFrameResult> SplitViewRenderer::renderGpuFrame(
         const SplitViewRequest& request,
         RenderTargetPool& render_target_pool,
@@ -267,12 +359,38 @@ namespace lfs::rendering {
         glDisable(GL_SCISSOR_TEST);
 
         std::array<PanelRenderOutput, 2> panel_outputs;
-        for (size_t i = 0; i < request.panels.size(); ++i) {
-            auto panel_result = renderPanelContent(i, request.panels[i], request.composite.output_size, engine);
-            if (!panel_result) {
-                return std::unexpected(panel_result.error());
+        const bool can_batch_gaussians =
+            request.prefer_batched_gaussian_render &&
+            request.panels[0].content.type == PanelContentType::Model3D &&
+            request.panels[1].content.type == PanelContentType::Model3D &&
+            request.panels[0].content.gaussian_render.has_value() &&
+            request.panels[1].content.gaussian_render.has_value() &&
+            !request.panels[0].content.point_cloud_render.has_value() &&
+            !request.panels[1].content.point_cloud_render.has_value() &&
+            request.panels[0].content.model != nullptr &&
+            request.panels[0].content.model == request.panels[1].content.model;
+
+        if (can_batch_gaussians) {
+            auto batch_result = renderBatchedGaussianPanels(request, engine);
+            if (!batch_result) {
+                return std::unexpected(batch_result.error());
             }
-            panel_outputs[i] = std::move(*panel_result);
+            panel_outputs = std::move(*batch_result);
+        } else {
+            for (size_t i = 0; i < request.panels.size(); ++i) {
+                glm::ivec2 panel_size = request.composite.output_size;
+                if (request.panels[i].content.point_cloud_render.has_value()) {
+                    panel_size = request.panels[i].content.point_cloud_render->frame_view.size;
+                } else if (request.panels[i].content.gaussian_render.has_value()) {
+                    panel_size = request.panels[i].content.gaussian_render->frame_view.size;
+                }
+
+                auto panel_result = renderPanelContent(i, request.panels[i], panel_size, engine);
+                if (!panel_result) {
+                    return std::unexpected(panel_result.error());
+                }
+                panel_outputs[i] = std::move(*panel_result);
+            }
         }
 
         std::optional<FrameMetadata> left_render_metadata =
@@ -321,8 +439,12 @@ namespace lfs::rendering {
         if (auto result = compositeSplitView(
                 panel_outputs[0].texture_id, panel_outputs[1].texture_id,
                 request.panels[0].presentation.end_position,
+                {request.panels[0].presentation.start_position, request.panels[0].presentation.end_position},
+                {request.panels[1].presentation.start_position, request.panels[1].presentation.end_position},
                 panel_outputs[0].texcoord_scale,
                 panel_outputs[1].texcoord_scale,
+                request.panels[0].presentation.normalize_x_to_panel,
+                request.panels[1].presentation.normalize_x_to_panel,
                 flip_left, flip_right);
             !result) {
             LOG_ERROR("Failed to composite split view: {}", result.error());
@@ -345,8 +467,12 @@ namespace lfs::rendering {
         const GLuint left_texture,
         const GLuint right_texture,
         const float split_position,
+        const glm::vec2& left_region,
+        const glm::vec2& right_region,
         const glm::vec2& left_texcoord_scale,
         const glm::vec2& right_texcoord_scale,
+        const bool normalize_left_x,
+        const bool normalize_right_x,
         const bool flip_left_y,
         const bool flip_right_y) {
 
@@ -377,6 +503,18 @@ namespace lfs::rendering {
 
         if (auto result = split_shader_.set("rightTexcoordScale", right_texcoord_scale); !result)
             LOG_TRACE("Uniform 'rightTexcoordScale' not found in shader: {}", result.error());
+
+        if (auto result = split_shader_.set("leftRegion", left_region); !result)
+            LOG_TRACE("Uniform 'leftRegion' not found in shader: {}", result.error());
+
+        if (auto result = split_shader_.set("rightRegion", right_region); !result)
+            LOG_TRACE("Uniform 'rightRegion' not found in shader: {}", result.error());
+
+        if (auto result = split_shader_.set("normalizeLeftX", normalize_left_x); !result)
+            LOG_TRACE("Uniform 'normalizeLeftX' not found in shader: {}", result.error());
+
+        if (auto result = split_shader_.set("normalizeRightX", normalize_right_x); !result)
+            LOG_TRACE("Uniform 'normalizeRightX' not found in shader: {}", result.error());
 
         if (auto result = split_shader_.set("flipLeftY", flip_left_y); !result)
             LOG_TRACE("Uniform 'flipLeftY' not found in shader: {}", result.error());

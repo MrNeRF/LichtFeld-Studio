@@ -53,6 +53,7 @@ namespace lfs::vis::input {
         ZOOM_SPEED_DOWN,
         // View
         TOGGLE_SPLIT_VIEW,
+        TOGGLE_INDEPENDENT_SPLIT_VIEW,
         TOGGLE_GT_COMPARISON,
         TOGGLE_DEPTH_MODE, // Deprecated: migrated to TOGGLE_SELECTION_DEPTH_FILTER on load
         CYCLE_PLY,
@@ -216,6 +217,7 @@ namespace lfs::vis::input {
         void startCapture(ToolMode mode, Action action);
         void cancelCapture();
         void captureKey(int key, int mods);
+        void captureKey(int physical_key, int logical_key, int mods);
         void captureMouseButton(int button, int mods);
         void updateCapture();
         bool isCapturing() const { return capture_state_.active; }

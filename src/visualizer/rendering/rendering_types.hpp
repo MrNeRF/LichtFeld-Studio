@@ -6,7 +6,9 @@
 
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/render_constants.hpp"
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <glm/glm.hpp>
 #include <string>
 
@@ -17,7 +19,74 @@ namespace lfs::vis {
     enum class SplitViewMode {
         Disabled,
         PLYComparison,
-        GTComparison
+        GTComparison,
+        IndependentDual
+    };
+
+    enum class SplitViewPanelId : uint8_t {
+        Left = 0,
+        Right = 1
+    };
+
+    [[nodiscard]] inline bool splitViewEnabled(const SplitViewMode mode) {
+        return mode != SplitViewMode::Disabled;
+    }
+
+    [[nodiscard]] inline bool splitViewUsesComparisonPanels(const SplitViewMode mode) {
+        return mode == SplitViewMode::PLYComparison || mode == SplitViewMode::GTComparison;
+    }
+
+    [[nodiscard]] inline bool splitViewUsesPLYComparison(const SplitViewMode mode) {
+        return mode == SplitViewMode::PLYComparison;
+    }
+
+    [[nodiscard]] inline bool splitViewUsesGTComparison(const SplitViewMode mode) {
+        return mode == SplitViewMode::GTComparison;
+    }
+
+    [[nodiscard]] inline bool splitViewUsesIndependentPanels(const SplitViewMode mode) {
+        return mode == SplitViewMode::IndependentDual;
+    }
+
+    struct SplitViewPanelLayout {
+        SplitViewPanelId panel = SplitViewPanelId::Left;
+        int x = 0;
+        int width = 0;
+        float start_position = 0.0f;
+        float end_position = 1.0f;
+    };
+
+    [[nodiscard]] inline size_t splitViewPanelIndex(const SplitViewPanelId panel) {
+        return panel == SplitViewPanelId::Right ? 1u : 0u;
+    }
+
+    [[nodiscard]] inline int splitViewDividerPixel(const int total_width, const float split_position) {
+        if (total_width <= 1) {
+            return std::max(total_width, 0);
+        }
+
+        return std::clamp(
+            static_cast<int>(std::lround(static_cast<float>(total_width) * split_position)),
+            1,
+            total_width - 1);
+    }
+
+    [[nodiscard]] inline std::array<SplitViewPanelLayout, 2> makeSplitViewPanelLayouts(
+        const int total_width,
+        const float split_position) {
+        const int divider_x = splitViewDividerPixel(total_width, split_position);
+        return {{
+            {.panel = SplitViewPanelId::Left,
+             .x = 0,
+             .width = divider_x,
+             .start_position = 0.0f,
+             .end_position = split_position},
+            {.panel = SplitViewPanelId::Right,
+             .x = divider_x,
+             .width = std::max(total_width - divider_x, 0),
+             .start_position = split_position,
+             .end_position = 1.0f},
+        }};
     };
 
     enum class SelectionPreviewMode {
@@ -161,6 +230,8 @@ namespace lfs::vis {
 
     struct SplitViewInfo {
         bool enabled = false;
+        std::string mode_label;
+        std::string detail_label;
         std::string left_name;
         std::string right_name;
     };

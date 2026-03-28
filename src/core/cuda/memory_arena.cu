@@ -69,21 +69,29 @@ namespace lfs::core {
         frame_contexts_.clear();
     }
 
-    RasterizerMemoryArena::RasterizerMemoryArena(RasterizerMemoryArena&& other) noexcept
-        : device_arenas_(std::move(other.device_arenas_)),
-          frame_contexts_(std::move(other.frame_contexts_)),
-          config_(other.config_),
-          frame_counter_(other.frame_counter_.load()),
-          generation_counter_(other.generation_counter_.load()),
-          creation_time_(other.creation_time_),
-          total_frames_processed_(other.total_frames_processed_.load()) {
+    RasterizerMemoryArena::RasterizerMemoryArena(RasterizerMemoryArena&& other) noexcept {
+        std::scoped_lock lock(other.arena_mutex_, other.frame_mutex_, other.sync_mutex_);
+        device_arenas_ = std::move(other.device_arenas_);
+        frame_contexts_ = std::move(other.frame_contexts_);
+        config_ = other.config_;
+        frame_counter_ = other.frame_counter_.load();
+        generation_counter_ = other.generation_counter_.load();
+        creation_time_ = other.creation_time_;
+        total_frames_processed_ = other.total_frames_processed_.load();
+        active_frames_ = other.active_frames_;
+        pending_render_frames_ = other.pending_render_frames_;
+        active_training_frames_ = other.active_training_frames_;
     }
 
     RasterizerMemoryArena& RasterizerMemoryArena::operator=(RasterizerMemoryArena&& other) noexcept {
         if (this != &other) {
-            std::lock_guard<std::mutex> lock1(arena_mutex_);
-            std::lock_guard<std::mutex> lock2(other.arena_mutex_);
-
+            std::scoped_lock lock(
+                arena_mutex_,
+                other.arena_mutex_,
+                frame_mutex_,
+                other.frame_mutex_,
+                sync_mutex_,
+                other.sync_mutex_);
             device_arenas_ = std::move(other.device_arenas_);
             frame_contexts_ = std::move(other.frame_contexts_);
             config_ = other.config_;
@@ -91,6 +99,9 @@ namespace lfs::core {
             generation_counter_ = other.generation_counter_.load();
             creation_time_ = other.creation_time_;
             total_frames_processed_ = other.total_frames_processed_.load();
+            active_frames_ = other.active_frames_;
+            pending_render_frames_ = other.pending_render_frames_;
+            active_training_frames_ = other.active_training_frames_;
         }
         return *this;
     }
@@ -126,12 +137,15 @@ namespace lfs::core {
     }
 
     uint64_t RasterizerMemoryArena::begin_frame(bool from_rendering) {
-        // Training waits for rendering; rendering skips this
-        if (!from_rendering) {
-            while (rendering_active_.load(std::memory_order_acquire)) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
+        {
+            std::unique_lock<std::mutex> sync_lock(sync_mutex_);
+            sync_cv_.wait(sync_lock, [this, from_rendering]() {
+                return active_frames_ == 0 && (from_rendering || pending_render_frames_ == 0);
+            });
+            ++active_frames_;
+            if (!from_rendering) {
+                ++active_training_frames_;
             }
-            active_training_frames_.fetch_add(1, std::memory_order_release);
         }
 
         uint64_t frame_id = frame_counter_.fetch_add(1, std::memory_order_relaxed);
@@ -177,10 +191,6 @@ namespace lfs::core {
     }
 
     void RasterizerMemoryArena::end_frame(uint64_t frame_id, bool from_rendering) {
-        if (!from_rendering) {
-            active_training_frames_.fetch_sub(1, std::memory_order_release);
-        }
-
         // Track peak usage before resetting
         int device;
         cudaError_t err = cudaGetDevice(&device);
@@ -217,6 +227,23 @@ namespace lfs::core {
 
         // Cleanup old frames - keep only last 3
         cleanup_frames(3);
+
+        {
+            std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+            if (active_frames_ > 0) {
+                --active_frames_;
+            } else {
+                LOG_WARN("RasterizerMemoryArena::end_frame called with no active arena frames");
+            }
+            if (!from_rendering) {
+                if (active_training_frames_ > 0) {
+                    --active_training_frames_;
+                } else {
+                    LOG_WARN("RasterizerMemoryArena::end_frame called with no active training frames");
+                }
+            }
+        }
+        sync_cv_.notify_all();
     }
 
     void RasterizerMemoryArena::log_memory_status(uint64_t frame_id, bool force) {
@@ -354,8 +381,7 @@ namespace lfs::core {
     }
 
     void RasterizerMemoryArena::full_reset() {
-        const std::lock_guard<std::mutex> lock1(arena_mutex_);
-        const std::lock_guard<std::mutex> lock2(frame_mutex_);
+        const std::scoped_lock lock(arena_mutex_, frame_mutex_, sync_mutex_);
 
         std::erase_if(frame_contexts_, [](const auto& kv) { return !kv.second.is_active; });
 
@@ -368,7 +394,12 @@ namespace lfs::core {
             }
         }
 
+        active_frames_ = 0;
+        pending_render_frames_ = 0;
+        active_training_frames_ = 0;
+
         empty_cuda_cache();
+        sync_cv_.notify_all();
         LOG_DEBUG("Arena reset");
     }
 
@@ -1020,9 +1051,26 @@ namespace lfs::core {
         arena_.reset();
     }
 
-    void RasterizerMemoryArena::wait_for_training() const {
-        while (active_training_frames_.load(std::memory_order_acquire) > 0) {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+    bool RasterizerMemoryArena::is_rendering_active() const {
+        std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+        return pending_render_frames_ > 0;
+    }
+
+    void RasterizerMemoryArena::set_rendering_active(bool active) {
+        bool should_notify = false;
+        {
+            std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+            if (active) {
+                ++pending_render_frames_;
+            } else if (pending_render_frames_ > 0) {
+                --pending_render_frames_;
+                should_notify = pending_render_frames_ == 0;
+            } else {
+                LOG_WARN("RasterizerMemoryArena::set_rendering_active(false) called with no pending render frames");
+            }
+        }
+        if (should_notify) {
+            sync_cv_.notify_all();
         }
     }
 

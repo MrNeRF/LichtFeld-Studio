@@ -136,6 +136,32 @@ namespace lfs::vis {
         EXPECT_EQ(toggle_split_count, 0);
     }
 
+    TEST_F(InputControllerFocusTest, GlobalShortcutsUseLogicalKeyWhileMovementUsesPhysicalKey) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        lfs::event::ScopedHandler handlers;
+        int undo_count = 0;
+        handlers.subscribe<core::events::cmd::Undo>(
+            [&](const auto&) { ++undo_count; });
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        router.endMouseButton(input::ACTION_RELEASE);
+
+        controller.handleKey(input::KEY_W, input::KEY_Z, 0, input::ACTION_PRESS, input::KEYMOD_CTRL);
+
+        EXPECT_EQ(undo_count, 1);
+        EXPECT_FALSE(controller.isContinuousInputActive());
+
+        controller.handleKey(input::KEY_W, input::KEY_Z, 0, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        EXPECT_TRUE(controller.isContinuousInputActive());
+    }
+
     TEST_F(InputControllerFocusTest, StaleMouseCaptureDoesNotRequireSecondViewportClick) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -183,6 +209,24 @@ namespace lfs::vis {
 
         EXPECT_EQ(router.pointerTarget(2500.0, 2500.0), input::InputTarget::Viewport);
         EXPECT_EQ(router.hoverTarget(2500.0, 2500.0), input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, SplitToggleClearsActiveCameraDrag) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        controller.handleMouseButton(static_cast<int>(input::AppMouseButton::MIDDLE),
+                                     input::ACTION_PRESS, 40.0, 50.0);
+
+        ASSERT_TRUE(controller.isContinuousInputActive());
+
+        core::events::cmd::ToggleSplitView{}.emit();
+
+        EXPECT_FALSE(controller.isContinuousInputActive());
     }
 
     TEST_F(InputControllerFocusTest, PointerTargetsExposeHoverAndCapturedTargets) {

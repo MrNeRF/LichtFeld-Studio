@@ -1,190 +1,81 @@
 <rml>
 <head>
     <link type="text/rcss" href="scene_tree.rcss"/>
-    <link type="text/rcss" href="history_panel.rcss"/>
+    <link type="text/rcss" href="history_shared.rcss"/>
 </head>
-<body id="body" data-model="scene_panel">
+<body id="body">
     <div class="scene-header">
         <div class="scene-header-row">
             <div class="scene-tab-bar">
-                <button type="button"
-                        class="scene-tab"
-                        data-class-active="active_tab == 'scene'"
-                        data-event-click="switch_tab('scene')">Scene</button>
-                <button type="button"
-                        class="scene-tab"
-                        data-class-active="active_tab == 'history'"
-                        data-event-click="switch_tab('history')">History</button>
+                <button id="scene-tab" type="button" class="scene-tab">Scene</button>
+                <button id="history-tab" type="button" class="scene-tab">History</button>
             </div>
         </div>
-        <div class="scene-chip-row" data-if="show_tree" data-class-hidden="!show_scene_tab">
-            <span class="scene-chip scene-chip--accent">{{ summary_model_chip }}</span>
-            <span class="scene-chip">{{ summary_node_chip }}</span>
-            <span class="scene-chip">{{ summary_selection_chip }}</span>
-            <span class="scene-chip" data-if="show_filter_chip">{{ summary_filter_chip }}</span>
+        <div id="scene-chip-row" class="scene-chip-row">
+            <span id="summary-model-chip" class="scene-chip scene-chip--accent"></span>
+            <span id="summary-node-chip" class="scene-chip"></span>
+            <span id="summary-selection-chip" class="scene-chip"></span>
+            <span id="summary-filter-chip" class="scene-chip"></span>
         </div>
     </div>
 
-    <div id="search-container" data-class-hidden="!show_scene_tab">
-        <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
-        <input id="filter-input" type="text" data-attr-placeholder="search_placeholder" />
-        <button id="filter-clear" type="button" data-if="show_filter_clear">
-            <img src="../icon/scene/x.png" />
-        </button>
-    </div>
-    <div id="tree-container" data-class-hidden="!show_scene_tab">
-        <div class="empty-state" data-if="show_empty_state">
-            <div class="empty-message">{{ empty_message_primary }}</div>
-            <div class="empty-message">{{ empty_message_secondary }}</div>
+    <div id="scene-view">
+        <div id="search-container">
+            <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
+            <input id="filter-input" type="text" placeholder="Search" />
+            <button id="filter-clear" type="button">
+                <img src="../icon/scene/x.png" />
+            </button>
         </div>
 
-        <div id="tree-content" data-if="show_tree">
-            <div class="section-header" id="models-header">
-                <span class="section-arrow">{{ models_collapsed ? '▶' : '▼' }}</span>
-                <span>{{ models_header_text }}</span>
-            </div>
-
-            <div class="virtual-spacer" data-style-height="top_spacer_height"></div>
-
-            <div class="tree-row"
-                 data-for="row : visible_rows"
-                 data-class-placeholder="!row.present"
-                 data-class-even="row.even"
-                 data-class-odd="!row.even"
-                 data-class-selected="row.selected"
-                 data-class-drop-target="row.drop_target"
-                 data-attr-data-node="row.name"
-                 data-attr-data-id="row.id"
-                 data-attr-data-type="row.node_type"
-                 data-style-padding-left="row.indent"
-                 data-style-drag="row.drag_mode">
-                <span class="row-content">
-                    <img class="row-icon"
-                         data-class-icon-vis-on="row.visible"
-                         data-class-icon-vis-off="!row.visible"
-                         data-attr-sprite="row.vis_sprite"
-                         data-attr-data-node="row.name"
-                         data-action="toggle-vis" />
-
-                    <img data-if="row.deletable"
-                         class="row-icon trash-icon"
-                         src="../icon/scene/trash.png"
-                         data-attr-data-node="row.name"
-                         data-action="delete" />
-
-                    <img data-if="row.use_type_icon"
-                         data-attr-class="'row-icon type-icon ' + row.type_class"
-                         data-attr-src="row.type_icon_src" />
-                    <span data-if="row.use_unicode_icon"
-                          data-attr-class="'node-icon ' + row.type_class">{{ row.unicode_icon }}</span>
-
-                    <img data-if="row.has_mask"
-                         class="row-icon mask-icon"
-                         data-class-mask-inverted="row.mask_inverted"
-                         src="../icon/scene/mask.png" />
-
-                    <span class="expand-toggle"
-                          data-if="row.has_children"
-                          data-attr-data-target="row.children_target">{{ row.expand_glyph }}</span>
-                    <span class="leaf-spacer" data-if="!row.has_children"></span>
-
-                    <input type="text"
-                           class="rename-input"
-                           data-if="row.renaming"
-                           data-attr-data-node="row.name"
-                           data-attr-value="row.rename_value" />
-
-                    <span class="node-name"
-                          data-if="!row.renaming"
-                          data-class-training-disabled="row.camera_training_disabled">{{ row.label }}</span>
-                </span>
-            </div>
-
-            <div class="virtual-spacer" data-style-height="bottom_spacer_height"></div>
+        <div id="empty-state" class="empty-state">
+            <div id="empty-primary" class="empty-message"></div>
+            <div id="empty-secondary" class="empty-message"></div>
         </div>
+
+        <scene-graph id="tree-container" tab-index="auto"></scene-graph>
     </div>
-    <div id="history-container" data-class-hidden="!show_history_tab">
+
+    <div id="history-container">
         <div class="history-summary">
-            <div class="history-summary__label text-muted">Shared History</div>
-            <div class="history-summary__value text-default">{{ history_summary_text }}</div>
+            <div id="history-summary-label" class="history-summary__label text-muted">Shared History</div>
+            <div id="history-summary-value" class="history-summary__value text-default">No history yet</div>
         </div>
 
-        <div class="history-transaction status-info"
-             data-if="history_show_transaction">{{ history_transaction_label }}</div>
+        <div id="history-transaction" class="history-transaction status-info"></div>
 
         <div class="history-actions">
-            <button class="btn btn--primary history-action"
-                    data-event-click="history_do_undo"
-                    data-attrif-disabled="!history_has_undo">{{ history_undo_label }}</button>
-            <button class="btn btn--secondary history-action"
-                    data-event-click="history_do_redo"
-                    data-attrif-disabled="!history_has_redo">{{ history_redo_label }}</button>
-            <button class="btn btn--ghost history-action history-action--clear"
-                    data-event-click="history_clear"
-                    data-attrif-disabled="!history_can_clear">Clear History</button>
+            <button id="history-undo-btn"
+                    class="btn btn--primary history-action"
+                    type="button">Undo</button>
+            <button id="history-redo-btn"
+                    class="btn btn--secondary history-action"
+                    type="button">Redo</button>
+            <button id="history-clear-btn"
+                    class="btn btn--ghost history-action history-action--clear"
+                    type="button">Clear History</button>
         </div>
 
-        <div class="history-note text-muted">Newest block is at the top. Click a block to jump there. New projects start clean.</div>
+        <div id="history-note" class="history-note text-muted">Newest block is at the top. Click a block to jump there. New projects start clean.</div>
 
         <div class="separator"></div>
 
         <div class="history-section">
-            <span class="history-section__title text-accent">Undo Stack</span>
+            <span id="history-undo-title" class="history-section__title text-accent">Undo Stack</span>
             <div class="history-list">
-                <span class="history-empty text-muted"
-                      data-if="!history_has_undo">{{ history_empty_text }}</span>
-                <div class="history-stack-item"
-                     style="display:block; width:100%;"
-                     data-for="item : history_undo_items">
-                    <button type="button"
-                            class="btn btn--ghost history-row"
-                            style="display:block; width:100%;"
-                            data-class-is-next="item.is_next"
-                            data-event-click="history_jump_to(item.kind, item.steps)">
-                        <span class="history-row__line history-row__line--primary text-default">{{ item.title_line }}</span><br />
-                        <span class="history-row__line history-row__line--stack text-muted">{{ item.stack_line }}</span><br />
-                        <span class="history-row__line history-row__line--secondary text-muted">{{ item.detail_line }}</span>
-                    </button>
-                </div>
+                <span id="history-empty-undo" class="history-empty text-muted">Nothing recorded yet</span>
+                <div id="history-undo-list" class="history-stack-item" style="display:block; width:100%;"></div>
             </div>
         </div>
 
         <div class="separator"></div>
 
         <div class="history-section">
-            <span class="history-section__title text-accent">Redo Stack</span>
+            <span id="history-redo-title" class="history-section__title text-accent">Redo Stack</span>
             <div class="history-list">
-                <span class="history-empty text-muted"
-                      data-if="!history_has_redo">{{ history_empty_text }}</span>
-                <div class="history-stack-item"
-                     style="display:block; width:100%;"
-                     data-for="item : history_redo_items">
-                    <button type="button"
-                            class="btn btn--ghost history-row history-row--redo"
-                            style="display:block; width:100%;"
-                            data-class-is-next="item.is_next"
-                            data-event-click="history_jump_to(item.kind, item.steps)">
-                        <span class="history-row__line history-row__line--primary text-default">{{ item.title_line }}</span><br />
-                        <span class="history-row__line history-row__line--stack text-muted">{{ item.stack_line }}</span><br />
-                        <span class="history-row__line history-row__line--secondary text-muted">{{ item.detail_line }}</span>
-                    </button>
-                </div>
+                <span id="history-empty-redo" class="history-empty text-muted">Nothing recorded yet</span>
+                <div id="history-redo-list" class="history-stack-item" style="display:block; width:100%;"></div>
             </div>
-        </div>
-    </div>
-    <div id="context-menu"
-         class="context-menu"
-         data-class-visible="context_menu_visible"
-         data-style-left="context_menu_left"
-         data-style-top="context_menu_top">
-        <div data-for="item : context_menu_entries">
-            <div class="context-menu-separator" data-if="item.separator_before"></div>
-            <div class="context-menu-label" data-if="item.is_label">{{ item.label }}</div>
-            <div class="context-menu-item"
-                 data-if="!item.is_label"
-                 data-class-submenu-item="item.is_submenu_item"
-                 data-class-active="item.is_active"
-                 data-attr-data-action="item.action">{{ item.label }}</div>
         </div>
     </div>
 </body>

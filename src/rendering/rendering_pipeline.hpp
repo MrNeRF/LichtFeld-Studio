@@ -111,10 +111,16 @@ namespace lfs::rendering {
             bool orthographic = false;
         };
 
+        struct DualImageRenderResult {
+            std::array<ImageRenderResult, 2> views;
+        };
+
         RenderingPipeline();
         ~RenderingPipeline();
 
         Result<ImageRenderResult> renderGaussianImage(const lfs::core::SplatData& model, const RasterRequest& request);
+        Result<DualImageRenderResult> renderGaussianImagePair(const lfs::core::SplatData& model,
+                                                              const std::array<RasterRequest, 2>& requests);
         Result<ImageRenderResult> renderPointCloudImage(const lfs::core::SplatData& model, const RasterRequest& request);
         Result<Tensor> renderScreenPositions(const lfs::core::SplatData& model, const RasterRequest& request);
         void setRenderTargetPool(RenderTargetPool* pool) { render_target_pool_ = pool; }

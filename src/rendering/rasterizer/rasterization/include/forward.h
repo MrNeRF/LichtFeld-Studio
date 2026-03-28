@@ -6,6 +6,7 @@
 
 #include "helper_math.h"
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <functional>
 
 namespace lfs::rendering {
@@ -123,6 +124,7 @@ namespace lfs::rendering {
         float ortho_scale = 1.0f,
         bool mip_filter = false,
         const int* visible_indices = nullptr,
-        int visible_count = 0);
+        int visible_count = 0,
+        cudaStream_t stream = nullptr);
 
 } // namespace lfs::rendering

@@ -172,7 +172,7 @@ namespace lfs::vis {
             // Check if rendering manager has split view enabled (in PLY comparison mode)
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
-                if (settings.split_view_mode == lfs::vis::SplitViewMode::PLYComparison) {
+                if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode)) {
                     // In split mode: advance the offset
                     services().renderingOrNull()->advanceSplitOffset();
                     LOG_DEBUG("Advanced split view offset");

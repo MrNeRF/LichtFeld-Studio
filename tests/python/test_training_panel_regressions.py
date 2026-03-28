@@ -45,6 +45,8 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     for locale_path in locale_dir.glob("*.json"):
         data = json.loads(locale_path.read_text())
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
+        assert "refinement.grow_until_iter" in data["training"]
+        assert "tooltip.grow_until_iter" in data["training"]
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
@@ -85,6 +87,7 @@ class _ParamsStub:
         self.steps_scaler = 1.0
         self.start_refine = 500
         self.stop_refine = 15000
+        self.grow_until_iter = 15000
         self.refine_every = 100
         self.reset_every = 3000
         self.sh_degree_interval = 1000
@@ -99,6 +102,7 @@ class _ParamsStub:
         self.iterations = int(self.iterations * scale)
         self.start_refine = int(self.start_refine * scale)
         self.stop_refine = int(self.stop_refine * scale)
+        self.grow_until_iter = int(self.grow_until_iter * scale)
 
     def set(self, prop, value):
         setattr(self, prop, value)
@@ -386,6 +390,7 @@ def test_steps_scaler_syncs_dependent_text_bufs(training_panel_module, monkeypat
     params.iterations = 30000
     params.start_refine = 500
     params.stop_refine = 15000
+    params.grow_until_iter = 15000
     params.steps_scaler = 1.0
     dataset = _DatasetStub()
 
@@ -404,7 +409,9 @@ def test_steps_scaler_syncs_dependent_text_bufs(training_panel_module, monkeypat
     assert panel._set_num_prop("steps_scaler", "2.0", float, 0.01, None) is True
     assert params.steps_scaler == 2.0
     assert params.iterations == 60000
+    assert params.grow_until_iter == 30000
     assert panel._text_bufs["iterations_str"] == "60,000"
+    assert panel._text_bufs["grow_until_iter_str"] == "30,000"
     assert panel._handle.dirty_all_count >= 1
 
 
@@ -440,6 +447,18 @@ def test_training_rml_no_longer_includes_ppisp_auto_toggle():
 
     assert "ppisp_auto_step" not in content
     assert "label_ppisp_auto" not in content
+
+
+def test_training_rml_exposes_mrnf_grow_until_iter():
+    project_root = Path(__file__).parent.parent.parent
+    training_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "training.rml"
+    content = training_rml.read_text()
+
+    assert 'data-value="grow_until_iter_str"' in content
+    assert "{{label_grow_until_iter}}" in content
+    assert "num_step('grow_until_iter', -1)" in content
+    assert 'data-tooltip="training.tooltip.grow_until_iter"' in content
+    assert 'data-if="dep_mrnf"' in content
 
 
 def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):

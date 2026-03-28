@@ -150,12 +150,60 @@ namespace lfs::vis::gui {
         screen_origin_ = screen_origin;
     }
 
+    void RmlViewportOverlay::setToolbarPanels(const float primary_x,
+                                              const float primary_width,
+                                              const bool show_secondary,
+                                              const float secondary_x,
+                                              const float secondary_width) {
+        const bool changed =
+            std::abs(primary_toolbar_x_ - primary_x) > 0.5f ||
+            std::abs(primary_toolbar_width_ - primary_width) > 0.5f ||
+            show_secondary_toolbar_ != show_secondary ||
+            std::abs(secondary_toolbar_x_ - secondary_x) > 0.5f ||
+            std::abs(secondary_toolbar_width_ - secondary_width) > 0.5f;
+        if (!changed) {
+            return;
+        }
+
+        primary_toolbar_x_ = primary_x;
+        primary_toolbar_width_ = primary_width;
+        show_secondary_toolbar_ = show_secondary;
+        secondary_toolbar_x_ = secondary_x;
+        secondary_toolbar_width_ = secondary_width;
+        render_needed_ = true;
+        updateToolbarRoots();
+    }
+
+    void RmlViewportOverlay::updateToolbarRoots() {
+        if (!document_) {
+            return;
+        }
+
+        const auto apply_root = [&](const char* element_id,
+                                    const float x,
+                                    const float width,
+                                    const bool visible) {
+            if (auto* const element = document_->GetElementById(element_id)) {
+                element->SetProperty("left", std::format("{:.1f}px", x));
+                element->SetProperty("width", std::format("{:.1f}px", std::max(width, 0.0f)));
+                element->SetClass("hidden", !visible);
+            }
+        };
+
+        apply_root("primary-toolbar-root", primary_toolbar_x_, primary_toolbar_width_, primary_toolbar_width_ > 0.0f);
+        apply_root("secondary-toolbar-root",
+                   secondary_toolbar_x_,
+                   secondary_toolbar_width_,
+                   show_secondary_toolbar_ && secondary_toolbar_width_ > 0.0f);
+    }
+
     void RmlViewportOverlay::processInput(const PanelInputState& input) {
         wants_input_ = false;
         if (!rml_context_ || !document_)
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        updateToolbarRoots();
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(vp_pos_.x - screen_origin_.x),
@@ -307,6 +355,7 @@ namespace lfs::vis::gui {
 
         auto* body = document_->GetElementById("overlay-body");
         ensureBodyDataModelBound(body);
+        updateToolbarRoots();
 
         const bool needs_render = render_needed_ || animation_active_ || run_document_hooks ||
                                   theme_changed || size_changed;

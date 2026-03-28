@@ -168,8 +168,6 @@ namespace lfs::vis {
         }
 
         viewport_interaction_context_.scene_manager = scene_manager;
-        viewport_interaction_context_.updatePickContext(context.viewport_region,
-                                                        viewport_interaction_context_.viewport_data);
     }
 
 } // namespace lfs::vis

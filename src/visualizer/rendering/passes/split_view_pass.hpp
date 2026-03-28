@@ -22,10 +22,6 @@ namespace lfs::vis {
         void execute(lfs::rendering::RenderingEngine& engine,
                      const FrameContext& ctx,
                      FrameResources& res) override;
-
-    private:
-        [[nodiscard]] std::optional<lfs::rendering::SplitViewRequest>
-        buildSplitViewRequest(const FrameContext& ctx, const FrameResources& res, SplitViewInfo& split_info);
     };
 
 } // namespace lfs::vis

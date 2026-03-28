@@ -160,7 +160,9 @@ namespace lfs::vis {
             ui.show_pip_preview = !ui.show_pip_preview;
         else if (id == "btn-equirect") {
             ui.equirectangular = !ui.equirectangular;
-            lfs::core::events::ui::RenderSettingsChanged{.equirectangular = ui.equirectangular}.emit();
+            auto event = lfs::core::events::ui::RenderSettingsChanged{};
+            event.equirectangular = ui.equirectangular;
+            event.emit();
         } else if (id == "btn-speed") {
             const size_t idx = findSpeedIndex(ui.playback_speed);
             const size_t next = (idx + 1) % SPEED_PRESETS.size();

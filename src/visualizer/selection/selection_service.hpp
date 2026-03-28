@@ -5,6 +5,7 @@
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "rendering/rendering_types.hpp"
 #include <array>
 #include <cstdint>
 #include <glm/vec2.hpp>
@@ -18,6 +19,8 @@
 namespace lfs::rendering {
     struct ViewportData;
 }
+
+class Viewport;
 
 namespace lfs::vis {
 
@@ -121,6 +124,14 @@ namespace lfs::vis {
         void clearTestingOverrides();
 
     private:
+        struct ViewerViewportContext {
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+            ViewportInfo info;
+            const Viewport* viewport = nullptr;
+
+            [[nodiscard]] bool valid() const { return viewport != nullptr && info.valid(); }
+        };
+
         struct InteractiveSelectionState {
             bool active = false;
             SelectionShape shape = SelectionShape::Brush;
@@ -129,6 +140,7 @@ namespace lfs::vis {
             float brush_radius = 20.0f;
             glm::vec2 start_pos{0.0f};
             glm::vec2 cursor_pos{0.0f};
+            std::optional<ViewerViewportContext> viewport_context;
             std::vector<glm::vec2> points;
             std::vector<glm::vec3> polygon_world_points;
             bool polygon_closed = false;
@@ -142,15 +154,26 @@ namespace lfs::vis {
                                                       const SelectionFilterState& filters,
                                                       const char* undo_name);
         [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
+        [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
+            std::optional<glm::vec2> screen_point = std::nullopt,
+            std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
         [[nodiscard]] std::optional<ViewportInfo> resolveViewportInfo() const;
+        [[nodiscard]] std::shared_ptr<core::Tensor> getScreenPositionsForContext(
+            const ViewerViewportContext& context) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> resolveCommandScreenPositions(int camera_index) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForCamera(int camera_index) const;
+        [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForViewerContext(
+            const ViewerViewportContext& context) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForCurrentViewport() const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters);
+        [[nodiscard]] std::optional<int> renderHoveredGaussianIdForViewerContext(
+            const ViewerViewportContext& context,
+            glm::vec2 cursor_pos,
+            const SelectionFilterState& filters) const;
         [[nodiscard]] std::optional<int> renderHoveredGaussianId(const rendering::ViewportData& viewport,
                                                                  glm::vec2 cursor_pos,
-                                                                 const SelectionFilterState& filters);
+                                                                 const SelectionFilterState& filters) const;
         [[nodiscard]] std::optional<int> renderHoveredGaussianIdForCamera(float x, float y, int camera_index,
                                                                           const SelectionFilterState& filters);
         [[nodiscard]] std::optional<int> renderHoveredGaussianIdForCurrentViewport(float x, float y,
@@ -195,8 +218,8 @@ namespace lfs::vis {
         std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<int> testing_hovered_gaussian_id_;
-        mutable std::shared_ptr<core::Tensor> viewport_screen_positions_;
-        mutable uint64_t viewport_screen_positions_generation_ = 0;
+        mutable std::array<std::shared_ptr<core::Tensor>, 2> viewport_screen_positions_;
+        mutable std::array<uint64_t, 2> viewport_screen_positions_generation_{0, 0};
         mutable std::vector<float> polygon_vertex_host_buffer_;
         mutable core::Tensor polygon_vertex_device_buffer_;
 

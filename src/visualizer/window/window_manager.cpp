@@ -287,12 +287,20 @@ namespace lfs::vis {
                 break;
             if (!input_controller_)
                 break;
-            const int key = input::sdlScancodeToAppKey(event.key.scancode);
+            const int physical_key = input::sdlScancodeToAppKey(event.key.scancode);
+            // Resolve the unmodified layout key so bindings keep modifiers separate
+            // (for example, '=' + Shift stays KEY_EQUAL plus a Shift modifier).
+            int logical_key = input::sdlKeycodeToAppKey(
+                SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false));
+            if (logical_key == input::KEY_UNKNOWN) {
+                logical_key = physical_key;
+            }
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
             const int mods = input::sdlModsToAppMods(event.key.mod);
-            input_controller_->handleKey(key, action, mods);
+            input_controller_->handleKey(
+                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods);
             break;
         }
 

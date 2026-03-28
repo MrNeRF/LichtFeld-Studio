@@ -8,6 +8,10 @@
 namespace lfs::vis {
 
     namespace {
+        [[nodiscard]] bool panelMatches(const std::optional<SplitViewPanelId> preview_panel,
+                                        const std::optional<SplitViewPanelId> render_panel) {
+            return !preview_panel || !render_panel || *preview_panel == *render_panel;
+        }
 
         void applyGaussianCropBox(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
             if (!ctx.scene_manager || !(ctx.settings.use_crop_box || ctx.settings.show_crop_box)) {
@@ -102,9 +106,12 @@ namespace lfs::vis {
     } // namespace
 
     lfs::rendering::ViewportRenderRequest buildViewportRenderRequest(const FrameContext& ctx,
-                                                                     const glm::ivec2 render_size) {
-        auto frame_view = ctx.makeFrameView();
-        frame_view.size = render_size;
+                                                                     const glm::ivec2 render_size,
+                                                                     const Viewport* const source_viewport,
+                                                                     const std::optional<SplitViewPanelId> render_panel) {
+        const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
+        const auto frame_view = ctx.makeFrameView(viewport, render_size);
+        const bool overlay_visible = panelMatches(ctx.cursor_preview.panel, render_panel);
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
@@ -125,7 +132,7 @@ namespace lfs::vis {
                       .ring_width = ctx.settings.ring_width,
                       .show_center_markers = ctx.settings.show_center_markers},
                  .cursor =
-                     {.enabled = ctx.cursor_preview.active,
+                     {.enabled = ctx.cursor_preview.active && overlay_visible,
                       .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
                       .radius = ctx.cursor_preview.radius,
                       .saturation_preview = ctx.cursor_preview.saturation_mode,
@@ -142,10 +149,10 @@ namespace lfs::vis {
                                                   : std::vector<bool>{},
                       .dim_non_emphasized = ctx.settings.desaturate_unselected,
                       .flash_intensity = ctx.selection_flash_intensity,
-                      .focused_gaussian_id =
-                          (ctx.cursor_preview.selection_mode == SelectionPreviewMode::Rings)
-                              ? ctx.hovered_gaussian_id
-                              : -1}}};
+                      .focused_gaussian_id = ((ctx.cursor_preview.selection_mode == SelectionPreviewMode::Rings) &&
+                                              overlay_visible)
+                                                 ? ctx.cursor_preview.focused_gaussian_id
+                                                 : -1}}};
 
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
@@ -154,9 +161,9 @@ namespace lfs::vis {
     }
 
     lfs::rendering::HoveredGaussianQueryRequest buildHoveredGaussianQueryRequest(
-        const FrameContext& ctx, const glm::ivec2 render_size) {
-        auto frame_view = ctx.makeFrameView();
-        frame_view.size = render_size;
+        const FrameContext& ctx, const glm::ivec2 render_size, const Viewport* const source_viewport) {
+        const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
+        const auto frame_view = ctx.makeFrameView(viewport, render_size);
 
         lfs::rendering::HoveredGaussianQueryRequest request{
             .frame_view = frame_view,
@@ -180,8 +187,10 @@ namespace lfs::vis {
     }
 
     lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
-        const FrameContext& ctx, const glm::ivec2 render_size) {
-        const auto request = buildViewportRenderRequest(ctx, render_size);
+        const FrameContext& ctx, const glm::ivec2 render_size,
+        const Viewport* const source_viewport,
+        const std::optional<SplitViewPanelId> render_panel) {
+        const auto request = buildViewportRenderRequest(ctx, render_size, source_viewport, render_panel);
         return lfs::rendering::SplitViewGaussianPanelRenderState{
             .frame_view = request.frame_view,
             .scaling_modifier = request.scaling_modifier,
@@ -190,14 +199,15 @@ namespace lfs::vis {
             .sh_degree = request.sh_degree,
             .gut = request.gut,
             .equirectangular = request.equirectangular,
+            .scene = request.scene,
             .filters = request.filters,
             .overlay = request.overlay};
     }
 
     lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
-        const FrameContext& ctx, const glm::ivec2 render_size) {
-        auto frame_view = ctx.makeFrameView();
-        frame_view.size = render_size;
+        const FrameContext& ctx, const glm::ivec2 render_size, const Viewport* const source_viewport) {
+        const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
+        const auto frame_view = ctx.makeFrameView(viewport, render_size);
 
         lfs::rendering::SplitViewPointCloudPanelRenderState state{
             .frame_view = frame_view,
@@ -205,6 +215,9 @@ namespace lfs::vis {
                 {.scaling_modifier = ctx.settings.scaling_modifier,
                  .voxel_size = ctx.settings.voxel_size,
                  .equirectangular = ctx.settings.equirectangular},
+            .scene =
+                {.model_transforms = &ctx.scene_state.model_transforms,
+                 .transform_indices = ctx.scene_state.transform_indices},
             .filters = {}};
         applyPointCloudCropBox(state.filters, ctx);
         return state;

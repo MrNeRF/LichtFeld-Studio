@@ -9,6 +9,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/pie_menu.hpp"
 #include "gui/ui_context.hpp"
+#include "rendering/rendering_types.hpp"
 #include <chrono>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -99,6 +100,7 @@ namespace lfs::vis {
 
             // Viewport gizmo
             bool viewport_gizmo_dragging_ = false;
+            SplitViewPanelId viewport_gizmo_active_panel_ = SplitViewPanelId::Left;
             glm::dvec2 gizmo_drag_start_cursor_{0.0, 0.0};
             bool show_viewport_gizmo_ = true;
             static constexpr float VIEWPORT_GIZMO_SIZE = 95.0f;

@@ -13,6 +13,7 @@ namespace lfs::vis {
 
     void RenderingManager::setupEventHandlers() {
         cmd::ToggleSplitView::when([this](const auto&) { handleToggleSplitView(); });
+        cmd::ToggleIndependentSplitView::when([this](const auto& event) { handleToggleIndependentSplitView(event); });
         cmd::ToggleGTComparison::when([this](const auto&) { handleToggleGTComparison(); });
         cmd::GoToCamView::when([this](const auto& event) { handleGoToCamView(event.cam_id); });
         ui::SplitPositionChanged::when([this](const auto& event) { handleSplitPositionChanged(event.position); });
@@ -32,47 +33,50 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleSplitView() {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        const bool was_enabled = settings_.split_view_mode != SplitViewMode::Disabled;
-        const bool enabled = split_view_service_.togglePLYComparison(settings_);
-        if (was_enabled && !enabled) {
-            viewport_artifact_service_.clearViewportOutput();
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.toggleMode(settings_, SplitViewMode::PLYComparison);
+            markDirty(DirtyFlag::SPLIT_VIEW);
         }
-        LOG_INFO("Split view: {}", enabled ? "PLY comparison mode" : "disabled");
-        markDirty(DirtyFlag::SPLIT_VIEW);
+        applySplitModeChange(result);
+        LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::PLYComparison ? "PLY comparison mode" : "disabled");
+    }
+
+    void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
+        if (!event.viewport) {
+            return;
+        }
+
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.toggleMode(settings_, SplitViewMode::IndependentDual, event.viewport);
+            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::CAMERA);
+        }
+        applySplitModeChange(result);
+        LOG_INFO("Split view: {}", result.current_mode == SplitViewMode::IndependentDual
+                                       ? "independent dual-camera mode"
+                                       : "disabled");
     }
 
     void RenderingManager::handleToggleGTComparison() {
-        bool is_now_enabled = false;
-        std::optional<bool> restore_equirectangular;
-        bool should_clear_viewport_output = false;
+        SplitViewService::ModeChangeResult result;
 
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const bool was_enabled = settings_.split_view_mode != SplitViewMode::Disabled;
-            const auto toggle_result = split_view_service_.toggleGTComparison(settings_);
-            is_now_enabled = toggle_result.enabled;
-            restore_equirectangular = toggle_result.restore_equirectangular;
-            should_clear_viewport_output = was_enabled && !is_now_enabled;
-            if (should_clear_viewport_output) {
-                viewport_artifact_service_.clearViewportOutput();
-            }
+            result = split_view_service_.toggleMode(settings_, SplitViewMode::GTComparison);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
         }
 
-        if (restore_equirectangular) {
-            auto event = ui::RenderSettingsChanged{};
-            event.equirectangular = *restore_equirectangular;
-            event.emit();
-        }
-        ui::GTComparisonModeChanged{.enabled = is_now_enabled}.emit();
+        applySplitModeChange(result);
     }
 
     void RenderingManager::handleGoToCamView(const int cam_id) {
         setCurrentCameraId(cam_id);
         LOG_DEBUG("Current camera ID set to: {}", cam_id);
 
-        if (settings_.split_view_mode == SplitViewMode::GTComparison && cam_id >= 0) {
+        if (isGTComparisonActive() && cam_id >= 0) {
             markDirty(DirtyFlag::SPLIT_VIEW);
         }
     }
@@ -138,15 +142,14 @@ namespace lfs::vis {
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
 
-        const bool had_gt_comparison = settings_.split_view_mode == SplitViewMode::GTComparison;
-        const bool had_split_view = settings_.split_view_mode != SplitViewMode::Disabled;
-        split_view_service_.handleSceneLoaded(settings_);
-        if (had_split_view && settings_.split_view_mode == SplitViewMode::Disabled) {
-            viewport_artifact_service_.clearViewportOutput();
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.handleSceneLoaded(settings_);
         }
-        if (had_gt_comparison) {
+        applySplitModeChange(result);
+        if (splitViewUsesGTComparison(result.previous_mode) && !splitViewUsesGTComparison(result.current_mode)) {
             LOG_INFO("Scene loaded, disabling GT comparison (camera selection reset)");
-            ui::GTComparisonModeChanged{.enabled = false}.emit();
         }
     }
 
@@ -159,17 +162,18 @@ namespace lfs::vis {
         viewport_artifact_service_.clearViewportOutput();
         pass_graph_.resetPointCloudCache();
         gt_texture_cache_.clear();
-        const bool had_gt_comparison = settings_.split_view_mode == SplitViewMode::GTComparison;
-        split_view_service_.handleSceneCleared(settings_);
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.handleSceneCleared(settings_);
+        }
         if (engine_) {
             engine_->clearFrustumCache();
         }
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
         frame_lifecycle_service_.resetModelTracking();
-        if (had_gt_comparison) {
-            ui::GTComparisonModeChanged{.enabled = false}.emit();
-        }
+        applySplitModeChange(result);
         markDirty();
     }
 
@@ -183,13 +187,16 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handlePLYRemoved() {
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull())) {
-            LOG_DEBUG("PLY removed, disabling split view (not enough PLYs)");
-            viewport_artifact_service_.clearViewportOutput();
+        SplitViewService::ModeChangeResult result;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            result = split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull());
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
         }
-
-        markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
+        applySplitModeChange(result);
+        if (result.mode_changed) {
+            LOG_DEBUG("PLY removed, disabling split view (not enough PLYs)");
+        }
     }
 
     void RenderingManager::handleCropBoxChanged(const bool enabled) {

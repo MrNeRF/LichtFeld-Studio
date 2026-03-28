@@ -81,6 +81,7 @@ class InputSettingsPanel(Panel):
         ],
         "view_global": [
             lf.keymap.Action.TOGGLE_SPLIT_VIEW,
+            lf.keymap.Action.TOGGLE_INDEPENDENT_SPLIT_VIEW,
             lf.keymap.Action.TOGGLE_GT_COMPARISON,
             lf.keymap.Action.CYCLE_PLY,
             lf.keymap.Action.CYCLE_SELECTION_VIS,

@@ -5,6 +5,7 @@
 #include "viewport_artifact_service.hpp"
 #include "core/cuda_debug.hpp"
 #include "rendering/rendering.hpp"
+#include <cmath>
 #include <cuda_runtime.h>
 #include <glad/glad.h>
 #include <limits>
@@ -54,11 +55,12 @@ namespace lfs::vis {
     }
 
     bool ViewportArtifactService::hasOutputArtifacts() const {
-        return (metadata_.depth && metadata_.depth->is_valid()) ||
-               (metadata_.depth_right && metadata_.depth_right->is_valid()) ||
-               hasGpuFrame() ||
-               rendered_size_.x > 0 ||
-               rendered_size_.y > 0;
+        for (size_t i = 0; i < metadata_.depth_panel_count && i < metadata_.depth_panels.size(); ++i) {
+            if (metadata_.depth_panels[i].depth && metadata_.depth_panels[i].depth->is_valid()) {
+                return true;
+            }
+        }
+        return hasGpuFrame() || rendered_size_.x > 0 || rendered_size_.y > 0;
     }
 
     std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::getCapturedImageIfCurrent() const {
@@ -103,7 +105,8 @@ namespace lfs::vis {
         const int x,
         const int y,
         const glm::ivec2& fallback_viewport_size,
-        const lfs::rendering::RenderingEngine* const engine) const {
+        const lfs::rendering::RenderingEngine* const engine,
+        const std::optional<SplitViewPanelId> panel) const {
         int viewport_width = rendered_size_.x;
         int viewport_height = rendered_size_.y;
         if (viewport_width <= 0 || viewport_height <= 0) {
@@ -130,19 +133,46 @@ namespace lfs::vis {
 
         if (metadata_.valid) {
             const lfs::core::Tensor* depth_ptr = nullptr;
+            int panel_local_x = x;
+            int panel_viewport_width = viewport_width;
 
-            if (metadata_.split_position > 0.0f &&
-                metadata_.depth && metadata_.depth->is_valid()) {
-                const float normalized_x = static_cast<float>(x) / static_cast<float>(viewport_width);
+            if (metadata_.depth_panel_count > 0) {
+                size_t panel_index = 0;
+                int panel_start_x = 0;
+                int panel_end_x = viewport_width;
 
-                if (normalized_x >= metadata_.split_position &&
-                    metadata_.depth_right && metadata_.depth_right->is_valid()) {
-                    depth_ptr = metadata_.depth_right.get();
-                } else {
-                    depth_ptr = metadata_.depth.get();
+                if (panel && metadata_.depth_panel_count > 1) {
+                    panel_index = (*panel == SplitViewPanelId::Right) ? 1 : 0;
+                } else if (!panel && metadata_.depth_panel_count > 1) {
+                    for (size_t i = 0; i < metadata_.depth_panel_count && i < metadata_.depth_panels.size(); ++i) {
+                        const auto& depth_panel = metadata_.depth_panels[i];
+                        const int candidate_start =
+                            static_cast<int>(std::lround(static_cast<float>(viewport_width) * depth_panel.start_position));
+                        const int candidate_end =
+                            static_cast<int>(std::lround(static_cast<float>(viewport_width) * depth_panel.end_position));
+                        if (x >= candidate_start && (x < candidate_end || i + 1 == metadata_.depth_panel_count)) {
+                            panel_index = i;
+                            panel_start_x = candidate_start;
+                            panel_end_x = candidate_end;
+                            break;
+                        }
+                    }
                 }
-            } else if (metadata_.depth && metadata_.depth->is_valid()) {
-                depth_ptr = metadata_.depth.get();
+
+                if (panel_index < metadata_.depth_panel_count && panel_index < metadata_.depth_panels.size()) {
+                    const auto& depth_panel = metadata_.depth_panels[panel_index];
+                    panel_start_x =
+                        static_cast<int>(std::lround(static_cast<float>(viewport_width) * depth_panel.start_position));
+                    panel_end_x =
+                        static_cast<int>(std::lround(static_cast<float>(viewport_width) * depth_panel.end_position));
+                    panel_viewport_width = std::max(panel_end_x - panel_start_x, 1);
+                    if (!panel) {
+                        panel_local_x -= panel_start_x;
+                    }
+                    if (depth_panel.depth && depth_panel.depth->is_valid()) {
+                        depth_ptr = depth_panel.depth.get();
+                    }
+                }
             }
 
             if (depth_ptr && depth_ptr->ndim() == 3) {
@@ -151,9 +181,11 @@ namespace lfs::vis {
 
                 int scaled_x = x;
                 int scaled_y = y;
-                if (depth_width != viewport_width || depth_height != viewport_height) {
-                    scaled_x = static_cast<int>(static_cast<float>(x) * depth_width / viewport_width);
+                if (depth_width != panel_viewport_width || depth_height != viewport_height) {
+                    scaled_x = static_cast<int>(static_cast<float>(panel_local_x) * depth_width / panel_viewport_width);
                     scaled_y = static_cast<int>(static_cast<float>(y) * depth_height / viewport_height);
+                } else {
+                    scaled_x = panel_local_x;
                 }
 
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {

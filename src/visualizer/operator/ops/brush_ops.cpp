@@ -15,6 +15,7 @@
 #include "scene/scene_manager.hpp"
 #include "selection/selection_service.hpp"
 #include "visualizer_impl.hpp"
+#include <optional>
 
 namespace lfs::vis::op {
 
@@ -22,6 +23,23 @@ namespace lfs::vis::op {
 
         struct ViewportBounds {
             float x = 0, y = 0, width = 0, height = 0;
+        };
+
+        struct BrushRenderTarget {
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+            float x = 0.0f;
+            float y = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+            int render_width = 0;
+            int render_height = 0;
+
+            [[nodiscard]] bool valid() const {
+                return width > 0.0f &&
+                       height > 0.0f &&
+                       render_width > 0 &&
+                       render_height > 0;
+            }
         };
 
         ViewportBounds getViewportBounds() {
@@ -32,6 +50,41 @@ namespace lfs::vis::op {
             const auto pos = gm->getViewportPos();
             const auto size = gm->getViewportSize();
             return {pos.x, pos.y, size.x, size.y};
+        }
+
+        std::optional<BrushRenderTarget> resolveBrushRenderTarget(
+            RenderingManager& rendering_manager,
+            gui::GuiManager& gui_manager,
+            const double screen_x,
+            const double screen_y) {
+            auto* const viewer = gui_manager.getViewer();
+            if (!viewer) {
+                return std::nullopt;
+            }
+
+            const auto bounds = getViewportBounds();
+            if (bounds.width <= 0.0f || bounds.height <= 0.0f) {
+                return std::nullopt;
+            }
+
+            const auto panel = rendering_manager.resolveViewerPanel(
+                viewer->getViewport(),
+                {bounds.x, bounds.y},
+                {bounds.width, bounds.height},
+                glm::vec2(static_cast<float>(screen_x), static_cast<float>(screen_y)));
+            if (!panel || !panel->valid()) {
+                return std::nullopt;
+            }
+
+            return BrushRenderTarget{
+                .panel = panel->panel,
+                .x = panel->x,
+                .y = panel->y,
+                .width = panel->width,
+                .height = panel->height,
+                .render_width = panel->render_width,
+                .render_height = panel->render_height,
+            };
         }
 
     } // namespace
@@ -223,27 +276,24 @@ namespace lfs::vis::op {
             return;
         }
 
-        const auto bounds = getViewportBounds();
-        const auto& viewport = gm->getViewer()->getViewport();
-        const glm::ivec2 rendered_size = rm->getRenderedSize();
-
-        const int render_w = rendered_size.x > 0 ? rendered_size.x : static_cast<int>(viewport.windowSize.x);
-        const int render_h = rendered_size.y > 0 ? rendered_size.y : static_cast<int>(viewport.windowSize.y);
-
-        if (bounds.width <= 0 || bounds.height <= 0) {
+        const auto target = resolveBrushRenderTarget(*rm, *gm, x, y);
+        if (!target || !target->valid()) {
             return;
         }
 
-        const float scale_x = static_cast<float>(render_w) / bounds.width;
-        const float rel_x = static_cast<float>(x) - bounds.x;
-        const float rel_y = static_cast<float>(y) - bounds.y;
+        rm->setFocusedSplitPanel(target->panel);
+
+        const float scale_x = static_cast<float>(target->render_width) / target->width;
+        const float rel_x = static_cast<float>(x) - target->x;
+        const float rel_y = static_cast<float>(y) - target->y;
 
         const float image_x = rel_x * scale_x;
-        const float image_y = rel_y * (static_cast<float>(render_h) / bounds.height);
+        const float image_y = rel_y * (static_cast<float>(target->render_height) / target->height);
         const float scaled_radius = brush_radius_ * scale_x;
         const bool add_mode = (action_ == BrushAction::Add);
 
-        rm->setCursorPreviewState(true, image_x, image_y, scaled_radius, add_mode, &cumulative_selection_);
+        rm->setCursorPreviewState(
+            true, image_x, image_y, scaled_radius, add_mode, &cumulative_selection_, false, 0.0f, target->panel);
     }
 
     void BrushStrokeOperator::updateSaturationAtPoint(double x, double y, OperatorContext& ctx) {
@@ -268,21 +318,17 @@ namespace lfs::vis::op {
             return;
         }
 
-        const auto bounds = getViewportBounds();
-        const auto& viewport = gm->getViewer()->getViewport();
-        const glm::ivec2 rendered_size = rm->getRenderedSize();
-
-        const int render_w = rendered_size.x > 0 ? rendered_size.x : static_cast<int>(viewport.windowSize.x);
-        const int render_h = rendered_size.y > 0 ? rendered_size.y : static_cast<int>(viewport.windowSize.y);
-
-        if (bounds.width <= 0 || bounds.height <= 0) {
+        const auto target = resolveBrushRenderTarget(*rm, *gm, x, y);
+        if (!target || !target->valid()) {
             return;
         }
 
-        const float scale_x = static_cast<float>(render_w) / bounds.width;
-        const float scale_y = static_cast<float>(render_h) / bounds.height;
-        const float rel_x = static_cast<float>(x) - bounds.x;
-        const float rel_y = static_cast<float>(y) - bounds.y;
+        rm->setFocusedSplitPanel(target->panel);
+
+        const float scale_x = static_cast<float>(target->render_width) / target->width;
+        const float scale_y = static_cast<float>(target->render_height) / target->height;
+        const float rel_x = static_cast<float>(x) - target->x;
+        const float rel_y = static_cast<float>(y) - target->y;
 
         const float image_x = rel_x * scale_x;
         const float image_y = rel_y * scale_y;
@@ -312,7 +358,8 @@ namespace lfs::vis::op {
             nullptr);
 
         rm->markDirty(DirtyFlag::SPLATS);
-        rm->setCursorPreviewState(true, image_x, image_y, scaled_radius, true, nullptr, true, saturation_amount_);
+        rm->setCursorPreviewState(
+            true, image_x, image_y, scaled_radius, true, nullptr, true, saturation_amount_, target->panel);
     }
 
     void BrushStrokeOperator::finalizeSelectionStroke(OperatorContext& ctx) {

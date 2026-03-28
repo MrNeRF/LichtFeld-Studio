@@ -192,6 +192,108 @@ namespace lfs::rendering {
         return {std::move(image), std::move(depth)};
     }
 
+    DualRasterizeTensorOutput rasterize_tensor_pair(
+        const std::array<lfs::core::Camera, 2>& viewpoint_cameras,
+        const lfs::core::SplatData& gaussian_model,
+        const Tensor& bg_color,
+        const DualRasterizeTensorRequest& request) {
+
+        const int sh_degree = resolve_render_sh_degree(gaussian_model, request.sh_degree_override);
+        const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
+        constexpr float NEAR_PLANE = 0.01f;
+
+        const auto& means = gaussian_model.means_raw();
+        const auto& scales_raw = gaussian_model.scaling_raw();
+        const auto& rotations_raw = gaussian_model.rotation_raw();
+        const auto& opacities_raw = gaussian_model.opacity_raw();
+        const auto& sh0 = gaussian_model.sh0_raw();
+        const auto& shN = gaussian_model.shN_raw();
+
+        const Tensor* actual_deleted_mask = request.deleted_mask;
+        if (!actual_deleted_mask && gaussian_model.has_deleted_mask()) {
+            actual_deleted_mask = &gaussian_model.deleted();
+        }
+
+        std::array<ForwardWrapperTensorViewState, 2> views;
+        for (size_t i = 0; i < views.size(); ++i) {
+            views[i] = ForwardWrapperTensorViewState{
+                .w2c = viewpoint_cameras[i].world_view_transform(),
+                .cam_position = viewpoint_cameras[i].cam_position(),
+                .width = viewpoint_cameras[i].camera_width(),
+                .height = viewpoint_cameras[i].camera_height(),
+                .focal_x = viewpoint_cameras[i].focal_x(),
+                .focal_y = viewpoint_cameras[i].focal_y(),
+                .center_x = viewpoint_cameras[i].center_x(),
+                .center_y = viewpoint_cameras[i].center_y(),
+                .cursor_active = request.view_states[i].cursor_active,
+                .cursor_x = request.view_states[i].cursor_x,
+                .cursor_y = request.view_states[i].cursor_y,
+                .cursor_radius = request.view_states[i].cursor_radius,
+                .cursor_saturation_preview = request.view_states[i].cursor_saturation_preview,
+                .cursor_saturation_amount = request.view_states[i].cursor_saturation_amount,
+                .hovered_depth_id = request.view_states[i].hovered_depth_id,
+                .focused_gaussian_id = request.view_states[i].focused_gaussian_id};
+        }
+
+        ForwardWrapperTensorSharedParams shared{
+            .active_sh_bases = active_sh_bases,
+            .near_plane = NEAR_PLANE,
+            .far_plane = request.far_plane,
+            .show_rings = request.show_rings,
+            .ring_width = request.ring_width,
+            .model_transforms = request.model_transforms,
+            .transform_indices = request.transform_indices,
+            .selection_mask = request.selection_mask,
+            .preview_selection_add_mode = request.preview_selection_add_mode,
+            .preview_selection_out = request.preview_selection_out,
+            .show_center_markers = request.show_center_markers,
+            .crop_box_transform = request.crop_box_transform,
+            .crop_box_min = request.crop_box_min,
+            .crop_box_max = request.crop_box_max,
+            .crop_inverse = request.crop_inverse,
+            .crop_desaturate = request.crop_desaturate,
+            .crop_parent_node_index = request.crop_parent_node_index,
+            .ellipsoid_transform = request.ellipsoid_transform,
+            .ellipsoid_radii = request.ellipsoid_radii,
+            .ellipsoid_inverse = request.ellipsoid_inverse,
+            .ellipsoid_desaturate = request.ellipsoid_desaturate,
+            .ellipsoid_parent_node_index = request.ellipsoid_parent_node_index,
+            .view_volume_transform = request.view_volume_transform,
+            .view_volume_min = request.view_volume_min,
+            .view_volume_max = request.view_volume_max,
+            .view_volume_cull = request.view_volume_cull,
+            .deleted_mask = actual_deleted_mask,
+            .emphasized_node_mask = &request.emphasized_node_mask,
+            .dim_non_emphasized = request.dim_non_emphasized,
+            .node_visibility_mask = &request.node_visibility_mask,
+            .emphasis_flash_intensity = request.emphasis_flash_intensity,
+            .orthographic = request.orthographic,
+            .ortho_scale = request.ortho_scale,
+            .mip_filter = request.mip_filter};
+
+        auto outputs = forward_wrapper_tensor_dual(
+            means,
+            scales_raw,
+            rotations_raw,
+            opacities_raw,
+            sh0,
+            shN,
+            views,
+            shared);
+
+        DualRasterizeTensorOutput result;
+        Tensor bg = bg_color.unsqueeze(1).unsqueeze(2);
+        for (size_t i = 0; i < outputs.size(); ++i) {
+            outputs[i].alpha.mul_(-1.0f).add_(1.0f);
+            outputs[i].image.add_(outputs[i].alpha * bg);
+            outputs[i].image.clamp_(0.0f, 1.0f);
+            result.images[i] = std::move(outputs[i].image);
+            result.depths[i] = std::move(outputs[i].depth);
+        }
+
+        return result;
+    }
+
     GutRenderOutput gut_rasterize_tensor(
         const lfs::core::Camera& camera,
         const lfs::core::SplatData& model,

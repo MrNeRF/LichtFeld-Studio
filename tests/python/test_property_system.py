@@ -163,6 +163,47 @@ class TestOptimizationParams:
         with pytest.raises(AttributeError):
             params.headless = True
 
+    def test_apply_step_scaling_updates_mrnf_growth_horizon(self, lf):
+        """apply_step_scaling() should scale MRNF's grow_until_iter alongside stop_refine."""
+        params = lf.optimization_params()
+
+        original = {
+            "steps_scaler": params.steps_scaler,
+            "iterations": params.iterations,
+            "start_refine": params.start_refine,
+            "stop_refine": params.stop_refine,
+            "reset_every": params.reset_every,
+            "refine_every": params.refine_every,
+            "sh_degree_interval": params.sh_degree_interval,
+            "grow_until_iter": params.grow_until_iter,
+        }
+
+        try:
+            params.steps_scaler = 1.0
+            params.iterations = 30_000
+            params.set("start_refine", 500)
+            params.set("stop_refine", 15_000)
+            params.set("reset_every", 3_000)
+            params.set("refine_every", 100)
+            params.set("sh_degree_interval", 1_000)
+            params.set("grow_until_iter", 15_000)
+
+            params.apply_step_scaling(2.0)
+
+            assert params.steps_scaler == pytest.approx(2.0)
+            assert params.iterations == 60_000
+            assert params.stop_refine == 30_000
+            assert params.grow_until_iter == 30_000
+        finally:
+            params.steps_scaler = original["steps_scaler"]
+            params.iterations = original["iterations"]
+            params.set("start_refine", original["start_refine"])
+            params.set("stop_refine", original["stop_refine"])
+            params.set("reset_every", original["reset_every"])
+            params.set("refine_every", original["refine_every"])
+            params.set("sh_degree_interval", original["sh_degree_interval"])
+            params.set("grow_until_iter", original["grow_until_iter"])
+
 
 class TestPanelPrefix:
     """Tests for the unified Panel API."""

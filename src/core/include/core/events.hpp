@@ -12,6 +12,8 @@
 #include <string>
 #include <unordered_map>
 
+class Viewport;
+
 namespace lfs::core {
 
     // Forward declarations
@@ -94,6 +96,7 @@ namespace lfs::core {
             EVENT(CyclePLY, );
             EVENT(CycleSelectionVisualization, );
             EVENT(ToggleSplitView, );
+            EVENT(ToggleIndependentSplitView, const Viewport* viewport;);
             EVENT(ToggleGTComparison, );
             EVENT(Undo, );
             EVENT(Redo, );
@@ -264,7 +267,6 @@ namespace lfs::core {
             EVENT(EllipsoidVisibilityChanged, bool visible;);
             EVENT(ConsoleResult, std::string command; std::string result;);
             EVENT(SplitPositionChanged, float position;);
-            EVENT(GTComparisonModeChanged, bool enabled;);
             EVENT(FocusTrainingPanel, );
             EVENT(ToggleUI, );
             EVENT(ToggleFullscreen, );

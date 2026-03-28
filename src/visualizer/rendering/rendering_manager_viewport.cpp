@@ -29,7 +29,7 @@ namespace lfs::vis {
     RenderingManager::ContentBounds RenderingManager::getContentBounds(const glm::ivec2& viewport_size) const {
         ContentBounds bounds{0.0f, 0.0f, static_cast<float>(viewport_size.x), static_cast<float>(viewport_size.y), false};
 
-        if (settings_.split_view_mode == SplitViewMode::GTComparison) {
+        if (split_view_service_.isGTComparisonActive(settings_)) {
             const auto content_dims = split_view_service_.gtContentDimensions();
             if (!content_dims) {
                 return bounds;
@@ -52,6 +52,116 @@ namespace lfs::vis {
             bounds.letterboxed = true;
         }
         return bounds;
+    }
+
+    std::optional<RenderingManager::MutableViewerPanelInfo> RenderingManager::resolveViewerPanel(
+        Viewport& primary_viewport,
+        const glm::vec2& viewport_pos,
+        const glm::vec2& viewport_size,
+        const std::optional<glm::vec2> screen_point,
+        const std::optional<SplitViewPanelId> panel_override) {
+        const glm::ivec2 rendered_size = getRenderedSize();
+        const int full_render_width =
+            rendered_size.x > 0 ? rendered_size.x : std::max(static_cast<int>(viewport_size.x), 1);
+        const int full_render_height =
+            rendered_size.y > 0 ? rendered_size.y : std::max(static_cast<int>(viewport_size.y), 1);
+
+        MutableViewerPanelInfo info{
+            .panel = SplitViewPanelId::Left,
+            .viewport = &primary_viewport,
+            .x = viewport_pos.x,
+            .y = viewport_pos.y,
+            .width = viewport_size.x,
+            .height = viewport_size.y,
+            .render_width = full_render_width,
+            .render_height = full_render_height,
+        };
+
+        const auto screen_layouts = split_view_service_.panelLayouts(
+            settings_,
+            std::max(static_cast<int>(viewport_size.x), 1));
+        if (!screen_layouts || viewport_size.x <= 1.0f) {
+            return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
+        }
+
+        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
+        if (!render_layouts) {
+            return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
+        }
+
+        SplitViewPanelId panel = panel_override.value_or(split_view_service_.focusedPanel());
+        if (screen_point && !panel_override) {
+            const float divider_x = viewport_pos.x + (*screen_layouts)[0].width;
+            panel = screen_point->x >= divider_x ? SplitViewPanelId::Right : SplitViewPanelId::Left;
+        }
+
+        const size_t index = splitViewPanelIndex(panel);
+        info.panel = panel;
+        info.viewport = (panel == SplitViewPanelId::Right)
+                            ? &split_view_service_.secondaryViewport()
+                            : &primary_viewport;
+        info.x = viewport_pos.x + static_cast<float>((*screen_layouts)[index].x);
+        info.y = viewport_pos.y;
+        info.width = static_cast<float>((*screen_layouts)[index].width);
+        info.height = viewport_size.y;
+        info.render_width = std::max((*render_layouts)[index].width, 1);
+        info.render_height = full_render_height;
+        return info.valid() ? std::optional<MutableViewerPanelInfo>(info) : std::nullopt;
+    }
+
+    std::optional<RenderingManager::ViewerPanelInfo> RenderingManager::resolveViewerPanel(
+        const Viewport& primary_viewport,
+        const glm::vec2& viewport_pos,
+        const glm::vec2& viewport_size,
+        const std::optional<glm::vec2> screen_point,
+        const std::optional<SplitViewPanelId> panel_override) const {
+        const glm::ivec2 rendered_size = getRenderedSize();
+        const int full_render_width =
+            rendered_size.x > 0 ? rendered_size.x : std::max(static_cast<int>(viewport_size.x), 1);
+        const int full_render_height =
+            rendered_size.y > 0 ? rendered_size.y : std::max(static_cast<int>(viewport_size.y), 1);
+
+        ViewerPanelInfo info{
+            .panel = SplitViewPanelId::Left,
+            .viewport = &primary_viewport,
+            .x = viewport_pos.x,
+            .y = viewport_pos.y,
+            .width = viewport_size.x,
+            .height = viewport_size.y,
+            .render_width = full_render_width,
+            .render_height = full_render_height,
+        };
+
+        const auto screen_layouts = split_view_service_.panelLayouts(
+            settings_,
+            std::max(static_cast<int>(viewport_size.x), 1));
+        if (!screen_layouts || viewport_size.x <= 1.0f) {
+            return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
+        }
+
+        const auto render_layouts = split_view_service_.panelLayouts(settings_, full_render_width);
+        if (!render_layouts) {
+            return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
+        }
+
+        SplitViewPanelId panel = panel_override.value_or(split_view_service_.focusedPanel());
+        if (screen_point && !panel_override) {
+            const float divider_x = viewport_pos.x + (*screen_layouts)[0].width;
+            panel = screen_point->x >= divider_x ? SplitViewPanelId::Right : SplitViewPanelId::Left;
+        }
+
+        const size_t index = splitViewPanelIndex(panel);
+        info.panel = panel;
+        info.viewport = (panel == SplitViewPanelId::Right)
+                            ? &split_view_service_.secondaryViewport()
+                            : &primary_viewport;
+        info.x = viewport_pos.x + static_cast<float>((*screen_layouts)[index].x);
+        info.y = viewport_pos.y;
+        info.width = static_cast<float>((*screen_layouts)[index].width);
+        info.height = viewport_size.y;
+        info.render_width = std::max((*render_layouts)[index].width, 1);
+        info.render_height = full_render_height;
+        return info.valid() ? std::optional<ViewerPanelInfo>(info) : std::nullopt;
     }
 
     lfs::rendering::RenderingEngine* RenderingManager::getRenderingEngine() {
@@ -184,12 +294,14 @@ namespace lfs::vis {
         return false;
     }
 
-    float RenderingManager::getDepthAtPixel(const int x, const int y) const {
+    float RenderingManager::getDepthAtPixel(const int x, const int y,
+                                            const std::optional<SplitViewPanelId> panel) const {
         return viewport_artifact_service_.sampleLinearDepthAt(
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
-            engine_.get());
+            engine_.get(),
+            panel);
     }
 
 } // namespace lfs::vis

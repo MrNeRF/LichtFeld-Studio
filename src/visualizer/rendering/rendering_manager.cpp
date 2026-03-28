@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering_manager.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "rendering/rasterizer/rasterization/include/rasterization_config.h"
@@ -148,11 +149,90 @@ namespace lfs::vis {
         return split_view_service_.getInfo();
     }
 
+    bool RenderingManager::isSplitViewActive() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return split_view_service_.isActive(settings_);
+    }
+
+    bool RenderingManager::isGTComparisonActive() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return split_view_service_.isGTComparisonActive(settings_);
+    }
+
+    bool RenderingManager::isIndependentSplitViewActive() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return split_view_service_.isIndependentDualActive(settings_);
+    }
+
+    float RenderingManager::getSplitPosition() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return settings_.split_position;
+    }
+
+    std::optional<float> RenderingManager::getSplitDividerScreenX(const glm::vec2& viewport_pos,
+                                                                  const glm::vec2& viewport_size) const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (!split_view_service_.isActive(settings_)) {
+            return std::nullopt;
+        }
+
+        const auto content_bounds = getContentBounds(glm::ivec2(
+            std::max(static_cast<int>(viewport_size.x), 0),
+            std::max(static_cast<int>(viewport_size.y), 0)));
+        return viewport_pos.x + content_bounds.x + content_bounds.width * settings_.split_position;
+    }
+
+    Viewport& RenderingManager::resolvePanelViewport(Viewport& primary_viewport, const SplitViewPanelId panel) {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (split_view_service_.isIndependentDualActive(settings_) &&
+            panel == SplitViewPanelId::Right) {
+            return split_view_service_.secondaryViewport();
+        }
+        return primary_viewport;
+    }
+
+    const Viewport& RenderingManager::resolvePanelViewport(
+        const Viewport& primary_viewport,
+        const SplitViewPanelId panel) const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        if (split_view_service_.isIndependentDualActive(settings_) &&
+            panel == SplitViewPanelId::Right) {
+            return split_view_service_.secondaryViewport();
+        }
+        return primary_viewport;
+    }
+
+    void RenderingManager::applySplitModeChange(const SplitViewService::ModeChangeResult& result) {
+        if (!result.mode_changed) {
+            return;
+        }
+
+        if (result.clear_viewport_output) {
+            viewport_artifact_service_.clearViewportOutput();
+        }
+
+        if (result.restore_equirectangular) {
+            auto event = lfs::core::events::ui::RenderSettingsChanged{};
+            event.equirectangular = *result.restore_equirectangular;
+            event.emit();
+        }
+    }
+
+    Viewport& RenderingManager::resolveFocusedViewport(Viewport& primary_viewport) {
+        return resolvePanelViewport(primary_viewport, split_view_service_.focusedPanel());
+    }
+
+    const Viewport& RenderingManager::resolveFocusedViewport(const Viewport& primary_viewport) const {
+        return resolvePanelViewport(primary_viewport, split_view_service_.focusedPanel());
+    }
+
     void RenderingManager::setCursorPreviewState(const bool active, const float x, const float y, const float radius,
                                                  const bool add_mode, lfs::core::Tensor* selection_tensor,
-                                                 const bool saturation_mode, const float saturation_amount) {
+                                                 const bool saturation_mode, const float saturation_amount,
+                                                 const std::optional<SplitViewPanelId> panel,
+                                                 const int focused_gaussian_id) {
         viewport_overlay_service_.setCursorPreview(active, x, y, radius, add_mode, selection_tensor,
-                                                   saturation_mode, saturation_amount);
+                                                   saturation_mode, saturation_amount, panel, focused_gaussian_id);
         markDirty(DirtyFlag::SELECTION);
     }
 
@@ -161,29 +241,33 @@ namespace lfs::vis {
         markDirty(DirtyFlag::SELECTION);
     }
 
-    void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode) {
-        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode);
+    void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode,
+                                          const std::optional<SplitViewPanelId> panel) {
+        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel);
     }
 
     void RenderingManager::clearRectPreview() {
         viewport_overlay_service_.clearRect();
     }
 
-    void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode) {
-        viewport_overlay_service_.setPolygon(points, closed, add_mode);
+    void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed,
+                                             bool add_mode, const std::optional<SplitViewPanelId> panel) {
+        viewport_overlay_service_.setPolygon(points, closed, add_mode, panel);
     }
 
     void RenderingManager::setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points,
-                                                       const bool closed, const bool add_mode) {
-        viewport_overlay_service_.setPolygonWorldSpace(world_points, closed, add_mode);
+                                                       const bool closed, const bool add_mode,
+                                                       const std::optional<SplitViewPanelId> panel) {
+        viewport_overlay_service_.setPolygonWorldSpace(world_points, closed, add_mode, panel);
     }
 
     void RenderingManager::clearPolygonPreview() {
         viewport_overlay_service_.clearPolygon();
     }
 
-    void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode) {
-        viewport_overlay_service_.setLasso(points, add_mode);
+    void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode,
+                                           const std::optional<SplitViewPanelId> panel) {
+        viewport_overlay_service_.setLasso(points, add_mode, panel);
     }
 
     void RenderingManager::clearLassoPreview() {

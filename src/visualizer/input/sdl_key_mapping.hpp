@@ -12,6 +12,7 @@
 namespace lfs::vis::input {
 
     LFS_VIS_API int sdlScancodeToAppKey(SDL_Scancode scancode);
+    LFS_VIS_API int sdlKeycodeToAppKey(SDL_Keycode keycode);
     LFS_VIS_API int sdlModsToAppMods(SDL_Keymod sdl_mods);
     LFS_VIS_API int sdlMouseButtonToApp(uint8_t sdl_button);
     LFS_VIS_API SDL_Scancode appKeyToSdlScancode(int app_key);

@@ -105,7 +105,7 @@ namespace lfs::vis {
             bool isModalWindowOpen() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
-            void captureKey(int key, int mods);
+            void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods);
 
             // Thumbnail system (delegates to MenuBar)

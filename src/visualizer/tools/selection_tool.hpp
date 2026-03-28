@@ -38,7 +38,7 @@ namespace lfs::vis::tools {
         void setDepthFilterEnabled(bool enabled);
         void toggleDepthFilter() { setDepthFilterEnabled(!depth_filter_enabled_); }
         void adjustDepthFar(float scale);
-        void syncDepthFilterToCamera();
+        void syncDepthFilterToCamera(const Viewport& viewport);
 
         // Crop filter (use scene crop box/ellipsoid as selection filter)
         [[nodiscard]] bool isCropFilterEnabled() const { return crop_filter_enabled_; }

@@ -6,6 +6,7 @@
 
 #include "core/tensor.hpp"
 #include "gsplat_forward.h"
+#include <array>
 #include <tuple>
 #include <vector>
 
@@ -13,6 +14,68 @@ namespace lfs::rendering {
 
     // Import Tensor from lfs::core
     using lfs::core::Tensor;
+
+    struct ForwardWrapperTensorViewState {
+        Tensor w2c;
+        Tensor cam_position;
+        int width = 0;
+        int height = 0;
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        bool cursor_active = false;
+        float cursor_x = 0.0f;
+        float cursor_y = 0.0f;
+        float cursor_radius = 0.0f;
+        bool cursor_saturation_preview = false;
+        float cursor_saturation_amount = 0.0f;
+        unsigned long long* hovered_depth_id = nullptr;
+        int focused_gaussian_id = -1;
+    };
+
+    struct ForwardWrapperTensorSharedParams {
+        int active_sh_bases = 0;
+        float near_plane = 0.01f;
+        float far_plane = 0.0f;
+        bool show_rings = false;
+        float ring_width = 0.01f;
+        const Tensor* model_transforms = nullptr;
+        const Tensor* transform_indices = nullptr;
+        const Tensor* selection_mask = nullptr;
+        bool preview_selection_add_mode = true;
+        Tensor* preview_selection_out = nullptr;
+        bool show_center_markers = false;
+        const Tensor* crop_box_transform = nullptr;
+        const Tensor* crop_box_min = nullptr;
+        const Tensor* crop_box_max = nullptr;
+        bool crop_inverse = false;
+        bool crop_desaturate = false;
+        int crop_parent_node_index = -1;
+        const Tensor* ellipsoid_transform = nullptr;
+        const Tensor* ellipsoid_radii = nullptr;
+        bool ellipsoid_inverse = false;
+        bool ellipsoid_desaturate = false;
+        int ellipsoid_parent_node_index = -1;
+        const Tensor* view_volume_transform = nullptr;
+        const Tensor* view_volume_min = nullptr;
+        const Tensor* view_volume_max = nullptr;
+        bool view_volume_cull = false;
+        const Tensor* deleted_mask = nullptr;
+        const std::vector<bool>* emphasized_node_mask = nullptr;
+        bool dim_non_emphasized = false;
+        const std::vector<bool>* node_visibility_mask = nullptr;
+        float emphasis_flash_intensity = 0.0f;
+        bool orthographic = false;
+        float ortho_scale = 1.0f;
+        bool mip_filter = false;
+    };
+
+    struct ForwardWrapperTensorResult {
+        Tensor image;
+        Tensor alpha;
+        Tensor depth;
+    };
 
     /**
      * @brief Forward rasterization with custom Tensor types (libtorch-free)
@@ -102,6 +165,16 @@ namespace lfs::rendering {
         bool orthographic = false,
         float ortho_scale = 1.0f,
         bool mip_filter = false);
+
+    std::array<ForwardWrapperTensorResult, 2> forward_wrapper_tensor_dual(
+        const Tensor& means,
+        const Tensor& scales_raw,
+        const Tensor& rotations_raw,
+        const Tensor& opacities_raw,
+        const Tensor& sh_coefficients_0,
+        const Tensor& sh_coefficients_rest,
+        const std::array<ForwardWrapperTensorViewState, 2>& views,
+        const ForwardWrapperTensorSharedParams& shared);
 
     /**
      * @brief Select Gaussians within brush radius using GPU

@@ -459,19 +459,8 @@ namespace lfs::vis::gui {
             auto split_info = rm->getSplitViewInfo();
             split_enabled = split_info.enabled;
             if (split_enabled) {
-                auto settings = rm->getSettings();
-                if (settings.split_view_mode == SplitViewMode::GTComparison) {
-                    int cam_id = rm->getCurrentCameraId();
-                    split_mode_rml = LOC("status_bar.gt_compare");
-                    std::string cam_template = LOC("status_bar.camera");
-                    auto pos = cam_template.find("{cam_id}");
-                    if (pos != std::string::npos)
-                        cam_template.replace(pos, 8, std::to_string(cam_id));
-                    split_detail_rml = cam_template;
-                } else if (settings.split_view_mode == SplitViewMode::PLYComparison) {
-                    split_mode_rml = LOC("status_bar.split");
-                    split_detail_rml = std::format("{} | {}", split_info.left_name, split_info.right_name);
-                }
+                split_mode_rml = split_info.mode_label;
+                split_detail_rml = split_info.detail_label;
             }
         }
         setModelBool("show_split", model_.show_split, split_enabled);

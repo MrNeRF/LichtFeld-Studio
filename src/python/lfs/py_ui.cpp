@@ -5173,10 +5173,11 @@ namespace lfs::python {
                 switch (rm->getSettings().split_view_mode) {
                 case vis::SplitViewMode::GTComparison: return "gt_comparison";
                 case vis::SplitViewMode::PLYComparison: return "ply_comparison";
+                case vis::SplitViewMode::IndependentDual: return "independent_dual";
                 default: return "none";
                 }
             },
-            "Get split view mode (none, gt_comparison, ply_comparison)");
+            "Get split view mode (none, gt_comparison, ply_comparison, independent_dual)");
 
         m.def(
             "get_speed_overlay", []() -> std::tuple<float, float, float, float> {

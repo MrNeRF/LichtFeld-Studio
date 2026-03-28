@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <functional>
@@ -108,9 +109,13 @@ namespace lfs::core {
         std::chrono::steady_clock::time_point creation_time_;
         std::atomic<size_t> total_frames_processed_{0};
 
-        // Simple rendering synchronization
-        std::atomic<bool> rendering_active_{false};
-        std::atomic<uint64_t> active_training_frames_{0};
+        // The arena uses a single offset per device, so only one live frame can own it safely.
+        // Pending render requests are counted so training does not cut in front of queued renders.
+        mutable std::mutex sync_mutex_;
+        mutable std::condition_variable sync_cv_;
+        uint64_t active_frames_ = 0;
+        uint64_t pending_render_frames_ = 0;
+        uint64_t active_training_frames_ = 0;
 
     public:
         // Constructors
@@ -142,9 +147,8 @@ namespace lfs::core {
         bool is_under_memory_pressure() const;
         float get_memory_pressure() const;
 
-        bool is_rendering_active() const { return rendering_active_.load(std::memory_order_acquire); }
-        void set_rendering_active(bool active) { rendering_active_.store(active, std::memory_order_release); }
-        void wait_for_training() const;
+        bool is_rendering_active() const;
+        void set_rendering_active(bool active);
 
     private:
         Arena& get_or_create_arena(int device);

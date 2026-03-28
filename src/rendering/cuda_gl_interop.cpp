@@ -10,6 +10,7 @@
 #include "core/tensor.hpp"
 #include "cuda_gl_interop.hpp"
 #include "image_layout.hpp"
+#include <array>
 #include <cassert>
 #include <format>
 
@@ -22,7 +23,199 @@ namespace lfs::rendering {
 
     namespace {
         constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
-    }
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        struct CudaArrayFormatInfo {
+            int channels = 0;
+            int bits_per_channel = 0;
+            cudaChannelFormatKind kind = cudaChannelFormatKindNone;
+        };
+
+        [[nodiscard]] Result<CudaArrayFormatInfo> getCudaArrayFormatInfo(cudaArray_t cuda_array) {
+            cudaChannelFormatDesc desc{};
+            cudaExtent extent{};
+            unsigned int flags = 0;
+
+            if (const cudaError_t err = cudaArrayGetInfo(&desc, &extent, &flags, cuda_array); err != cudaSuccess) {
+                return std::unexpected(std::format("Failed to query CUDA array info: {}",
+                                                   cudaGetErrorString(err)));
+            }
+
+            CudaArrayFormatInfo info;
+            info.kind = desc.f;
+
+            const std::array<int, 4> channel_bits = {desc.x, desc.y, desc.z, desc.w};
+            for (const int bits : channel_bits) {
+                if (bits <= 0) {
+                    continue;
+                }
+
+                if (info.bits_per_channel == 0) {
+                    info.bits_per_channel = bits;
+                } else if (info.bits_per_channel != bits) {
+                    return std::unexpected("Unsupported CUDA array format: mixed channel bit depths");
+                }
+
+                ++info.channels;
+            }
+
+            if (info.channels < 3 || info.channels > 4 || info.bits_per_channel <= 0) {
+                return std::unexpected(std::format(
+                    "Unsupported CUDA array format: channels={}, bits_per_channel={}, kind={}",
+                    info.channels,
+                    info.bits_per_channel,
+                    static_cast<int>(info.kind)));
+            }
+
+            if (info.bits_per_channel % 8 != 0) {
+                return std::unexpected(std::format(
+                    "Unsupported CUDA array format: {} bits per channel is not byte-aligned",
+                    info.bits_per_channel));
+            }
+
+            return info;
+        }
+
+        [[nodiscard]] Result<Tensor> copyCudaArrayToFloatTensor(
+            cudaArray_t cuda_array,
+            const int width,
+            const int height) {
+            auto format_info = getCudaArrayFormatInfo(cuda_array);
+            if (!format_info) {
+                return std::unexpected(format_info.error());
+            }
+
+            const CudaArrayFormatInfo info = *format_info;
+            const size_t bytes_per_channel = static_cast<size_t>(info.bits_per_channel / 8);
+            const lfs::core::TensorShape shape = {
+                static_cast<size_t>(height),
+                static_cast<size_t>(width),
+                static_cast<size_t>(info.channels)};
+
+            const auto try_copy = [&](Tensor& image, const size_t copy_channels) {
+                const size_t copy_row_bytes =
+                    static_cast<size_t>(width) * copy_channels * bytes_per_channel;
+                return cudaMemcpy2DFromArray(
+                    image.data_ptr(),
+                    copy_row_bytes,
+                    cuda_array,
+                    0,
+                    0,
+                    copy_row_bytes,
+                    height,
+                    cudaMemcpyDeviceToDevice);
+            };
+
+            const auto try_padded_copy = [&](const lfs::core::DataType dtype) -> Result<Tensor> {
+                if (info.channels != 3) {
+                    return std::unexpected("Padded CUDA array fallback requires a 3-channel source");
+                }
+
+                Tensor padded = Tensor::empty(
+                    {static_cast<size_t>(height), static_cast<size_t>(width), size_t{4}},
+                    lfs::core::Device::CUDA,
+                    dtype);
+                if (const cudaError_t err = try_copy(padded, 4); err != cudaSuccess) {
+                    return std::unexpected(std::format("Failed padded CUDA array copy: {}",
+                                                       cudaGetErrorString(err)));
+                }
+
+                return padded.slice(2, 0, 3).contiguous();
+            };
+
+            LOG_TRACE("CUDA array readback format: {} channels, {} bits/channel, kind={}",
+                      info.channels,
+                      info.bits_per_channel,
+                      static_cast<int>(info.kind));
+
+            if (info.bits_per_channel == 32 && info.kind == cudaChannelFormatKindFloat) {
+                Tensor image = Tensor::empty(shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                if (const cudaError_t err = try_copy(image, static_cast<size_t>(info.channels));
+                    err != cudaSuccess) {
+                    if (err == cudaErrorInvalidValue && info.channels == 3) {
+                        cudaGetLastError();
+                        auto padded = try_padded_copy(lfs::core::DataType::Float32);
+                        if (padded) {
+                            return padded;
+                        }
+                        return std::unexpected(std::format(
+                            "Failed to copy float CUDA array: {}; padded fallback also failed: {}",
+                            cudaGetErrorString(err),
+                            padded.error()));
+                    }
+                    return std::unexpected(std::format("Failed to copy float CUDA array: {}",
+                                                       cudaGetErrorString(err)));
+                }
+
+                if (info.channels == 4) {
+                    image = image.slice(2, 0, 3).contiguous();
+                }
+                return image;
+            }
+
+            if (info.bits_per_channel == 16 && info.kind == cudaChannelFormatKindFloat) {
+                Tensor image_f16 = Tensor::empty(shape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+                if (const cudaError_t err = try_copy(image_f16, static_cast<size_t>(info.channels));
+                    err != cudaSuccess) {
+                    if (err == cudaErrorInvalidValue && info.channels == 3) {
+                        cudaGetLastError();
+                        auto padded = try_padded_copy(lfs::core::DataType::Float16);
+                        if (padded) {
+                            return padded->to(lfs::core::DataType::Float32);
+                        }
+                        return std::unexpected(std::format(
+                            "Failed to copy float16 CUDA array: {}; padded fallback also failed: {}",
+                            cudaGetErrorString(err),
+                            padded.error()));
+                    }
+                    return std::unexpected(std::format("Failed to copy float16 CUDA array: {}",
+                                                       cudaGetErrorString(err)));
+                }
+
+                Tensor image = image_f16.to(lfs::core::DataType::Float32);
+                if (info.channels == 4) {
+                    image = image.slice(2, 0, 3).contiguous();
+                }
+                return image;
+            }
+
+            if (info.bits_per_channel == 8 && info.kind == cudaChannelFormatKindUnsigned) {
+                Tensor image_u8 = Tensor::empty(shape, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                if (const cudaError_t err = try_copy(image_u8, static_cast<size_t>(info.channels));
+                    err != cudaSuccess) {
+                    if (err == cudaErrorInvalidValue && info.channels == 3) {
+                        cudaGetLastError();
+                        auto padded = try_padded_copy(lfs::core::DataType::UInt8);
+                        if (padded) {
+                            Tensor image = padded->to(lfs::core::DataType::Float32);
+                            image.div_(255.0f);
+                            return image;
+                        }
+                        return std::unexpected(std::format(
+                            "Failed to copy uint8 CUDA array: {}; padded fallback also failed: {}",
+                            cudaGetErrorString(err),
+                            padded.error()));
+                    }
+                    return std::unexpected(std::format("Failed to copy uint8 CUDA array: {}",
+                                                       cudaGetErrorString(err)));
+                }
+
+                Tensor image = image_u8.to(lfs::core::DataType::Float32);
+                image.div_(255.0f);
+                if (info.channels == 4) {
+                    image = image.slice(2, 0, 3).contiguous();
+                }
+                return image;
+            }
+
+            return std::unexpected(std::format(
+                "Unsupported CUDA array format: channels={}, bits_per_channel={}, kind={}",
+                info.channels,
+                info.bits_per_channel,
+                static_cast<int>(info.kind)));
+        }
+#endif
+    } // namespace
 
     // Implementation for CudaGraphicsResourceDeleter
     void CudaGraphicsResourceDeleter::operator()(void* resource) const {
@@ -358,40 +551,13 @@ namespace lfs::rendering {
                                                cudaGetErrorString(err)));
         }
 
-        // Allocate output tensor [H, W, 3] in float32
-        if (!output.is_valid() || output.size(0) != static_cast<size_t>(out_height) ||
-            output.size(1) != static_cast<size_t>(out_width) || output.size(2) != 3) {
-            output = Tensor::empty({static_cast<size_t>(out_height),
-                                    static_cast<size_t>(out_width),
-                                    3},
-                                   lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        auto readback = copyCudaArrayToFloatTensor(cuda_array, out_width, out_height);
+        if (!readback) {
+            LOG_ERROR("Failed to copy from CUDA array: {}", readback.error());
+            return std::unexpected(readback.error());
         }
 
-        // Allocate temp buffer for RGBA data (only the region we need)
-        auto rgba_temp = Tensor::empty({static_cast<size_t>(out_height),
-                                        static_cast<size_t>(out_width),
-                                        4},
-                                       lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        // Copy from CUDA array to temp buffer (RGBA float32)
-        // Only copy the target region (top-left corner of the texture)
-        err = cudaMemcpy2DFromArray(
-            rgba_temp.ptr<float>(),
-            out_width * 4 * sizeof(float), // dst pitch
-            cuda_array,
-            0, 0,                          // src offset (x, y)
-            out_width * 4 * sizeof(float), // width in bytes to copy
-            out_height,                    // height (rows) to copy
-            cudaMemcpyDeviceToDevice);
-
-        if (err != cudaSuccess) {
-            LOG_ERROR("Failed to copy from CUDA array: {}", cudaGetErrorString(err));
-            return std::unexpected(std::format("Failed to copy from CUDA array: {}",
-                                               cudaGetErrorString(err)));
-        }
-
-        // Extract RGB channels (drop alpha)
-        output = rgba_temp.slice(2, 0, 3).contiguous();
+        output = std::move(*readback);
 
         LOG_TRACE("Successfully read texture to tensor ({}x{})", out_width, out_height);
         return {};

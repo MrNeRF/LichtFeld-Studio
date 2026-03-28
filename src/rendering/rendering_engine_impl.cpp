@@ -139,6 +139,117 @@ namespace lfs::rendering {
             pipeline_req.view_volume_cull = view_volume_cull;
         }
 
+        [[nodiscard]] bool equalVec3(const glm::vec3& a, const glm::vec3& b) {
+            return a.x == b.x && a.y == b.y && a.z == b.z;
+        }
+
+        [[nodiscard]] bool equalMat4(const glm::mat4& a, const glm::mat4& b) {
+            for (int col = 0; col < 4; ++col) {
+                for (int row = 0; row < 4; ++row) {
+                    if (a[col][row] != b[col][row]) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool equalBoundingBox(const BoundingBox& a, const BoundingBox& b) {
+            return equalVec3(a.min, b.min) &&
+                   equalVec3(a.max, b.max) &&
+                   equalMat4(a.transform, b.transform);
+        }
+
+        [[nodiscard]] bool equalEllipsoid(const Ellipsoid& a, const Ellipsoid& b) {
+            return equalVec3(a.radii, b.radii) &&
+                   equalMat4(a.transform, b.transform);
+        }
+
+        [[nodiscard]] bool equalScopedBoxFilter(const GaussianScopedBoxFilter& a,
+                                                const GaussianScopedBoxFilter& b) {
+            return equalBoundingBox(a.bounds, b.bounds) &&
+                   a.inverse == b.inverse &&
+                   a.desaturate == b.desaturate &&
+                   a.parent_node_index == b.parent_node_index;
+        }
+
+        [[nodiscard]] bool equalScopedEllipsoidFilter(const GaussianScopedEllipsoidFilter& a,
+                                                      const GaussianScopedEllipsoidFilter& b) {
+            return equalEllipsoid(a.bounds, b.bounds) &&
+                   a.inverse == b.inverse &&
+                   a.desaturate == b.desaturate &&
+                   a.parent_node_index == b.parent_node_index;
+        }
+
+        [[nodiscard]] bool equalGaussianFilterState(const GaussianFilterState& a,
+                                                    const GaussianFilterState& b) {
+            const bool crop_equal =
+                (!a.crop_region && !b.crop_region) ||
+                (a.crop_region && b.crop_region && equalScopedBoxFilter(*a.crop_region, *b.crop_region));
+            const bool ellipsoid_equal =
+                (!a.ellipsoid_region && !b.ellipsoid_region) ||
+                (a.ellipsoid_region && b.ellipsoid_region && equalScopedEllipsoidFilter(*a.ellipsoid_region, *b.ellipsoid_region));
+            const bool view_volume_equal =
+                (!a.view_volume && !b.view_volume) ||
+                (a.view_volume && b.view_volume && equalBoundingBox(*a.view_volume, *b.view_volume));
+            return crop_equal &&
+                   ellipsoid_equal &&
+                   view_volume_equal &&
+                   a.cull_outside_view_volume == b.cull_outside_view_volume;
+        }
+
+        [[nodiscard]] const char* batchedGaussianCompatibilityMismatch(
+            const ViewportRenderRequest& a,
+            const ViewportRenderRequest& b) {
+            if (a.scaling_modifier != b.scaling_modifier)
+                return "scaling_modifier";
+            if (a.antialiasing != b.antialiasing)
+                return "antialiasing";
+            if (a.mip_filter != b.mip_filter)
+                return "mip_filter";
+            if (a.sh_degree != b.sh_degree)
+                return "sh_degree";
+            if (a.gut != b.gut)
+                return "gut";
+            if (a.equirectangular != b.equirectangular)
+                return "equirectangular";
+            if (!equalVec3(a.frame_view.background_color, b.frame_view.background_color))
+                return "frame_view.background_color";
+            if (a.frame_view.far_plane != b.frame_view.far_plane)
+                return "frame_view.far_plane";
+            if (a.frame_view.orthographic != b.frame_view.orthographic)
+                return "frame_view.orthographic";
+            if (a.frame_view.ortho_scale != b.frame_view.ortho_scale)
+                return "frame_view.ortho_scale";
+            if (a.scene.model_transforms != b.scene.model_transforms)
+                return "scene.model_transforms";
+            if (a.scene.transform_indices.get() != b.scene.transform_indices.get())
+                return "scene.transform_indices";
+            if (a.scene.node_visibility_mask != b.scene.node_visibility_mask)
+                return "scene.node_visibility_mask";
+            if (!equalGaussianFilterState(a.filters, b.filters))
+                return "filters";
+            if (a.overlay.markers.show_rings != b.overlay.markers.show_rings)
+                return "overlay.markers.show_rings";
+            if (a.overlay.markers.ring_width != b.overlay.markers.ring_width)
+                return "overlay.markers.ring_width";
+            if (a.overlay.markers.show_center_markers != b.overlay.markers.show_center_markers)
+                return "overlay.markers.show_center_markers";
+            if (a.overlay.emphasis.mask.get() != b.overlay.emphasis.mask.get())
+                return "overlay.emphasis.mask";
+            if (a.overlay.emphasis.transient_mask.mask != b.overlay.emphasis.transient_mask.mask)
+                return "overlay.emphasis.transient_mask.mask";
+            if (a.overlay.emphasis.transient_mask.additive != b.overlay.emphasis.transient_mask.additive)
+                return "overlay.emphasis.transient_mask.additive";
+            if (a.overlay.emphasis.emphasized_node_mask != b.overlay.emphasis.emphasized_node_mask)
+                return "overlay.emphasis.emphasized_node_mask";
+            if (a.overlay.emphasis.dim_non_emphasized != b.overlay.emphasis.dim_non_emphasized)
+                return "overlay.emphasis.dim_non_emphasized";
+            if (a.overlay.emphasis.flash_intensity != b.overlay.emphasis.flash_intensity)
+                return "overlay.emphasis.flash_intensity";
+            return nullptr;
+        }
+
         [[nodiscard]] RenderingPipeline::RasterRequest makeGaussianPipelineRequest(
             const ViewportRenderRequest& request) {
             return RenderingPipeline::RasterRequest{
@@ -460,9 +571,69 @@ namespace lfs::rendering {
         return *pipeline_result;
     }
 
+    Result<RenderingPipeline::DualImageRenderResult> RenderingEngineImpl::renderGaussiansRasterResultPair(
+        const lfs::core::SplatData& splat_data,
+        const std::array<ViewportRenderRequest, 2>& requests) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        for (const auto& request : requests) {
+            if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+                request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+                LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
+                return std::unexpected("Invalid viewport dimensions");
+            }
+        }
+
+        if (const char* mismatch = batchedGaussianCompatibilityMismatch(requests[0], requests[1]);
+            mismatch != nullptr) {
+            LOG_DEBUG(
+                "Falling back to independent dual gaussian renders because batched requests differ in {}",
+                mismatch);
+            RenderingPipeline::DualImageRenderResult fallback;
+            for (size_t i = 0; i < fallback.views.size(); ++i) {
+                auto single = renderGaussiansRasterResult(splat_data, requests[i]);
+                if (!single) {
+                    return std::unexpected(single.error());
+                }
+                fallback.views[i] = std::move(*single);
+            }
+            return fallback;
+        }
+
+        std::array<RenderingPipeline::RasterRequest, 2> pipeline_requests;
+        std::array<GaussianRasterResources, 2> raster_resources;
+        for (size_t i = 0; i < pipeline_requests.size(); ++i) {
+            pipeline_requests[i] = makeGaussianPipelineRequest(requests[i]);
+            applyCropBoxToPipeline(pipeline_requests[i], requests[i].filters.crop_region, raster_resources[i]);
+            applyEllipsoidToPipeline(pipeline_requests[i], requests[i].filters.ellipsoid_region, raster_resources[i]);
+            applyViewVolumeToPipeline(
+                pipeline_requests[i],
+                requests[i].filters.view_volume,
+                requests[i].filters.cull_outside_view_volume,
+                raster_resources[i]);
+        }
+
+        auto pipeline_result = pipeline_.renderGaussianImagePair(splat_data, pipeline_requests);
+        if (!pipeline_result) {
+            LOG_ERROR("Batched pipeline render failed: {}", pipeline_result.error());
+            return std::unexpected(pipeline_result.error());
+        }
+
+        return *pipeline_result;
+    }
+
     FrameMetadata RenderingEngineImpl::makeFrameMetadata(const RenderingPipeline::ImageRenderResult& result) {
         return FrameMetadata{
-            .depth = result.depth.is_valid() ? std::make_shared<Tensor>(result.depth) : nullptr,
+            .depth_panels = {FramePanelMetadata{
+                .depth = result.depth.is_valid() ? std::make_shared<Tensor>(result.depth) : nullptr,
+                .start_position = 0.0f,
+                .end_position = 1.0f,
+            }},
+            .depth_panel_count = 1,
             .valid = result.valid,
             .depth_is_ndc = result.depth_is_ndc,
             .external_depth_texture = result.external_depth_texture,
@@ -532,6 +703,25 @@ namespace lfs::rendering {
         return GaussianImageResult{
             .image = std::move(image),
             .metadata = makeFrameMetadata(*raster_result)};
+    }
+
+    Result<DualGaussianImageResult> RenderingEngineImpl::renderGaussiansImagePair(
+        const lfs::core::SplatData& splat_data,
+        const std::array<ViewportRenderRequest, 2>& requests) {
+
+        auto raster_result = renderGaussiansRasterResultPair(splat_data, requests);
+        if (!raster_result) {
+            return std::unexpected(raster_result.error());
+        }
+
+        DualGaussianImageResult result;
+        for (size_t i = 0; i < result.size(); ++i) {
+            auto image = std::make_shared<Tensor>(std::move(raster_result->views[i].image));
+            result[i] = GaussianImageResult{
+                .image = std::move(image),
+                .metadata = makeFrameMetadata(raster_result->views[i])};
+        }
+        return result;
     }
 
     Result<GpuFrame> RenderingEngineImpl::renderPointCloudGpuFrame(
@@ -799,7 +989,7 @@ namespace lfs::rendering {
         const GLuint uploaded_depth_texture =
             metadata.external_depth_texture != 0
                 ? metadata.external_depth_texture
-                : (metadata.depth ? screen_renderer_->getUploadedDepthTexture() : 0);
+                : (metadata.primaryDepth() ? screen_renderer_->getUploadedDepthTexture() : 0);
 
         return GpuFrame{
             .color = {.id = screen_renderer_->getUploadedColorTexture(),
@@ -959,8 +1149,9 @@ namespace lfs::rendering {
         // a new shared_ptr per render, so distinct renders always have distinct pointers.
         // Same pointer == same content.
         const bool same_image_ptr = (last_presented_image_.get() == image.get());
-        const bool same_depth_ptr = (!metadata.depth && !last_presented_depth_) ||
-                                    (metadata.depth && last_presented_depth_.get() == metadata.depth.get());
+        const auto& primary_depth = metadata.primaryDepth();
+        const bool same_depth_ptr = (!primary_depth && !last_presented_depth_) ||
+                                    (primary_depth && last_presented_depth_.get() == primary_depth.get());
         const bool same_depth_tex = (last_presented_external_depth_texture_ == metadata.external_depth_texture);
         const bool same_depth_mode = (last_presented_depth_is_ndc_ == metadata.depth_is_ndc);
         const bool same_near = (last_presented_near_plane_ == metadata.near_plane);
@@ -983,7 +1174,7 @@ namespace lfs::rendering {
 
         RenderingPipeline::ImageRenderResult internal_result;
         internal_result.image = *image;
-        internal_result.depth = metadata.depth ? *metadata.depth : Tensor();
+        internal_result.depth = primary_depth ? *primary_depth : Tensor();
         internal_result.valid = true;
         internal_result.depth_is_ndc = metadata.depth_is_ndc;
         internal_result.external_depth_texture = metadata.external_depth_texture;
@@ -998,7 +1189,7 @@ namespace lfs::rendering {
         }
 
         last_presented_image_ = image;
-        last_presented_depth_ = metadata.depth;
+        last_presented_depth_ = primary_depth;
         last_presented_external_depth_texture_ = metadata.external_depth_texture;
         last_presented_depth_is_ndc_ = metadata.depth_is_ndc;
         last_presented_near_plane_ = metadata.near_plane;

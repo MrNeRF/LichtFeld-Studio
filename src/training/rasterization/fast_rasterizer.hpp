@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/render_output.hpp"
@@ -82,11 +83,15 @@ namespace lfs::training {
     inline RenderOutput fast_rasterize(
         lfs::core::Camera& viewpoint_camera,
         lfs::core::SplatData& gaussian_model,
-        lfs::core::Tensor& bg_color) {
-        auto result = fast_rasterize_forward(viewpoint_camera, gaussian_model, bg_color);
+        lfs::core::Tensor& bg_color,
+        bool mip_filter = false,
+        const lfs::core::Tensor& bg_image = {}) {
+        auto result = fast_rasterize_forward(viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0, mip_filter, bg_image);
         if (!result) {
             throw std::runtime_error(result.error());
         }
+        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+        arena.end_frame(result->second.forward_ctx.frame_id);
         return result->first;
     }
 } // namespace lfs::training

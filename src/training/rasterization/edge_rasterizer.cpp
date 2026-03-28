@@ -85,31 +85,26 @@ namespace lfs::training {
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
-        edge_compute::rasterization::ForwardContext forward_ctx;
-        try {
-            forward_ctx = edge_compute::rasterization::edge_forward_raw(
-                means.ptr<float>(),
-                raw_scales.ptr<float>(),
-                raw_rotations.ptr<float>(),
-                raw_opacities.ptr<float>(),
-                w2c_ptr,
-                cam_position_ptr,
-                alpha.ptr<float>(),
-                n_primitives,
-                width,
-                height,
-                fx,
-                fy,
-                cx_adjusted, // Use adjusted cx for tile offset
-                cy_adjusted, // Use adjusted cy for tile offset
-                near_plane,
-                far_plane,
-                pixel_weights_ptr,
-                accum_weights_out);
-        } catch (const std::exception& e) {
-        }
+        auto forward_ctx = edge_compute::rasterization::edge_forward_raw(
+            means.ptr<float>(),
+            raw_scales.ptr<float>(),
+            raw_rotations.ptr<float>(),
+            raw_opacities.ptr<float>(),
+            w2c_ptr,
+            cam_position_ptr,
+            alpha.ptr<float>(),
+            n_primitives,
+            width,
+            height,
+            fx,
+            fy,
+            cx_adjusted, // Use adjusted cx for tile offset
+            cy_adjusted, // Use adjusted cy for tile offset
+            near_plane,
+            far_plane,
+            pixel_weights_ptr,
+            accum_weights_out);
 
-        // Check if forward failed due to OOM
         if (!forward_ctx.success) {
             return std::unexpected(std::string(forward_ctx.error_message));
         }

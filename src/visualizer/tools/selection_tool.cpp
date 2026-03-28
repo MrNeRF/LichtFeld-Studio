@@ -29,6 +29,14 @@ namespace lfs::vis::tools {
             return std::max(half_width / aspect, 0.05f);
         }
 
+        [[nodiscard]] const Viewport& selectionFilterViewport(const ToolContext& ctx) {
+            auto* const rm = ctx.getRenderingManager();
+            if (rm) {
+                return rm->resolveFocusedViewport(ctx.getViewport());
+            }
+            return ctx.getViewport();
+        }
+
     } // namespace
 
     SelectionTool::SelectionTool() = default;
@@ -122,12 +130,30 @@ namespace lfs::vis::tools {
         }
     }
 
-    void SelectionTool::syncDepthFilterToCamera() {
+    void SelectionTool::syncDepthFilterToCamera(const Viewport& viewport) {
         if (!tool_context_ || !isEnabled() || !depth_filter_enabled_) {
             return;
         }
 
-        applySelectionFilterSettings(*tool_context_);
+        auto* const rm = tool_context_->getRenderingManager();
+        if (!rm) {
+            return;
+        }
+
+        auto settings = rm->getSettings();
+        settings.crop_filter_for_selection = crop_filter_enabled_;
+        if (crop_filter_enabled_) {
+            settings.show_crop_box = true;
+            settings.show_ellipsoid = true;
+        }
+        settings.depth_filter_enabled = depth_filter_enabled_;
+        const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
+        const float half_height = depthBoxHalfHeight(*tool_context_, frustum_half_width_);
+        settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
+        settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, depth_near_);
+        settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, depth_far_);
+        rm->updateSettings(settings);
+        rm->markDirty(DirtyFlag::SELECTION);
     }
 
     void SelectionTool::setCropFilterEnabled(const bool enabled) {
@@ -206,7 +232,7 @@ namespace lfs::vis::tools {
         }
         settings.depth_filter_enabled = depth_filter_enabled_;
         if (depth_filter_enabled_) {
-            const auto& viewport = ctx.getViewport();
+            const auto& viewport = selectionFilterViewport(ctx);
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
             const float half_height = depthBoxHalfHeight(ctx, frustum_half_width_);
             settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);

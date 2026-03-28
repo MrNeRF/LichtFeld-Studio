@@ -45,7 +45,7 @@ namespace lfs::vis {
             static_cast<int>(viewport_size.x * scale),
             static_cast<int>(viewport_size.y * scale));
 
-        if (settings.split_view_mode == SplitViewMode::GTComparison && res.gt_context && res.gt_context->valid()) {
+        if (splitViewUsesGTComparison(settings.split_view_mode) && res.gt_context && res.gt_context->valid()) {
             render_size = res.gt_context->dimensions;
         }
 
@@ -107,8 +107,7 @@ namespace lfs::vis {
                     viewport_frame = lfs::rendering::GaussianGpuFrameResult{
                         .frame = *gpu_frame,
                         .metadata =
-                            {.depth = nullptr,
-                             .depth_right = nullptr,
+                            {.depth_panel_count = 1,
                              .valid = true,
                              .depth_is_ndc = gpu_frame->depth_is_ndc,
                              .external_depth_texture = gpu_frame->depth.valid() ? gpu_frame->depth.id : 0,

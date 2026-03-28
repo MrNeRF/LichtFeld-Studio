@@ -57,15 +57,22 @@ namespace lfs::rendering {
             GLuint left_texture,
             GLuint right_texture,
             float split_position,
+            const glm::vec2& left_region,
+            const glm::vec2& right_region,
             const glm::vec2& left_texcoord_scale,
             const glm::vec2& right_texcoord_scale,
+            bool normalize_left_x,
+            bool normalize_right_x,
             bool flip_left_y,
             bool flip_right_y);
 
         Result<PanelRenderOutput> renderPanelContent(
             size_t panel_index,
             const SplitViewPanel& panel,
-            const glm::ivec2& output_size,
+            const glm::ivec2& panel_size,
+            RenderingEngine& engine);
+        Result<std::array<PanelRenderOutput, 2>> renderBatchedGaussianPanels(
+            const SplitViewRequest& request,
             RenderingEngine& engine);
     };
 

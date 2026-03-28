@@ -2025,26 +2025,36 @@ namespace lfs::training {
                 r_output = output; // Save last tile for densification
                 nvtxRangePop();
 
+                bool tile_context_cleaned = false;
+                auto cleanup_tile_context = [&]() {
+                    if (tile_context_cleaned) {
+                        return;
+                    }
+                    tile_context_cleaned = true;
+
+                    auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+                    if (fast_ctx) {
+                        arena.end_frame(fast_ctx->forward_ctx.frame_id);
+                        fast_ctx.reset();
+                    } else if (gsplat_ctx) {
+                        if (gsplat_ctx->isect_ids_ptr != nullptr) {
+                            cudaFree(gsplat_ctx->isect_ids_ptr);
+                            gsplat_ctx->isect_ids_ptr = nullptr;
+                        }
+                        if (gsplat_ctx->flatten_ids_ptr != nullptr) {
+                            cudaFree(gsplat_ctx->flatten_ids_ptr);
+                            gsplat_ctx->flatten_ids_ptr = nullptr;
+                        }
+                        arena.end_frame(gsplat_ctx->frame_id);
+                        gsplat_ctx.reset();
+                    }
+                };
+
                 if (in_controller_phase) {
                     // Controller phase: forward through ISP with controller params, photometric loss,
                     // backward only through controller (base params frozen)
                     nvtxRangePush("controller_phase");
-                    auto cleanup_controller_tile_context = [&]() {
-                        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                        if (fast_ctx) {
-                            arena.end_frame(fast_ctx->forward_ctx.frame_id);
-                        } else if (gsplat_ctx) {
-                            if (gsplat_ctx->isect_ids_ptr != nullptr) {
-                                cudaFree(gsplat_ctx->isect_ids_ptr);
-                                gsplat_ctx->isect_ids_ptr = nullptr;
-                            }
-                            if (gsplat_ctx->flatten_ids_ptr != nullptr) {
-                                cudaFree(gsplat_ctx->flatten_ids_ptr);
-                                gsplat_ctx->flatten_ids_ptr = nullptr;
-                            }
-                            arena.end_frame(gsplat_ctx->frame_id);
-                        }
-                    };
+                    auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
 
                     lfs::core::Tensor corrected_image = output.image;
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
@@ -2083,7 +2093,6 @@ namespace lfs::training {
                         auto result = compute_photometric_loss_with_mask(
                             corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization);
                         if (!result) {
-                            cleanup_controller_tile_context();
                             nvtxRangePop();
                             nvtxRangePop();
                             nvtxRangePop();
@@ -2095,7 +2104,6 @@ namespace lfs::training {
                         auto result = compute_photometric_loss_with_gradient(
                             corrected_image, gt_tile, params_.optimization);
                         if (!result) {
-                            cleanup_controller_tile_context();
                             nvtxRangePop();
                             nvtxRangePop();
                             nvtxRangePop();
@@ -2113,12 +2121,11 @@ namespace lfs::training {
                     auto ctrl_grad = ppisp_->backward_with_controller_params(ppisp_input, tile_grad, pred, ppisp_cam_idx);
                     ppisp_controller_pool_->backward(ppisp_cam_idx, ctrl_grad);
 
-                    // End arena frame explicitly (normally done inside rasterize_backward which we skip)
-                    cleanup_controller_tile_context();
-
                     nvtxRangePop(); // controller_phase
                 } else {
                     // Normal phase: full forward + backward through all components
+                    auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
+
                     lfs::core::Tensor corrected_image = output.image;
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
                         nvtxRangePush("bilateral_grid_forward");
@@ -2356,10 +2363,12 @@ namespace lfs::training {
                         auto grad_alpha = tile_grad_alpha.is_valid()
                                               ? tile_grad_alpha
                                               : lfs::core::Tensor::zeros_like(output.alpha);
+                        tile_context_guard.release();
                         gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
                                                   strategy_->get_model(), strategy_->get_optimizer(),
                                                   use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
                     } else {
+                        tile_context_guard.release();
                         fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                 strategy_->get_optimizer(), tile_grad_alpha,
                                                 use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},

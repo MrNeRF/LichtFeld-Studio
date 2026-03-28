@@ -14,7 +14,9 @@ namespace lfs::vis {
     public:
         void setCursorPreview(bool active, float x, float y, float radius, bool add_mode,
                               lfs::core::Tensor* selection_tensor,
-                              bool saturation_mode, float saturation_amount) {
+                              bool saturation_mode, float saturation_amount,
+                              std::optional<SplitViewPanelId> panel,
+                              int focused_gaussian_id) {
             cursor_preview_.active = active;
             cursor_preview_.x = x;
             cursor_preview_.y = y;
@@ -23,6 +25,8 @@ namespace lfs::vis {
             cursor_preview_.selection_tensor = selection_tensor;
             cursor_preview_.saturation_mode = saturation_mode;
             cursor_preview_.saturation_amount = saturation_amount;
+            cursor_preview_.panel = panel;
+            cursor_preview_.focused_gaussian_id = focused_gaussian_id;
         }
 
         void clearCursorPreview() {
@@ -34,6 +38,8 @@ namespace lfs::vis {
             cursor_preview_.preview_selection = nullptr;
             cursor_preview_.saturation_mode = false;
             cursor_preview_.saturation_amount = 0.0f;
+            cursor_preview_.panel.reset();
+            cursor_preview_.focused_gaussian_id = -1;
             hovered_gaussian_id_ = -1;
         }
 
@@ -66,39 +72,49 @@ namespace lfs::vis {
 
         [[nodiscard]] const CursorPreviewState& cursorPreview() const { return cursor_preview_; }
 
-        void setRect(float x0, float y0, float x1, float y1, bool add_mode) {
+        void setRect(float x0, float y0, float x1, float y1, bool add_mode,
+                     std::optional<SplitViewPanelId> panel) {
             rect_.active = true;
             rect_.x0 = x0;
             rect_.y0 = y0;
             rect_.x1 = x1;
             rect_.y1 = y1;
             rect_.add_mode = add_mode;
+            rect_.panel = panel;
         }
 
-        void clearRect() { rect_.active = false; }
+        void clearRect() {
+            rect_.active = false;
+            rect_.panel.reset();
+        }
         [[nodiscard]] bool isRectPreviewActive() const { return rect_.active; }
         [[nodiscard]] float rectX0() const { return rect_.x0; }
         [[nodiscard]] float rectY0() const { return rect_.y0; }
         [[nodiscard]] float rectX1() const { return rect_.x1; }
         [[nodiscard]] float rectY1() const { return rect_.y1; }
         [[nodiscard]] bool rectAddMode() const { return rect_.add_mode; }
+        [[nodiscard]] std::optional<SplitViewPanelId> rectPanel() const { return rect_.panel; }
 
-        void setPolygon(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode) {
+        void setPolygon(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode,
+                        std::optional<SplitViewPanelId> panel) {
             polygon_.active = true;
             polygon_.points = points;
             polygon_.world_points.clear();
             polygon_.closed = closed;
             polygon_.add_mode = add_mode;
             polygon_.world_space = false;
+            polygon_.panel = panel;
         }
 
-        void setPolygonWorldSpace(const std::vector<glm::vec3>& world_points, bool closed, bool add_mode) {
+        void setPolygonWorldSpace(const std::vector<glm::vec3>& world_points, bool closed, bool add_mode,
+                                  std::optional<SplitViewPanelId> panel) {
             polygon_.active = true;
             polygon_.points.clear();
             polygon_.world_points = world_points;
             polygon_.closed = closed;
             polygon_.add_mode = add_mode;
             polygon_.world_space = true;
+            polygon_.panel = panel;
         }
 
         void clearPolygon() {
@@ -107,6 +123,7 @@ namespace lfs::vis {
             polygon_.world_points.clear();
             polygon_.closed = false;
             polygon_.world_space = false;
+            polygon_.panel.reset();
         }
 
         [[nodiscard]] bool isPolygonPreviewActive() const { return polygon_.active; }
@@ -115,21 +132,26 @@ namespace lfs::vis {
         [[nodiscard]] bool polygonClosed() const { return polygon_.closed; }
         [[nodiscard]] bool polygonAddMode() const { return polygon_.add_mode; }
         [[nodiscard]] bool polygonWorldSpace() const { return polygon_.world_space; }
+        [[nodiscard]] std::optional<SplitViewPanelId> polygonPanel() const { return polygon_.panel; }
 
-        void setLasso(const std::vector<std::pair<float, float>>& points, bool add_mode) {
+        void setLasso(const std::vector<std::pair<float, float>>& points, bool add_mode,
+                      std::optional<SplitViewPanelId> panel) {
             lasso_.active = true;
             lasso_.points = points;
             lasso_.add_mode = add_mode;
+            lasso_.panel = panel;
         }
 
         void clearLasso() {
             lasso_.active = false;
             lasso_.points.clear();
+            lasso_.panel.reset();
         }
 
         [[nodiscard]] bool isLassoPreviewActive() const { return lasso_.active; }
         [[nodiscard]] const std::vector<std::pair<float, float>>& lassoPoints() const { return lasso_.points; }
         [[nodiscard]] bool lassoAddMode() const { return lasso_.add_mode; }
+        [[nodiscard]] std::optional<SplitViewPanelId> lassoPanel() const { return lasso_.panel; }
 
         [[nodiscard]] int hoveredGaussianId() const { return hovered_gaussian_id_; }
         void setHoveredGaussianId(int hovered_gaussian_id) { hovered_gaussian_id_ = hovered_gaussian_id; }
@@ -175,6 +197,7 @@ namespace lfs::vis {
             float x1 = 0.0f;
             float y1 = 0.0f;
             bool add_mode = true;
+            std::optional<SplitViewPanelId> panel;
         };
 
         struct PolygonPreviewState {
@@ -184,12 +207,14 @@ namespace lfs::vis {
             bool closed = false;
             bool add_mode = true;
             bool world_space = false;
+            std::optional<SplitViewPanelId> panel;
         };
 
         struct LassoPreviewState {
             bool active = false;
             std::vector<std::pair<float, float>> points;
             bool add_mode = true;
+            std::optional<SplitViewPanelId> panel;
         };
 
         CursorPreviewState cursor_preview_;

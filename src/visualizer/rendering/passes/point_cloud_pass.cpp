@@ -112,7 +112,7 @@ namespace lfs::vis {
         const std::vector<glm::mat4> pc_transforms = {point_cloud_transform};
         const auto pc_request = buildPointCloudRenderRequest(ctx, ctx.render_size, pc_transforms);
 
-        if (ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
+        if (splitViewUsesGTComparison(ctx.settings.split_view_mode) &&
             res.gt_context && res.gt_context->valid()) {
             renderToTexture(engine, ctx, res, *point_cloud_to_render, pc_transforms, pc_request,
                             res.gt_context->dimensions);

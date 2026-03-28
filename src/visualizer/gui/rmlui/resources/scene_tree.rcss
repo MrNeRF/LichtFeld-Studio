@@ -100,6 +100,13 @@ body {
     border-color: #45475a;
 }
 
+#scene-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
 #search-icon {
     width: 13dp;
     height: 13dp;
@@ -141,10 +148,13 @@ body {
     image-color: #cdd6f4;
 }
 
+scene-graph,
 #tree-container {
     flex: 1;
+    display: block;
     overflow: auto;
     min-height: 0;
+    position: relative;
     tab-index: auto;
 }
 
@@ -166,17 +176,6 @@ body {
     flex-direction: column;
     gap: 8dp;
     padding-top: 4dp;
-}
-
-#search-container.hidden,
-#tree-container.hidden,
-#history-container.hidden,
-.scene-chip-row.hidden {
-    display: none;
-}
-
-#tree-content {
-    display: block;
 }
 
 .tree-row {
