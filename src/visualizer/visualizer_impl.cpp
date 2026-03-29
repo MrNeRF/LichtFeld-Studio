@@ -974,9 +974,17 @@ namespace lfs::vis {
                 std::lock_guard lock(work_queue_mutex_);
                 work.swap(work_queue_);
             }
-            for (auto& item : work) {
-                if (item.run)
-                    item.run();
+            for (size_t i = 0; i < work.size(); ++i) {
+                try {
+                    if (work[i].run)
+                        work[i].run();
+                } catch (...) {
+                    for (size_t j = i + 1; j < work.size(); ++j) {
+                        if (work[j].cancel)
+                            work[j].cancel();
+                    }
+                    throw;
+                }
             }
         }
 
@@ -1120,14 +1128,18 @@ namespace lfs::vis {
             }
             if (!render_work.empty()) {
                 processing_render_work_ = true;
-                try {
-                    for (auto& item : render_work) {
-                        if (item.run)
-                            item.run();
+                for (size_t i = 0; i < render_work.size(); ++i) {
+                    try {
+                        if (render_work[i].run)
+                            render_work[i].run();
+                    } catch (...) {
+                        for (size_t j = i + 1; j < render_work.size(); ++j) {
+                            if (render_work[j].cancel)
+                                render_work[j].cancel();
+                        }
+                        processing_render_work_ = false;
+                        throw;
                     }
-                } catch (...) {
-                    processing_render_work_ = false;
-                    throw;
                 }
                 processing_render_work_ = false;
             }

@@ -42,53 +42,62 @@ namespace lfs::app {
         }
     }
 
+    namespace detail {
+
+        template <typename F, typename PostFn>
+        auto post_and_wait_impl(PostFn&& post_fn, F&& fn) {
+            using R = std::invoke_result_t<F>;
+            constexpr const char* shutdown_error = "Viewer is shutting down";
+
+            auto task = std::make_shared<std::decay_t<F>>(std::forward<F>(fn));
+            auto promise = std::make_shared<std::promise<R>>();
+            auto completed = std::make_shared<std::atomic_bool>(false);
+            auto future = promise->get_future();
+
+            auto finish_with_value = [promise, completed](auto&& value) mutable {
+                if (!completed->exchange(true))
+                    promise->set_value(std::forward<decltype(value)>(value));
+            };
+            auto finish_with_exception = [promise, completed](std::exception_ptr error) {
+                if (!completed->exchange(true))
+                    promise->set_exception(std::move(error));
+            };
+
+            const bool posted = post_fn(vis::Visualizer::WorkItem{
+                .run =
+                    [task, finish_with_value, finish_with_exception]() mutable {
+                        try {
+                            finish_with_value(std::invoke(*task));
+                        } catch (...) {
+                            finish_with_exception(std::current_exception());
+                        }
+                    },
+                .cancel =
+                    [finish_with_value]() mutable {
+                        finish_with_value(make_post_failure<R>(shutdown_error));
+                    }});
+
+            if (!posted)
+                return make_post_failure<R>(shutdown_error);
+
+            return future.get();
+        }
+
+    } // namespace detail
+
     template <typename F>
     auto post_and_wait(vis::Visualizer* viewer, F&& fn) {
         using R = std::invoke_result_t<F>;
-        constexpr const char* shutdown_error = "Viewer is shutting down";
 
         if (viewer->isOnViewerThread()) {
-            if (!viewer->acceptsPostedWork()) {
-                return make_post_failure<R>(shutdown_error);
-            }
+            if (!viewer->acceptsPostedWork())
+                return make_post_failure<R>("Viewer is shutting down");
             return std::invoke(std::forward<F>(fn));
         }
 
-        auto task = std::make_shared<std::decay_t<F>>(std::forward<F>(fn));
-        auto promise = std::make_shared<std::promise<R>>();
-        auto completed = std::make_shared<std::atomic_bool>(false);
-        auto future = promise->get_future();
-
-        auto finish_with_value = [promise, completed](auto&& value) mutable {
-            if (!completed->exchange(true)) {
-                promise->set_value(std::forward<decltype(value)>(value));
-            }
-        };
-        auto finish_with_exception = [promise, completed](std::exception_ptr error) {
-            if (!completed->exchange(true)) {
-                promise->set_exception(std::move(error));
-            }
-        };
-
-        const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-            .run =
-                [task, finish_with_value, finish_with_exception]() mutable {
-                    try {
-                        finish_with_value(std::invoke(*task));
-                    } catch (...) {
-                        finish_with_exception(std::current_exception());
-                    }
-                },
-            .cancel =
-                [finish_with_value]() mutable {
-                    finish_with_value(make_post_failure<R>(shutdown_error));
-                }});
-
-        if (!posted) {
-            return make_post_failure<R>(shutdown_error);
-        }
-
-        return future.get();
+        return detail::post_and_wait_impl(
+            [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+            std::forward<F>(fn));
     }
 
     inline std::expected<std::vector<mcp::McpResourceContent>, std::string> single_json_resource(

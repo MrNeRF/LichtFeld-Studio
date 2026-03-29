@@ -138,52 +138,21 @@ namespace lfs::app {
         template <typename F>
         auto post_render_and_wait(vis::VisualizerImpl* viewer_impl, F&& fn) {
             using R = std::invoke_result_t<F>;
-            constexpr const char* shutdown_error = "Viewer is shutting down";
-            constexpr const char* viewer_thread_error =
-                "Composited capture must be requested from a non-viewer thread unless already running in render work";
 
             if (viewer_impl->isOnViewerThread()) {
                 if (!viewer_impl->acceptsPostedWork())
-                    return make_post_failure<R>(shutdown_error);
+                    return make_post_failure<R>("Viewer is shutting down");
                 if (!viewer_impl->isProcessingRenderWork())
-                    return make_post_failure<R>(viewer_thread_error);
+                    return make_post_failure<R>(
+                        "Composited capture must be requested from a non-viewer thread unless already running in render work");
                 return std::invoke(std::forward<F>(fn));
             }
 
-            auto task = std::make_shared<std::decay_t<F>>(std::forward<F>(fn));
-            auto promise = std::make_shared<std::promise<R>>();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-            auto future = promise->get_future();
-
-            auto finish_with_value = [promise, completed](auto&& value) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::forward<decltype(value)>(value));
-                }
-            };
-            auto finish_with_exception = [promise, completed](std::exception_ptr error) {
-                if (!completed->exchange(true)) {
-                    promise->set_exception(std::move(error));
-                }
-            };
-
-            const bool posted = viewer_impl->postRenderWork(vis::Visualizer::WorkItem{
-                .run =
-                    [task, finish_with_value, finish_with_exception]() mutable {
-                        try {
-                            finish_with_value(std::invoke(*task));
-                        } catch (...) {
-                            finish_with_exception(std::current_exception());
-                        }
-                    },
-                .cancel =
-                    [finish_with_value]() mutable {
-                        finish_with_value(make_post_failure<R>(shutdown_error));
-                    }});
-
-            if (!posted)
-                return make_post_failure<R>(shutdown_error);
-
-            return future.get();
+            return detail::post_and_wait_impl(
+                [viewer_impl](vis::Visualizer::WorkItem work) {
+                    return viewer_impl->postRenderWork(std::move(work));
+                },
+                std::forward<F>(fn));
         }
 
         template <typename F>

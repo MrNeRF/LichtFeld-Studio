@@ -19,6 +19,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
+#include <cassert>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -68,6 +69,7 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool acceptsPostedWork() const override;
         [[nodiscard]] bool isProcessingRenderWork() const {
+            assert(isOnViewerThread());
             return processing_render_work_;
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
