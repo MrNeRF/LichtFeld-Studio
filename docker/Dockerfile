@@ -103,10 +103,10 @@ RUN git clone https://github.com/microsoft/vcpkg.git ${HOME}/vcpkg && \
 RUN echo 'export VCPKG_ROOT=$HOME/vcpkg' >> $HOME/.bashrc && \
     echo 'export PATH=$VCPKG_ROOT:$PATH' >> $HOME/.bashrc
 
-RUN wget https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh && \
-    chmod +x cmake-4.0.3-linux-x86_64.sh && \
-    sudo ./cmake-4.0.3-linux-x86_64.sh --skip-license --prefix=/usr/local && \
-    rm cmake-4.0.3-linux-x86_64.sh
+RUN ARCH=$(uname -m) && wget https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-${ARCH}.sh && \
+    chmod +x cmake-4.0.3-linux-${ARCH}.sh && \
+    sudo ./cmake-4.0.3-linux-${ARCH}.sh --skip-license --prefix=/usr/local && \
+    rm cmake-4.0.3-linux-${ARCH}.sh
 
 # Modified from https://github.com/jmhardison/dockercolorlogo
 RUN echo '#!/bin/sh' >> ${HOME}/.docker_whale && \
