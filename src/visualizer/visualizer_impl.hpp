@@ -62,7 +62,7 @@ namespace lfs::vis {
         void clearScene() override;
         core::Scene& getScene() override { return scene_manager_->getScene(); }
         bool postWork(WorkItem work) override;
-        bool postRenderWork(WorkItem work);
+        LFS_VIS_API bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
         }
