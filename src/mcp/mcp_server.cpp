@@ -9,6 +9,50 @@
 
 namespace lfs::mcp {
 
+    namespace {
+
+        std::optional<std::string_view> string_field(const json& value, const char* key) {
+            if (!value.is_object())
+                return std::nullopt;
+            const auto it = value.find(key);
+            if (it == value.end() || !it->is_string())
+                return std::nullopt;
+            return it->get_ref<const std::string&>();
+        }
+
+        json tool_result_to_content(const json& result) {
+            if (const auto mime_type = string_field(result, "mime_type")) {
+                if (mime_type->starts_with("image/")) {
+                    if (const auto data = string_field(result, "data")) {
+                        return json::array({
+                            json{
+                                {"type", "image"},
+                                {"mimeType", *mime_type},
+                                {"data", *data},
+                            }});
+                    }
+                }
+
+                if (mime_type->starts_with("text/")) {
+                    if (const auto text = string_field(result, "text")) {
+                        return json::array({
+                            json{
+                                {"type", "text"},
+                                {"text", *text},
+                            }});
+                    }
+                }
+            }
+
+            return json::array({
+                json{
+                    {"type", "text"},
+                    {"text", result.dump(2)},
+                }});
+        }
+
+    } // namespace
+
     McpServer::McpServer(const McpServerOptions& options) {
         capabilities_.tools = options.enable_tools;
         capabilities_.resources = options.enable_resources;
@@ -113,10 +157,7 @@ namespace lfs::mcp {
             is_error = !error.is_string() || !error.get_ref<const std::string&>().empty();
         }
 
-        json content = json::array();
-        content.push_back(json{
-            {"type", "text"},
-            {"text", result.dump(2)}});
+        const json content = tool_result_to_content(result);
 
         return make_success_response(req.id, json{
                                                  {"content", content},
