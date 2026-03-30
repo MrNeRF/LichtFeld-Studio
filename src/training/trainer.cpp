@@ -514,6 +514,13 @@ namespace lfs::training {
             PPISPConfig config;
             config.lr = params_.optimization.ppisp_lr;
             config.warmup_steps = params_.optimization.ppisp_warmup_steps;
+            const float reg_weight = params_.optimization.ppisp_reg_weight;
+            config.exposure_mean *= reg_weight;
+            config.vig_center *= reg_weight;
+            config.vig_channel *= reg_weight;
+            config.vig_non_pos *= reg_weight;
+            config.color_mean *= reg_weight;
+            config.crf_channel *= reg_weight;
 
             ppisp_ = std::make_unique<PPISP>(params_.optimization.iterations, config);
             for (const auto& cam : train_dataset_->get_cameras()) {
@@ -523,8 +530,9 @@ namespace lfs::training {
             }
             ppisp_->finalize();
 
-            LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}",
-                     ppisp_->num_cameras(), ppisp_->num_frames(), params_.optimization.ppisp_lr, config.warmup_steps);
+            LOG_INFO("PPISP initialized: {} cameras (physical), {} frames, lr={:.2e}, warmup={}, reg_weight={:.2e}",
+                     ppisp_->num_cameras(), ppisp_->num_frames(), params_.optimization.ppisp_lr,
+                     config.warmup_steps, reg_weight);
 
             if (auto result = apply_ppisp_sidecar_if_configured(); !result) {
                 return result;
@@ -851,17 +859,43 @@ namespace lfs::training {
     }
 
     // Compute photometric loss AND gradient manually
-    std::expected<std::pair<lfs::core::Tensor, lfs::core::Tensor>, std::string> Trainer::compute_photometric_loss_with_gradient(
-        const lfs::core::Tensor& rendered,
+    std::expected<Trainer::PhotometricLossResult, std::string> Trainer::compute_photometric_loss_with_gradient(
+        const lfs::core::Tensor& corrected,
         const lfs::core::Tensor& gt_image,
-        const lfs::core::param::OptimizationParameters& opt_params) {
+        const lfs::core::param::OptimizationParameters& opt_params,
+        const lfs::core::Tensor& raw_rendered) {
+        const bool use_decoupled_appearance_loss =
+            raw_rendered.is_valid() &&
+            raw_rendered.numel() > 0 &&
+            opt_params.lambda_dssim > 0.0f;
+
+        if (use_decoupled_appearance_loss) {
+            auto [loss_tensor, ctx] = lfs::training::kernels::decoupled_fused_l1_ssim_forward(
+                corrected, raw_rendered, gt_image, opt_params.lambda_dssim, decoupled_fused_workspace_,
+                /*apply_valid_padding=*/true);
+            auto grads = lfs::training::kernels::decoupled_fused_l1_ssim_backward(ctx, decoupled_fused_workspace_);
+
+            if (corrected.ndim() == 3) {
+                grads.grad_corrected = grads.grad_corrected.squeeze(0);
+                grads.grad_raw = grads.grad_raw.squeeze(0);
+            }
+
+            return PhotometricLossResult{
+                .loss = loss_tensor,
+                .grad_corrected = grads.grad_corrected,
+                .grad_raw = grads.grad_raw};
+        }
+
         lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
-        auto result = photometric_loss_.forward(rendered, gt_image, params);
+        auto result = photometric_loss_.forward(corrected, gt_image, params);
         if (!result) {
             return std::unexpected(result.error());
         }
         auto [loss_tensor, ctx] = *result;
-        return std::make_pair(loss_tensor, ctx.grad_image);
+        return PhotometricLossResult{
+            .loss = loss_tensor,
+            .grad_corrected = ctx.grad_image,
+            .grad_raw = {}};
     }
 
     std::expected<void, std::string> Trainer::validate_masks() {
@@ -903,11 +937,12 @@ namespace lfs::training {
     }
 
     std::expected<Trainer::MaskLossResult, std::string> Trainer::compute_photometric_loss_with_mask(
-        const lfs::core::Tensor& rendered,
+        const lfs::core::Tensor& corrected,
         const lfs::core::Tensor& gt_image,
         const lfs::core::Tensor& mask,
         const lfs::core::Tensor& alpha,
-        const lfs::core::param::OptimizationParameters& opt_params) {
+        const lfs::core::param::OptimizationParameters& opt_params,
+        const lfs::core::Tensor& raw_rendered) {
 
         using namespace lfs::core;
         constexpr float EPSILON = 1e-8f;
@@ -916,29 +951,50 @@ namespace lfs::training {
         const auto mode = opt_params.mask_mode;
         const Tensor mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
 
-        Tensor loss, grad, grad_alpha;
+        Tensor loss, grad_corrected, grad_raw, grad_alpha;
+        const bool use_decoupled_appearance_loss =
+            raw_rendered.is_valid() &&
+            raw_rendered.numel() > 0 &&
+            opt_params.lambda_dssim > 0.0f;
 
         if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore) {
-            if (opt_params.lambda_dssim > 0.0f) {
+            if (use_decoupled_appearance_loss) {
+                auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
+                    corrected, raw_rendered, gt_image, mask_2d, opt_params.lambda_dssim,
+                    masked_decoupled_fused_workspace_);
+                auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
+                    ctx, masked_decoupled_fused_workspace_);
+
+                grad_corrected = grads.grad_corrected;
+                grad_raw = grads.grad_raw;
+                loss = loss_tensor;
+
+                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
+                    grad_corrected = grad_corrected.squeeze(0);
+                }
+                if (grad_raw.ndim() == 4 && corrected.ndim() == 3) {
+                    grad_raw = grad_raw.squeeze(0);
+                }
+            } else if (opt_params.lambda_dssim > 0.0f) {
                 // Use FUSED masked L1+SSIM kernel
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    rendered, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
+                    corrected, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
 
-                grad = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
+                grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
                 loss = loss_tensor;
 
                 // Squeeze gradient to match input dimensions (loss is scalar, no adjustment needed)
-                if (grad.ndim() == 4 && rendered.ndim() == 3) {
-                    grad = grad.squeeze(0);
+                if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
+                    grad_corrected = grad_corrected.squeeze(0);
                 }
             } else {
                 // Pure L1 with mask (no SSIM)
                 const Tensor mask_3d = mask_2d.unsqueeze(0);
-                const Tensor mask_sum = mask_2d.sum() * static_cast<float>(rendered.shape()[0]) + EPSILON;
-                const Tensor diff = rendered - gt_image;
+                const Tensor mask_sum = mask_2d.sum() * static_cast<float>(corrected.shape()[0]) + EPSILON;
+                const Tensor diff = corrected - gt_image;
                 const Tensor masked_l1 = (diff.abs() * mask_3d).sum() / mask_sum;
                 const Tensor sign_diff = diff.sign();
-                grad = sign_diff * mask_3d / mask_sum;
+                grad_corrected = sign_diff * mask_3d / mask_sum;
                 loss = masked_l1;
             }
 
@@ -956,14 +1012,13 @@ namespace lfs::training {
 
         } else if (mode == param::MaskMode::AlphaConsistent) {
             // Standard photometric loss
-            const lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
-            auto result = photometric_loss_.forward(rendered, gt_image, params);
+            auto result = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered);
             if (!result) {
                 return std::unexpected(result.error());
             }
-            auto [photo_loss, ctx] = *result;
-            loss = photo_loss;
-            grad = ctx.grad_image;
+            loss = result->loss;
+            grad_corrected = result->grad_corrected;
+            grad_raw = result->grad_raw;
 
             // Alpha should match mask
             if (alpha.is_valid()) {
@@ -973,14 +1028,22 @@ namespace lfs::training {
                 grad_alpha = (alpha_2d - mask_2d).sign() * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
             }
         } else {
-            auto fallback = compute_photometric_loss_with_gradient(rendered, gt_image, opt_params);
+            auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered);
             if (!fallback) {
                 return std::unexpected(fallback.error());
             }
-            return MaskLossResult{.loss = fallback->first, .grad_image = fallback->second, .grad_alpha = {}};
+            return MaskLossResult{
+                .loss = fallback->loss,
+                .grad_corrected = fallback->grad_corrected,
+                .grad_raw = fallback->grad_raw,
+                .grad_alpha = {}};
         }
 
-        return MaskLossResult{.loss = loss, .grad_image = grad, .grad_alpha = grad_alpha};
+        return MaskLossResult{
+            .loss = loss,
+            .grad_corrected = grad_corrected,
+            .grad_raw = grad_raw,
+            .grad_alpha = grad_alpha};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -2064,6 +2127,7 @@ namespace lfs::training {
 
                     auto pred = ppisp_controller_pool_->predict(ppisp_cam_idx, corrected_image.unsqueeze(0), 1.0f);
                     corrected_image = ppisp_->apply_with_controller_params(corrected_image, pred, ppisp_cam_idx);
+                    const lfs::core::Tensor raw_loss_input = output.image;
 
                     // Photometric loss
                     nvtxRangePush("compute_photometric_loss");
@@ -2091,7 +2155,7 @@ namespace lfs::training {
                         }
 
                         auto result = compute_photometric_loss_with_mask(
-                            corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization);
+                            corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
                         if (!result) {
                             nvtxRangePop();
                             nvtxRangePop();
@@ -2099,18 +2163,18 @@ namespace lfs::training {
                             return std::unexpected(result.error());
                         }
                         tile_loss = result->loss;
-                        tile_grad = result->grad_image;
+                        tile_grad = result->grad_corrected;
                     } else {
                         auto result = compute_photometric_loss_with_gradient(
-                            corrected_image, gt_tile, params_.optimization);
+                            corrected_image, gt_tile, params_.optimization, raw_loss_input);
                         if (!result) {
                             nvtxRangePop();
                             nvtxRangePop();
                             nvtxRangePop();
                             return std::unexpected(result.error());
                         }
-                        tile_loss = result->first;
-                        tile_grad = result->second;
+                        tile_loss = result->loss;
+                        tile_grad = result->grad_corrected;
                     }
 
                     loss_tensor_gpu = loss_tensor_gpu + tile_loss;
@@ -2133,11 +2197,20 @@ namespace lfs::training {
                         nvtxRangePop();
                     }
 
+                    lfs::core::Tensor ppisp_input;
                     if (ppisp_ && params_.optimization.use_ppisp) {
                         nvtxRangePush("ppisp_forward");
-                        corrected_image = ppisp_->apply(corrected_image, cam->camera_id(), cam->uid());
+                        ppisp_input = corrected_image;
+                        corrected_image = ppisp_->apply(ppisp_input, cam->camera_id(), cam->uid());
                         nvtxRangePop();
                     }
+                    // For decoupled D-SSIM, the active appearance model provides the corrected image
+                    // for the L1/luminance terms, while contrast/structure still use the raw render.
+                    const lfs::core::Tensor raw_loss_input =
+                        ((bilateral_grid_ && params_.optimization.use_bilateral_grid) ||
+                         (ppisp_ && params_.optimization.use_ppisp))
+                            ? output.image
+                            : lfs::core::Tensor{};
 
                     // Final tonemapping: clamp to [0, 1] for loss computation.
                     // This is redundant when PPISP is active (CRF already clamps), but ensures
@@ -2147,6 +2220,7 @@ namespace lfs::training {
                     nvtxRangePush("compute_photometric_loss");
                     lfs::core::Tensor tile_loss;
                     lfs::core::Tensor tile_grad;
+                    lfs::core::Tensor tile_grad_raw;
                     lfs::core::Tensor tile_grad_alpha;
                     lfs::core::Tensor tile_error_map;
                     lfs::core::Tensor mask_tile;
@@ -2178,33 +2252,39 @@ namespace lfs::training {
                         }
 
                         auto result = compute_photometric_loss_with_mask(
-                            corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization);
+                            corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
                         if (!result) {
                             nvtxRangePop();
                             nvtxRangePop();
                             return std::unexpected(result.error());
                         }
                         tile_loss = result->loss;
-                        tile_grad = result->grad_image;
+                        tile_grad = result->grad_corrected;
+                        tile_grad_raw = result->grad_raw;
                         tile_grad_alpha = result->grad_alpha;
                     } else {
                         auto result = compute_photometric_loss_with_gradient(
-                            corrected_image, gt_tile, params_.optimization);
+                            corrected_image, gt_tile, params_.optimization, raw_loss_input);
                         if (!result) {
                             nvtxRangePop();
                             nvtxRangePop();
                             return std::unexpected(result.error());
                         }
-                        tile_loss = result->first;
-                        tile_grad = result->second;
+                        tile_loss = result->loss;
+                        tile_grad = result->grad_corrected;
+                        tile_grad_raw = result->grad_raw;
                     }
 
                     // 2) Extract error map from workspace's ssim_map
                     if (use_pixel_error_densification) {
                         if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
                             lfs::core::Tensor ssim_map;
-                            if (used_masked_fused) {
+                            if (used_masked_fused && raw_loss_input.is_valid()) {
+                                ssim_map = masked_decoupled_fused_workspace_.ssim_map;
+                            } else if (used_masked_fused) {
                                 ssim_map = masked_fused_workspace_.ssim_map;
+                            } else if (raw_loss_input.is_valid()) {
+                                ssim_map = decoupled_fused_workspace_.ssim_map;
                             } else if (params_.optimization.lambda_dssim < 1.0f) {
                                 ssim_map = photometric_loss_.fused_workspace().ssim_map;
                             } else {
@@ -2341,10 +2421,6 @@ namespace lfs::training {
                     lfs::core::Tensor raster_grad = tile_grad;
                     if (ppisp_ && params_.optimization.use_ppisp) {
                         nvtxRangePush("ppisp_backward");
-                        lfs::core::Tensor ppisp_input = output.image;
-                        if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
-                            ppisp_input = bilateral_grid_->apply(output.image, cam->uid());
-                        }
                         raster_grad = ppisp_->backward(ppisp_input, raster_grad, cam->camera_id(), cam->uid());
                         if (ppisp_frozen) {
                             ppisp_->zero_grad();
@@ -2356,6 +2432,10 @@ namespace lfs::training {
                         nvtxRangePush("bilateral_grid_backward");
                         raster_grad = bilateral_grid_->backward(output.image, raster_grad, cam->uid());
                         nvtxRangePop();
+                    }
+
+                    if (tile_grad_raw.is_valid() && tile_grad_raw.numel() > 0) {
+                        raster_grad = raster_grad + tile_grad_raw;
                     }
 
                     nvtxRangePush("rasterize_backward");
@@ -3028,15 +3108,17 @@ namespace lfs::training {
         const auto rgb_chw = is_chw ? rgb : rgb.permute({2, 0, 1}).contiguous();
         const bool is_training_camera = ppisp_->is_known_frame(camera_uid);
         const bool has_controller = ppisp_controller_pool_ && params_.optimization.ppisp_use_controller;
+        const int camera_idx = is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(camera_uid)) : 0;
 
         lfs::core::Tensor result;
 
         if (use_controller && has_controller) {
-            constexpr int CONTROLLER_IDX = 0;
-            const auto controller_params = ppisp_controller_pool_->predict(CONTROLLER_IDX, rgb_chw.unsqueeze(0), 1.0f);
+            const int controller_idx =
+                (camera_idx >= 0 && camera_idx < ppisp_controller_pool_->num_cameras()) ? camera_idx : 0;
+            const auto controller_params = ppisp_controller_pool_->predict(controller_idx, rgb_chw.unsqueeze(0), 1.0f);
             result = overrides.isIdentity()
-                         ? ppisp_->apply_with_controller_params(rgb_chw, controller_params, CONTROLLER_IDX)
-                         : ppisp_->apply_with_controller_params_and_overrides(rgb_chw, controller_params, CONTROLLER_IDX,
+                         ? ppisp_->apply_with_controller_params(rgb_chw, controller_params, controller_idx)
+                         : ppisp_->apply_with_controller_params_and_overrides(rgb_chw, controller_params, controller_idx,
                                                                               toRenderOverrides(overrides));
         } else if (is_training_camera) {
             const int camera_id = ppisp_->camera_for_frame(camera_uid);
@@ -3044,11 +3126,15 @@ namespace lfs::training {
                                             : ppisp_->apply_with_overrides(rgb_chw, camera_id, camera_uid,
                                                                            toRenderOverrides(overrides));
         } else {
+            // Manual viewport overrides should remain usable on novel views even without a controller.
+            // Fall back to any learned PPISP frame/camera pair so the user can still inspect exposure,
+            // vignette, white-balance, and CRF adjustments on free-orbit renders.
             const int fallback_camera = ppisp_->any_camera_id();
             const int fallback_frame = ppisp_->any_frame_uid();
-            result = overrides.isIdentity() ? ppisp_->apply(rgb_chw, fallback_camera, fallback_frame)
-                                            : ppisp_->apply_with_overrides(rgb_chw, fallback_camera, fallback_frame,
-                                                                           toRenderOverrides(overrides));
+            result = overrides.isIdentity()
+                         ? ppisp_->apply(rgb_chw, fallback_camera, fallback_frame)
+                         : ppisp_->apply_with_overrides(rgb_chw, fallback_camera, fallback_frame,
+                                                        toRenderOverrides(overrides));
         }
 
         return is_chw ? result : result.permute({1, 2, 0}).contiguous();

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/EventListener.h>
 #include <core/scene.hpp>
 
 #include <cstdint>
@@ -47,6 +48,11 @@ namespace lfs::vis::gui {
         void ProcessDefaultAction(Rml::Event& event) override;
 
     private:
+        struct RenameInputListener : Rml::EventListener {
+            SceneGraphElement* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
         static constexpr size_t kUnsetVisibleRange = std::numeric_limits<size_t>::max();
 
         struct NodeSnapshot {
@@ -160,6 +166,7 @@ namespace lfs::vis::gui {
         core::NodeId click_anchor_id_ = core::NULL_NODE;
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
+        RenameInputListener rename_input_listener_;
         core::NodeId context_menu_node_id_ = core::NULL_NODE;
         core::NodeId drag_source_id_ = core::NULL_NODE;
         core::NodeId drop_target_id_ = core::NULL_NODE;

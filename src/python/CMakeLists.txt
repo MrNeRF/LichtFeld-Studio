@@ -270,7 +270,7 @@ if(WIN32)
     # Copy vcpkg runtime DLLs
     add_custom_command(TARGET lfs_py POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin"
+            "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
             "${CMAKE_CURRENT_BINARY_DIR}"
         COMMENT "Copying vcpkg DLLs to Python module directory"
     )
@@ -316,7 +316,7 @@ import os, sys
 # Add DLL directories (Python 3.8+ requirement on Windows)
 dll_dirs = [
     r'$<TARGET_FILE_DIR:lfs_python_runtime>',
-    r'${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin',
+    r'${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin',
     r'${CMAKE_BINARY_DIR}/external/nvImageCodec/src',
     r'${CUDAToolkit_BIN_DIR}',
     r'${CUDAToolkit_BIN_DIR}/x64',

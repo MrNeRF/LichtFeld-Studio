@@ -352,6 +352,27 @@ namespace lfs::vis::gui {
         syncVisibleRows(false);
     }
 
+    void SceneGraphElement::RenameInputListener::ProcessEvent(Rml::Event& event) {
+        if (!owner)
+            return;
+        auto* target = event.GetTargetElement();
+        if (owner->rename_node_id_ == core::NULL_NODE || !owner->isTextInputTarget(target))
+            return;
+
+        const auto type = event.GetType();
+        if (type == "escapecancel") {
+            owner->cancelRename();
+            event.StopPropagation();
+        } else if (type == "keydown") {
+            const auto key =
+                static_cast<Rml::Input::KeyIdentifier>(event.GetParameter("key_identifier", 0));
+            if (key == Rml::Input::KI_RETURN) {
+                owner->confirmRename();
+                event.StopPropagation();
+            }
+        }
+    }
+
     void SceneGraphElement::ensureDom() {
         if (content_el_)
             return;
@@ -359,6 +380,10 @@ namespace lfs::vis::gui {
         auto* doc = GetOwnerDocument();
         if (!doc)
             return;
+
+        rename_input_listener_.owner = this;
+        AddEventListener("escapecancel", &rename_input_listener_);
+        AddEventListener("keydown", &rename_input_listener_, true);
 
         auto content = doc->CreateElement("div");
         content->SetClass("scene-graph-content", true);
@@ -1051,6 +1076,7 @@ namespace lfs::vis::gui {
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
         markStateDirty();
+        syncVisibleRows(true);
     }
 
     void SceneGraphElement::cancelRename() {
@@ -1781,19 +1807,6 @@ namespace lfs::vis::gui {
         } else if (type == "keydown") {
             const auto key =
                 static_cast<Rml::Input::KeyIdentifier>(event.GetParameter("key_identifier", 0));
-
-            if (rename_node_id_ != core::NULL_NODE && isTextInputTarget(target)) {
-                if (key == Rml::Input::KI_RETURN) {
-                    confirmRename();
-                    event.StopPropagation();
-                    return;
-                }
-                if (key == Rml::Input::KI_ESCAPE) {
-                    cancelRename();
-                    event.StopPropagation();
-                    return;
-                }
-            }
 
             if (isTextInputTarget(target))
                 return;

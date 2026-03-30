@@ -10,6 +10,7 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "theme/theme.hpp"
 
+#include "gui/ui_widgets.hpp"
 #include <array>
 #include <cmath>
 #include <format>
@@ -481,7 +482,7 @@ namespace lfs::gui {
         ImGui::PushItemWidth(80);
         ImGui::PushStyleColor(ImGuiCol_FrameBg,
                               lfs::vis::toU32WithAlpha(t.palette.success, 0.2f));
-        if (ImGui::DragFloat("##trim_start", &trim_start_, 0.1f, 0.0f, trim_end_ - 0.1f, "%.1fs")) {
+        if (lfs::vis::gui::widgets::DragFloat("##trim_start", &trim_start_, 0.1f, 0.0f, trim_end_ - 0.1f, "%.1fs")) {
             trim_start_ = std::clamp(trim_start_, 0.0f, trim_end_ - 0.1f);
         }
         ImGui::PopStyleColor();
@@ -503,7 +504,7 @@ namespace lfs::gui {
         // End time
         ImGui::PushItemWidth(80);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, lfs::vis::toU32WithAlpha(t.palette.error, 0.2f));
-        if (ImGui::DragFloat("##trim_end", &trim_end_, 0.1f, trim_start_ + 0.1f, duration, "%.1fs")) {
+        if (lfs::vis::gui::widgets::DragFloat("##trim_end", &trim_end_, 0.1f, trim_start_ + 0.1f, duration, "%.1fs")) {
             trim_end_ = std::clamp(trim_end_, trim_start_ + 0.1f, duration);
         }
         ImGui::PopStyleColor();
@@ -587,14 +588,15 @@ namespace lfs::gui {
         if (mode_selection_ == 0) {
             ImGui::SetNextItemWidth(100);
             ImGui::PushID("fps");
-            ImGui::SliderFloat(LOC(VideoExtractor::FPS_LABEL), &fps_, 0.1f, 30.0f, "%.1f");
+            lfs::vis::gui::widgets::SliderFloat(LOC(VideoExtractor::FPS_LABEL), &fps_, 0.1f, 30.0f, "%.1f");
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", LOC(VideoExtractor::FPS_TOOLTIP));
             ImGui::PopID();
         } else {
             ImGui::SetNextItemWidth(100);
             ImGui::PushID("interval");
-            ImGui::SliderInt(LOC(VideoExtractor::EVERY_LABEL), &frame_interval_, 1, 100, LOC(VideoExtractor::FRAMES_FORMAT));
+            lfs::vis::gui::widgets::SliderInt(LOC(VideoExtractor::EVERY_LABEL), &frame_interval_, 1, 100,
+                                              LOC(VideoExtractor::FRAMES_FORMAT));
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", LOC(VideoExtractor::INTERVAL_TOOLTIP));
             ImGui::PopID();
@@ -615,7 +617,7 @@ namespace lfs::gui {
             ImGui::SameLine(0, 20);
             ImGui::SetNextItemWidth(100);
             ImGui::PushID("quality");
-            ImGui::SliderInt(LOC(VideoExtractor::QUALITY_LABEL), &jpg_quality_, 50, 100, "%d%%");
+            lfs::vis::gui::widgets::SliderInt(LOC(VideoExtractor::QUALITY_LABEL), &jpg_quality_, 50, 100, "%d%%");
             ImGui::PopID();
         }
     }
@@ -637,14 +639,14 @@ namespace lfs::gui {
             ImGui::Combo("##scale", &scale_selection_, scales.data(), static_cast<int>(scales.size()));
         } else if (resolution_mode_ == 2) {
             ImGui::SetNextItemWidth(80);
-            ImGui::InputInt("##custom_w", &custom_width_, 0, 0);
+            lfs::vis::gui::widgets::InputInt("##custom_w", &custom_width_, 0, 0);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", LOC(VideoExtractor::WIDTH));
             ImGui::SameLine();
             ImGui::Text("x");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(80);
-            ImGui::InputInt("##custom_h", &custom_height_, 0, 0);
+            lfs::vis::gui::widgets::InputInt("##custom_h", &custom_height_, 0, 0);
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s", LOC(VideoExtractor::HEIGHT));
 
@@ -678,7 +680,7 @@ namespace lfs::gui {
         ImGui::Text("%s", LOC(VideoExtractor::PATTERN));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200);
-        ImGui::InputText("##pattern", filename_pattern_.data(), filename_pattern_.size());
+        lfs::vis::gui::widgets::InputText("##pattern", filename_pattern_.data(), filename_pattern_.size());
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("%s", LOC(VideoExtractor::PATTERN_TOOLTIP));
 

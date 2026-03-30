@@ -504,6 +504,81 @@ TEST_F(MaskedFusedL1SSIMTest, WorkspaceReuse) {
 }
 
 // ============================================================================
+// Decoupled appearance-loss tests
+// ============================================================================
+
+TEST_F(FusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
+    const int N = 1, C = 3, H = 64, W = 64;
+    const float ssim_weight = 0.2f;
+
+    auto raw = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+    auto corrected = raw.clone();
+    auto gt = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+
+    FusedL1SSIMWorkspace standard_workspace;
+    auto [standard_loss, standard_ctx] =
+        fused_l1_ssim_forward(raw, gt, ssim_weight, standard_workspace, true);
+    auto standard_grad = fused_l1_ssim_backward(standard_ctx, standard_workspace);
+
+    DecoupledFusedL1SSIMWorkspace decoupled_workspace;
+    auto [decoupled_loss, decoupled_ctx] =
+        decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, decoupled_workspace, true);
+    auto decoupled_grads = decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
+    auto combined_grad = decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+
+    EXPECT_NEAR(decoupled_loss.item<float>(), standard_loss.item<float>(), 1e-4f);
+
+    auto diff = (combined_grad - standard_grad).abs();
+    EXPECT_LT(diff.max().item<float>(), 1e-3f);
+    EXPECT_LT(diff.mean().item<float>(), 1e-5f);
+}
+
+TEST_F(MaskedFusedL1SSIMTest, DecoupledMatchesStandardWhenCorrectedEqualsRaw) {
+    const int N = 1, C = 3, H = 64, W = 64;
+    const float ssim_weight = 0.2f;
+
+    auto raw = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+    auto corrected = raw.clone();
+    auto gt = Tensor::randn({N, C, H, W}, Device::CUDA).abs() + 0.1f;
+    auto mask = Tensor::ones({H, W}, Device::CUDA);
+
+    MaskedFusedL1SSIMWorkspace standard_workspace;
+    auto [standard_loss, standard_ctx] =
+        masked_fused_l1_ssim_forward(raw, gt, mask, ssim_weight, standard_workspace);
+    auto standard_grad = masked_fused_l1_ssim_backward(standard_ctx, standard_workspace);
+
+    MaskedDecoupledFusedL1SSIMWorkspace decoupled_workspace;
+    auto [decoupled_loss, decoupled_ctx] =
+        masked_decoupled_fused_l1_ssim_forward(corrected, raw, gt, mask, ssim_weight, decoupled_workspace);
+    auto decoupled_grads =
+        masked_decoupled_fused_l1_ssim_backward(decoupled_ctx, decoupled_workspace);
+    auto combined_grad = decoupled_grads.grad_corrected + decoupled_grads.grad_raw;
+
+    EXPECT_NEAR(decoupled_loss.item<float>(), standard_loss.item<float>(), 1e-4f);
+
+    auto diff = (combined_grad - standard_grad).abs();
+    EXPECT_LT(diff.max().item<float>(), 1e-3f);
+    EXPECT_LT(diff.mean().item<float>(), 1e-5f);
+}
+
+TEST_F(FusedL1SSIMTest, DecoupledRoutesContrastStructureGradientToRawBranch) {
+    const int N = 1, C = 3, H = 64, W = 64;
+    const float ssim_weight = 1.0f;
+    auto gt = Tensor::linspace(-1.0f, 1.0f, N * C * H * W, Device::CUDA).reshape({N, C, H, W});
+    auto corrected = gt.clone();
+    auto raw = gt * -0.6f;
+
+    DecoupledFusedL1SSIMWorkspace workspace;
+    auto [loss, ctx] =
+        decoupled_fused_l1_ssim_forward(corrected, raw, gt, ssim_weight, workspace, true);
+    auto grads = decoupled_fused_l1_ssim_backward(ctx, workspace);
+
+    EXPECT_GT(loss.item<float>(), 0.0f);
+    EXPECT_LT(grads.grad_corrected.abs().max().item<float>(), 1e-4f);
+    EXPECT_GT(grads.grad_raw.abs().max().item<float>(), 1e-4f);
+}
+
+// ============================================================================
 // Performance benchmark (not a correctness test)
 // ============================================================================
 

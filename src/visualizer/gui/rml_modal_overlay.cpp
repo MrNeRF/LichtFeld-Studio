@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -27,23 +28,6 @@
 
 namespace lfs::vis::gui {
 
-    namespace {
-        bool isTextEditableElement(Rml::Element* element) {
-            if (!element)
-                return false;
-
-            const auto tag = element->GetTagName();
-            if (tag == "textarea")
-                return true;
-            if (tag != "input")
-                return false;
-
-            const auto input_type = element->GetAttribute<Rml::String>("type", "text");
-            return input_type.empty() || input_type == "text" || input_type == "password" ||
-                   input_type == "search" || input_type == "email" || input_type == "url";
-        }
-    } // namespace
-
     RmlModalOverlay::RmlModalOverlay(RmlUIManager* rml_manager)
         : rml_manager_(rml_manager) {
         assert(rml_manager_);
@@ -52,6 +36,7 @@ namespace lfs::vis::gui {
 
     RmlModalOverlay::~RmlModalOverlay() {
         fbo_.destroy();
+        text_input_revert_.clear();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("modal_overlay");
     }
@@ -181,6 +166,8 @@ namespace lfs::vis::gui {
             queue_.pop_front();
         }
 
+        text_input_revert_.clear();
+
         el_title_->SetInnerRML(req.title);
         el_content_->SetInnerRML(req.body_rml);
 
@@ -211,10 +198,10 @@ namespace lfs::vis::gui {
         el_backdrop_->SetProperty("display", "block");
         el_dialog_->SetProperty("display", "block");
 
-        if (req.has_input)
-            el_input_->Focus();
-
         active_ = std::move(req);
+        bindTextInputRevert();
+        if (active_->has_input)
+            el_input_->Focus();
     }
 
     lfs::core::ModalResult RmlModalOverlay::collectFormValues() const {
@@ -224,15 +211,13 @@ namespace lfs::vis::gui {
             result.input_value = el_input_->GetAttribute<Rml::String>("value", "");
         }
 
-        // Collect all text inputs from the content area
-        Rml::ElementList inputs;
-        el_content_->GetElementsByTagName(inputs, "input");
-        for (auto* input : inputs) {
-            const auto id = input->GetId();
+        // Collect all named text-editable controls from the content area.
+        rml_input::forEachTextEditableElement(el_content_, [&result](Rml::Element& element) {
+            const auto id = element.GetId();
             if (!id.empty()) {
-                result.form_values[id] = input->GetAttribute<Rml::String>("value", "");
+                result.form_values[id] = element.GetAttribute<Rml::String>("value", "");
             }
-        }
+        });
 
         return result;
     }
@@ -241,6 +226,7 @@ namespace lfs::vis::gui {
         if (!active_)
             return;
 
+        text_input_revert_.clear();
         el_backdrop_->SetProperty("display", "none");
         el_dialog_->SetProperty("display", "none");
 
@@ -271,6 +257,7 @@ namespace lfs::vis::gui {
         if (!active_)
             return;
 
+        text_input_revert_.clear();
         el_backdrop_->SetProperty("display", "none");
         el_dialog_->SetProperty("display", "none");
 
@@ -279,6 +266,13 @@ namespace lfs::vis::gui {
 
         if (on_cancel)
             on_cancel();
+    }
+
+    void RmlModalOverlay::bindTextInputRevert() {
+        text_input_revert_.bind(el_input_);
+        rml_input::forEachTextEditableElement(el_content_, [this](Rml::Element& element) {
+            text_input_revert_.bind(&element);
+        });
     }
 
     void RmlModalOverlay::processInput(const PanelInputState& input) {
@@ -290,7 +284,7 @@ namespace lfs::vis::gui {
         auto& focus = guiFocusState();
         focus.want_capture_mouse = true;
         focus.want_capture_keyboard = true;
-        const bool has_text_focus = isTextEditableElement(rml_context_->GetFocusElement());
+        bool has_text_focus = rml_input::isTextEditableElement(rml_context_->GetFocusElement());
         if (has_text_focus)
             focus.want_text_input = true;
 
@@ -309,7 +303,16 @@ namespace lfs::vis::gui {
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
+        bool escape_requested = false;
         for (const int sc : input.keys_pressed) {
+            if (!composing && sc == SDL_SCANCODE_ESCAPE) {
+                if (auto* const focused = rml_context_->GetFocusElement();
+                    focused && (rml_input::isTextEditableElement(focused) ||
+                                rml_input::isSelectRelatedElement(focused))) {
+                    escape_requested = true;
+                    continue;
+                }
+            }
             if (composing &&
                 (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
                  sc == SDL_SCANCODE_ESCAPE)) {
@@ -323,11 +326,20 @@ namespace lfs::vis::gui {
             }
         }
         for (const int sc : input.keys_released) {
+            if (escape_requested && sc == SDL_SCANCODE_ESCAPE)
+                continue;
             if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER))
                 continue;
             const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
             if (rml_key != Rml::Input::KI_UNKNOWN)
                 rml_context_->ProcessKeyUp(rml_key, mods);
+        }
+
+        if (!composing && escape_requested) {
+            if (rml_input::cancelFocusedElement(*rml_context_)) {
+                has_text_focus = rml_input::isTextEditableElement(rml_context_->GetFocusElement());
+                return;
+            }
         }
 
         if (has_text_focus && text_input_handler && input.has_text_editing) {
@@ -456,7 +468,7 @@ namespace lfs::vis::gui {
 
         if (event == Rml::EventId::Change && event.GetCurrentElement() == overlay->el_form_) {
             if (event.GetParameter<bool>("linebreak", false) &&
-                isTextEditableElement(event.GetTargetElement())) {
+                rml_input::isTextEditableElement(event.GetTargetElement())) {
                 overlay->dismissFirstEnabledButton();
                 event.StopPropagation();
             }

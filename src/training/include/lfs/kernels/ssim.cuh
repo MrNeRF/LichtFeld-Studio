@@ -183,6 +183,72 @@ namespace lfs::training::kernels {
         FusedL1SSIMWorkspace& workspace);
 
     // ============================================================================
+    // Decoupled L1+SSIM Loss for appearance modeling
+    // ============================================================================
+
+    struct DecoupledGradients {
+        lfs::core::Tensor grad_corrected; // Gradient through the appearance-corrected image
+        lfs::core::Tensor grad_raw;       // Direct gradient to the raw render (contrast/structure only)
+    };
+
+    struct DecoupledFusedL1SSIMWorkspace {
+        lfs::core::Tensor ssim_map;          // [N, C, H, W] decoupled SSIM map = l(corrected, gt) * cs(raw, gt)
+        lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] d(ssim_map)/d mu(corrected)
+        lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] indirect mu(raw) contribution via sigma terms
+        lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma^2(raw)
+        lfs::core::Tensor raw_dm_dsigma12;   // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma12(raw)
+        lfs::core::Tensor zero_terms;        // [N, C, H, W] reusable zeros for unused backward terms
+        lfs::core::Tensor grad_corrected;    // [N, C, H, W]
+        lfs::core::Tensor grad_raw;          // [N, C, H, W]
+        lfs::core::Tensor reduction_temp;    // [<=1024]
+        lfs::core::Tensor reduction_result;  // [1]
+
+        std::vector<size_t> allocated_shape;
+
+        void ensure_size(const std::vector<size_t>& shape) {
+            if (allocated_shape != shape) {
+                lfs::core::TensorShape tshape(shape);
+                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                zero_terms = lfs::core::Tensor::zeros(tshape, lfs::core::Device::CUDA);
+                grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
+                reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+                allocated_shape = shape;
+            }
+        }
+    };
+
+    struct DecoupledFusedL1SSIMContext {
+        lfs::core::Tensor corrected_img;
+        lfs::core::Tensor raw_img;
+        lfs::core::Tensor gt_img;
+        lfs::core::Tensor app_dm_dmu1;
+        lfs::core::Tensor raw_dm_dmu1;
+        lfs::core::Tensor raw_dm_dsigma1_sq;
+        lfs::core::Tensor raw_dm_dsigma12;
+        float ssim_weight;
+        int H, W;
+        bool apply_valid_padding;
+    };
+
+    std::pair<lfs::core::Tensor, DecoupledFusedL1SSIMContext> decoupled_fused_l1_ssim_forward(
+        const lfs::core::Tensor& corrected_img,
+        const lfs::core::Tensor& raw_img,
+        const lfs::core::Tensor& gt_img,
+        float ssim_weight,
+        DecoupledFusedL1SSIMWorkspace& workspace,
+        bool apply_valid_padding = true);
+
+    DecoupledGradients decoupled_fused_l1_ssim_backward(
+        const DecoupledFusedL1SSIMContext& ctx,
+        DecoupledFusedL1SSIMWorkspace& workspace);
+
+    // ============================================================================
     // Fused Masked L1+SSIM Loss (for segmentation/ignore mask modes)
     // ============================================================================
 
@@ -238,6 +304,66 @@ namespace lfs::training::kernels {
     lfs::core::Tensor masked_fused_l1_ssim_backward(
         const MaskedFusedL1SSIMContext& ctx,
         MaskedFusedL1SSIMWorkspace& workspace);
+
+    struct MaskedDecoupledFusedL1SSIMWorkspace {
+        lfs::core::Tensor ssim_map;    // [N, C, H, W]
+        lfs::core::Tensor app_dm_dmu1; // [N, C, H, W]
+        lfs::core::Tensor raw_dm_dmu1;
+        lfs::core::Tensor raw_dm_dsigma1_sq;
+        lfs::core::Tensor raw_dm_dsigma12;
+        lfs::core::Tensor zero_terms;
+        lfs::core::Tensor grad_corrected; // [N, C, H, W]
+        lfs::core::Tensor grad_raw;       // [N, C, H, W]
+        lfs::core::Tensor reduction_temp; // [<=2048]
+        lfs::core::Tensor masked_loss;    // [1]
+        lfs::core::Tensor mask_sum;       // [1]
+
+        std::vector<size_t> allocated_shape;
+
+        void ensure_size(const std::vector<size_t>& shape) {
+            if (allocated_shape != shape) {
+                lfs::core::TensorShape tshape(shape);
+                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                raw_dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                zero_terms = lfs::core::Tensor::zeros(tshape, lfs::core::Device::CUDA);
+                grad_corrected = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                grad_raw = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                reduction_temp = lfs::core::Tensor::empty({2048}, lfs::core::Device::CUDA);
+                masked_loss = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+                mask_sum = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+                allocated_shape = shape;
+            }
+        }
+    };
+
+    struct MaskedDecoupledFusedL1SSIMContext {
+        lfs::core::Tensor corrected_img;
+        lfs::core::Tensor raw_img;
+        lfs::core::Tensor gt_img;
+        lfs::core::Tensor mask;
+        lfs::core::Tensor app_dm_dmu1;
+        lfs::core::Tensor raw_dm_dmu1;
+        lfs::core::Tensor raw_dm_dsigma1_sq;
+        lfs::core::Tensor raw_dm_dsigma12;
+        float ssim_weight;
+        float mask_sum_value;
+        int H, W;
+    };
+
+    std::pair<lfs::core::Tensor, MaskedDecoupledFusedL1SSIMContext> masked_decoupled_fused_l1_ssim_forward(
+        const lfs::core::Tensor& corrected_img,
+        const lfs::core::Tensor& raw_img,
+        const lfs::core::Tensor& gt_img,
+        const lfs::core::Tensor& mask,
+        float ssim_weight,
+        MaskedDecoupledFusedL1SSIMWorkspace& workspace);
+
+    DecoupledGradients masked_decoupled_fused_l1_ssim_backward(
+        const MaskedDecoupledFusedL1SSIMContext& ctx,
+        MaskedDecoupledFusedL1SSIMWorkspace& workspace);
 
     // Fused SSIM map → error map: error_map[i] = max(0, 1 - mean_c(ssim_map[c, i]))
     // Replaces .neg().add(1).mean({1}).squeeze(0).clamp_min(0).contiguous() chain

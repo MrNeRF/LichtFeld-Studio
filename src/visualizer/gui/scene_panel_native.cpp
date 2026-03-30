@@ -303,6 +303,7 @@ namespace lfs::vis::gui {
     }
 
     void NativeScenePanel::cacheElements() {
+        filter_input_revert_.clear();
         tree_el_ = dynamic_cast<SceneGraphElement*>(document_->GetElementById("tree-container"));
         scene_tab_el_ = document_->GetElementById("scene-tab");
         history_tab_el_ = document_->GetElementById("history-tab");
@@ -354,6 +355,9 @@ namespace lfs::vis::gui {
         history_clear_btn_el_->AddEventListener(Rml::EventId::Click, &listener_);
         history_undo_list_el_->AddEventListener(Rml::EventId::Click, &listener_);
         history_redo_list_el_->AddEventListener(Rml::EventId::Click, &listener_);
+        filter_input_revert_.bind(filter_input_el_, [this](Rml::Element&) {
+            applyFilterInputValue();
+        });
     }
 
     void NativeScenePanel::syncPanel(const PanelDrawContext& ctx) {
@@ -532,11 +536,7 @@ namespace lfs::vis::gui {
         if (id == "filter-clear") {
             if (filter_input_el_)
                 filter_input_el_->SetAttribute("value", "");
-            if (tree_el_)
-                tree_el_->setFilterText({});
-            syncSummaryChips();
-            syncSceneVisibility();
-            host_.markContentDirty();
+            applyFilterInputValue();
             event.StopPropagation();
             return true;
         }
@@ -576,6 +576,14 @@ namespace lfs::vis::gui {
         }
 
         return false;
+    }
+
+    void NativeScenePanel::applyFilterInputValue() {
+        if (tree_el_)
+            tree_el_->setFilterText(filter_input_el_ ? filter_input_el_->GetAttribute<Rml::String>("value", "") : "");
+        syncSummaryChips();
+        syncSceneVisibility();
+        host_.markContentDirty();
     }
 
     void NativeScenePanel::setTab(const Tab tab) {

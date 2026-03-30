@@ -827,7 +827,7 @@ namespace lfs::vis::gui::panels {
 
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(PKG_SEARCH_WIDTH);
-                    ImGui::InputTextWithHint("##search", "Search...", search_filter, sizeof(search_filter));
+                    lfs::vis::gui::widgets::InputTextWithHint("##search", "Search...", search_filter, sizeof(search_filter));
 
                     ImGui::SameLine();
                     if (loading) {
@@ -1209,7 +1209,8 @@ namespace lfs::vis::gui::panels {
 
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(PKG_SEARCH_WIDTH);
-                    ImGui::InputTextWithHint("##search_docked", "Search...", search_filter, sizeof(search_filter));
+                    lfs::vis::gui::widgets::InputTextWithHint("##search_docked", "Search...", search_filter,
+                                                              sizeof(search_filter));
 
                     ImGui::SameLine();
                     if (loading) {

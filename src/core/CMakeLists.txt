@@ -147,7 +147,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # The splat simplifier is sensitive to tiny FP contraction differences.
     set_source_files_properties(
         ${CMAKE_CURRENT_SOURCE_DIR}/splat_simplify.cpp
-        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-tree-vectorize;-fno-unsafe-math-optimizations;-frounding-math;-ffloat-store;-fexcess-precision=standard;-mno-fma;-mno-avx2")
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-tree-vectorize;-fno-unsafe-math-optimizations;-frounding-math;-ffloat-store;-fexcess-precision=standard$<$<BOOL:${COMPILER_SUPPORTS_AVX2}>:;-mno-fma;-mno-avx2>")
 endif()
 
 # Visibility: hide by default, export only LFS_CORE_API symbols

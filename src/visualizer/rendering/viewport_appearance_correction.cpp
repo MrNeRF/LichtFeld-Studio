@@ -47,25 +47,30 @@ namespace lfs::vis {
 
             const bool was_hwc = (rgb.ndim() == 3 && rgb.shape()[2] == 3);
             const auto input = was_hwc ? rgb.permute({2, 0, 1}).contiguous() : rgb;
-            const bool is_training_camera = (camera_uid >= 0 && camera_uid < ppisp->num_frames());
+            const bool is_training_camera = ppisp->is_known_frame(camera_uid);
             const bool has_controller = use_controller && scene_mgr.hasAppearanceController();
+            const int camera_idx = is_training_camera ? ppisp->camera_index(ppisp->camera_for_frame(camera_uid)) : 0;
 
             lfs::core::Tensor result;
 
             if (has_controller) {
                 auto* pool = scene_mgr.getAppearanceControllerPool();
-                const int controller_idx = camera_uid >= 0 ? camera_uid % pool->num_cameras() : 0;
+                const int controller_idx =
+                    (camera_idx >= 0 && camera_idx < pool->num_cameras()) ? camera_idx : 0;
                 const auto params = pool->predict(controller_idx, input.unsqueeze(0), 1.0f);
                 result = overrides.isIdentity()
-                             ? ppisp->apply_with_controller_params(input, params, 0)
+                             ? ppisp->apply_with_controller_params(input, params, controller_idx)
                              : ppisp->apply_with_controller_params_and_overrides(
-                                   input, params, 0, toRenderOverrides(overrides));
+                                   input, params, controller_idx, toRenderOverrides(overrides));
             } else if (is_training_camera) {
+                const int camera_id = ppisp->camera_for_frame(camera_uid);
                 result = overrides.isIdentity()
-                             ? ppisp->apply(input, camera_uid, camera_uid)
+                             ? ppisp->apply(input, camera_id, camera_uid)
                              : ppisp->apply_with_overrides(
-                                   input, camera_uid, camera_uid, toRenderOverrides(overrides));
+                                   input, camera_id, camera_uid, toRenderOverrides(overrides));
             } else {
+                // Keep manual overrides active on novel views by anchoring them to any valid learned PPISP
+                // frame/camera pair when no controller is available.
                 const int fallback_camera = ppisp->any_camera_id();
                 const int fallback_frame = ppisp->any_frame_uid();
                 result = overrides.isIdentity()

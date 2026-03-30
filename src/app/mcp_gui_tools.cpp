@@ -135,6 +135,110 @@ namespace lfs::app {
             }
         }
 
+        template <typename F>
+        auto post_render_and_wait(vis::VisualizerImpl* viewer_impl, F&& fn) {
+            using R = std::invoke_result_t<F>;
+
+            if (viewer_impl->isOnViewerThread()) {
+                if (!viewer_impl->acceptsPostedWork())
+                    return make_post_failure<R>("Viewer is shutting down");
+                if (!viewer_impl->isProcessingRenderWork())
+                    return make_post_failure<R>(
+                        "Composited capture must be requested from a non-viewer thread unless already running in render work");
+                return std::invoke(std::forward<F>(fn));
+            }
+
+            return detail::post_and_wait_impl(
+                [viewer_impl](vis::Visualizer::WorkItem work) {
+                    return viewer_impl->postRenderWork(std::move(work));
+                },
+                std::forward<F>(fn));
+        }
+
+        template <typename F>
+        auto capture_after_gui_render(vis::Visualizer* viewer, F&& fn) {
+            using R = std::invoke_result_t<F>;
+
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return make_post_failure<R>("Composited capture requires a GUI visualizer");
+
+            return post_render_and_wait(viewer_impl, std::forward<F>(fn));
+        }
+
+        std::expected<std::string, std::string> capture_default_framebuffer_region_to_base64(
+            int framebuffer_width,
+            int framebuffer_height,
+            int capture_x,
+            int capture_y_top,
+            int capture_width,
+            int capture_height,
+            int width = 0,
+            int height = 0,
+            std::string_view capture_target = "capture",
+            const GLenum read_buffer = GL_FRONT) {
+            if (framebuffer_width <= 0 || framebuffer_height <= 0)
+                return std::unexpected("Window framebuffer size is unavailable");
+            if (capture_x < 0 || capture_y_top < 0)
+                return std::unexpected(std::string(capture_target) + " bounds are invalid");
+            if (capture_width <= 0 || capture_height <= 0)
+                return std::unexpected(std::string(capture_target) + " size is empty");
+            if (capture_x + capture_width > framebuffer_width ||
+                capture_y_top + capture_height > framebuffer_height) {
+                return std::unexpected(std::string(capture_target) + " bounds exceed the framebuffer");
+            }
+
+            const int capture_y_bottom = framebuffer_height - capture_y_top - capture_height;
+            if (capture_y_bottom < 0)
+                return std::unexpected(std::string(capture_target) + " bounds are invalid");
+
+            std::vector<uint8_t> pixels(static_cast<size_t>(capture_width) * capture_height * 4u);
+
+            GLint previous_read_fbo = 0;
+            GLint previous_read_buffer = GL_BACK;
+            GLint previous_pack_alignment = 4;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
+            glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
+            glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            glReadBuffer(read_buffer);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glFinish();
+            glReadPixels(
+                capture_x,
+                capture_y_bottom,
+                capture_width,
+                capture_height,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                pixels.data());
+            const GLenum read_error = glGetError();
+
+            glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
+            glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
+
+            if (read_error != GL_NO_ERROR)
+                return std::unexpected("glReadPixels failed while capturing " + std::string(capture_target));
+
+            const size_t row_bytes = static_cast<size_t>(capture_width) * 4u;
+            std::vector<uint8_t> flipped(pixels.size());
+            for (int row = 0; row < capture_height; ++row) {
+                const size_t src_offset = static_cast<size_t>(capture_height - 1 - row) * row_bytes;
+                const size_t dst_offset = static_cast<size_t>(row) * row_bytes;
+                std::copy_n(pixels.data() + src_offset, row_bytes, flipped.data() + dst_offset);
+            }
+
+            return mcp::encode_pixels_to_base64(
+                flipped.data(),
+                capture_width,
+                capture_height,
+                4,
+                width,
+                height);
+        }
+
         std::expected<std::string, std::string> capture_live_viewport_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
@@ -168,58 +272,42 @@ namespace lfs::app {
             const int capture_height = std::min(
                 framebuffer_size.y - capture_y_top,
                 std::max(1, static_cast<int>(viewport_size.y * scale_y)));
-            if (capture_width <= 0 || capture_height <= 0)
-                return std::unexpected("Viewport capture size is empty");
-
-            const int capture_y_bottom = framebuffer_size.y - capture_y_top - capture_height;
-            if (capture_y_bottom < 0)
-                return std::unexpected("Viewport capture bounds are invalid");
-
-            std::vector<uint8_t> pixels(static_cast<size_t>(capture_width) * capture_height * 4u);
-
-            GLint previous_read_fbo = 0;
-            GLint previous_read_buffer = GL_BACK;
-            GLint previous_pack_alignment = 4;
-            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
-            glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
-            glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
-
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-            glReadBuffer(GL_FRONT);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
-            glFinish();
-            glReadPixels(
+            return capture_default_framebuffer_region_to_base64(
+                framebuffer_size.x,
+                framebuffer_size.y,
                 capture_x,
-                capture_y_bottom,
+                capture_y_top,
                 capture_width,
                 capture_height,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                pixels.data());
-            const GLenum read_error = glGetError();
-
-            glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
-            glReadBuffer(static_cast<GLenum>(previous_read_buffer));
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
-
-            if (read_error != GL_NO_ERROR)
-                return std::unexpected("glReadPixels failed while capturing the live viewport");
-
-            const size_t row_bytes = static_cast<size_t>(capture_width) * 4u;
-            std::vector<uint8_t> flipped(pixels.size());
-            for (int row = 0; row < capture_height; ++row) {
-                const size_t src_offset = static_cast<size_t>(capture_height - 1 - row) * row_bytes;
-                const size_t dst_offset = static_cast<size_t>(row) * row_bytes;
-                std::copy_n(pixels.data() + src_offset, row_bytes, flipped.data() + dst_offset);
-            }
-
-            return mcp::encode_pixels_to_base64(
-                flipped.data(),
-                capture_width,
-                capture_height,
-                4,
                 width,
-                height);
+                height,
+                "the live viewport");
+        }
+
+        std::expected<std::string, std::string> capture_full_window_to_base64(
+            vis::Visualizer* viewer,
+            int width = 0,
+            int height = 0) {
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return std::unexpected("Full-window capture requires a GUI visualizer");
+
+            auto* const window_manager = viewer_impl->getWindowManager();
+            if (!window_manager)
+                return std::unexpected("Window capture is not initialized");
+
+            const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
+            return capture_default_framebuffer_region_to_base64(
+                framebuffer_size.x,
+                framebuffer_size.y,
+                0,
+                0,
+                framebuffer_size.x,
+                framebuffer_size.y,
+                width,
+                height,
+                "the full window",
+                GL_BACK);
         }
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
@@ -1772,6 +1860,39 @@ namespace lfs::app {
                     return count_visible_model_gaussians(viewer->getScene());
                 });
             }});
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.capture_window",
+                .description = "Capture the current composited app window. Unlike render.capture without camera_index, this includes the full window, including panels, toolbars, and GUI overlays.",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
+                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
+                    .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "render",
+                    .kind = "query",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer](const json& args) -> json {
+                const int width = args.value("width", 0);
+                const int height = args.value("height", 0);
+
+                auto result = capture_after_gui_render(viewer, [viewer, width, height]() {
+                    return capture_full_window_to_base64(viewer, width, height);
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+
+                return json{
+                    {"success", true},
+                    {"mime_type", "image/png"},
+                    {"data", *result},
+                };
+            });
 
         registry.register_tool(
             McpTool{
@@ -4215,7 +4336,7 @@ namespace lfs::app {
             McpResource{
                 .uri = "lichtfeld://render/current",
                 .name = "Current Render",
-                .description = "Base64-encoded PNG capture of the current GUI viewport",
+                .description = "Base64-encoded PNG capture of the live viewport region only; excludes panels, toolbars, and other window UI",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 auto result = post_and_wait(viewer, [viewer]() {
@@ -4227,15 +4348,35 @@ namespace lfs::app {
                 return single_blob_resource(uri, "image/png", *result);
             });
 
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://render/window",
+                .name = "Current Window",
+                .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
+                .mime_type = "image/png"},
+            [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                auto result = capture_after_gui_render(viewer, [viewer]() {
+                    return capture_full_window_to_base64(viewer);
+                });
+                if (!result)
+                    return std::unexpected(result.error());
+
+                return single_blob_resource(uri, "image/png", *result);
+            });
+
         registry.register_resource_prefix(
             "lichtfeld://render/",
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                if (uri != "lichtfeld://render/current")
-                    return std::unexpected("Unknown resource URI: " + uri);
-
-                auto result = post_and_wait(viewer, [viewer]() {
-                    return capture_live_viewport_to_base64(viewer);
-                });
+                std::expected<std::string, std::string> result = std::unexpected("Unknown resource URI: " + uri);
+                if (uri == "lichtfeld://render/current") {
+                    result = post_and_wait(viewer, [viewer]() {
+                        return capture_live_viewport_to_base64(viewer);
+                    });
+                } else if (uri == "lichtfeld://render/window") {
+                    result = capture_after_gui_render(viewer, [viewer]() {
+                        return capture_full_window_to_base64(viewer);
+                    });
+                }
                 if (!result)
                     return std::unexpected(result.error());
 

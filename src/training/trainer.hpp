@@ -224,26 +224,35 @@ namespace lfs::training {
 
         void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
 
+        struct PhotometricLossResult {
+            lfs::core::Tensor loss;
+            lfs::core::Tensor grad_corrected;
+            lfs::core::Tensor grad_raw;
+        };
+
         // Compute photometric loss AND gradient manually (no autograd)
-        // Returns GPU tensor for loss (avoid sync!)
-        std::expected<std::pair<lfs::core::Tensor, lfs::core::Tensor>, std::string> compute_photometric_loss_with_gradient(
-            const lfs::core::Tensor& rendered,
+        // Returns GPU tensors for loss and gradients (avoid sync!)
+        std::expected<PhotometricLossResult, std::string> compute_photometric_loss_with_gradient(
+            const lfs::core::Tensor& corrected,
             const lfs::core::Tensor& gt_image,
-            const lfs::core::param::OptimizationParameters& opt_params);
+            const lfs::core::param::OptimizationParameters& opt_params,
+            const lfs::core::Tensor& raw_rendered);
 
         struct MaskLossResult {
             lfs::core::Tensor loss;
-            lfs::core::Tensor grad_image;
+            lfs::core::Tensor grad_corrected;
+            lfs::core::Tensor grad_raw;
             lfs::core::Tensor grad_alpha;
         };
 
         // Masked photometric loss with optional alpha gradient
         std::expected<MaskLossResult, std::string> compute_photometric_loss_with_mask(
-            const lfs::core::Tensor& rendered,
+            const lfs::core::Tensor& corrected,
             const lfs::core::Tensor& gt_image,
             const lfs::core::Tensor& mask,
             const lfs::core::Tensor& alpha,
-            const lfs::core::param::OptimizationParameters& opt_params);
+            const lfs::core::param::OptimizationParameters& opt_params,
+            const lfs::core::Tensor& raw_rendered);
 
         // Validate masks exist for all cameras when mask mode is enabled
         std::expected<void, std::string> validate_masks();
@@ -343,6 +352,8 @@ namespace lfs::training {
         // Pre-allocated SSIM-map workspace for densification error maps.
         lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
         lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
+        lfs::training::kernels::DecoupledFusedL1SSIMWorkspace decoupled_fused_workspace_;
+        lfs::training::kernels::MaskedDecoupledFusedL1SSIMWorkspace masked_decoupled_fused_workspace_;
 
         // Pre-allocated error map buffer for densification (avoids per-iteration allocation)
         core::Tensor densification_error_map_;

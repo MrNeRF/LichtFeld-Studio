@@ -129,6 +129,7 @@ namespace lfs::python {
         // Focus
         bool focus();
         void blur();
+        bool select();
         void submit(const std::string& name = "", const std::string& value = "");
 
         Rml::Element* raw() { return elem_; }

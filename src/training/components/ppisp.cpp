@@ -40,7 +40,7 @@ namespace lfs::training {
 
     PPISP::PPISP(int total_iterations, Config config)
         : config_(config),
-          current_lr_(config.lr),
+          current_lr_(config.warmup_steps > 0 ? config.lr * config.warmup_start_factor : config.lr),
           initial_lr_(config.lr),
           total_iterations_(total_iterations) {
     }
@@ -920,7 +920,7 @@ namespace lfs::training {
         crf_exp_avg_sq_.zero_();
         crf_grad_.zero_();
         step_ = 0;
-        current_lr_ = initial_lr_;
+        current_lr_ = config_.warmup_steps > 0 ? initial_lr_ * config_.warmup_start_factor : initial_lr_;
 
         return {};
     }

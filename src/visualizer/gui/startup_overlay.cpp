@@ -11,7 +11,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
-#include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -261,7 +261,7 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(document_, base_rcss, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
-    void StartupOverlay::forwardInput(const PanelInputState& input, float overlay_x,
+    bool StartupOverlay::forwardInput(const PanelInputState& input, float overlay_x,
                                       float overlay_y, float overlay_w, float overlay_h) {
         assert(rml_context_);
         if (rml_manager_) {
@@ -288,6 +288,34 @@ namespace lfs::vis::gui {
             if (input.mouse_wheel != 0.0f)
                 rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), 0);
         }
+
+        bool escape_consumed = false;
+        if (!input.viewport_keyboard_focus &&
+            rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement())) {
+            const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                          input.key_alt, input.key_super);
+            for (int sc : input.keys_pressed) {
+                if (sc == SDL_SCANCODE_ESCAPE && rml_input::cancelFocusedElement(*rml_context_)) {
+                    escape_consumed = true;
+                    continue;
+                }
+
+                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN)
+                    rml_context_->ProcessKeyDown(rml_key, mods);
+            }
+
+            for (int sc : input.keys_released) {
+                if (escape_consumed && sc == SDL_SCANCODE_ESCAPE)
+                    continue;
+
+                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN)
+                    rml_context_->ProcessKeyUp(rml_key, mods);
+            }
+        }
+
+        return escape_consumed;
     }
 
     void StartupOverlay::render(const ViewportLayout& viewport, bool drag_hovering) {
@@ -305,7 +333,14 @@ namespace lfs::vis::gui {
         focus.want_capture_mouse = true;
         focus.want_capture_keyboard = true;
 
-        if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
+        bool escape_consumed = false;
+        const bool defer_fbo_update = rml_manager_->shouldDeferFboUpdate(fbo_);
+        if (defer_fbo_update && input_) {
+            escape_consumed = forwardInput(*input_, viewport.pos.x, viewport.pos.y,
+                                           viewport.size.x, viewport.size.y);
+        }
+
+        if (!defer_fbo_update) {
             updateTheme();
             updateLocalizedText();
 
@@ -322,8 +357,8 @@ namespace lfs::vis::gui {
                 return;
 
             if (input_) {
-                forwardInput(*input_, viewport.pos.x, viewport.pos.y,
-                             viewport.size.x, viewport.size.y);
+                escape_consumed = forwardInput(*input_, viewport.pos.x, viewport.pos.y,
+                                               viewport.size.x, viewport.size.y);
             }
 
             auto* render = rml_manager_->getRenderInterface();
@@ -383,7 +418,8 @@ namespace lfs::vis::gui {
         if (shown_frames_ > 2 && !rml_select_open && !drag_hovering && input_) {
             const bool mouse_clicked =
                 input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
-            const bool key_action = hasKey(input_->keys_pressed, SDL_SCANCODE_ESCAPE) ||
+            const bool key_action = (!escape_consumed &&
+                                     hasKey(input_->keys_pressed, SDL_SCANCODE_ESCAPE)) ||
                                     hasKey(input_->keys_pressed, SDL_SCANCODE_SPACE) ||
                                     hasKey(input_->keys_pressed, SDL_SCANCODE_RETURN) ||
                                     hasKey(input_->keys_pressed, SDL_SCANCODE_KP_ENTER);

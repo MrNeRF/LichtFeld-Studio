@@ -123,7 +123,12 @@ namespace {
         update_ppisp(source, 20, 102, 0.40f, 0.07f, 3);
         EXPECT_GT(source.get_step(), 0);
 
-        PPISPControllerPool source_controller(2, 64);
+        PPISPControllerPool::Config controller_config;
+        controller_config.lr = 1e-3;
+        controller_config.warmup_steps = 100;
+        controller_config.warmup_start_factor = 0.1;
+
+        PPISPControllerPool source_controller(2, 64, controller_config);
         update_controller(source_controller, 0, 0.10f, 0.03f, 2);
         update_controller(source_controller, 1, 0.25f, 0.05f, 3);
 
@@ -139,7 +144,7 @@ namespace {
         ASSERT_TRUE(save_result) << save_result.error();
 
         PPISP loaded(1);
-        PPISPControllerPool loaded_controller(2, 1);
+        PPISPControllerPool loaded_controller(2, 1, controller_config);
         loaded_controller.allocate_buffers(48, 48);
         PPISPFileMetadata loaded_metadata;
         auto load_result = lfs::training::load_ppisp_file(path, loaded, &loaded_controller, &loaded_metadata);
@@ -162,13 +167,15 @@ namespace {
         auto import_result = target.copy_inference_weights_from(loaded, frame_mapping, camera_mapping);
         ASSERT_TRUE(import_result) << import_result.error();
 
-        PPISPControllerPool target_controller(2, 64);
+        PPISPControllerPool target_controller(2, 64, controller_config);
         target_controller.allocate_buffers(48, 48);
         const auto controller_import_error = target_controller.copy_inference_weights_from(loaded_controller, camera_mapping);
         ASSERT_TRUE(controller_import_error.empty()) << controller_import_error;
 
         EXPECT_EQ(target.get_step(), 0);
-        EXPECT_DOUBLE_EQ(target.get_lr(), target.get_config().lr);
+        EXPECT_DOUBLE_EQ(target.get_lr(), target.get_config().lr * target.get_config().warmup_start_factor);
+        EXPECT_DOUBLE_EQ(target_controller.get_learning_rate(),
+                         controller_config.lr * controller_config.warmup_start_factor);
 
         struct ComparisonCase {
             int target_camera_id;
@@ -236,7 +243,7 @@ namespace {
         ASSERT_TRUE(import_result) << import_result.error();
 
         EXPECT_EQ(target.get_step(), 0);
-        EXPECT_DOUBLE_EQ(target.get_lr(), target.get_config().lr);
+        EXPECT_DOUBLE_EQ(target.get_lr(), target.get_config().lr * target.get_config().warmup_start_factor);
 
         const auto input_a = make_input(0.30f);
         const auto input_b = make_input(0.60f);

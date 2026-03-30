@@ -80,6 +80,10 @@ namespace lfs::vis::gui {
              message.find("Could not get value from data variable") != Rml::String::npos)) {
             return true;
         }
+        if (type == Rml::Log::LT_INFO &&
+            message.find("The desired box-shadow texture dimensions") != Rml::String::npos) {
+            return true;
+        }
 
         switch (type) {
         case Rml::Log::LT_ERROR:

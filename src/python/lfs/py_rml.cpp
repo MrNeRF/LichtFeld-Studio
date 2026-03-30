@@ -10,6 +10,7 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/DataTypeRegister.h>
 #include <RmlUi/Core/DataVariable.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/StyleSheetSpecification.h>
 #include <RmlUi/Core/Tween.h>
 #include <cassert>
@@ -573,6 +574,14 @@ namespace lfs::python {
 
     bool PyRmlElement::focus() { return elem_->Focus(); }
     void PyRmlElement::blur() { elem_->Blur(); }
+    bool PyRmlElement::select() {
+        if (auto* input = rmlui_dynamic_cast<Rml::ElementFormControlInput*>(elem_)) {
+            input->Select();
+            mark_document_dirty(input);
+            return true;
+        }
+        return false;
+    }
 
     void PyRmlElement::submit(const std::string& name, const std::string& value) {
         Rml::Element* element = elem_;
@@ -977,6 +986,7 @@ namespace lfs::python {
                  nb::arg("align_top") = true)
             .def("focus", &PyRmlElement::focus)
             .def("blur", &PyRmlElement::blur)
+            .def("select", &PyRmlElement::select)
             .def("submit", &PyRmlElement::submit, nb::arg("name") = "",
                  nb::arg("value") = "");
 

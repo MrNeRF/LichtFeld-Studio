@@ -394,8 +394,9 @@ class ImagePreviewPanel(Panel):
         if not viewport or w <= 0 or h <= 0:
             return
 
-        vw = max(1, viewport.client_width)
-        vh = max(1, viewport.client_height)
+        dp_ratio = max(1.0, lf.ui.get_ui_scale())
+        vw = max(1, int(viewport.client_width / dp_ratio))
+        vh = max(1, int(viewport.client_height / dp_ratio))
 
         if self._fit_to_window:
             scale = min(1.0, vw / w, vh / h)
@@ -428,8 +429,9 @@ class ImagePreviewPanel(Panel):
         if not viewport:
             return 0
 
-        vw = viewport.client_width
-        vh = viewport.client_height
+        dp_ratio = max(1.0, lf.ui.get_ui_scale())
+        vw = int(viewport.client_width / dp_ratio)
+        vh = int(viewport.client_height / dp_ratio)
         if vw <= 1 or vh <= 1:
             return 0
 

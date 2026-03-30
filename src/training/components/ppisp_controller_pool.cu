@@ -87,7 +87,7 @@ namespace lfs::training {
         : num_cameras_(num_cameras),
           total_iterations_(total_iterations),
           config_(config),
-          current_lr_(config.lr),
+          current_lr_(config.warmup_steps > 0 ? config.lr * config.warmup_start_factor : config.lr),
           initial_lr_(config.lr) {
 
         conv1_w_ = kaiming_uniform(3, CNN_CH1);
@@ -551,7 +551,7 @@ namespace lfs::training {
         fc4_b_m_.zero_();
         fc4_b_v_.zero_();
         step_ = 0;
-        current_lr_ = initial_lr_;
+        current_lr_ = config_.warmup_steps > 0 ? initial_lr_ * config_.warmup_start_factor : initial_lr_;
         last_predict_camera_ = -1;
 
         return {};

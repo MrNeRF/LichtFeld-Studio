@@ -6,12 +6,52 @@
 
 #include "core/export.hpp"
 #include "gui/ui_context.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 #include <imgui.h>
 
 namespace lfs::vis::gui::widgets {
+
+    // Shared single-line input helpers with Blender-style text editing affordances.
+    LFS_VIS_API bool InputText(const char* label, char* buf, std::size_t buf_size,
+                               ImGuiInputTextFlags flags = 0,
+                               ImGuiInputTextCallback callback = nullptr, void* user_data = nullptr);
+    LFS_VIS_API bool InputTextWithHint(const char* label, const char* hint, char* buf, std::size_t buf_size,
+                                       ImGuiInputTextFlags flags = 0,
+                                       ImGuiInputTextCallback callback = nullptr, void* user_data = nullptr);
+    LFS_VIS_API bool InputFloat(const char* label, float* v, float step = 0.0f, float step_fast = 0.0f,
+                                const char* format = "%.3f", ImGuiInputTextFlags flags = 0);
+    LFS_VIS_API bool InputInt(const char* label, int* v, int step = 1, int step_fast = 100,
+                              ImGuiInputTextFlags flags = 0);
+    LFS_VIS_API bool DragFloat(const char* label, float* v, float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                               const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt(const char* label, int* v, float speed = 1.0f, int min = 0, int max = 0,
+                             const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragFloat2(const char* label, float v[2], float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                                const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragFloat3(const char* label, float v[3], float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                                const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragFloat4(const char* label, float v[4], float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                                const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt2(const char* label, int v[2], float speed = 1.0f, int min = 0, int max = 0,
+                              const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt3(const char* label, int v[3], float speed = 1.0f, int min = 0, int max = 0,
+                              const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt4(const char* label, int v[4], float speed = 1.0f, int min = 0, int max = 0,
+                              const char* format = "%d", ImGuiSliderFlags flags = 0);
+
+    // Slider helpers enter text edit mode on click-release-without-drag and select the full value.
+    LFS_VIS_API bool SliderFloat(const char* label, float* v, float min, float max,
+                                 const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool SliderInt(const char* label, int* v, int min, int max,
+                               const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool SliderFloat2(const char* label, float v[2], float min, float max,
+                                  const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool SliderFloat3(const char* label, float v[3], float min, float max,
+                                  const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API void RequestActiveEditCancel();
 
     // Reusable UI widgets
     bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,

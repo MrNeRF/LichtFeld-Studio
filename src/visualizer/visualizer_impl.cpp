@@ -708,6 +708,7 @@ namespace lfs::vis {
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
         std::vector<WorkItem> pending_work;
+        std::vector<WorkItem> pending_render_work;
         {
             std::lock_guard lock(work_queue_mutex_);
             if (shutdown_started_)
@@ -715,9 +716,14 @@ namespace lfs::vis {
             shutdown_started_ = true;
             accepting_work_ = false;
             pending_work.swap(work_queue_);
+            pending_render_work.swap(render_work_queue_);
         }
 
         for (auto& work : pending_work) {
+            if (work.cancel)
+                work.cancel();
+        }
+        for (auto& work : pending_render_work) {
             if (work.cancel)
                 work.cancel();
         }
@@ -968,9 +974,17 @@ namespace lfs::vis {
                 std::lock_guard lock(work_queue_mutex_);
                 work.swap(work_queue_);
             }
-            for (auto& item : work) {
-                if (item.run)
-                    item.run();
+            for (size_t i = 0; i < work.size(); ++i) {
+                try {
+                    if (work[i].run)
+                        work[i].run();
+                } catch (...) {
+                    for (size_t j = i + 1; j < work.size(); ++j) {
+                        if (work[j].cancel)
+                            work[j].cancel();
+                    }
+                    throw;
+                }
             }
         }
 
@@ -1105,6 +1119,31 @@ namespace lfs::vis {
         const bool resize_done = rendering_manager_->consumeResizeCompleted();
         if (resize_done)
             glFinish();
+
+        {
+            std::vector<WorkItem> render_work;
+            {
+                std::lock_guard lock(work_queue_mutex_);
+                render_work.swap(render_work_queue_);
+            }
+            if (!render_work.empty()) {
+                processing_render_work_ = true;
+                for (size_t i = 0; i < render_work.size(); ++i) {
+                    try {
+                        if (render_work[i].run)
+                            render_work[i].run();
+                    } catch (...) {
+                        for (size_t j = i + 1; j < render_work.size(); ++j) {
+                            if (render_work[j].cancel)
+                                render_work[j].cancel();
+                        }
+                        processing_render_work_ = false;
+                        throw;
+                    }
+                }
+                processing_render_work_ = false;
+            }
+        }
 
         window_manager_->swapBuffers();
 
@@ -1286,6 +1325,20 @@ namespace lfs::vis {
         if (!accepting_work_)
             return false;
         work_queue_.push_back(std::move(work));
+        return true;
+    }
+
+    bool VisualizerImpl::postRenderWork(WorkItem work) {
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            if (!accepting_work_)
+                return false;
+            render_work_queue_.push_back(std::move(work));
+        }
+
+        if (window_manager_)
+            window_manager_->requestRedraw();
+
         return true;
     }
 

@@ -36,6 +36,8 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
+        constexpr float kWasdShiftSpeedBonus = 20.0f;
+
         bool dispatchKeyToModals(int key, int scancode, int action, int mods,
                                  double x, double y, const bool over_gui) {
             op::ModalEvent evt{};
@@ -1412,23 +1414,25 @@ namespace lfs::vis {
         // Handle continuous movement
         if (shouldCameraHandleInput() && drag_mode_ != DragMode::Gizmo && drag_mode_ != DragMode::Splitter) {
             auto& movement_viewport = activeKeyboardViewport();
+            const float movement_speed_bonus =
+                (getModifierKeys() & input::KEYMOD_SHIFT) != 0 ? kWasdShiftSpeedBonus : 0.0f;
             if (keys_movement_[0]) {
-                movement_viewport.camera.advance_forward(delta_time);
+                movement_viewport.camera.advance_forward(delta_time, movement_speed_bonus);
             }
             if (keys_movement_[1]) {
-                movement_viewport.camera.advance_left(delta_time);
+                movement_viewport.camera.advance_left(delta_time, movement_speed_bonus);
             }
             if (keys_movement_[2]) {
-                movement_viewport.camera.advance_backward(delta_time);
+                movement_viewport.camera.advance_backward(delta_time, movement_speed_bonus);
             }
             if (keys_movement_[3]) {
-                movement_viewport.camera.advance_right(delta_time);
+                movement_viewport.camera.advance_right(delta_time, movement_speed_bonus);
             }
             if (keys_movement_[4]) {
-                movement_viewport.camera.advance_up(delta_time);
+                movement_viewport.camera.advance_up(delta_time, movement_speed_bonus);
             }
             if (keys_movement_[5]) {
-                movement_viewport.camera.advance_down(delta_time);
+                movement_viewport.camera.advance_down(delta_time, movement_speed_bonus);
             }
         }
 
