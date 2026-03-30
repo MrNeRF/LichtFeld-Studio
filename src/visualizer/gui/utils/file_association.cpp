@@ -178,6 +178,13 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        bool queryUserChoiceProgId(const wchar_t* extension, std::wstring& out) {
+            const auto user_choice_key =
+                std::wstring(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\") +
+                extension + L"\\UserChoice";
+            return getRegString(HKEY_CURRENT_USER, user_choice_key, L"ProgId", out);
+        }
+
     } // namespace
 
     bool registerFileAssociations() {
@@ -198,7 +205,8 @@ namespace lfs::vis::gui {
                                command);
 
             const auto ext_key = classes + ext.ext;
-            ok &= setRegString(HKEY_CURRENT_USER, ext_key, L"", ext.prog_id);
+            // Register as an available handler only. Windows should keep the effective
+            // default app decision in the system-managed Default Apps flow.
             ok &= setRegString(HKEY_CURRENT_USER, ext_key + L"\\OpenWithProgids", ext.prog_id,
                                L"");
             ok &= setRegString(HKEY_CURRENT_USER, application_key + L"\\SupportedTypes", ext.ext,
@@ -286,7 +294,8 @@ namespace lfs::vis::gui {
         for (const auto& ext : EXTENSIONS) {
             std::wstring current;
             if (!queryEffectiveProgId(registration.get(), ext.ext, current)) {
-                if (!getRegString(HKEY_CURRENT_USER, classes + ext.ext, L"", current))
+                if (!queryUserChoiceProgId(ext.ext, current) &&
+                    !getRegString(HKEY_CURRENT_USER, classes + ext.ext, L"", current))
                     return false;
             }
             if (current != ext.prog_id)
