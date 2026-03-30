@@ -204,6 +204,9 @@ namespace lfs::vis {
 
         // Access to rendering engine (for initialization only)
         lfs::rendering::RenderingEngine* getRenderingEngine();
+        [[nodiscard]] lfs::rendering::RenderingEngine* getRenderingEngineIfInitialized() const {
+            return initialized_ ? engine_.get() : nullptr;
+        }
 
         // Camera frustum picking
         int pickCameraFrustum(const glm::vec2& mouse_pos);

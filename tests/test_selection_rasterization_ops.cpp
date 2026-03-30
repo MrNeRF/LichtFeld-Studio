@@ -273,7 +273,9 @@ TEST_F(SelectionRasterizationOpsTest, CropFilterKeepsOnlyPointsInsideCropBox) {
         false,
         nullptr,
         nullptr,
-        false);
+        false,
+        nullptr,
+        nullptr);
 
     EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false, true, true}));
 }
@@ -332,7 +334,58 @@ TEST_F(SelectionRasterizationOpsTest, DepthFilterKeepsOnlyPointsInsideCameraSpac
         false,
         nullptr,
         nullptr,
-        false);
+        false,
+        nullptr,
+        nullptr);
 
     EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{false, true, false, false, true}));
+}
+
+TEST_F(SelectionRasterizationOpsTest, CropFilterAppliesModelTransformsBeforeWorldSpaceBounds) {
+    auto selection = make_bool_mask({1, 1});
+    const auto means = make_float32_values(
+        {
+            0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 0.0f,
+        },
+        {2, 3});
+    const auto crop_transform = make_float32_values(
+        {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+        },
+        {4, 4});
+    const auto crop_min = make_float32_values({0.5f, -0.5f, -0.5f}, {3});
+    const auto crop_max = make_float32_values({1.5f, 0.5f, 0.5f}, {3});
+    const auto model_transforms = make_float32_values(
+        {
+            1.0f, 0.0f, 0.0f, 1.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+
+            1.0f, 0.0f, 0.0f, -1.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f,
+        },
+        {2, 4, 4});
+    const auto transform_indices = make_int32_values({0, 1});
+
+    lfs::rendering::filter_selection_by_crop(
+        selection,
+        means,
+        &crop_transform,
+        &crop_min,
+        &crop_max,
+        false,
+        nullptr,
+        nullptr,
+        false,
+        &model_transforms,
+        &transform_indices);
+
+    EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, false}));
 }

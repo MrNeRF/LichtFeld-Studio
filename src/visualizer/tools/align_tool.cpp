@@ -5,6 +5,7 @@
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "internal/viewport.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "theme/theme.hpp"
 #include <imgui.h>
@@ -25,23 +26,25 @@ namespace lfs::vis::tools {
 
     void AlignTool::update([[maybe_unused]] const ToolContext& ctx) {}
 
-    static ImVec2 projectToScreen(const glm::vec3& world_pos, const Viewport& viewport) {
-        const glm::mat4 view = viewport.getViewMatrix();
-        const glm::mat4 proj = viewport.getProjectionMatrix();
-        const glm::vec4 clip_pos = proj * view * glm::vec4(world_pos, 1.0f);
-
-        if (clip_pos.w <= 0.0f)
+    static ImVec2 projectToScreen(const glm::vec3& world_pos, const Viewport& viewport, const float focal_length_mm) {
+        const auto projected = lfs::rendering::projectWorldPoint(
+            viewport.camera.R,
+            viewport.camera.t,
+            viewport.windowSize,
+            world_pos,
+            focal_length_mm);
+        if (!projected)
             return ImVec2(-1000, -1000);
 
-        const glm::vec3 ndc = glm::vec3(clip_pos) / clip_pos.w;
-        return ImVec2(
-            (ndc.x * 0.5f + 0.5f) * viewport.windowSize.x,
-            (1.0f - (ndc.y * 0.5f + 0.5f)) * viewport.windowSize.y);
+        return ImVec2(projected->x, projected->y);
     }
 
-    static float calculateScreenRadius(const glm::vec3& world_pos, const float world_radius, const Viewport& viewport) {
+    static float calculateScreenRadius(const glm::vec3& world_pos,
+                                       const float world_radius,
+                                       const Viewport& viewport,
+                                       const float focal_length_mm) {
         const glm::mat4 view = viewport.getViewMatrix();
-        const glm::mat4 proj = viewport.getProjectionMatrix();
+        const glm::mat4 proj = viewport.getProjectionMatrix(focal_length_mm);
         const glm::vec4 view_pos = view * glm::vec4(world_pos, 1.0f);
         const float depth = -view_pos.z;
 
@@ -61,6 +64,9 @@ namespace lfs::vis::tools {
         const ImVec2 mouse_pos = ImGui::GetMousePos();
         const auto& viewport = tool_context_->getViewport();
         auto* const rendering_manager = tool_context_->getRenderingManager();
+        const float focal_length_mm = rendering_manager
+                                          ? rendering_manager->getFocalLengthMm()
+                                          : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
         const bool over_gui = gui::guiFocusState().want_capture_mouse;
 
         constexpr float SPHERE_RADIUS = 0.05f;
@@ -75,8 +81,8 @@ namespace lfs::vis::tools {
 
         // Draw picked points
         for (size_t i = 0; i < picked_points.size(); ++i) {
-            const ImVec2 screen_pos = projectToScreen(picked_points[i], viewport);
-            const float screen_radius = calculateScreenRadius(picked_points[i], SPHERE_RADIUS, viewport);
+            const ImVec2 screen_pos = projectToScreen(picked_points[i], viewport, focal_length_mm);
+            const float screen_radius = calculateScreenRadius(picked_points[i], SPHERE_RADIUS, viewport, focal_length_mm);
 
             draw_list->AddCircleFilled(screen_pos, screen_radius, SPHERE_COLOR, 32);
             draw_list->AddCircle(screen_pos, screen_radius, SPHERE_OUTLINE, 32, 1.5f);
@@ -99,8 +105,8 @@ namespace lfs::vis::tools {
                 const glm::vec3 preview_point = viewport.unprojectPixel(
                     mouse_pos.x, mouse_pos.y, depth, rendering_manager->getFocalLengthMm());
                 if (Viewport::isValidWorldPosition(preview_point)) {
-                    const ImVec2 screen_pos = projectToScreen(preview_point, viewport);
-                    const float screen_radius = calculateScreenRadius(preview_point, SPHERE_RADIUS, viewport);
+                    const ImVec2 screen_pos = projectToScreen(preview_point, viewport, focal_length_mm);
+                    const float screen_radius = calculateScreenRadius(preview_point, SPHERE_RADIUS, viewport, focal_length_mm);
 
                     draw_list->AddCircleFilled(screen_pos, screen_radius, PREVIEW_COLOR, 32);
                     draw_list->AddCircle(screen_pos, screen_radius, toU32WithAlpha(t.palette.text, 0.6f), 32, 1.5f);
@@ -133,16 +139,16 @@ namespace lfs::vis::tools {
                     const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
                     const glm::vec3 normal_end = center + normal * line_length;
 
-                    const ImVec2 center_screen = projectToScreen(center, viewport);
-                    const ImVec2 normal_screen = projectToScreen(normal_end, viewport);
+                    const ImVec2 center_screen = projectToScreen(center, viewport, focal_length_mm);
+                    const ImVec2 normal_screen = projectToScreen(normal_end, viewport, focal_length_mm);
 
                     draw_list->AddLine(center_screen, normal_screen, IM_COL32(255, 255, 0, 255), 4.0f);
                     draw_list->AddCircleFilled(normal_screen, 10.0f, IM_COL32(255, 255, 0, 255));
                     draw_list->AddText(ImVec2(normal_screen.x + 12, normal_screen.y - 8), IM_COL32(255, 255, 0, 255), "UP");
 
-                    const ImVec2 p0_screen = projectToScreen(p0, viewport);
-                    const ImVec2 p1_screen = projectToScreen(p1, viewport);
-                    const ImVec2 p2_screen = projectToScreen(p2, viewport);
+                    const ImVec2 p0_screen = projectToScreen(p0, viewport, focal_length_mm);
+                    const ImVec2 p1_screen = projectToScreen(p1, viewport, focal_length_mm);
+                    const ImVec2 p2_screen = projectToScreen(p2, viewport, focal_length_mm);
                     draw_list->AddLine(p0_screen, p1_screen, IM_COL32(255, 0, 0, 200), 2.0f);
                     draw_list->AddLine(p1_screen, p2_screen, IM_COL32(0, 255, 0, 200), 2.0f);
                     draw_list->AddLine(p2_screen, p0_screen, IM_COL32(0, 0, 255, 200), 2.0f);

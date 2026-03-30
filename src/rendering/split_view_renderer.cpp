@@ -39,12 +39,14 @@ namespace lfs::rendering {
             if (left_render_metadata) {
                 result.depth_is_ndc = left_render_metadata->depth_is_ndc;
                 result.external_depth_texture = left_render_metadata->external_depth_texture;
+                result.depth_texcoord_scale = left_render_metadata->depth_texcoord_scale;
                 result.near_plane = left_render_metadata->near_plane;
                 result.far_plane = left_render_metadata->far_plane;
                 result.orthographic = left_render_metadata->orthographic;
             } else if (right_render_metadata) {
                 result.depth_is_ndc = right_render_metadata->depth_is_ndc;
                 result.external_depth_texture = right_render_metadata->external_depth_texture;
+                result.depth_texcoord_scale = right_render_metadata->depth_texcoord_scale;
                 result.near_plane = right_render_metadata->near_plane;
                 result.far_plane = right_render_metadata->far_plane;
                 result.orthographic = right_render_metadata->orthographic;
@@ -62,6 +64,7 @@ namespace lfs::rendering {
                 .valid = image && image->is_valid(),
                 .depth_is_ndc = metadata.depth_is_ndc,
                 .external_depth_texture = metadata.external_depth_texture,
+                .depth_texcoord_scale = metadata.depth_texcoord_scale,
                 .near_plane = metadata.near_plane,
                 .far_plane = metadata.far_plane,
                 .orthographic = metadata.orthographic};
@@ -455,6 +458,7 @@ namespace lfs::rendering {
         result.frame = {
             .color = {.id = targets->composite->getFrameTexture(), .size = request.composite.output_size},
             .depth = {},
+            .flip_y = false,
             .depth_is_ndc = metadata.depth_is_ndc,
             .near_plane = metadata.near_plane,
             .far_plane = metadata.far_plane,

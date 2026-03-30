@@ -64,7 +64,8 @@ namespace lfs::rendering {
                                             GLuint mesh_color_tex, GLuint mesh_depth_tex,
                                             float near_plane, float far_plane,
                                             bool flip_splat_y,
-                                            const glm::vec2& splat_texcoord_scale,
+                                            const glm::vec2& splat_color_texcoord_scale,
+                                            const glm::vec2& splat_depth_texcoord_scale,
                                             bool splat_depth_is_ndc) {
         if (!initialized_)
             return std::unexpected("DepthCompositor not initialized");
@@ -91,7 +92,8 @@ namespace lfs::rendering {
         shader_->set_uniform("u_near_plane", near_plane);
         shader_->set_uniform("u_far_plane", far_plane);
         shader_->set_uniform("u_flip_splat_y", flip_splat_y);
-        shader_->set_uniform("u_splat_texcoord_scale", splat_texcoord_scale);
+        shader_->set_uniform("u_splat_color_texcoord_scale", splat_color_texcoord_scale);
+        shader_->set_uniform("u_splat_depth_texcoord_scale", splat_depth_texcoord_scale);
         shader_->set_uniform("u_splat_depth_is_ndc", splat_depth_is_ndc);
         shader_->set_uniform("u_mesh_only", false);
 

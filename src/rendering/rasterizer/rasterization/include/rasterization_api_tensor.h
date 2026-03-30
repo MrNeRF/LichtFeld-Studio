@@ -276,7 +276,9 @@ namespace lfs::rendering {
         bool crop_inverse,
         const Tensor* ellipsoid_transform, // [4, 4] world-to-local, nullptr if not active
         const Tensor* ellipsoid_radii,     // [3] radii
-        bool ellipsoid_inverse);
+        bool ellipsoid_inverse,
+        const Tensor* model_transforms = nullptr, // [M, 4, 4] row-major local-to-world transforms
+        const Tensor* transform_indices = nullptr); // [N] optional transform index per gaussian
 
     // GUT forward rasterization - returns (image [3,H,W], alpha [1,H,W], depth [1,H,W])
     std::tuple<Tensor, Tensor, Tensor>

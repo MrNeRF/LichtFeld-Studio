@@ -9,6 +9,7 @@
 #include "internal/viewport.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rasterizer/rasterization/include/forward.h"
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "rendering/rendering_manager.hpp"
@@ -97,15 +98,19 @@ namespace lfs::vis {
                                                core::Device::CPU,
                                                core::DataType::Float32);
             auto* data = polygon.ptr<float>();
-            const glm::mat4 vp = viewport.getProjectionMatrix(focal_mm) * viewport.getViewMatrix();
+            const glm::ivec2 render_size(render_width, render_height);
             for (size_t i = 0; i < world_points.size(); ++i) {
-                const glm::vec4 clip = vp * glm::vec4(world_points[i], 1.0f);
-                if (clip.w <= 0.0f) {
+                const auto projected = rendering::projectWorldPoint(
+                    viewport.camera.R,
+                    viewport.camera.t,
+                    render_size,
+                    world_points[i],
+                    focal_mm);
+                if (!projected) {
                     return std::nullopt;
                 }
-                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                data[i * 2] = (ndc.x * 0.5f + 0.5f) * static_cast<float>(render_width);
-                data[i * 2 + 1] = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(render_height);
+                data[i * 2] = projected->x;
+                data[i * 2 + 1] = projected->y;
             }
             return polygon;
         }
@@ -184,24 +189,62 @@ namespace lfs::vis {
             const float* const rotation = rotation_cpu.ptr<float>();
             const float* const position = position_cpu.ptr<float>();
 
-            glm::mat3 view_rotation(1.0f);
+            glm::mat3 world_to_camera(1.0f);
             for (int row = 0; row < 3; ++row) {
                 for (int col = 0; col < 3; ++col) {
-                    view_rotation[col][row] = rotation[row * 3 + col];
+                    world_to_camera[col][row] = rotation[row * 3 + col];
                 }
             }
+            const glm::mat3 data_camera_to_world = glm::transpose(world_to_camera);
+            glm::mat4 scene_transform(1.0f);
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                auto visible_transforms = scene_manager->getScene().getVisibleNodeTransforms();
+                if (!visible_transforms.empty()) {
+                    scene_transform = rendering::dataWorldTransformToVisualizerWorld(visible_transforms[0]);
+                }
+            }
+
+            glm::mat3 scene_rotation(1.0f);
+            const glm::mat3 raw_scene_rotation(scene_transform);
+            for (int axis = 0; axis < 3; ++axis) {
+                const float axis_length = glm::length(raw_scene_rotation[axis]);
+                scene_rotation[axis] =
+                    axis_length > 1e-6f ? raw_scene_rotation[axis] / axis_length : glm::mat3(1.0f)[axis];
+            }
+
+            const glm::mat3 view_rotation =
+                scene_rotation * rendering::visualizerRotationFromDataCameraToWorld(data_camera_to_world);
+            const glm::vec3 view_translation = glm::vec3(
+                scene_transform * glm::vec4(position[0], position[1], position[2], 1.0f));
 
             const int width = std::max(camera.image_width(), camera.camera_width());
             const int height = std::max(camera.image_height(), camera.camera_height());
 
             return rendering::ViewportData{
                 .rotation = view_rotation,
-                .translation = glm::vec3(position[0], position[1], position[2]),
+                .translation = view_translation,
                 .size = glm::ivec2(width, height),
                 .focal_length_mm = rendering::vFovToFocalLength(glm::degrees(camera.FoVy())),
                 .orthographic = false,
                 .ortho_scale = 1.0f,
             };
+        }
+
+        [[nodiscard]] core::Tensor uploadModelTransformsToCuda(const std::vector<glm::mat4>& model_transforms) {
+            std::vector<float> transform_data(model_transforms.size() * 16);
+            for (size_t i = 0; i < model_transforms.size(); ++i) {
+                const auto& transform = model_transforms[i];
+                for (int row = 0; row < 4; ++row) {
+                    for (int col = 0; col < 4; ++col) {
+                        transform_data[i * 16 + row * 4 + col] = transform[col][row];
+                    }
+                }
+            }
+            return core::Tensor::from_vector(
+                       transform_data,
+                       {model_transforms.size(), size_t{4}, size_t{4}},
+                       core::Device::CPU)
+                .cuda();
         }
 
         [[nodiscard]] rendering::ViewportData viewportDataFromViewer(
@@ -881,8 +924,12 @@ namespace lfs::vis {
             break;
         case SelectionShape::Rings: {
             const auto render_cursor = screenToRender(session.cursor_pos, info);
-            const int focused_gaussian_id =
-                renderHoveredGaussianIdForViewerContext(context, session.cursor_pos, session.filters).value_or(-1);
+            int focused_gaussian_id = testing_hovered_gaussian_id_.value_or(-1);
+            if (focused_gaussian_id < 0) {
+                focused_gaussian_id =
+                    renderHoveredGaussianIdForViewerContext(context, session.cursor_pos, session.filters)
+                        .value_or(-1);
+            }
             rendering_manager_->setCursorPreviewState(
                 true, render_cursor.x, render_cursor.y, 0.0f, add_mode, nullptr, false, 0.0f,
                 context.panel, focused_gaussian_id);
@@ -976,7 +1023,7 @@ namespace lfs::vis {
             return nullptr;
         }
 
-        auto* const engine = rendering_manager_->getRenderingEngine();
+        auto* const engine = rendering_manager_->getRenderingEngineIfInitialized();
         if (!engine || !engine->isInitialized()) {
             return nullptr;
         }
@@ -1014,7 +1061,7 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
-        auto* const engine = rendering_manager_->getRenderingEngine();
+        auto* const engine = rendering_manager_->getRenderingEngineIfInitialized();
         if (!engine || !engine->isInitialized()) {
             return nullptr;
         }
@@ -1154,8 +1201,8 @@ namespace lfs::vis {
 
         if (filters.crop_filter) {
             const auto& scene = scene_manager_->getScene();
-            const auto& cropboxes = scene.getVisibleCropBoxes();
-            if (const auto* const cb = findRenderableByNodeId(cropboxes, scene_manager_->getActiveSelectionCropBoxId());
+            if (const auto* const cb =
+                    findRenderableByNodeId(scene_state.cropboxes, scene_manager_->getActiveSelectionCropBoxId());
                 cb && cb->data) {
                 request.filters.crop_region = rendering::GaussianScopedBoxFilter{
                     .bounds =
@@ -1166,8 +1213,8 @@ namespace lfs::vis {
                     .parent_node_index = scene.getVisibleNodeIndex(cb->parent_splat_id)};
             }
 
-            const auto& ellipsoids = scene.getVisibleEllipsoids();
-            if (const auto* const el = findRenderableByNodeId(ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
+            if (const auto* const el =
+                    findRenderableByNodeId(scene_state.ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
                 el && el->data) {
                 request.filters.ellipsoid_region = rendering::GaussianScopedEllipsoidFilter{
                     .bounds =
@@ -1516,6 +1563,10 @@ namespace lfs::vis {
             !session.viewport_context->info.valid()) {
             return std::nullopt;
         }
+        const glm::ivec2 rendered_size = rendering_manager_->getRenderedSize();
+        if (rendered_size.x <= 0 || rendered_size.y <= 0) {
+            return std::nullopt;
+        }
 
         const auto& info = session.viewport_context->info;
         Viewport projection_viewport = *session.viewport_context->viewport;
@@ -1541,7 +1592,7 @@ namespace lfs::vis {
             return fallback_world;
         }
 
-        const glm::vec3 forward = glm::normalize(projection_viewport.camera.R * glm::vec3(0.0f, 0.0f, 1.0f));
+        const glm::vec3 forward = rendering::cameraForward(projection_viewport.camera.R);
         return projection_viewport.camera.t + forward * fallback_distance;
     }
 
@@ -1555,16 +1606,20 @@ namespace lfs::vis {
         const auto& info = session.viewport_context->info;
         Viewport projection_viewport = *session.viewport_context->viewport;
         projection_viewport.windowSize = {info.render_width, info.render_height};
-        const glm::vec4 clip =
-            projection_viewport.getProjectionMatrix(rendering_manager_->getFocalLengthMm()) *
-            projection_viewport.getViewMatrix() * glm::vec4(world_point, 1.0f);
-        if (clip.w <= 0.0f) {
+        const auto projected = rendering::projectWorldPoint(
+            projection_viewport.camera.R,
+            projection_viewport.camera.t,
+            {info.render_width, info.render_height},
+            world_point,
+            rendering_manager_->getFocalLengthMm());
+        if (!projected) {
             return std::nullopt;
         }
 
-        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-        return glm::vec2(info.x + (ndc.x * 0.5f + 0.5f) * info.width,
-                         info.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * info.height);
+        const float scale_x = info.width / static_cast<float>(std::max(info.render_width, 1));
+        const float scale_y = info.height / static_cast<float>(std::max(info.render_height, 1));
+        return glm::vec2(info.x + projected->x * scale_x,
+                         info.y + projected->y * scale_y);
     }
 
     bool SelectionService::shouldClosePolygonPreview() const {
@@ -1629,9 +1684,9 @@ namespace lfs::vis {
         core::Tensor crop_max;
         bool crop_inverse = false;
 
-        const auto& scene = scene_manager_->getScene();
-        const auto& cropboxes = scene.getVisibleCropBoxes();
-        if (const auto* const cb = findRenderableByNodeId(cropboxes, scene_manager_->getActiveSelectionCropBoxId());
+        const auto render_state = scene_manager_->buildRenderState();
+        if (const auto* const cb =
+                findRenderableByNodeId(render_state.cropboxes, scene_manager_->getActiveSelectionCropBoxId());
             cb && cb->data) {
             const glm::mat4 inv_transform = glm::inverse(cb->world_transform);
             const float* const t_ptr = glm::value_ptr(inv_transform);
@@ -1645,14 +1700,33 @@ namespace lfs::vis {
         core::Tensor ellip_radii;
         bool ellipsoid_inverse = false;
 
-        const auto& ellipsoids = scene.getVisibleEllipsoids();
-        if (const auto* const el = findRenderableByNodeId(ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
+        if (const auto* const el =
+                findRenderableByNodeId(render_state.ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
             el && el->data) {
             const glm::mat4 inv_transform = glm::inverse(el->world_transform);
             const float* const t_ptr = glm::value_ptr(inv_transform);
             ellip_t = core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
             ellip_radii = core::Tensor::from_vector({el->data->radii.x, el->data->radii.y, el->data->radii.z}, {3});
             ellipsoid_inverse = el->data->inverse;
+        }
+
+        core::Tensor model_transforms_cuda;
+        const core::Tensor* model_transforms_ptr = nullptr;
+        if (!render_state.model_transforms.empty()) {
+            model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
+            model_transforms_ptr = &model_transforms_cuda;
+        }
+
+        core::Tensor transform_indices_cuda;
+        const core::Tensor* transform_indices_ptr = nullptr;
+        if (render_state.transform_indices && render_state.transform_indices->is_valid() &&
+            render_state.transform_indices->numel() == means.size(0)) {
+            if (render_state.transform_indices->device() == core::Device::CUDA) {
+                transform_indices_ptr = render_state.transform_indices.get();
+            } else {
+                transform_indices_cuda = render_state.transform_indices->cuda();
+                transform_indices_ptr = &transform_indices_cuda;
+            }
         }
 
         rendering::filter_selection_by_crop(
@@ -1663,7 +1737,9 @@ namespace lfs::vis {
             crop_inverse,
             ellip_t.is_valid() ? &ellip_t : nullptr,
             ellip_radii.is_valid() ? &ellip_radii : nullptr,
-            ellipsoid_inverse);
+            ellipsoid_inverse,
+            model_transforms_ptr,
+            transform_indices_ptr);
     }
 
     void SelectionService::applyDepthFilter(core::Tensor& selection) const {
@@ -1695,10 +1771,32 @@ namespace lfs::vis {
         const auto depth_max = core::Tensor::from_vector(
             {settings.depth_filter_max.x, settings.depth_filter_max.y, settings.depth_filter_max.z}, {3});
 
+        const auto render_state = scene_manager_->buildRenderState();
+        core::Tensor model_transforms_cuda;
+        const core::Tensor* model_transforms_ptr = nullptr;
+        if (!render_state.model_transforms.empty()) {
+            model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
+            model_transforms_ptr = &model_transforms_cuda;
+        }
+
+        core::Tensor transform_indices_cuda;
+        const core::Tensor* transform_indices_ptr = nullptr;
+        if (render_state.transform_indices && render_state.transform_indices->is_valid() &&
+            render_state.transform_indices->numel() == means.size(0)) {
+            if (render_state.transform_indices->device() == core::Device::CUDA) {
+                transform_indices_ptr = render_state.transform_indices.get();
+            } else {
+                transform_indices_cuda = render_state.transform_indices->cuda();
+                transform_indices_ptr = &transform_indices_cuda;
+            }
+        }
+
         rendering::filter_selection_by_crop(
             selection, means,
             &depth_t, &depth_min, &depth_max, false,
-            nullptr, nullptr, false);
+            nullptr, nullptr, false,
+            model_transforms_ptr,
+            transform_indices_ptr);
     }
 
     void SelectionService::clearInteractivePreviewState() {

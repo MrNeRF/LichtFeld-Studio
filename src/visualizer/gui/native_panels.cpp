@@ -12,6 +12,7 @@
 #include "gui/startup_overlay.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer_impl.hpp"
@@ -148,7 +149,8 @@ namespace lfs::vis::gui::native_panels {
         const float vp_pos[] = {ctx.viewport->pos.x, ctx.viewport->pos.y};
         const float vp_size[] = {ctx.viewport->size.x, ctx.viewport->size.y};
         const float cam_pos[] = {vp.camera.t.x, vp.camera.t.y, vp.camera.t.z};
-        const float cam_fwd[] = {vp.camera.R[2].x, vp.camera.R[2].y, vp.camera.R[2].z};
+        const glm::vec3 forward = lfs::rendering::cameraForward(vp.camera.R);
+        const float cam_fwd[] = {forward.x, forward.y, forward.z};
 
         python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
                                         vp_pos, vp_size, cam_pos, cam_fwd,

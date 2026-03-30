@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_gizmo.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "gl_state_guard.hpp"
-#include "rendering/render_constants.hpp"
 #include "shader_paths.hpp"
 #include "text_renderer.hpp"
 #include <SDL3/SDL.h>
@@ -271,14 +271,11 @@ namespace lfs::rendering {
         // Disable face culling for gizmo
         glDisable(GL_CULL_FACE);
 
-        // Build view matrix matching main renderer's coordinate system
+        // Build view matrix matching the visualizer's OpenGL-style camera convention.
         constexpr float GIZMO_DISTANCE = 2.8f;
         constexpr float GIZMO_FOV = 38.0f;
-        const glm::mat3 view_rotation = computeViewRotation(camera_rotation);
-        glm::mat4 view(1.0f);
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j)
-                view[i][j] = view_rotation[i][j];
+        glm::mat4 view = makeViewMatrix(camera_rotation, glm::vec3(0.0f));
+        const glm::mat3 view_rotation = glm::mat3(view);
         view[3][2] = -GIZMO_DISTANCE;
         const glm::mat4 proj = glm::perspective(glm::radians(GIZMO_FOV), 1.0f, 0.1f, 10.0f);
 
@@ -606,13 +603,13 @@ namespace lfs::rendering {
     }
 
     glm::mat3 ViewportGizmo::getAxisViewRotation(const GizmoAxis axis, const bool negative) {
-        // Returns camera-to-world rotation for looking along an axis
         const float sign = negative ? -1.0f : 1.0f;
 
-        glm::vec3 forward, up, right;
+        glm::vec3 forward;
+        glm::vec3 up;
         switch (axis) {
         case GizmoAxis::X:
-            forward = glm::vec3(sign, 0.0f, 0.0f);
+            forward = glm::vec3(-sign, 0.0f, 0.0f);
             up = glm::vec3(0.0f, 1.0f, 0.0f);
             break;
         case GizmoAxis::Y:
@@ -620,16 +617,14 @@ namespace lfs::rendering {
             up = glm::vec3(0.0f, 0.0f, sign);
             break;
         case GizmoAxis::Z:
-            forward = glm::vec3(0.0f, 0.0f, sign);
+            forward = glm::vec3(0.0f, 0.0f, -sign);
             up = glm::vec3(0.0f, 1.0f, 0.0f);
             break;
         default:
             return glm::mat3(1.0f);
         }
 
-        right = glm::normalize(glm::cross(up, forward));
-        up = glm::normalize(glm::cross(forward, right));
-        return glm::mat3(right, up, forward); // Columns: [right, up, forward]
+        return makeVisualizerLookAtRotation(glm::vec3(0.0f), forward, up);
     }
 
 } // namespace lfs::rendering

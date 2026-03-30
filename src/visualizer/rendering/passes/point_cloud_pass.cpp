@@ -40,6 +40,10 @@ namespace lfs::vis {
             return;
 
         const lfs::core::PointCloud* point_cloud_to_render = scene_state.point_cloud;
+        glm::mat4 point_cloud_transform(1.0f);
+        if (!scene_state.model_transforms.empty()) {
+            point_cloud_transform = scene_state.model_transforms[0];
+        }
 
         for (const auto& cb : scene_state.cropboxes) {
             if (!cb.data || (!cb.data->enabled && !ctx.settings.show_crop_box))
@@ -47,6 +51,7 @@ namespace lfs::vis {
 
             const bool cache_valid = cached_filtered_point_cloud_ &&
                                      cached_source_point_cloud_ == scene_state.point_cloud &&
+                                     cached_point_cloud_transform_ == point_cloud_transform &&
                                      cached_cropbox_transform_ == cb.world_transform &&
                                      cached_cropbox_min_ == cb.data->min &&
                                      cached_cropbox_max_ == cb.data->max &&
@@ -55,7 +60,7 @@ namespace lfs::vis {
             if (!cache_valid) {
                 const auto& means = scene_state.point_cloud->means;
                 const auto& colors = scene_state.point_cloud->colors;
-                const glm::mat4 m = glm::inverse(cb.world_transform);
+                const glm::mat4 m = glm::inverse(cb.world_transform) * point_cloud_transform;
                 const auto device = means.device();
 
                 // R (3x3) and t (3,) from the inverse transform — avoids homogeneous expansion
@@ -89,6 +94,7 @@ namespace lfs::vis {
                 }
 
                 cached_source_point_cloud_ = scene_state.point_cloud;
+                cached_point_cloud_transform_ = point_cloud_transform;
                 cached_cropbox_transform_ = cb.world_transform;
                 cached_cropbox_min_ = cb.data->min;
                 cached_cropbox_max_ = cb.data->max;
@@ -104,11 +110,6 @@ namespace lfs::vis {
         }
 
         LOG_TRACE("Rendering point cloud with {} points", point_cloud_to_render->size());
-
-        glm::mat4 point_cloud_transform(1.0f);
-        if (!scene_state.model_transforms.empty()) {
-            point_cloud_transform = scene_state.model_transforms[0];
-        }
         const std::vector<glm::mat4> pc_transforms = {point_cloud_transform};
         const auto pc_request = buildPointCloudRenderRequest(ctx, ctx.render_size, pc_transforms);
 
@@ -150,6 +151,7 @@ namespace lfs::vis {
     void PointCloudPass::resetCache() {
         cached_filtered_point_cloud_.reset();
         cached_source_point_cloud_ = nullptr;
+        cached_point_cloud_transform_ = glm::mat4(1.0f);
     }
 
 } // namespace lfs::vis

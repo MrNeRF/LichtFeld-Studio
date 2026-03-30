@@ -44,8 +44,10 @@ namespace lfs::rendering {
         Result<void> renderTexture(ManagedShader& shader,
                                    GLuint color_texture,
                                    const DepthParams& depth_params,
-                                   glm::vec2 texcoord_scale = glm::vec2(1.0f, 1.0f),
-                                   GLuint depth_texture = 0) const;
+                                   glm::vec2 color_texcoord_scale = glm::vec2(1.0f, 1.0f),
+                                   glm::vec2 depth_texcoord_scale = glm::vec2(1.0f, 1.0f),
+                                   GLuint depth_texture = 0,
+                                   bool flip_y = false) const;
 
         virtual Result<void> uploadData(const unsigned char* image, int width_, int height_);
         Result<void> uploadFromCUDA(const Tensor& cuda_image, int width, int height);
@@ -60,6 +62,7 @@ namespace lfs::rendering {
 
         // Get texture coordinate scale for over-allocated textures
         glm::vec2 getTexcoordScale() const;
+        glm::vec2 getDepthTexcoordScale() const;
 
         GLuint getUploadedColorTexture() const { return getTextureID(); }
         GLuint getUploadedDepthTexture() const { return getDepthTextureID(); }

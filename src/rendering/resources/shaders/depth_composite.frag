@@ -10,7 +10,8 @@ uniform sampler2D u_mesh_depth;
 uniform float u_near_plane;
 uniform float u_far_plane;
 uniform bool u_flip_splat_y;
-uniform vec2 u_splat_texcoord_scale;
+uniform vec2 u_splat_color_texcoord_scale;
+uniform vec2 u_splat_depth_texcoord_scale;
 uniform bool u_splat_depth_is_ndc;
 uniform bool u_mesh_only;
 
@@ -39,11 +40,14 @@ void main() {
         return;
     }
 
-    vec2 splat_uv = v_texcoord * u_splat_texcoord_scale;
+    vec2 splat_color_uv = v_texcoord * u_splat_color_texcoord_scale;
+    vec2 splat_depth_uv = v_texcoord * u_splat_depth_texcoord_scale;
     if (u_flip_splat_y)
-        splat_uv.y = u_splat_texcoord_scale.y - splat_uv.y;
-    vec4 splat_color = texture(u_splat_color, splat_uv);
-    float splat_depth = texture(u_splat_depth, splat_uv).r;
+        splat_color_uv.y = u_splat_color_texcoord_scale.y - splat_color_uv.y;
+    if (u_flip_splat_y)
+        splat_depth_uv.y = u_splat_depth_texcoord_scale.y - splat_depth_uv.y;
+    vec4 splat_color = texture(u_splat_color, splat_color_uv);
+    float splat_depth = texture(u_splat_depth, splat_depth_uv).r;
     if (u_splat_depth_is_ndc)
         splat_depth = ndc_to_view_depth(splat_depth);
 

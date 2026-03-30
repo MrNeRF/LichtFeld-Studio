@@ -8,8 +8,9 @@ uniform float far_plane = 100000.0;
 uniform bool has_depth = false;
 uniform bool orthographic = false;
 uniform bool depth_is_ndc = false;
-uniform vec2 texcoord_scale = vec2(1.0, 1.0);  // Scale UV for over-allocated textures
-uniform bool flip_y = true;  // Flip Y for screen output, disable for framebuffer rendering
+uniform vec2 color_texcoord_scale = vec2(1.0, 1.0);  // Scale UV for over-allocated color textures
+uniform vec2 depth_texcoord_scale = vec2(1.0, 1.0);  // Scale UV for over-allocated depth textures
+uniform bool flip_y = false;  // Presentation orientation is explicit in GpuFrame
 out vec4 FragColor;
 
 // Convert view-space depth to NDC depth (0 to 1 range for OpenGL)
@@ -36,11 +37,12 @@ float viewDepthToNDC(float z_view) {
 void main()
 {
     float y = flip_y ? (1.0 - TexCoord.y) : TexCoord.y;
-    vec2 uv = vec2(TexCoord.x * texcoord_scale.x, y * texcoord_scale.y);
-    FragColor = texture(screenTexture, uv);
+    vec2 color_uv = vec2(TexCoord.x * color_texcoord_scale.x, y * color_texcoord_scale.y);
+    vec2 depth_uv = vec2(TexCoord.x * depth_texcoord_scale.x, y * depth_texcoord_scale.y);
+    FragColor = texture(screenTexture, color_uv);
 
     if (has_depth) {
-        float depth_value = texture(depthTexture, uv).r;
+        float depth_value = texture(depthTexture, depth_uv).r;
         if (depth_is_ndc) {
             // Depth is already in NDC format (0-1), use directly
             gl_FragDepth = depth_value;

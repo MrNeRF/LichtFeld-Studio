@@ -51,6 +51,10 @@ namespace lfs::rendering {
         bool orthographic = false;
         float ortho_scale = DEFAULT_ORTHO_SCALE;
 
+        [[nodiscard]] glm::mat4 getViewMatrix() const {
+            return makeViewMatrix(rotation, translation);
+        }
+
         [[nodiscard]] glm::mat4 getProjectionMatrix(const float near_plane = DEFAULT_NEAR_PLANE,
                                                     const float far_plane = DEFAULT_FAR_PLANE) const {
             const float vfov = focalLengthToVFov(focal_length_mm);
@@ -202,6 +206,7 @@ namespace lfs::rendering {
         // Depth conversion parameters (needed for proper depth buffer writing)
         bool depth_is_ndc = false;               // True if depth is already NDC (0-1), e.g., from OpenGL
         unsigned int external_depth_texture = 0; // If set, use this OpenGL texture directly (zero-copy)
+        glm::vec2 depth_texcoord_scale{1.0f, 1.0f};
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;

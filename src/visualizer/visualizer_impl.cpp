@@ -23,6 +23,7 @@
 #include "operator/ops/transform_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/brush_tool.hpp"
@@ -48,74 +49,10 @@ namespace lfs::vis {
 
     namespace {
 
-        constexpr float kMinSetViewVectorLength = 1e-6f;
-
-        bool isFiniteVec3(const glm::vec3& v) {
-            return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
-        }
-
-        glm::vec3 chooseFallbackUp(const glm::vec3& forward) {
-            constexpr glm::vec3 kCandidates[] = {
-                {0.0f, 1.0f, 0.0f},
-                {0.0f, 0.0f, 1.0f},
-                {1.0f, 0.0f, 0.0f},
-            };
-
-            glm::vec3 best = kCandidates[0];
-            float best_alignment = std::abs(glm::dot(forward, best));
-            for (const auto& candidate : kCandidates) {
-                const float alignment = std::abs(glm::dot(forward, candidate));
-                if (alignment < best_alignment) {
-                    best = candidate;
-                    best_alignment = alignment;
-                }
-            }
-            return best;
-        }
-
         std::optional<glm::mat3> buildValidatedViewRotation(const glm::vec3& eye,
                                                             const glm::vec3& target,
                                                             const glm::vec3& requested_up) {
-            if (!isFiniteVec3(eye) || !isFiniteVec3(target) || !isFiniteVec3(requested_up)) {
-                return std::nullopt;
-            }
-
-            const glm::vec3 view = target - eye;
-            const float view_length = glm::length(view);
-            if (view_length <= kMinSetViewVectorLength) {
-                return std::nullopt;
-            }
-
-            const glm::vec3 forward = view / view_length;
-
-            glm::vec3 up = requested_up;
-            const float up_length = glm::length(up);
-            if (up_length <= kMinSetViewVectorLength) {
-                up = chooseFallbackUp(forward);
-            } else {
-                up /= up_length;
-            }
-
-            glm::vec3 right = glm::cross(up, forward);
-            float right_length = glm::length(right);
-            if (right_length <= kMinSetViewVectorLength) {
-                up = chooseFallbackUp(forward);
-                right = glm::cross(up, forward);
-                right_length = glm::length(right);
-                if (right_length <= kMinSetViewVectorLength) {
-                    return std::nullopt;
-                }
-            }
-            right /= right_length;
-
-            glm::vec3 camera_up = glm::cross(forward, right);
-            const float camera_up_length = glm::length(camera_up);
-            if (camera_up_length <= kMinSetViewVectorLength) {
-                return std::nullopt;
-            }
-            camera_up /= camera_up_length;
-
-            return glm::mat3(right, camera_up, forward);
+            return lfs::rendering::tryMakeVisualizerLookAtRotation(eye, target, requested_up);
         }
 
     } // namespace

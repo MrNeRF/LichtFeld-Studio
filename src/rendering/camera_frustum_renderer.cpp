@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "camera_frustum_renderer.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "core/logger.hpp"
 #include "gl_state_guard.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -21,7 +22,6 @@ namespace lfs::rendering {
         constexpr int INITIAL_TEXTURE_ARRAY_CAPACITY = 256;
         constexpr float EQUIRECTANGULAR_DISPLAY_FOV = 1.0472f; // 60 degrees
 
-        const glm::mat4 GL_TO_COLMAP = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, -1.0f));
     } // namespace
 
     CameraFrustumRenderer::~CameraFrustumRenderer() {
@@ -345,7 +345,8 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 transformed_c2w = scene_transform * glm::inverse(w2c);
-            const glm::vec3 cam_pos = glm::vec3(transformed_c2w[3]);
+            const glm::mat4 visualizer_c2w = transformed_c2w * DATA_TO_VISUALIZER_CAMERA_AXES_4;
+            const glm::vec3 cam_pos = glm::vec3(visualizer_c2w[3]);
             camera_positions_.push_back(cam_pos);
 
             const float aspect = static_cast<float>(cam->image_width()) / static_cast<float>(cam->image_height());
@@ -355,8 +356,9 @@ namespace lfs::rendering {
             const float half_height = std::tan(fov_y * 0.5f);
             const float half_width = half_height * aspect;
 
-            const glm::mat4 fov_scale = glm::scale(glm::mat4(1.0f), glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
-            const glm::mat4 model = transformed_c2w * GL_TO_COLMAP * fov_scale;
+            const glm::mat4 fov_scale =
+                glm::scale(glm::mat4(1.0f), glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
+            const glm::mat4 model = visualizer_c2w * fov_scale;
 
             const bool is_validation = cam->image_name().find("test") != std::string::npos;
             const glm::vec3 color = is_validation ? eval_color : train_color;

@@ -53,7 +53,7 @@ namespace lfs::vis {
             }
 
             if (settings.show_crop_box && ctx.scene_manager) {
-                const auto visible_cropboxes = ctx.scene_manager->getScene().getVisibleCropBoxes();
+                const auto& visible_cropboxes = ctx.scene_state.cropboxes;
                 const core::NodeId selected_cropbox_id = ctx.scene_manager->getSelectedNodeCropBoxId();
 
                 for (const auto& cb : visible_cropboxes) {
@@ -87,7 +87,7 @@ namespace lfs::vis {
             }
 
             if (settings.show_ellipsoid && ctx.scene_manager) {
-                const auto visible_ellipsoids = ctx.scene_manager->getScene().getVisibleEllipsoids();
+                const auto& visible_ellipsoids = ctx.scene_state.ellipsoids;
                 const core::NodeId selected_ellipsoid_id = ctx.scene_manager->getSelectedNodeEllipsoidId();
 
                 for (const auto& el : visible_ellipsoids) {
@@ -174,7 +174,7 @@ namespace lfs::vis {
                     }
 
                     glm::mat4 scene_transform(1.0f);
-                    auto visible_transforms = ctx.scene_manager->getScene().getVisibleNodeTransforms();
+                    const auto& visible_transforms = ctx.scene_state.model_transforms;
                     if (!visible_transforms.empty()) {
                         scene_transform = visible_transforms[0];
                     }
@@ -221,6 +221,7 @@ namespace lfs::vis {
                     LOG_WARN("Grid render failed: {}", result.error());
                 }
             }
+
         };
 
         if (ctx.view_panels.size() > 1 && ctx.render_size.x > 1 && ctx.render_size.y > 0) {

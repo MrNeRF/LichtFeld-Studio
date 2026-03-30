@@ -1382,7 +1382,7 @@ namespace lfs::vis::gui {
 
                     active_viewport.camera.pivot = glm::vec3(0.0f);
                     active_viewport.camera.R = rotation;
-                    active_viewport.camera.t = -rotation[2] * dist;
+                    active_viewport.camera.t = rotation[2] * dist;
 
                     const auto& settings = rendering_manager->getSettings();
                     lfs::core::events::ui::GridSettingsChanged{

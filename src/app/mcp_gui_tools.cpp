@@ -26,6 +26,7 @@
 #include "mcp/shared_scene_tools.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/gs_rasterizer_tensor.hpp"
 #include "sequencer/keyframe.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
@@ -653,6 +654,11 @@ namespace lfs::app {
                 json::array({info.rotation[3], info.rotation[4], info.rotation[5]}),
                 json::array({info.rotation[6], info.rotation[7], info.rotation[8]}),
             });
+            const glm::mat3 rotation_matrix(
+                glm::vec3(info.rotation[0], info.rotation[3], info.rotation[6]),
+                glm::vec3(info.rotation[1], info.rotation[4], info.rotation[7]),
+                glm::vec3(info.rotation[2], info.rotation[5], info.rotation[8]));
+            const glm::vec3 forward = rendering::cameraForward(rotation_matrix);
 
             return json{
                 {"success", true},
@@ -661,7 +667,7 @@ namespace lfs::app {
                                {"target", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
                                {"pivot", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
                                {"up", json::array({info.rotation[1], info.rotation[4], info.rotation[7]})},
-                               {"forward", json::array({info.rotation[2], info.rotation[5], info.rotation[8]})},
+                               {"forward", json::array({forward.x, forward.y, forward.z})},
                                {"rotation_matrix", rotation},
                                {"width", info.width},
                                {"height", info.height},

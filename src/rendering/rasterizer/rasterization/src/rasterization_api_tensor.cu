@@ -1243,13 +1243,27 @@ namespace lfs::rendering {
         const float* __restrict__ ellipsoid_transform,
         const float3* ellipsoid_radii,
         const bool ellipsoid_inverse,
+        const float* __restrict__ model_transforms,
+        const int* __restrict__ transform_indices,
+        const int num_model_transforms,
         const int n) {
 
         const int idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx >= n || !selection[idx])
             return;
 
-        const float3 pos = means[idx];
+        float3 pos = means[idx];
+
+        if (model_transforms != nullptr && num_model_transforms > 0) {
+            const int transform_idx = transform_indices != nullptr
+                                          ? min(max(transform_indices[idx], 0), num_model_transforms - 1)
+                                          : 0;
+            const float* const m = model_transforms + transform_idx * 16;
+            pos = make_float3(
+                m[0] * pos.x + m[1] * pos.y + m[2] * pos.z + m[3],
+                m[4] * pos.x + m[5] * pos.y + m[6] * pos.z + m[7],
+                m[8] * pos.x + m[9] * pos.y + m[10] * pos.z + m[11]);
+        }
 
         if (crop_transform && crop_min && crop_max) {
             const float* const c = crop_transform;
@@ -1293,7 +1307,9 @@ namespace lfs::rendering {
         const bool crop_inverse,
         const Tensor* ellipsoid_transform,
         const Tensor* ellipsoid_radii,
-        const bool ellipsoid_inverse) {
+        const bool ellipsoid_inverse,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices) {
 
         if (!selection.is_valid() || !means.is_valid())
             return;
@@ -1324,12 +1340,25 @@ namespace lfs::rendering {
         if (!crop_t_ptr && !ellip_t_ptr)
             return;
 
+        const auto prepared_transforms = PreparedModelTransforms::from(model_transforms);
+        const float* const model_transforms_ptr = prepared_transforms.ptr;
+        const int num_model_transforms = prepared_transforms.count;
+
+        Tensor transform_indices_contig;
+        const int* transform_indices_ptr = nullptr;
+        if (transform_indices != nullptr && transform_indices->is_valid() &&
+            transform_indices->numel() == static_cast<size_t>(n)) {
+            transform_indices_contig = transform_indices->is_contiguous() ? *transform_indices : transform_indices->contiguous();
+            transform_indices_ptr = transform_indices_contig.ptr<int>();
+        }
+
         const int grid_size = (n + KERNEL_BLOCK_SIZE - 1) / KERNEL_BLOCK_SIZE;
         filter_selection_by_crop_kernel<<<grid_size, KERNEL_BLOCK_SIZE>>>(
             selection.ptr<bool>(),
             reinterpret_cast<const float3*>(means.ptr<float>()),
             crop_t_ptr, crop_min_ptr, crop_max_ptr, crop_inverse,
             ellip_t_ptr, ellip_radii_ptr, ellipsoid_inverse,
+            model_transforms_ptr, transform_indices_ptr, num_model_transforms,
             n);
     }
 

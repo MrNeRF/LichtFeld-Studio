@@ -98,14 +98,23 @@ namespace lfs::rendering {
     Result<void> ScreenQuadRenderer::render(ManagedShader& shader) const {
         LOG_TIMER_TRACE("ScreenQuadRenderer::render");
 
-        return renderTexture(shader, getTextureID(), depth_params_, getTexcoordScale(), getDepthTextureID());
+        return renderTexture(
+            shader,
+            getTextureID(),
+            depth_params_,
+            getTexcoordScale(),
+            getDepthTexcoordScale(),
+            getDepthTextureID(),
+            false);
     }
 
     Result<void> ScreenQuadRenderer::renderTexture(ManagedShader& shader,
                                                    const GLuint color_texture,
                                                    const DepthParams& depth_params,
-                                                   const glm::vec2 texcoord_scale,
-                                                   const GLuint depth_texture) const {
+                                                   const glm::vec2 color_texcoord_scale,
+                                                   const glm::vec2 depth_texcoord_scale,
+                                                   const GLuint depth_texture,
+                                                   const bool flip_y) const {
         LOG_TIMER_TRACE("ScreenQuadRenderer::renderTexture");
 
         GLStateGuard state_guard;
@@ -119,8 +128,16 @@ namespace lfs::rendering {
             return result;
         }
 
-        if (auto result = shader.set("texcoord_scale", texcoord_scale); !result) {
-            LOG_TRACE("Uniform 'texcoord_scale' not found in shader: {}", result.error());
+        if (auto result = shader.set("color_texcoord_scale", color_texcoord_scale); !result) {
+            LOG_TRACE("Uniform 'color_texcoord_scale' not found in shader: {}", result.error());
+        }
+
+        if (auto result = shader.set("depth_texcoord_scale", depth_texcoord_scale); !result) {
+            LOG_TRACE("Uniform 'depth_texcoord_scale' not found in shader: {}", result.error());
+        }
+
+        if (auto result = shader.set("flip_y", flip_y); !result) {
+            LOG_TRACE("Uniform 'flip_y' not set: {}", result.error());
         }
 
         glActiveTexture(GL_TEXTURE1);
@@ -201,6 +218,20 @@ namespace lfs::rendering {
 #ifdef CUDA_GL_INTEROP_ENABLED
         if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
             return glm::vec2(interop_fb->getTexcoordScaleX(), interop_fb->getTexcoordScaleY());
+        }
+#endif
+        return glm::vec2(1.0f, 1.0f);
+    }
+
+    glm::vec2 ScreenQuadRenderer::getDepthTexcoordScale() const {
+        if (depth_params_.external_depth_texture != 0) {
+            return glm::vec2(1.0f, 1.0f);
+        }
+#ifdef CUDA_GL_INTEROP_ENABLED
+        if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
+            if (interop_fb->hasDepthInterop()) {
+                return glm::vec2(1.0f, 1.0f);
+            }
         }
 #endif
         return glm::vec2(1.0f, 1.0f);

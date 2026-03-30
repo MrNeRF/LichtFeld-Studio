@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "camera_interaction_service.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "scene/scene_manager.hpp"
 
@@ -44,7 +45,7 @@ namespace lfs::vis {
         glm::mat4 scene_transform(1.0f);
         const auto transforms = scene_manager->getScene().getVisibleNodeTransforms();
         if (!transforms.empty()) {
-            scene_transform = transforms[0];
+            scene_transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transforms[0]);
         }
 
         const lfs::rendering::CameraFrustumPickRequest request{

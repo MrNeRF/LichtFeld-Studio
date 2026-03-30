@@ -40,13 +40,6 @@ namespace lfs::rendering {
         return SENSOR_HEIGHT_35MM / (2.0f * std::tan(glm::radians(vfov_degrees) * 0.5f));
     }
 
-    // Converts from internal camera space (+Y up, +Z forward) to OpenGL clip space (-Y up, -Z forward)
-    inline const glm::mat3 FLIP_YZ{1, 0, 0, 0, -1, 0, 0, 0, -1};
-
-    inline glm::mat3 computeViewRotation(const glm::mat3& camera_rotation) {
-        return FLIP_YZ * glm::transpose(camera_rotation);
-    }
-
     inline glm::mat4 createProjectionMatrix(const glm::ivec2& viewport_size, const float fov_degrees,
                                             const bool orthographic, const float ortho_scale,
                                             const float near_plane = DEFAULT_NEAR_PLANE,

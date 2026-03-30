@@ -40,6 +40,7 @@ namespace lfs::vis {
 
         std::unique_ptr<lfs::core::PointCloud> cached_filtered_point_cloud_;
         const lfs::core::PointCloud* cached_source_point_cloud_ = nullptr;
+        glm::mat4 cached_point_cloud_transform_{1.0f};
         glm::mat4 cached_cropbox_transform_{1.0f};
         glm::vec3 cached_cropbox_min_{0.0f};
         glm::vec3 cached_cropbox_max_{0.0f};

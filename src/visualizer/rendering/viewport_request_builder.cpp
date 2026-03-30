@@ -69,7 +69,7 @@ namespace lfs::vis {
             }
 
             const auto& scene = ctx.scene_manager->getScene();
-            const auto visible_ellipsoids = scene.getVisibleEllipsoids();
+            const auto& visible_ellipsoids = ctx.scene_state.ellipsoids;
             const core::NodeId selected_ellipsoid_id = ctx.scene_manager->getSelectedNodeEllipsoidId();
             for (const auto& el : visible_ellipsoids) {
                 if (!el.data) {

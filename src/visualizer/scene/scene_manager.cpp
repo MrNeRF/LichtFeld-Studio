@@ -19,6 +19,7 @@
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp.hpp"
@@ -95,6 +96,10 @@ namespace lfs::vis {
                 op::undoHistory().push(
                     std::make_unique<op::SceneGraphMetadataEntry>(scene_manager, std::move(label), std::move(diffs)));
             }
+        }
+
+        [[nodiscard]] glm::mat4 visualizerWorldTransform(const core::Scene& scene, const core::NodeId node_id) {
+            return rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node_id));
         }
     } // namespace
 
@@ -1078,7 +1083,7 @@ namespace lfs::vis {
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
-            const glm::mat4 local_to_world = scene_.getWorldTransform(node->id);
+            const glm::mat4 local_to_world = visualizerWorldTransform(scene_, node->id);
             const glm::mat4 world_to_local = glm::inverse(local_to_world);
             const glm::vec3 local_origin = glm::vec3(world_to_local * glm::vec4(ray_origin, 1.0f));
             const glm::vec3 local_dir = glm::vec3(world_to_local * glm::vec4(ray_dir, 0.0f));
@@ -1160,7 +1165,7 @@ namespace lfs::vis {
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
-            const glm::mat4 world_transform = scene_.getWorldTransform(node->id);
+            const glm::mat4 world_transform = visualizerWorldTransform(scene_, node->id);
 
             if (node->type == core::NodeType::MESH && node->mesh) {
                 auto accessor = CpuMeshAccessor::from(*node->mesh);
@@ -1235,7 +1240,7 @@ namespace lfs::vis {
         glm::mat4 cam_scene_transform(1.0f);
         auto visible_transforms = scene_.getVisibleNodeTransforms();
         if (!visible_transforms.empty())
-            cam_scene_transform = visible_transforms[0];
+            cam_scene_transform = rendering::dataWorldTransformToVisualizerWorld(visible_transforms[0]);
 
         for (const auto* node : scene_.getNodes()) {
             if (node->type != core::NodeType::CAMERA || !node->camera)
@@ -2152,11 +2157,15 @@ namespace lfs::vis {
 
         state.meshes = scene_.getVisibleMeshes();
         for (auto& vm : state.meshes) {
+            vm.transform = rendering::dataWorldTransformToVisualizerWorld(vm.transform);
             vm.is_selected = selection_.isNodeSelected(vm.node_id);
         }
 
         // Get transforms and indices
         state.model_transforms = scene_.getVisibleNodeTransforms();
+        for (auto& transform : state.model_transforms) {
+            transform = rendering::dataWorldTransformToVisualizerWorld(transform);
+        }
         state.transform_indices = scene_.getTransformIndices();
         state.visible_splat_count = state.model_transforms.size();
 
@@ -2169,6 +2178,13 @@ namespace lfs::vis {
 
         // Get cropboxes (before lock — no selection dependency)
         state.cropboxes = scene_.getVisibleCropBoxes();
+        for (auto& cropbox : state.cropboxes) {
+            cropbox.world_transform = rendering::dataWorldTransformToVisualizerWorld(cropbox.world_transform);
+        }
+        state.ellipsoids = scene_.getVisibleEllipsoids();
+        for (auto& ellipsoid : state.ellipsoids) {
+            ellipsoid.world_transform = rendering::dataWorldTransformToVisualizerWorld(ellipsoid.world_transform);
+        }
 
         // Read selection-dependent state
         {

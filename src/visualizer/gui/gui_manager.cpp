@@ -44,6 +44,7 @@
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -1519,22 +1520,23 @@ namespace lfs::vis::gui {
                         Viewport projection_viewport = panel_ctx.viewport ? *panel_ctx.viewport : ctx.viewer->getViewport();
                         projection_viewport.windowSize = {std::max(panel_ctx.render_width, 1),
                                                           std::max(panel_ctx.render_height, 1)};
-                        const glm::mat4 vp_matrix =
-                            projection_viewport.getProjectionMatrix(rm->getFocalLengthMm()) *
-                            projection_viewport.getViewMatrix();
 
                         bool all_visible = true;
                         for (const auto& world_point : world_points) {
-                            const glm::vec4 clip = vp_matrix * glm::vec4(world_point, 1.0f);
-                            if (clip.w <= 0.0f) {
+                            const auto projected = lfs::rendering::projectWorldPoint(
+                                projection_viewport.camera.R,
+                                projection_viewport.camera.t,
+                                projection_viewport.windowSize,
+                                world_point,
+                                rm->getFocalLengthMm());
+                            if (!projected) {
                                 all_visible = false;
                                 break;
                             }
 
-                            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
                             screen_points.emplace_back(
-                                panel_ctx.x + (ndc.x * 0.5f + 0.5f) * panel_ctx.width,
-                                panel_ctx.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * panel_ctx.height);
+                                panel_ctx.x + projected->x * (panel_ctx.width / static_cast<float>(projection_viewport.windowSize.x)),
+                                panel_ctx.y + projected->y * (panel_ctx.height / static_cast<float>(projection_viewport.windowSize.y)));
                         }
 
                         if (!all_visible) {

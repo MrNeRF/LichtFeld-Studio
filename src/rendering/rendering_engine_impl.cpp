@@ -637,6 +637,7 @@ namespace lfs::rendering {
             .valid = result.valid,
             .depth_is_ndc = result.depth_is_ndc,
             .external_depth_texture = result.external_depth_texture,
+            .depth_texcoord_scale = result.depth_texcoord_scale,
             .near_plane = result.near_plane,
             .far_plane = result.far_plane,
             .orthographic = result.orthographic};
@@ -653,7 +654,11 @@ namespace lfs::rendering {
 
         invalidatePresentUploadCache();
 
-        const glm::vec2 texcoord_scale = screen_renderer_->getTexcoordScale();
+        const glm::vec2 color_texcoord_scale = screen_renderer_->getTexcoordScale();
+        const glm::vec2 depth_texcoord_scale =
+            result.external_depth_texture != 0
+                ? result.depth_texcoord_scale
+                : screen_renderer_->getDepthTexcoordScale();
         const GLuint uploaded_depth_texture =
             result.external_depth_texture != 0
                 ? result.external_depth_texture
@@ -662,10 +667,11 @@ namespace lfs::rendering {
         return GpuFrame{
             .color = {.id = screen_renderer_->getUploadedColorTexture(),
                       .size = viewport_size,
-                      .texcoord_scale = texcoord_scale},
+                      .texcoord_scale = color_texcoord_scale},
             .depth = {.id = uploaded_depth_texture,
                       .size = viewport_size,
-                      .texcoord_scale = texcoord_scale},
+                      .texcoord_scale = depth_texcoord_scale},
+            .flip_y = false,
             .depth_is_ndc = result.depth_is_ndc,
             .near_plane = result.near_plane,
             .far_plane = result.far_plane,
@@ -985,7 +991,11 @@ namespace lfs::rendering {
             return std::unexpected(upload_result.error());
         }
 
-        const glm::vec2 texcoord_scale = screen_renderer_->getTexcoordScale();
+        const glm::vec2 color_texcoord_scale = screen_renderer_->getTexcoordScale();
+        const glm::vec2 depth_texcoord_scale =
+            metadata.external_depth_texture != 0
+                ? metadata.depth_texcoord_scale
+                : screen_renderer_->getDepthTexcoordScale();
         const GLuint uploaded_depth_texture =
             metadata.external_depth_texture != 0
                 ? metadata.external_depth_texture
@@ -994,10 +1004,11 @@ namespace lfs::rendering {
         return GpuFrame{
             .color = {.id = screen_renderer_->getUploadedColorTexture(),
                       .size = viewport_size,
-                      .texcoord_scale = texcoord_scale},
+                      .texcoord_scale = color_texcoord_scale},
             .depth = {.id = uploaded_depth_texture,
                       .size = viewport_size,
-                      .texcoord_scale = texcoord_scale},
+                      .texcoord_scale = depth_texcoord_scale},
+            .flip_y = false,
             .depth_is_ndc = metadata.depth_is_ndc,
             .near_plane = metadata.near_plane,
             .far_plane = metadata.far_plane,
@@ -1138,7 +1149,9 @@ namespace lfs::rendering {
             frame.color.id,
             params,
             frame.color.texcoord_scale,
-            frame.depth.valid() ? frame.depth.id : 0);
+            frame.depth.texcoord_scale,
+            frame.depth.valid() ? frame.depth.id : 0,
+            frame.flip_y);
     }
 
     Result<void> RenderingEngineImpl::ensureRenderResultUploaded(
@@ -1382,24 +1395,7 @@ namespace lfs::rendering {
     }
 
     glm::mat4 RenderingEngineImpl::createViewMatrix(const ViewportData& viewport) const {
-        glm::mat3 flip_yz = glm::mat3(1, 0, 0, 0, -1, 0, 0, 0, -1);
-        glm::mat3 R_inv = glm::transpose(viewport.rotation);
-        glm::vec3 t_inv = -R_inv * viewport.translation;
-
-        R_inv = flip_yz * R_inv;
-        t_inv = flip_yz * t_inv;
-
-        glm::mat4 view(1.0f);
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                view[i][j] = R_inv[i][j];
-            }
-        }
-        view[3][0] = t_inv.x;
-        view[3][1] = t_inv.y;
-        view[3][2] = t_inv.z;
-
-        return view;
+        return viewport.getViewMatrix();
     }
 
     glm::mat4 RenderingEngineImpl::createProjectionMatrix(const ViewportData& viewport) const {
@@ -1469,8 +1465,9 @@ namespace lfs::rendering {
             mesh_renderer_.getDepthTexture(),
             splat_frame.near_plane,
             splat_frame.far_plane,
-            true,
+            splat_frame.flip_y,
             splat_frame.color.texcoord_scale,
+            splat_frame.depth.texcoord_scale,
             splat_frame.depth_is_ndc);
     }
 

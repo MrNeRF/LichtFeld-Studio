@@ -18,6 +18,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/video/video_export_options.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -534,25 +535,35 @@ namespace lfs::vis::gui {
             return;
         const auto& settings = rm->getSettings();
         const glm::ivec2 vp_size(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
-        const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
-            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
-        const glm::mat4 view_proj = projection * vp.getViewMatrix();
 
         const auto projectToScreen = [&](const glm::vec3& pos) -> glm::vec2 {
-            const glm::vec4 clip = view_proj * glm::vec4(pos, 1.0f);
-            if (clip.w <= 0.0f)
+            const auto projected = lfs::rendering::projectWorldPoint(
+                vp.getRotationMatrix(),
+                vp.getTranslation(),
+                vp_size,
+                pos,
+                settings.focal_length_mm);
+            if (!projected)
                 return {-10000.0f, -10000.0f};
-            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            return {viewport.pos.x + (ndc.x * 0.5f + 0.5f) * viewport.size.x,
-                    viewport.pos.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewport.size.y};
+            return {viewport.pos.x + projected->x,
+                    viewport.pos.y + projected->y};
         };
 
         const auto isVisible = [&](const glm::vec3& pos) -> bool {
-            const glm::vec4 clip = view_proj * glm::vec4(pos, 1.0f);
-            if (clip.w <= 0.0f)
+            const auto projected = lfs::rendering::projectWorldPoint(
+                vp.getRotationMatrix(),
+                vp.getTranslation(),
+                vp_size,
+                pos,
+                settings.focal_length_mm);
+            if (!projected)
                 return false;
-            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            return std::abs(ndc.x) <= NDC_CULL_MARGIN && std::abs(ndc.y) <= NDC_CULL_MARGIN;
+            const float margin_x = (NDC_CULL_MARGIN - 1.0f) * 0.5f * viewport.size.x;
+            const float margin_y = (NDC_CULL_MARGIN - 1.0f) * 0.5f * viewport.size.y;
+            return projected->x >= -margin_x &&
+                   projected->x <= viewport.size.x + margin_x &&
+                   projected->y >= -margin_y &&
+                   projected->y <= viewport.size.y + margin_y;
         };
 
         const auto toColor = [](const ImVec4& c, float alpha) -> glm::vec4 {
@@ -661,9 +672,9 @@ namespace lfs::vis::gui {
             const float half_w = half_h * SENSOR_ASPECT;
 
             const glm::mat3 rot_mat = glm::mat3_cast(kf.rotation);
-            const glm::vec3 forward = rot_mat[2];
-            const glm::vec3 up = -rot_mat[1];
-            const glm::vec3 right = rot_mat[0];
+            const glm::vec3 forward = rendering::cameraForward(rot_mat);
+            const glm::vec3 up = rendering::cameraUp(rot_mat);
+            const glm::vec3 right = rendering::cameraRight(rot_mat);
 
             const glm::vec3 apex = kf.position;
 
@@ -704,9 +715,9 @@ namespace lfs::vis::gui {
                 const float ph_half_w = ph_half_h * SENSOR_ASPECT;
 
                 const glm::mat3 rot_mat = glm::mat3_cast(state.rotation);
-                const glm::vec3 forward = rot_mat[2];
-                const glm::vec3 up = -rot_mat[1];
-                const glm::vec3 right = rot_mat[0];
+                const glm::vec3 forward = rendering::cameraForward(rot_mat);
+                const glm::vec3 up = rendering::cameraUp(rot_mat);
+                const glm::vec3 right = rendering::cameraRight(rot_mat);
 
                 const glm::vec3 apex = state.position;
                 const glm::vec3 base_center = apex + forward * PLAYHEAD_FRUSTUM_DEPTH;

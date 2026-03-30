@@ -561,7 +561,7 @@ void lfs::rendering::forward(
         selection_mask,
         cursor_active,
         cursor_x,
-        cursor_y,
+        cursor_active ? (static_cast<float>(height) - cursor_y) : cursor_y,
         cursor_radius * cursor_radius, // Pass squared radius for efficient comparison
         preview_selection_add_mode,
         preview_selection_out,
@@ -595,19 +595,20 @@ void lfs::rendering::forward(
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
-    // Copy screen positions if requested (for interactive overlay queries)
-    // Note: When visibility filtering is active, screen positions are written directly
-    // in the kernel using global_idx, so this copy is only needed without filtering
+    // Export screen positions in window coordinates (top-left origin) for GUI tools.
     if (screen_positions_out != nullptr && visible_indices == nullptr) {
-        cudaMemcpyAsync(screen_positions_out, per_primitive_buffers.mean2d,
-                        sizeof(float2) * n_primitives, cudaMemcpyDeviceToDevice, stream);
+        constexpr int BLOCK = 256;
+        const int grid_size = (n_primitives + BLOCK - 1) / BLOCK;
+        copy_screen_positions_kernel<<<grid_size, BLOCK, 0, stream>>>(
+            per_primitive_buffers.mean2d,
+            screen_positions_out,
+            static_cast<float>(height),
+            n_primitives);
 
         // In desaturate mode, invalidate screen positions for outside gaussians
         // Check crop box desaturate, ellipsoid desaturate, and depth filter
         const bool has_view_volume = (view_volume_transform != nullptr);
         if (crop_desaturate || ellipsoid_desaturate || has_view_volume) {
-            constexpr int BLOCK = 256;
-            const int grid_size = (n_primitives + BLOCK - 1) / BLOCK;
             invalidate_outside_crop_kernel<<<grid_size, BLOCK, 0, stream>>>(
                 screen_positions_out, per_primitive_buffers.outside_crop, n_primitives);
         }

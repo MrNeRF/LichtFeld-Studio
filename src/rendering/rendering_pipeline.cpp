@@ -6,6 +6,7 @@
 #include "core/camera.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "gl_state_guard.hpp"
 #include "gs_rasterizer_tensor.hpp"
 #include "image_layout.hpp"
@@ -31,6 +32,7 @@ namespace lfs::rendering {
                               alloc_size.x > 0 ? static_cast<float>(render_size.x) / static_cast<float>(alloc_size.x) : 1.0f,
                               alloc_size.y > 0 ? static_cast<float>(render_size.y) / static_cast<float>(alloc_size.y) : 1.0f}},
                 .depth = {.id = depth_texture, .size = alloc_size, .texcoord_scale = {alloc_size.x > 0 ? static_cast<float>(render_size.x) / static_cast<float>(alloc_size.x) : 1.0f, alloc_size.y > 0 ? static_cast<float>(render_size.y) / static_cast<float>(alloc_size.y) : 1.0f}},
+                .flip_y = false,
                 .depth_is_ndc = true,
                 .near_plane = DEFAULT_NEAR_PLANE,
                 .far_plane = far_plane,
@@ -40,27 +42,7 @@ namespace lfs::rendering {
         [[nodiscard]] glm::mat4 buildPointCloudViewMatrix(
             const RenderingPipeline::RasterRequest& request,
             const bool apply_first_model_transform = false) {
-            glm::mat3 flip_yz = glm::mat3(
-                1, 0, 0,
-                0, -1, 0,
-                0, 0, -1);
-
-            glm::mat3 rotation_inv = glm::transpose(request.view_rotation);
-            glm::vec3 translation_inv = -rotation_inv * request.view_translation;
-
-            rotation_inv = flip_yz * rotation_inv;
-            translation_inv = flip_yz * translation_inv;
-
-            glm::mat4 view(1.0f);
-            for (int i = 0; i < 3; ++i) {
-                for (int j = 0; j < 3; ++j) {
-                    view[i][j] = rotation_inv[i][j];
-                }
-            }
-            view[3][0] = translation_inv.x;
-            view[3][1] = translation_inv.y;
-            view[3][2] = translation_inv.z;
-            view[3][3] = 1.0f;
+            glm::mat4 view = request.getViewMatrix();
 
             if (apply_first_model_transform && !request.model_transforms.empty()) {
                 view = view * request.model_transforms[0];
@@ -71,9 +53,7 @@ namespace lfs::rendering {
 
         [[nodiscard]] glm::mat4 buildPointCloudProjectionMatrix(
             const RenderingPipeline::RasterRequest& request) {
-            glm::mat4 projection = request.getProjectionMatrix();
-            projection[1][1] *= -1.0f;
-            return projection;
+            return request.getProjectionMatrix();
         }
 
         [[nodiscard]] bool tensorMatchesGaussianCount(const Tensor* const tensor,
@@ -721,6 +701,9 @@ namespace lfs::rendering {
                     result.image = image_hwc.permute({2, 0, 1}).contiguous();
                     result.valid = true;
                     result.external_depth_texture = persistent_render_target_->depthTexture();
+                    result.depth_texcoord_scale = {
+                        persistent_fbo_width_ > 0 ? static_cast<float>(width) / static_cast<float>(persistent_fbo_width_) : 1.0f,
+                        persistent_fbo_height_ > 0 ? static_cast<float>(height) / static_cast<float>(persistent_fbo_height_) : 1.0f};
                     result.depth_is_ndc = true;
                 } else {
                     LOG_TRACE("FBO interop read failed: {}", read_result.error());
@@ -767,6 +750,9 @@ namespace lfs::rendering {
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
             }
             result.external_depth_texture = persistent_render_target_->depthTexture();
+            result.depth_texcoord_scale = {
+                persistent_fbo_width_ > 0 ? static_cast<float>(width) / static_cast<float>(persistent_fbo_width_) : 1.0f,
+                persistent_fbo_height_ > 0 ? static_cast<float>(height) / static_cast<float>(persistent_fbo_height_) : 1.0f};
             result.depth_is_ndc = true;
             result.valid = true;
         }
@@ -891,24 +877,24 @@ namespace lfs::rendering {
     Result<lfs::core::Camera> RenderingPipeline::createCamera(const RasterRequest& request) {
         LOG_TIMER_TRACE("RenderingPipeline::createCamera");
 
-        // Convert view matrix to camera matrix
-        std::vector<float> R_data = {
-            request.view_rotation[0][0], request.view_rotation[1][0], request.view_rotation[2][0],
-            request.view_rotation[0][1], request.view_rotation[1][1], request.view_rotation[2][1],
-            request.view_rotation[0][2], request.view_rotation[1][2], request.view_rotation[2][2]};
+        const glm::mat3 raster_camera_to_world =
+            rasterCameraToWorldFromVisualizerRotation(request.view_rotation);
+        const glm::mat3 world_to_camera = glm::transpose(raster_camera_to_world);
+        const glm::vec3 translation = -world_to_camera * request.view_translation;
+
+        std::vector<float> R_data;
+        R_data.reserve(9);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                R_data.push_back(world_to_camera[col][row]);
+            }
+        }
 
         auto R_tensor = Tensor::from_vector(R_data, {3, 3}, lfs::core::Device::CPU);
-
-        std::vector<float> t_data = {
-            request.view_translation[0],
-            request.view_translation[1],
-            request.view_translation[2]};
-
-        auto t_tensor = Tensor::from_vector(t_data, {3, 1}, lfs::core::Device::CPU);
-
-        // Convert from view to camera space
-        R_tensor = R_tensor.transpose(0, 1);
-        t_tensor = (-R_tensor.mm(t_tensor)).squeeze();
+        auto t_tensor = Tensor::from_vector(
+            std::vector<float>{translation.x, translation.y, translation.z},
+            {3},
+            lfs::core::Device::CPU);
 
         // Compute field of view from focal length (single conversion point)
         const float vfov_rad = focalLengthToVFovRad(request.focal_length_mm);
