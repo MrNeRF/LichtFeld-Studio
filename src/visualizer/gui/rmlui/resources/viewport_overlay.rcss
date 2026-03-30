@@ -8,6 +8,13 @@ body {
     position: relative;
 }
 
+.panel-toolbar-root {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    pointer-events: none;
+}
+
 .toolbar-container {
     display: flex;
     padding: 6dp;
@@ -25,6 +32,7 @@ body {
     left: 10dp;
     top: 5dp;
     flex-direction: column;
+    pointer-events: auto;
 }
 
 .toolbar-hcenter {

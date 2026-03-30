@@ -21,7 +21,7 @@ namespace lfs::vis::gui {
         // right_panel_width_ intentionally not loaded — always start at default
         scene_panel_ratio_ = state.scene_panel_ratio;
         python_console_width_ = state.python_console_width;
-        show_sequencer_ = state.show_sequencer;
+        show_sequencer_ = false;
     }
 
     void PanelLayoutManager::saveState() const {

@@ -11,11 +11,15 @@ namespace lfs::vis {
     void PresentPass::execute(lfs::rendering::RenderingEngine& engine,
                               const FrameContext& ctx,
                               FrameResources& res) {
-        if (res.split_view_executed)
-            return;
+        const bool has_gpu_frame = res.cached_gpu_frame && res.cached_gpu_frame->valid();
 
-        if (!res.cached_result.image || res.cached_result_size.x <= 0 || res.cached_result_size.y <= 0)
+        if (res.split_view_executed && !has_gpu_frame) {
             return;
+        }
+
+        if (!has_gpu_frame) {
+            return;
+        }
 
         if (res.splats_presented)
             return;
@@ -25,8 +29,9 @@ namespace lfs::vis {
                      ctx.settings.background_color.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        const auto present_result = engine.presentToScreen(
-            res.cached_result, ctx.viewport_pos, res.cached_result_size);
+        auto present_result = engine.presentGpuFrame(*res.cached_gpu_frame,
+                                                     ctx.viewport_pos,
+                                                     res.cached_result_size);
         if (present_result) {
             res.splats_presented = true;
         } else {

@@ -7,6 +7,17 @@
 
 namespace {
 
+    TEST(ParameterManagerTest, DefaultStrategyIsMrnf) {
+        lfs::vis::ParameterManager manager;
+        const auto load_result = manager.ensureLoaded();
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+
+        EXPECT_EQ(manager.getActiveStrategy(), "mrnf");
+        EXPECT_EQ(manager.getActiveParams().strategy, "mrnf");
+        EXPECT_EQ(lfs::core::param::OptimizationParameters{}.strategy, "mrnf");
+        EXPECT_EQ(lfs::core::param::OptimizationParameters::mcmc_defaults().strategy, "mcmc");
+    }
+
     TEST(ParameterManagerTest, ImportTrainingParamsRestoresResolvedCheckpointState) {
         lfs::vis::ParameterManager manager;
         const auto load_result = manager.ensureLoaded();
@@ -90,8 +101,8 @@ namespace {
         manager.importTrainingParams(checkpoint_params);
 
         lfs::core::param::TrainingParameters dataset_params;
-        dataset_params.optimization = lfs::core::param::OptimizationParameters::adc_defaults();
-        dataset_params.optimization.strategy = "adc";
+        dataset_params.optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        dataset_params.optimization.strategy = "mcmc";
         dataset_params.optimization.iterations = 900;
         dataset_params.dataset.images = "images_8";
         dataset_params.dataset.resize_factor = 4;
@@ -100,15 +111,15 @@ namespace {
 
         manager.setSessionDefaults(dataset_params);
 
-        EXPECT_EQ(manager.getActiveStrategy(), "adc");
-        EXPECT_EQ(manager.getActiveParams().strategy, "adc");
+        EXPECT_EQ(manager.getActiveStrategy(), "mcmc");
+        EXPECT_EQ(manager.getActiveParams().strategy, "mcmc");
         EXPECT_EQ(manager.getActiveParams().iterations, 900u);
 
         const auto& dataset = manager.getDatasetConfig();
         EXPECT_EQ(dataset.images, "images_8");
         EXPECT_EQ(dataset.resize_factor, 4);
         const auto recreated = manager.createForDataset("/tmp/override_dataset", "/tmp/override_output");
-        EXPECT_EQ(recreated.optimization.strategy, "adc");
+        EXPECT_EQ(recreated.optimization.strategy, "mcmc");
         EXPECT_EQ(recreated.optimization.iterations, 900u);
         EXPECT_EQ(recreated.dataset.images, "images_8");
         EXPECT_EQ(recreated.dataset.data_path, "/tmp/override_dataset");

@@ -3,8 +3,8 @@
     <link type="text/rcss" href="viewport_overlay.rcss"/>
 </head>
 <body id="overlay-body">
-    <div id="toolbar-root">
-        <div id="utility-toolbar" class="toolbar-container toolbar-vertical">
+    <div id="primary-toolbar-root" class="panel-toolbar-root">
+        <div id="primary-utility-toolbar" class="toolbar-container toolbar-vertical">
             <div class="icon-btn"
                  data-for="button : utility_primary_buttons"
                  data-attr-id="button.button_id"
@@ -51,7 +51,7 @@
         </div>
 
         <div class="toolbar-hcenter" style="top: 5dp;">
-            <div id="gizmo-toolbar" class="toolbar-container"
+            <div id="primary-gizmo-toolbar" class="toolbar-container"
                  data-class-hidden="!show_gizmo_toolbar">
                 <div class="icon-btn"
                      data-for="button : gizmo_buttons"
@@ -67,7 +67,7 @@
         </div>
 
         <div class="toolbar-hcenter" style="top: 49dp;">
-            <div id="submode-toolbar" class="subtoolbar-container hidden"
+            <div id="primary-submode-toolbar" class="subtoolbar-container hidden"
                  data-class-hidden="!show_submode_toolbar">
                 <div class="icon-btn"
                      data-for="button : submode_buttons"
@@ -83,11 +83,100 @@
         </div>
 
         <div class="toolbar-hcenter" style="top: 83dp;">
-            <div id="pivot-toolbar" class="subtoolbar-container hidden"
+            <div id="primary-pivot-toolbar" class="subtoolbar-container hidden"
                  data-class-hidden="!show_pivot_toolbar">
                 <div class="icon-btn"
                      data-for="button : pivot_buttons"
                      data-attr-id="button.button_id"
+                     data-class-selected="button.selected"
+                     data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="secondary-toolbar-root" class="panel-toolbar-root hidden">
+        <div id="secondary-utility-toolbar" class="toolbar-container toolbar-vertical">
+            <div class="icon-btn"
+                 data-for="button : utility_primary_buttons"
+                 data-class-selected="button.selected"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text"
+                 data-attrif-disabled="!button.enabled"
+                 data-event-click="toolbar_action(button.action, button.value)">
+                <img data-attr-src="button.icon_src" />
+            </div>
+            <div class="toolbar-separator" data-if="show_render_controls"></div>
+            <div class="icon-btn"
+                 data-for="button : render_mode_buttons"
+                 data-class-selected="button.selected"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text"
+                 data-attrif-disabled="!button.enabled"
+                 data-event-click="toolbar_action(button.action, button.value)">
+                <img data-attr-src="button.icon_src" />
+            </div>
+            <div class="toolbar-separator" data-if="show_render_controls"></div>
+            <div class="icon-btn"
+                 data-for="button : projection_buttons"
+                 data-class-selected="button.selected"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text"
+                 data-attrif-disabled="!button.enabled"
+                 data-event-click="toolbar_action(button.action, button.value)">
+                <img data-attr-src="button.icon_src" />
+            </div>
+            <div class="toolbar-separator" data-if="show_render_controls"></div>
+            <div class="icon-btn"
+                 data-for="button : utility_extra_buttons"
+                 data-class-selected="button.selected"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text"
+                 data-attrif-disabled="!button.enabled"
+                 data-event-click="toolbar_action(button.action, button.value)">
+                <img data-attr-src="button.icon_src" />
+            </div>
+        </div>
+
+        <div class="toolbar-hcenter" style="top: 5dp;">
+            <div id="secondary-gizmo-toolbar" class="toolbar-container"
+                 data-class-hidden="!show_gizmo_toolbar">
+                <div class="icon-btn"
+                     data-for="button : gizmo_buttons"
+                     data-class-selected="button.selected"
+                     data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
+        </div>
+
+        <div class="toolbar-hcenter" style="top: 49dp;">
+            <div id="secondary-submode-toolbar" class="subtoolbar-container hidden"
+                 data-class-hidden="!show_submode_toolbar">
+                <div class="icon-btn"
+                     data-for="button : submode_buttons"
+                     data-class-selected="button.selected"
+                     data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-title="button.tooltip_text"
+                     data-attrif-disabled="!button.enabled"
+                     data-event-click="toolbar_action(button.action, button.value)">
+                    <img data-attr-src="button.icon_src" />
+                </div>
+            </div>
+        </div>
+
+        <div class="toolbar-hcenter" style="top: 83dp;">
+            <div id="secondary-pivot-toolbar" class="subtoolbar-container hidden"
+                 data-class-hidden="!show_pivot_toolbar">
+                <div class="icon-btn"
+                     data-for="button : pivot_buttons"
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
                      data-attr-title="button.tooltip_text"

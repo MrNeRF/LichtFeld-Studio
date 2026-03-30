@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include <cstdint>
 #include <iosfwd>
+#include <string>
 #include <vector>
 
 namespace lfs::training {
@@ -71,6 +72,12 @@ namespace lfs::training {
 
         /// Deserialize inference weights.
         void deserialize_inference(std::istream& is);
+
+        /// Copy inference weights from another controller pool using explicit source camera indices
+        /// for each target camera. Optimizer state is reset.
+        [[nodiscard]] std::string copy_inference_weights_from(
+            const PPISPControllerPool& source,
+            const std::vector<int>& source_camera_indices);
 
     private:
         void adam_update(lfs::core::Tensor& param, lfs::core::Tensor& exp_avg,

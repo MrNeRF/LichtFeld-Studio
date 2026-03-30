@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
+#include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <print>
@@ -19,7 +20,7 @@ namespace lfs::app {
     namespace {
 
         constexpr size_t SH_CHANNELS = 3;
-        constexpr const char* VALID_EXTENSIONS[] = {".ply", ".sog", ".spz", ".resume"};
+        constexpr const char* VALID_EXTENSIONS[] = {".ply", ".sog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume"};
 
         enum class OverwriteChoice { YES,
                                      NO,
@@ -63,7 +64,10 @@ namespace lfs::app {
                 for (const auto& entry : std::filesystem::directory_iterator(path)) {
                     if (!entry.is_regular_file())
                         continue;
-                    const auto ext = entry.path().extension().string();
+                    auto ext = entry.path().extension().string();
+                    std::transform(ext.begin(), ext.end(), ext.begin(), [](const unsigned char c) {
+                        return static_cast<char>(std::tolower(c));
+                    });
                     for (const auto* valid : VALID_EXTENSIONS) {
                         if (ext == valid) {
                             files.push_back(entry.path());
@@ -83,6 +87,9 @@ namespace lfs::app {
             case param::OutputFormat::SOG: return ".sog";
             case param::OutputFormat::SPZ: return ".spz";
             case param::OutputFormat::HTML: return ".html";
+            case param::OutputFormat::USD: return ".usd";
+            case param::OutputFormat::USDA: return ".usda";
+            case param::OutputFormat::USDC: return ".usdc";
             }
             return ".ply";
         }
@@ -156,6 +163,11 @@ namespace lfs::app {
             case param::OutputFormat::HTML:
                 result = lfs::io::export_html(*splat, {.output_path = output, .kmeans_iterations = params.sog_iterations});
                 break;
+            case param::OutputFormat::USD:
+            case param::OutputFormat::USDA:
+            case param::OutputFormat::USDC:
+                result = lfs::io::save_usd(*splat, {.output_path = output});
+                break;
             }
 
             if (!result) {
@@ -174,7 +186,7 @@ namespace lfs::app {
         const auto files = getInputFiles(params.input_path);
         if (files.empty()) {
             LOG_ERROR("No convertible files in: {}", path_to_utf8(params.input_path));
-            std::println(stderr, "Error: No .ply, .sog, or .resume files found");
+            std::println(stderr, "Error: No .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, or .resume files found");
             return 1;
         }
 

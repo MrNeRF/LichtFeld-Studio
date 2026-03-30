@@ -4,7 +4,6 @@
 
 #include "py_operator.hpp"
 #include "py_ui.hpp"
-#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator.hpp"
 #include "visualizer/operator/operator_id.hpp"
 #include "visualizer/operator/operator_registry.hpp"
@@ -146,19 +145,6 @@ namespace lfs::python {
             },
             nb::arg("id"),
             "Get operator descriptor by ID (None if not found)");
-
-        ops.def(
-            "undo", [] { vis::op::undoHistory().undo(); },
-            "Undo the last operation");
-        ops.def(
-            "redo", [] { vis::op::undoHistory().redo(); },
-            "Redo the last undone operation");
-        ops.def(
-            "can_undo", [] { return vis::op::undoHistory().canUndo(); },
-            "Check if undo is available");
-        ops.def(
-            "can_redo", [] { return vis::op::undoHistory().canRedo(); },
-            "Check if redo is available");
         ops.def(
             "has_modal", [] { return vis::op::operators().hasModalOperator(); },
             "Check if a modal operator is running");

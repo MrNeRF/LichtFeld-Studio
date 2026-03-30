@@ -83,13 +83,6 @@ namespace lfs::rendering {
         EBO cube_ebo_;
         VBO instance_vbo_; // For positions and colors
 
-        // Framebuffer resources using RAII
-        FBO fbo_;
-        Texture color_texture_;
-        Texture depth_texture_;
-        int fbo_width_ = 0;
-        int fbo_height_ = 0;
-
         // Shaders
         ManagedShader shader_;
 

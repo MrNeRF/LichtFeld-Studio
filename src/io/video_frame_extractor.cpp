@@ -4,6 +4,7 @@
 
 #include "video_frame_extractor.hpp"
 #include "core/include/core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "nvcodec_image_loader.hpp"
 #include "video/color_convert.cuh"
 
@@ -25,6 +26,19 @@ namespace lfs::io {
 
     namespace {
         constexpr int JPEG_BATCH_SIZE = 32;
+
+        bool write_image_file(const std::filesystem::path& path,
+                              int width,
+                              int height,
+                              const void* data,
+                              ImageFormat format,
+                              int jpg_quality) {
+            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            if (format == ImageFormat::JPG) {
+                return stbi_write_jpg(path_utf8.c_str(), width, height, 3, data, jpg_quality) != 0;
+            }
+            return stbi_write_png(path_utf8.c_str(), width, height, 3, data, width * 3) != 0;
+        }
 
         void write_jpeg_to_file(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
             std::ofstream file(path, std::ios::binary);
@@ -87,7 +101,9 @@ namespace lfs::io {
             bool using_hw_decode = false;
 
             try {
-                if (avformat_open_input(&fmt_ctx, params.video_path.string().c_str(), nullptr,
+                const std::string video_path_utf8 = lfs::core::path_to_utf8(params.video_path);
+
+                if (avformat_open_input(&fmt_ctx, video_path_utf8.c_str(), nullptr,
                                         nullptr) < 0) {
                     error = "Failed to open video file";
                     return false;
@@ -393,12 +409,10 @@ namespace lfs::io {
                             if (batch_idx >= JPEG_BATCH_SIZE) {
                                 flush_jpeg_batch();
                             }
-                        } else if (params.format == ImageFormat::JPG) {
-                            stbi_write_jpg(filename.string().c_str(), out_width, out_height, 3,
-                                           cpu_contiguous_buffer, params.jpg_quality);
-                        } else {
-                            stbi_write_png(filename.string().c_str(), out_width, out_height, 3,
-                                           cpu_contiguous_buffer, out_width * 3);
+                        } else if (!write_image_file(filename, out_width, out_height,
+                                                     cpu_contiguous_buffer, params.format,
+                                                     params.jpg_quality)) {
+                            LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
                         }
                     }
 
@@ -430,12 +444,10 @@ namespace lfs::io {
                         if (batch_idx >= JPEG_BATCH_SIZE) {
                             flush_jpeg_batch();
                         }
-                    } else if (params.format == ImageFormat::JPG) {
-                        stbi_write_jpg(filename.string().c_str(), out_width, out_height, 3,
-                                       cpu_contiguous_buffer, params.jpg_quality);
-                    } else {
-                        stbi_write_png(filename.string().c_str(), out_width, out_height, 3,
-                                       cpu_contiguous_buffer, out_width * 3);
+                    } else if (!write_image_file(filename, out_width, out_height,
+                                                 cpu_contiguous_buffer, params.format,
+                                                 params.jpg_quality)) {
+                        LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
                     }
 
                     saved_count++;

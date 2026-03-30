@@ -12,6 +12,10 @@ uniform float dividerWidth;
 uniform vec2 leftTexcoordScale;
 uniform vec2 rightTexcoordScale;
 uniform vec2 viewportSize;
+uniform vec2 leftRegion;
+uniform vec2 rightRegion;
+uniform bool normalizeLeftX = false;
+uniform bool normalizeRightX = false;
 uniform bool flipLeftY = false;
 uniform bool flipRightY = false;
 
@@ -27,11 +31,23 @@ const int GRIP_LINE_COUNT = 2;
 void main() {
     vec2 uv = TexCoord;
 
+    float leftX = uv.x;
+    if (normalizeLeftX) {
+        float leftWidth = max(leftRegion.y - leftRegion.x, 1e-6);
+        leftX = clamp((uv.x - leftRegion.x) / leftWidth, 0.0, 1.0);
+    }
+
+    float rightX = uv.x;
+    if (normalizeRightX) {
+        float rightWidth = max(rightRegion.y - rightRegion.x, 1e-6);
+        rightX = clamp((uv.x - rightRegion.x) / rightWidth, 0.0, 1.0);
+    }
+
     float leftY = flipLeftY ? (1.0 - uv.y) : uv.y;
     float rightY = flipRightY ? (1.0 - uv.y) : uv.y;
 
-    vec4 leftColor = texture(leftTexture, vec2(uv.x, leftY) * leftTexcoordScale);
-    vec4 rightColor = texture(rightTexture, vec2(uv.x, rightY) * rightTexcoordScale);
+    vec4 leftColor = texture(leftTexture, vec2(leftX, leftY) * leftTexcoordScale);
+    vec4 rightColor = texture(rightTexture, vec2(rightX, rightY) * rightTexcoordScale);
 
     vec4 color = (uv.x < splitPosition) ? leftColor : rightColor;
 

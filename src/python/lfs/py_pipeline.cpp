@@ -3,14 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_pipeline.hpp"
-#include "core/logger.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/operation/operation.hpp"
 #include "visualizer/operation/ops/edit_ops.hpp"
 #include "visualizer/operation/ops/select_ops.hpp"
 #include "visualizer/operation/ops/transform_ops.hpp"
 #include "visualizer/operation/pipeline.hpp"
-#include "visualizer/operation/undo_history.hpp"
 
 #include <glm/glm.hpp>
 #include <nanobind/stl/optional.h>
@@ -20,7 +18,6 @@
 namespace lfs::python {
 
     namespace {
-
         vis::op::OperatorProperties dict_to_props(const nb::dict& properties) {
             vis::op::OperatorProperties props;
             for (const auto& [key, value] : properties) {
@@ -166,22 +163,6 @@ namespace lfs::python {
             "scale", [](nb::kwargs kwargs) { return make_stage<vis::op::TransformScale>(kwargs); }, "Create scale stage");
         transform.def(
             "set", [](nb::kwargs kwargs) { return make_stage<vis::op::TransformSet>(kwargs); }, "Create set-transform stage");
-
-        auto undo = pipe.def_submodule("undo", "Unified undo system");
-        undo.def(
-            "undo", [] { vis::op::undoHistory().undo(); }, "Undo last operation");
-        undo.def(
-            "redo", [] { vis::op::undoHistory().redo(); }, "Redo last undone operation");
-        undo.def(
-            "can_undo", [] { return vis::op::undoHistory().canUndo(); }, "Check if undo is available");
-        undo.def(
-            "can_redo", [] { return vis::op::undoHistory().canRedo(); }, "Check if redo is available");
-        undo.def(
-            "undo_name", [] { return vis::op::undoHistory().undoName(); }, "Get name of next undo operation");
-        undo.def(
-            "redo_name", [] { return vis::op::undoHistory().redoName(); }, "Get name of next redo operation");
-        undo.def(
-            "clear", [] { vis::op::undoHistory().clear(); }, "Clear undo history");
     }
 
 } // namespace lfs::python

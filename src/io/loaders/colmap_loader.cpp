@@ -6,11 +6,13 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/colmap.hpp"
 #include "formats/ply.hpp"
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/loaders/loader_utils.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -100,7 +102,7 @@ namespace lfs::io {
 
         // Determine images folder
         std::string actual_images_folder = options.images_folder;
-        std::filesystem::path image_dir = path / actual_images_folder;
+        std::filesystem::path image_dir = path / lfs::core::utf8_to_path(actual_images_folder);
 
         auto is_dataset_root = [&](const std::filesystem::path& candidate) {
             if (candidate.empty()) {
@@ -204,14 +206,7 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating {} camera objects", cameras.size());
 
-            bool images_have_alpha = false;
-            if (!cameras.empty()) {
-                try {
-                    auto [w, h, c] = lfs::core::get_image_info(cameras[0]->image_path());
-                    images_have_alpha = (c == 4);
-                } catch (const std::exception&) {
-                }
-            }
+            const bool images_have_alpha = detect_camera_alpha(cameras);
 
             if (options.progress) {
                 options.progress(60.0f, "Loading point cloud...");

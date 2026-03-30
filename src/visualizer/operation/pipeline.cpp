@@ -106,7 +106,7 @@ namespace lfs::vis::op {
         }
 
         snapshot->captureAfter();
-        undoHistory().push(std::move(snapshot));
+        pushSceneSnapshotIfChanged(std::move(snapshot));
 
         return OperationResult::success(std::move(data));
     }

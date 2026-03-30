@@ -2225,6 +2225,11 @@ namespace lfs::core {
             std::vector<uint8_t> result(numel());
 
             if (device_ == Device::CUDA) {
+                if (stream()) {
+                    CHECK_CUDA(cudaStreamSynchronize(stream()));
+                } else {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
                 CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
                 std::memcpy(result.data(), data_ptr(), bytes());
@@ -2238,6 +2243,11 @@ namespace lfs::core {
             std::vector<uint8_t> result(numel());
 
             if (device_ == Device::CUDA) {
+                if (stream()) {
+                    CHECK_CUDA(cudaStreamSynchronize(stream()));
+                } else {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
                 CHECK_CUDA(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
             } else {
                 const unsigned char* src = ptr<unsigned char>();

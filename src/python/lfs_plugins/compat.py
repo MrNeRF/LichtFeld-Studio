@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover - packaging is expected in release build
     SpecifierSet = Version = None
 
 
-LICHTFELD_VERSION = "0.4.2"
+LICHTFELD_VERSION = "0.5.0"
 PLUGIN_API_VERSION = "1.0"
 SUPPORTED_PLUGIN_FEATURES = (
     "capabilities.v1",

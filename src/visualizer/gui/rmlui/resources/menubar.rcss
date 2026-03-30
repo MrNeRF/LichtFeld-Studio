@@ -4,7 +4,7 @@ div {
 
 body {
     font-family: Inter;
-    font-size: 11dp;
+    font-size: 12dp;
     width: 100%;
     display: flex;
     flex-direction: column;

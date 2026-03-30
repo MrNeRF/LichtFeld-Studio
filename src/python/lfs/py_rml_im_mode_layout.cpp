@@ -58,7 +58,8 @@ namespace lfs::python {
             .def("stepper_float", &RmlImModeLayout::stepper_float, nb::arg("label"), nb::arg("value"),
                  nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f})
             .def("path_input", &RmlImModeLayout::path_input, nb::arg("label"), nb::arg("value"),
-                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "")
+                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
+                 "Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.")
             // Color
             .def("color_edit3", &RmlImModeLayout::color_edit3, nb::arg("label"), nb::arg("color"))
             .def("color_edit4", &RmlImModeLayout::color_edit4, nb::arg("label"), nb::arg("color"))

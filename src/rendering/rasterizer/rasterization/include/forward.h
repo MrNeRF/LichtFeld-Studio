@@ -6,6 +6,7 @@
 
 #include "helper_math.h"
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <functional>
 
 namespace lfs::rendering {
@@ -86,15 +87,14 @@ namespace lfs::rendering {
         int num_transforms = 0,
         const uint8_t* selection_mask = nullptr,
         float2* screen_positions_out = nullptr,
-        bool brush_active = false,
-        float brush_x = 0.0f,
-        float brush_y = 0.0f,
-        float brush_radius = 0.0f,
-        bool brush_add_mode = true,
-        bool* brush_selection_out = nullptr,
-        bool brush_saturation_mode = false,
-        float brush_saturation_amount = 0.0f,
-        bool selection_mode_rings = false,
+        bool cursor_active = false,
+        float cursor_x = 0.0f,
+        float cursor_y = 0.0f,
+        float cursor_radius = 0.0f,
+        bool preview_selection_add_mode = true,
+        bool* preview_selection_out = nullptr,
+        bool cursor_saturation_preview = false,
+        float cursor_saturation_amount = 0.0f,
         bool show_center_markers = false,
         const float* crop_box_transform = nullptr,
         const float3* crop_box_min = nullptr,
@@ -107,22 +107,24 @@ namespace lfs::rendering {
         bool ellipsoid_inverse = false,
         bool ellipsoid_desaturate = false,
         int ellipsoid_parent_node_index = -1,
-        const float* depth_filter_transform = nullptr,
-        const float3* depth_filter_min = nullptr,
-        const float3* depth_filter_max = nullptr,
+        const float* view_volume_transform = nullptr,
+        const float3* view_volume_min = nullptr,
+        const float3* view_volume_max = nullptr,
+        bool view_volume_cull = false,
         const bool* deleted_mask = nullptr,
         unsigned long long* hovered_depth_id = nullptr,
-        int highlight_gaussian_id = -1,
-        const bool* selected_node_mask = nullptr,
+        int focused_gaussian_id = -1,
+        const bool* emphasized_node_mask = nullptr,
         int num_selected_nodes = 0,
-        bool desaturate_unselected = false,
+        bool dim_non_emphasized = false,
         const bool* node_visibility_mask = nullptr,
         int num_visibility_nodes = 0,
-        float selection_flash_intensity = 0.0f,
+        float emphasis_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
         bool mip_filter = false,
         const int* visible_indices = nullptr,
-        int visible_count = 0);
+        int visible_count = 0,
+        cudaStream_t stream = nullptr);
 
 } // namespace lfs::rendering

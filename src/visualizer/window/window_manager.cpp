@@ -68,6 +68,14 @@ namespace lfs::vis {
         SDL_Quit();
     }
 
+    void WindowManager::setInputController(InputController* ic) {
+        input_controller_ = ic;
+        input_router_.setInputController(ic);
+        if (input_controller_) {
+            input_controller_->setInputRouter(&input_router_);
+        }
+    }
+
     bool WindowManager::init() {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             std::cerr << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
@@ -228,6 +236,7 @@ namespace lfs::vis {
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             lfs::core::events::internal::WindowFocusLost{}.emit();
+            input_router_.onWindowFocusLost();
             if (input_controller_) {
                 input_controller_->onWindowFocusLost();
             }
@@ -250,7 +259,9 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
+            input_router_.beginMouseButton(action, event.button.x, event.button.y);
             input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
+            input_router_.endMouseButton(action);
             break;
         }
 
@@ -276,12 +287,20 @@ namespace lfs::vis {
                 break;
             if (!input_controller_)
                 break;
-            const int key = input::sdlScancodeToAppKey(event.key.scancode);
+            const int physical_key = input::sdlScancodeToAppKey(event.key.scancode);
+            // Resolve the unmodified layout key so bindings keep modifiers separate
+            // (for example, '=' + Shift stays KEY_EQUAL plus a Shift modifier).
+            int logical_key = input::sdlKeycodeToAppKey(
+                SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, false));
+            if (logical_key == input::KEY_UNKNOWN) {
+                logical_key = physical_key;
+            }
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
             const int mods = input::sdlModsToAppMods(event.key.mod);
-            input_controller_->handleKey(key, action, mods);
+            input_controller_->handleKey(
+                physical_key, logical_key, static_cast<int>(event.key.scancode), action, mods);
             break;
         }
 

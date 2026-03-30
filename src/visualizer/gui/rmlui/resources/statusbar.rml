@@ -43,6 +43,7 @@
         </div>
     </div>
     <div id="status-right">
+        <span id="gpu-model" class="dim hidden" data-class-hidden="!show_gpu_model">{{ gpu_model_text }}</span>
         <img id="gpu-icon" src="../icon/gpu.png" />
         <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>
         <span class="separator thin">|</span>

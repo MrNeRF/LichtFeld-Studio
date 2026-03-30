@@ -401,7 +401,7 @@ namespace lfs::mcp {
                     result.push_back(op_json);
                 }
 
-                return result;
+                return json{{"operations", result}};
             });
 
         registry.register_tool(

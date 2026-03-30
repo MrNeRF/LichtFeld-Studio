@@ -5,6 +5,7 @@
 import hashlib
 import json
 import logging
+import os
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -28,7 +29,10 @@ except ImportError:
 
 _log = logging.getLogger(__name__)
 
-REGISTRY_URL = "https://lichtfeld.github.io/plugin-registry"
+DEFAULT_REGISTRY_URLS = (
+    "https://lichtfeld.io/plugin-registry",
+    "https://lichtfeld.github.io/plugin-registry",
+)
 CACHE_TTL_HOURS = 1
 HTTP_TIMEOUT_SEC = 10
 
@@ -73,6 +77,8 @@ class RegistryClient:
         self._cache_dir = cache_dir or Path.home() / ".lichtfeld" / "cache" / "registry"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict] = None
+        override = os.environ.get("LICHTFELD_PLUGIN_REGISTRY_URL", "").strip()
+        self._registry_urls: Tuple[str, ...] = ((override,) if override else DEFAULT_REGISTRY_URLS)
 
     def search(
         self,
@@ -260,7 +266,9 @@ class RegistryClient:
                     return self._index
 
         try:
-            self._index = self._fetch_json(f"{REGISTRY_URL}/index.json")
+            self._index = self._fetch_json_with_fallback(
+                [f"{base_url}/index.json" for base_url in self._registry_urls]
+            )
             with open(cache_path, "w") as f:
                 json.dump(self._index, f)
             timestamp_path.touch()
@@ -279,6 +287,16 @@ class RegistryClient:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
             return json.loads(resp.read().decode())
 
+    def _fetch_json_with_fallback(self, urls: List[str]) -> Dict:
+        last_error: Exception | None = None
+        for url in urls:
+            try:
+                return self._fetch_json(url)
+            except Exception as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
     def _plugin_cache_path(self, namespace: str, name: str) -> Path:
         safe_namespace = self._safe_cache_component(namespace)
         safe_name = self._safe_cache_component(name)
@@ -288,11 +306,13 @@ class RegistryClient:
         namespace_q = quote(namespace, safe="")
         name_q = quote(name, safe="")
         full_id_q = quote(f"{namespace}:{name}", safe="")
-        urls = [
-            f"{REGISTRY_URL}/plugins/{namespace_q}/{name_q}.json",
-            f"{REGISTRY_URL}/plugins/{full_id_q}.json",
-            f"{REGISTRY_URL}/plugins/{name_q}.json",
-        ]
+        urls = []
+        for base_url in self._registry_urls:
+            urls.extend([
+                f"{base_url}/plugins/{namespace_q}/{name_q}.json",
+                f"{base_url}/plugins/{full_id_q}.json",
+                f"{base_url}/plugins/{name_q}.json",
+            ])
         deduped = []
         for url in urls:
             if url not in deduped:

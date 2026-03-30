@@ -1,0 +1,52 @@
+body.scrub-controls-demo {
+    font-family: Inter;
+    padding: 0;
+    margin: 0;
+    color: #eaf2ff;
+}
+
+.demo-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 12dp;
+    padding: 16dp;
+}
+
+.demo-header {
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+}
+
+.demo-title {
+    font-size: 16dp;
+    font-weight: bold;
+}
+
+.demo-note {
+    color: #a9b7c6;
+    font-size: 11dp;
+}
+
+.demo-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10dp;
+    padding: 14dp;
+    border-radius: 12dp;
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 24);
+    background-color: rgba(255, 255, 255, 10);
+}
+
+.demo-actions {
+    display: flex;
+    gap: 8dp;
+    justify-content: flex-end;
+}
+
+.demo-actions button {
+    padding: 6dp 12dp;
+    border-radius: 6dp;
+    border-width: 1dp;
+}

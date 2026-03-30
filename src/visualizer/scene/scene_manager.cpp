@@ -28,6 +28,7 @@
 #include "training/training_manager.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/rendering/model_renderability.hpp"
 #include <algorithm>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
@@ -40,15 +41,80 @@ namespace lfs::vis {
     namespace {
         constexpr float DEFAULT_VOXEL_SIZE = 0.01f;
 
+        [[nodiscard]] std::vector<float> closeScreenPolygon(std::vector<float> points) {
+            if (points.size() >= 6 &&
+                (points[0] != points[points.size() - 2] ||
+                 points[1] != points[points.size() - 1])) {
+                points.push_back(points[0]);
+                points.push_back(points[1]);
+            }
+            return points;
+        }
+
         template <typename TRenderable>
         [[nodiscard]] bool containsRenderableNode(const std::vector<TRenderable>& renderables, const core::NodeId node_id) {
             return std::ranges::any_of(renderables, [node_id](const auto& item) { return item.node_id == node_id; });
+        }
+
+        [[nodiscard]] op::SceneGraphCaptureOptions sceneGraphCaptureOptions(
+            const bool include_selected_nodes = true,
+            const bool include_scene_context = false) {
+            return op::SceneGraphCaptureOptions{
+                .mode = op::SceneGraphCaptureMode::FULL,
+                .include_selected_nodes = include_selected_nodes,
+                .include_scene_context = include_scene_context,
+            };
+        }
+
+        void pushSceneGraphHistoryEntry(SceneManager& scene_manager,
+                                        std::string label,
+                                        op::SceneGraphStateSnapshot before,
+                                        const std::vector<std::string>& after_roots,
+                                        const op::SceneGraphCaptureOptions options = sceneGraphCaptureOptions()) {
+            auto after = op::SceneGraphPatchEntry::captureState(scene_manager, after_roots, options);
+            op::undoHistory().push(
+                std::make_unique<op::SceneGraphPatchEntry>(scene_manager, std::move(label),
+                                                           std::move(before), std::move(after)));
+        }
+
+        void pushSceneGraphMetadataHistoryEntry(
+            SceneManager& scene_manager,
+            std::string label,
+            const std::vector<op::SceneGraphNodeMetadataSnapshot>& before,
+            const std::vector<op::SceneGraphNodeMetadataSnapshot>& after) {
+            std::vector<op::SceneGraphNodeMetadataDiff> diffs;
+            const size_t count = std::min(before.size(), after.size());
+            diffs.reserve(count);
+            for (size_t i = 0; i < count; ++i) {
+                diffs.push_back(op::SceneGraphNodeMetadataDiff{
+                    .before = before[i],
+                    .after = after[i],
+                });
+            }
+            if (!diffs.empty()) {
+                op::undoHistory().push(
+                    std::make_unique<op::SceneGraphMetadataEntry>(scene_manager, std::move(label), std::move(diffs)));
+            }
         }
     } // namespace
 
     using namespace lfs::core::events;
 
     SceneManager::SceneManager() {
+        core::prop::set_undo_callback(
+            [](const std::string& property_path,
+               const std::any& old_value,
+               const std::any& new_value,
+               std::function<void(const std::any&)> applier) {
+                if (!services().sceneOrNull()) {
+                    return;
+                }
+                op::undoHistory().push(std::make_unique<op::PropertyChangeUndoEntry>(
+                    property_path,
+                    old_value,
+                    new_value,
+                    std::move(applier)));
+            });
         setupEventHandlers();
         python::set_application_scene(&scene_);
         LOG_DEBUG("SceneManager initialized");
@@ -72,7 +138,17 @@ namespace lfs::vis {
         });
 
         cmd::SetNodeLocked::when([this](const auto& cmd) {
+            const auto* node = scene_.getNode(cmd.name);
+            if (!node || static_cast<bool>(node->locked) == cmd.locked) {
+                return;
+            }
+            const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {cmd.name});
             scene_.setNodeLocked(cmd.name, cmd.locked);
+            pushSceneGraphMetadataHistoryEntry(
+                *this,
+                "Set Lock State",
+                history_before,
+                op::SceneGraphMetadataEntry::captureNodes(*this, {cmd.name}));
         });
 
         cmd::ClearScene::when([this](const auto&) {
@@ -96,7 +172,7 @@ namespace lfs::vis {
             // Check if rendering manager has split view enabled (in PLY comparison mode)
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
-                if (settings.split_view_mode == lfs::vis::SplitViewMode::PLYComparison) {
+                if (lfs::vis::splitViewUsesPLYComparison(settings.split_view_mode)) {
                     // In split mode: advance the offset
                     services().renderingOrNull()->advanceSplitOffset();
                     LOG_DEBUG("Advanced split view offset");
@@ -155,19 +231,19 @@ namespace lfs::vis {
         });
 
         cmd::ReparentNode::when([this](const auto& cmd) {
-            handleReparentNode(cmd.node_name, cmd.new_parent_name);
+            reparentNode(cmd.node_name, cmd.new_parent_name);
         });
 
         cmd::AddGroup::when([this](const auto& cmd) {
-            handleAddGroup(cmd.name, cmd.parent_name);
+            addGroupNode(cmd.name, cmd.parent_name);
         });
 
         cmd::DuplicateNode::when([this](const auto& cmd) {
-            handleDuplicateNode(cmd.name);
+            duplicateNodeTree(cmd.name);
         });
 
         cmd::MergeGroup::when([this](const auto& cmd) {
-            handleMergeGroup(cmd.name);
+            mergeGroupNode(cmd.name);
         });
 
         // Handle node selection from scene panel (both PLYs and Groups)
@@ -225,6 +301,42 @@ namespace lfs::vis {
         LOG_DEBUG("Changing content type to: {}", type_str);
 
         content_type_ = type;
+    }
+
+    std::optional<std::filesystem::path> SceneManager::getPlyPath(const std::string& name) const {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        const auto it = splat_paths_.find(name);
+        if (it == splat_paths_.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
+    void SceneManager::setPlyPath(const std::string& name, const std::filesystem::path& path) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        splat_paths_[name] = path;
+    }
+
+    void SceneManager::clearPlyPath(const std::string& name) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        splat_paths_.erase(name);
+    }
+
+    void SceneManager::movePlyPath(const std::string& old_name, const std::string& new_name) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        auto it = splat_paths_.find(old_name);
+        if (it == splat_paths_.end()) {
+            splat_paths_.erase(new_name);
+            return;
+        }
+        const auto path = it->second;
+        splat_paths_.erase(it);
+        splat_paths_[new_name] = path;
+    }
+
+    void SceneManager::setDatasetPath(const std::filesystem::path& path) {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        dataset_path_ = path;
     }
 
     void SceneManager::loadSplatFile(const std::filesystem::path& path) {
@@ -357,7 +469,10 @@ namespace lfs::vis {
                     }
                 }
 
-                updateCropBoxToFitScene(true);
+                if (splat_for_cropbox &&
+                    scene_.getCropBoxForSplat(splat_for_cropbox->id) != core::NULL_NODE) {
+                    updateCropBoxToFitScene(true);
+                }
                 selectNode(name);
 
                 // Check for companion PPISP file
@@ -554,6 +669,11 @@ namespace lfs::vis {
     }
 
     void SceneManager::removePLY(const std::string& name, const bool keep_children) {
+        const auto* node_to_remove = scene_.getNode(name);
+        if (!node_to_remove) {
+            return;
+        }
+
         const auto& training_name = scene_.getTrainingModelNodeName();
 
         // Check if node is or contains training model
@@ -572,6 +692,15 @@ namespace lfs::vis {
 
         const bool affects_training = isTrainingNode();
         bool trainer_cleared = false;
+        std::vector<std::string> promoted_children;
+        if (keep_children) {
+            promoted_children.reserve(node_to_remove->children.size());
+            for (const auto child_id : node_to_remove->children) {
+                if (const auto* child = scene_.getNodeById(child_id)) {
+                    promoted_children.push_back(child->name);
+                }
+            }
+        }
 
         // Use state machine to check if deletion is allowed
         if (affects_training && services().trainerOrNull()) {
@@ -590,8 +719,11 @@ namespace lfs::vis {
             trainer_cleared = true;
         }
 
+        const auto history_options = sceneGraphCaptureOptions(true, true);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
+
         std::string parent_name;
-        if (const auto* node = scene_.getNode(name)) {
+        if (const auto* node = node_to_remove) {
             if (node->parent_id != core::NULL_NODE) {
                 if (const auto* p = scene_.getNodeById(node->parent_id)) {
                     parent_name = p->name;
@@ -630,19 +762,40 @@ namespace lfs::vis {
         if (!ids_to_deselect.empty())
             selection_.invalidateNodeMask();
 
-        state::PLYRemoved{.name = name, .children_kept = keep_children, .parent_of_removed = parent_name}.emit();
+        state::PLYRemoved{
+            .name = name,
+            .children_kept = keep_children,
+            .parent_of_removed = parent_name,
+            .from_history = false,
+        }
+            .emit();
 
         if (scene_.getNodeCount() == 0) {
             resetToEmptyState(trainer_cleared);
         }
+
+        pushSceneGraphHistoryEntry(*this, "Delete Node", std::move(history_before),
+                                   keep_children ? promoted_children : std::vector<std::string>{},
+                                   history_options);
     }
 
     void SceneManager::setPLYVisibility(const std::string& name, const bool visible) {
         const auto* node = scene_.getNode(name);
+        if (!node || static_cast<bool>(node->visible) == visible) {
+            return;
+        }
+
+        const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {name});
         scene_.setNodeVisibility(name, visible);
 
         if (visible)
             syncCropToolRenderSettings(node);
+
+        pushSceneGraphMetadataHistoryEntry(
+            *this,
+            "Set Visibility",
+            history_before,
+            op::SceneGraphMetadataEntry::captureNodes(*this, {name}));
     }
 
     // ========== Node Selection ==========
@@ -714,6 +867,10 @@ namespace lfs::vis {
         if (auto* rm = services().renderingOrNull())
             rm->markDirty(DirtyFlag::SELECTION);
         LOG_TRACE("Cleared node selection");
+    }
+
+    void SceneManager::invalidateNodeSelectionMask() {
+        selection_.invalidateNodeMask();
     }
 
     std::string SceneManager::getSelectedNodeName() const {
@@ -1521,8 +1678,7 @@ namespace lfs::vis {
                 dataset_path_ = path;
             }
 
-            const auto* training_model = scene_.getTrainingModel();
-            const size_t num_gaussians = training_model ? training_model->size() : 0;
+            const size_t num_gaussians = scene_.getTrainingModelGaussianCount();
             const auto* point_cloud = scene_.getVisiblePointCloud();
             const size_t num_points = point_cloud ? point_cloud->size() : 0;
 
@@ -1620,8 +1776,7 @@ namespace lfs::vis {
             }
 
             // Get info from scene
-            const auto* training_model = scene_.getTrainingModel();
-            const size_t num_gaussians = training_model ? training_model->size() : 0;
+            const size_t num_gaussians = scene_.getTrainingModelGaussianCount();
             const auto* point_cloud = scene_.getVisiblePointCloud();
             const size_t num_points = point_cloud ? point_cloud->size() : 0;
             const size_t num_cameras = scene_.getAllCameras().size();
@@ -1903,6 +2058,7 @@ namespace lfs::vis {
                 return;
             }
         }
+        op::undoHistory().clear();
         resetToEmptyState(false);
     }
 
@@ -1958,6 +2114,7 @@ namespace lfs::vis {
             .num_gaussians = num_gaussians}
             .emit();
 
+        op::undoHistory().clear();
         LOG_INFO("Switched to Edit Mode: {} gaussians", num_gaussians);
     }
 
@@ -1987,8 +2144,9 @@ namespace lfs::vis {
             state.combined_model = scene_.getTrainingModel();
         }
 
-        // Always try to get point cloud if no model (supports plugin-added point clouds)
-        if (!state.combined_model) {
+        // Fall back to the visible point cloud whenever the active splat model is absent or empty.
+        // This keeps dataset "ready" scenes renderable before training has produced gaussians.
+        if (!hasRenderableGaussians(state.combined_model)) {
             state.point_cloud = scene_.getVisiblePointCloud();
         }
 
@@ -2078,8 +2236,7 @@ namespace lfs::vis {
             // For dataset mode, get info from scene directly (Scene owns the model)
             info.has_model = scene_.hasNodes();
             if (info.has_model) {
-                const auto* training_model = scene_.getTrainingModel();
-                info.num_gaussians = training_model ? training_model->size() : 0;
+                info.num_gaussians = scene_.getTrainingModelGaussianCount();
             }
             info.num_nodes = scene_.getNodeCount();
             info.source_type = "Dataset";
@@ -2200,7 +2357,7 @@ namespace lfs::vis {
             if (filtered_count > 0 && filtered_count < num_points) {
                 node->point_cloud = std::make_shared<lfs::core::PointCloud>(
                     means.index_select(0, indices), colors.index_select(0, indices));
-                node->gaussian_count = filtered_count;
+                node->gaussian_count.store(filtered_count, std::memory_order_release);
 
                 LOG_INFO("Cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
 
@@ -2361,7 +2518,7 @@ namespace lfs::vis {
             if (filtered_count > 0 && filtered_count < num_points) {
                 node->point_cloud = std::make_shared<lfs::core::PointCloud>(
                     means.index_select(0, indices), colors.index_select(0, indices));
-                node->gaussian_count = filtered_count;
+                node->gaussian_count.store(filtered_count, std::memory_order_release);
                 LOG_INFO("Ellipsoid cropped PointCloud '{}': {} -> {} points", node_name, num_points, filtered_count);
             }
         }
@@ -2409,13 +2566,7 @@ namespace lfs::vis {
     }
 
     void SceneManager::updatePlyPath(const std::string& ply_name, const std::filesystem::path& ply_path) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        auto it = splat_paths_.find(ply_name);
-        if (it != splat_paths_.end()) {
-            it->second = ply_path;
-        } else {
-            LOG_WARN("ply name was not found {}", ply_name);
-        }
+        setPlyPath(ply_name, ply_path);
     }
 
     size_t SceneManager::applyDeleted() {
@@ -2427,25 +2578,28 @@ namespace lfs::vis {
     }
 
     bool SceneManager::renamePLY(const std::string& old_name, const std::string& new_name) {
+        if (old_name.empty() || new_name.empty()) {
+            return false;
+        }
+        if (old_name == new_name) {
+            return true;
+        }
+
         LOG_DEBUG("Renaming '{}' to '{}'", old_name, new_name);
+        const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {old_name});
 
         // Attempt to rename in the scene
         bool success = scene_.renameNode(old_name, new_name);
 
         if (success && old_name != new_name) {
-            // Update the splat_paths_ map to use the new name
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                auto it = splat_paths_.find(old_name);
-                if (it != splat_paths_.end()) {
-                    auto path = it->second;
-
-                    splat_paths_.erase(it);
-                    splat_paths_[new_name] = path;
-                }
-            }
+            movePlyPath(old_name, new_name);
 
             LOG_INFO("Successfully renamed '{}' to '{}'", old_name, new_name);
+            pushSceneGraphMetadataHistoryEntry(
+                *this,
+                "Rename Node",
+                history_before,
+                op::SceneGraphMetadataEntry::captureNodes(*this, {new_name}));
         } else if (!success) {
             LOG_WARN("Failed to rename '{}' to '{}' - name may already exist", old_name, new_name);
         }
@@ -2456,10 +2610,12 @@ namespace lfs::vis {
         renamePLY(event.old_name, event.new_name);
     }
 
-    void SceneManager::handleReparentNode(const std::string& node_name, const std::string& new_parent_name) {
+    bool SceneManager::reparentNode(const std::string& node_name, const std::string& new_parent_name) {
         auto* node = scene_.getMutableNode(node_name);
         if (!node)
-            return;
+            return false;
+
+        const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {node_name});
 
         std::string old_parent_name;
         if (node->parent_id != core::NULL_NODE) {
@@ -2472,21 +2628,27 @@ namespace lfs::vis {
         if (!new_parent_name.empty()) {
             const auto* parent = scene_.getNode(new_parent_name);
             if (!parent)
-                return;
+                return false;
             parent_id = parent->id;
         }
 
         scene_.reparent(node->id, parent_id);
         selection_.invalidateNodeMask();
         state::NodeReparented{.name = node_name, .old_parent = old_parent_name, .new_parent = new_parent_name}.emit();
+        pushSceneGraphMetadataHistoryEntry(
+            *this,
+            "Reparent Node",
+            history_before,
+            op::SceneGraphMetadataEntry::captureNodes(*this, {node_name}));
+        return true;
     }
 
-    void SceneManager::handleAddGroup(const std::string& name, const std::string& parent_name) {
+    std::string SceneManager::addGroupNode(const std::string& name, const std::string& parent_name) {
         core::NodeId parent_id = core::NULL_NODE;
         if (!parent_name.empty()) {
             const auto* parent = scene_.getNode(parent_name);
             if (!parent)
-                return;
+                return {};
             parent_id = parent->id;
         }
 
@@ -2495,7 +2657,13 @@ namespace lfs::vis {
             unique_name = std::format("{} {}", name, i);
         }
 
+        const auto history_options = sceneGraphCaptureOptions(false, true);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {}, history_options);
         scene_.addGroup(unique_name, parent_id);
+        if (getContentType() == ContentType::Empty) {
+            changeContentType(ContentType::SplatFiles);
+            python::set_application_scene(&scene_);
+        }
         selection_.invalidateNodeMask();
         state::PLYAdded{
             .name = unique_name,
@@ -2507,12 +2675,91 @@ namespace lfs::vis {
             .node_type = 1 // GROUP
         }
             .emit();
+        pushSceneGraphHistoryEntry(*this, "Add Group", std::move(history_before), {unique_name}, history_options);
+        return unique_name;
     }
 
-    void SceneManager::handleDuplicateNode(const std::string& name) {
+    std::string SceneManager::addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
+                                                    const std::string& source_name,
+                                                    const std::string& desired_name,
+                                                    const bool select_new_node) {
+        if (!model) {
+            LOG_ERROR("Cannot add generated splat node: model is null");
+            return {};
+        }
+
+        core::NodeId parent_id = core::NULL_NODE;
+        std::string parent_name;
+        glm::mat4 local_transform{1.0f};
+        bool visible = true;
+        bool locked = false;
+        bool training_enabled = true;
+
+        if (const auto* source = scene_.getNode(source_name)) {
+            local_transform = source->local_transform.get();
+            visible = source->visible.get();
+            locked = source->locked.get();
+            training_enabled = source->training_enabled;
+            if (source->parent_id != core::NULL_NODE) {
+                parent_id = source->parent_id;
+                if (const auto* parent = scene_.getNodeById(parent_id)) {
+                    parent_name = parent->name;
+                }
+            }
+        }
+
+        std::string unique_name = desired_name.empty() ? "Simplified Splat" : desired_name;
+        for (int i = 1; scene_.getNode(unique_name); ++i) {
+            unique_name = std::format("{} {}", desired_name.empty() ? "Simplified Splat" : desired_name, i);
+        }
+
+        const auto history_options = sceneGraphCaptureOptions(true, false);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {}, history_options);
+
+        const core::NodeId node_id = scene_.addSplat(unique_name, std::move(model), parent_id);
+        if (node_id == core::NULL_NODE) {
+            LOG_ERROR("Failed to add generated splat node '{}'", unique_name);
+            return {};
+        }
+
+        if (auto* added = scene_.getMutableNode(unique_name)) {
+            added->local_transform.setQuiet(local_transform);
+            added->visible.setQuiet(visible);
+            added->locked.setQuiet(locked);
+            added->training_enabled = training_enabled;
+            added->transform_dirty = true;
+        }
+
+        if (getContentType() == ContentType::Empty) {
+            changeContentType(ContentType::SplatFiles);
+            python::set_application_scene(&scene_);
+        }
+
+        selection_.invalidateNodeMask();
+        if (select_new_node) {
+            selectNode(unique_name);
+        }
+
+        if (const auto* added = scene_.getNode(unique_name)) {
+            state::PLYAdded{
+                .name = unique_name,
+                .node_gaussians = added->gaussian_count.load(std::memory_order_acquire),
+                .total_gaussians = scene_.getTotalGaussianCount(),
+                .is_visible = added->visible,
+                .parent_name = parent_name,
+                .is_group = false,
+                .node_type = static_cast<int>(added->type)}
+                .emit();
+        }
+
+        pushSceneGraphHistoryEntry(*this, "Add Simplified Splat", std::move(history_before), {unique_name}, history_options);
+        return unique_name;
+    }
+
+    std::string SceneManager::duplicateNodeTree(const std::string& name) {
         const auto* src = scene_.getNode(name);
         if (!src)
-            return;
+            return {};
 
         std::string parent_name;
         if (src->parent_id != core::NULL_NODE) {
@@ -2521,9 +2768,11 @@ namespace lfs::vis {
             }
         }
 
+        const auto history_options = sceneGraphCaptureOptions(false, false);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {}, history_options);
         const std::string new_name = scene_.duplicateNode(name);
         if (new_name.empty())
-            return;
+            return {};
         selection_.invalidateNodeMask();
 
         // Emit PLYAdded for duplicated node tree
@@ -2535,7 +2784,7 @@ namespace lfs::vis {
 
                 state::PLYAdded{
                     .name = node->name,
-                    .node_gaussians = node->gaussian_count,
+                    .node_gaussians = node->gaussian_count.load(std::memory_order_acquire),
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = node->visible,
                     .parent_name = pn,
@@ -2551,13 +2800,18 @@ namespace lfs::vis {
             };
 
         emit_added(new_name, parent_name);
+        pushSceneGraphHistoryEntry(*this, "Duplicate Node", std::move(history_before), {new_name}, history_options);
+        return new_name;
     }
 
-    void SceneManager::handleMergeGroup(const std::string& name) {
+    std::string SceneManager::mergeGroupNode(const std::string& name) {
         const auto* group = scene_.getNode(name);
         if (!group || group->type != core::NodeType::GROUP) {
-            return;
+            return {};
         }
+
+        const auto history_options = sceneGraphCaptureOptions(true, false);
+        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
 
         std::string parent_name;
         if (group->parent_id != core::NULL_NODE) {
@@ -2591,22 +2845,34 @@ namespace lfs::vis {
         const std::string merged_name = scene_.mergeGroup(name);
         if (merged_name.empty()) {
             LOG_WARN("Failed to merge group '{}'", name);
-            return;
+            return {};
         }
         selection_.invalidateNodeMask();
 
         // Emit PLYRemoved for all original children and the group
         for (const auto& child_name : children_to_remove) {
-            state::PLYRemoved{.name = child_name}.emit();
+            state::PLYRemoved{
+                .name = child_name,
+                .children_kept = false,
+                .parent_of_removed = {},
+                .from_history = false,
+            }
+                .emit();
         }
-        state::PLYRemoved{.name = name}.emit();
+        state::PLYRemoved{
+            .name = name,
+            .children_kept = false,
+            .parent_of_removed = {},
+            .from_history = false,
+        }
+            .emit();
 
         // Emit PLYAdded for merged node
         const auto* merged = scene_.getNode(merged_name);
         if (merged) {
             state::PLYAdded{
                 .name = merged->name,
-                .node_gaussians = merged->gaussian_count,
+                .node_gaussians = merged->gaussian_count.load(std::memory_order_acquire),
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = merged->visible,
                 .parent_name = parent_name,
@@ -2630,6 +2896,8 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Merged group '{}' -> '{}'", name, merged_name);
+        pushSceneGraphHistoryEntry(*this, "Merge Group", std::move(history_before), {merged_name}, history_options);
+        return merged_name;
     }
 
     void SceneManager::handleAddCropBox(const std::string& node_name) {
@@ -3072,13 +3340,13 @@ namespace lfs::vis {
             nodes.reserve(sel_ids.size());
             for (const auto id : sel_ids) {
                 auto* n = scene_.getNodeById(id);
-                if (n && n->type == core::NodeType::SPLAT && n->model)
+                if (n && n->type == core::NodeType::SPLAT && n->model && !static_cast<bool>(n->locked))
                     nodes.push_back(n);
             }
         }
 
         if (nodes.empty()) {
-            LOG_WARN("Mirror: no SPLAT nodes selected");
+            LOG_WARN("Mirror: no editable SPLAT nodes selected");
             return false;
         }
 
@@ -3170,7 +3438,7 @@ namespace lfs::vis {
 
             state::PLYAdded{
                 .name = name,
-                .node_gaussians = pasted_node ? pasted_node->gaussian_count : 0,
+                .node_gaussians = pasted_node ? pasted_node->gaussian_count.load(std::memory_order_acquire) : 0,
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = true,
                 .parent_name = "",
@@ -3272,7 +3540,7 @@ namespace lfs::vis {
             scene_.clearSelection();
 
             entry->captureAfter();
-            op::undoHistory().push(std::move(entry));
+            op::pushSceneSnapshotIfChanged(std::move(entry));
 
             if (auto* rm = services().renderingOrNull())
                 rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
@@ -3295,7 +3563,7 @@ namespace lfs::vis {
         scene_.setSelectionMask(new_mask);
 
         entry->captureAfter();
-        op::undoHistory().push(std::move(entry));
+        op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
             rm->markDirty(DirtyFlag::SELECTION);
@@ -3311,7 +3579,7 @@ namespace lfs::vis {
         scene_.clearSelection();
 
         entry->captureAfter();
-        op::undoHistory().push(std::move(entry));
+        op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
             rm->markDirty(DirtyFlag::SELECTION);
@@ -3346,7 +3614,7 @@ namespace lfs::vis {
             scene_.setSelectionMask(new_mask);
 
             entry->captureAfter();
-            op::undoHistory().push(std::move(entry));
+            op::pushSceneSnapshotIfChanged(std::move(entry));
         } else {
             const auto nodes = scene_.getNodes();
             std::vector<std::string> splat_names;
@@ -3428,7 +3696,10 @@ namespace lfs::vis {
         else if (mode == "remove")
             sel_mode = SelectionMode::Remove;
 
-        auto vertices = core::Tensor::from_vector(points, {points.size() / 2, size_t{2}}, core::Device::CUDA);
+        auto closed_points = closeScreenPolygon(points);
+        auto vertices = core::Tensor::from_vector(closed_points,
+                                                  {closed_points.size() / 2, size_t{2}},
+                                                  core::Device::CUDA);
         return selection_service_->selectPolygon(vertices, sel_mode, camera_index);
     }
 

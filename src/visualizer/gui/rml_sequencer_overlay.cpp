@@ -26,6 +26,8 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
+#include <SDL3/SDL_video.h>
+#include <algorithm>
 #include <cassert>
 #include <format>
 #include <ImGuizmo.h>
@@ -80,6 +82,27 @@ namespace lfs::vis::gui {
         } catch (const std::exception& e) {
             LOG_ERROR("RmlSequencerOverlay: resource not found: {}", e.what());
         }
+    }
+
+    bool RmlSequencerOverlay::ensureContextReady() {
+        if (!rml_context_)
+            initContext();
+        if (!rml_context_ || !document_ || !elements_cached_)
+            return false;
+
+        if (width_ <= 0 || height_ <= 0) {
+            int window_w = 800;
+            int window_h = 600;
+            if (auto* const window = rml_manager_ ? rml_manager_->getWindow() : nullptr)
+                SDL_GetWindowSize(window, &window_w, &window_h);
+
+            width_ = std::max(window_w, 1);
+            height_ = std::max(window_h, 1);
+            rml_context_->SetDimensions(Rml::Vector2i(width_, height_));
+        }
+
+        syncTheme();
+        return true;
     }
 
     void RmlSequencerOverlay::cacheElements() {
@@ -151,12 +174,11 @@ namespace lfs::vis::gui {
             ".overlay-panel {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
             ".overlay-text {{ color: {}; }}\n"
             ".overlay-text-dim {{ color: {}; }}\n"
-            ".close-x {{ color: {}; }}\n"
             ".edit-popup {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
             ".popup-title {{ color: {}; }}\n"
             ".popup-sep {{ background-color: {}; }}\n",
             surface, border, rounding,
-            text, text_dim, text_dim,
+            text, text_dim,
             surface, border, rounding,
             text, sep_color);
     }
@@ -184,6 +206,10 @@ namespace lfs::vis::gui {
             el_edit_apply_->SetInnerRML(LOC(Sequencer::APPLY_U));
         if (el_edit_revert_)
             el_edit_revert_->SetInnerRML(LOC(Sequencer::REVERT_ESC));
+        if (document_) {
+            if (auto* const close_btn = document_->GetElementById("kf-close-btn"))
+                close_btn->SetInnerRML(LOC(Common::CLOSE));
+        }
         if (el_time_popup_title_)
             el_time_popup_title_->SetInnerRML(LOC(Sequencer::EDIT_KEYFRAME_TIME));
         if (el_focal_popup_title_)
@@ -278,9 +304,7 @@ namespace lfs::vis::gui {
                                               std::optional<size_t> keyframe_index,
                                               const float time,
                                               const int gizmo_op) {
-        if (!rml_context_)
-            initContext();
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         context_menu_keyframe_ = keyframe_index;
@@ -293,15 +317,15 @@ namespace lfs::vis::gui {
         el_context_menu_->SetClass("visible", true);
         el_menu_backdrop_->SetProperty("display", "block");
 
-        syncTheme();
         rml_context_->Update();
+        const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
         const float menu_h = el_context_menu_->GetClientHeight();
         const float y = (screen_y + menu_h > static_cast<float>(height_))
                             ? std::max(0.0f, screen_y - menu_h)
                             : screen_y;
 
-        el_context_menu_->SetProperty("left", std::format("{:.0f}dp", screen_x));
-        el_context_menu_->SetProperty("top", std::format("{:.0f}dp", y));
+        el_context_menu_->SetProperty("left", std::format("{:.0f}dp", screen_x / dp));
+        el_context_menu_->SetProperty("top", std::format("{:.0f}dp", y / dp));
     }
 
     void RmlSequencerOverlay::hideContextMenu() {
@@ -316,7 +340,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlSequencerOverlay::showTimeEdit(size_t index, float current_time) {
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         time_edit_active_ = true;
@@ -324,8 +348,9 @@ namespace lfs::vis::gui {
 
         el_time_input_->SetAttribute("value", std::format("{:.2f}", current_time));
 
-        const float popup_x = static_cast<float>(width_) * 0.5f - 110.0f;
-        const float popup_y = static_cast<float>(height_) * 0.5f - 60.0f;
+        const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        const float popup_x = static_cast<float>(width_) / (2.0f * dp) - 110.0f;
+        const float popup_y = static_cast<float>(height_) / (2.0f * dp) - 60.0f;
         el_time_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
         el_time_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
         el_time_popup_->SetProperty("display", "block");
@@ -336,7 +361,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlSequencerOverlay::showFocalEdit(size_t index, float current_focal_mm) {
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         focal_edit_active_ = true;
@@ -344,8 +369,9 @@ namespace lfs::vis::gui {
 
         el_focal_input_->SetAttribute("value", std::format("{:.1f}", current_focal_mm));
 
-        const float popup_x = static_cast<float>(width_) * 0.5f - 110.0f;
-        const float popup_y = static_cast<float>(height_) * 0.5f - 60.0f;
+        const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        const float popup_x = static_cast<float>(width_) / (2.0f * dp) - 110.0f;
+        const float popup_y = static_cast<float>(height_) / (2.0f * dp) - 60.0f;
         el_focal_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
         el_focal_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
         el_focal_popup_->SetProperty("display", "block");
@@ -387,18 +413,25 @@ namespace lfs::vis::gui {
 
     void RmlSequencerOverlay::updateEditOverlay(size_t selected, float pos_delta, float rot_delta,
                                                 float right_x, float top_y) {
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         constexpr float MARGIN = 16.0f;
         constexpr float OVERLAY_WIDTH = 200.0f;
         constexpr const char* DEG_SIGN = "\xC2\xB0";
 
-        const float left = right_x - OVERLAY_WIDTH - MARGIN;
-        const float top = top_y + MARGIN;
+        const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        const float left = right_x / dp - OVERLAY_WIDTH - MARGIN;
+        const float top = top_y / dp + MARGIN;
 
         el_edit_overlay_->SetProperty("left", std::format("{:.0f}dp", left));
         el_edit_overlay_->SetProperty("top", std::format("{:.0f}dp", top));
+
+        overlay_px_left_ = left * dp;
+        overlay_px_top_ = top * dp;
+        overlay_px_width_ = (OVERLAY_WIDTH + 18.0f) * dp;
+        overlay_px_height_ = 80.0f * dp;
+
         const size_t kf_num = selected + 1;
         el_edit_label_->SetInnerRML(std::vformat(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME), std::make_format_args(kf_num)));
         el_edit_delta_->SetInnerRML(std::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
@@ -415,6 +448,7 @@ namespace lfs::vis::gui {
 
         el_edit_overlay_->SetProperty("display", "none");
         edit_overlay_visible_ = false;
+        overlay_px_left_ = overlay_px_top_ = overlay_px_width_ = overlay_px_height_ = 0.0f;
     }
 
     void RmlSequencerOverlay::processInput(const lfs::vis::PanelInputState& input) {
@@ -429,6 +463,9 @@ namespace lfs::vis::gui {
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
+        // Sync any property changes from this frame before hover and click hit-testing.
+        rml_context_->Update();
+
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
 
@@ -438,7 +475,16 @@ namespace lfs::vis::gui {
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
                                       hover->GetId() != "body";
 
-        if (over_interactive || context_menu_open_ || time_edit_active_ || focal_edit_active_) {
+        if (edit_overlay_visible_ && el_edit_overlay_) {
+            const float h = el_edit_overlay_->GetOffsetHeight();
+            if (h > 0.0f)
+                overlay_px_height_ = h;
+        }
+
+        const bool over_edit_overlay = isMouseOverEditOverlay(mx, my);
+
+        if (over_interactive || over_edit_overlay ||
+            context_menu_open_ || time_edit_active_ || focal_edit_active_) {
             wants_input_ = true;
 
             if (skip_next_click_) {
@@ -446,11 +492,11 @@ namespace lfs::vis::gui {
             } else {
                 if (input.mouse_clicked[0])
                     rml_context_->ProcessMouseButtonDown(0, 0);
-                if (!input.mouse_down[0])
+                if (input.mouse_released[0])
                     rml_context_->ProcessMouseButtonUp(0, 0);
                 if (input.mouse_clicked[1])
                     rml_context_->ProcessMouseButtonDown(1, 0);
-                if (!input.mouse_down[1])
+                if (input.mouse_released[1])
                     rml_context_->ProcessMouseButtonUp(1, 0);
             }
         }
@@ -548,16 +594,12 @@ namespace lfs::vis::gui {
         if (!anything_visible)
             return;
 
-        if (!rml_context_) {
-            initContext();
-            if (!rml_context_)
-                return;
-        }
+        if (!ensureContextReady())
+            return;
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
             if (rml_manager_)
                 rml_manager_->trackContextFrame(rml_context_, 0, 0);
-            syncTheme();
 
             const int w = screen_w;
             const int h = screen_h;
@@ -595,7 +637,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlSequencerOverlay::compositeToScreen(const int screen_w, const int screen_h) const {
-        if (!fbo_.valid() || screen_w <= 0 || screen_h <= 0)
+        const bool anything_visible = context_menu_open_ || time_edit_active_ ||
+                                      focal_edit_active_ || edit_overlay_visible_;
+        if (!anything_visible || !fbo_.valid() || screen_w <= 0 || screen_h <= 0)
             return;
         fbo_.blitToScreen(0.0f, 0.0f, static_cast<float>(screen_w), static_cast<float>(screen_h),
                           screen_w, screen_h);
@@ -628,6 +672,8 @@ namespace lfs::vis::gui {
     void RmlSequencerOverlay::OverlayEventListener::ProcessEvent(Rml::Event& event) {
         assert(overlay);
         auto* target = event.GetTargetElement();
+        while (target && target->GetId().empty())
+            target = target->GetParentNode();
         if (!target)
             return;
 
@@ -708,7 +754,7 @@ namespace lfs::vis::gui {
             overlay->hideContextMenu();
         } else if (id == "kf-close-btn") {
             overlay->pending_actions_.push_back(
-                {RmlSequencerOverlay::Action::DESELECT_KEYFRAME, 0, 0, 0.0f});
+                {RmlSequencerOverlay::Action::CLOSE_EDIT_PANEL, 0, 0, 0.0f});
         } else if (id == "kf-edit-apply") {
             overlay->pending_actions_.push_back(
                 {RmlSequencerOverlay::Action::APPLY_EDIT, 0, 0, 0.0f});

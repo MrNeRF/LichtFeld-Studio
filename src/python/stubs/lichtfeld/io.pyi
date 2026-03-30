@@ -57,6 +57,9 @@ def save_sog(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_it
 def save_spz(data: lichtfeld.scene.SplatData, path: str | os.PathLike) -> None:
     """Save splat data as SPZ compressed file"""
 
+def save_usd(data: lichtfeld.scene.SplatData, path: str | os.PathLike) -> None:
+    """Save splat data as OpenUSD gaussian file"""
+
 def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, progress: object | None = None) -> None:
     """Export splat data as self-contained HTML viewer"""
 

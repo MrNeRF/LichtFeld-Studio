@@ -7,6 +7,7 @@
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "python/python_runtime.hpp"
 #include "training/trainer.hpp"
 #include "visualizer/core/parameter_manager.hpp"
@@ -49,6 +50,10 @@ namespace lfs::python {
                         "means_lr", "Position LR", 0.000016f, 0.0f, 0.001f,
                         "Learning rate for gaussian positions")
             .flags(PROP_LIVE_UPDATE)
+            .float_prop(&OptimizationParameters::means_lr_end,
+                        "means_lr_end", "Position LR End", 0.00000016f, 0.0f, 0.001f,
+                        "Target end learning rate for gaussian positions")
+            .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::shs_lr,
                         "shs_lr", "SH LR", 0.0025f, 0.0f, 0.1f,
                         "Learning rate for spherical harmonics")
@@ -60,6 +65,10 @@ namespace lfs::python {
             .float_prop(&OptimizationParameters::scaling_lr,
                         "scaling_lr", "Scale LR", 0.005f, 0.0f, 0.1f,
                         "Learning rate for gaussian scales")
+            .flags(PROP_LIVE_UPDATE)
+            .float_prop(&OptimizationParameters::scaling_lr_end,
+                        "scaling_lr_end", "Scale LR End", 0.005f, 0.0f, 0.1f,
+                        "Target end learning rate for gaussian scales")
             .flags(PROP_LIVE_UPDATE)
             .float_prop(&OptimizationParameters::rotation_lr,
                         "rotation_lr", "Rotation LR", 0.001f, 0.0f, 0.1f,
@@ -147,35 +156,64 @@ namespace lfs::python {
 
             // Strategy
             .string_prop(&OptimizationParameters::strategy,
-                         "strategy", "Strategy", "mcmc",
-                         "Optimization strategy: mcmc or adc")
+                         "strategy", "Strategy", "mrnf",
+                         "Optimization strategy: mcmc, mrnf, or igs+")
             .flags(PROP_NEEDS_RESTART)
 
-            // ADC strategy parameters
+            // Shared densification parameters
             .float_prop(&OptimizationParameters::prune_opacity,
                         "prune_opacity", "Prune Opacity", 0.005f, 0.0f, std::numeric_limits<float>::infinity(),
-                        "Opacity threshold for pruning (ADC)")
+                        "Opacity threshold for pruning")
             .float_prop(&OptimizationParameters::grow_scale3d,
                         "grow_scale3d", "Grow Scale 3D", 0.01f, 0.0f, std::numeric_limits<float>::infinity(),
-                        "3D scale threshold for growing (ADC)")
+                        "3D scale threshold for growing")
             .float_prop(&OptimizationParameters::grow_scale2d,
                         "grow_scale2d", "Grow Scale 2D", 0.05f, 0.0f, std::numeric_limits<float>::infinity(),
-                        "2D scale threshold for growing (ADC)")
+                        "2D scale threshold for growing")
             .size_prop(&OptimizationParameters::reset_every,
                        "reset_every", "Reset Every", 3000, 100, 10000,
-                       "Iteration interval for opacity reset (ADC)")
+                       "Iteration interval for opacity reset")
             .float_prop(&OptimizationParameters::prune_scale3d,
                         "prune_scale3d", "Prune Scale 3D", 0.1f, 0.0f, std::numeric_limits<float>::infinity(),
-                        "3D scale threshold for pruning (ADC)")
+                        "3D scale threshold for pruning")
             .float_prop(&OptimizationParameters::prune_scale2d,
                         "prune_scale2d", "Prune Scale 2D", 0.15f, 0.0f, std::numeric_limits<float>::infinity(),
-                        "2D scale threshold for pruning (ADC)")
+                        "2D scale threshold for pruning")
             .size_prop(&OptimizationParameters::pause_refine_after_reset,
                        "pause_refine_after_reset", "Pause After Reset", 0, 0, std::numeric_limits<size_t>::max(),
                        "Iterations to pause refinement after opacity reset")
             .bool_prop(&OptimizationParameters::revised_opacity,
                        "revised_opacity", "Revised Opacity", false,
-                       "Use revised opacity calculation for ADC")
+                       "Use revised opacity calculation during densification")
+
+            // MRNF strategy parameters
+            .float_prop(&OptimizationParameters::growth_grad_threshold,
+                        "growth_grad_threshold", "Growth Grad Threshold", 0.003f, 0.0f, 1.0f,
+                        "Min refine weight for growth candidacy (MRNF)")
+            .float_prop(&OptimizationParameters::grow_fraction,
+                        "grow_fraction", "Grow Fraction", 0.07f, 0.0f, 1.0f,
+                        "Fraction of above-threshold splats to grow (MRNF)")
+            .size_prop(&OptimizationParameters::grow_until_iter,
+                       "grow_until_iter", "Grow Until Iter", 15000, 0, 100000,
+                       "Stop MRNF growth after this iteration")
+            .float_prop(&OptimizationParameters::opacity_decay,
+                        "opacity_decay", "Opacity Decay", 0.004f, 0.0f, 0.1f,
+                        "Opacity decay rate per refine (MRNF)")
+            .float_prop(&OptimizationParameters::scale_decay,
+                        "scale_decay", "Scale Decay", 0.002f, 0.0f, 0.1f,
+                        "Scale decay rate per refine (MRNF)")
+            .float_prop(&OptimizationParameters::means_noise_weight,
+                        "means_noise_weight", "Means Noise Weight", 50.0f, 0.0f, 200.0f,
+                        "Exploration noise multiplier for means updates (MRNF)")
+            .float_prop(&OptimizationParameters::bounds_percentile,
+                        "bounds_percentile", "Bounds Percentile", 0.8f, 0.5f, 1.0f,
+                        "Percentile for bounds computation (MRNF)")
+            .bool_prop(&OptimizationParameters::use_error_map,
+                       "use_error_map", "Error Map", true,
+                       "Weight MRNF refine signal by per-pixel SSIM error map")
+            .bool_prop(&OptimizationParameters::use_edge_map,
+                       "use_edge_map", "Edge Map", true,
+                       "Weight MRNF refine signal by Sobel edge map on GT images")
 
             // Flags
             .bool_prop(&OptimizationParameters::mip_filter,
@@ -187,9 +225,12 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::ppisp_use_controller,
                        "ppisp_use_controller", "Controller", false,
                        "Enable PPISP controller for novel view synthesis")
+            .bool_prop(&OptimizationParameters::ppisp_freeze_from_sidecar,
+                       "ppisp_freeze_from_sidecar", "Freeze From Sidecar", false,
+                       "Load PPISP weights from a sidecar and freeze PPISP learning during training")
             .int_prop(&OptimizationParameters::ppisp_controller_activation_step,
                       "ppisp_controller_activation_step", "Controller Step", -1, -1, 100000,
-                      "Iteration to start controller distillation (-1 = auto)")
+                      "Iteration to start controller distillation (negative = default schedule)")
             .float_prop(&OptimizationParameters::ppisp_controller_lr,
                         "ppisp_controller_lr", "Controller LR", 2e-3f, 1e-5f, 1e-1f,
                         "Learning rate for PPISP controller")
@@ -991,6 +1032,11 @@ namespace lfs::python {
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr = v; }); },
                 "Learning rate for gaussian positions")
             .def_prop_rw(
+                "means_lr_end",
+                [](PyOptimizationParams& self) { return self.params().means_lr_end; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr_end = v; }); },
+                "Target end learning rate for gaussian positions")
+            .def_prop_rw(
                 "shs_lr",
                 [](PyOptimizationParams& self) { return self.params().shs_lr; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.shs_lr = v; }); },
@@ -1005,6 +1051,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().scaling_lr; },
                 [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr = v; }); },
                 "Learning rate for gaussian scales")
+            .def_prop_rw(
+                "scaling_lr_end",
+                [](PyOptimizationParams& self) { return self.params().scaling_lr_end; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr_end = v; }); },
+                "Target end learning rate for gaussian scales")
             .def_prop_rw(
                 "rotation_lr",
                 [](PyOptimizationParams& self) { return self.params().rotation_lr; },
@@ -1031,16 +1082,17 @@ namespace lfs::python {
             .def(
                 "set_strategy",
                 [](PyOptimizationParams& /*self*/, const std::string& strategy) {
-                    if (strategy != "mcmc" && strategy != "adc" && strategy != "igs+") {
-                        throw std::invalid_argument("Strategy must be 'mcmc', 'adc', or 'igs+'");
+                    const auto canonical_strategy = lfs::core::param::canonical_strategy_name(strategy);
+                    if (canonical_strategy.empty()) {
+                        throw std::invalid_argument("Strategy must be 'mcmc', 'mrnf', or 'igs+'");
                     }
                     auto* pm = get_parameter_manager();
                     if (pm) {
-                        pm->modifyActiveParams([&](auto&) { pm->setActiveStrategy(strategy); });
+                        pm->modifyActiveParams([&](auto&) { pm->setActiveStrategy(canonical_strategy); });
                     }
                 },
                 nb::arg("strategy"),
-                "Set active strategy ('mcmc', 'adc', or 'igs+')")
+                "Set active strategy ('mcmc', 'mrnf', or 'igs+')")
             .def_prop_ro(
                 "headless", [](PyOptimizationParams& self) { return self.params().headless; },
                 "Whether running without visualization")
@@ -1065,27 +1117,7 @@ namespace lfs::python {
                             return;
 
                         const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
-                        const auto scale = [ratio](const size_t v) {
-                            return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
-                        };
-                        opt.iterations = scale(opt.iterations);
-                        opt.start_refine = scale(opt.start_refine);
-                        opt.reset_every = scale(opt.reset_every);
-                        opt.stop_refine = scale(opt.stop_refine);
-                        opt.refine_every = scale(opt.refine_every);
-                        opt.sh_degree_interval = scale(opt.sh_degree_interval);
-
-                        auto scale_vec = [ratio](std::vector<size_t>& steps) {
-                            std::set<size_t> unique;
-                            for (const auto& s : steps) {
-                                size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(s) * ratio));
-                                if (scaled > 0)
-                                    unique.insert(scaled);
-                            }
-                            steps.assign(unique.begin(), unique.end());
-                        };
-                        scale_vec(opt.eval_steps);
-                        scale_vec(opt.save_steps);
+                        opt.scale_steps(ratio);
                     });
                 },
                 nb::arg("new_scaler"),
@@ -1097,7 +1129,7 @@ namespace lfs::python {
                         pm->autoScaleSteps(image_count);
                 },
                 nb::arg("image_count"),
-                "Auto-scale steps for both strategies based on image count")
+                "Auto-scale steps for all strategies based on image count")
             .def_prop_rw(
                 "gut",
                 [](PyOptimizationParams& self) { return self.params().gut; },
@@ -1129,10 +1161,24 @@ namespace lfs::python {
                 [](PyOptimizationParams& self, bool v) { self.params().ppisp_use_controller = v; },
                 "Enable PPISP controller for novel view synthesis")
             .def_prop_rw(
+                "ppisp_freeze_from_sidecar",
+                [](PyOptimizationParams& self) { return self.params().ppisp_freeze_from_sidecar; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_freeze_from_sidecar = v; },
+                "Freeze PPISP learning and reuse a PPISP sidecar during training")
+            .def_prop_rw(
+                "ppisp_sidecar_path",
+                [](PyOptimizationParams& self) {
+                    return lfs::core::path_to_utf8(self.params().ppisp_sidecar_path);
+                },
+                [](PyOptimizationParams& self, const std::string& v) {
+                    self.params().ppisp_sidecar_path = lfs::core::utf8_to_path(v);
+                },
+                "Path to a PPISP sidecar used for frozen PPISP training")
+            .def_prop_rw(
                 "ppisp_controller_activation_step",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_activation_step; },
                 [](PyOptimizationParams& self, int v) { self.params().ppisp_controller_activation_step = v; },
-                "Iteration to start controller distillation (-1 = auto)")
+                "Iteration to start controller distillation (negative = default schedule)")
             .def_prop_rw(
                 "ppisp_controller_lr",
                 [](PyOptimizationParams& self) { return self.params().ppisp_controller_lr; },
@@ -1192,7 +1238,7 @@ namespace lfs::python {
                 "revised_opacity",
                 [](PyOptimizationParams& self) { return self.params().revised_opacity; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.revised_opacity = v; }); },
-                "Use revised opacity calculation for ADC densification")
+                "Use revised opacity calculation during densification")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

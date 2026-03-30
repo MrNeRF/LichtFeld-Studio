@@ -42,6 +42,7 @@ namespace lfs::io {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
         size_t output_queue_size = config::DEFAULT_OUTPUT_QUEUE_SIZE;
+        size_t decoder_pool_size = config::DEFAULT_BATCH_SIZE;
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
         size_t max_cache_bytes = config::DEFAULT_MAX_CACHE_BYTES;
@@ -149,6 +150,11 @@ namespace lfs::io {
             const lfs::core::UndistortParams* undistort = nullptr;
         };
 
+        struct CachedJpegHit {
+            std::shared_ptr<std::vector<uint8_t>> data;
+            bool from_base_key = false;
+        };
+
         // Pairing buffer: wait for both image and mask before output
         struct PendingPair {
             std::optional<lfs::core::Tensor> image;
@@ -234,6 +240,9 @@ namespace lfs::io {
         bool is_jpeg_data(const std::vector<uint8_t>& data) const;
         std::vector<uint8_t> read_file(const std::filesystem::path& path) const;
         void save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data);
+        std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
+        std::optional<CachedJpegHit> find_cached_jpeg(const std::string& cache_key,
+                                                      const std::string& base_key);
 
         std::shared_ptr<std::vector<uint8_t>> get_from_jpeg_cache(const std::string& cache_key);
         void put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data);

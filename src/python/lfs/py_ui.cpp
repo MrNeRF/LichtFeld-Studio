@@ -9,6 +9,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
 #include "gui/global_context_menu.hpp"
@@ -16,9 +17,10 @@
 #include "gui/rml_menu_bar.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
-#include "gui/utils/windows_utils.hpp"
+#include "gui/utils/native_file_dialog.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "py_command.hpp"
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
 #include "py_params.hpp"
@@ -34,6 +36,7 @@
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/operator/property_schema.hpp"
@@ -323,6 +326,24 @@ namespace lfs::python {
         void remove_python_operator_instance(const std::string& id) {
             std::lock_guard lock(g_python_operator_mutex);
             g_python_operator_instances.erase(id);
+        }
+
+        void push_python_operator_undo_entry(const std::string& label, nb::object instance) {
+            if (!instance.is_valid() || instance.is_none()) {
+                return;
+            }
+            if (!nb::hasattr(instance, "undo") || !nb::hasattr(instance, "redo")) {
+                return;
+            }
+
+            auto entry = std::make_unique<lfs::python::PyUndoEntry>(
+                label,
+                instance.attr("undo"),
+                instance.attr("redo"),
+                "python.operator",
+                "python",
+                "operator");
+            vis::op::undoHistory().push(std::move(entry));
         }
 
         unsigned int load_icon_from_path(const std::filesystem::path& path, const std::string& cache_key) {
@@ -876,7 +897,7 @@ namespace lfs::python {
             }
 
             if (has_invoke || has_execute) {
-                callbacks.invoke = [class_id = id, has_invoke](vis::op::OperatorProperties& props) -> vis::op::OperatorResult {
+                callbacks.invoke = [class_id = id, label = desc.label, has_invoke, has_undo](vis::op::OperatorProperties& props) -> vis::op::OperatorResult {
                     nb::gil_scoped_acquire gil;
                     nb::object instance = get_python_operator_instance(class_id);
                     if (!instance.is_valid() || instance.is_none()) {
@@ -894,7 +915,11 @@ namespace lfs::python {
                         } else {
                             result = instance.attr("execute")(nb::none());
                         }
-                        return parse_operator_result(result, instance);
+                        const auto status = parse_operator_result(result, instance);
+                        if (has_undo && status == vis::op::OperatorResult::FINISHED) {
+                            push_python_operator_undo_entry(label.empty() ? class_id : label, instance);
+                        }
+                        return status;
                     } catch (const std::exception& e) {
                         LOG_ERROR("Operator invoke error: {}", e.what());
                         return vis::op::OperatorResult::CANCELLED;
@@ -903,8 +928,8 @@ namespace lfs::python {
             }
 
             if (has_modal) {
-                callbacks.modal = [class_id = id](const vis::op::ModalEvent& event,
-                                                  vis::op::OperatorProperties& /*props*/) -> vis::op::OperatorResult {
+                callbacks.modal = [class_id = id, label = desc.label, has_undo](const vis::op::ModalEvent& event,
+                                                                                vis::op::OperatorProperties& /*props*/) -> vis::op::OperatorResult {
                     nb::gil_scoped_acquire gil;
                     nb::object instance = get_python_operator_instance(class_id);
                     if (!instance.is_valid() || instance.is_none()) {
@@ -914,7 +939,11 @@ namespace lfs::python {
                     try {
                         PyEvent py_event = convert_modal_event(event);
                         nb::object result = instance.attr("modal")(nb::none(), py_event);
-                        return parse_operator_result(result, instance);
+                        const auto status = parse_operator_result(result, instance);
+                        if (has_undo && status == vis::op::OperatorResult::FINISHED) {
+                            push_python_operator_undo_entry(label.empty() ? class_id : label, instance);
+                        }
+                        return status;
                     } catch (const std::exception& e) {
                         LOG_ERROR("Operator modal error: {}", e.what());
                         return vis::op::OperatorResult::CANCELLED;
@@ -958,10 +987,14 @@ namespace lfs::python {
             if (key >= lfs::vis::input::KEY_0 && key <= lfs::vis::input::KEY_9) {
                 return std::string("KEY_") + static_cast<char>('0' + (key - lfs::vis::input::KEY_0));
             }
+            if (key >= lfs::vis::input::KEY_KP_0 && key <= lfs::vis::input::KEY_KP_9) {
+                return std::string("KEY_") + static_cast<char>('0' + (key - lfs::vis::input::KEY_KP_0));
+            }
             switch (key) {
             case lfs::vis::input::KEY_SPACE: return "SPACE";
             case lfs::vis::input::KEY_ESCAPE: return "ESC";
             case lfs::vis::input::KEY_ENTER: return "RET";
+            case lfs::vis::input::KEY_KP_ENTER: return "RET";
             case lfs::vis::input::KEY_TAB: return "TAB";
             case lfs::vis::input::KEY_BACKSPACE: return "BACK_SPACE";
             case lfs::vis::input::KEY_DELETE: return "DEL";
@@ -1114,7 +1147,7 @@ namespace lfs::python {
             ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, BOX_BORDER_SIZE);
             const std::string id = "##pybox_" + std::to_string(parent_->next_box_id());
             ImGui::BeginChild(id.c_str(), {0, 0},
-                              ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY);
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
             break;
         }
         case LayoutType::GridFlow: {
@@ -1861,7 +1894,7 @@ namespace lfs::python {
                                nb::object color, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
         ImFont* const font = ImGui::GetFont();
-        dl->AddText(font, font->FontSize, ImVec2(x, y), tuple_to_color32(color), text.c_str());
+        dl->AddText(font, ImGui::GetFontSize(), ImVec2(x, y), tuple_to_color32(color), text.c_str());
     }
 
     void PyUILayout::draw_window_rect_filled(float x0, float y0, float x1, float y1,
@@ -1900,7 +1933,7 @@ namespace lfs::python {
                                       nb::object color) {
         auto* const dl = ImGui::GetWindowDrawList();
         ImFont* const font = ImGui::GetFont();
-        dl->AddText(font, font->FontSize, ImVec2(x, y), tuple_to_color32(color), text.c_str());
+        dl->AddText(font, ImGui::GetFontSize(), ImVec2(x, y), tuple_to_color32(color), text.c_str());
     }
 
     void PyUILayout::draw_window_triangle_filled(float x0, float y0, float x1, float y1, float x2, float y2,
@@ -2007,27 +2040,27 @@ namespace lfs::python {
     // Sliders
     std::tuple<bool, float> PyUILayout::slider_float(const std::string& label, float value, float min, float max) {
         float v = value;
-        bool changed = ImGui::SliderFloat(label.c_str(), &v, min, max);
+        bool changed = lfs::vis::gui::widgets::SliderFloat(label.c_str(), &v, min, max);
         return {changed, v};
     }
 
     std::tuple<bool, int> PyUILayout::slider_int(const std::string& label, int value, int min, int max) {
         int v = value;
-        bool changed = ImGui::SliderInt(label.c_str(), &v, min, max);
+        bool changed = lfs::vis::gui::widgets::SliderInt(label.c_str(), &v, min, max);
         return {changed, v};
     }
 
     std::tuple<bool, std::tuple<float, float>> PyUILayout::slider_float2(
         const std::string& label, std::tuple<float, float> value, float min, float max) {
         float v[2] = {std::get<0>(value), std::get<1>(value)};
-        bool changed = ImGui::SliderFloat2(label.c_str(), v, min, max);
+        bool changed = lfs::vis::gui::widgets::SliderFloat2(label.c_str(), v, min, max);
         return {changed, {v[0], v[1]}};
     }
 
     std::tuple<bool, std::tuple<float, float, float>> PyUILayout::slider_float3(
         const std::string& label, std::tuple<float, float, float> value, float min, float max) {
         float v[3] = {std::get<0>(value), std::get<1>(value), std::get<2>(value)};
-        bool changed = ImGui::SliderFloat3(label.c_str(), v, min, max);
+        bool changed = lfs::vis::gui::widgets::SliderFloat3(label.c_str(), v, min, max);
         return {changed, {v[0], v[1], v[2]}};
     }
 
@@ -2035,14 +2068,14 @@ namespace lfs::python {
     std::tuple<bool, float> PyUILayout::drag_float(const std::string& label, float value,
                                                    float speed, float min, float max) {
         float v = value;
-        bool changed = ImGui::DragFloat(label.c_str(), &v, speed, min, max);
+        bool changed = vis::gui::widgets::DragFloat(label.c_str(), &v, speed, min, max);
         return {changed, v};
     }
 
     std::tuple<bool, int> PyUILayout::drag_int(const std::string& label, int value,
                                                float speed, int min, int max) {
         int v = value;
-        bool changed = ImGui::DragInt(label.c_str(), &v, speed, min, max);
+        bool changed = vis::gui::widgets::DragInt(label.c_str(), &v, speed, min, max);
         return {changed, v};
     }
 
@@ -2051,7 +2084,7 @@ namespace lfs::python {
         char buffer[INPUT_TEXT_BUFFER_SIZE];
         std::strncpy(buffer, value.c_str(), sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
-        bool changed = ImGui::InputText(label.c_str(), buffer, sizeof(buffer));
+        bool changed = vis::gui::widgets::InputText(label.c_str(), buffer, sizeof(buffer));
         return {changed, std::string(buffer)};
     }
 
@@ -2060,20 +2093,20 @@ namespace lfs::python {
         char buffer[INPUT_TEXT_BUFFER_SIZE];
         std::strncpy(buffer, value.c_str(), sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
-        bool changed = ImGui::InputTextWithHint(label.c_str(), hint.c_str(), buffer, sizeof(buffer));
+        bool changed = vis::gui::widgets::InputTextWithHint(label.c_str(), hint.c_str(), buffer, sizeof(buffer));
         return {changed, std::string(buffer)};
     }
 
     std::tuple<bool, float> PyUILayout::input_float(const std::string& label, float value, float step, float step_fast,
                                                     const std::string& format) {
         float v = value;
-        const bool changed = ImGui::InputFloat(label.c_str(), &v, step, step_fast, format.c_str());
+        const bool changed = vis::gui::widgets::InputFloat(label.c_str(), &v, step, step_fast, format.c_str());
         return {changed, v};
     }
 
     std::tuple<bool, int> PyUILayout::input_int(const std::string& label, int value, int step, int step_fast) {
         int v = value;
-        const bool changed = ImGui::InputInt(label.c_str(), &v, step, step_fast);
+        const bool changed = vis::gui::widgets::InputInt(label.c_str(), &v, step, step_fast);
         return {changed, v};
     }
 
@@ -2106,7 +2139,7 @@ namespace lfs::python {
 
         const float input_width = std::max(avail - buttons_total - spacing, 60.0f);
         ImGui::SetNextItemWidth(input_width);
-        if (ImGui::InputFloat("##val", &v, 0.0f, 0.0f, "%.3f")) {
+        if (vis::gui::widgets::InputFloat("##val", &v, 0.0f, 0.0f, "%.3f")) {
             changed = true;
         }
 
@@ -2143,7 +2176,9 @@ namespace lfs::python {
     }
 
     std::tuple<bool, std::string> PyUILayout::path_input(const std::string& label, const std::string& value,
-                                                         const bool folder_mode, const std::string& dialog_title) {
+                                                         const bool folder_mode,
+                                                         const std::string& /*dialog_title*/) {
+        // `dialog_title` is accepted for Python API compatibility; native dialogs currently ignore it.
         char buffer[INPUT_TEXT_BUFFER_SIZE];
         std::strncpy(buffer, value.c_str(), sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
@@ -2153,21 +2188,22 @@ namespace lfs::python {
         const float input_width = available - button_width - ImGui::GetStyle().ItemSpacing.x;
 
         ImGui::SetNextItemWidth(input_width);
-        bool changed = ImGui::InputText(label.c_str(), buffer, sizeof(buffer));
+        bool changed = vis::gui::widgets::InputText(label.c_str(), buffer, sizeof(buffer));
 
         ImGui::SameLine();
         const std::string btn_id = "...##" + label + "_browse";
         if (ImGui::Button(btn_id.c_str())) {
-            const std::filesystem::path start_path = value.empty() ? std::filesystem::path{} : std::filesystem::path{value};
+            const std::filesystem::path start_path =
+                value.empty() ? std::filesystem::path{} : lfs::core::utf8_to_path(value);
             std::filesystem::path result;
             if (folder_mode) {
-                result = lfs::vis::gui::SelectFolderDialog(
-                    dialog_title.empty() ? "Select Folder" : dialog_title, start_path);
+                result = lfs::vis::gui::PickFolderDialog(start_path);
             } else {
                 result = lfs::vis::gui::OpenImageFileDialog(start_path);
             }
             if (!result.empty()) {
-                std::strncpy(buffer, result.string().c_str(), sizeof(buffer) - 1);
+                const std::string result_utf8 = lfs::core::path_to_utf8(result);
+                std::strncpy(buffer, result_utf8.c_str(), sizeof(buffer) - 1);
                 buffer[sizeof(buffer) - 1] = '\0';
                 changed = true;
             }
@@ -2474,8 +2510,9 @@ namespace lfs::python {
         char buffer[256];
         std::strncpy(buffer, value.c_str(), sizeof(buffer) - 1);
         buffer[sizeof(buffer) - 1] = '\0';
-        const bool entered = ImGui::InputText(label.c_str(), buffer, sizeof(buffer),
-                                              ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        const bool entered = vis::gui::widgets::InputText(
+            label.c_str(), buffer, sizeof(buffer),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
         return {entered, std::string(buffer)};
     }
 
@@ -2725,7 +2762,7 @@ namespace lfs::python {
     }
 
     bool PyUILayout::begin_child(const std::string& id, std::tuple<float, float> size, bool border) {
-        return ImGui::BeginChild(id.c_str(), {std::get<0>(size), std::get<1>(size)}, border ? ImGuiChildFlags_Border : ImGuiChildFlags_None);
+        return ImGui::BeginChild(id.c_str(), {std::get<0>(size), std::get<1>(size)}, border ? ImGuiChildFlags_Borders : ImGuiChildFlags_None);
     }
 
     void PyUILayout::end_child() {
@@ -3065,7 +3102,7 @@ namespace lfs::python {
                 if (subtype == "COLOR" || subtype == "COLOR_GAMMA") {
                     changed = ImGui::ColorEdit3(display_name.c_str(), v);
                 } else {
-                    changed = ImGui::DragFloat3(display_name.c_str(), v, 0.01f);
+                    changed = vis::gui::widgets::DragFloat3(display_name.c_str(), v, 0.01f);
                 }
                 new_value = nb::make_tuple(v[0], v[1], v[2]);
             } else if (size == 4) {
@@ -3074,12 +3111,12 @@ namespace lfs::python {
                 if (subtype == "COLOR" || subtype == "COLOR_GAMMA") {
                     changed = ImGui::ColorEdit4(display_name.c_str(), v);
                 } else {
-                    changed = ImGui::DragFloat4(display_name.c_str(), v, 0.01f);
+                    changed = vis::gui::widgets::DragFloat4(display_name.c_str(), v, 0.01f);
                 }
                 new_value = nb::make_tuple(v[0], v[1], v[2], v[3]);
             } else if (size == 2) {
                 float v[2] = {nb::cast<float>(t[0]), nb::cast<float>(t[1])};
-                changed = ImGui::DragFloat2(display_name.c_str(), v, 0.01f);
+                changed = vis::gui::widgets::DragFloat2(display_name.c_str(), v, 0.01f);
                 new_value = nb::make_tuple(v[0], v[1]);
             }
         } else if (prop_type == "IntVectorProperty") {
@@ -3088,16 +3125,16 @@ namespace lfs::python {
 
             if (size == 3) {
                 int v[3] = {nb::cast<int>(t[0]), nb::cast<int>(t[1]), nb::cast<int>(t[2])};
-                changed = ImGui::DragInt3(display_name.c_str(), v);
+                changed = vis::gui::widgets::DragInt3(display_name.c_str(), v);
                 new_value = nb::make_tuple(v[0], v[1], v[2]);
             } else if (size == 4) {
                 int v[4] = {nb::cast<int>(t[0]), nb::cast<int>(t[1]),
                             nb::cast<int>(t[2]), nb::cast<int>(t[3])};
-                changed = ImGui::DragInt4(display_name.c_str(), v);
+                changed = vis::gui::widgets::DragInt4(display_name.c_str(), v);
                 new_value = nb::make_tuple(v[0], v[1], v[2], v[3]);
             } else if (size == 2) {
                 int v[2] = {nb::cast<int>(t[0]), nb::cast<int>(t[1])};
-                changed = ImGui::DragInt2(display_name.c_str(), v);
+                changed = vis::gui::widgets::DragInt2(display_name.c_str(), v);
                 new_value = nb::make_tuple(v[0], v[1]);
             }
         } else if (prop_type == "TensorProperty") {
@@ -3455,7 +3492,8 @@ namespace lfs::python {
                  nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f},
                  "Draw a float input with increment/decrement buttons, returns (changed, value)")
             .def("path_input", &PyUILayout::path_input, nb::arg("label"), nb::arg("value"),
-                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "", "Draw a path input with browse button, returns (changed, path)")
+                 nb::arg("folder_mode") = true, nb::arg("dialog_title") = "",
+                 "Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.")
             // Color
             .def("color_edit3", &PyUILayout::color_edit3, nb::arg("label"), nb::arg("color"), "Draw an RGB color editor, returns (changed, color)")
             .def("color_edit4", &PyUILayout::color_edit4, nb::arg("label"), nb::arg("color"), "Draw an RGBA color editor, returns (changed, color)")
@@ -3568,7 +3606,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3681,49 +3720,51 @@ namespace lfs::python {
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
                 auto result = lfs::vis::gui::OpenImageFileDialog(start_path);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select an image file. Returns empty string if cancelled.");
 
         m.def(
             "open_folder_dialog",
-            [](const std::string& title, const std::string& start_dir) -> std::string {
+            [](const std::string& /*title*/, const std::string& start_dir) -> std::string {
+                // `title` is accepted for Python API compatibility; native dialogs currently ignore it.
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
-                auto result = lfs::vis::gui::SelectFolderDialog(title, start_path);
-                return result.empty() ? "" : result.string();
+                auto result = lfs::vis::gui::PickFolderDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("title") = "Select Folder", nb::arg("start_dir") = "",
-            "Open a folder selection dialog. Returns empty string if cancelled.");
+            "Open a folder selection dialog. Returns empty string if cancelled. "
+            "title is accepted for compatibility and currently ignored.");
 
         m.def(
             "open_ply_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
-                auto result = lfs::vis::gui::OpenPlyFileDialogNative(start_path);
-                return result.empty() ? "" : result.string();
+                auto result = lfs::vis::gui::OpenPointCloudFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
-            "Open a file dialog to select a PLY file. Returns empty string if cancelled.");
+            "Open a file dialog to select a splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.");
 
         m.def(
             "open_mesh_file_dialog",
             [](const std::string& start_dir) -> std::string {
                 std::filesystem::path start_path;
                 if (!start_dir.empty()) {
-                    start_path = start_dir;
+                    start_path = lfs::core::utf8_to_path(start_dir);
                 }
                 auto result = lfs::vis::gui::OpenMeshFileDialog(start_path);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("start_dir") = "",
             "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
@@ -3732,15 +3773,28 @@ namespace lfs::python {
             "open_checkpoint_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenCheckpointFileDialog();
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a file dialog to select a checkpoint file. Returns empty string if cancelled.");
+
+        m.def(
+            "open_ppisp_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = lfs::core::utf8_to_path(start_dir);
+                }
+                auto result = lfs::vis::gui::OpenPPISPFileDialog(start_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a PPISP sidecar file. Returns empty string if cancelled.");
 
         m.def(
             "open_json_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenJsonFileDialog();
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a file dialog to select a JSON config file. Returns empty string if cancelled.");
 
@@ -3748,7 +3802,7 @@ namespace lfs::python {
             "save_json_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             nb::arg("default_name") = "config.json",
             "Open a save file dialog for JSON files. Returns empty string if cancelled.");
@@ -3757,43 +3811,52 @@ namespace lfs::python {
             "save_ply_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SavePlyFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
-            nb::arg("default_name") = "export.ply",
+            nb::arg("default_name") = "export",
             "Open a save file dialog for PLY files. Returns empty string if cancelled.");
 
         m.def(
             "save_sog_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSogFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
-            nb::arg("default_name") = "export.sog",
+            nb::arg("default_name") = "export",
             "Open a save file dialog for SOG files. Returns empty string if cancelled.");
 
         m.def(
             "save_spz_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSpzFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
-            nb::arg("default_name") = "export.spz",
+            nb::arg("default_name") = "export",
             "Open a save file dialog for SPZ files. Returns empty string if cancelled.");
+
+        m.def(
+            "save_usd_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveUsdFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for USD files. Returns empty string if cancelled.");
 
         m.def(
             "save_html_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveHtmlFileDialog(default_name);
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
-            nb::arg("default_name") = "viewer.html",
+            nb::arg("default_name") = "viewer",
             "Open a save file dialog for HTML viewer files. Returns empty string if cancelled.");
 
         m.def(
             "open_dataset_folder_dialog",
             []() -> std::string {
-                auto result = lfs::vis::gui::OpenDatasetFolderDialogNative();
-                return result.empty() ? "" : result.string();
+                auto result = lfs::vis::gui::OpenDatasetFolderDialog();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a folder dialog to select a dataset. Returns empty string if cancelled.");
 
@@ -3801,7 +3864,7 @@ namespace lfs::python {
             "open_video_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenVideoFileDialog();
-                return result.empty() ? "" : result.string();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
             "Open a file dialog to select a video file. Returns empty string if cancelled.");
 
@@ -3957,7 +4020,7 @@ namespace lfs::python {
                     if (g_show_dataset_popup_callback && !g_show_dataset_popup_callback.is_none()) {
                         nb::gil_scoped_acquire guard;
                         try {
-                            g_show_dataset_popup_callback(e.dataset_path.string());
+                            g_show_dataset_popup_callback(lfs::core::path_to_utf8(e.dataset_path));
                         } catch (const std::exception& ex) {
                             LOG_ERROR("ShowDatasetLoadPopup callback error: {}", ex.what());
                         }
@@ -3975,7 +4038,7 @@ namespace lfs::python {
                     if (g_show_resume_popup_callback && !g_show_resume_popup_callback.is_none()) {
                         nb::gil_scoped_acquire guard;
                         try {
-                            g_show_resume_popup_callback(e.checkpoint_path.string());
+                            g_show_resume_popup_callback(lfs::core::path_to_utf8(e.checkpoint_path));
                         } catch (const std::exception& ex) {
                             LOG_ERROR("ShowResumeCheckpointPopup callback error: {}", ex.what());
                         }
@@ -4984,7 +5047,23 @@ namespace lfs::python {
         key.attr("F10") = lfs::vis::input::KEY_F10;
         key.attr("F11") = lfs::vis::input::KEY_F11;
         key.attr("F12") = lfs::vis::input::KEY_F12;
+        key.attr("KP_0") = lfs::vis::input::KEY_KP_0;
+        key.attr("KP_1") = lfs::vis::input::KEY_KP_1;
+        key.attr("KP_2") = lfs::vis::input::KEY_KP_2;
+        key.attr("KP_3") = lfs::vis::input::KEY_KP_3;
+        key.attr("KP_4") = lfs::vis::input::KEY_KP_4;
+        key.attr("KP_5") = lfs::vis::input::KEY_KP_5;
+        key.attr("KP_6") = lfs::vis::input::KEY_KP_6;
+        key.attr("KP_7") = lfs::vis::input::KEY_KP_7;
+        key.attr("KP_8") = lfs::vis::input::KEY_KP_8;
+        key.attr("KP_9") = lfs::vis::input::KEY_KP_9;
+        key.attr("KP_DECIMAL") = lfs::vis::input::KEY_KP_DECIMAL;
+        key.attr("KP_DIVIDE") = lfs::vis::input::KEY_KP_DIVIDE;
+        key.attr("KP_MULTIPLY") = lfs::vis::input::KEY_KP_MULTIPLY;
+        key.attr("KP_SUBTRACT") = lfs::vis::input::KEY_KP_SUBTRACT;
+        key.attr("KP_ADD") = lfs::vis::input::KEY_KP_ADD;
         key.attr("KP_ENTER") = lfs::vis::input::KEY_KP_ENTER;
+        key.attr("KP_EQUAL") = lfs::vis::input::KEY_KP_EQUAL;
 
         auto mouse = m.def_submodule("mouse", "Mouse buttons");
         mouse.attr("LEFT") = static_cast<int>(lfs::vis::input::AppMouseButton::LEFT);
@@ -5102,10 +5181,11 @@ namespace lfs::python {
                 switch (rm->getSettings().split_view_mode) {
                 case vis::SplitViewMode::GTComparison: return "gt_comparison";
                 case vis::SplitViewMode::PLYComparison: return "ply_comparison";
+                case vis::SplitViewMode::IndependentDual: return "independent_dual";
                 default: return "none";
                 }
             },
-            "Get split view mode (none, gt_comparison, ply_comparison)");
+            "Get split view mode (none, gt_comparison, ply_comparison, independent_dual)");
 
         m.def(
             "get_speed_overlay", []() -> std::tuple<float, float, float, float> {

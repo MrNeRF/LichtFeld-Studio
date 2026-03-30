@@ -8,6 +8,7 @@
 #include "app/mcp_event_handlers.hpp"
 #include "app/mcp_operator_tools.hpp"
 #include "app/mcp_runtime_tools.hpp"
+#include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 
 #include "core/event_bridge/command_center_bridge.hpp"
@@ -73,6 +74,31 @@ namespace lfs::app {
 
         using TransformComponents = vis::cap::TransformComponents;
 
+        const core::SceneNode* find_first_visible_splat_node(const core::Scene& scene) {
+            for (const auto* node : scene.getNodes()) {
+                if (node->type == core::NodeType::SPLAT && node->model &&
+                    static_cast<bool>(node->visible))
+                    return node;
+            }
+            return nullptr;
+        }
+
+        std::expected<int64_t, std::string> count_visible_model_gaussians(const core::Scene& scene) {
+            int64_t total = 0;
+            bool has_model = false;
+            for (const auto* node : scene.getVisibleNodes()) {
+                if (!node)
+                    continue;
+                has_model = true;
+                total += static_cast<int64_t>(node->gaussian_count.load(std::memory_order_acquire));
+            }
+
+            if (!has_model)
+                return std::unexpected("No model loaded");
+
+            return total;
+        }
+
         std::expected<std::string, std::string> render_scene_to_base64(
             core::Scene& scene,
             int camera_index = 0,
@@ -80,6 +106,11 @@ namespace lfs::app {
             int height = 0) {
 
             auto* model = scene.getTrainingModel();
+            if (!model) {
+                const auto* node = find_first_visible_splat_node(scene);
+                if (node)
+                    model = node->model.get();
+            }
             if (!model)
                 return std::unexpected("No model to render");
 
@@ -102,6 +133,110 @@ namespace lfs::app {
             } catch (const std::exception& e) {
                 return std::unexpected(std::string("Render failed: ") + e.what());
             }
+        }
+
+        template <typename F>
+        auto post_render_and_wait(vis::VisualizerImpl* viewer_impl, F&& fn) {
+            using R = std::invoke_result_t<F>;
+
+            if (viewer_impl->isOnViewerThread()) {
+                if (!viewer_impl->acceptsPostedWork())
+                    return make_post_failure<R>("Viewer is shutting down");
+                if (!viewer_impl->isProcessingRenderWork())
+                    return make_post_failure<R>(
+                        "Composited capture must be requested from a non-viewer thread unless already running in render work");
+                return std::invoke(std::forward<F>(fn));
+            }
+
+            return detail::post_and_wait_impl(
+                [viewer_impl](vis::Visualizer::WorkItem work) {
+                    return viewer_impl->postRenderWork(std::move(work));
+                },
+                std::forward<F>(fn));
+        }
+
+        template <typename F>
+        auto capture_after_gui_render(vis::Visualizer* viewer, F&& fn) {
+            using R = std::invoke_result_t<F>;
+
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return make_post_failure<R>("Composited capture requires a GUI visualizer");
+
+            return post_render_and_wait(viewer_impl, std::forward<F>(fn));
+        }
+
+        std::expected<std::string, std::string> capture_default_framebuffer_region_to_base64(
+            int framebuffer_width,
+            int framebuffer_height,
+            int capture_x,
+            int capture_y_top,
+            int capture_width,
+            int capture_height,
+            int width = 0,
+            int height = 0,
+            std::string_view capture_target = "capture",
+            const GLenum read_buffer = GL_FRONT) {
+            if (framebuffer_width <= 0 || framebuffer_height <= 0)
+                return std::unexpected("Window framebuffer size is unavailable");
+            if (capture_x < 0 || capture_y_top < 0)
+                return std::unexpected(std::string(capture_target) + " bounds are invalid");
+            if (capture_width <= 0 || capture_height <= 0)
+                return std::unexpected(std::string(capture_target) + " size is empty");
+            if (capture_x + capture_width > framebuffer_width ||
+                capture_y_top + capture_height > framebuffer_height) {
+                return std::unexpected(std::string(capture_target) + " bounds exceed the framebuffer");
+            }
+
+            const int capture_y_bottom = framebuffer_height - capture_y_top - capture_height;
+            if (capture_y_bottom < 0)
+                return std::unexpected(std::string(capture_target) + " bounds are invalid");
+
+            std::vector<uint8_t> pixels(static_cast<size_t>(capture_width) * capture_height * 4u);
+
+            GLint previous_read_fbo = 0;
+            GLint previous_read_buffer = GL_BACK;
+            GLint previous_pack_alignment = 4;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
+            glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
+            glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            glReadBuffer(read_buffer);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glFinish();
+            glReadPixels(
+                capture_x,
+                capture_y_bottom,
+                capture_width,
+                capture_height,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                pixels.data());
+            const GLenum read_error = glGetError();
+
+            glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
+            glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
+
+            if (read_error != GL_NO_ERROR)
+                return std::unexpected("glReadPixels failed while capturing " + std::string(capture_target));
+
+            const size_t row_bytes = static_cast<size_t>(capture_width) * 4u;
+            std::vector<uint8_t> flipped(pixels.size());
+            for (int row = 0; row < capture_height; ++row) {
+                const size_t src_offset = static_cast<size_t>(capture_height - 1 - row) * row_bytes;
+                const size_t dst_offset = static_cast<size_t>(row) * row_bytes;
+                std::copy_n(pixels.data() + src_offset, row_bytes, flipped.data() + dst_offset);
+            }
+
+            return mcp::encode_pixels_to_base64(
+                flipped.data(),
+                capture_width,
+                capture_height,
+                4,
+                width,
+                height);
         }
 
         std::expected<std::string, std::string> capture_live_viewport_to_base64(
@@ -137,58 +272,42 @@ namespace lfs::app {
             const int capture_height = std::min(
                 framebuffer_size.y - capture_y_top,
                 std::max(1, static_cast<int>(viewport_size.y * scale_y)));
-            if (capture_width <= 0 || capture_height <= 0)
-                return std::unexpected("Viewport capture size is empty");
-
-            const int capture_y_bottom = framebuffer_size.y - capture_y_top - capture_height;
-            if (capture_y_bottom < 0)
-                return std::unexpected("Viewport capture bounds are invalid");
-
-            std::vector<uint8_t> pixels(static_cast<size_t>(capture_width) * capture_height * 4u);
-
-            GLint previous_read_fbo = 0;
-            GLint previous_read_buffer = GL_BACK;
-            GLint previous_pack_alignment = 4;
-            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
-            glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
-            glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
-
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-            glReadBuffer(GL_FRONT);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
-            glFinish();
-            glReadPixels(
+            return capture_default_framebuffer_region_to_base64(
+                framebuffer_size.x,
+                framebuffer_size.y,
                 capture_x,
-                capture_y_bottom,
+                capture_y_top,
                 capture_width,
                 capture_height,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                pixels.data());
-            const GLenum read_error = glGetError();
-
-            glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
-            glReadBuffer(static_cast<GLenum>(previous_read_buffer));
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
-
-            if (read_error != GL_NO_ERROR)
-                return std::unexpected("glReadPixels failed while capturing the live viewport");
-
-            const size_t row_bytes = static_cast<size_t>(capture_width) * 4u;
-            std::vector<uint8_t> flipped(pixels.size());
-            for (int row = 0; row < capture_height; ++row) {
-                const size_t src_offset = static_cast<size_t>(capture_height - 1 - row) * row_bytes;
-                const size_t dst_offset = static_cast<size_t>(row) * row_bytes;
-                std::copy_n(pixels.data() + src_offset, row_bytes, flipped.data() + dst_offset);
-            }
-
-            return mcp::encode_pixels_to_base64(
-                flipped.data(),
-                capture_width,
-                capture_height,
-                4,
                 width,
-                height);
+                height,
+                "the live viewport");
+        }
+
+        std::expected<std::string, std::string> capture_full_window_to_base64(
+            vis::Visualizer* viewer,
+            int width = 0,
+            int height = 0) {
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return std::unexpected("Full-window capture requires a GUI visualizer");
+
+            auto* const window_manager = viewer_impl->getWindowManager();
+            if (!window_manager)
+                return std::unexpected("Window capture is not initialized");
+
+            const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
+            return capture_default_framebuffer_region_to_base64(
+                framebuffer_size.x,
+                framebuffer_size.y,
+                0,
+                0,
+                framebuffer_size.x,
+                framebuffer_size.y,
+                width,
+                height,
+                "the full window",
+                GL_BACK);
         }
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
@@ -280,7 +399,7 @@ namespace lfs::app {
                 {"type", node_type_to_string(node.type)},
                 {"visible", static_cast<bool>(node.visible)},
                 {"locked", static_cast<bool>(node.locked)},
-                {"gaussian_count", node.gaussian_count},
+                {"gaussian_count", node.gaussian_count.load(std::memory_order_acquire)},
             };
 
             if (node.parent_id != core::NULL_NODE) {
@@ -447,6 +566,16 @@ namespace lfs::app {
             return vis::cap::resolveTransformTargets(scene_manager, requested_node);
         }
 
+        std::expected<std::vector<std::string>, std::string> resolve_editable_transform_targets(
+            const vis::SceneManager& scene_manager,
+            const std::optional<std::string>& requested_node) {
+            auto resolved = vis::cap::resolveEditableTransformSelection(
+                scene_manager, requested_node, vis::cap::TransformTargetPolicy::AllowEditableSubset);
+            if (!resolved)
+                return std::unexpected(resolved.error());
+            return resolved->node_names;
+        }
+
         std::expected<core::NodeId, std::string> resolve_cropbox_parent_id(
             const vis::SceneManager& scene_manager,
             const std::optional<std::string>& requested_node) {
@@ -557,6 +686,7 @@ namespace lfs::app {
                                  {"use_ellipsoid", settings.use_ellipsoid},
                                  {"desaturate_unselected", settings.desaturate_unselected},
                                  {"desaturate_cropping", settings.desaturate_cropping},
+                                 {"hide_outside_depth_box", settings.hide_outside_depth_box},
                                  {"crop_filter_for_selection", settings.crop_filter_for_selection},
                                  {"apply_appearance_correction", settings.apply_appearance_correction},
                                  {"ppisp_mode", settings.ppisp_mode},
@@ -685,6 +815,7 @@ namespace lfs::app {
             set_bool("use_ellipsoid", settings.use_ellipsoid);
             set_bool("desaturate_unselected", settings.desaturate_unselected);
             set_bool("desaturate_cropping", settings.desaturate_cropping);
+            set_bool("hide_outside_depth_box", settings.hide_outside_depth_box);
             set_bool("crop_filter_for_selection", settings.crop_filter_for_selection);
             set_bool("apply_appearance_correction", settings.apply_appearance_correction);
             set_int("ppisp_mode", settings.ppisp_mode);
@@ -790,6 +921,33 @@ namespace lfs::app {
 
         json history_json() {
             auto& history = vis::op::undoHistory();
+            const auto item_json = [](const vis::op::UndoStackItem& item) {
+                return json{
+                    {"id", item.metadata.id},
+                    {"label", item.metadata.label},
+                    {"source", item.metadata.source},
+                    {"scope", item.metadata.scope},
+                    {"estimated_bytes", static_cast<int64_t>(item.estimated_bytes)},
+                    {"cpu_bytes", static_cast<int64_t>(item.cpu_bytes)},
+                    {"gpu_bytes", static_cast<int64_t>(item.gpu_bytes)},
+                };
+            };
+
+            json undo_items = json::array();
+            for (const auto& item : history.undoItems()) {
+                undo_items.push_back(item_json(item));
+            }
+
+            json redo_items = json::array();
+            for (const auto& item : history.redoItems()) {
+                redo_items.push_back(item_json(item));
+            }
+
+            const auto undo_memory = history.undoMemory();
+            const auto redo_memory = history.redoMemory();
+            const auto transaction_memory = history.transactionMemory();
+            const auto total_memory = history.totalMemory();
+
             return json{
                 {"success", true},
                 {"can_undo", history.canUndo()},
@@ -798,7 +956,37 @@ namespace lfs::app {
                 {"redo_count", static_cast<int64_t>(history.redoCount())},
                 {"undo_name", history.undoName()},
                 {"redo_name", history.redoName()},
+                {"undo_names", history.undoNames()},
+                {"redo_names", history.redoNames()},
+                {"undo_items", std::move(undo_items)},
+                {"redo_items", std::move(redo_items)},
+                {"undo_bytes", static_cast<int64_t>(history.undoBytes())},
+                {"redo_bytes", static_cast<int64_t>(history.redoBytes())},
+                {"transaction_bytes", static_cast<int64_t>(history.transactionBytes())},
+                {"total_bytes", static_cast<int64_t>(history.totalBytes())},
+                {"undo_cpu_bytes", static_cast<int64_t>(undo_memory.cpu_bytes)},
+                {"undo_gpu_bytes", static_cast<int64_t>(undo_memory.gpu_bytes)},
+                {"redo_cpu_bytes", static_cast<int64_t>(redo_memory.cpu_bytes)},
+                {"redo_gpu_bytes", static_cast<int64_t>(redo_memory.gpu_bytes)},
+                {"transaction_cpu_bytes", static_cast<int64_t>(transaction_memory.cpu_bytes)},
+                {"transaction_gpu_bytes", static_cast<int64_t>(transaction_memory.gpu_bytes)},
+                {"total_cpu_bytes", static_cast<int64_t>(total_memory.cpu_bytes)},
+                {"total_gpu_bytes", static_cast<int64_t>(total_memory.gpu_bytes)},
+                {"max_entries", static_cast<int64_t>(vis::op::UndoHistory::MAX_ENTRIES)},
+                {"max_bytes", static_cast<int64_t>(history.maxBytes())},
+                {"transaction_active", history.hasActiveTransaction()},
+                {"transaction_depth", static_cast<int64_t>(history.transactionDepth())},
+                {"transaction_name", history.activeTransactionName()},
+                {"transaction_age_ms", static_cast<int64_t>(history.transactionAgeMs())},
+                {"generation", static_cast<int64_t>(history.generation())},
             };
+        }
+
+        void append_history_result(json& payload, const vis::op::HistoryResult& result) {
+            payload["success"] = result.success;
+            payload["changed"] = result.changed;
+            payload["steps_performed"] = static_cast<int64_t>(result.steps_performed);
+            payload["error"] = result.error;
         }
 
         std::expected<void, std::string> prepare_delete_operator(vis::Visualizer& viewer,
@@ -845,16 +1033,15 @@ namespace lfs::app {
             if (!scene_manager)
                 return std::unexpected("Scene manager not initialized");
 
-            const auto requested_node = props.get<std::string>("node");
-            if (requested_node && !requested_node->empty()) {
-                if (!scene_manager->getScene().getNode(*requested_node))
-                    return std::unexpected("Node not found: " + *requested_node);
-                return {};
-            }
+            std::optional<std::string> requested_node;
+            if (const auto node = props.get<std::string>("node"); node && !node->empty())
+                requested_node = *node;
 
-            if (!scene_manager->hasSelectedNode())
-                return std::unexpected("No node specified and no node selected");
+            auto targets = resolve_editable_transform_targets(*scene_manager, requested_node);
+            if (!targets)
+                return std::unexpected(targets.error());
 
+            props.set("resolved_node_names", *targets);
             return {};
         }
 
@@ -1245,6 +1432,11 @@ namespace lfs::app {
                     if (!training_name.empty())
                         requested.push_back(training_name);
                 }
+                if (requested.empty()) {
+                    const auto* node = find_first_visible_splat_node(scene);
+                    if (node)
+                        requested.push_back(node->name);
+                }
             }
 
             if (requested.empty())
@@ -1333,66 +1525,14 @@ namespace lfs::app {
                     return std::unexpected(result.error());
                 break;
             }
+            case core::ExportFormat::USD: {
+                if (auto result = io::save_usd(*merged, io::UsdSaveOptions{.output_path = path}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
             }
 
             return {};
-        }
-
-        const char* keyframe_easing_name(const uint8_t easing) {
-            switch (easing) {
-            case 0: return "linear";
-            case 1: return "ease_in";
-            case 2: return "ease_out";
-            case 3: return "ease_in_out";
-            default: return "unknown";
-            }
-        }
-
-        json keyframe_node_json(const core::SceneNode& node) {
-            assert(node.keyframe);
-
-            const auto& keyframe = *node.keyframe;
-            return json{
-                {"name", node.name},
-                {"index", static_cast<int64_t>(keyframe.keyframe_index)},
-                {"time", keyframe.time},
-                {"position", vec3_to_json(keyframe.position)},
-                {"rotation_quat", json::array({keyframe.rotation.w, keyframe.rotation.x, keyframe.rotation.y, keyframe.rotation.z})},
-                {"focal_length_mm", keyframe.focal_length_mm},
-                {"easing", keyframe.easing},
-                {"easing_name", keyframe_easing_name(keyframe.easing)},
-            };
-        }
-
-        json sequencer_state_json(const vis::SceneManager& scene_manager) {
-            const auto& scene = scene_manager.getScene();
-
-            std::vector<const core::SceneNode*> keyframes;
-            for (const auto* const node : scene.getNodes()) {
-                if (node && node->type == core::NodeType::KEYFRAME && node->keyframe)
-                    keyframes.push_back(node);
-            }
-
-            std::sort(keyframes.begin(), keyframes.end(), [](const auto* lhs, const auto* rhs) {
-                return lhs->keyframe->keyframe_index < rhs->keyframe->keyframe_index;
-            });
-
-            json keyframe_list = json::array();
-            for (const auto* const node : keyframes)
-                keyframe_list.push_back(keyframe_node_json(*node));
-
-            const auto* const ui_state = python::get_sequencer_ui_state();
-            return json{
-                {"success", true},
-                {"visible", python::is_sequencer_visible()},
-                {"has_keyframes", python::has_keyframes()},
-                {"selected_keyframe", ui_state ? ui_state->selected_keyframe : -1},
-                {"playback_speed", ui_state ? ui_state->playback_speed : 1.0f},
-                {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
-                {"follow_playback", ui_state ? ui_state->follow_playback : false},
-                {"keyframe_count", keyframe_list.size()},
-                {"keyframes", keyframe_list},
-            };
         }
 
         std::expected<std::string, std::string> resolve_gaussian_node_name(
@@ -1421,6 +1561,10 @@ namespace lfs::app {
                 if (node && node->model)
                     return training_name;
             }
+
+            const auto* fallback = find_first_visible_splat_node(scene);
+            if (fallback)
+                return fallback->name;
 
             return std::unexpected("No gaussian node specified and no suitable selected/training node is available");
         }
@@ -1618,12 +1762,18 @@ namespace lfs::app {
 
     void register_gui_scene_tools(vis::Visualizer* viewer) {
         assert(viewer);
-        auto* const viewer_impl = viewer;
         auto& registry = ToolRegistry::instance();
 
         register_generic_gui_operator_tools(registry, viewer);
         register_generic_gui_runtime_tools(registry, viewer);
         register_generic_gui_ui_tools(registry, viewer);
+
+        auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+        assert(viewer_impl);
+        if (!viewer_impl) {
+            LOG_ERROR("GUI-native MCP scene tools require a GUI VisualizerImpl");
+            return;
+        }
 
         // --- Scene operations (posted to GUI thread) ---
 
@@ -1646,7 +1796,7 @@ namespace lfs::app {
                 if (!result)
                     return json{{"error", result.error()}};
 
-                return json{{"success", true}, {"path", path.string()}};
+                return json{{"success", true}, {"path", core::path_to_utf8(path)}};
             });
 
         mcp::register_shared_scene_tools(mcp::SharedSceneToolBackend{
@@ -1697,20 +1847,52 @@ namespace lfs::app {
                     });
                 },
             .render_capture =
-                [viewer](int camera_index, int width, int height) {
+                [viewer](std::optional<int> camera_index, int width, int height) {
                     return post_and_wait(viewer, [viewer, camera_index, width, height]() {
-                        return render_scene_to_base64(viewer->getScene(), camera_index, width, height);
+                        if (camera_index)
+                            return render_scene_to_base64(viewer->getScene(), *camera_index, width, height);
+                        return capture_live_viewport_to_base64(viewer, width, height);
                     });
                 },
             .gaussian_count =
                 [viewer]() -> std::expected<int64_t, std::string> {
                 return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
-                    auto& scene = viewer->getScene();
-                    if (!scene.getTrainingModel())
-                        return std::unexpected("No model loaded");
-                    return scene.getTotalGaussianCount();
+                    return count_visible_model_gaussians(viewer->getScene());
                 });
             }});
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.capture_window",
+                .description = "Capture the current composited app window. Unlike render.capture without camera_index, this includes the full window, including panels, toolbars, and GUI overlays.",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
+                        {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
+                    .required = {}},
+                .metadata = mcp::McpToolMetadata{
+                    .category = "render",
+                    .kind = "query",
+                    .runtime = "gui",
+                    .thread_affinity = "gui_thread",
+                }},
+            [viewer](const json& args) -> json {
+                const int width = args.value("width", 0);
+                const int height = args.value("height", 0);
+
+                auto result = capture_after_gui_render(viewer, [viewer, width, height]() {
+                    return capture_full_window_to_base64(viewer, width, height);
+                });
+                if (!result)
+                    return json{{"error", result.error()}};
+
+                return json{
+                    {"success", true},
+                    {"mime_type", "image/png"},
+                    {"data", *result},
+                };
+            });
 
         registry.register_tool(
             McpTool{
@@ -1866,52 +2048,156 @@ namespace lfs::app {
                 });
             });
 
-        register_gui_operator_tool(
-            registry, viewer_impl,
-            GuiOperatorToolBinding{
-                .tool_name = "history.undo",
-                .operator_id = vis::op::BuiltinOp::Undo,
-                .category = "history",
-                .description = "Undo the most recent shared scene operation",
-                .prepare =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
-                    if (!vis::op::undoHistory().canUndo())
-                        return std::unexpected("Nothing to undo");
-                    return {};
-                },
-                .on_success =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       const vis::op::OperatorProperties& /*props*/,
-                       const vis::op::OperatorReturnValue& /*result*/) {
-                        auto payload = history_json();
-                        payload["performed"] = "undo";
-                        return payload;
-                    },
+        registry.register_tool(
+            McpTool{
+                .name = "history.list",
+                .description = "List the full undo and redo stacks for the shared history service",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    auto payload = history_json();
+                    payload["performed"] = "list";
+                    return payload;
+                });
             });
 
-        register_gui_operator_tool(
-            registry, viewer_impl,
-            GuiOperatorToolBinding{
-                .tool_name = "history.redo",
-                .operator_id = vis::op::BuiltinOp::Redo,
-                .category = "history",
+        registry.register_tool(
+            McpTool{
+                .name = "history.begin_transaction",
+                .description = "Begin a grouped transaction in the shared undo/redo history service",
+                .input_schema =
+                    {.type = "object",
+                     .properties = {{"name", {{"type", "string"}}}},
+                     .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto name = args.contains("name") && args["name"].is_string()
+                                      ? args["name"].get<std::string>()
+                                      : std::string("MCP Transaction");
+                return post_and_wait(viewer_impl, [name]() -> json {
+                    vis::op::undoHistory().beginTransaction(name);
+                    auto payload = history_json();
+                    payload["performed"] = "begin_transaction";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.commit_transaction",
+                .description = "Commit the current grouped transaction in the shared undo/redo history service",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    if (!vis::op::undoHistory().hasActiveTransaction())
+                        return json{{"error", "No active history transaction"}};
+                    vis::op::undoHistory().commitTransaction();
+                    auto payload = history_json();
+                    payload["performed"] = "commit_transaction";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.rollback_transaction",
+                .description = "Rollback the current grouped transaction in the shared undo/redo history service",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    if (!vis::op::undoHistory().hasActiveTransaction())
+                        return json{{"error", "No active history transaction"}};
+                    const auto result = vis::op::undoHistory().rollbackTransaction();
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "rollback_transaction";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.undo",
+                .description = "Undo the most recent shared scene operation",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    const auto result = vis::op::undoHistory().undo();
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "undo";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.redo",
                 .description = "Redo the next shared scene operation",
-                .prepare =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
-                    if (!vis::op::undoHistory().canRedo())
-                        return std::unexpected("Nothing to redo");
-                    return {};
-                },
-                .on_success =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       const vis::op::OperatorProperties& /*props*/,
-                       const vis::op::OperatorReturnValue& /*result*/) {
-                        auto payload = history_json();
-                        payload["performed"] = "redo";
-                        return payload;
-                    },
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    const auto result = vis::op::undoHistory().redo();
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "redo";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.jump",
+                .description = "Apply multiple undo or redo steps to navigate to a shared history state",
+                .input_schema =
+                    {.type = "object",
+                     .properties = {
+                         {"stack", {{"type", "string"}, {"enum", json::array({"undo", "redo"})}}},
+                         {"count", {{"type", "integer"}, {"minimum", 1}}}},
+                     .required = {"stack", "count"}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json& args) -> json {
+                const auto stack = args.value("stack", std::string{});
+                const auto count = static_cast<size_t>(std::max<int64_t>(1, args.value("count", 1)));
+                return post_and_wait(viewer_impl, [stack, count]() -> json {
+                    vis::op::HistoryResult result;
+                    if (stack == "undo") {
+                        result = vis::op::undoHistory().undoMultiple(count);
+                    } else if (stack == "redo") {
+                        result = vis::op::undoHistory().redoMultiple(count);
+                    } else {
+                        return json{{"error", "stack must be 'undo' or 'redo'"}};
+                    }
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "jump";
+                    payload["stack"] = stack;
+                    payload["requested_count"] = static_cast<int64_t>(count);
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.shrink",
+                .description = "Offload shared history to CPU and evict cold entries until GPU usage fits the requested budget",
+                .input_schema =
+                    {.type = "object",
+                     .properties = {{"target_gpu_bytes", {{"type", "integer"}, {"minimum", 0}}}},
+                     .required = {"target_gpu_bytes"}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json& args) -> json {
+                const auto target_gpu_bytes =
+                    static_cast<size_t>(std::max<int64_t>(0, args.value("target_gpu_bytes", 0)));
+                return post_and_wait(viewer_impl, [target_gpu_bytes]() -> json {
+                    vis::op::undoHistory().shrinkToFit(target_gpu_bytes);
+                    auto payload = history_json();
+                    payload["success"] = true;
+                    payload["performed"] = "shrink";
+                    payload["target_gpu_bytes"] = static_cast<int64_t>(target_gpu_bytes);
+                    return payload;
+                });
             });
 
         registry.register_tool(
@@ -2340,6 +2626,45 @@ namespace lfs::app {
                         {"started", false},
                         {"completed", true},
                         {"format", "spz"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_usd",
+                .description = "Start an asynchronous export of one or more scene nodes to USD",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::USD, path, sh_degree); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "usd"},
                         {"path", core::path_to_utf8(path)},
                         {"nodes", *node_names},
                     };
@@ -3672,36 +3997,16 @@ namespace lfs::app {
                     auto* const node = scene.getMutableNode(*node_name);
                     if (!node || !node->model)
                         return json{{"error", "Gaussian node not found: " + *node_name}};
-
-                    auto* const field = resolve_gaussian_field(*node->model, field_name);
-                    if (!field)
-                        return json{{"error", "Unsupported gaussian field: " + field_name}};
-
-                    for (const int index : indices) {
-                        if (index < 0 || static_cast<size_t>(index) >= node->model->size())
-                            return json{{"error", "Gaussian index out of range: " + std::to_string(index)}};
+                    if (auto result = vis::cap::writeGaussianField(
+                            *scene_manager,
+                            rendering_manager,
+                            *node_name,
+                            field_name,
+                            indices,
+                            values);
+                        !result) {
+                        return json{{"error", result.error()}};
                     }
-
-                    const size_t row_width = product_of_tail_dims(*field);
-                    const size_t expected_values = row_width * indices.size();
-                    if (values.size() != expected_values) {
-                        return json{{"error", "Field slice expects " + std::to_string(expected_values) +
-                                                  " values but received " + std::to_string(values.size())}};
-                    }
-
-                    const auto& field_shape = field->shape();
-                    if (field_shape.rank() == 0)
-                        return json{{"error", "Gaussian tensor field has invalid rank"}};
-                    auto shape_dims = field_shape.dims();
-                    shape_dims[0] = indices.size();
-
-                    const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
-                    const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
-                    field->index_copy_(0, index_tensor, src_tensor);
-
-                    scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-                    if (rendering_manager)
-                        rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
 
                     return json{
                         {"success", true},
@@ -3712,365 +4017,44 @@ namespace lfs::app {
                 });
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.get",
-                .description = "Inspect sequencer visibility, selected keyframe, and the mirrored keyframe scene nodes",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.add_keyframe",
-                .description = "Add a keyframe at the current viewport camera, optionally setting the camera first",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
-                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                auto eye = optional_vec3_arg(args, "eye");
-                if (!eye)
-                    return json{{"error", eye.error()}};
-                auto target = optional_vec3_arg(args, "target");
-                if (!target)
-                    return json{{"error", target.error()}};
-                auto up = optional_vec3_arg(args, "up");
-                if (!up)
-                    return json{{"error", up.error()}};
-                if (eye->has_value() != target->has_value())
-                    return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
-
-                const std::optional<float> fov = args.contains("fov_degrees")
-                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
-                                                     : std::nullopt;
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, eye = *eye, target = *target, up = *up, fov, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-                    if (eye && target) {
-                        const glm::vec3 up_value = up.value_or(glm::vec3(0.0f, 1.0f, 0.0f));
-                        vis::apply_set_view(vis::SetViewParams{
-                            .eye = {eye->x, eye->y, eye->z},
-                            .target = {target->x, target->y, target->z},
-                            .up = {up_value.x, up_value.y, up_value.z},
-                        });
-                    }
-                    if (fov)
-                        vis::apply_set_fov(*fov);
-
-                    core::events::cmd::SequencerAddKeyframe{}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.update_keyframe",
-                .description = "Update the selected keyframe, optionally selecting it and/or setting the viewport camera first",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Optional keyframe index to select before updating"}}},
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
-                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                auto eye = optional_vec3_arg(args, "eye");
-                if (!eye)
-                    return json{{"error", eye.error()}};
-                auto target = optional_vec3_arg(args, "target");
-                if (!target)
-                    return json{{"error", target.error()}};
-                auto up = optional_vec3_arg(args, "up");
-                if (!up)
-                    return json{{"error", up.error()}};
-                if (eye->has_value() != target->has_value())
-                    return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
-
-                const std::optional<size_t> keyframe_index = args.contains("keyframe_index")
-                                                                 ? std::optional<size_t>(args["keyframe_index"].get<size_t>())
-                                                                 : std::nullopt;
-                const std::optional<float> fov = args.contains("fov_degrees")
-                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
-                                                     : std::nullopt;
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, eye = *eye, target = *target, up = *up, fov, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-                    if (keyframe_index)
-                        core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *keyframe_index}.emit();
-                    if (eye && target) {
-                        const glm::vec3 up_value = up.value_or(glm::vec3(0.0f, 1.0f, 0.0f));
-                        vis::apply_set_view(vis::SetViewParams{
-                            .eye = {eye->x, eye->y, eye->z},
-                            .target = {target->x, target->y, target->z},
-                            .up = {up_value.x, up_value.y, up_value.z},
-                        });
-                    }
-                    if (fov)
-                        vis::apply_set_fov(*fov);
-
-                    core::events::cmd::SequencerUpdateKeyframe{}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.select_keyframe",
-                .description = "Select a keyframe in the shared sequencer timeline",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {"keyframe_index"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-
-                    core::events::cmd::SequencerSelectKeyframe{.keyframe_index = keyframe_index}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.go_to_keyframe",
-                .description = "Move the viewport camera to a sequencer keyframe",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {"keyframe_index"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-
-                    core::events::cmd::SequencerGoToKeyframe{.keyframe_index = keyframe_index}.emit();
-                    json result = sequencer_state_json(*scene_manager);
-                    const auto info = vis::get_current_view_info();
-                    if (info)
-                        result["camera"] = view_info_json(*info)["camera"];
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.delete_keyframe",
-                .description = "Delete a keyframe from the shared sequencer timeline",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}}},
-                    .required = {"keyframe_index"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = keyframe_index}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.set_easing",
-                .description = "Set the easing mode for a keyframe",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"easing", json{{"oneOf", json::array({json{{"type", "integer"}},
-                                                               json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}})},
-                                        {"description", "Easing mode as integer or name"}}}},
-                    .required = {"keyframe_index", "easing"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-                int easing = 0;
-                if (args["easing"].is_string()) {
-                    const std::string value = args["easing"].get<std::string>();
-                    if (value == "linear")
-                        easing = 0;
-                    else if (value == "ease_in")
-                        easing = 1;
-                    else if (value == "ease_out")
-                        easing = 2;
-                    else if (value == "ease_in_out")
-                        easing = 3;
-                    else
-                        return json{{"error", "Unsupported easing mode: " + value}};
-                } else {
-                    easing = args["easing"].get<int>();
-                }
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, easing]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = keyframe_index, .easing_type = easing}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.play_pause",
-                .description = "Toggle sequencer playback",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    core::events::cmd::SequencerPlayPause{}.emit();
-                    json result = sequencer_state_json(*scene_manager);
-                    result["toggled"] = true;
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.clear",
-                .description = "Clear all sequencer keyframes",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    python::clear_keyframes();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.save_path",
-                .description = "Save the sequencer camera path to JSON",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Destination JSON path"}}}},
-                    .required = {"path"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string path = args["path"].get<std::string>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, path]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    const bool saved = python::save_camera_path(path);
-                    if (!saved)
-                        return json{{"error", "Failed to save camera path"}};
-
-                    json result = sequencer_state_json(*scene_manager);
-                    result["path"] = path;
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.load_path",
-                .description = "Load the sequencer camera path from JSON",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Source JSON path"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {"path"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string path = args["path"].get<std::string>();
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, path, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-
-                    const bool loaded = python::load_camera_path(path);
-                    if (!loaded)
-                        return json{{"error", "Failed to load camera path"}};
-
-                    json result = sequencer_state_json(*scene_manager);
-                    result["path"] = path;
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.set_playback_speed",
-                .description = "Set the sequencer playback speed multiplier",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"speed", json{{"type", "number"}, {"description", "Playback speed multiplier"}}}},
-                    .required = {"speed"}}},
-            [viewer_impl](const json& args) -> json {
-                const float speed = args["speed"].get<float>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, speed]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    python::set_playback_speed(speed);
-                    return sequencer_state_json(*scene_manager);
-                });
+        register_gui_sequencer_tools(
+            registry,
+            viewer,
+            SequencerToolBackend{
+                .ensure_ready =
+                    [viewer_impl]() -> std::expected<void, std::string> {
+                    if (!viewer_impl)
+                        return std::unexpected("Sequencer tools require a GUI visualizer");
+                    if (!viewer_impl->getSceneManager())
+                        return std::unexpected("Scene manager not initialized");
+                    if (!viewer_impl->getGuiManager())
+                        return std::unexpected("GUI manager not initialized");
+                    return {};
+                },
+                .controller =
+                    [viewer_impl]() -> vis::SequencerController* {
+                    if (!viewer_impl)
+                        return nullptr;
+                    auto* const gui_manager = viewer_impl->getGuiManager();
+                    return gui_manager ? &gui_manager->sequencer() : nullptr;
+                },
+                .is_visible = []() { return python::is_sequencer_visible(); },
+                .set_visible = [](const bool visible) { python::set_sequencer_visible(visible); },
+                .ui_state = []() { return python::get_sequencer_ui_state(); },
+                .add_keyframe = []() { core::events::cmd::SequencerAddKeyframe{}.emit(); },
+                .update_selected_keyframe = []() { core::events::cmd::SequencerUpdateKeyframe{}.emit(); },
+                .select_keyframe = [](const size_t index) { core::events::cmd::SequencerSelectKeyframe{.keyframe_index = index}.emit(); },
+                .go_to_keyframe = [](const size_t index) { core::events::cmd::SequencerGoToKeyframe{.keyframe_index = index}.emit(); },
+                .delete_keyframe = [](const size_t index) { core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit(); },
+                .set_keyframe_easing =
+                    [](const size_t index, const int easing) {
+                        core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = index, .easing_type = easing}.emit();
+                    },
+                .play_pause = []() { core::events::cmd::SequencerPlayPause{}.emit(); },
+                .clear = []() { python::clear_keyframes(); },
+                .save_path = [](const std::string& path) { return python::save_camera_path(path); },
+                .load_path = [](const std::string& path) { return python::load_camera_path(path); },
+                .set_playback_speed = [](const float speed) { python::set_playback_speed(speed); },
             });
 
         // --- Plugin tools ---
@@ -4352,7 +4336,7 @@ namespace lfs::app {
             McpResource{
                 .uri = "lichtfeld://render/current",
                 .name = "Current Render",
-                .description = "Base64-encoded PNG capture of the current GUI viewport",
+                .description = "Base64-encoded PNG capture of the live viewport region only; excludes panels, toolbars, and other window UI",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 auto result = post_and_wait(viewer, [viewer]() {
@@ -4364,15 +4348,35 @@ namespace lfs::app {
                 return single_blob_resource(uri, "image/png", *result);
             });
 
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://render/window",
+                .name = "Current Window",
+                .description = "Base64-encoded PNG capture of the full composited app window, including the live viewport, panels, toolbars, and GUI overlays",
+                .mime_type = "image/png"},
+            [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                auto result = capture_after_gui_render(viewer, [viewer]() {
+                    return capture_full_window_to_base64(viewer);
+                });
+                if (!result)
+                    return std::unexpected(result.error());
+
+                return single_blob_resource(uri, "image/png", *result);
+            });
+
         registry.register_resource_prefix(
             "lichtfeld://render/",
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
-                if (uri != "lichtfeld://render/current")
-                    return std::unexpected("Unknown resource URI: " + uri);
-
-                auto result = post_and_wait(viewer, [viewer]() {
-                    return capture_live_viewport_to_base64(viewer);
-                });
+                std::expected<std::string, std::string> result = std::unexpected("Unknown resource URI: " + uri);
+                if (uri == "lichtfeld://render/current") {
+                    result = post_and_wait(viewer, [viewer]() {
+                        return capture_live_viewport_to_base64(viewer);
+                    });
+                } else if (uri == "lichtfeld://render/window") {
+                    result = capture_after_gui_render(viewer, [viewer]() {
+                        return capture_full_window_to_base64(viewer);
+                    });
+                }
                 if (!result)
                     return std::unexpected(result.error());
 
@@ -4434,6 +4438,32 @@ namespace lfs::app {
                 return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
                     auto payload = selection_state_json(viewer->getScene());
                     payload["success"] = true;
+                    return single_json_resource(uri, std::move(payload));
+                });
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://history/state",
+                .name = "History State",
+                .description = "Current undo/redo state for the shared GUI history service",
+                .mime_type = "application/json"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    return single_json_resource(uri, history_json());
+                });
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://history/stack",
+                .name = "History Stack",
+                .description = "Full undo and redo stacks for the shared GUI history service",
+                .mime_type = "application/json"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    auto payload = history_json();
+                    payload["performed"] = "stack";
                     return single_json_resource(uri, std::move(payload));
                 });
             });

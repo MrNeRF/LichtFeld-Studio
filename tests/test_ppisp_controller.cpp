@@ -91,7 +91,7 @@ namespace {
         lfs::training::PPISPController controller(10000, config);
 
         double initial_lr = controller.get_lr();
-        EXPECT_NEAR(initial_lr, config.lr, 1e-6);
+        EXPECT_NEAR(initial_lr, config.lr * config.warmup_start_factor, 1e-6);
 
         // After warmup completes, LR should be at initial_lr
         for (int i = 0; i < 100; ++i) {

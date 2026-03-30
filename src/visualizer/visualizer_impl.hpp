@@ -19,6 +19,7 @@
 #include "training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
+#include <cassert>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -62,10 +63,15 @@ namespace lfs::vis {
         void clearScene() override;
         core::Scene& getScene() override { return scene_manager_->getScene(); }
         bool postWork(WorkItem work) override;
+        LFS_VIS_API bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
         }
         [[nodiscard]] bool acceptsPostedWork() const override;
+        [[nodiscard]] bool isProcessingRenderWork() const {
+            assert(isOnViewerThread());
+            return processing_render_work_;
+        }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
         std::expected<std::filesystem::path, std::string> saveCheckpoint(
@@ -210,9 +216,11 @@ namespace lfs::vis {
 
         mutable std::mutex work_queue_mutex_;
         std::vector<WorkItem> work_queue_;
+        std::vector<WorkItem> render_work_queue_;
         std::thread::id viewer_thread_id_;
         bool accepting_work_ = true;
         bool shutdown_started_ = false;
+        bool processing_render_work_ = false;
 
         std::mutex shutdown_callback_mutex_;
         std::function<void()> shutdown_requested_callback_;

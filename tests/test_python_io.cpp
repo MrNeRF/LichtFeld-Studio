@@ -1,13 +1,19 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <array>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
+#include <stdexcept>
+#include <vector>
 
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/ply.hpp"
 #include "io/loader.hpp"
 
 namespace fs = std::filesystem;
@@ -89,6 +95,99 @@ protected:
             std::move(rotation),
             std::move(opacity),
             1.0f);
+    }
+
+    static SplatData create_layout_test_splat() {
+        auto means = Tensor::from_vector(std::vector<float>{1.0f, 2.0f, 3.0f}, {size_t{1}, size_t{3}}, Device::CPU);
+        auto sh0 = Tensor::from_vector(std::vector<float>{10.0f, 20.0f, 30.0f}, {size_t{1}, size_t{1}, size_t{3}}, Device::CPU);
+        auto shN = Tensor::from_vector(
+            std::vector<float>{
+                100.0f, 200.0f, 300.0f,
+                101.0f, 201.0f, 301.0f,
+                102.0f, 202.0f, 302.0f},
+            {size_t{1}, size_t{3}, size_t{3}}, Device::CPU);
+        auto scaling = Tensor::zeros({size_t{1}, size_t{3}}, Device::CPU, DataType::Float32);
+        auto rotation = Tensor::from_vector(std::vector<float>{1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU);
+        auto opacity = Tensor::from_vector(std::vector<float>{0.25f}, {size_t{1}, size_t{1}}, Device::CPU);
+
+        return SplatData(
+            1,
+            std::move(means),
+            std::move(sh0),
+            std::move(shN),
+            std::move(scaling),
+            std::move(rotation),
+            std::move(opacity),
+            1.0f);
+    }
+
+    static void write_external_sh_layout_test_ply(const fs::path& path) {
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Failed to open test PLY for writing");
+        }
+
+        std::string header =
+            "ply\n"
+            "format binary_little_endian 1.0\n"
+            "element vertex 1\n"
+            "property float x\n"
+            "property float y\n"
+            "property float z\n"
+            "property float f_dc_0\n"
+            "property float f_dc_1\n"
+            "property float f_dc_2\n"
+            "property float f_rest_0\n"
+            "property float f_rest_1\n"
+            "property float f_rest_2\n"
+            "property float f_rest_3\n"
+            "property float f_rest_4\n"
+            "property float f_rest_5\n"
+            "property float f_rest_6\n"
+            "property float f_rest_7\n"
+            "property float f_rest_8\n"
+            "end_header\n";
+        out.write(header.data(), static_cast<std::streamsize>(header.size()));
+
+        const std::array<float, 15> vertex{
+            1.0f, 2.0f, 3.0f,
+            10.0f, 20.0f, 30.0f,
+            100.0f, 101.0f, 102.0f,
+            200.0f, 201.0f, 202.0f,
+            300.0f, 301.0f, 302.0f};
+        out.write(reinterpret_cast<const char*>(vertex.data()),
+                  static_cast<std::streamsize>(vertex.size() * sizeof(float)));
+        if (!out.good()) {
+            throw std::runtime_error("Failed to write test PLY");
+        }
+    }
+
+    static std::vector<float> read_binary_ply_body_as_floats(const fs::path& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) {
+            throw std::runtime_error("Failed to open test PLY for reading");
+        }
+
+        const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        const size_t header_pos = bytes.find("end_header");
+        if (header_pos == std::string::npos) {
+            throw std::runtime_error("Missing end_header in test PLY");
+        }
+
+        const size_t newline_pos = bytes.find('\n', header_pos);
+        if (newline_pos == std::string::npos) {
+            throw std::runtime_error("Malformed PLY header");
+        }
+
+        const size_t body_offset = newline_pos + 1;
+        const size_t body_bytes = bytes.size() - body_offset;
+        if (body_bytes % sizeof(float) != 0) {
+            throw std::runtime_error("PLY body is not float-aligned");
+        }
+
+        std::vector<float> values(body_bytes / sizeof(float));
+        std::memcpy(values.data(), bytes.data() + body_offset, body_bytes);
+        return values;
     }
 };
 
@@ -192,6 +291,76 @@ TEST_F(PythonIOTest, PlySaveLoadRoundtrip) {
 
     for (size_t i = 0; i < std::min(size_t(100), num_points * 3); ++i) {
         EXPECT_NEAR(orig_ptr[i], load_ptr[i], PLY_TOLERANCE) << "Mismatch at index " << i;
+    }
+}
+
+TEST_F(PythonIOTest, PlyLoadMapsExternalChannelMajorShOrderToInternalLayout) {
+    const fs::path input_path = temp_dir / "external_channel_major_sh.ply";
+    write_external_sh_layout_test_ply(input_path);
+
+    auto loaded = load_ply(input_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load test PLY: " << loaded.error();
+
+    EXPECT_EQ(loaded->size(), 1UL);
+    EXPECT_EQ(loaded->get_max_sh_degree(), 1);
+
+    const auto sh0 = loaded->sh0().cpu().contiguous();
+    ASSERT_EQ(sh0.ndim(), 3);
+    ASSERT_EQ(sh0.size(0), 1);
+    ASSERT_EQ(sh0.size(1), 1);
+    ASSERT_EQ(sh0.size(2), 3);
+
+    const auto* sh0_ptr = sh0.ptr<float>();
+    EXPECT_FLOAT_EQ(sh0_ptr[0], 10.0f);
+    EXPECT_FLOAT_EQ(sh0_ptr[1], 20.0f);
+    EXPECT_FLOAT_EQ(sh0_ptr[2], 30.0f);
+
+    const auto shN = loaded->shN().cpu().contiguous();
+    ASSERT_TRUE(shN.is_valid());
+    ASSERT_EQ(shN.ndim(), 3);
+    ASSERT_EQ(shN.size(0), 1);
+    ASSERT_EQ(shN.size(1), 3);
+    ASSERT_EQ(shN.size(2), 3);
+
+    const std::array<float, 9> expected_rest{
+        100.0f, 200.0f, 300.0f,
+        101.0f, 201.0f, 301.0f,
+        102.0f, 202.0f, 302.0f};
+    const auto* shN_ptr = shN.ptr<float>();
+    for (size_t i = 0; i < expected_rest.size(); ++i) {
+        EXPECT_FLOAT_EQ(shN_ptr[i], expected_rest[i]) << "Mismatch at shN index " << i;
+    }
+}
+
+TEST_F(PythonIOTest, PlySaveUsesExternalChannelMajorShOrder) {
+    auto splat = create_layout_test_splat();
+    const fs::path output_path = temp_dir / "channel_major_export.ply";
+
+    PlySaveOptions save_options;
+    save_options.output_path = output_path;
+    save_options.binary = true;
+
+    auto save_result = save_ply(splat, save_options);
+    ASSERT_TRUE(save_result.has_value()) << "Failed to save test PLY: " << save_result.error().format();
+
+    const auto values = read_binary_ply_body_as_floats(output_path);
+    ASSERT_GE(values.size(), 18UL);
+
+    EXPECT_FLOAT_EQ(values[0], 1.0f);
+    EXPECT_FLOAT_EQ(values[1], 2.0f);
+    EXPECT_FLOAT_EQ(values[2], 3.0f);
+
+    const std::array<float, 3> expected_dc{10.0f, 20.0f, 30.0f};
+    for (size_t i = 0; i < expected_dc.size(); ++i) {
+        EXPECT_FLOAT_EQ(values[6 + i], expected_dc[i]) << "Mismatch at f_dc_" << i;
+    }
+
+    const std::array<float, 9> expected_rest{
+        100.0f, 101.0f, 102.0f,
+        200.0f, 201.0f, 202.0f,
+        300.0f, 301.0f, 302.0f};
+    for (size_t i = 0; i < expected_rest.size(); ++i) {
+        EXPECT_FLOAT_EQ(values[9 + i], expected_rest[i]) << "Mismatch at f_rest_" << i;
     }
 }
 

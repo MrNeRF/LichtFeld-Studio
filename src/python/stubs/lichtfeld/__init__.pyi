@@ -259,7 +259,9 @@ def force_exit() -> None:
     """Force immediate application exit (bypasses confirmation)."""
 
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int) -> None:
-    """Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML."""
+    """
+    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD.
+    """
 
 def save_config_file(path: str) -> None:
     """Save current training configuration to a JSON file."""
@@ -981,6 +983,24 @@ def get_mesh2splat_error() -> str:
     Get error message from last mesh-to-splat conversion (empty on success)
     """
 
+def simplify_splats(source_name: str, ratio: float = 0.1, knn_k: int = 16, merge_cap: float = 0.5) -> None:
+    """Simplify a splat node asynchronously and create a new output node."""
+
+def cancel_splat_simplify() -> None:
+    """Cancel the active splat simplification job"""
+
+def is_splat_simplify_active() -> bool:
+    """Check if a splat simplification job is currently running"""
+
+def get_splat_simplify_progress() -> float:
+    """Get splat simplification progress (0.0 to 1.0)"""
+
+def get_splat_simplify_stage() -> str:
+    """Get splat simplification stage text"""
+
+def get_splat_simplify_error() -> str:
+    """Get the last splat simplification error (empty on success)"""
+
 class ViewInfo:
     @property
     def rotation(self) -> Tensor: ...
@@ -1013,12 +1033,12 @@ class ViewportRender:
 
 def get_viewport_render() -> ViewportRender | None:
     """
-    Get the current viewport's rendered image and screen positions (None if not available)
+    Get the most recently captured CPU-visible viewport render if available (does not force GPU readback)
     """
 
 def capture_viewport() -> ViewportRender | None:
     """
-    Capture viewport render for async processing (clones data, safe to use from background threads)
+    Capture viewport render explicitly (may read back from GPU; clones data, safe to use from background threads)
     """
 
 def render_view(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, bg_color: Tensor | None = None) -> Tensor | None:
@@ -1387,6 +1407,13 @@ class OptimizationParams:
     def means_lr(self, arg: float, /) -> None: ...
 
     @property
+    def means_lr_end(self) -> float:
+        """Target end learning rate for gaussian positions"""
+
+    @means_lr_end.setter
+    def means_lr_end(self, arg: float, /) -> None: ...
+
+    @property
     def shs_lr(self) -> float:
         """Learning rate for spherical harmonics"""
 
@@ -1406,6 +1433,13 @@ class OptimizationParams:
 
     @scaling_lr.setter
     def scaling_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def scaling_lr_end(self) -> float:
+        """Target end learning rate for gaussian scales"""
+
+    @scaling_lr_end.setter
+    def scaling_lr_end(self, arg: float, /) -> None: ...
 
     @property
     def rotation_lr(self) -> float:
@@ -1440,7 +1474,7 @@ class OptimizationParams:
         """Active optimization strategy name"""
 
     def set_strategy(self, strategy: str) -> None:
-        """Set active strategy ('mcmc', 'adc', or 'igs+')"""
+        """Set active strategy ('mcmc', 'mrnf', or 'igs+')"""
 
     @property
     def headless(self) -> bool:
@@ -1464,7 +1498,7 @@ class OptimizationParams:
         """Set steps_scaler and scale all step-related parameters by the ratio"""
 
     def auto_scale_steps(self, image_count: int) -> None:
-        """Auto-scale steps for both strategies based on image count"""
+        """Auto-scale steps for all strategies based on image count"""
 
     @property
     def gut(self) -> bool:
@@ -1509,8 +1543,24 @@ class OptimizationParams:
     def ppisp_use_controller(self, arg: bool, /) -> None: ...
 
     @property
+    def ppisp_freeze_from_sidecar(self) -> bool:
+        """Freeze PPISP learning and reuse a PPISP sidecar during training"""
+
+    @ppisp_freeze_from_sidecar.setter
+    def ppisp_freeze_from_sidecar(self, arg: bool, /) -> None: ...
+
+    @property
+    def ppisp_sidecar_path(self) -> str:
+        """Path to a PPISP sidecar used for frozen PPISP training"""
+
+    @ppisp_sidecar_path.setter
+    def ppisp_sidecar_path(self, arg: str, /) -> None: ...
+
+    @property
     def ppisp_controller_activation_step(self) -> int:
-        """Iteration to start controller distillation (-1 = auto)"""
+        """
+        Iteration to start controller distillation (negative = default schedule)
+        """
 
     @ppisp_controller_activation_step.setter
     def ppisp_controller_activation_step(self, arg: int, /) -> None: ...
@@ -1587,7 +1637,7 @@ class OptimizationParams:
 
     @property
     def revised_opacity(self) -> bool:
-        """Use revised opacity calculation for ADC densification"""
+        """Use revised opacity calculation during densification"""
 
     @revised_opacity.setter
     def revised_opacity(self, arg: bool, /) -> None: ...
@@ -1801,4 +1851,4 @@ class CheckpointParams:
 def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_error', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_stage', 'get_mesh2splat_error', 'simplify_splats', 'cancel_splat_simplify', 'is_splat_simplify_active', 'get_splat_simplify_progress', 'get_splat_simplify_stage', 'get_splat_simplify_error', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')

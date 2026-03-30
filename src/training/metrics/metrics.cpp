@@ -407,8 +407,7 @@ namespace lfs::training {
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
                                            const lfs::core::SplatData& splatData,
                                            std::shared_ptr<CameraDataset> val_dataset,
-                                           lfs::core::Tensor& background,
-                                           const bool images_have_alpha) {
+                                           lfs::core::Tensor& background) {
         if (!_params.optimization.enable_eval) {
             throw std::runtime_error("Evaluation is not enabled");
         }
@@ -436,7 +435,6 @@ namespace lfs::training {
 
         const auto mask_mode = _params.optimization.mask_mode;
         const bool use_masking = mask_mode == lfs::core::param::MaskMode::Segment || mask_mode == lfs::core::param::MaskMode::Ignore;
-        const bool alpha_as_mask = _params.optimization.use_alpha_as_mask && images_have_alpha;
 
         while (auto batch_opt = val_dataloader->next()) {
             auto& batch = *batch_opt;
@@ -450,8 +448,9 @@ namespace lfs::training {
 
             lfs::core::Tensor mask;
             if (use_masking) {
+                const bool cam_alpha = _params.optimization.use_alpha_as_mask && cam->has_alpha();
                 try {
-                    mask = load_eval_mask(cam, gt_image, alpha_as_mask);
+                    mask = load_eval_mask(cam, gt_image, cam_alpha);
                 } catch (const std::exception& e) {
                     LOG_WARN("Eval: skipping camera '{}' (failed to load mask: {})", cam->image_name(), e.what());
                     skipped_images++;
@@ -459,9 +458,8 @@ namespace lfs::training {
                 }
 
                 if (!mask.is_valid()) {
-                    LOG_WARN("Eval: skipping camera '{}' (masking enabled but no mask available)", cam->image_name());
-                    skipped_images++;
-                    continue;
+                    LOG_DEBUG("Eval: camera '{}' has no mask, proceeding unmasked", cam->image_name());
+                    mask = lfs::core::Tensor();
                 }
             }
 
@@ -471,13 +469,7 @@ namespace lfs::training {
                 r_output = gsplat_rasterize(*cam, splatData_mutable, background,
                                             1.0f, false, GsplatRenderMode::RGB, true);
             } else {
-                auto rasterize_result = fast_rasterize_forward(*cam, splatData_mutable, background,
-                                                               0, 0, 0, 0,
-                                                               _params.optimization.mip_filter);
-                if (!rasterize_result) {
-                    throw std::runtime_error("Evaluation rasterization failed: " + rasterize_result.error());
-                }
-                r_output = std::move(rasterize_result->first);
+                r_output = fast_rasterize(*cam, splatData_mutable, background, _params.optimization.mip_filter);
             }
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
 
@@ -527,7 +519,7 @@ namespace lfs::training {
 
         // Wait for all images to be saved before computing final timing
         if (_params.optimization.enable_save_eval_images) {
-            const auto pending = lfs::core::image_io::BatchImageSaver::instance().pending_count();
+            const auto pending = lfs::core::image_io::BatchImageSaver::pending_count_if_initialized();
             if (pending > 0) {
                 lfs::core::image_io::wait_for_pending_saves();
             }

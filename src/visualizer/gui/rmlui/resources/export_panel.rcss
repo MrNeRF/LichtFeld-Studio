@@ -1,7 +1,16 @@
 /* Export panel styles */
 
+#content-wrap {
+    min-width: 0;
+    overflow-x: hidden;
+}
+
 .ep-section {
     margin-bottom: 4dp;
+}
+
+.ep-section .setting-row--aligned {
+    min-width: 0;
 }
 
 .ep-section-title {

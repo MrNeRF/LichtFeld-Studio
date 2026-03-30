@@ -182,7 +182,7 @@ namespace lfs::vis::op {
         .description = "Clear the current gaussian selection",
         .icon = "",
         .shortcut = "",
-        .flags = OperatorFlags::REGISTER,
+        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
         .poll_deps = PollDependency::SCENE,
     };
@@ -242,7 +242,7 @@ namespace lfs::vis::op {
         .description = "Add or reuse a crop box helper",
         .icon = "",
         .shortcut = "",
-        .flags = OperatorFlags::REGISTER,
+        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
         .poll_deps = PollDependency::SCENE | PollDependency::SELECTION,
     };
@@ -394,7 +394,7 @@ namespace lfs::vis::op {
         .description = "Add or reuse an ellipsoid helper",
         .icon = "",
         .shortcut = "",
-        .flags = OperatorFlags::REGISTER,
+        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
         .poll_deps = PollDependency::SCENE | PollDependency::SELECTION,
     };

@@ -14,6 +14,63 @@
 
 namespace lfs::training {
 
+    namespace {
+        [[nodiscard]] bool has_background_image(const core::Tensor& bg_image) {
+            return bg_image.is_valid() && !bg_image.is_empty();
+        }
+
+        void compose_background_in_place(
+            core::Tensor& image,
+            const core::Tensor& alpha,
+            const core::Tensor& bg_color,
+            const core::Tensor& bg_image,
+            int height,
+            int width,
+            cudaStream_t stream,
+            bool subtract_background) {
+            if (has_background_image(bg_image)) {
+                if (subtract_background) {
+                    kernels::launch_fused_background_unblend_with_image(
+                        image.ptr<float>(),
+                        alpha.ptr<float>(),
+                        bg_image.ptr<float>(),
+                        height,
+                        width,
+                        stream);
+                } else {
+                    kernels::launch_fused_background_blend_with_image(
+                        image.ptr<float>(),
+                        alpha.ptr<float>(),
+                        bg_image.ptr<float>(),
+                        image.ptr<float>(),
+                        height,
+                        width,
+                        stream);
+                }
+                return;
+            }
+
+            if (subtract_background) {
+                kernels::launch_fused_background_unblend(
+                    image.ptr<float>(),
+                    alpha.ptr<float>(),
+                    bg_color.ptr<float>(),
+                    height,
+                    width,
+                    stream);
+            } else {
+                kernels::launch_fused_background_blend(
+                    image.ptr<float>(),
+                    alpha.ptr<float>(),
+                    bg_color.ptr<float>(),
+                    image.ptr<float>(),
+                    height,
+                    width,
+                    stream);
+            }
+        }
+    } // namespace
+
     /**
      * @brief Dumps all rasterizer input data when a crash occurs for debugging.
      *
@@ -239,7 +296,6 @@ namespace lfs::training {
         // Pre-allocate output tensors (reused across iterations)
         thread_local core::Tensor image;
         thread_local core::Tensor alpha;
-        thread_local core::Tensor output_image;
         thread_local int last_width = -1;
         thread_local int last_height = -1;
 
@@ -247,7 +303,6 @@ namespace lfs::training {
         if (last_width != width || last_height != height) {
             image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
-            output_image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)}, core::Device::CUDA);
             last_width = width;
             last_height = height;
         }
@@ -336,33 +391,11 @@ namespace lfs::training {
 
         // Prepare render output
         RenderOutput render_output;
-        // output = image + (1 - alpha) * bg_color (or bg_image)
-        // (output_image is pre-allocated above)
+        const cudaStream_t stream = image.stream();
 
-        const cudaStream_t stream = output_image.stream();
+        compose_background_in_place(image, alpha, bg_color, bg_image, height, width, stream, false);
 
-        // Use background image if provided, otherwise use solid color
-        if (bg_image.is_valid() && !bg_image.is_empty()) {
-            kernels::launch_fused_background_blend_with_image(
-                image.ptr<float>(),
-                alpha.ptr<float>(),
-                bg_image.ptr<float>(),
-                output_image.ptr<float>(),
-                height,
-                width,
-                stream);
-        } else {
-            kernels::launch_fused_background_blend(
-                image.ptr<float>(),
-                alpha.ptr<float>(),
-                bg_color.ptr<float>(),
-                output_image.ptr<float>(),
-                height,
-                width,
-                stream);
-        }
-
-        render_output.image = output_image;
+        render_output.image = image;
         render_output.alpha = alpha;
         render_output.width = width;
         render_output.height = height;
@@ -415,7 +448,8 @@ namespace lfs::training {
         core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
         const core::Tensor& grad_alpha_extra,
-        const core::Tensor& pixel_error_map) {
+        const core::Tensor& pixel_error_map,
+        DensificationType densification_type) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -445,7 +479,7 @@ namespace lfs::training {
         grad_alpha.set_stream(stream);
 
         // Use background image kernel if available, otherwise use solid color kernel
-        if (ctx.bg_image.is_valid() && !ctx.bg_image.is_empty() && is_chw_layout) {
+        if (has_background_image(ctx.bg_image) && is_chw_layout) {
             kernels::launch_fused_grad_alpha_with_image(
                 grad_image.ptr<float>(),
                 ctx.bg_image.ptr<float>(),
@@ -495,13 +529,15 @@ namespace lfs::training {
             }
         }
 
-        // Get gradient pointers from optimizer
+        auto raw_image = ctx.image;
+        compose_background_in_place(raw_image, ctx.alpha, ctx.bg_color, ctx.bg_image, H, W, stream, true);
+
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             grad_alpha.ptr<float>(),
-            ctx.image.ptr<float>(),
+            raw_image.ptr<float>(),
             ctx.alpha.ptr<float>(),
             ctx.means.ptr<float>(),
             ctx.raw_scales.ptr<float>(),
@@ -527,7 +563,8 @@ namespace lfs::training {
             ctx.focal_y,
             ctx.center_x,
             ctx.center_y,
-            ctx.mip_filter);
+            ctx.mip_filter,
+            densification_type);
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);

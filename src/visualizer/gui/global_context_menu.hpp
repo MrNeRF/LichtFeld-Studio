@@ -45,7 +45,7 @@ namespace lfs::vis::gui {
 
         void request(std::vector<ContextMenuItem> items, float screen_x, float screen_y);
         std::string pollResult();
-        [[nodiscard]] bool isOpen() const { return open_; }
+        [[nodiscard]] bool isOpen() const { return open_ || pending_open_; }
 
         void processInput(const PanelInputState& input);
         void render(int screen_w, int screen_h, float screen_x, float screen_y);

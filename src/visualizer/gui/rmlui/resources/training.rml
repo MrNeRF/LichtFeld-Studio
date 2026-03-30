@@ -63,9 +63,9 @@
       <div class="setting-row" data-tooltip="training.tooltip.strategy">
         <span class="prop-label">{{label_strategy}}</span>
         <select data-value="strategy">
-          <option value="mcmc">MCMC</option>
-          <option value="adc">ADC</option>
-          <option value="igs+">igs+</option>
+          <option value="mrnf">{{label_strategy_mrnf}}</option>
+          <option value="igs+">{{label_strategy_igs_plus}}</option>
+          <option value="mcmc">{{label_strategy_mcmc}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.iterations">
@@ -92,9 +92,9 @@
       <div class="setting-row" data-tooltip="training.tooltip.tile_mode">
         <span class="prop-label">{{label_tile_mode}}</span>
         <select data-value="tile_mode_str">
-          <option value="1">Full</option>
-          <option value="2">Half</option>
-          <option value="4">Quarter</option>
+          <option value="1">{{label_tile_full}}</option>
+          <option value="2">{{label_tile_half}}</option>
+          <option value="4">{{label_tile_quarter}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.steps_scaler">
@@ -105,7 +105,7 @@
       </div>
     </div>
 
-    <!-- Live-editable params -->
+    <!-- Params that follow the main training edit lock -->
     <div data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid">
         <span class="prop-label">{{label_bilateral_grid}}</span>
@@ -114,20 +114,41 @@
       <div class="setting-row" data-tooltip="training.tooltip.mask_mode">
         <span class="prop-label">{{label_mask_mode}}</span>
         <select data-value="mask_mode_str">
-          <option value="0">None</option>
-          <option value="1">Segment</option>
-          <option value="2">Ignore</option>
-          <option value="3">Alpha Consistent</option>
+          <option value="0">{{label_mask_none}}</option>
+          <option value="1">{{label_mask_segment}}</option>
+          <option value="2">{{label_mask_ignore}}</option>
+          <option value="3">{{label_mask_alpha_consistent}}</option>
         </select>
       </div>
-      <div class="indent" data-if="dep_mask_mode">
+      <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-tooltip="training.tooltip.invert_masks">
           <span class="prop-label">{{label_invert_masks}}</span>
           <input type="checkbox" data-checked="invert_masks" />
         </div>
+        <div class="setting-row" data-tooltip="training.tooltip.mask_threshold">
+          <span class="prop-label">{{label_mask_threshold}}</span>
+          <input type="text" class="number-input" data-value="mask_threshold_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', 1)">+</button>
+        </div>
         <div class="setting-row" data-tooltip="training.tooltip.use_alpha_as_mask">
           <span class="prop-label">{{label_use_alpha_as_mask}}</span>
           <input type="checkbox" data-checked="use_alpha_as_mask" />
+        </div>
+        <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
+        <div data-if="dep_mask_segment">
+          <div class="setting-row" data-tooltip="training.tooltip.penalty_weight">
+            <span class="prop-label">{{label_opacity_penalty_weight}}</span>
+            <input type="text" class="number-input" data-value="mask_opacity_penalty_weight_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_weight', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_weight', 1)">+</button>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.penalty_power">
+            <span class="prop-label">{{label_opacity_penalty_power}}</span>
+            <input type="text" class="number-input" data-value="mask_opacity_penalty_power_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_power', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('mask_opacity_penalty_power', 1)">+</button>
+          </div>
         </div>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.sparsity">
@@ -150,23 +171,32 @@
         <span class="prop-label">{{label_ppisp}}</span>
         <input type="checkbox" data-checked="ppisp" />
       </div>
-      <div class="indent" data-if="dep_ppisp">
+      <div data-if="dep_ppisp">
+        <div class="setting-row">
+          <span class="prop-label">{{label_ppisp_freeze_from_sidecar}}</span>
+          <input type="checkbox" data-checked="ppisp_freeze_from_sidecar" />
+        </div>
+        <div data-if="dep_ppisp_frozen_sidecar">
+          <div class="setting-row">
+            <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
+            <input type="text" data-value="ppisp_sidecar_path" />
+            <button class="btn btn--secondary" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">&#160;</span>
+            <button class="btn btn--secondary" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
+          </div>
+        </div>
         <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller">
           <span class="prop-label">{{label_ppisp_controller}}</span>
           <input type="checkbox" data-checked="ppisp_use_controller" />
         </div>
-        <div class="indent" data-if="dep_ppisp_controller">
-          <div class="setting-row">
-            <span class="prop-label">{{label_ppisp_auto}}</span>
-            <input type="checkbox" data-checked="ppisp_auto_step" />
-          </div>
-          <div data-if="dep_ppisp_manual_step">
-            <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step">
-              <span class="prop-label">{{label_ppisp_activation_step}}</span>
-              <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
-              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
-            </div>
+        <div data-if="dep_ppisp_controller">
+          <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step">
+            <span class="prop-label">{{label_ppisp_activation_step}}</span>
+            <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
           </div>
           <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller_lr">
             <span class="prop-label">{{label_ppisp_controller_lr}}</span>
@@ -183,10 +213,10 @@
       <div class="setting-row" data-tooltip="training.tooltip.bg_modulation">
         <span class="prop-label">{{label_bg_mode}}</span>
         <select data-value="bg_mode_str">
-          <option value="0">Color</option>
-          <option value="1">Modulation</option>
-          <option value="2">Image</option>
-          <option value="3">Random</option>
+          <option value="0">{{label_bg_option_color}}</option>
+          <option value="1">{{label_bg_option_modulation}}</option>
+          <option value="2">{{label_bg_option_image}}</option>
+          <option value="3">{{label_bg_option_random}}</option>
         </select>
       </div>
       <div class="setting-row" data-if="dep_bg_color">
@@ -197,12 +227,13 @@
         <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
         <input type="text" class="color-hex" data-value="bg_color_hex" />
       </div>
-      <div class="indent" data-if="dep_bg_image">
+      <div data-if="dep_bg_image">
         <div class="setting-row">
           <span class="prop-label">{{label_bg_image}}</span>
           <span class="text-disabled">{{bg_image_path_display}}</span>
         </div>
         <div class="setting-row">
+          <span class="prop-label">&#160;</span>
           <button class="btn btn--secondary" data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
           <button class="btn btn--secondary" data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
         </div>
@@ -219,9 +250,9 @@
 
     <!-- Dataset subsection -->
     <div class="training-subsection">
-      <div class="section-header" id="hdr-dataset" data-event-click="toggle_section('dataset')">
-        <span class="section-arrow" id="arrow-dataset">&#x25B6;</span>
-        <span>{{label_hdr_dataset}}</span>
+      <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
+        <span class="section-arrow text-accent" id="arrow-dataset">&#x25B6;</span>
+        <span class="text-accent">{{label_hdr_dataset}}</span>
       </div>
       <div class="section-content collapsed" id="sec-dataset">
         <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
@@ -236,7 +267,7 @@
           <div class="setting-row" data-tooltip="training.tooltip.resize_factor">
             <span class="prop-label">{{label_resize_factor}}</span>
             <select data-value="resize_factor_str">
-              <option value="-1">Auto</option>
+              <option value="-1">{{label_auto}}</option>
               <option value="1">1</option>
               <option value="2">2</option>
               <option value="4">4</option>
@@ -268,9 +299,9 @@
 
     <!-- Optimization subsection -->
     <div class="training-subsection">
-      <div class="section-header" id="hdr-optimization" data-event-click="toggle_section('optimization')">
-        <span class="section-arrow" id="arrow-optimization">&#x25B6;</span>
-        <span>{{label_hdr_optimization}}</span>
+      <div class="section-header text-accent" id="hdr-optimization" data-event-click="toggle_section('optimization')">
+        <span class="section-arrow text-accent" id="arrow-optimization">&#x25B6;</span>
+        <span class="text-accent">{{label_hdr_optimization}}</span>
       </div>
       <div class="section-content collapsed" id="sec-optimization">
         <div data-class-disabled-overlay="adv_disabled">
@@ -328,6 +359,12 @@
             <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', 1)">+</button>
           </div>
+          <div class="setting-row" data-if="dep_mrnf" data-tooltip="training.tooltip.grow_until_iter">
+            <span class="prop-label">{{label_grow_until_iter}}</span>
+            <input type="text" class="number-input" data-value="grow_until_iter_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', 1)">+</button>
+          </div>
           <div class="setting-row" data-tooltip="training.tooltip.gradient_thr">
             <span class="prop-label">{{label_grad_threshold}}</span>
             <input type="text" class="number-input" data-value="grad_threshold_str" />
@@ -346,13 +383,13 @@
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', 1)">+</button>
           </div>
-          <div class="setting-row" data-if="dep_adc_or_igs">
+          <div class="setting-row" data-if="dep_igs">
             <span class="prop-label">{{label_prune_opacity}}</span>
             <input type="text" class="number-input" data-value="prune_opacity_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', 1)">+</button>
           </div>
-          <div class="setting-row" data-if="dep_adc_or_igs">
+          <div class="setting-row" data-if="dep_igs">
             <span class="prop-label">{{label_revised_opacity}}</span>
             <input type="checkbox" data-checked="revised_opacity" />
           </div>
@@ -393,9 +430,9 @@
 
     <!-- Losses subsection -->
     <div class="training-subsection">
-      <div class="section-header" id="hdr-losses" data-event-click="toggle_section('losses')">
-        <span class="section-arrow" id="arrow-losses">&#x25B6;</span>
-        <span>{{label_hdr_losses}}</span>
+      <div class="section-header text-accent" id="hdr-losses" data-event-click="toggle_section('losses')">
+        <span class="section-arrow text-accent" id="arrow-losses">&#x25B6;</span>
+        <span class="text-accent">{{label_hdr_losses}}</span>
       </div>
       <div class="section-content collapsed" id="sec-losses">
         <div data-class-disabled-overlay="adv_disabled">
@@ -428,9 +465,9 @@
 
     <!-- Initialization subsection -->
     <div class="training-subsection">
-      <div class="section-header" id="hdr-init" data-event-click="toggle_section('init')">
-        <span class="section-arrow" id="arrow-init">&#x25B6;</span>
-        <span>{{label_hdr_init}}</span>
+      <div class="section-header text-accent" id="hdr-init" data-event-click="toggle_section('init')">
+        <span class="section-arrow text-accent" id="arrow-init">&#x25B6;</span>
+        <span class="text-accent">{{label_hdr_init}}</span>
       </div>
       <div class="section-content collapsed" id="sec-init">
         <div data-class-disabled-overlay="adv_disabled">
@@ -449,7 +486,7 @@
             <span class="prop-label">{{label_random_init}}</span>
             <input type="checkbox" data-checked="random" />
           </div>
-          <div class="indent" data-if="dep_random">
+          <div data-if="dep_random">
             <div class="setting-row" data-tooltip="training.tooltip.num_points">
               <span class="prop-label">{{label_init_num_pts}}</span>
               <input type="text" class="number-input" data-value="init_num_pts_str" />
@@ -467,9 +504,9 @@
       </div>
     </div>
 
-    <!-- ADC Pruning/Growing subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_adc">
-      <div class="training-subsection-title">{{label_hdr_adc}}</div>
+    <!-- Pruning/Growing subsection (conditional) -->
+    <div class="training-subsection" data-if="dep_igs">
+      <div class="training-subsection-title">{{label_hdr_pruning_growing}}</div>
       <div data-class-disabled-overlay="adv_disabled">
         <div class="setting-row">
           <span class="prop-label">{{label_min_opacity}}</span>
@@ -536,9 +573,9 @@
 
     <!-- Save Steps subsection -->
     <div class="training-subsection">
-      <div class="section-header" id="hdr-save-steps" data-event-click="toggle_section('save_steps')">
-        <span class="section-arrow" id="arrow-save-steps">&#x25B6;</span>
-        <span>{{label_hdr_save_steps}}</span>
+      <div class="section-header text-accent" id="hdr-save-steps" data-event-click="toggle_section('save_steps')">
+        <span class="section-arrow text-accent" id="arrow-save-steps">&#x25B6;</span>
+        <span class="text-accent">{{label_hdr_save_steps}}</span>
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
         <div data-if="save_edit_mode">

@@ -40,6 +40,7 @@ namespace lfs::vis::gui {
         bool key_shift = false;
         bool key_alt = false;
         bool key_super = false;
+        bool viewport_keyboard_focus = false;
         std::vector<int> keys_pressed;
         std::vector<int> keys_released;
         std::vector<uint32_t> text_codepoints;

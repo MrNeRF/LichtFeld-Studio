@@ -40,6 +40,17 @@ namespace lfs::vis {
     class VisualizerImpl;
 
     namespace gui {
+        struct GuiHitTestResult {
+            bool blocks_pointer = false;
+            bool takes_keyboard_focus = false;
+        };
+
+        struct GuiInputState {
+            bool has_keyboard_focus = false;
+            bool text_input_active = false;
+            bool modal_open = false;
+        };
+
         class LFS_VIS_API GuiManager {
         public:
             GuiManager(VisualizerImpl* viewer);
@@ -72,6 +83,8 @@ namespace lfs::vis {
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
+            [[nodiscard]] GuiHitTestResult hitTestPointer(double x, double y) const;
+            [[nodiscard]] GuiInputState inputState() const;
 
             bool isForceExit() const { return force_exit_; }
             void setForceExit(bool value) { force_exit_ = value; }
@@ -92,7 +105,7 @@ namespace lfs::vis {
             bool isModalWindowOpen() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
-            void captureKey(int key, int mods);
+            void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods);
 
             // Thumbnail system (delegates to MenuBar)

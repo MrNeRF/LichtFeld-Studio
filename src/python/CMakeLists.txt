@@ -162,6 +162,7 @@ nanobind_add_module(
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp
     lfs/py_mesh2splat.cpp
+    lfs/py_splat_simplify.cpp
     lfs/openmesh/handles.cpp
     lfs/openmesh/io.cpp
     lfs/py_rendering.cpp
@@ -189,19 +190,29 @@ target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
 )
 
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_PY_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_core,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering,lfs_sequencer>"
+    )
+else()
+    set(LFS_PY_INTERNAL_LINK_LIBS
+        lfs_core
+        lfs_event_bridge
+        lfs_geometry
+        lfs_visualizer
+        lfs_mcp
+        lfs_python_runtime
+        lfs_training
+        lfs_io
+        lfs_rendering
+        lfs_sequencer
+    )
+endif()
+
 target_link_libraries(lfs_py PRIVATE
-    lfs_core
-    lfs_event_bridge
-    lfs_geometry
-    lfs_visualizer
-    lfs_mcp
-    lfs_python_runtime
-    lfs_training
-    lfs_io
-    lfs_rendering
+    ${LFS_PY_INTERNAL_LINK_LIBS}
     $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
     $<IF:$<PLATFORM_ID:Windows>,OpenMeshTools,OpenMeshToolsStatic>
-    lfs_sequencer
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
@@ -259,7 +270,7 @@ if(WIN32)
     # Copy vcpkg runtime DLLs
     add_custom_command(TARGET lfs_py POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin"
+            "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
             "${CMAKE_CURRENT_BINARY_DIR}"
         COMMENT "Copying vcpkg DLLs to Python module directory"
     )
@@ -305,7 +316,7 @@ import os, sys
 # Add DLL directories (Python 3.8+ requirement on Windows)
 dll_dirs = [
     r'$<TARGET_FILE_DIR:lfs_python_runtime>',
-    r'${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin',
+    r'${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin',
     r'${CMAKE_BINARY_DIR}/external/nvImageCodec/src',
     r'${CUDAToolkit_BIN_DIR}',
     r'${CUDAToolkit_BIN_DIR}/x64',

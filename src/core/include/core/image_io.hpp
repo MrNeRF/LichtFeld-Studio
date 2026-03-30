@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include <atomic>
 #include <condition_variable>
 #include <filesystem>
 #include <future>
@@ -44,6 +45,9 @@ namespace lfs::core::image_io {
     class LFS_CORE_API BatchImageSaver {
     public:
         static BatchImageSaver& instance();
+        static BatchImageSaver* try_instance();
+        static void wait_all_if_initialized();
+        static size_t pending_count_if_initialized();
 
         // Delete copy/move constructors
         BatchImageSaver(const BatchImageSaver&) = delete;
@@ -79,25 +83,26 @@ namespace lfs::core::image_io {
 
         struct SaveTask {
             std::filesystem::path path;
-            lfs::core::Tensor image;
             std::vector<lfs::core::Tensor> images;
-            bool is_multi;
-            bool horizontal;
-            int separator_width;
+            bool horizontal = true;
+            int separator_width = 2;
         };
 
         void worker_thread();
         void process_task(const SaveTask& task);
+        void enqueue_task(SaveTask task);
 
         std::vector<std::thread> workers_;
         std::queue<SaveTask> task_queue_;
         mutable std::mutex queue_mutex_;
         std::condition_variable cv_;
+        std::condition_variable cv_space_;
         std::condition_variable cv_finished_;
         std::atomic<bool> stop_{false};
         std::atomic<size_t> active_tasks_{0};
         std::atomic<bool> enabled_{true};
         size_t num_workers_;
+        size_t max_pending_tasks_;
     };
 
     // Convenience functions that use the singleton
@@ -113,7 +118,7 @@ namespace lfs::core::image_io {
     }
 
     inline void wait_for_pending_saves() {
-        BatchImageSaver::instance().wait_all();
+        BatchImageSaver::wait_all_if_initialized();
     }
 
 } // namespace lfs::core::image_io

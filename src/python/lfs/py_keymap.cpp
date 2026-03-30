@@ -43,6 +43,7 @@ namespace lfs::python {
             .value("ZOOM_SPEED_UP", Action::ZOOM_SPEED_UP)
             .value("ZOOM_SPEED_DOWN", Action::ZOOM_SPEED_DOWN)
             .value("TOGGLE_SPLIT_VIEW", Action::TOGGLE_SPLIT_VIEW)
+            .value("TOGGLE_INDEPENDENT_SPLIT_VIEW", Action::TOGGLE_INDEPENDENT_SPLIT_VIEW)
             .value("TOGGLE_GT_COMPARISON", Action::TOGGLE_GT_COMPARISON)
             .value("TOGGLE_DEPTH_MODE", Action::TOGGLE_DEPTH_MODE)
             .value("CYCLE_PLY", Action::CYCLE_PLY)

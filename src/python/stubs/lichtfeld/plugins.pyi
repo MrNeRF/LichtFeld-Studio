@@ -40,7 +40,7 @@ def get_error(name: str) -> object:
 def get_traceback(name: str) -> object:
     """Get plugin error traceback"""
 
-def install(url: str, auto_load: bool = True) -> str:
+def install(url: str, auto_load: bool = True, transport: str = 'archive') -> str:
     """Install from GitHub URL"""
 
 def update(name: str) -> bool:
@@ -52,7 +52,7 @@ def uninstall(name: str) -> bool:
 def search(query: str) -> object:
     """Search plugin registry"""
 
-def install_from_registry(plugin_id: str, version: str = '', auto_load: bool = True) -> str:
+def install_from_registry(plugin_id: str, version: str = '', auto_load: bool = True, transport: str = 'archive') -> str:
     """Install plugin from registry"""
 
 def check_updates() -> object:

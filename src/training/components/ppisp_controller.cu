@@ -98,7 +98,7 @@ namespace lfs::training {
 
     PPISPController::PPISPController(const int total_iterations, Config config)
         : config_(config),
-          current_lr_(config.lr),
+          current_lr_(config.warmup_steps > 0 ? config.lr * config.warmup_start_factor : config.lr),
           initial_lr_(config.lr),
           total_iterations_(total_iterations) {
 

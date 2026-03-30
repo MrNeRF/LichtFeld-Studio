@@ -6,6 +6,7 @@
 
 #include "core/modal_request.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 
 #include <RmlUi/Core/EventListener.h>
 #include <cstddef>
@@ -54,6 +55,7 @@ namespace lfs::vis::gui {
         void showNext();
         void dismiss(const std::string& button_label);
         bool dismissFirstEnabledButton();
+        void bindTextInputRevert();
         void cancel();
         lfs::core::ModalResult collectFormValues() const;
 
@@ -64,6 +66,7 @@ namespace lfs::vis::gui {
 
         RmlUIManager* rml_manager_;
         OverlayEventListener listener_;
+        rml_input::TextInputEscapeRevertController text_input_revert_;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;

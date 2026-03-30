@@ -23,6 +23,7 @@ Read these first in most sessions:
 3. `lichtfeld://ui/state`
 4. `lichtfeld://scene/state`
 5. `lichtfeld://selection/current`
+6. `lichtfeld://history/state`
 
 Then narrow further:
 
@@ -31,6 +32,7 @@ Then narrow further:
 - `lichtfeld://ui/panels` for panel ids and registry state
 - `lichtfeld://operators/registry` for operator ids, flags, and input schemas
 - `lichtfeld://scene/nodes` and `lichtfeld://scene/selected_nodes` for scene manipulation
+- `lichtfeld://history/state` and `lichtfeld://history/stack` for undo/redo inspection
 - `lichtfeld://runtime/jobs/<job_id>` and `lichtfeld://runtime/events/<event_type>` for long-running work
 
 ## Main Namespaces
@@ -45,6 +47,7 @@ Then narrow further:
 | `selection.*` | Screen-space Gaussian selection |
 | `transform.*` | Node transform inspection and edits |
 | `gaussians.*` | Raw Gaussian tensor reads and writes |
+| `history.*` | Shared undo/redo inspection, playback, and grouped transactions |
 | `editor.*` | Integrated Python console execution |
 | `camera.*`, `render.*`, `sequencer.*` | View state, captures, and timeline workflows |
 

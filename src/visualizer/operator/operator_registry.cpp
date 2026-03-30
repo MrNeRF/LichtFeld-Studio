@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "python/python_runtime.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/operation/undo_history.hpp"
 #include <cassert>
 
 namespace lfs::vis::op {
@@ -27,6 +28,57 @@ namespace lfs::vis::op {
         private:
             std::unique_lock<std::mutex>& lock_;
         };
+
+        [[nodiscard]] bool requiresUndoTransaction(const OperatorDescriptor& descriptor) {
+            return hasFlag(descriptor.flags, OperatorFlags::UNDO) ||
+                   hasFlag(descriptor.flags, OperatorFlags::UNDO_GROUPED);
+        }
+
+        [[nodiscard]] std::string historyLabel(const OperatorDescriptor& descriptor, const std::string& fallback_id) {
+            if (!descriptor.label.empty()) {
+                return descriptor.label;
+            }
+            return fallback_id;
+        }
+
+        void finalizeUndoTransaction(TransactionGuard* transaction,
+                                     const OperatorResult result,
+                                     bool& modal_transaction_active) {
+            if (!transaction) {
+                return;
+            }
+
+            if (result == OperatorResult::RUNNING_MODAL) {
+                modal_transaction_active = true;
+                transaction->release();
+                return;
+            }
+
+            modal_transaction_active = false;
+            if (result == OperatorResult::FINISHED) {
+                transaction->commit();
+            } else {
+                transaction->rollback();
+            }
+        }
+
+        void finalizeUndoTransaction(const bool active, const OperatorResult result, bool& modal_transaction_active) {
+            if (!active) {
+                return;
+            }
+
+            if (result == OperatorResult::RUNNING_MODAL) {
+                modal_transaction_active = true;
+                return;
+            }
+
+            modal_transaction_active = false;
+            if (result == OperatorResult::FINISHED) {
+                undoHistory().commitTransaction();
+            } else {
+                undoHistory().rollbackTransaction();
+            }
+        }
 
     } // namespace
 
@@ -294,6 +346,11 @@ namespace lfs::vis::op {
         const auto poll_fn = reg.poll_fn;
         const auto invoke_fn = reg.invoke_fn;
         const auto modal_fn = reg.modal_fn;
+        const bool history_txn = requiresUndoTransaction(reg.descriptor);
+        std::optional<TransactionGuard> transaction;
+        if (history_txn) {
+            transaction.emplace(historyLabel(reg.descriptor, id));
+        }
 
         if (invoke_fn) {
             if (poll_fn && !poll_fn()) {
@@ -313,6 +370,13 @@ namespace lfs::vis::op {
                 }
                 active_modal_id_ = id;
                 modal_props_ = props_ref;
+            }
+
+            {
+                ScopedUnlock unlock(lock);
+                finalizeUndoTransaction(transaction ? &*transaction : nullptr,
+                                        result,
+                                        active_modal_has_undo_transaction_);
             }
 
             return {result, {}};
@@ -352,6 +416,13 @@ namespace lfs::vis::op {
             }
             active_modal_ = std::move(op);
             modal_props_ = props_ref;
+        }
+
+        {
+            ScopedUnlock unlock(lock);
+            finalizeUndoTransaction(transaction ? &*transaction : nullptr,
+                                    result,
+                                    active_modal_has_undo_transaction_);
         }
 
         return {result, {}};
@@ -467,6 +538,14 @@ namespace lfs::vis::op {
                 modal_props_ = props;
             }
 
+            const bool finalize_history = (result == OperatorResult::FINISHED || result == OperatorResult::CANCELLED) &&
+                                          active_modal_has_undo_transaction_;
+            if (finalize_history) {
+                lock.unlock();
+                finalizeUndoTransaction(true, result, active_modal_has_undo_transaction_);
+                lock.lock();
+            }
+
             return result;
         }
 
@@ -499,11 +578,19 @@ namespace lfs::vis::op {
             active_modal_builtin_.reset();
         }
 
+        const bool finalize_history = (result == OperatorResult::FINISHED || result == OperatorResult::CANCELLED) &&
+                                      active_modal_has_undo_transaction_;
+        if (finalize_history) {
+            lock.unlock();
+            finalizeUndoTransaction(true, result, active_modal_has_undo_transaction_);
+            lock.lock();
+        }
+
         return result;
     }
 
     void OperatorRegistry::cancelModalOperator() {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
 
         if (!active_modal_id_.empty()) {
             auto it = python_operators_.find(active_modal_id_);
@@ -511,6 +598,11 @@ namespace lfs::vis::op {
                 it->second.cancel_fn();
             }
             active_modal_id_.clear();
+            const bool finalize_history = active_modal_has_undo_transaction_;
+            lock.unlock();
+            if (finalize_history) {
+                finalizeUndoTransaction(true, OperatorResult::CANCELLED, active_modal_has_undo_transaction_);
+            }
             return;
         }
 
@@ -523,10 +615,15 @@ namespace lfs::vis::op {
         }
         active_modal_.reset();
         active_modal_builtin_.reset();
+        const bool finalize_history = active_modal_has_undo_transaction_;
+        lock.unlock();
+        if (finalize_history) {
+            finalizeUndoTransaction(true, OperatorResult::CANCELLED, active_modal_has_undo_transaction_);
+        }
     }
 
     void OperatorRegistry::clear() {
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
 
         if (!active_modal_id_.empty()) {
             auto it = python_operators_.find(active_modal_id_);
@@ -544,6 +641,7 @@ namespace lfs::vis::op {
         }
 
         active_modal_builtin_.reset();
+        const bool finalize_history = active_modal_has_undo_transaction_;
 
         for (auto& reg : builtins_) {
             reg = RegisteredOperator{};
@@ -551,6 +649,11 @@ namespace lfs::vis::op {
         python_operators_.clear();
         poll_cache_.clear();
         scene_manager_ = nullptr;
+
+        lock.unlock();
+        if (finalize_history) {
+            finalizeUndoTransaction(true, OperatorResult::CANCELLED, active_modal_has_undo_transaction_);
+        }
     }
 
     std::optional<OperatorContext> OperatorRegistry::makeContext() const {

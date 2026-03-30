@@ -186,6 +186,48 @@ namespace lfs::rendering {
         }
     };
 
+    class GLFramebufferGuard {
+        GLint saved_framebuffer_ = 0;
+
+    public:
+        GLFramebufferGuard() {
+            glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_framebuffer_);
+            LOG_TRACE("GLFramebufferGuard: Saved framebuffer {}", saved_framebuffer_);
+        }
+
+        explicit GLFramebufferGuard(GLuint framebuffer) : GLFramebufferGuard() {
+            glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            LOG_TRACE("GLFramebufferGuard: Bound framebuffer {}", framebuffer);
+        }
+
+        ~GLFramebufferGuard() {
+            glBindFramebuffer(GL_FRAMEBUFFER, saved_framebuffer_);
+            LOG_TRACE("GLFramebufferGuard: Restored framebuffer {}", saved_framebuffer_);
+        }
+
+        void bind(GLuint framebuffer) const {
+            glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+            LOG_TRACE("GLFramebufferGuard: Bound framebuffer {}", framebuffer);
+        }
+    };
+
+    class GLScissorEnableGuard {
+        GLboolean saved_enabled_;
+
+    public:
+        GLScissorEnableGuard() : saved_enabled_(glIsEnabled(GL_SCISSOR_TEST)) {
+            LOG_TRACE("GLScissorEnableGuard: Saved scissor {}", saved_enabled_ ? "enabled" : "disabled");
+        }
+
+        ~GLScissorEnableGuard() {
+            if (saved_enabled_)
+                glEnable(GL_SCISSOR_TEST);
+            else
+                glDisable(GL_SCISSOR_TEST);
+            LOG_TRACE("GLScissorEnableGuard: Restored scissor {}", saved_enabled_ ? "enabled" : "disabled");
+        }
+    };
+
     class GLLineGuard {
         GLfloat saved_width_;
         GLboolean saved_smooth_;

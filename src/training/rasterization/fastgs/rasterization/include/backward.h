@@ -5,6 +5,7 @@
 #pragma once
 
 #include "helper_math.h"
+#include "rasterization_config.h"
 #include <functional>
 
 namespace fast_lfs::rasterization {
@@ -50,6 +51,7 @@ namespace fast_lfs::rasterization {
         const float fy,
         const float cx,
         const float cy,
-        bool mip_filter);
+        bool mip_filter,
+        DensificationType densification_type = DensificationType::None);
 
 }

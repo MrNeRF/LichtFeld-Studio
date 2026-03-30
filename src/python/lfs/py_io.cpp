@@ -16,6 +16,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -137,7 +138,7 @@ namespace lfs::python {
                 auto result = loader->load(path, options);
                 if (!result) {
                     throw std::runtime_error(
-                        std::format("Failed to load '{}': {}", path.string(), result.error().format()));
+                        std::format("Failed to load '{}': {}", lfs::core::path_to_utf8(path), result.error().format()));
                 }
 
                 PyLoadResult py_result;
@@ -244,6 +245,19 @@ namespace lfs::python {
             },
             nb::arg("data"), nb::arg("path"),
             "Save splat data as SPZ compressed file");
+
+        m.def(
+            "save_usd",
+            [](const PySplatData& data, const std::filesystem::path& path) {
+                io::UsdSaveOptions options;
+                options.output_path = path;
+
+                auto result = io::save_usd(*data.data(), options);
+                if (!result)
+                    throw std::runtime_error(std::format("Failed to save USD: {}", result.error().format()));
+            },
+            nb::arg("data"), nb::arg("path"),
+            "Save splat data as OpenUSD gaussian file");
 
         m.def(
             "export_html",

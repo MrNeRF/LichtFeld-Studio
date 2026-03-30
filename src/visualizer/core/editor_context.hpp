@@ -139,6 +139,10 @@ namespace lfs::vis {
         ToolType active_tool_ = ToolType::None;
         bool has_selection_ = false;
         bool has_gaussians_ = false;
+        bool has_editable_transform_selection_ = false;
+        bool has_splat_selection_ = false;
+        bool has_editable_splat_selection_ = false;
+        std::string transform_selection_error_;
 
         // String-based operator system
         std::string active_operator_id_;
@@ -148,8 +152,6 @@ namespace lfs::vis {
         CancelOperatorCallback cancel_operator_cb_;
         InvokeOperatorCallback invoke_operator_cb_;
         ModalEventCallback modal_event_cb_;
-
-        [[nodiscard]] static bool isTransformableNodeType(core::NodeType type);
     };
 
 } // namespace lfs::vis

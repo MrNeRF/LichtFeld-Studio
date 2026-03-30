@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 from pathlib import Path
 import shutil
 import sys
@@ -35,6 +36,58 @@ def collect_files(root: Path) -> dict[str, Path]:
     }
 
 
+def _referenced_generated_files(root: Path) -> set[str]:
+    referenced: set[str] = set()
+    visited_packages: set[Path] = set()
+
+    def visit_package(package_dir: Path) -> None:
+        package_dir = package_dir.resolve()
+        if package_dir in visited_packages:
+            return
+        visited_packages.add(package_dir)
+
+        init_path = package_dir / "__init__.pyi"
+        if not init_path.exists():
+            return
+
+        referenced.add(init_path.relative_to(root).as_posix())
+
+        py_typed = package_dir / "py.typed"
+        if py_typed.exists():
+            referenced.add(py_typed.relative_to(root).as_posix())
+
+        tree = ast.parse(init_path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom) or node.level != 1 or node.module is not None:
+                continue
+            for alias in node.names:
+                child_name = alias.name
+                child_package = package_dir / child_name
+                child_module = package_dir / f"{child_name}.pyi"
+                if (child_package / "__init__.pyi").exists():
+                    visit_package(child_package)
+                elif child_module.exists():
+                    referenced.add(child_module.relative_to(root).as_posix())
+
+    for package_init in root.glob("*/__init__.pyi"):
+        visit_package(package_init.parent)
+
+    return referenced
+
+
+def prune_generated_stubs(root: Path) -> None:
+    if not root.exists():
+        return
+
+    referenced = _referenced_generated_files(root)
+    for rel_path, path in collect_files(root).items():
+        if rel_path in referenced:
+            continue
+        path.unlink()
+
+    remove_empty_dirs(root)
+
+
 def read_normalized(path: Path) -> bytes:
     return path.read_bytes().replace(b"\r\n", b"\n")
 
@@ -50,6 +103,7 @@ def remove_empty_dirs(root: Path) -> None:
 
 
 def sync_stubs(generated: Path, committed: Path) -> int:
+    prune_generated_stubs(generated)
     generated_files = collect_files(generated)
     committed_files = collect_files(committed)
 
@@ -74,6 +128,7 @@ def sync_stubs(generated: Path, committed: Path) -> int:
 
 
 def check_stubs(generated: Path, committed: Path) -> int:
+    prune_generated_stubs(generated)
     generated_files = collect_files(generated)
     committed_files = collect_files(committed)
 

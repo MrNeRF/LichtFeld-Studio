@@ -77,9 +77,6 @@ def draw_lasso_preview(points: Sequence[tuple[float, float]], add_mode: bool = T
 def clear_lasso_preview() -> None:
     """Clear lasso selection preview"""
 
-def set_output_screen_positions(enable: bool) -> None:
-    """Enable/disable screen positions output during rendering"""
-
 def has_screen_positions() -> bool:
     """Check if screen positions are available"""
 
@@ -87,9 +84,7 @@ def get_screen_positions() -> lichtfeld.Tensor | None:
     """Get screen positions tensor [N, 2]"""
 
 def set_depth_filter(enabled: bool, depth_far: float = 100.0, frustum_half_width: float = 50.0, depth_near: float = 0.0) -> None:
-    """
-    Set selection depth filter in camera space. The first three positional arguments remain backward-compatible.
-    """
+    """Set selection depth filter in camera space."""
 
 def set_depth_filter_range(enabled: bool, depth_near: float = 0.0, depth_far: float = 100.0, frustum_half_width: float = 50.0) -> None:
     """

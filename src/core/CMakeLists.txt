@@ -20,6 +20,7 @@ add_subdirectory(logger)
 # Tensor C++ sources (merged from src/core/tensor/)
 set(TENSOR_SOURCES
         tensor/cuda_stream_context.cpp
+        tensor/gpu_slab_allocator.cpp
         tensor/lazy_config.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
@@ -55,6 +56,7 @@ set(CORE_SOURCES
         parameters.cpp
         property_registry.cpp
         scene.cpp
+        splat_simplify.cpp
         splat_data.cpp
         splat_data_mirror.cpp
         splat_data_transform.cpp
@@ -141,6 +143,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         )
         target_compile_definitions(lfs_core PRIVATE HAS_AVX2_SUPPORT)
     endif()
+
+    # The splat simplifier is sensitive to tiny FP contraction differences.
+    set_source_files_properties(
+        ${CMAKE_CURRENT_SOURCE_DIR}/splat_simplify.cpp
+        PROPERTIES COMPILE_OPTIONS "-ffp-contract=off;-fno-tree-vectorize;-fno-unsafe-math-optimizations;-frounding-math;-ffloat-store;-fexcess-precision=standard$<$<BOOL:${COMPILER_SUPPORTS_AVX2}>:;-mno-fma;-mno-avx2>")
 endif()
 
 # Visibility: hide by default, export only LFS_CORE_API symbols

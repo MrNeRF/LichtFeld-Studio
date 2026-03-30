@@ -12,6 +12,8 @@
 #include <string>
 #include <unordered_map>
 
+class Viewport;
+
 namespace lfs::core {
 
     // Forward declarations
@@ -21,7 +23,8 @@ namespace lfs::core {
     enum class ExportFormat { PLY,
                               SOG,
                               SPZ,
-                              HTML_VIEWER };
+                              HTML_VIEWER,
+                              USD };
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \
@@ -93,6 +96,7 @@ namespace lfs::core {
             EVENT(CyclePLY, );
             EVENT(CycleSelectionVisualization, );
             EVENT(ToggleSplitView, );
+            EVENT(ToggleIndependentSplitView, const Viewport* viewport;);
             EVENT(ToggleGTComparison, );
             EVENT(Undo, );
             EVENT(Redo, );
@@ -154,14 +158,14 @@ namespace lfs::core {
                   enum class Type{PLY, Dataset, SOG, SPZ, Checkpoint} type;
                   size_t num_gaussians;
                   int checkpoint_iteration = 0;);
-            EVENT(SceneCleared, );
+            EVENT(SceneCleared, bool from_history = false;);
             EVENT(ModelUpdated, int iteration; size_t num_gaussians;);
             EVENT(SceneChanged, uint32_t mutation_flags = 0;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type: 0=SPLAT, 1=GROUP, 2=CROPBOX
-            EVENT(PLYAdded, std::string name; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type;);
-            EVENT(PLYRemoved, std::string name; bool children_kept = false; std::string parent_of_removed;);
-            EVENT(NodeReparented, std::string name; std::string old_parent; std::string new_parent;);
+            EVENT(PLYAdded, std::string name; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
+            EVENT(PLYRemoved, std::string name; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
+            EVENT(NodeReparented, std::string name; std::string old_parent; std::string new_parent; bool from_history = false;);
 
             // Data loading
             EVENT(DatasetLoadStarted, std::filesystem::path path;);
@@ -263,7 +267,6 @@ namespace lfs::core {
             EVENT(EllipsoidVisibilityChanged, bool visible;);
             EVENT(ConsoleResult, std::string command; std::string result;);
             EVENT(SplitPositionChanged, float position;);
-            EVENT(GTComparisonModeChanged, bool enabled;);
             EVENT(FocusTrainingPanel, );
             EVENT(ToggleUI, );
             EVENT(ToggleFullscreen, );

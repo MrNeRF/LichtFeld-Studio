@@ -86,30 +86,40 @@ option(BUILD_PORTABLE "Build portable distribution" OFF)
 if(BUILD_PORTABLE)
     set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    add_compile_definitions(LFS_BUILD_PORTABLE=1)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
 
-# Compiler cache (CUDA caching disabled on Windows due to nvcc compatibility issues)
-find_program(SCCACHE_PROGRAM sccache)
-find_program(CCACHE_PROGRAM ccache)
-if(SCCACHE_PROGRAM)
-    set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-    if(WIN32)
-        message(STATUS "Compiler cache: sccache (C/C++ only, CUDA uncached)")
+# Compiler cache is opt-in. Auto-enabling a broken local launcher can silently
+# poison object files and make the build non-reproducible.
+option(ENABLE_COMPILER_CACHE "Enable sccache/ccache compiler launchers when available" OFF)
+if(ENABLE_COMPILER_CACHE)
+    # CUDA caching disabled on Windows due to nvcc compatibility issues.
+    find_program(SCCACHE_PROGRAM sccache)
+    find_program(CCACHE_PROGRAM ccache)
+    if(SCCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+        if(WIN32)
+            message(STATUS "Compiler cache: sccache (C/C++ only, CUDA uncached)")
+        else()
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
+            message(STATUS "Compiler cache: sccache")
+        endif()
+    elseif(CCACHE_PROGRAM)
+        set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+        if(WIN32)
+            message(STATUS "Compiler cache: ccache (C/C++ only, CUDA uncached)")
+        else()
+            set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+            message(STATUS "Compiler cache: ccache")
+        endif()
     else()
-        set(CMAKE_CUDA_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-        message(STATUS "Compiler cache: sccache")
+        message(STATUS "Compiler cache: requested, but no launcher was found")
     endif()
-elseif(CCACHE_PROGRAM)
-    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-    if(WIN32)
-        message(STATUS "Compiler cache: ccache (C/C++ only, CUDA uncached)")
-    else()
-        set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        message(STATUS "Compiler cache: ccache")
-    endif()
+else()
+    message(STATUS "Compiler cache: disabled")
 endif()
 
 # Minimum SM for PTX-only (75=Turing, 80=Ampere, 86=GA102, 89=Ada, 90=Hopper)
@@ -246,6 +256,7 @@ find_package(SDL3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(imgui REQUIRED)
 find_package(implot REQUIRED)
+find_package(nfd CONFIG REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
 find_package(spdlog REQUIRED)
@@ -254,6 +265,7 @@ find_package(WebP REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
+find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
@@ -363,6 +375,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_gui_tools.cpp
     src/app/mcp_operator_tools.cpp
     src/app/mcp_runtime_tools.cpp
+    src/app/mcp_sequencer_tools.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     src/app/splash_screen.cpp
@@ -390,10 +403,15 @@ target_include_directories(${PROJECT_NAME}
         ${OPENGL_INCLUDE_DIRS}
 )
 
-target_link_libraries(${PROJECT_NAME}
-        PRIVATE
+if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
+    set(LFS_APP_INTERNAL_LINK_LIBS
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils>"
+    )
+else()
+    set(LFS_APP_INTERNAL_LINK_LIBS
         lfs_visualizer
         lfs_mcp
+        lfs_sequencer
         lfs_rendering
         lfs_training
         lfs_geometry
@@ -402,6 +420,12 @@ target_link_libraries(${PROJECT_NAME}
         lfs_video
         fastlfs_backend
         lfs_python_utils
+    )
+endif()
+
+target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+        ${LFS_APP_INTERNAL_LINK_LIBS}
 
         ${OPENGL_LIBRARIES}
         CUDA::cudart
@@ -411,6 +435,10 @@ target_link_libraries(${PROJECT_NAME}
         glad::glad
         SDL3::SDL3
 )
+
+# The app embeds Python and loads the nanobind module at runtime for panels,
+# menus, and operators. Keep the runtime artifact in lockstep with the app.
+add_dependencies(${PROJECT_NAME} lfs_py)
 
 # Copy nvImageCodec shared libraries next to executable for easy deployment
 if(TARGET nvimgcodec)
@@ -617,8 +645,42 @@ if(UNIX)
                 INSTALL_RPATH_USE_LINK_PATH FALSE
         )
     else()
+        set(_lichtfeld_runtime_rpath_common
+                "$ORIGIN"
+                "$ORIGIN/lib"
+                "${CUDAToolkit_LIBRARY_DIR}"
+        )
+        set(_lichtfeld_runtime_rpath_release "${_lichtfeld_runtime_rpath_common}")
+        set(_lichtfeld_runtime_rpath_debug "${_lichtfeld_runtime_rpath_common}")
+        if(DEFINED VCPKG_TARGET_TRIPLET)
+            set(_vcpkg_release_runtime_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib")
+            if(EXISTS "${_vcpkg_release_runtime_dir}")
+                list(APPEND _lichtfeld_runtime_rpath_release "${_vcpkg_release_runtime_dir}")
+                list(APPEND _lichtfeld_runtime_rpath_debug "${_vcpkg_release_runtime_dir}")
+            endif()
+
+            set(_vcpkg_debug_runtime_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/lib")
+            if(EXISTS "${_vcpkg_debug_runtime_dir}")
+                list(APPEND _lichtfeld_runtime_rpath_debug "${_vcpkg_debug_runtime_dir}")
+            endif()
+        endif()
+
+        list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_release)
+        list(REMOVE_DUPLICATES _lichtfeld_runtime_rpath_debug)
+        list(JOIN _lichtfeld_runtime_rpath_release ":" _lichtfeld_runtime_rpath_release_string)
+        list(JOIN _lichtfeld_runtime_rpath_debug ":" _lichtfeld_runtime_rpath_debug_string)
+
+        if(CMAKE_CONFIGURATION_TYPES)
+            set(_lichtfeld_runtime_rpath_string
+                    "$<$<CONFIG:Debug>:${_lichtfeld_runtime_rpath_debug_string}>$<$<NOT:$<CONFIG:Debug>>:${_lichtfeld_runtime_rpath_release_string}>")
+        elseif(CMAKE_BUILD_TYPE STREQUAL "Debug")
+            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_debug_string}")
+        else()
+            set(_lichtfeld_runtime_rpath_string "${_lichtfeld_runtime_rpath_release_string}")
+        endif()
+
         set_target_properties(${PROJECT_NAME} PROPERTIES
-                INSTALL_RPATH "$ORIGIN:$ORIGIN/lib:${CUDAToolkit_LIBRARY_DIR}"
+                INSTALL_RPATH "${_lichtfeld_runtime_rpath_string}"
                 BUILD_WITH_INSTALL_RPATH TRUE
                 INSTALL_RPATH_USE_LINK_PATH TRUE
         )

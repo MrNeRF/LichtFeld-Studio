@@ -71,16 +71,16 @@ namespace lfs::vis {
 
     private:
         bool loaded_ = false;
-        std::string active_strategy_ = "mcmc";
+        std::string active_strategy_ = std::string(lfs::core::param::kStrategyMRNF);
 
         // Session defaults
         lfs::core::param::OptimizationParameters mcmc_session_;
-        lfs::core::param::OptimizationParameters adc_session_;
+        lfs::core::param::OptimizationParameters mrnf_session_;
         lfs::core::param::OptimizationParameters igs_session_;
 
         // Current params (user-editable)
         lfs::core::param::OptimizationParameters mcmc_current_;
-        lfs::core::param::OptimizationParameters adc_current_;
+        lfs::core::param::OptimizationParameters mrnf_current_;
         lfs::core::param::OptimizationParameters igs_current_;
 
         // Dataset config (CLI overrides JSON defaults)

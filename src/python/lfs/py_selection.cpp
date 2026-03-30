@@ -11,6 +11,8 @@
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/operation/undo_entry.hpp"
+#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
@@ -37,6 +39,17 @@ namespace lfs::python {
         vis::SceneManager* get_sm() { return get_scene_manager(); }
 
         vis::SelectionService* get_ss() { return get_selection_service(); }
+
+        template <typename Mutator>
+        void apply_selection_state_with_undo(vis::SceneManager& scene_manager,
+                                             const std::string& undo_label,
+                                             Mutator&& mutator) {
+            auto snapshot = std::make_unique<vis::op::SceneSnapshot>(scene_manager, undo_label);
+            snapshot->captureSelection();
+            mutator(scene_manager.getScene());
+            snapshot->captureAfter();
+            vis::op::pushSceneSnapshotIfChanged(std::move(snapshot));
+        }
 
         void configure_depth_filter(vis::RenderSettings& settings, const bool enabled,
                                     const float depth_near, const float depth_far,
@@ -134,14 +147,14 @@ namespace lfs::python {
 
         sel.def(
             "brush_select", [](float x, float y, float radius) {
-                auto* rm = get_rm();
                 auto* ss = get_ss();
-                if (!rm || !ss)
+                if (!ss)
                     return;
+                auto screen_pos = ss->getScreenPositions();
                 auto* stroke = ss->getStrokeSelection();
-                if (!stroke || !stroke->is_valid())
+                if (!screen_pos || !stroke || !stroke->is_valid())
                     return;
-                rm->brushSelect(x, y, radius, *stroke);
+                rendering::brush_select_tensor(*screen_pos, x, y, radius, *stroke);
             },
             nb::arg("x"), nb::arg("y"), nb::arg("radius"), "Brush select at (x, y) with given radius. Accumulates into stroke selection.");
 
@@ -249,14 +262,14 @@ namespace lfs::python {
                 if (!rm)
                     return;
                 core::Tensor* stroke = ss ? ss->getStrokeSelection() : nullptr;
-                rm->setBrushState(true, x, y, radius, add_mode, stroke);
+                rm->setCursorPreviewState(true, x, y, radius, add_mode, stroke);
             },
             nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("add_mode") = true, "Draw brush circle overlay at (x, y)");
 
         sel.def(
             "clear_brush_state", []() {
                 if (auto* rm = get_rm()) {
-                    rm->clearBrushState();
+                    rm->clearCursorPreviewState();
                 }
             },
             "Clear brush circle overlay");
@@ -313,17 +326,8 @@ namespace lfs::python {
             "Clear lasso selection preview");
 
         // ─────────────────────────────────────────────────────────────────────
-        // SCREEN POSITIONS OUTPUT
+        // SCREEN POSITIONS
         // ─────────────────────────────────────────────────────────────────────
-
-        sel.def(
-            "set_output_screen_positions", [](bool enable) {
-                if (auto* rm = get_rm()) {
-                    rm->setOutputScreenPositions(enable);
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
-                }
-            },
-            nb::arg("enable"), "Enable/disable screen positions output during rendering");
 
         sel.def(
             "has_screen_positions", []() -> bool {
@@ -357,7 +361,7 @@ namespace lfs::python {
                 configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
                 rm->updateSettings(settings);
             },
-            nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space. The first three positional arguments remain backward-compatible.");
+            nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space.");
 
         sel.def(
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
@@ -411,14 +415,10 @@ namespace lfs::python {
 
         sel.def(
             "apply_crop_filter", []() {
-                auto* rm = get_rm();
                 auto* ss = get_ss();
-                if (!rm || !ss)
+                if (!ss)
                     return;
-                auto* stroke = ss->getStrokeSelection();
-                if (stroke && stroke->is_valid()) {
-                    rm->applyCropFilter(*stroke);
-                }
+                ss->applyCropFilterToStroke();
             },
             "Apply crop box filter to current stroke selection");
 
@@ -536,7 +536,9 @@ namespace lfs::python {
                 auto* sm = get_sm();
                 if (!sm)
                     return;
-                sm->getScene().setActiveSelectionGroup(static_cast<uint8_t>(group_id));
+                apply_selection_state_with_undo(
+                    *sm, "selection_group.set_active",
+                    [group_id](core::Scene& scene) { scene.setActiveSelectionGroup(static_cast<uint8_t>(group_id)); });
             },
             nb::arg("group_id"), "Set the active selection group ID");
 
@@ -569,7 +571,11 @@ namespace lfs::python {
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
                     current = core::cuda::selection_grow(current, model->means(), radius, group_id);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.grow",
+                    [updated = std::move(current)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
@@ -590,7 +596,11 @@ namespace lfs::python {
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
                     current = core::cuda::selection_shrink(current, model->means(), radius);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.shrink",
+                    [updated = std::move(current)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
@@ -607,7 +617,11 @@ namespace lfs::python {
                     return;
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.by_opacity",
+                    [updated = std::move(mask)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
@@ -624,7 +638,11 @@ namespace lfs::python {
                     return;
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.by_scale",
+                    [updated = std::move(mask)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },

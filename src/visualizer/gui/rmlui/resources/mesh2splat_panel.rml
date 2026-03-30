@@ -23,54 +23,60 @@
   <div class="separator"></div>
 
   <div class="m2s-section">
-    <span class="m2s-section-title text-accent">@tr:mesh2splat.gaussian_scale</span>
-    <div class="setting-row">
-      <input id="gaussian-scale-slider"
-             type="range"
-             class="setting-slider"
-             data-value="gaussian_scale"
-             min="0.1"
-             max="2.0"
-             step="0.01" />
-      <span class="slider-value">{{gaussian_scale_text}}</span>
-    </div>
-    <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_gaussian_scale</span>
-  </div>
-
-  <div class="separator"></div>
-
-  <div class="m2s-section">
     <span class="m2s-section-title text-accent">@tr:mesh2splat.sampling_density_header</span>
 
-    <span class="m2s-label text-default">@tr:mesh2splat.sampling_density</span>
-    <div class="setting-row">
-      <input id="quality-slider"
-             type="range"
-             class="setting-slider"
-             data-value="quality"
-             min="0"
-             max="1"
-             step="0.01" />
-      <span class="slider-value">{{quality_text}}</span>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">@tr:mesh2splat.gaussian_scale</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input id="gaussian-scale-slider"
+               type="range"
+               class="setting-slider"
+               data-value="gaussian_scale"
+               min="0.1"
+               max="2.0"
+               step="0.01" />
+        <span class="slider-value">{{gaussian_scale_text}}</span>
+      </div>
+    </div>
+    <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_gaussian_scale</span>
+
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">@tr:mesh2splat.sampling_density</span>
+      <div class="setting-row__control-col setting-row__control-col--slider">
+        <input id="quality-slider"
+               type="range"
+               class="setting-slider"
+               data-value="quality"
+               min="0"
+               max="1"
+               step="0.01" />
+        <span class="slider-value">{{quality_text}}</span>
+      </div>
     </div>
     <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_quality</span>
 
-    <span class="m2s-label m2s-label--spaced text-default">@tr:mesh2splat.max_resolution</span>
-    <div id="resolution-list" class="m2s-chip-list">
-      <button type="button"
-           class="m2s-chip select-chip"
-           data-for="option : resolutions"
-           data-class-selected="option.selected"
-           data-attr-data-resolution-index="option.index">{{option.label}}</button>
+    <div class="setting-row setting-row--aligned">
+      <span class="setting-row__label-col">@tr:mesh2splat.max_resolution</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <div id="resolution-list" class="m2s-chip-list">
+          <button type="button"
+               class="m2s-chip select-chip"
+               data-for="option : resolutions"
+               data-class-selected="option.selected"
+               data-attr-data-resolution-index="option.index">{{option.label}}</button>
+        </div>
+      </div>
     </div>
     <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_max_resolution</span>
   </div>
 
   <div class="separator"></div>
 
-  <div class="m2s-summary-row">
-    <span class="m2s-summary-label text-muted">@tr:mesh2splat.effective_resolution</span>
-    <span class="m2s-summary-value text-default">{{effective_resolution}}</span>
+  <div class="setting-row setting-row--aligned">
+    <span class="setting-row__label-col text-muted">@tr:mesh2splat.effective_resolution</span>
+    <div class="setting-row__control-col">
+      <span class="m2s-summary-value text-default">{{effective_resolution}}</span>
+    </div>
   </div>
 
   <div class="m2s-progress-wrap" data-if="show_progress">

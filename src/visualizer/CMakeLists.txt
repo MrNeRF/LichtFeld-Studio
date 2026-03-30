@@ -26,8 +26,22 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         window/window_manager.cpp
 
         # Rendering
+        rendering/camera_interaction_service.cpp
+        rendering/gt_texture_cache.cpp
+        rendering/image_texture_loader.cpp
+        rendering/render_frame_coordinator.cpp
+        rendering/render_pass_graph.cpp
         rendering/rendering_manager.cpp
+        rendering/rendering_manager_events.cpp
+        rendering/rendering_manager_frame.cpp
+        rendering/rendering_manager_viewport.cpp
+        rendering/split_view_composition.cpp
+        rendering/split_view_service.cpp
+        rendering/viewport_artifact_service.cpp
+        rendering/viewport_frame_lifecycle_service.cpp
         rendering/render_pass.cpp
+        rendering/viewport_appearance_correction.cpp
+        rendering/viewport_request_builder.cpp
         rendering/framerate_controller.cpp
         rendering/passes/overlay_pass.cpp
         rendering/passes/splat_raster_pass.cpp
@@ -49,6 +63,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/native_panels.cpp
         gui/layout_state.cpp
         gui/async_task_manager.cpp
+        gui/video_export_utils.cpp
         gui/startup_overlay.cpp
         gui/rml_menu_bar.cpp
         gui/rml_right_panel.cpp
@@ -65,6 +80,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
         gui/html_viewer_export.cpp
+        gui/scene_panel_native.cpp
         gui/ui_widgets.cpp
         gui_capabilities.cpp
         gui/panels/windows_console_utils.cpp
@@ -87,6 +103,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Input handling
         input/input_controller.cpp
+        input/input_router.cpp
         input/input_bindings.cpp
         input/sdl_key_mapping.cpp
 
@@ -140,7 +157,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         gui/panels/menu_bar.cpp
         gui/panels/menu_bar.hpp
-        gui/utils/windows_utils.cpp
+        gui/utils/native_file_dialog.cpp
         gui/utils/drag_drop_native.cpp
         gui/utils/file_association.cpp
 
@@ -157,6 +174,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
+        gui/rmlui/elements/scene_graph_element.cpp
 )
 
 set_source_files_properties(
@@ -200,6 +218,7 @@ target_link_libraries(lfs_visualizer
         OpenSSL::SSL
         OpenSSL::Crypto
         CUDA::cudart
+        nfd::nfd
         ${OPENGL_LIBRARIES}
         vterm
 )
@@ -281,14 +300,14 @@ file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/shaders")
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets")
 
 # Copy shaders to build directory
-file(GLOB SHADER_FILES "${VISUALIZER_SOURCE_RESOURCE_DIR}/shaders/*")
+file(GLOB SHADER_FILES CONFIGURE_DEPENDS "${VISUALIZER_SOURCE_RESOURCE_DIR}/shaders/*")
 foreach (SHADER_FILE ${SHADER_FILES})
     get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
     configure_file(${SHADER_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/shaders/${SHADER_NAME}" COPYONLY)
 endforeach ()
 
 # Copy assets from resources/assets if they exist
-file(GLOB ASSET_FILES "${VISUALIZER_SOURCE_RESOURCE_DIR}/assets/*")
+file(GLOB ASSET_FILES CONFIGURE_DEPENDS "${VISUALIZER_SOURCE_RESOURCE_DIR}/assets/*")
 foreach (ASSET_FILE ${ASSET_FILES})
     get_filename_component(ASSET_NAME ${ASSET_FILE} NAME)
     configure_file(${ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/${ASSET_NAME}" COPYONLY)
@@ -308,7 +327,7 @@ endforeach ()
 
 # Copy icon files
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon")
-file(GLOB ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/*.png")
+file(GLOB ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/*.png")
 foreach (ICON_FILE ${ICON_FILES})
     get_filename_component(ICON_NAME ${ICON_FILE} NAME)
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/${ICON_NAME}" COPYONLY)
@@ -316,7 +335,7 @@ endforeach ()
 
 # Copy scene icon files (used by RmlUI scene panel)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene")
-file(GLOB SCENE_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/scene/*.png")
+file(GLOB SCENE_ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/scene/*.png")
 foreach (ICON_FILE ${SCENE_ICON_FILES})
     get_filename_component(ICON_NAME ${ICON_FILE} NAME)
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene/${ICON_NAME}" COPYONLY)
@@ -324,7 +343,7 @@ endforeach ()
 
 # Copy sequencer icon files (used by RmlUI sequencer panel)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer")
-file(GLOB SEQUENCER_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/sequencer/*.png")
+file(GLOB SEQUENCER_ICON_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/sequencer/*.png")
 foreach (ICON_FILE ${SEQUENCER_ICON_FILES})
     get_filename_component(ICON_NAME ${ICON_FILE} NAME)
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer/${ICON_NAME}" COPYONLY)
@@ -332,7 +351,7 @@ endforeach ()
 
 # Copy RmlUI resources (re-copy on every build so edits are picked up)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
-file(GLOB RMLUI_RESOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
+file(GLOB RMLUI_RESOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
 foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
@@ -347,7 +366,7 @@ add_dependencies(lfs_visualizer copy_rmlui_resources)
 
 # Copy locale files
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/locales")
-file(GLOB LOCALE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/*.json")
+file(GLOB LOCALE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/*.json")
 foreach (LOCALE_FILE ${LOCALE_FILES})
     get_filename_component(LOCALE_NAME ${LOCALE_FILE} NAME)
     configure_file(${LOCALE_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/locales/${LOCALE_NAME}" COPYONLY)

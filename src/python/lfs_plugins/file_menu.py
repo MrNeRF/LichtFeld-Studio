@@ -30,7 +30,7 @@ class ImportDatasetOperator(Operator):
 
 class ImportPlyOperator(Operator):
     label = "menu.file.import_ply"
-    description = "Import a PLY file"
+    description = "Import a splat file"
 
     def execute(self, context) -> set:
         path = lf.ui.open_ply_file_dialog("")

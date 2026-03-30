@@ -67,6 +67,11 @@ namespace lfs::io {
                     return true;
                 }
 
+                if (ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
+                    LOG_TRACE("USD gaussian file detected: {}", lfs::core::path_to_utf8(path));
+                    return true;
+                }
+
                 if (ext == ".resume") {
                     LOG_TRACE("Checkpoint file detected: {}", lfs::core::path_to_utf8(path));
                     return true;

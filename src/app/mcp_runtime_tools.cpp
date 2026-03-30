@@ -216,6 +216,8 @@ namespace lfs::app {
                 return "spz";
             case core::ExportFormat::HTML_VIEWER:
                 return "html_viewer";
+            case core::ExportFormat::USD:
+                return "usd";
             }
             return "unknown";
         }
@@ -421,6 +423,7 @@ namespace lfs::app {
                 {"active", active},
                 {"status",
                  active                                ? "running"
+                 : stage == "Cancelled"                ? "cancelled"
                  : !error.empty() || stage == "Failed" ? "failed"
                  : stage == "Complete"                 ? "finished"
                                                        : "idle"},

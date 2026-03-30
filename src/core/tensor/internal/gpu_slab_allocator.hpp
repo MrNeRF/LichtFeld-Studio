@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/logger.hpp"
 #include <array>
 #include <atomic>
@@ -31,10 +32,7 @@ namespace lfs::core {
             size_t blocks_per_class[NUM_SIZE_CLASSES]{0};
         };
 
-        static GPUSlabAllocator& instance() {
-            static GPUSlabAllocator allocator;
-            return allocator;
-        }
+        static LFS_CORE_API GPUSlabAllocator& instance();
 
         void shutdown() {
             bool expected = false;

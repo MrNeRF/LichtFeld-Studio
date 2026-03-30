@@ -41,6 +41,9 @@ namespace lfs::training {
         const float cx_adjusted = cx - static_cast<float>(tile_x_offset);
         const float cy_adjusted = cy - static_cast<float>(tile_y_offset);
 
+        assert(!pixel_weights.is_valid() ||
+               pixel_weights.numel() == static_cast<size_t>(width) * static_cast<size_t>(height));
+
         // Get Gaussian parameters
         auto& means = gaussian_model.means();
         auto& raw_opacities = gaussian_model.opacity_raw();
@@ -73,7 +76,8 @@ namespace lfs::training {
         }
 
         // Input pixel_weights pointer and output accum_weights
-        const float* pixel_weights_ptr = pixel_weights.contiguous().ptr<float>();
+        auto pixel_weights_contig = pixel_weights.contiguous();
+        const float* pixel_weights_ptr = pixel_weights_contig.ptr<float>();
 
         auto accum_weights = core::Tensor::zeros(
             {static_cast<size_t>(n_primitives)}, core::Device::CUDA, core::DataType::Float32);
@@ -81,31 +85,26 @@ namespace lfs::training {
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
-        edge_compute::rasterization::ForwardContext forward_ctx;
-        try {
-            forward_ctx = edge_compute::rasterization::edge_forward_raw(
-                means.ptr<float>(),
-                raw_scales.ptr<float>(),
-                raw_rotations.ptr<float>(),
-                raw_opacities.ptr<float>(),
-                w2c_ptr,
-                cam_position_ptr,
-                alpha.ptr<float>(),
-                n_primitives,
-                width,
-                height,
-                fx,
-                fy,
-                cx_adjusted, // Use adjusted cx for tile offset
-                cy_adjusted, // Use adjusted cy for tile offset
-                near_plane,
-                far_plane,
-                pixel_weights_ptr,
-                accum_weights_out);
-        } catch (const std::exception& e) {
-        }
+        auto forward_ctx = edge_compute::rasterization::edge_forward_raw(
+            means.ptr<float>(),
+            raw_scales.ptr<float>(),
+            raw_rotations.ptr<float>(),
+            raw_opacities.ptr<float>(),
+            w2c_ptr,
+            cam_position_ptr,
+            alpha.ptr<float>(),
+            n_primitives,
+            width,
+            height,
+            fx,
+            fy,
+            cx_adjusted, // Use adjusted cx for tile offset
+            cy_adjusted, // Use adjusted cy for tile offset
+            near_plane,
+            far_plane,
+            pixel_weights_ptr,
+            accum_weights_out);
 
-        // Check if forward failed due to OOM
         if (!forward_ctx.success) {
             return std::unexpected(std::string(forward_ctx.error_message));
         }

@@ -652,7 +652,9 @@ from lfs_plugins.types import Operator, Event
 class MeasureTool(Operator):
     label = "Measure Distance"
     description = "Click two points to measure distance"
-    options = {"UNDO"}
+    # Only set UNDO when the operator actually implements undo()/redo()
+    # or when all mutations go through history-aware scene APIs.
+    options = set()
 
     def __init__(self):
         super().__init__()
@@ -686,6 +688,9 @@ class MeasureTool(Operator):
     def cancel(self, context):
         self.start_pos = None
 ```
+
+If an operator performs custom side effects that are not already covered by the shared scene history,
+wrap them in `with lf.undo.transaction("My Change"):` or push a custom step with `lf.undo.push(...)`.
 
 ---
 

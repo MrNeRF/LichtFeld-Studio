@@ -26,9 +26,9 @@ The following commands should be run from the root directory of this project.
 
     ```bash
     ./eval/benchmark_mipnerf360_mcmc.sh
-    ./eval/benchmark_mipnerf360_adc.sh
+    ./eval/benchmark_mipnerf360_mrnf.sh
+    ./eval/benchmark_mipnerf360_improved_gs_plus.sh
     ./eval/timing_mipnerf360_mcmc.sh
-    ./eval/timing_mipnerf360_adc.sh
     ```
 
     ```ps

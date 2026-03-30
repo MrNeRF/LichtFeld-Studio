@@ -129,9 +129,9 @@ namespace lfs {
     __global__ void adjustSaturationKernel(
         float* __restrict__ sh0,
         const float* __restrict__ screen_positions,
-        const float brush_x,
-        const float brush_y,
-        const float brush_radius_sq,
+        const float cursor_x,
+        const float cursor_y,
+        const float cursor_radius_sq,
         const float saturation_delta,
         const int num_gaussians) {
 
@@ -139,9 +139,9 @@ namespace lfs {
         if (idx >= num_gaussians)
             return;
 
-        const float dx = screen_positions[idx * 2 + 0] - brush_x;
-        const float dy = screen_positions[idx * 2 + 1] - brush_y;
-        if (dx * dx + dy * dy > brush_radius_sq)
+        const float dx = screen_positions[idx * 2 + 0] - cursor_x;
+        const float dy = screen_positions[idx * 2 + 1] - cursor_y;
+        if (dx * dx + dy * dy > cursor_radius_sq)
             return;
 
         // SH to RGB: color = SH_C0 * sh + 0.5
@@ -167,9 +167,9 @@ namespace lfs {
     void launchAdjustSaturation(
         float* sh0,
         const float* screen_positions,
-        const float brush_x,
-        const float brush_y,
-        const float brush_radius,
+        const float cursor_x,
+        const float cursor_y,
+        const float cursor_radius,
         const float saturation_delta,
         const int num_gaussians,
         cudaStream_t stream) {
@@ -180,8 +180,8 @@ namespace lfs {
         constexpr int threads = 256;
         const int blocks = (num_gaussians + threads - 1) / threads;
         adjustSaturationKernel<<<blocks, threads, 0, stream>>>(
-            sh0, screen_positions, brush_x, brush_y,
-            brush_radius * brush_radius, saturation_delta, num_gaussians);
+            sh0, screen_positions, cursor_x, cursor_y,
+            cursor_radius * cursor_radius, saturation_delta, num_gaussians);
     }
 
 } // namespace lfs

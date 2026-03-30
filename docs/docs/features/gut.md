@@ -6,7 +6,7 @@
 Use 3DGUT when your COLMAP camera model is not PINHOLE or SIMPLE_PINHOLE.
 
 :::warning
-RealityScan (formerly RealityCapture) may export datasets with a camera model that has distortion with images that are undistorted. If you attempt to use 3DGUT with a dataset like this, the results will be incorrect. The `--rc` flag can be used to ignore the distortion parameters in this case.
+RealityScan (formerly RealityCapture) may export datasets whose images are already undistorted while the COLMAP metadata still reports a distorted camera model. LFS automatically normalizes zero-distortion pinhole-family models during import, but stale non-pinhole metadata can still produce incorrect 3DGUT results.
 :::
 
 ## How to Use

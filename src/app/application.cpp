@@ -69,6 +69,8 @@ namespace lfs::app {
                         checkpoint_params.dataset.data_path = params->dataset.data_path;
                     if (!params->dataset.output_path.empty())
                         checkpoint_params.dataset.output_path = params->dataset.output_path;
+                    if (!params->dataset.output_name.empty())
+                        checkpoint_params.dataset.output_name = params->dataset.output_name;
 
                     if (checkpoint_params.dataset.data_path.empty()) {
                         LOG_ERROR("Checkpoint has no dataset path and none provided via --data-path");
@@ -229,7 +231,14 @@ namespace lfs::app {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
 
-            if (params->optimization.no_splash) {
+            const bool disable_splash =
+#ifdef LFS_BUILD_PORTABLE
+                false;
+#else
+                params->optimization.no_splash;
+#endif
+
+            if (disable_splash) {
                 warmupCuda();
             } else {
                 SplashScreen::runWithDelay([]() { warmupCuda(); return 0; });
@@ -250,6 +259,7 @@ namespace lfs::app {
                 .height = 720,
                 .antialiasing = false,
                 .enable_cuda_interop = true,
+                .show_startup_overlay = !disable_splash,
                 .gut = params->optimization.gut,
             });
 

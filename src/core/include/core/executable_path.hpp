@@ -158,6 +158,108 @@ namespace lfs::core {
         return {};
     }
 
+    inline bool isVcpkgPythonPrefix(const std::filesystem::path& triplet_dir) {
+        std::error_code ec;
+#ifdef _WIN32
+        return std::filesystem::exists(triplet_dir / "tools" / "python3" / "python.exe", ec);
+#else
+        return std::filesystem::exists(triplet_dir / "tools" / "python3" / "python3.12", ec) &&
+               std::filesystem::exists(triplet_dir / "lib" / "python3.12", ec);
+#endif
+    }
+
+    inline bool tripletLooksLikeCurrentPlatform(const std::string& name) {
+#ifdef _WIN32
+        if (name.find("windows") == std::string::npos) {
+            return false;
+        }
+#else
+        if (name.find("linux") == std::string::npos) {
+            return false;
+        }
+#endif
+
+#if defined(_M_ARM64) || defined(__aarch64__)
+        return name.starts_with("arm64");
+#elif defined(_M_X64) || defined(__x86_64__)
+        return name.starts_with("x64");
+#elif defined(_M_ARM) || defined(__arm__)
+        return name.starts_with("arm");
+#else
+        return true;
+#endif
+    }
+
+    inline std::filesystem::path preferredVcpkgPrefix(const std::filesystem::path& vcpkg_root) {
+#ifdef LFS_PYTHON_EXECUTABLE
+        auto configured_prefix = std::filesystem::path(LFS_PYTHON_EXECUTABLE);
+        for (int i = 0; i < 3 && !configured_prefix.empty(); ++i) {
+            configured_prefix = configured_prefix.parent_path();
+        }
+
+        if (!configured_prefix.empty()) {
+            if (configured_prefix.parent_path() == vcpkg_root && isVcpkgPythonPrefix(configured_prefix)) {
+                return configured_prefix;
+            }
+
+            if (const auto mapped_prefix = vcpkg_root / configured_prefix.filename();
+                isVcpkgPythonPrefix(mapped_prefix)) {
+                return mapped_prefix;
+            }
+        }
+#endif
+        return {};
+    }
+
+    // Discover the vcpkg triplet directory under vcpkg_installed/ at runtime.
+    // Returns empty path if no matching triplet is found.
+    inline std::filesystem::path findVcpkgPrefix(const std::filesystem::path& exe_dir) {
+        const auto vcpkg_root = exe_dir / "vcpkg_installed";
+        std::error_code ec;
+        if (!std::filesystem::exists(vcpkg_root, ec)) {
+            return {};
+        }
+
+        if (const auto prefix = preferredVcpkgPrefix(vcpkg_root); !prefix.empty()) {
+            return prefix;
+        }
+
+        std::filesystem::path preferred;
+        std::string preferred_name;
+        std::filesystem::path fallback;
+        std::string fallback_name;
+
+        for (const auto& entry : std::filesystem::directory_iterator(vcpkg_root, ec)) {
+            if (!entry.is_directory(ec)) {
+                continue;
+            }
+            const auto triplet_dir = entry.path();
+            const auto name = triplet_dir.filename().string();
+            if (name == "vcpkg" || name.starts_with(".")) {
+                continue;
+            }
+            if (!isVcpkgPythonPrefix(triplet_dir)) {
+                continue;
+            }
+
+            if (fallback.empty() || name < fallback_name) {
+                fallback = triplet_dir;
+                fallback_name = name;
+            }
+
+            if (tripletLooksLikeCurrentPlatform(name) &&
+                (preferred.empty() || name < preferred_name)) {
+                preferred = triplet_dir;
+                preferred_name = name;
+            }
+        }
+
+        if (!preferred.empty()) {
+            return preferred;
+        }
+        return fallback;
+    }
+
     // Python home directory (for embedded Python)
     inline std::filesystem::path getPythonHome() {
         const auto exe_dir = getExecutableDir();
@@ -170,11 +272,9 @@ namespace lfs::core {
             return exe_dir.parent_path();
         }
 
-        // Windows Development (vcpkg): python in vcpkg_installed/x64-windows/tools/python3/
-        // vcpkg Python on Windows has Lib/ directly in tools/python3/
-        const auto vcpkg = exe_dir / "vcpkg_installed" / "x64-windows" / "tools" / "python3";
-        if (std::filesystem::exists(vcpkg / "python.exe")) {
-            return vcpkg;
+        // Windows Development (vcpkg)
+        if (const auto prefix = findVcpkgPrefix(exe_dir); !prefix.empty()) {
+            return prefix / "tools" / "python3";
         }
 #else
         // Linux Production: exe in bin/, Python stdlib in ../lib/python3.12/
@@ -183,13 +283,9 @@ namespace lfs::core {
             return exe_dir.parent_path();
         }
 
-        // Linux Development (vcpkg): python3.12 in vcpkg_installed/x64-linux/tools/python3/
-        // but stdlib is in vcpkg_installed/x64-linux/lib/python3.12/
-        const auto vcpkg_tools = exe_dir / "vcpkg_installed" / "x64-linux" / "tools" / "python3";
-        const auto vcpkg_lib = exe_dir / "vcpkg_installed" / "x64-linux" / "lib" / "python3.12";
-        if (std::filesystem::exists(vcpkg_tools / "python3.12") && std::filesystem::exists(vcpkg_lib)) {
-            // Return the prefix (parent of lib/)
-            return exe_dir / "vcpkg_installed" / "x64-linux";
+        // Linux Development (vcpkg)
+        if (const auto prefix = findVcpkgPrefix(exe_dir); !prefix.empty()) {
+            return prefix;
         }
 #endif
 
@@ -230,16 +326,18 @@ namespace lfs::core {
         if (const auto p = exe_dir / "python.exe"; std::filesystem::exists(p))
             return p;
 
-        if (const auto p = exe_dir / "vcpkg_installed" / "x64-windows" / "tools" / "python3" / "python.exe";
-            std::filesystem::exists(p))
-            return p;
+        if (const auto prefix = findVcpkgPrefix(exe_dir); !prefix.empty()) {
+            if (const auto p = prefix / "tools" / "python3" / "python.exe"; std::filesystem::exists(p))
+                return p;
+        }
 #else
         if (const auto p = exe_dir / "python3"; std::filesystem::exists(p))
             return p;
 
-        if (const auto p = exe_dir / "vcpkg_installed" / "x64-linux" / "tools" / "python3" / "python3.12";
-            std::filesystem::exists(p))
-            return p;
+        if (const auto prefix = findVcpkgPrefix(exe_dir); !prefix.empty()) {
+            if (const auto p = prefix / "tools" / "python3" / "python3.12"; std::filesystem::exists(p))
+                return p;
+        }
 #endif
 
 #ifdef LFS_PYTHON_EXECUTABLE

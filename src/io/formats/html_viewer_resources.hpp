@@ -18,7 +18,7 @@ namespace lfs::io {
             R"TMPL0(<!DOCTYPE html>
 <html lang="en">
     <head>
-        <title>SuperSplat Viewer</title>
+        <title>LichtFeld Studio Viewer</title>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
         <base href="">
@@ -266,6 +266,19 @@ namespace lfs::io {
 
             <!-- Tooltip -->
             <div id="tooltip"></div>
+
+            <!-- Branding -->
+            <a id="lichtfeldBranding" href="https://github.com/MrNeRF/LichtFeld-Studio" target="_blank" rel="noopener">
+                <svg id="lichtfeldLogo" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="1.1" cy="1.1" r="1.1"/><circle cx="4.2" cy="1.1" r="1.1"/><circle cx="7.3" cy="1.1" r="1.1"/><circle cx="10.4" cy="1.1" r="1.1"/><circle cx="13.5" cy="1.1" r="1.1"/><circle cx="16.6" cy="1.1" r="1.1"/>
+                    <circle cx="1.1" cy="4.2" r="1.1"/><circle cx="4.2" cy="4.2" r="1.1"/><circle cx="7.3" cy="4.2" r="1.1"/><circle cx="10.4" cy="4.2" r="1.1"/><circle cx="13.5" cy="4.2" r="1.1"/><circle cx="16.6" cy="4.2" r="1.1"/>
+                    <circle cx="1.1" cy="7.3" r="1.1"/><circle cx="4.2" cy="7.3" r="1.1"/><circle cx="7.3" cy="7.3" r="1.1"/><circle cx="10.4" cy="7.3" r="1.1"/><circle cx="13.5" cy="7.3" r="1.1"/><circle cx="16.6" cy="7.3" r="1.1"/>
+                    <circle cx="1.1" cy="10.4" r="1.1"/><circle cx="4.2" cy="10.4" r="1.1"/><circle cx="7.3" cy="10.4" r="1.1"/><circle cx="10.4" cy="10.4" r="1.1"/><circle cx="13.5" cy="10.4" r="1.1"/><circle cx="16.6" cy="10.4" r="1.1"/>
+                    <circle cx="1.1" cy="13.5" r="1.1"/><circle cx="4.2" cy="13.5" r="1.1"/><circle cx="7.3" cy="13.5" r="1.1"/><circle cx="10.4" cy="13.5" r="1.1"/><circle cx="13.5" cy="13.5" r="1.1"/><circle cx="16.6" cy="13.5" r="1.1"/>
+                    <circle cx="1.1" cy="16.6" r="1.1"/><circle cx="4.2" cy="16.6" r="1.1"/><circle cx="7.3" cy="16.6" r="1.1"/><circle cx="10.4" cy="16.6" r="1.1"/><circle cx="13.5" cy="16.6" r="1.1"/><circle cx="16.6" cy="16.6" r="1.1"/>
+                </svg>
+                Made with LichtFeld Studio
+            </a>
         </div>
 
         <!-- SVG Icons -->
@@ -708,6 +721,29 @@ button {
   font-size: 12px;
   color: #E0DCDD;
   background-color: #282828;
+}
+
+#lichtfeldBranding {
+  position: fixed;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: sans-serif;
+  text-decoration: none;
+  pointer-events: auto;
+  transition: color 0.2s ease;
+}
+#lichtfeldBranding:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+#lichtfeldLogo {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
 }
 
 #annotations {

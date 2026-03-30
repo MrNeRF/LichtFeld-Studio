@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
 #include <map>
 #include <sstream>
 #include <vector>
@@ -1594,115 +1595,28 @@ TEST_F(UnicodePathTest, FileBrowserDisplayStrings) {
 }
 
 // ============================================================================
-// Test 31: Shell Escape for Linux File Dialogs
+// Test 31: Native File Dialog UTF-8 Round Trip
 // ============================================================================
 
-TEST_F(UnicodePathTest, ShellEscapeForLinuxDialogs) {
-    // Test the shell_escape() function pattern used in windows_utils.cpp
-    // for Linux file dialogs (zenity/kdialog)
-    //
-    // The escape function wraps strings in single quotes and escapes
-    // any single quotes within as: ' -> '\''
+TEST_F(UnicodePathTest, NativeFileDialogUtf8RoundTrip) {
+    auto test_dir = test_root_ / "native_dialog_utf8";
+    std::vector<fs::path> candidate_dirs = {
+        test_dir / "日本語_プロジェクト" / "shots",
+        test_dir / "中文_场景" / "导出",
+        test_dir / "한국어_데이터" / "결과",
+        test_dir / "mixed_'quotes'_フォルダ" / "nested"};
 
-    auto shell_escape = [](const std::string& str) -> std::string {
-        std::string result = "'";
-        for (char c : str) {
-            if (c == '\'') {
-                result += "'\\''";
-            } else {
-                result += c;
-            }
-        }
-        result += "'";
-        return result;
-    };
+    for (const auto& dir : candidate_dirs) {
+        SCOPED_TRACE(path_to_utf8(dir));
+        fs::create_directories(dir);
 
-    // Test basic Unicode strings
-    std::vector<std::pair<std::string, std::string>> test_cases = {
-        // {input, expected_output}
-        {"simple", "'simple'"},
-        {"with space", "'with space'"},
-        {"日本語テスト", "'日本語テスト'"},
-        {"한국어_테스트", "'한국어_테스트'"},
-        {"中文测试", "'中文测试'"},
-        {"Mixed_混合_ミックス", "'Mixed_混合_ミックス'"},
-        {"file.json", "'file.json'"},
-        {"path/to/file", "'path/to/file'"},
-    };
+        const std::string dir_utf8 = path_to_utf8(dir);
+        EXPECT_FALSE(dir_utf8.empty()) << "UTF-8 conversion failed for native dialog path";
 
-    for (const auto& [input, expected] : test_cases) {
-        SCOPED_TRACE(input);
-        std::string escaped = shell_escape(input);
-        EXPECT_EQ(escaped, expected) << "Shell escape mismatch for: " << input;
-    }
-
-    // Test strings with single quotes (injection attempt)
-    {
-        std::string dangerous = "file'; rm -rf /; echo '";
-        std::string escaped = shell_escape(dangerous);
-        // Should be: 'file'\'''; rm -rf /; echo '\'''
-        EXPECT_TRUE(escaped.starts_with("'")) << "Should start with single quote";
-        EXPECT_TRUE(escaped.ends_with("'")) << "Should end with single quote";
-        EXPECT_TRUE(escaped.find("'\\''") != std::string::npos)
-            << "Single quotes should be escaped";
-        // Verify expected escape pattern for dangerous string
-        // The escape wraps the string in quotes and converts ' to '\''
-        // Input: "file'; rm -rf /; echo '"
-        // Output: 'file'\''; rm -rf /; echo '\'''
-        // This is safe because when bash processes it, the semicolons are literal characters
-        // The pattern '\'' means: close quote, escaped quote, open new quote
-        // So the semicolon and other chars after escape are INSIDE the new quoted section
-        EXPECT_EQ(escaped, "'file'\\''; rm -rf /; echo '\\'''")
-            << "Escape pattern should match expected format";
-    }
-
-    // Test Unicode with single quotes
-    {
-        std::string unicode_quote = "フォルダ'名前_한국어";
-        std::string escaped = shell_escape(unicode_quote);
-        EXPECT_TRUE(escaped.starts_with("'"));
-        EXPECT_TRUE(escaped.ends_with("'"));
-        EXPECT_TRUE(escaped.find("'\\''") != std::string::npos)
-            << "Quote in Unicode should be escaped";
-    }
-
-    // Test empty string
-    {
-        std::string empty = "";
-        std::string escaped = shell_escape(empty);
-        EXPECT_EQ(escaped, "''") << "Empty string should become ''";
-    }
-
-    // Test string with only single quote
-    {
-        std::string just_quote = "'";
-        std::string escaped = shell_escape(just_quote);
-        EXPECT_EQ(escaped, "''\\'''") << "Single quote should be properly escaped";
-    }
-
-    // Test multiple consecutive single quotes
-    {
-        std::string multi_quote = "a'''b";
-        std::string escaped = shell_escape(multi_quote);
-        // Count the escape sequences
-        size_t escape_count = 0;
-        size_t pos = 0;
-        while ((pos = escaped.find("'\\''", pos)) != std::string::npos) {
-            escape_count++;
-            pos += 4;
-        }
-        EXPECT_EQ(escape_count, 3) << "Should have 3 escaped quotes";
-    }
-
-    // Test real-world Linux dialog filename patterns
-    {
-        // Pattern from saveConfigDialog: defaultName + ".json"
-        std::string config_name = "設定_config_설정";
-        std::string with_ext = config_name + ".json";
-        std::string escaped = shell_escape(with_ext);
-        EXPECT_TRUE(escaped.starts_with("'"));
-        EXPECT_TRUE(escaped.ends_with("'"));
-        EXPECT_TRUE(escaped.find(".json") != std::string::npos);
+        const fs::path recovered = utf8_to_path(dir_utf8);
+        EXPECT_TRUE(fs::exists(recovered)) << "Recovered dialog path should exist";
+        EXPECT_TRUE(fs::is_directory(recovered)) << "Recovered dialog path should be a directory";
+        EXPECT_EQ(recovered.lexically_normal(), dir.lexically_normal());
     }
 }
 
@@ -2167,7 +2081,7 @@ TEST_F(UnicodePathTest, COLMAPLoaderLoggingPatternSafety) {
 // ============================================================================
 
 TEST_F(UnicodePathTest, FileDialogInitialDirectory) {
-    // Test the pattern used in windows_utils.cpp file dialogs
+    // Test the UTF-8 conversion pattern used for native file dialog default paths.
     // Initial directories need proper Unicode handling
 
     auto test_dir = test_root_ / "file_dialog_test";
@@ -2182,8 +2096,7 @@ TEST_F(UnicodePathTest, FileDialogInitialDirectory) {
         SCOPED_TRACE(path_to_utf8(dir));
         fs::create_directories(dir);
 
-        // Simulate the pattern from openFileDialog:
-        // Using path_to_utf8 for zenity/kdialog commands on Linux
+        // Native file dialogs exchange UTF-8 strings with the app layer.
         std::string dir_utf8 = path_to_utf8(dir);
 
         EXPECT_FALSE(dir_utf8.empty()) << "Initial directory UTF-8 conversion failed";
@@ -2193,23 +2106,7 @@ TEST_F(UnicodePathTest, FileDialogInitialDirectory) {
         EXPECT_TRUE(fs::exists(recovered)) << "Initial directory not accessible";
         EXPECT_TRUE(fs::is_directory(recovered)) << "Should be a directory";
 
-        // Test the shell escape pattern for Linux dialogs
-        auto shell_escape = [](const std::string& str) -> std::string {
-            std::string result = "'";
-            for (char c : str) {
-                if (c == '\'') {
-                    result += "'\\''";
-                } else {
-                    result += c;
-                }
-            }
-            result += "'";
-            return result;
-        };
-
-        std::string escaped = shell_escape(dir_utf8);
-        EXPECT_TRUE(escaped.starts_with("'"));
-        EXPECT_TRUE(escaped.ends_with("'"));
+        EXPECT_EQ(recovered.lexically_normal(), dir.lexically_normal());
     }
 }
 
@@ -2377,7 +2274,11 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
         uint32_t num_gaussians;
     };
 
-    // Test multiple checkpoint saves
+    const auto checkpoint_path = checkpoints_dir / "checkpoint.resume";
+    auto temp_checkpoint_path = checkpoint_path;
+    temp_checkpoint_path += ".tmp";
+
+    // Test repeated checkpoint saves to the same file
     std::vector<std::pair<int, int>> checkpoints = {
         {1000, 50000},
         {5000, 75000},
@@ -2385,14 +2286,11 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
     };
 
     for (const auto& [iteration, num_gaussians] : checkpoints) {
-        auto checkpoint_path = checkpoints_dir /
-                               ("checkpoint_" + std::to_string(iteration) + ".resume");
-
         // Simulate save_checkpoint
         {
             std::ofstream file;
-            EXPECT_TRUE(open_file_for_write(checkpoint_path, std::ios::binary, file))
-                << "Failed to open checkpoint for writing: " << path_to_utf8(checkpoint_path);
+            EXPECT_TRUE(open_file_for_write(temp_checkpoint_path, std::ios::binary, file))
+                << "Failed to open checkpoint for writing: " << path_to_utf8(temp_checkpoint_path);
 
             if (file.is_open()) {
                 MockCheckpointHeader header;
@@ -2407,6 +2305,13 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
                 file.close();
             }
         }
+
+        std::error_code ec;
+        fs::remove(checkpoint_path, ec);
+        EXPECT_FALSE(ec) << "Failed to remove checkpoint: " << ec.message();
+
+        fs::rename(temp_checkpoint_path, checkpoint_path, ec);
+        EXPECT_FALSE(ec) << "Failed to replace checkpoint: " << ec.message();
 
         // Simulate load_checkpoint
         {
@@ -2425,6 +2330,9 @@ TEST_F(UnicodePathTest, CheckpointSaveLoad) {
 
         EXPECT_TRUE(fs::exists(checkpoint_path))
             << "Checkpoint file missing: " << path_to_utf8(checkpoint_path);
+        EXPECT_FALSE(fs::exists(temp_checkpoint_path))
+            << "Temporary checkpoint file not cleaned up: " << path_to_utf8(temp_checkpoint_path);
+        EXPECT_EQ(std::distance(fs::directory_iterator(checkpoints_dir), fs::directory_iterator()), 1);
     }
 }
 
@@ -2879,7 +2787,7 @@ TEST_F(UnicodePathTest, CompleteExportWorkflow) {
 
     // 2. Save checkpoints at intervals
     for (int iter : {10000, 20000, 30000}) {
-        auto cp_path = checkpoints_dir / ("checkpoint_" + std::to_string(iter) + ".resume");
+        auto cp_path = checkpoints_dir / "checkpoint.resume";
         std::ofstream file;
         EXPECT_TRUE(open_file_for_write(cp_path, std::ios::binary, file));
         uint32_t header[4] = {0x4C465343, 1, static_cast<uint32_t>(iter), 100000};
@@ -2928,7 +2836,7 @@ TEST_F(UnicodePathTest, CompleteExportWorkflow) {
     }
 
     // Verify complete workflow succeeded
-    EXPECT_EQ(fs::directory_iterator(checkpoints_dir) != fs::directory_iterator(), true);
+    EXPECT_EQ(std::distance(fs::directory_iterator(checkpoints_dir), fs::directory_iterator()), 1);
     EXPECT_EQ(fs::directory_iterator(exports_dir) != fs::directory_iterator(), true);
 }
 
@@ -3079,13 +2987,13 @@ TEST_F(UnicodePathTest, Utf8ToPathHandlesUnicodeWithEmbeddedNulls) {
 
     // Test path append with checkpoint-like structure
     fs::path checkpoint_dir = converted / "checkpoints";
-    fs::path checkpoint_file = checkpoint_dir / "checkpoint_1000.resume";
+    fs::path checkpoint_file = checkpoint_dir / "checkpoint.resume";
 
     // Verify path operations worked (not truncated by embedded nulls)
     std::string checkpoint_str = path_to_utf8(checkpoint_file);
     EXPECT_TRUE(checkpoint_str.find("日本語_output") != std::string::npos);
     EXPECT_TRUE(checkpoint_str.find("checkpoints") != std::string::npos);
-    EXPECT_TRUE(checkpoint_str.find("checkpoint_1000.resume") != std::string::npos);
+    EXPECT_TRUE(checkpoint_str.find("checkpoint.resume") != std::string::npos);
 
     // Create the structure
     fs::create_directories(checkpoint_dir);
@@ -3123,7 +3031,7 @@ TEST_F(UnicodePathTest, CheckpointPathConstructionWithBufferPadding) {
 
         // This is what checkpoint.cpp does
         fs::path checkpoint_dir = output_path / "checkpoints";
-        fs::path checkpoint_file = checkpoint_dir / "checkpoint_7000.resume";
+        fs::path checkpoint_file = checkpoint_dir / "checkpoint.resume";
 
         // Verify the paths are correctly constructed
         EXPECT_NE(checkpoint_dir, output_path)

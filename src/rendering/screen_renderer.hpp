@@ -41,6 +41,11 @@ namespace lfs::rendering {
         // Updated to return Result for consistency
         virtual Result<void> render(std::shared_ptr<Shader> shader) const;
         Result<void> render(ManagedShader& shader) const;
+        Result<void> renderTexture(ManagedShader& shader,
+                                   GLuint color_texture,
+                                   const DepthParams& depth_params,
+                                   glm::vec2 texcoord_scale = glm::vec2(1.0f, 1.0f),
+                                   GLuint depth_texture = 0) const;
 
         virtual Result<void> uploadData(const unsigned char* image, int width_, int height_);
         Result<void> uploadFromCUDA(const Tensor& cuda_image, int width, int height);

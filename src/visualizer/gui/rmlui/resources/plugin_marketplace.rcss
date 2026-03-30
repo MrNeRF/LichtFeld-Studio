@@ -5,8 +5,34 @@
 .mp-warning-text {
     display: block;
     color: #f9e2af;
-    font-size: 11dp;
+    font-size: 12dp;
     margin-bottom: 4dp;
+}
+
+#content-wrap {
+    padding: 0;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+#content {
+    width: 100%;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+#main-area {
+    flex: 1;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    min-width: 0;
+    min-height: 0;
+    padding: 8dp;
 }
 
 /* ── Controls row ─────────────────────────────────────── */
@@ -61,15 +87,29 @@
 }
 
 .mp-format-item {
-    font-size: 11dp;
+    font-size: 12dp;
     padding: 1dp 0 1dp 18dp;
 }
 
 /* ── Card grid ────────────────────────────────────────── */
 
 .card-grid {
+    display: block;
+    min-width: 0;
+    margin-bottom: 8dp;
+}
+
+.card-row {
     display: flex;
-    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0;
+    margin-bottom: 12dp;
+    min-width: 0;
+}
+
+.card-row--single {
+    justify-content: center;
     gap: 12dp;
 }
 
@@ -77,17 +117,38 @@
 
 .plugin-card {
     width: 220dp;
-    min-height: 180dp;
+    flex-shrink: 0;
+    height: 220dp;
     border-width: 1dp;
     padding: 8dp;
     display: flex;
     flex-direction: column;
-    transition: border-color background-color 0.15s quadratic-out;
+    transition: background-color 0.18s quadratic-out;
+    background-color: transparent;
+}
+
+.plugin-card--placeholder {
+    visibility: hidden;
+    pointer-events: none;
+}
+
+#status-bar {
+    display: flex;
+    align-items: center;
+    height: 24dp;
+    padding: 0 10dp;
+    flex-shrink: 0;
+    border-top-width: 1dp;
+}
+
+.status-item {
+    font-size: 10dp;
+    margin-right: 16dp;
+    letter-spacing: 0.5dp;
 }
 
 .plugin-card:hover {
-    border-color: #89b4fa;
-    background-color: #313244;
+    background-color: rgba(137, 180, 250, 24);
 }
 
 .plugin-card.card--in-progress { border-color: #89b4fa; }
@@ -100,52 +161,59 @@
     cursor: pointer;
     flex: 1;
     min-height: 0;
+    height: 144dp;
+    overflow: hidden;
 }
 
 .card-name {
-    font-size: 11dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
 .card-version {
-    font-size: 11dp;
+    font-size: 12dp;
     margin-left: 6dp;
 }
 
 .card-repo {
     display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .card-metrics {
-    font-size: 10dp;
+    font-size: 11dp;
     display: block;
     margin-top: 2dp;
 }
 
 .card-tags {
-    font-size: 10dp;
+    font-size: 11dp;
     display: block;
 }
 
 .card-local {
-    font-size: 10dp;
+    font-size: 11dp;
     display: block;
 }
 
 .card-status {
-    font-size: 11dp;
+    font-size: 12dp;
     display: block;
     margin-top: 2dp;
 }
 
 .card-error {
-    font-size: 11dp;
+    font-size: 12dp;
     display: block;
 }
 
 .card-description {
     display: block;
     margin-top: 2dp;
+    max-height: 42dp;
+    overflow: hidden;
 }
 
 /* ── Card buttons ─────────────────────────────────────── */
@@ -154,22 +222,25 @@
     display: flex;
     gap: 6dp;
     margin-top: 4dp;
+    min-height: 22dp;
 }
 
 .card-buttons .btn {
     flex: 1;
-    font-size: 11dp;
+    font-size: 12dp;
     padding: 2dp 4dp;
 }
 
-.card-startup-row {
+.card-startup-row,
+.card-git-row {
     display: flex;
     align-items: center;
     margin-top: 4dp;
+    min-height: 18dp;
 }
 
 .card-startup-label {
-    font-size: 10dp;
+    font-size: 11dp;
 }
 
 /* ── Card feedback ────────────────────────────────────── */
@@ -185,7 +256,7 @@
 }
 
 .card-progress-text {
-    font-size: 10dp;
+    font-size: 11dp;
     display: block;
 }
 
@@ -218,7 +289,7 @@
 
 .confirm-message {
     display: block;
-    font-size: 10dp;
+    font-size: 11dp;
     text-align: center;
     margin-bottom: 8dp;
 }

@@ -44,9 +44,10 @@ namespace lfs::vis::gui {
         if (!input_context_ || composing_)
             return false;
 
-        const bool ctrl_pressed = (modifiers & Rml::Input::KM_CTRL) != 0;
+        const bool primary_shortcut_pressed =
+            (modifiers & (Rml::Input::KM_CTRL | Rml::Input::KM_META)) != 0;
         const bool alt_pressed = (modifiers & Rml::Input::KM_ALT) != 0;
-        if (key_identifier != Rml::Input::KI_A || !ctrl_pressed || alt_pressed)
+        if (key_identifier != Rml::Input::KI_A || !primary_shortcut_pressed || alt_pressed)
             return false;
 
         input_context_->SetSelectionRange(0, std::numeric_limits<int>::max());

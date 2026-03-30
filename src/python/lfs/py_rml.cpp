@@ -10,6 +10,7 @@
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/DataTypeRegister.h>
 #include <RmlUi/Core/DataVariable.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/StyleSheetSpecification.h>
 #include <RmlUi/Core/Tween.h>
 #include <cassert>
@@ -563,12 +564,24 @@ namespace lfs::python {
     float PyRmlElement::scroll_height() { return elem_->GetScrollHeight(); }
     float PyRmlElement::client_width() { return elem_->GetClientWidth(); }
     float PyRmlElement::client_height() { return elem_->GetClientHeight(); }
+    float PyRmlElement::absolute_left() { return elem_->GetAbsoluteOffset(Rml::BoxArea::Border).x; }
+    float PyRmlElement::absolute_top() { return elem_->GetAbsoluteOffset(Rml::BoxArea::Border).y; }
+    float PyRmlElement::absolute_width() { return elem_->GetBox().GetSize(Rml::BoxArea::Border).x; }
+    float PyRmlElement::absolute_height() { return elem_->GetBox().GetSize(Rml::BoxArea::Border).y; }
     float PyRmlElement::offset_top() { return elem_->GetOffsetTop(); }
     float PyRmlElement::offset_height() { return elem_->GetOffsetHeight(); }
     void PyRmlElement::scroll_into_view(bool align_top) { elem_->ScrollIntoView(align_top); }
 
     bool PyRmlElement::focus() { return elem_->Focus(); }
     void PyRmlElement::blur() { elem_->Blur(); }
+    bool PyRmlElement::select() {
+        if (auto* input = rmlui_dynamic_cast<Rml::ElementFormControlInput*>(elem_)) {
+            input->Select();
+            mark_document_dirty(input);
+            return true;
+        }
+        return false;
+    }
 
     void PyRmlElement::submit(const std::string& name, const std::string& value) {
         Rml::Element* element = elem_;
@@ -963,12 +976,17 @@ namespace lfs::python {
             .def_prop_ro("scroll_height", &PyRmlElement::scroll_height)
             .def_prop_ro("client_width", &PyRmlElement::client_width)
             .def_prop_ro("client_height", &PyRmlElement::client_height)
+            .def_prop_ro("absolute_left", &PyRmlElement::absolute_left)
+            .def_prop_ro("absolute_top", &PyRmlElement::absolute_top)
+            .def_prop_ro("absolute_width", &PyRmlElement::absolute_width)
+            .def_prop_ro("absolute_height", &PyRmlElement::absolute_height)
             .def_prop_ro("offset_top", &PyRmlElement::offset_top)
             .def_prop_ro("offset_height", &PyRmlElement::offset_height)
             .def("scroll_into_view", &PyRmlElement::scroll_into_view,
                  nb::arg("align_top") = true)
             .def("focus", &PyRmlElement::focus)
             .def("blur", &PyRmlElement::blur)
+            .def("select", &PyRmlElement::select)
             .def("submit", &PyRmlElement::submit, nb::arg("name") = "",
                  nb::arg("value") = "");
 

@@ -12,6 +12,7 @@
 #include <string>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::io {
@@ -97,6 +98,74 @@ namespace lfs::io {
         }
         return {};
     }
+
+    // Recursive file index with exact relative-path matching and a basename
+    // fallback when that basename is unique under the indexed root.
+    class RecursiveFileCache {
+    public:
+        explicit RecursiveFileCache(const fs::path& root_path) {
+            if (!safe_is_directory(root_path))
+                return;
+
+            std::error_code ec;
+            for (fs::recursive_directory_iterator it(
+                     root_path,
+                     fs::directory_options::skip_permission_denied,
+                     ec),
+                 end;
+                 !ec && it != end;
+                 it.increment(ec)) {
+                const auto& entry = *it;
+                std::error_code file_ec;
+                if (!entry.is_regular_file(file_ec) || file_ec)
+                    continue;
+
+                const fs::path rel = entry.path().lexically_relative(root_path);
+                if (rel.empty())
+                    continue;
+
+                const std::string rel_key = detail::normalize_lookup_key(rel);
+                exact_entries_.emplace(rel_key, entry.path());
+
+                const std::string basename_key =
+                    detail::normalize_lookup_key(entry.path().filename());
+                if (auto [it_basename, inserted] =
+                        basename_entries_.emplace(basename_key, entry.path());
+                    !inserted && it_basename->second != entry.path()) {
+                    ambiguous_basenames_.insert(basename_key);
+                }
+            }
+        }
+
+        fs::path find(const fs::path& relative_or_name) const {
+            if (relative_or_name.empty())
+                return {};
+
+            const std::string exact_key =
+                detail::normalize_lookup_key(relative_or_name);
+            if (auto it = exact_entries_.find(exact_key);
+                it != exact_entries_.end()) {
+                return it->second;
+            }
+
+            const std::string basename_key =
+                detail::normalize_lookup_key(relative_or_name.filename());
+            if (ambiguous_basenames_.contains(basename_key))
+                return {};
+
+            if (auto it = basename_entries_.find(basename_key);
+                it != basename_entries_.end()) {
+                return it->second;
+            }
+
+            return {};
+        }
+
+    private:
+        std::unordered_map<std::string, fs::path> exact_entries_;
+        std::unordered_map<std::string, fs::path> basename_entries_;
+        std::unordered_set<std::string> ambiguous_basenames_;
+    };
 
     // Get standard COLMAP search paths for a base directory
     inline std::vector<fs::path> get_colmap_search_paths(const fs::path& base) {

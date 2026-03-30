@@ -21,6 +21,7 @@
 #include "training/training_setup.hpp"
 #include "visualizer/selection/selection_group_mask.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cuda_runtime.h>
 #include <limits>
@@ -29,6 +30,32 @@
 namespace lfs::mcp {
 
     namespace {
+        struct ScreenRect {
+            float x0;
+            float y0;
+            float x1;
+            float y1;
+        };
+
+        [[nodiscard]] ScreenRect normalize_screen_rect(const float x0, const float y0, const float x1, const float y1) {
+            return {
+                .x0 = std::min(x0, x1),
+                .y0 = std::min(y0, y1),
+                .x1 = std::max(x0, x1),
+                .y1 = std::max(y0, y1),
+            };
+        }
+
+        [[nodiscard]] std::vector<float> close_screen_polygon(std::vector<float> vertices) {
+            if (vertices.size() >= 6 &&
+                (vertices[0] != vertices[vertices.size() - 2] ||
+                 vertices[1] != vertices[vertices.size() - 1])) {
+                vertices.push_back(vertices[0]);
+                vertices.push_back(vertices[1]);
+            }
+            return vertices;
+        }
+
         core::Tensor ensure_cuda_bool_mask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             if (result.device() != core::Device::CUDA) {
@@ -43,6 +70,22 @@ namespace lfs::mcp {
             }
             const auto bool_mask = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             return static_cast<int64_t>(bool_mask.sum_scalar());
+        }
+
+        std::expected<int64_t, std::string> count_visible_model_gaussians(const core::Scene& scene) {
+            int64_t total = 0;
+            bool has_model = false;
+            for (const auto* node : scene.getVisibleNodes()) {
+                if (!node)
+                    continue;
+                has_model = true;
+                total += static_cast<int64_t>(node->gaussian_count.load(std::memory_order_acquire));
+            }
+
+            if (!has_model)
+                return std::unexpected("No model loaded");
+
+            return total;
         }
 
         core::Tensor& reset_cuda_bool_scratch(core::Tensor& buffer, const size_t size) {
@@ -159,21 +202,21 @@ namespace lfs::mcp {
                     camera,
                     model,
                     bg,
+                    -1,      // sh_degree_override
                     false,   // show_rings
                     0.01f,   // ring_width
                     nullptr, // model_transforms
                     nullptr, // transform_indices
                     nullptr, // selection_mask
                     nullptr, // screen_positions_out
-                    true,    // brush_active
+                    true,    // cursor_active
                     x,
                     y,
-                    0.0f,    // brush_radius
-                    true,    // brush_add_mode
-                    nullptr, // brush_selection_out
-                    false,   // brush_saturation_mode
-                    0.0f,    // brush_saturation_amount
-                    true,    // selection_mode_rings
+                    0.0f,    // cursor_radius
+                    true,    // preview_selection_add_mode
+                    nullptr, // preview_selection_out
+                    false,   // cursor_saturation_preview
+                    0.0f,    // cursor_saturation_amount
                     false,   // show_center_markers
                     nullptr, // crop_box_transform
                     nullptr, // crop_box_min
@@ -189,6 +232,7 @@ namespace lfs::mcp {
                     nullptr, // depth_filter_transform
                     nullptr, // depth_filter_min
                     nullptr, // depth_filter_max
+                    false,   // view_volume_cull
                     nullptr, // deleted_mask
                     hovered_depth_id_device,
                     -1); // highlight_gaussian_id
@@ -262,6 +306,7 @@ namespace lfs::mcp {
                     *camera,
                     *model,
                     bg,
+                    -1,      // sh_degree_override
                     false,   // show_rings
                     0.01f,   // ring_width
                     nullptr, // model_transforms
@@ -337,7 +382,7 @@ namespace lfs::mcp {
                 {},
                 replace_mode);
 
-            auto new_selection = std::make_shared<core::Tensor>(output_mask);
+            auto new_selection = std::make_shared<core::Tensor>(output_mask.clone());
             const int64_t count = count_selected(*new_selection);
             scene.setSelectionMask(new_selection);
             return count;
@@ -384,7 +429,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error());
         }
 
-        LOG_INFO("MCP: Loaded dataset from {}", path.string());
+        LOG_INFO("MCP: Loaded dataset from {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -424,7 +469,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error());
         }
 
-        LOG_INFO("MCP: Loaded checkpoint from {}", path.string());
+        LOG_INFO("MCP: Loaded checkpoint from {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -448,7 +493,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error());
         }
 
-        LOG_INFO("MCP: Saved checkpoint to {}", path.string());
+        LOG_INFO("MCP: Saved checkpoint to {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -472,7 +517,7 @@ namespace lfs::mcp {
             return std::unexpected(result.error().message);
         }
 
-        LOG_INFO("MCP: Saved PLY to {}", path.string());
+        LOG_INFO("MCP: Saved PLY to {}", core::path_to_utf8(path));
         return {};
     }
 
@@ -595,15 +640,21 @@ namespace lfs::mcp {
                     return TrainingContext::instance().start_training();
                 },
             .render_capture =
-                [](int camera_index, int width, int height) {
-                    return TrainingContext::instance().render_to_base64(camera_index, width, height);
-                },
+                [](std::optional<int> camera_index, int width, int height)
+                -> std::expected<std::string, std::string> {
+                if (!camera_index) {
+                    return std::unexpected(
+                        "camera_index is required in the training runtime; "
+                        "live viewport capture is only available in the GUI runtime");
+                }
+                return TrainingContext::instance().render_to_base64(*camera_index, width, height);
+            },
             .gaussian_count =
                 []() -> std::expected<int64_t, std::string> {
                 auto scene = TrainingContext::instance().scene();
                 if (!scene)
                     return std::unexpected("No scene loaded");
-                return scene->getTotalGaussianCount();
+                return count_visible_model_gaussians(*scene);
             }});
 
         auto& registry = ToolRegistry::instance();
@@ -706,14 +757,21 @@ namespace lfs::mcp {
 
                 const auto& screen_positions = *screen_pos_result;
                 const auto N = static_cast<size_t>(screen_positions.shape()[0]);
+                const auto rect = normalize_screen_rect(x0, y0, x1, y1);
                 return ctx.with_selection_workspace([&](TrainingContext::SelectionWorkspace& workspace) -> json {
                     auto& selection = reset_cuda_bool_scratch(workspace.selection_scratch_buffer, N);
 
                     if (mode == "replace") {
-                        rendering::rect_select_tensor(screen_positions, x0, y0, x1, y1, selection);
+                        rendering::rect_select_tensor(screen_positions, rect.x0, rect.y0, rect.x1, rect.y1, selection);
                     } else {
                         const bool add_mode = (mode == "add");
-                        rendering::rect_select_mode_tensor(screen_positions, x0, y0, x1, y1, selection, add_mode);
+                        rendering::rect_select_mode_tensor(screen_positions,
+                                                           rect.x0,
+                                                           rect.y0,
+                                                           rect.x1,
+                                                           rect.y1,
+                                                           selection,
+                                                           add_mode);
                     }
 
                     auto result = apply_headless_selection(*scene,
@@ -757,6 +815,7 @@ namespace lfs::mcp {
                     vertex_data.push_back(pt[0].get<float>());
                     vertex_data.push_back(pt[1].get<float>());
                 }
+                vertex_data = close_screen_polygon(std::move(vertex_data));
 
                 const std::string mode = args.value("mode", "replace");
 
@@ -1143,6 +1202,7 @@ namespace lfs::mcp {
                 const float y0 = bbox["y0"].get<float>();
                 const float x1 = bbox["x1"].get<float>();
                 const float y1 = bbox["y1"].get<float>();
+                const auto rect = normalize_screen_rect(x0, y0, x1, y1);
                 auto screen_pos_result = compute_screen_positions_for_scene(scene, camera_index);
                 if (!screen_pos_result) {
                     return json{{"error", screen_pos_result.error()}};
@@ -1152,7 +1212,7 @@ namespace lfs::mcp {
                 const auto N = static_cast<size_t>(screen_positions.shape()[0]);
                 return ctx.with_selection_workspace([&](TrainingContext::SelectionWorkspace& workspace) -> json {
                     auto& selection = reset_cuda_bool_scratch(workspace.selection_scratch_buffer, N);
-                    rendering::rect_select_tensor(screen_positions, x0, y0, x1, y1, selection);
+                    rendering::rect_select_tensor(screen_positions, rect.x0, rect.y0, rect.x1, rect.y1, selection);
 
                     auto selection_result = apply_headless_selection(*scene,
                                                                      workspace.locked_groups_device_mask,

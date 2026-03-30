@@ -6,9 +6,11 @@
 #include "lfs/kernels/ppisp.cuh"
 #include <cassert>
 #include <cmath>
+#include <expected>
 #include <istream>
 #include <ostream>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::training {
 
@@ -168,6 +170,16 @@ namespace lfs::training {
         /// Returns: [exposure, color_params[0:8]] for distillation target
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor get_params_for_frame(int uid) const;
+
+        /// Return camera ids ordered by the contiguous camera index used by internal tensors.
+        [[nodiscard]] std::vector<int> ordered_camera_ids() const;
+
+        /// Copy inference weights from another PPISP into this finalized instance using explicit
+        /// source indices for each target frame and camera. Optimizer state is reset.
+        [[nodiscard]] std::expected<void, std::string> copy_inference_weights_from(
+            const PPISP& source,
+            const std::vector<int>& source_frame_indices,
+            const std::vector<int>& source_camera_indices);
 
         // Serialization (full state for checkpoints)
         void serialize(std::ostream& os) const;

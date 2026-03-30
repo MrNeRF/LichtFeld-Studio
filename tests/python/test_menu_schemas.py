@@ -20,20 +20,15 @@ def _source_python_path(monkeypatch):
 
 def _install_lichtfeld_stub(monkeypatch):
     state = {
-        "enabled_panels": [],
-        "languages": [("en", "English"), ("de", "Deutsch")],
-        "current_language": "en",
         "theme": "dark",
         "ui_scale": 1.0,
         "python_console_shown": 0,
+        "undo_called": False,
+        "redo_called": False,
     }
 
     ui = SimpleNamespace(
         tr=lambda key: f"tr:{key}",
-        set_panel_enabled=lambda panel_id, enabled: state["enabled_panels"].append((panel_id, enabled)),
-        get_current_language=lambda: state["current_language"],
-        get_languages=lambda: list(state["languages"]),
-        set_language=lambda lang: state.__setitem__("current_language", lang),
         get_theme=lambda: state["theme"],
         set_theme=lambda theme: state.__setitem__("theme", theme),
         get_ui_scale_preference=lambda: state["ui_scale"],
@@ -45,6 +40,12 @@ def _install_lichtfeld_stub(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui
+    lf_stub.undo = SimpleNamespace(
+        can_undo=lambda: True,
+        can_redo=lambda: False,
+        undo=lambda: state.__setitem__("undo_called", True),
+        redo=lambda: state.__setitem__("redo_called", True),
+    )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
 
@@ -76,11 +77,15 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     }
 
     edit_items = edit_mod.EditMenu().menu_items()
+    assert len(edit_items) == 2
     assert edit_items[0]["type"] == "item"
+    assert edit_items[0]["label"] == "Undo"
     edit_items[0]["callback"]()
-    assert state["enabled_panels"] == [("lfs.input_settings", True)]
-    assert edit_items[2]["type"] == "submenu"
-    assert edit_items[2]["items"][0]["type"] == "toggle"
+    assert state["undo_called"] is True
+    assert edit_items[1]["type"] == "item"
+    assert edit_items[1]["label"] == "Redo"
+    assert edit_items[1]["enabled"] is False
+    assert all(item["label"] in {"Undo", "Redo"} for item in edit_items)
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"

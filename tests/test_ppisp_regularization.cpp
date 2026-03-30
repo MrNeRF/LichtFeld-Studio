@@ -131,6 +131,21 @@ namespace {
         }
     };
 
+    TEST_F(PPISPRegularizationTest, SchedulerStartsAtWarmupFloor) {
+        lfs::training::PPISPConfig config;
+        config.lr = 0.002;
+        config.warmup_steps = 100;
+        config.warmup_start_factor = 0.01;
+
+        auto ppisp = create_test_ppisp(1, 1, 1000, config);
+        EXPECT_NEAR(ppisp->get_lr(), config.lr * config.warmup_start_factor, 1e-9);
+
+        for (int i = 0; i < config.warmup_steps; ++i) {
+            ppisp->scheduler_step();
+        }
+        EXPECT_NEAR(ppisp->get_lr(), config.lr, 1e-9);
+    }
+
     // Test exposure mean regularization loss
     TEST_F(PPISPRegularizationTest, ExposureMeanLoss) {
         const int num_frames = 10;

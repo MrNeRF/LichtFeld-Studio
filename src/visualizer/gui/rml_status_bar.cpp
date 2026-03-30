@@ -194,6 +194,8 @@ namespace lfs::vis::gui {
         ctor.Bind("zoom_sep_color", &model_.zoom_sep_color);
         ctor.Bind("lfs_mem_text", &model_.lfs_mem_text);
         ctor.Bind("lfs_mem_color", &model_.lfs_mem_color);
+        ctor.Bind("show_gpu_model", &model_.show_gpu_model);
+        ctor.Bind("gpu_model_text", &model_.gpu_model_text);
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
         ctor.Bind("fps_value", &model_.fps_value);
@@ -337,9 +339,17 @@ namespace lfs::vis::gui {
             const char* strategy_raw = tm ? tm->getStrategyType() : "default";
             bool gut = tm && tm->isGutEnabled();
             std::string method = gut ? "GUT" : "3DGS";
-            std::string strat_name = (std::string_view(strategy_raw) == "mcmc")
-                                         ? LOC("training.options.strategy.mcmc")
-                                         : LOC("status_bar.strategy_default");
+            std::string strat_name;
+            const std::string_view strategy = strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
+            if (strategy == "mcmc") {
+                strat_name = LOC("training.options.strategy.mcmc");
+            } else if (lfs::core::param::is_mrnf_strategy(strategy)) {
+                strat_name = LOC("training.options.strategy.mrnf");
+            } else if (strategy == "igs+") {
+                strat_name = LOC("training.options.strategy.igs_plus");
+            } else {
+                strat_name = LOC("status_bar.strategy_default");
+            }
 
             auto suffix = std::format(" ({}/{})", strat_name, method);
 
@@ -449,19 +459,8 @@ namespace lfs::vis::gui {
             auto split_info = rm->getSplitViewInfo();
             split_enabled = split_info.enabled;
             if (split_enabled) {
-                auto settings = rm->getSettings();
-                if (settings.split_view_mode == SplitViewMode::GTComparison) {
-                    int cam_id = rm->getCurrentCameraId();
-                    split_mode_rml = LOC("status_bar.gt_compare");
-                    std::string cam_template = LOC("status_bar.camera");
-                    auto pos = cam_template.find("{cam_id}");
-                    if (pos != std::string::npos)
-                        cam_template.replace(pos, 8, std::to_string(cam_id));
-                    split_detail_rml = cam_template;
-                } else if (settings.split_view_mode == SplitViewMode::PLYComparison) {
-                    split_mode_rml = LOC("status_bar.split");
-                    split_detail_rml = std::format("{} | {}", split_info.left_name, split_info.right_name);
-                }
+                split_mode_rml = split_info.mode_label;
+                split_detail_rml = split_info.detail_label;
             }
         }
         setModelBool("show_split", model_.show_split, split_enabled);
@@ -523,6 +522,8 @@ namespace lfs::vis::gui {
         ImVec4 mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
         setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.1f}GB", app_gb));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
+        setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
+        setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
                        std::format("{} {:.1f}/{:.1f}GB", LOC("status_bar.gpu"), used_gb, total_gb));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));

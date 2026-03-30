@@ -26,11 +26,11 @@
     "text":           [0.922, 0.859, 0.698, 1.0],
     "_text":          "Main text - Gruvbox fg (#ebdbb2)",
 
-    "text_dim":       [0.573, 0.514, 0.455, 1.0],
-    "_text_dim":      "Disabled/secondary text - Gruvbox gray (#928374)",
+    "text_dim":       [0.624, 0.600, 0.565, 1.0],
+    "_text_dim":      "Disabled/secondary text - softened warm gray",
 
-    "border":         [0.400, 0.361, 0.329, 1.0],
-    "_border":        "Panel borders - Gruvbox bg3 (#665c54)",
+    "border":         [0.376, 0.349, 0.337, 1.0],
+    "_border":        "Panel borders - cooler Gruvbox edge",
 
     "success":        [0.722, 0.733, 0.149, 1.0],
     "_success":       "Success indicators - Gruvbox green (#b8bb26)",
@@ -177,10 +177,10 @@
     "text": [0.922, 0.859, 0.698, 1.0],
     "_text": "Overlay text color",
 
-    "text_dim": [0.573, 0.514, 0.455, 1.0],
+    "text_dim": [0.624, 0.600, 0.565, 1.0],
     "_text_dim": "Subtle/hint text",
 
-    "border": [0.514, 0.459, 0.424, 1.0],
+    "border": [0.471, 0.431, 0.416, 1.0],
     "_border": "Overlay borders",
 
     "icon": [0.514, 0.647, 0.596, 1.0],

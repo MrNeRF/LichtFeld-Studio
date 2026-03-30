@@ -471,41 +471,70 @@ namespace lfs::core {
                 return *this;
             }
 
-            float* dst = ptr<float>();
-
             auto indices_same_device = ensure_same_device(idx);
             auto src_same_device = ensure_same_device(src);
+            const bool is_int64 = indices_same_device.dtype() == DataType::Int64;
+            Tensor indices_int32;
+            if (is_int64) {
+                indices_int32 = indices_same_device.to(DataType::Int32);
+            }
 
-            const int* indices = indices_same_device.ptr<int>();
-            const float* src_data = src_same_device.ptr<float>();
+            const int* indices = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
 
             if (device_ == Device::CUDA) {
-                tensor_ops::launch_scatter(dst, indices, src_data,
-                                           shape_.dims().data(), src.shape().dims().data(),
-                                           shape_.rank(), dim, src.numel(),
-                                           static_cast<int>(mode), stream());
-                // No sync - tensor operation
+                if (dtype_ == DataType::Float32) {
+                    tensor_ops::launch_scatter(ptr<float>(), indices, src_same_device.ptr<float>(),
+                                               shape_.dims().data(), src.shape().dims().data(),
+                                               shape_.rank(), dim, src.numel(),
+                                               static_cast<int>(mode), stream());
+                } else if (dtype_ == DataType::Int32) {
+                    tensor_ops::launch_scatter(ptr<int>(), indices, src_same_device.ptr<int>(),
+                                               shape_.dims().data(), src.shape().dims().data(),
+                                               shape_.rank(), dim, src.numel(),
+                                               static_cast<int>(mode), stream());
+                } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
+                    tensor_ops::launch_scatter(ptr<uint8_t>(), indices, src_same_device.ptr<uint8_t>(),
+                                               shape_.dims().data(), src.shape().dims().data(),
+                                               shape_.rank(), dim, src.numel(),
+                                               static_cast<int>(mode), stream());
+                } else {
+                    LOG_ERROR("scatter_ unsupported dtype {} for CUDA", static_cast<int>(dtype_));
+                    return *this;
+                }
             } else {
-                for (size_t i = 0; i < idx.numel(); ++i) {
-                    int pos = indices[i];
-                    if (pos < 0)
-                        pos += static_cast<int>(shape_[0]);
-                    if (pos >= 0 && pos < static_cast<int>(shape_[0])) {
-                        switch (mode) {
-                        case ScatterMode::Multiply:
-                            dst[pos] *= src_data[i];
-                            break;
-                        case ScatterMode::Max:
-                            dst[pos] = std::max(dst[pos], src_data[i]);
-                            break;
-                        case ScatterMode::Min:
-                            dst[pos] = std::min(dst[pos], src_data[i]);
-                            break;
-                        default:
-                            dst[pos] = src_data[i];
-                            break;
+                const auto scatter_1d = [&](auto* dst, const auto* src_data) {
+                    for (size_t i = 0; i < idx.numel(); ++i) {
+                        int pos = indices[i];
+                        if (pos < 0)
+                            pos += static_cast<int>(shape_[0]);
+                        if (pos >= 0 && pos < static_cast<int>(shape_[0])) {
+                            switch (mode) {
+                            case ScatterMode::Multiply:
+                                dst[pos] *= src_data[i];
+                                break;
+                            case ScatterMode::Max:
+                                dst[pos] = std::max(dst[pos], src_data[i]);
+                                break;
+                            case ScatterMode::Min:
+                                dst[pos] = std::min(dst[pos], src_data[i]);
+                                break;
+                            default:
+                                dst[pos] = src_data[i];
+                                break;
+                            }
                         }
                     }
+                };
+
+                if (dtype_ == DataType::Float32) {
+                    scatter_1d(ptr<float>(), src_same_device.ptr<float>());
+                } else if (dtype_ == DataType::Int32) {
+                    scatter_1d(ptr<int>(), src_same_device.ptr<int>());
+                } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
+                    scatter_1d(ptr<unsigned char>(), src_same_device.ptr<unsigned char>());
+                } else {
+                    LOG_ERROR("scatter_ unsupported dtype {} for CPU", static_cast<int>(dtype_));
+                    return *this;
                 }
             }
 
@@ -529,13 +558,36 @@ namespace lfs::core {
         auto idx_same_device = ensure_same_device(idx);
         auto src_same_device = ensure_same_device(src);
 
+        const bool is_int64 = idx_same_device.dtype() == DataType::Int64;
+        Tensor idx_int32;
+        if (is_int64) {
+            idx_int32 = idx_same_device.to(DataType::Int32);
+        }
+        const int* idx_ptr = is_int64 ? idx_int32.ptr<int>() : idx_same_device.ptr<int>();
+
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_scatter(ptr<float>(), idx_same_device.ptr<int>(),
-                                       src_same_device.ptr<float>(), shape_.dims().data(),
-                                       src.shape().dims().data(),
-                                       shape_.rank(), dim, src.numel(),
-                                       static_cast<int>(mode), stream());
-            // No sync - tensor operation
+            if (dtype_ == DataType::Float32) {
+                tensor_ops::launch_scatter(ptr<float>(), idx_ptr,
+                                           src_same_device.ptr<float>(), shape_.dims().data(),
+                                           src.shape().dims().data(),
+                                           shape_.rank(), dim, src.numel(),
+                                           static_cast<int>(mode), stream());
+            } else if (dtype_ == DataType::Int32) {
+                tensor_ops::launch_scatter(ptr<int>(), idx_ptr,
+                                           src_same_device.ptr<int>(), shape_.dims().data(),
+                                           src.shape().dims().data(),
+                                           shape_.rank(), dim, src.numel(),
+                                           static_cast<int>(mode), stream());
+            } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
+                tensor_ops::launch_scatter(ptr<uint8_t>(), idx_ptr,
+                                           src_same_device.ptr<uint8_t>(), shape_.dims().data(),
+                                           src.shape().dims().data(),
+                                           shape_.rank(), dim, src.numel(),
+                                           static_cast<int>(mode), stream());
+            } else {
+                LOG_ERROR("scatter_ unsupported dtype {} for CUDA", static_cast<int>(dtype_));
+                return *this;
+            }
         } else {
             size_t outer = 1;
             for (int i = 0; i < dim; ++i) {
@@ -547,52 +599,67 @@ namespace lfs::core {
                 inner *= shape_[i];
             }
 
-            float* dst = ptr<float>();
-            const int* indices = idx_same_device.ptr<int>();
-            const float* src_data = src_same_device.ptr<float>();
+            const int* indices = idx_ptr;
 
-            for (size_t o = 0; o < outer; ++o) {
-                for (size_t i = 0; i < idx.numel(); ++i) {
-                    int pos = indices[i];
+            const auto scatter_nd = [&](auto* dst, const auto* src_data) {
+                for (size_t o = 0; o < outer; ++o) {
+                    for (size_t i = 0; i < idx.numel(); ++i) {
+                        int pos = indices[i];
 
-                    if (pos < 0)
-                        pos += static_cast<int>(shape_[dim]);
+                        if (pos < 0)
+                            pos += static_cast<int>(shape_[dim]);
 
-                    if (pos < 0 || pos >= static_cast<int>(shape_[dim])) {
-                        continue;
-                    }
-
-                    size_t src_base = o * idx.numel() * inner + i * inner;
-                    size_t dst_base = o * shape_[dim] * inner + pos * inner;
-
-                    for (size_t j = 0; j < inner; ++j) {
-                        size_t src_idx = src_base + j;
-                        size_t dst_idx = dst_base + j;
-
-                        if (src_idx >= src.numel() || dst_idx >= numel()) {
-                            LOG_ERROR("Index out of bounds in scatter_");
-                            return *this;
+                        if (pos < 0 || pos >= static_cast<int>(shape_[dim])) {
+                            continue;
                         }
 
-                        switch (mode) {
-                        case ScatterMode::Add:
-                            dst[dst_idx] += src_data[src_idx];
-                            break;
-                        case ScatterMode::Multiply:
-                            dst[dst_idx] *= src_data[src_idx];
-                            break;
-                        case ScatterMode::Max:
-                            dst[dst_idx] = std::max(dst[dst_idx], src_data[src_idx]);
-                            break;
-                        case ScatterMode::Min:
-                            dst[dst_idx] = std::min(dst[dst_idx], src_data[src_idx]);
-                            break;
-                        default:
-                            dst[dst_idx] = src_data[src_idx];
-                            break;
+                        size_t src_base = o * idx.numel() * inner + i * inner;
+                        size_t dst_base = o * shape_[dim] * inner + pos * inner;
+
+                        for (size_t j = 0; j < inner; ++j) {
+                            size_t src_idx = src_base + j;
+                            size_t dst_idx = dst_base + j;
+
+                            if (src_idx >= src.numel() || dst_idx >= numel()) {
+                                LOG_ERROR("Index out of bounds in scatter_");
+                                return false;
+                            }
+
+                            switch (mode) {
+                            case ScatterMode::Add:
+                                dst[dst_idx] += src_data[src_idx];
+                                break;
+                            case ScatterMode::Multiply:
+                                dst[dst_idx] *= src_data[src_idx];
+                                break;
+                            case ScatterMode::Max:
+                                dst[dst_idx] = std::max(dst[dst_idx], src_data[src_idx]);
+                                break;
+                            case ScatterMode::Min:
+                                dst[dst_idx] = std::min(dst[dst_idx], src_data[src_idx]);
+                                break;
+                            default:
+                                dst[dst_idx] = src_data[src_idx];
+                                break;
+                            }
                         }
                     }
                 }
+                return true;
+            };
+
+            if (dtype_ == DataType::Float32) {
+                if (!scatter_nd(ptr<float>(), src_same_device.ptr<float>()))
+                    return *this;
+            } else if (dtype_ == DataType::Int32) {
+                if (!scatter_nd(ptr<int>(), src_same_device.ptr<int>()))
+                    return *this;
+            } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
+                if (!scatter_nd(ptr<unsigned char>(), src_same_device.ptr<unsigned char>()))
+                    return *this;
+            } else {
+                LOG_ERROR("scatter_ unsupported dtype {} for CPU", static_cast<int>(dtype_));
+                return *this;
             }
         }
 
@@ -633,11 +700,30 @@ namespace lfs::core {
         auto idx_same_device = ensure_same_device(idx);
         auto src_same_device = ensure_same_device(src);
 
+        const bool is_int64 = idx_same_device.dtype() == DataType::Int64;
+        Tensor idx_int32;
+        if (is_int64) {
+            idx_int32 = idx_same_device.to(DataType::Int32);
+        }
+        const int* idx_ptr = is_int64 ? idx_int32.ptr<int>() : idx_same_device.ptr<int>();
+
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_index_copy(ptr<float>(), idx_same_device.ptr<int>(),
-                                          src_same_device.ptr<float>(), shape_.dims().data(),
-                                          shape_.rank(), dim, idx.numel(), stream());
-            // No sync - tensor operation
+            if (dtype_ == DataType::Float32) {
+                tensor_ops::launch_index_copy(ptr<float>(), idx_ptr,
+                                              src_same_device.ptr<float>(), shape_.dims().data(),
+                                              shape_.rank(), dim, idx.numel(), stream());
+            } else if (dtype_ == DataType::Int32) {
+                tensor_ops::launch_index_copy(ptr<int>(), idx_ptr,
+                                              src_same_device.ptr<int>(), shape_.dims().data(),
+                                              shape_.rank(), dim, idx.numel(), stream());
+            } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
+                tensor_ops::launch_index_copy(ptr<uint8_t>(), idx_ptr,
+                                              src_same_device.ptr<uint8_t>(), shape_.dims().data(),
+                                              shape_.rank(), dim, idx.numel(), stream());
+            } else {
+                LOG_ERROR("index_copy_ unsupported dtype {} for CUDA", static_cast<int>(dtype_));
+                return *this;
+            }
         } else {
             size_t outer = 1, inner = 1;
             for (int i = 0; i < dim; ++i)
@@ -645,28 +731,38 @@ namespace lfs::core {
             for (size_t i = dim + 1; i < shape_.rank(); ++i)
                 inner *= shape_[i];
 
-            float* dst = ptr<float>();
-            const int* indices = idx_same_device.ptr<int>();
-            const float* src_data = src_same_device.ptr<float>();
+            const int* indices = idx_ptr;
+            const auto index_copy = [&](auto* dst, const auto* src_data) {
+                for (size_t o = 0; o < outer; ++o) {
+                    for (size_t i = 0; i < idx.numel(); ++i) {
+                        int pos = indices[i];
+                        if (pos < 0 || pos >= static_cast<int>(shape_[dim])) {
+                            LOG_ERROR("Index {} out of bounds for dimension {} of size {}",
+                                      pos, dim, shape_[dim]);
+                            continue;
+                        }
 
-            for (size_t o = 0; o < outer; ++o) {
-                for (size_t i = 0; i < idx.numel(); ++i) {
-                    int pos = indices[i];
-                    if (pos < 0 || pos >= static_cast<int>(shape_[dim])) {
-                        LOG_ERROR("Index {} out of bounds for dimension {} of size {}",
-                                  pos, dim, shape_[dim]);
-                        continue;
-                    }
+                        for (size_t j = 0; j < inner; ++j) {
+                            size_t src_idx = o * idx.numel() * inner + i * inner + j;
+                            size_t dst_idx = o * shape_[dim] * inner + pos * inner + j;
 
-                    for (size_t j = 0; j < inner; ++j) {
-                        size_t src_idx = o * idx.numel() * inner + i * inner + j;
-                        size_t dst_idx = o * shape_[dim] * inner + pos * inner + j;
-
-                        if (src_idx < src.numel() && dst_idx < numel()) {
-                            dst[dst_idx] = src_data[src_idx];
+                            if (src_idx < src.numel() && dst_idx < numel()) {
+                                dst[dst_idx] = src_data[src_idx];
+                            }
                         }
                     }
                 }
+            };
+
+            if (dtype_ == DataType::Float32) {
+                index_copy(ptr<float>(), src_same_device.ptr<float>());
+            } else if (dtype_ == DataType::Int32) {
+                index_copy(ptr<int>(), src_same_device.ptr<int>());
+            } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
+                index_copy(ptr<unsigned char>(), src_same_device.ptr<unsigned char>());
+            } else {
+                LOG_ERROR("index_copy_ unsupported dtype {} for CPU", static_cast<int>(dtype_));
+                return *this;
             }
         }
 

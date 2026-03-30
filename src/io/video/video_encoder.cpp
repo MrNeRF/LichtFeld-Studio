@@ -4,6 +4,7 @@
 #include "video_encoder.hpp"
 #include "color_convert.cuh"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include <cuda_runtime.h>
 
 extern "C" {
@@ -90,7 +91,9 @@ namespace lfs::io::video {
                 return false;
             }
 
-            int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "mp4", path.string().c_str());
+            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+
+            int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
             if (ret < 0 || !fmt_ctx_)
                 return false;
 
@@ -169,7 +172,7 @@ namespace lfs::io::video {
             stream_->time_base = codec_ctx_->time_base;
 
             if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {
-                ret = avio_open(&fmt_ctx_->pb, path.string().c_str(), AVIO_FLAG_WRITE);
+                ret = avio_open(&fmt_ctx_->pb, path_utf8.c_str(), AVIO_FLAG_WRITE);
                 if (ret < 0) {
                     cleanupHwContexts();
                     return false;
@@ -204,7 +207,9 @@ namespace lfs::io::video {
             const std::filesystem::path& path,
             const VideoExportOptions& opts) {
 
-            int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "mp4", path.string().c_str());
+            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+
+            int ret = avformat_alloc_output_context2(&fmt_ctx_, nullptr, "mp4", path_utf8.c_str());
             if (ret < 0 || !fmt_ctx_) {
                 return std::unexpected("MP4 context creation failed");
             }
@@ -255,7 +260,7 @@ namespace lfs::io::video {
             stream_->time_base = codec_ctx_->time_base;
 
             if (!(fmt_ctx_->oformat->flags & AVFMT_NOFILE)) {
-                ret = avio_open(&fmt_ctx_->pb, path.string().c_str(), AVIO_FLAG_WRITE);
+                ret = avio_open(&fmt_ctx_->pb, path_utf8.c_str(), AVIO_FLAG_WRITE);
                 if (ret < 0) {
                     char err[AV_ERROR_MAX_STRING_SIZE];
                     av_strerror(ret, err, sizeof(err));

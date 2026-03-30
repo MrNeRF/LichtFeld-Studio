@@ -18,6 +18,9 @@ Usage in Panel.on_mount():
     w.progress(container, "prog", value=0.5, label="50%")
 """
 
+from dataclasses import dataclass
+from typing import Any, Callable
+
 
 def find_ancestor_with_attribute(element, attribute, stop=None):
     """Walk up the DOM tree looking for an element with the given attribute."""
@@ -26,6 +29,81 @@ def find_ancestor_with_attribute(element, attribute, stop=None):
             return element
         element = element.parent()
     return None
+
+
+def _select_all_text(element):
+    if element is None:
+        return False
+    try:
+        return bool(element.select())
+    except Exception:
+        return False
+
+
+def bind_select_all_on_focus(element):
+    """Select all text when the given input element receives focus."""
+    if element is None:
+        return None
+    if element.get_attribute("data-select-all-bound", "") == "1":
+        return element
+
+    element.set_attribute("data-select-all-bound", "1")
+    element.add_event_listener("focus", lambda _event, el=element: _select_all_text(el))
+    return element
+
+
+@dataclass
+class _EscapeRevertBinding:
+    element: object
+    capture: Callable[[], Any]
+    restore: Callable[[Any], None]
+    snapshot: Any = None
+
+
+class EscapeRevertController:
+    """Restore focused text inputs to their pre-edit value on host-dispatched cancel."""
+
+    def __init__(self):
+        self._bindings = {}
+
+    def clear(self):
+        self._bindings.clear()
+
+    def bind(self, element, key, capture, restore):
+        if element is None:
+            return None
+
+        binding_key = str(key)
+        self._bindings[binding_key] = _EscapeRevertBinding(
+            element=element,
+            capture=capture,
+            restore=restore,
+        )
+        element.add_event_listener("focus", lambda _event, k=binding_key: self._capture_binding(k))
+        element.add_event_listener("blur", lambda _event, k=binding_key: self._clear_binding(k))
+        element.add_event_listener("escapecancel", lambda event, k=binding_key: self._restore_binding(k, event))
+        return element
+
+    def _restore_binding(self, key, event):
+        binding = self._bindings.get(key)
+        if binding is None or binding.element.parent() is None:
+            return False
+
+        snapshot = binding.snapshot if binding.snapshot is not None else binding.capture()
+        binding.restore(snapshot)
+        event.stop_propagation()
+        return True
+
+    def _capture_binding(self, key):
+        binding = self._bindings.get(key)
+        if binding is None:
+            return
+        binding.snapshot = binding.capture()
+
+    def _clear_binding(self, key):
+        binding = self._bindings.get(key)
+        if binding is not None:
+            binding.snapshot = None
 
 
 def _section_duration(height_px, duration):
@@ -115,39 +193,73 @@ def button(container, id, label, style="", disabled=False):
     return btn
 
 
-def checkbox(container, id, label="", checked=False, data_prop=""):
-    """Create a setting row with a labeled checkbox."""
+def aligned_property_row(container, label="", control_classes="setting-row__control-col"):
+    """Create a fixed label-left / control-right row.
+
+    Returns:
+        Tuple of (row_element, control_container).
+    """
     row = container.append_child("div")
-    row.set_class_names("setting-row")
+    row.set_class_names("setting-row setting-row--aligned")
+
+    lbl = row.append_child("span")
+    lbl.set_class_names("setting-row__label-col")
+    if label:
+        lbl.set_text(label)
+
+    control = row.append_child("div")
+    control.set_class_names(control_classes)
+    return row, control
+
+
+def aligned_checkbox_row(container, id, label="", checked=False, data_prop=""):
+    """Create a fixed label-left / checkbox-right row."""
+    row = container.append_child("div")
+    row.set_class_names("setting-row setting-row--aligned")
     row.set_id(f"row-{id}")
 
-    lbl = row.append_child("label")
-    lbl.set_class_names("setting-label")
-    lbl.set_id(f"label-{id}")
+    lbl = row.append_child("span")
+    lbl.set_class_names("setting-row__label-col")
+    lbl.set_id(f"text-{id}")
+    if label:
+        lbl.set_text(label)
 
-    cb = lbl.append_child("input")
+    control = row.append_child("label")
+    control.set_class_names("setting-row__control-col setting-row__control-col--checkbox")
+    control.set_id(f"label-{id}")
+
+    cb = control.append_child("input")
     cb.set_id(f"cb-{id}")
     cb.set_attribute("type", "checkbox")
     if data_prop:
         cb.set_attribute("data-prop", data_prop)
     if checked:
         cb.set_attribute("checked", "")
+    return row, cb, control
 
-    if label:
-        span = lbl.append_child("span")
-        span.set_id(f"text-{id}")
-        span.set_text(label)
 
+def checkbox(container, id, label="", checked=False, data_prop=""):
+    """Create a setting row with a labeled checkbox."""
+    row, _cb, _control = aligned_checkbox_row(
+        container,
+        id,
+        label=label,
+        checked=checked,
+        data_prop=data_prop,
+    )
     return row
 
 
 def slider(container, id, label="", min=0.0, max=1.0, step=0.01,
            value=None, data_prop=""):
     """Create a setting row with a range slider and value display."""
-    row = container.append_child("div")
-    row.set_class_names("setting-row")
+    row, control = aligned_property_row(
+        container,
+        label=label,
+        control_classes="setting-row__control-col setting-row__control-col--slider",
+    )
 
-    inp = row.append_child("input")
+    inp = control.append_child("input")
     inp.set_id(f"slider-{id}")
     inp.set_attribute("type", "range")
     inp.set_class_names("setting-slider")
@@ -159,17 +271,11 @@ def slider(container, id, label="", min=0.0, max=1.0, step=0.01,
     if value is not None:
         inp.set_attribute("value", str(value))
 
-    val_span = row.append_child("span")
+    val_span = control.append_child("span")
     val_span.set_id(f"val-{id}")
     val_span.set_class_names("slider-value")
     if value is not None:
         val_span.set_text(f"{value:.3f}")
-
-    if label:
-        prop_lbl = row.append_child("span")
-        prop_lbl.set_id(f"label-{id}")
-        prop_lbl.set_class_names("prop-label")
-        prop_lbl.set_text(label)
 
     return row
 
@@ -180,10 +286,13 @@ def select(container, id, label="", options=None, data_prop=""):
     Args:
         options: List of (value, display_text) tuples.
     """
-    row = container.append_child("div")
-    row.set_class_names("setting-row")
+    row, control = aligned_property_row(
+        container,
+        label=label,
+        control_classes="setting-row__control-col setting-row__control-col--fill",
+    )
 
-    sel = row.append_child("select")
+    sel = control.append_child("select")
     sel.set_id(f"sel-{id}")
     if data_prop:
         sel.set_attribute("data-prop", data_prop)
@@ -193,12 +302,6 @@ def select(container, id, label="", options=None, data_prop=""):
             opt = sel.append_child("option")
             opt.set_attribute("value", str(val))
             opt.set_text(text)
-
-    if label:
-        prop_lbl = row.append_child("span")
-        prop_lbl.set_id(f"label-{id}")
-        prop_lbl.set_class_names("prop-label")
-        prop_lbl.set_text(label)
 
     return row
 
@@ -251,17 +354,19 @@ def progress(container, id, value=0.0, label=""):
 
 def color_swatch(container, id, r=0, g=0, b=0, data_prop=""):
     """Create a color swatch with RGB component displays."""
-    row = container.append_child("div")
-    row.set_class_names("setting-row")
+    row, control = aligned_property_row(
+        container,
+        control_classes="setting-row__control-col setting-row__control-col--color",
+    )
     row.set_id(f"row-{id}")
 
     for ch, val in [("r", r), ("g", g), ("b", b)]:
-        comp = row.append_child("span")
+        comp = control.append_child("span")
         comp.set_class_names("color-comp")
         comp.set_id(f"{ch}c-{id}")
         comp.set_text(f"{val:.0f}")
 
-    swatch = row.append_child("div")
+    swatch = control.append_child("div")
     swatch.set_class_names("color-swatch")
     swatch.set_id(f"swatch-{id}")
     swatch.set_property("background-color",
@@ -269,12 +374,13 @@ def color_swatch(container, id, r=0, g=0, b=0, data_prop=""):
     if data_prop:
         swatch.set_attribute("data-prop", data_prop)
 
-    hex_input = row.append_child("input")
+    hex_input = control.append_child("input")
     hex_input.set_id(f"hex-{id}")
     hex_input.set_class_names("color-hex")
     hex_input.set_attribute("type", "text")
     if data_prop:
         hex_input.set_attribute("data-prop", data_prop)
+    bind_select_all_on_focus(hex_input)
 
     return row
 
@@ -313,10 +419,13 @@ def number_input(container, id, label="", value="", data_prop="",
         fmt: Python format string for display (e.g. "%.6f", "%d").
         min_val/max_val: Clamping bounds (None = unclamped).
     """
-    row = container.append_child("div")
-    row.set_class_names("setting-row")
+    row, control = aligned_property_row(
+        container,
+        label=label,
+        control_classes="setting-row__control-col setting-row__control-col--fill",
+    )
 
-    inp = row.append_child("input")
+    inp = control.append_child("input")
     inp.set_id(f"num-{id}")
     inp.set_attribute("type", "text")
     inp.set_class_names("number-input")
@@ -332,12 +441,7 @@ def number_input(container, id, label="", value="", data_prop="",
         inp.set_attribute("data-max", str(max_val))
     if value != "":
         inp.set_attribute("value", str(value))
-
-    if label:
-        prop_lbl = row.append_child("span")
-        prop_lbl.set_id(f"label-{id}")
-        prop_lbl.set_class_names("prop-label")
-        prop_lbl.set_text(label)
+    bind_select_all_on_focus(inp)
 
     return row
 

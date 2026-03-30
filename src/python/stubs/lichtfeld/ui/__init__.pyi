@@ -405,7 +405,10 @@ class RmlUILayout:
 
     def stepper_float(self, label: str, value: float, steps: Sequence[float] = [1.0, 0.10000000149011612, 0.009999999776482582]) -> tuple[bool, float]: ...
 
-    def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]: ...
+    def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
+        """
+        Draw a path input, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]: ...
 
@@ -1394,7 +1397,9 @@ class UILayout:
         """
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
-        """Draw a path input with browse button, returns (changed, path)"""
+        """
+        Draw a path input with browse button, returns (changed, path). dialog_title is accepted for compatibility and currently ignored.
+        """
 
     def color_edit3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]:
         """Draw an RGB color editor, returns (changed, color)"""
@@ -1846,11 +1851,13 @@ def open_image_dialog(start_dir: str = '') -> str:
     """
 
 def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str:
-    """Open a folder selection dialog. Returns empty string if cancelled."""
+    """
+    Open a folder selection dialog. Returns empty string if cancelled. title is accepted for compatibility and currently ignored.
+    """
 
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
-    Open a file dialog to select a PLY file. Returns empty string if cancelled.
+    Open a file dialog to select a splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
     """
 
 def open_mesh_file_dialog(start_dir: str = '') -> str:
@@ -1863,6 +1870,11 @@ def open_checkpoint_file_dialog() -> str:
     Open a file dialog to select a checkpoint file. Returns empty string if cancelled.
     """
 
+def open_ppisp_file_dialog(start_dir: str = '') -> str:
+    """
+    Open a file dialog to select a PPISP sidecar file. Returns empty string if cancelled.
+    """
+
 def open_json_file_dialog() -> str:
     """
     Open a file dialog to select a JSON config file. Returns empty string if cancelled.
@@ -1873,22 +1885,27 @@ def save_json_file_dialog(default_name: str = 'config.json') -> str:
     Open a save file dialog for JSON files. Returns empty string if cancelled.
     """
 
-def save_ply_file_dialog(default_name: str = 'export.ply') -> str:
+def save_ply_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for PLY files. Returns empty string if cancelled.
     """
 
-def save_sog_file_dialog(default_name: str = 'export.sog') -> str:
+def save_sog_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SOG files. Returns empty string if cancelled.
     """
 
-def save_spz_file_dialog(default_name: str = 'export.spz') -> str:
+def save_spz_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for SPZ files. Returns empty string if cancelled.
     """
 
-def save_html_file_dialog(default_name: str = 'viewer.html') -> str:
+def save_usd_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for USD files. Returns empty string if cancelled.
+    """
+
+def save_html_file_dialog(default_name: str = 'viewer') -> str:
     """
     Open a save file dialog for HTML viewer files. Returns empty string if cancelled.
     """
@@ -2494,7 +2511,9 @@ def get_current_camera_id() -> int:
     """Get current camera ID for GT comparison"""
 
 def get_split_view_mode() -> str:
-    """Get split view mode (none, gt_comparison, ply_comparison)"""
+    """
+    Get split view mode (none, gt_comparison, ply_comparison, independent_dual)
+    """
 
 def get_speed_overlay() -> tuple[float, float, float, float]:
     """

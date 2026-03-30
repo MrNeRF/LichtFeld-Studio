@@ -14,6 +14,24 @@ from typing import Dict, List, Set, Tuple
 
 _log = logging.getLogger(__name__)
 
+try:
+    import lichtfeld as _lf
+
+    class _LfLogHandler(logging.Handler):
+        def emit(self, record):
+            msg = self.format(record)
+            if record.levelno >= logging.ERROR:
+                _lf.log.error(msg)
+            elif record.levelno >= logging.WARNING:
+                _lf.log.warn(msg)
+            else:
+                _lf.log.info(msg)
+
+    _log.addHandler(_LfLogHandler())
+    _log.setLevel(logging.DEBUG)
+except Exception:
+    pass
+
 GITHUB_TIMEOUT_SEC = 10
 REFRESH_RETRY_COOLDOWN_SEC = 30
 GITHUB_API_URL = "https://api.github.com/repos"
@@ -95,6 +113,18 @@ class PluginMarketplaceCatalog:
                 else _build_curated_fallback()
             )
             merged = _merge_entries(registry_entries, curated_entries)
+            if registry_ok:
+                _log.info(
+                    "Plugin marketplace registry loaded: %d registry entries, %d total catalog entries",
+                    len(registry_entries),
+                    len(merged),
+                )
+            else:
+                _log.info(
+                    "Plugin marketplace registry unavailable, using fallback catalog: %d fallback entries, %d total catalog entries",
+                    len(curated_entries),
+                    len(merged),
+                )
             with self._lock:
                 self._entries = merged
                 self._loading = False
@@ -103,10 +133,10 @@ class PluginMarketplaceCatalog:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def snapshot(self) -> Tuple[List[MarketplacePluginEntry], bool]:
-        """Return (entries, is_loading)."""
+    def snapshot(self) -> Tuple[List[MarketplacePluginEntry], bool, bool]:
+        """Return (entries, is_loading, registry_loaded)."""
         with self._lock:
-            return list(self._entries), self._loading
+            return list(self._entries), self._loading, self._registry_loaded
 
 
 def _entry_key(owner: str, repo: str) -> str:

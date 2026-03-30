@@ -13,10 +13,15 @@
 #include "training/training_manager.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdarg>
+#include <cstring>
 #include <glad/glad.h>
+#include <imgui_internal.h>
 #include <implot.h>
+#include <string>
+#include <unordered_map>
 #include <imgui.h>
 
 namespace lfs::vis::gui::widgets {
@@ -24,12 +29,27 @@ namespace lfs::vis::gui::widgets {
     using namespace lfs::core::events;
 
     namespace {
+        constexpr float CLICK_THRESHOLD_SQ = 5.0f * 5.0f;
+        constexpr const char* MULTI_COMPONENT_LABELS[4] = {"##X", "##Y", "##Z", "##W"};
+
         struct WidgetIcons {
             unsigned int reset = 0;
             bool initialized = false;
         };
 
         WidgetIcons g_icons;
+        ImGuiID g_pending_cancel_id = 0;
+        int g_snapshot_cleanup_frame = -1;
+
+        struct EditSnapshot {
+            std::string text;
+            std::array<double, 4> values = {0.0, 0.0, 0.0, 0.0};
+            int components = 0;
+            int last_seen_frame = -1;
+            bool is_text = false;
+        };
+
+        std::unordered_map<ImGuiID, EditSnapshot> g_edit_snapshots;
 
         void ensureIconsLoaded() {
             if (g_icons.initialized)
@@ -54,13 +74,354 @@ namespace lfs::vis::gui::widgets {
         ImVec4 getIconTint() {
             return theme().isLightTheme() ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f} : ImVec4{1.0f, 1.0f, 1.0f, 0.9f};
         }
+
+        void cleanupEditSnapshots() {
+            ImGuiContext& g = *GImGui;
+            if (g_snapshot_cleanup_frame == g.FrameCount)
+                return;
+
+            g_snapshot_cleanup_frame = g.FrameCount;
+            for (auto it = g_edit_snapshots.begin(); it != g_edit_snapshots.end();) {
+                if (it->first == g.ActiveId || it->first == g_pending_cancel_id ||
+                    it->second.last_seen_frame >= g.FrameCount - 1) {
+                    ++it;
+                    continue;
+                }
+                it = g_edit_snapshots.erase(it);
+            }
+
+            const auto pending_it = g_edit_snapshots.find(g_pending_cancel_id);
+            if (g_pending_cancel_id != 0 &&
+                (pending_it == g_edit_snapshots.end() ||
+                 pending_it->second.last_seen_frame < g.FrameCount - 1)) {
+                g_pending_cancel_id = 0;
+            }
+        }
+
+        void markSnapshotSeen(const ImGuiID id) {
+            auto it = g_edit_snapshots.find(id);
+            if (it == g_edit_snapshots.end())
+                return;
+            it->second.last_seen_frame = GImGui->FrameCount;
+        }
+
+        template <typename T>
+        void storeNumericSnapshot(const ImGuiID id, const T* values, const int components) {
+            auto& snapshot = g_edit_snapshots[id];
+            snapshot.text.clear();
+            snapshot.components = components;
+            snapshot.is_text = false;
+            snapshot.last_seen_frame = GImGui->FrameCount;
+            for (int i = 0; i < components; ++i)
+                snapshot.values[i] = static_cast<double>(values[i]);
+        }
+
+        void storeTextSnapshot(const ImGuiID id, const char* buf) {
+            auto& snapshot = g_edit_snapshots[id];
+            snapshot.text = buf ? buf : "";
+            snapshot.components = 0;
+            snapshot.is_text = true;
+            snapshot.last_seen_frame = GImGui->FrameCount;
+        }
+
+        template <typename T>
+        bool restoreNumericSnapshotIfRequested(const ImGuiID id, T* values, const int components) {
+            cleanupEditSnapshots();
+            if (g_pending_cancel_id != id)
+                return false;
+
+            g_pending_cancel_id = 0;
+            const auto it = g_edit_snapshots.find(id);
+            if (it == g_edit_snapshots.end() || it->second.is_text)
+                return false;
+
+            bool restored = false;
+            const int count = std::min(components, it->second.components);
+            for (int i = 0; i < count; ++i) {
+                const T original = static_cast<T>(it->second.values[i]);
+                if (values[i] == original)
+                    continue;
+                values[i] = original;
+                restored = true;
+            }
+            g_edit_snapshots.erase(it);
+            return restored;
+        }
+
+        bool restoreTextSnapshotIfRequested(const ImGuiID id, char* buf, const std::size_t buf_size) {
+            cleanupEditSnapshots();
+            if (g_pending_cancel_id != id)
+                return false;
+
+            g_pending_cancel_id = 0;
+            const auto it = g_edit_snapshots.find(id);
+            if (it == g_edit_snapshots.end() || !it->second.is_text || buf_size == 0)
+                return false;
+
+            const std::string original = it->second.text;
+            g_edit_snapshots.erase(it);
+
+            const std::string current = buf ? std::string(buf) : std::string();
+            if (current == original)
+                return false;
+
+            std::fill_n(buf, buf_size, '\0');
+            std::strncpy(buf, original.c_str(), buf_size - 1);
+            return true;
+        }
+
+        void forgetDeactivatedSnapshot(const ImGuiID id) {
+            if (id == 0 || id == g_pending_cancel_id)
+                return;
+            g_edit_snapshots.erase(id);
+        }
+
+        void handleActiveTextInputShortcut() {
+            if (!ImGui::IsItemActive())
+                return;
+
+            ImGuiContext& g = *GImGui;
+            const ImGuiID id = ImGui::GetItemID();
+            if (id == 0 || g.ActiveId != id || g.InputTextState.ID != id)
+                return;
+
+            const ImGuiIO& io = ImGui::GetIO();
+            const bool primary_shortcut_pressed = io.KeyCtrl || (io.ConfigMacOSXBehaviors && io.KeySuper);
+            if (!primary_shortcut_pressed || !ImGui::IsKeyPressed(ImGuiKey_A, false))
+                return;
+
+            g.InputTextState.SelectAll();
+        }
+
+        void handleSliderClickToInput() {
+            if (!ImGui::IsItemDeactivated())
+                return;
+            if (g_pending_cancel_id == ImGui::GetItemID())
+                return;
+            if (!ImGui::IsItemHovered())
+                return;
+            if (ImGui::GetIO().MouseDragMaxDistanceSqr[0] > CLICK_THRESHOLD_SQ)
+                return;
+
+            ImGuiContext& g = *GImGui;
+            const ImGuiID id = ImGui::GetItemID();
+            g.TempInputId = id;
+            ImGui::SetActiveID(id, g.CurrentWindow);
+        }
+
+        template <typename T>
+        bool drawTrackedNumericWidget(const T* original_values, T* current_values, const int components,
+                                      const auto& draw_widget, const auto& post_draw) {
+            cleanupEditSnapshots();
+            const bool changed = draw_widget();
+
+            ImGuiContext& g = *GImGui;
+            const ImGuiID item_id = ImGui::GetItemID();
+            const ImGuiID active_id = ImGui::IsItemActive() ? g.ActiveId : 0;
+            const ImGuiID snapshot_id = active_id ? active_id : item_id;
+
+            if (ImGui::IsItemActivated() && snapshot_id != 0)
+                storeNumericSnapshot(snapshot_id, original_values, components);
+            if (active_id != 0)
+                markSnapshotSeen(active_id);
+
+            handleActiveTextInputShortcut();
+            post_draw();
+
+            const bool restored = restoreNumericSnapshotIfRequested(snapshot_id, current_values, components);
+
+            if (ImGui::IsItemDeactivated())
+                forgetDeactivatedSnapshot(g.DeactivatedItemData.ID ? g.DeactivatedItemData.ID : snapshot_id);
+
+            return changed || restored;
+        }
+
+        bool drawTrackedTextWidget(char* buf, const std::size_t buf_size,
+                                   const auto& draw_widget) {
+            cleanupEditSnapshots();
+            const std::string original = buf ? std::string(buf) : std::string();
+            const bool changed = draw_widget();
+
+            ImGuiContext& g = *GImGui;
+            const ImGuiID item_id = ImGui::GetItemID();
+            const ImGuiID active_id = ImGui::IsItemActive() ? g.ActiveId : 0;
+            const ImGuiID snapshot_id = active_id ? active_id : item_id;
+
+            if (ImGui::IsItemActivated() && snapshot_id != 0)
+                storeTextSnapshot(snapshot_id, original.c_str());
+            if (active_id != 0)
+                markSnapshotSeen(active_id);
+
+            handleActiveTextInputShortcut();
+            const bool restored = restoreTextSnapshotIfRequested(snapshot_id, buf, buf_size);
+
+            if (ImGui::IsItemDeactivated())
+                forgetDeactivatedSnapshot(g.DeactivatedItemData.ID ? g.DeactivatedItemData.ID : snapshot_id);
+
+            return changed || restored;
+        }
+
+        template <typename DrawComponent>
+        bool drawMultiComponentWidget(const char* label, const int components, DrawComponent&& draw_component) {
+            bool changed = false;
+            ImGui::BeginGroup();
+            ImGui::PushID(label);
+            ImGui::PushMultiItemsWidths(components, ImGui::CalcItemWidth());
+            for (int i = 0; i < components; ++i) {
+                ImGui::PushID(i);
+                changed |= draw_component(i, MULTI_COMPONENT_LABELS[i]);
+                ImGui::PopID();
+                ImGui::PopItemWidth();
+                if (i + 1 < components)
+                    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+            }
+            ImGui::PopID();
+
+            const char* const label_end = ImGui::FindRenderedTextEnd(label);
+            if (label != label_end) {
+                ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+                ImGui::TextEx(label, label_end);
+            }
+            ImGui::EndGroup();
+            return changed;
+        }
     } // namespace
+
+    bool InputText(const char* label, char* buf, const std::size_t buf_size, const ImGuiInputTextFlags flags,
+                   ImGuiInputTextCallback callback, void* user_data) {
+        return drawTrackedTextWidget(
+            buf, buf_size,
+            [&]() { return ImGui::InputText(label, buf, buf_size, flags, callback, user_data); });
+    }
+
+    bool InputTextWithHint(const char* label, const char* hint, char* buf, const std::size_t buf_size,
+                           const ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* user_data) {
+        return drawTrackedTextWidget(
+            buf, buf_size,
+            [&]() { return ImGui::InputTextWithHint(label, hint, buf, buf_size, flags, callback, user_data); });
+    }
+
+    bool InputFloat(const char* label, float* v, const float step, const float step_fast,
+                    const char* format, const ImGuiInputTextFlags flags) {
+        const float original = *v;
+        return drawTrackedNumericWidget<float>(
+            &original, v, 1,
+            [&]() { return ImGui::InputFloat(label, v, step, step_fast, format, flags); },
+            []() {});
+    }
+
+    bool InputInt(const char* label, int* v, const int step, const int step_fast,
+                  const ImGuiInputTextFlags flags) {
+        const int original = *v;
+        return drawTrackedNumericWidget<int>(
+            &original, v, 1,
+            [&]() { return ImGui::InputInt(label, v, step, step_fast, flags); },
+            []() {});
+    }
+
+    bool DragFloat(const char* label, float* v, const float speed, const float min, const float max,
+                   const char* format, const ImGuiSliderFlags flags) {
+        const float original = *v;
+        return drawTrackedNumericWidget<float>(
+            &original, v, 1,
+            [&]() { return ImGui::DragFloat(label, v, speed, min, max, format, flags); },
+            []() {});
+    }
+
+    bool DragInt(const char* label, int* v, const float speed, const int min, const int max,
+                 const char* format, const ImGuiSliderFlags flags) {
+        const int original = *v;
+        return drawTrackedNumericWidget<int>(
+            &original, v, 1,
+            [&]() { return ImGui::DragInt(label, v, speed, min, max, format, flags); },
+            []() {});
+    }
+
+    bool DragFloat2(const char* label, float v[2], const float speed, const float min, const float max,
+                    const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 2, [&](const int i, const char* component_label) {
+            return DragFloat(component_label, &v[i], speed, min, max, format, flags);
+        });
+    }
+
+    bool DragFloat3(const char* label, float v[3], const float speed, const float min, const float max,
+                    const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 3, [&](const int i, const char* component_label) {
+            return DragFloat(component_label, &v[i], speed, min, max, format, flags);
+        });
+    }
+
+    bool DragFloat4(const char* label, float v[4], const float speed, const float min, const float max,
+                    const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 4, [&](const int i, const char* component_label) {
+            return DragFloat(component_label, &v[i], speed, min, max, format, flags);
+        });
+    }
+
+    bool DragInt2(const char* label, int v[2], const float speed, const int min, const int max,
+                  const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 2, [&](const int i, const char* component_label) {
+            return DragInt(component_label, &v[i], speed, min, max, format, flags);
+        });
+    }
+
+    bool DragInt3(const char* label, int v[3], const float speed, const int min, const int max,
+                  const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 3, [&](const int i, const char* component_label) {
+            return DragInt(component_label, &v[i], speed, min, max, format, flags);
+        });
+    }
+
+    bool DragInt4(const char* label, int v[4], const float speed, const int min, const int max,
+                  const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 4, [&](const int i, const char* component_label) {
+            return DragInt(component_label, &v[i], speed, min, max, format, flags);
+        });
+    }
+
+    bool SliderFloat(const char* label, float* v, const float min, const float max,
+                     const char* format, const ImGuiSliderFlags flags) {
+        const float original = *v;
+        return drawTrackedNumericWidget<float>(
+            &original, v, 1,
+            [&]() { return ImGui::SliderFloat(label, v, min, max, format, flags); },
+            []() { handleSliderClickToInput(); });
+    }
+
+    bool SliderInt(const char* label, int* v, const int min, const int max,
+                   const char* format, const ImGuiSliderFlags flags) {
+        const int original = *v;
+        return drawTrackedNumericWidget<int>(
+            &original, v, 1,
+            [&]() { return ImGui::SliderInt(label, v, min, max, format, flags); },
+            []() { handleSliderClickToInput(); });
+    }
+
+    bool SliderFloat2(const char* label, float v[2], const float min, const float max,
+                      const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 2, [&](const int i, const char* component_label) {
+            return SliderFloat(component_label, &v[i], min, max, format, flags);
+        });
+    }
+
+    bool SliderFloat3(const char* label, float v[3], const float min, const float max,
+                      const char* format, const ImGuiSliderFlags flags) {
+        return drawMultiComponentWidget(label, 3, [&](const int i, const char* component_label) {
+            return SliderFloat(component_label, &v[i], min, max, format, flags);
+        });
+    }
+
+    void RequestActiveEditCancel() {
+        cleanupEditSnapshots();
+        if (g_edit_snapshots.contains(GImGui->ActiveId))
+            g_pending_cancel_id = GImGui->ActiveId;
+    }
 
     bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,
                          const char* tooltip, const char* format) {
         ensureIconsLoaded();
 
-        bool changed = ImGui::SliderFloat(label, v, min, max, format);
+        bool changed = SliderFloat(label, v, min, max, format);
         bool slider_hovered = ImGui::IsItemHovered();
 
         ImGui::SameLine();
@@ -99,7 +460,7 @@ namespace lfs::vis::gui::widgets {
                              const char* tooltip) {
         ensureIconsLoaded();
 
-        bool changed = ImGui::DragFloat3(label, v, speed);
+        bool changed = DragFloat3(label, v, speed);
         bool drag_hovered = ImGui::IsItemHovered();
 
         ImGui::SameLine();
@@ -554,7 +915,7 @@ namespace lfs::vis::gui::widgets {
 
         bool changed = false;
         constexpr auto FLAGS = ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_AutoSelectAll;
-        if (ImGui::InputText("##input", buf, BUF_SIZE, FLAGS)) {
+        if (InputText("##input", buf, BUF_SIZE, FLAGS)) {
             int parsed = 0;
             bool has_digits = false;
             bool negative = false;

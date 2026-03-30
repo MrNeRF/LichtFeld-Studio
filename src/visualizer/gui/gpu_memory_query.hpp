@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 
 namespace lfs::vis::gui {
 
@@ -12,6 +13,7 @@ namespace lfs::vis::gui {
         size_t process_used = 0;
         size_t total_used = 0;
         size_t total = 0;
+        std::string device_name;
     };
 
     GpuMemoryInfo queryGpuMemory();

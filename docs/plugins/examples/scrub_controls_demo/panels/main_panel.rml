@@ -1,0 +1,38 @@
+<rml>
+<head>
+  <link type="text/rcss" href="main_panel.rcss"/>
+</head>
+<body id="body" data-model="scrub_controls_demo" class="plugin-panel scrub-controls-demo">
+  <div class="demo-shell">
+    <div class="demo-header">
+      <span class="demo-title">Scrub Controls Demo</span>
+      <span class="demo-note">{{summary}}</span>
+    </div>
+
+    <div class="demo-card">
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">Strength</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="strength" min="0" max="2" step="0.01" />
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">Quality</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="quality" min="0" max="1" step="0.01" />
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">Threshold</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="threshold" min="0" max="1" step="0.01" />
+        </div>
+      </div>
+    </div>
+
+    <div class="demo-actions">
+      <button data-event-click="do_reset">Reset</button>
+    </div>
+  </div>
+</body>
+</rml>

@@ -1,0 +1,10 @@
+[project]
+name = "scrub_controls_demo"
+version = "0.1.0"
+description = "Demonstrates public scrub field helpers in a plugin panel"
+
+[tool.lichtfeld]
+hot_reload = true
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.4.2"
+required_features = []

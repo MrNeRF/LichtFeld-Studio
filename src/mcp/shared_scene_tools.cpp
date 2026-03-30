@@ -12,6 +12,8 @@ namespace lfs::mcp {
 
     namespace {
 
+        constexpr std::string_view NO_MODEL_LOADED_ERROR = "No model loaded";
+
         McpToolMetadata command_metadata(const SharedSceneToolBackend& backend,
                                          std::string category,
                                          const bool destructive = false,
@@ -75,8 +77,11 @@ namespace lfs::mcp {
                     {"path", core::path_to_utf8(path)},
                 };
                 if (backend.gaussian_count) {
-                    if (const auto count = backend.gaussian_count(); count)
+                    if (const auto count = backend.gaussian_count(); count) {
                         response["num_gaussians"] = *count;
+                    } else if (count.error() == NO_MODEL_LOADED_ERROR) {
+                        response["num_gaussians"] = 0;
+                    }
                 }
                 return response;
             });
@@ -102,11 +107,11 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "scene.save_checkpoint",
-                .description = "Save current training state to a checkpoint directory; omit path to use the current output path",
+                .description = "Save current training state. The path is a base directory; checkpoints are saved as checkpoints/checkpoint.resume inside it. Omit path to use the current output path.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Optional output directory for the checkpoint"}}}},
+                        {"path", json{{"type", "string"}, {"description", "Base output directory; checkpoint files are written to <path>/checkpoints/checkpoint.resume"}}}},
                     .required = {}},
                 .metadata = command_metadata(backend, "scene", false, true)},
             [backend](const json& args) -> json {
@@ -161,17 +166,20 @@ namespace lfs::mcp {
         registry.register_tool(
             McpTool{
                 .name = "render.capture",
-                .description = "Render the current scene and return a base64-encoded PNG",
+                .description = "Capture the current scene. Omit camera_index to grab the live viewport region only; pass camera_index to render from a dataset camera.",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
+                        {"camera_index", json{{"type", "integer"}, {"description", "Dataset camera index; omit to capture the live viewport region only"}}},
                         {"width", json{{"type", "integer"}, {"description", "Optional output width; preserves aspect ratio when height is omitted"}}},
                         {"height", json{{"type", "integer"}, {"description", "Optional output height; preserves aspect ratio when width is omitted"}}}},
                     .required = {}},
                 .metadata = query_metadata(backend, "render")},
             [backend](const json& args) -> json {
-                const int camera_index = args.value("camera_index", 0);
+                const std::optional<int> camera_index =
+                    args.contains("camera_index")
+                        ? std::optional<int>(args["camera_index"].get<int>())
+                        : std::nullopt;
                 const int width = args.value("width", 0);
                 const int height = args.value("height", 0);
 

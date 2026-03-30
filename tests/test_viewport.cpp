@@ -33,3 +33,18 @@ TEST(ViewportTest, UnprojectPixelDependsOnScreenPixel) {
     EXPECT_LT(top_left.y, center.y);
     EXPECT_NEAR(top_left.z, center.z, 1e-4f);
 }
+
+TEST(ViewportTest, WasdAdvanceSupportsFlatAdditionalSpeed) {
+    Viewport viewport(100, 100);
+    viewport.camera.R = glm::mat3(1.0f);
+    viewport.camera.t = glm::vec3(0.0f);
+    viewport.camera.pivot = glm::vec3(0.0f);
+
+    viewport.camera.advance_forward(1.0f, 20.0f);
+
+    EXPECT_FLOAT_EQ(viewport.camera.getWasdSpeed(), 6.0f);
+    EXPECT_NEAR(viewport.camera.t.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(viewport.camera.t.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(viewport.camera.t.z, 26.0f, 1e-5f);
+    EXPECT_NEAR(viewport.camera.pivot.z, 26.0f, 1e-5f);
+}

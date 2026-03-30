@@ -4,6 +4,7 @@
 
 #include "video_player.hpp"
 #include "core/include/core/logger.hpp"
+#include "core/path_utils.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -80,8 +81,10 @@ namespace lfs::io {
         bool open(const std::filesystem::path& path) {
             close();
 
-            if (avformat_open_input(&fmt_ctx_, path.string().c_str(), nullptr, nullptr) < 0) {
-                LOG_WARN("VideoPlayer: Failed to open {}", path.string());
+            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+
+            if (avformat_open_input(&fmt_ctx_, path_utf8.c_str(), nullptr, nullptr) < 0) {
+                LOG_WARN("VideoPlayer: Failed to open {}", path_utf8);
                 return false;
             }
 

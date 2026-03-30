@@ -142,42 +142,20 @@ namespace lfs::rendering {
     Result<void> MeshRenderer::setupFBO(int width, int height) {
         assert(width > 0 && height > 0);
 
-        GLuint color_tex;
-        glGenTextures(1, &color_tex);
-        glBindTexture(GL_TEXTURE_2D, color_tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        color_texture_ = Texture(color_tex);
-
-        GLuint depth_tex;
-        glGenTextures(1, &depth_tex);
-        glBindTexture(GL_TEXTURE_2D, depth_tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height, 0,
-                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-        depth_texture_ = Texture(depth_tex);
-
-        GLuint fbo;
-        glGenFramebuffers(1, &fbo);
-        fbo_ = FBO(fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_.get());
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color_texture_.get(), 0);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth_texture_.get(), 0);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            return std::unexpected("Mesh FBO incomplete");
+        if (render_target_pool_) {
+            auto pooled_target = render_target_pool_->acquireDisplay("mesh_renderer.main", {width, height});
+            if (!pooled_target) {
+                return std::unexpected(pooled_target.error());
+            }
+            render_target_ = *pooled_target;
+        } else {
+            if (!render_target_) {
+                render_target_ = std::make_shared<DisplayRenderTarget>();
+            }
+            if (auto result = render_target_->ensureSize({width, height}); !result) {
+                return std::unexpected(result.error());
+            }
         }
-
-        fbo_width_ = width;
-        fbo_height_ = height;
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         return {};
@@ -221,8 +199,15 @@ namespace lfs::rendering {
     }
 
     void MeshRenderer::resize(int width, int height) {
-        if (width == fbo_width_ && height == fbo_height_)
+        if (width <= 0 || height <= 0) {
             return;
+        }
+
+        if (render_target_ &&
+            width == render_target_->width() &&
+            height == render_target_->height()) {
+            return;
+        }
 
         const auto result = setupFBO(width, height);
         if (!result)
@@ -443,8 +428,11 @@ namespace lfs::rendering {
         }
 
         if (use_fbo) {
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo_.get());
-            glViewport(0, 0, fbo_width_, fbo_height_);
+            if (!render_target_) {
+                return std::unexpected("Mesh render target not initialized");
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, render_target_->framebuffer());
+            glViewport(0, 0, render_target_->width(), render_target_->height());
 
             if (clear_fbo) {
                 glClearColor(opts.background_color.r, opts.background_color.g, opts.background_color.b, 1.0f);
@@ -479,9 +467,9 @@ namespace lfs::rendering {
             pbr_shader_->set_uniform("u_ambient", opts.ambient);
             pbr_shader_->set_uniform("u_has_vertex_colors", static_cast<int>(mesh.has_colors()));
 
-            pbr_shader_->set_uniform("u_is_selected", static_cast<int>(opts.is_selected));
-            pbr_shader_->set_uniform("u_desaturate_unselected", static_cast<int>(opts.desaturate_unselected));
-            pbr_shader_->set_uniform("u_selection_flash_intensity", opts.selection_flash_intensity);
+            pbr_shader_->set_uniform("u_is_emphasized", static_cast<int>(opts.is_emphasized));
+            pbr_shader_->set_uniform("u_dim_non_emphasized", static_cast<int>(opts.dim_non_emphasized));
+            pbr_shader_->set_uniform("u_flash_intensity", opts.flash_intensity);
 
             const bool shadow_active = opts.shadow_enabled && shadow_fbo_.get() && shadow_depth_texture_.get();
             pbr_shader_->set_uniform("u_shadow_enabled", static_cast<int>(shadow_active));
@@ -557,18 +545,18 @@ namespace lfs::rendering {
     }
 
     void MeshRenderer::blitToScreen(const glm::ivec2& dst_pos, const glm::ivec2& dst_size) {
-        assert(fbo_.get() != 0);
+        assert(render_target_ && render_target_->framebuffer() != 0);
 
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_.get());
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, render_target_->framebuffer());
         glReadBuffer(GL_COLOR_ATTACHMENT0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 
-        glBlitFramebuffer(0, 0, fbo_width_, fbo_height_,
+        glBlitFramebuffer(0, 0, render_target_->width(), render_target_->height(),
                           dst_pos.x, dst_pos.y,
                           dst_pos.x + dst_size.x, dst_pos.y + dst_size.y,
                           GL_COLOR_BUFFER_BIT, GL_LINEAR);
 
-        glBlitFramebuffer(0, 0, fbo_width_, fbo_height_,
+        glBlitFramebuffer(0, 0, render_target_->width(), render_target_->height(),
                           dst_pos.x, dst_pos.y,
                           dst_pos.x + dst_size.x, dst_pos.y + dst_size.y,
                           GL_DEPTH_BUFFER_BIT, GL_NEAREST);

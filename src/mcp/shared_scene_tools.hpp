@@ -26,7 +26,7 @@ namespace lfs::mcp {
         using StartTrainingHandler =
             std::function<std::expected<void, std::string>()>;
         using RenderCaptureHandler =
-            std::function<std::expected<std::string, std::string>(int camera_index, int width, int height)>;
+            std::function<std::expected<std::string, std::string>(std::optional<int> camera_index, int width, int height)>;
         using GaussianCountHandler =
             std::function<std::expected<int64_t, std::string>()>;
 

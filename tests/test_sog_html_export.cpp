@@ -6,7 +6,7 @@
  * @brief Regression tests for SOG and HTML viewer export
  *
  * Tests that validate:
- * 1. SOG export produces valid format compatible with SuperSplat viewer
+ * 1. SOG export produces valid format compatible with the viewer
  * 2. HTML export creates self-contained viewer with embedded data
  * 3. K-means clustering (cluster1d) works correctly for SH data
  */

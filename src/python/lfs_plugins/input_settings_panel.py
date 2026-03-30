@@ -60,12 +60,9 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.SELECT_MODE_RINGS,
         ],
         "depth": [
-            lf.keymap.Action.TOGGLE_DEPTH_MODE,
             lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER,
             lf.keymap.Action.TOGGLE_SELECTION_CROP_FILTER,
-            lf.keymap.Action.DEPTH_ADJUST_NEAR,
             lf.keymap.Action.DEPTH_ADJUST_FAR,
-            lf.keymap.Action.DEPTH_ADJUST_SIDE,
         ],
         "brush": [
             lf.keymap.Action.CYCLE_BRUSH_MODE,
@@ -84,6 +81,7 @@ class InputSettingsPanel(Panel):
         ],
         "view_global": [
             lf.keymap.Action.TOGGLE_SPLIT_VIEW,
+            lf.keymap.Action.TOGGLE_INDEPENDENT_SPLIT_VIEW,
             lf.keymap.Action.TOGGLE_GT_COMPARISON,
             lf.keymap.Action.CYCLE_PLY,
             lf.keymap.Action.CYCLE_SELECTION_VIS,
@@ -325,7 +323,7 @@ class InputSettingsPanel(Panel):
                 for action in self.BINDING_SECTIONS["selection_global"]:
                     rows.append(self._binding_row_record(action, mode))
 
-            if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION):
+            if mode == lf.keymap.ToolMode.SELECTION:
                 for action in self.BINDING_SECTIONS["depth"]:
                     rows.append(self._binding_row_record(action, mode))
 

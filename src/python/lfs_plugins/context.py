@@ -96,7 +96,7 @@ class PluginContext:
         view_ctx = None
         if include_view:
             try:
-                viewport = lf.get_viewport_render()
+                viewport = lf.capture_viewport()
                 view_info = lf.get_current_view()
                 if viewport is not None and view_info is not None:
                     view_ctx = ViewContext(

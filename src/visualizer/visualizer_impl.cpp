@@ -295,6 +295,35 @@ namespace lfs::vis {
                 return gm ? gm->asyncTasks().getMesh2SplatError() : std::string{};
             });
         callback_cleanup_.add([] { python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
+        python::set_splat_simplify_callbacks(
+            [](std::string name, core::SplatSimplifyOptions opts) {
+                auto* gm = python::get_gui_manager();
+                if (!gm)
+                    return;
+                gm->asyncTasks().startSplatSimplify(name, opts);
+            },
+            []() {
+                auto* gm = python::get_gui_manager();
+                if (gm)
+                    gm->asyncTasks().cancelSplatSimplify();
+            },
+            []() -> bool {
+                auto* gm = python::get_gui_manager();
+                return gm && gm->asyncTasks().isSplatSimplifyActive();
+            },
+            []() -> float {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyProgress() : 0.0f;
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyStage() : std::string{};
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getSplatSimplifyError() : std::string{};
+            });
+        callback_cleanup_.add([] { python::set_splat_simplify_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr); });
         python::set_selected_camera_callback([]() -> int {
             const auto* gm = python::get_gui_manager();
             return gm ? gm->getHighlightedCameraUid() : -1;
@@ -335,9 +364,12 @@ namespace lfs::vis {
                 state.progress = tasks.getExportProgress();
                 state.stage = tasks.getExportStage();
                 const auto fmt = tasks.getExportFormat();
-                state.format = fmt == core::ExportFormat::PLY   ? "PLY"
-                               : fmt == core::ExportFormat::SOG ? "SOG"
-                                                                : "file";
+                state.format = fmt == core::ExportFormat::PLY           ? "PLY"
+                               : fmt == core::ExportFormat::SOG         ? "SOG"
+                               : fmt == core::ExportFormat::SPZ         ? "SPZ"
+                               : fmt == core::ExportFormat::HTML_VIEWER ? "HTML"
+                               : fmt == core::ExportFormat::USD         ? "USD"
+                                                                        : "file";
                 return state;
             },
             []() {
@@ -450,7 +482,7 @@ namespace lfs::vis {
                 const bool loaded = gm->sequencer().loadFromJson(path);
                 if (loaded) {
                     lfs::core::events::state::KeyframeListChanged{
-                        .count = gm->sequencer().timeline().size()}
+                        .count = gm->sequencer().timeline().realKeyframeCount()}
                         .emit();
                 }
                 return loaded;
@@ -462,8 +494,10 @@ namespace lfs::vis {
                 }
             },
             [](float speed) {
-                if (auto* gm = python::get_gui_manager())
+                if (auto* gm = python::get_gui_manager()) {
                     gm->sequencer().setPlaybackSpeed(speed);
+                    gm->getSequencerUIState().playback_speed = gm->sequencer().playbackSpeed();
+                }
             });
         callback_cleanup_.add([] { python::set_sequencer_timeline_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
 
@@ -481,20 +515,24 @@ namespace lfs::vis {
                 state.snap_to_grid = s.snap_to_grid;
                 state.snap_interval = s.snap_interval;
                 state.playback_speed = s.playback_speed;
+                gm->sequencer().setPlaybackSpeed(state.playback_speed);
+                state.playback_speed = gm->sequencer().playbackSpeed();
                 state.follow_playback = s.follow_playback;
                 state.show_pip_preview = s.show_pip_preview;
                 state.pip_preview_scale = s.pip_preview_scale;
                 state.show_film_strip = s.show_film_strip;
+                state.equirectangular = s.equirectangular;
             }
 
             s.show_camera_path = state.show_camera_path;
             s.snap_to_grid = state.snap_to_grid;
             s.snap_interval = state.snap_interval;
-            s.playback_speed = state.playback_speed;
+            s.playback_speed = gm->sequencer().playbackSpeed();
             s.follow_playback = state.follow_playback;
             s.show_pip_preview = state.show_pip_preview;
             s.pip_preview_scale = state.pip_preview_scale;
             s.show_film_strip = state.show_film_strip;
+            s.equirectangular = state.equirectangular;
             const auto sel = gm->sequencer().selectedKeyframe();
             s.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
             sequencer_ui_initialized_ = true;
@@ -563,9 +601,6 @@ namespace lfs::vis {
             return;
 
         view_context_bridge_initialized_ = true;
-        if (rendering_manager_) {
-            rendering_manager_->setOutputScreenPositions(true);
-        }
 
         vis::set_view_callback([this]() -> std::optional<vis::ViewInfo> {
             if (!rendering_manager_)
@@ -615,17 +650,37 @@ namespace lfs::vis {
         });
         callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
 
-        vis::set_viewport_render_callback([this]() -> std::optional<vis::ViewportRender> {
+        const auto get_screen_positions = [this]() -> std::shared_ptr<lfs::core::Tensor> {
+            if (!scene_manager_) {
+                return nullptr;
+            }
+            auto* const selection_service = scene_manager_->getSelectionService();
+            return selection_service ? selection_service->getScreenPositions() : nullptr;
+        };
+
+        vis::set_viewport_render_callback([this, get_screen_positions]() -> std::optional<vis::ViewportRender> {
             if (!rendering_manager_)
                 return std::nullopt;
 
-            const auto& result = rendering_manager_->getCachedResult();
-            if (!result.valid || !result.image)
+            auto image = rendering_manager_->getViewportImageIfAvailable();
+            if (!image)
                 return std::nullopt;
 
-            return vis::ViewportRender{result.image, result.screen_positions};
+            return vis::ViewportRender{std::move(image), get_screen_positions()};
         });
         callback_cleanup_.add([] { vis::set_viewport_render_callback(nullptr); });
+
+        vis::set_capture_viewport_render_callback([this, get_screen_positions]() -> std::optional<vis::ViewportRender> {
+            if (!rendering_manager_)
+                return std::nullopt;
+
+            auto image = rendering_manager_->captureViewportImage();
+            if (!image)
+                return std::nullopt;
+
+            return vis::ViewportRender{std::move(image), get_screen_positions()};
+        });
+        callback_cleanup_.add([] { vis::set_capture_viewport_render_callback(nullptr); });
 
         vis::set_render_settings_callbacks(
             [this]() -> std::optional<vis::RenderSettingsProxy> {
@@ -653,6 +708,7 @@ namespace lfs::vis {
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
         std::vector<WorkItem> pending_work;
+        std::vector<WorkItem> pending_render_work;
         {
             std::lock_guard lock(work_queue_mutex_);
             if (shutdown_started_)
@@ -660,9 +716,14 @@ namespace lfs::vis {
             shutdown_started_ = true;
             accepting_work_ = false;
             pending_work.swap(work_queue_);
+            pending_render_work.swap(render_work_queue_);
         }
 
         for (auto& work : pending_work) {
+            if (work.cancel)
+                work.cancel();
+        }
+        for (auto& work : pending_render_work) {
             if (work.cancel)
                 work.cancel();
         }
@@ -738,22 +799,12 @@ namespace lfs::vis {
             internal::TrainingReadyToStart{}.emit();
         });
 
-        // Training started - switch to splat rendering and select training model
+        // Training started - switch to splat rendering without hijacking scene selection
         state::TrainingStarted::when([this](const auto&) {
             ui::PointCloudModeChanged{
                 .enabled = false,
                 .voxel_size = 0.01f}
                 .emit();
-
-            // Select the training model so it's visible
-            if (scene_manager_) {
-                const auto& scene = scene_manager_->getScene();
-                const auto& model_name = scene.getTrainingModelNodeName();
-                if (!model_name.empty()) {
-                    scene_manager_->selectNode(model_name);
-                    LOG_INFO("Selected training model '{}' for training", model_name);
-                }
-            }
 
             LOG_INFO("Switched to splat rendering mode (training started)");
         });
@@ -822,7 +873,8 @@ namespace lfs::vis {
         });
 
         state::SceneLoaded::when([](const auto& event) {
-            python::update_scene(true, event.path.string().c_str());
+            const std::string path_utf8 = core::path_to_utf8(event.path);
+            python::update_scene(true, path_utf8.c_str());
         });
 
         state::SceneCleared::when([](const auto&) {
@@ -872,9 +924,8 @@ namespace lfs::vis {
                 .viewport = viewport_,
                 .settings = rendering_manager_->getSettings(),
                 .viewport_region = nullptr,
-                .has_focus = false,
                 .scene_manager = scene_manager_.get()};
-            rendering_manager_->renderFrame(ctx, scene_manager_.get());
+            rendering_manager_->renderFrame(ctx);
             window_manager_->swapBuffers();
         }
 
@@ -923,9 +974,17 @@ namespace lfs::vis {
                 std::lock_guard lock(work_queue_mutex_);
                 work.swap(work_queue_);
             }
-            for (auto& item : work) {
-                if (item.run)
-                    item.run();
+            for (size_t i = 0; i < work.size(); ++i) {
+                try {
+                    if (work[i].run)
+                        work[i].run();
+                } catch (...) {
+                    for (size_t j = i + 1; j < work.size(); ++j) {
+                        if (work[j].cancel)
+                            work[j].cancel();
+                    }
+                    throw;
+                }
             }
         }
 
@@ -1046,7 +1105,6 @@ namespace lfs::vis {
             .viewport = viewport_,
             .settings = rendering_manager_->getSettings(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
-            .has_focus = gui_manager_ && gui_manager_->isViewportFocused(),
             .scene_manager = scene_manager_.get()};
 
         if (gui_manager_) {
@@ -1054,13 +1112,38 @@ namespace lfs::vis {
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
-        rendering_manager_->renderFrame(context, scene_manager_.get());
+        rendering_manager_->renderFrame(context);
 
         gui_manager_->render();
 
         const bool resize_done = rendering_manager_->consumeResizeCompleted();
         if (resize_done)
             glFinish();
+
+        {
+            std::vector<WorkItem> render_work;
+            {
+                std::lock_guard lock(work_queue_mutex_);
+                render_work.swap(render_work_queue_);
+            }
+            if (!render_work.empty()) {
+                processing_render_work_ = true;
+                for (size_t i = 0; i < render_work.size(); ++i) {
+                    try {
+                        if (render_work[i].run)
+                            render_work[i].run();
+                    } catch (...) {
+                        for (size_t j = i + 1; j < render_work.size(); ++j) {
+                            if (render_work[j].cancel)
+                                render_work[j].cancel();
+                        }
+                        processing_render_work_ = false;
+                        throw;
+                    }
+                }
+                processing_render_work_ = false;
+            }
+        }
 
         window_manager_->swapBuffers();
 
@@ -1245,6 +1328,20 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VisualizerImpl::postRenderWork(WorkItem work) {
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            if (!accepting_work_)
+                return false;
+            render_work_queue_.push_back(std::move(work));
+        }
+
+        if (window_manager_)
+            window_manager_->requestRedraw();
+
+        return true;
+    }
+
     bool VisualizerImpl::acceptsPostedWork() const {
         std::lock_guard lock(work_queue_mutex_);
         return accepting_work_;
@@ -1345,7 +1442,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::handleSwitchToLatestCheckpoint() {
-        LOG_WARN("Switch to latest checkpoint not implemented without project management");
+        // This event is emitted by the training flow even when no project/checkpoint manager is active.
+        // In the plain dataset workflow there is nothing to switch, so treat it as a no-op.
     }
 
 } // namespace lfs::vis

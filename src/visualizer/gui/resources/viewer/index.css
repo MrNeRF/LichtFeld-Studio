@@ -353,6 +353,29 @@ button {
   background-color: #282828;
 }
 
+#lichtfeldBranding {
+  position: fixed;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  font-family: sans-serif;
+  text-decoration: none;
+  pointer-events: auto;
+  transition: color 0.2s ease;
+}
+#lichtfeldBranding:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+#lichtfeldLogo {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
 #annotations {
   position: fixed;
   top: 0;

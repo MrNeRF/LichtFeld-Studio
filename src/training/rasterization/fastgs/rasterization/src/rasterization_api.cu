@@ -259,7 +259,8 @@ namespace fast_lfs::rasterization {
         float focal_y,
         float center_x,
         float center_y,
-        bool mip_filter) {
+        bool mip_filter,
+        DensificationType densification_type) {
 
         BackwardOutputs outputs;
         outputs.success = false;
@@ -384,7 +385,8 @@ namespace fast_lfs::rasterization {
                 focal_y,
                 center_x,
                 center_y,
-                mip_filter);
+                mip_filter,
+                densification_type);
 
             // Mark frame as complete
             auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();

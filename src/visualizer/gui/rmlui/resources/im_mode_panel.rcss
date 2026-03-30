@@ -26,7 +26,9 @@
 }
 
 .im-line > .setting-row > .prop-label {
-    min-width: 45%;
+    width: 120dp;
+    min-width: 120dp;
+    margin-left: 0;
 }
 
 .im-line > button {

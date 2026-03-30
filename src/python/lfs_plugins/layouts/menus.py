@@ -97,7 +97,7 @@ def get_menu_classes() -> list[type]:
         List of menu classes sorted by their 'order' attribute.
     """
     # Import menu modules to trigger @register_menu decorators
-    from .. import file_menu, edit_menu, view_menu, help_menu  # noqa: F401
+    from .. import file_menu, edit_menu, tools_menu, view_menu, help_menu  # noqa: F401
 
     return sorted(_MENU_CLASSES, key=lambda m: getattr(m, "order", 100))
 

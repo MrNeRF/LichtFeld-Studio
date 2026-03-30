@@ -39,12 +39,15 @@ namespace lfs::vis {
             void setupEvents();
             void render(const UIContext& ctx, const ViewportLayout& viewport);
             void compositeOverlays(int screen_w, int screen_h) const;
+            void setSequencerEnabled(bool enabled);
 
             void destroyGLResources();
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
             [[nodiscard]] float panelTopY() const { return panel_ ? panel_->cachedPanelY() : -1.0f; }
+            [[nodiscard]] bool blocksPointer(double x, double y) const;
+            [[nodiscard]] bool blocksKeyboard() const;
 
         private:
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport);
@@ -59,6 +62,10 @@ namespace lfs::vis {
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void drawPipPreviewWindow(const ViewportLayout& viewport);
+            void beginViewportKeyframeEdit(size_t keyframe_index);
+            void endViewportKeyframeEdit();
+            [[nodiscard]] sequencer::CameraState currentViewportCameraState() const;
+            void restoreViewportCameraState(const sequencer::CameraState& state) const;
 
             VisualizerImpl* viewer_;
             panels::SequencerUIState& ui_state_;
@@ -71,11 +78,10 @@ namespace lfs::vis {
 
             ImGuizmo::OPERATION keyframe_gizmo_op_ = ImGuizmo::OPERATION(0);
             bool keyframe_gizmo_active_ = false;
+            bool edit_entered_mouse_down_ = false;
             glm::vec3 keyframe_pos_before_drag_{0.0f};
             glm::quat keyframe_rot_before_drag_{1.0f, 0.0f, 0.0f, 0.0f};
 
-            std::chrono::steady_clock::time_point last_frustum_click_time_{};
-            std::optional<size_t> last_frustum_clicked_;
             bool film_strip_scrubbing_ = false;
             bool timeline_tooltip_active_ = false;
             ImVec2 timeline_tooltip_pos_{0.0f, 0.0f};
@@ -91,7 +97,9 @@ namespace lfs::vis {
             bool pip_init_failed_ = false;
             std::optional<size_t> pip_last_keyframe_;
             bool pip_needs_update_ = true;
+            bool last_equirectangular_ = false;
             std::chrono::steady_clock::time_point pip_last_render_time_ = std::chrono::steady_clock::now();
+            std::optional<sequencer::Keyframe> viewport_keyframe_edit_snapshot_;
 
             struct TimelineGeometry {
                 float timeline_x = 0.0f;

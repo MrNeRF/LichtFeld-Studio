@@ -1101,8 +1101,8 @@ namespace {
 
             // Strategy
             .string_prop(&OptimizationParameters::strategy,
-                         "strategy", "Strategy", "mcmc",
-                         "Optimization strategy: mcmc or adc")
+                         "strategy", "Strategy", "mrnf",
+                         "Optimization strategy: mcmc, mrnf, or igs+")
             .flags(PROP_NEEDS_RESTART)
 
             // Headless (read-only)
@@ -1237,17 +1237,17 @@ TEST_F(OptimizationParamsTest, StringProperty) {
     ASSERT_NE(meta, nullptr);
 
     EXPECT_EQ(meta->type, PropType::String);
-    EXPECT_EQ(meta->default_string, "mcmc");
+    EXPECT_EQ(meta->default_string, "mrnf");
     EXPECT_TRUE(meta->has_flag(PROP_NEEDS_RESTART));
 
     lfs::core::param::OptimizationParameters params;
-    params.strategy = "adc";
+    params.strategy = "igs+";
 
     std::any val = meta->getter(&params);
-    EXPECT_EQ(std::any_cast<std::string>(val), "adc");
+    EXPECT_EQ(std::any_cast<std::string>(val), "igs+");
 
-    meta->setter(&params, std::string("mcmc"));
-    EXPECT_EQ(params.strategy, "mcmc");
+    meta->setter(&params, std::string("mrnf"));
+    EXPECT_EQ(params.strategy, "mrnf");
 }
 
 TEST_F(OptimizationParamsTest, ReadOnlyProperty) {

@@ -34,6 +34,7 @@ namespace lfs::vis {
         float screen_y = 0.0f;
         bool mouse_down[3] = {};
         bool mouse_clicked[3] = {};
+        bool mouse_released[3] = {};
         float mouse_wheel = 0.0f;
         bool key_shift = false;
         bool key_ctrl = false;
@@ -181,10 +182,26 @@ namespace lfs::vis {
             void ProcessEvent(Rml::Event& event) override;
         };
 
+        struct QualityScrubListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        void syncQualityScrub();
+        void applyQualityFromDrag(float mouse_x);
+        void enterQualityEdit();
+        void exitQualityEdit(bool commit);
+
         SequencerController& controller_;
         gui::panels::SequencerUIState& ui_state_;
         gui::RmlUIManager* rml_manager_;
         TransportClickListener transport_listener_;
+        QualityScrubListener quality_scrub_listener_;
+
+        bool quality_scrub_active_ = false;
+        bool quality_scrub_dragging_ = false;
+        bool quality_scrub_editing_ = false;
+        float quality_scrub_start_x_ = 0.0f;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -213,8 +230,11 @@ namespace lfs::vis {
         Rml::Element* el_speed_label_ = nullptr;
         Rml::Element* el_format_label_ = nullptr;
         Rml::Element* el_resolution_info_ = nullptr;
-        Rml::Element* el_quality_slider_ = nullptr;
-        Rml::Element* el_quality_value_ = nullptr;
+        Rml::Element* el_quality_scrub_ = nullptr;
+        Rml::Element* el_quality_fill_ = nullptr;
+        Rml::Element* el_quality_display_ = nullptr;
+        Rml::Element* el_quality_input_ = nullptr;
+        Rml::Element* el_btn_equirect_ = nullptr;
         Rml::Element* el_btn_save_ = nullptr;
         Rml::Element* el_btn_load_ = nullptr;
         Rml::Element* el_btn_export_ = nullptr;

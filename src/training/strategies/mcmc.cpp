@@ -10,8 +10,96 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 namespace lfs::training {
+
+    namespace {
+        [[nodiscard]] inline bool has_zero_dimension(const lfs::core::TensorShape& shape) {
+            for (size_t i = 0; i < shape.rank(); ++i) {
+                if (shape[i] == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] size_t deleted_mask_capacity(const lfs::core::SplatData& splat_data) {
+            const size_t means_capacity = splat_data.means().capacity();
+            return means_capacity > 0 ? means_capacity : static_cast<size_t>(splat_data.size());
+        }
+
+        void ensure_deleted_mask_size(lfs::core::SplatData& splat_data) {
+            const size_t current_size = static_cast<size_t>(splat_data.size());
+            const size_t desired_capacity = deleted_mask_capacity(splat_data);
+            auto& deleted = splat_data.deleted();
+
+            if (!deleted.is_valid() || deleted.ndim() != 1 || deleted.numel() != current_size) {
+                deleted = lfs::core::Tensor::zeros_bool({current_size}, splat_data.means().device());
+            }
+
+            deleted.reserve(desired_capacity);
+        }
+
+        void set_deleted_mask_rows(
+            lfs::core::SplatData& splat_data,
+            const lfs::core::Tensor& indices,
+            const bool deleted) {
+            if (indices.numel() == 0) {
+                return;
+            }
+
+            ensure_deleted_mask_size(splat_data);
+            auto values = deleted
+                              ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
+                              : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
+            splat_data.deleted().index_put_(indices, values);
+        }
+
+        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const size_t n_rows) {
+            if (n_rows == 0 || !splat_data.has_deleted_mask()) {
+                return;
+            }
+
+            auto& deleted = splat_data.deleted();
+            const size_t desired_capacity = std::max(
+                deleted_mask_capacity(splat_data),
+                static_cast<size_t>(deleted.numel()) + n_rows);
+            deleted.reserve(desired_capacity);
+            deleted.append_zeros(n_rows);
+        }
+
+        void zero_optimizer_state(
+            lfs::training::AdamOptimizer& optimizer,
+            const ParamType param_type,
+            const lfs::core::Tensor& indices) {
+            if (indices.numel() == 0) {
+                return;
+            }
+
+            auto* state = optimizer.get_state_mutable(param_type);
+            if (!state) {
+                return;
+            }
+
+            const auto& shape = state->exp_avg.shape();
+            if (has_zero_dimension(shape)) {
+                return;
+            }
+
+            std::vector<size_t> dims = {static_cast<size_t>(indices.numel())};
+            for (size_t i = 1; i < shape.rank(); ++i) {
+                dims.push_back(shape[i]);
+            }
+
+            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
+            state->exp_avg.index_put_(indices, zeros);
+            state->exp_avg_sq.index_put_(indices, zeros);
+            if (state->grad.is_valid()) {
+                state->grad.index_put_(indices, zeros);
+            }
+        }
+    } // anonymous namespace
 
     MCMC::MCMC(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
 
@@ -234,6 +322,10 @@ namespace lfs::training {
             update_optimizer_for_relocate(sampled_idxs, dead_indices, ParamType::Opacity);
         }
 
+        if (_splat_data->has_deleted_mask()) {
+            set_deleted_mask_rows(*_splat_data, dead_indices, false);
+        }
+
         return n_dead;
     }
 
@@ -370,6 +462,8 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs);
         }
 
+        append_live_deleted_rows(*_splat_data, n_new);
+
         return n_new;
     }
 
@@ -471,6 +565,8 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Opacity, sampled_idxs_i64);
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs_i64);
         }
+
+        append_live_deleted_rows(*_splat_data, static_cast<size_t>(n_new));
 
         return n_new;
     }
@@ -601,11 +697,12 @@ namespace lfs::training {
     void MCMC::remove_gaussians(const lfs::core::Tensor& mask) {
         using namespace lfs::core;
 
-        // Get indices to keep
-        Tensor keep_mask = mask.logical_not();
-        Tensor keep_indices = keep_mask.nonzero().squeeze(-1);
-        const size_t old_size = static_cast<size_t>(_splat_data->size());
-        const int n_remove = static_cast<int>(old_size - keep_indices.numel());
+        if (!mask.is_valid() || mask.numel() == 0) {
+            LOG_DEBUG("MCMC: No Gaussians to remove");
+            return;
+        }
+
+        const int n_remove = mask.to(DataType::Int32).sum().template item<int>();
 
         LOG_INFO("MCMC::remove_gaussians called: mask size={}, n_remove={}, current size={}",
                  mask.numel(), n_remove, _splat_data->size());
@@ -617,29 +714,30 @@ namespace lfs::training {
 
         LOG_DEBUG("MCMC: Removing {} Gaussians", n_remove);
 
-        // Select only the Gaussians we want to keep
-        _splat_data->means() = _splat_data->means().index_select(0, keep_indices).contiguous();
-        _splat_data->sh0() = _splat_data->sh0().index_select(0, keep_indices).contiguous();
-        if (_splat_data->shN().is_valid()) {
-            _splat_data->shN() = _splat_data->shN().index_select(0, keep_indices).contiguous();
-        }
-        _splat_data->scaling_raw() = _splat_data->scaling_raw().index_select(0, keep_indices).contiguous();
-        _splat_data->rotation_raw() = _splat_data->rotation_raw().index_select(0, keep_indices).contiguous();
-        _splat_data->opacity_raw() = _splat_data->opacity_raw().index_select(0, keep_indices).contiguous();
-        const auto& info = _splat_data->_densification_info;
-        if (info.is_valid() && info.ndim() == 2 && info.shape()[1] == old_size) {
-            _splat_data->_densification_info = info.index_select(1, keep_indices).contiguous();
-        }
-        if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() == old_size) {
-            _error_score_max = _error_score_max.index_select(0, keep_indices).contiguous();
+        const Tensor prune_indices = mask.nonzero().squeeze(-1);
+
+        set_deleted_mask_rows(*_splat_data, prune_indices, true);
+
+        auto zero_rotation = Tensor::zeros(
+            {static_cast<size_t>(n_remove), 4},
+            _splat_data->rotation_raw().device());
+        _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
+
+        zero_optimizer_state(*_optimizer, ParamType::Means, prune_indices);
+        zero_optimizer_state(*_optimizer, ParamType::Sh0, prune_indices);
+        zero_optimizer_state(*_optimizer, ParamType::ShN, prune_indices);
+        zero_optimizer_state(*_optimizer, ParamType::Scaling, prune_indices);
+        zero_optimizer_state(*_optimizer, ParamType::Rotation, prune_indices);
+        zero_optimizer_state(*_optimizer, ParamType::Opacity, prune_indices);
+
+        if (_error_score_max.is_valid() &&
+            _error_score_max.ndim() == 1 &&
+            _error_score_max.numel() >= _splat_data->size()) {
+            auto zeros = Tensor::zeros({static_cast<size_t>(n_remove)}, _error_score_max.device());
+            _error_score_max.index_put_(prune_indices, zeros);
         }
 
-        // Recreate optimizer with reduced parameters (simpler than manual state update)
-        _optimizer = create_optimizer(*_splat_data, *_params);
-
-        // Recreate scheduler
-        const double gamma = std::pow(0.01, 1.0 / _params->iterations);
-        _scheduler = create_scheduler(*_params, *_optimizer);
+        LOG_DEBUG("MCMC: soft-deleted {} Gaussians (rotation and optimizer state zeroed)", n_remove);
     }
 
     void MCMC::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
@@ -699,6 +797,9 @@ namespace lfs::training {
         _scheduler = create_scheduler(*_params, *_optimizer);
 
         ensure_densification_info_shape();
+        if (_splat_data->has_deleted_mask()) {
+            ensure_deleted_mask_size(*_splat_data);
+        }
         _error_score_windows = 0;
 
         LOG_INFO("MCMC strategy initialized with {} Gaussians", _splat_data->size());

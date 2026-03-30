@@ -170,7 +170,8 @@ namespace lfs::python {
         std::tuple<bool, float> stepper_float(const std::string& label, float value,
                                               const std::vector<float>& steps = {1.0f, 0.1f, 0.01f});
         std::tuple<bool, std::string> path_input(const std::string& label, const std::string& value,
-                                                 bool folder_mode = true, const std::string& dialog_title = "");
+                                                 bool folder_mode = true,
+                                                 const std::string& dialog_title = "");
 
         // --- Color ---
         std::tuple<bool, std::tuple<float, float, float>> color_edit3(const std::string& label,

@@ -28,6 +28,12 @@ namespace lichtfeld::Strings {
             inline constexpr const char* PREFERENCES = "menu.edit.preferences";
         } // namespace Edit
 
+        namespace Tools {
+            inline constexpr const char* MENU = "menu.tools";
+            inline constexpr const char* PYTHON_CONSOLE = "menu.tools.python_console";
+            inline constexpr const char* PLUGIN_MARKETPLACE = "menu.tools.plugin_marketplace";
+        } // namespace Tools
+
         namespace View {
             inline constexpr const char* MENU = "menu.view";
             inline constexpr const char* THEME = "menu.view.theme";
@@ -350,6 +356,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* FORMAT_PLY_STANDARD = "export.format.ply_standard";
         inline constexpr const char* FORMAT_SOG_SUPERSPLAT = "export.format.sog_supersplat";
         inline constexpr const char* FORMAT_SPZ_NIANTIC = "export.format.spz_niantic";
+        inline constexpr const char* FORMAT_USD_OPENUSD = "export.format.usd_openusd";
         inline constexpr const char* FORMAT_HTML_VIEWER = "export.format.html_viewer";
         inline constexpr const char* SELECT_MODELS = "export.select_models";
         inline constexpr const char* ALL = "export.all";
@@ -431,6 +438,19 @@ namespace lichtfeld::Strings {
         inline constexpr const char* WASD = "controls.wasd";
         inline constexpr const char* ZOOM = "controls.zoom";
     } // namespace Controls
+
+    namespace StatusBar {
+        inline constexpr const char* GT_COMPARE = "status_bar.gt_compare";
+        inline constexpr const char* CAMERA = "status_bar.camera";
+        inline constexpr const char* GROUND_TRUTH = "status_bar.ground_truth";
+        inline constexpr const char* GROUND_TRUTH_EXCLUDED = "status_bar.ground_truth_excluded";
+        inline constexpr const char* RENDERED = "status_bar.rendered";
+        inline constexpr const char* SPLIT_VIEW = "status_bar.split_view";
+        inline constexpr const char* PRIMARY_VIEW = "status_bar.primary_view";
+        inline constexpr const char* SECONDARY_VIEW = "status_bar.secondary_view";
+        inline constexpr const char* GPU = "status_bar.gpu";
+        inline constexpr const char* STRATEGY_DEFAULT = "status_bar.strategy_default";
+    } // namespace StatusBar
 
     namespace Preferences {
         inline constexpr const char* TITLE = "preferences.title";
@@ -588,6 +608,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NO_SAVE_STEPS = "training_panel.no_save_steps";
         inline constexpr const char* SPARSITY = "training_panel.sparsity";
         inline constexpr const char* PRUNING_GROWING = "training_panel.pruning_growing";
+        inline constexpr const char* MRNF_PARAMS = "training_panel.mrnf_params";
     } // namespace TrainingPanel
 
     namespace Tooltip {

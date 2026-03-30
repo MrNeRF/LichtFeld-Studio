@@ -2,17 +2,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin dependency installer using uv."""
 
+from dataclasses import asdict, dataclass
+import json
 import logging
 import os
+from pathlib import Path
+from pathlib import PurePosixPath
 import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
-from pathlib import Path
 from typing import Optional, Callable, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+import urllib.request
+import zipfile
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +28,279 @@ try:
     import tomllib
 except ImportError:
     import tomli as tomllib
+
+
+PLUGIN_SOURCE_METADATA_NAME = ".lichtfeld-source.json"
+GITHUB_API_URL = "https://api.github.com/repos"
+HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
+
+
+@dataclass(frozen=True)
+class PluginSourceInfo:
+    """Persistent metadata describing how a plugin was installed."""
+
+    transport: str
+    origin: str = ""
+    github_url: str = ""
+    owner: str = ""
+    repo: str = ""
+    requested_ref: str = ""
+    resolved_ref: str = ""
+    registry_id: str = ""
+    version: str = ""
+    archive_url: str = ""
+    checksum: str = ""
+    git_remote: str = ""
+    git_commit: str = ""
+    schema: int = 1
+
+    def to_dict(self) -> dict:
+        return {k: v for k, v in asdict(self).items() if v not in ("", None)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PluginSourceInfo":
+        return cls(
+            transport=str(data.get("transport", "")).strip(),
+            origin=str(data.get("origin", "")).strip(),
+            github_url=str(data.get("github_url", "")).strip(),
+            owner=str(data.get("owner", "")).strip(),
+            repo=str(data.get("repo", "")).strip(),
+            requested_ref=str(data.get("requested_ref", "")).strip(),
+            resolved_ref=str(data.get("resolved_ref", "")).strip(),
+            registry_id=str(data.get("registry_id", "")).strip(),
+            version=str(data.get("version", "")).strip(),
+            archive_url=str(data.get("archive_url", "")).strip(),
+            checksum=str(data.get("checksum", "")).strip(),
+            git_remote=str(data.get("git_remote", "")).strip(),
+            git_commit=str(data.get("git_commit", "")).strip(),
+            schema=int(data.get("schema", 1) or 1),
+        )
+
+
+def plugin_source_metadata_path(plugin_dir: Path) -> Path:
+    """Return the metadata sidecar path for an installed plugin."""
+    return plugin_dir / PLUGIN_SOURCE_METADATA_NAME
+
+
+def read_plugin_source_metadata(plugin_dir: Path) -> Optional[PluginSourceInfo]:
+    """Read persisted install-source metadata if present."""
+    path = plugin_source_metadata_path(plugin_dir)
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        logger.warning("Failed to read plugin source metadata '%s': %s", path, exc)
+        return None
+    if not isinstance(data, dict):
+        logger.warning("Ignoring invalid plugin source metadata '%s': expected object", path)
+        return None
+    try:
+        return PluginSourceInfo.from_dict(data)
+    except Exception as exc:
+        logger.warning("Ignoring malformed plugin source metadata '%s': %s", path, exc)
+        return None
+
+
+def write_plugin_source_metadata(plugin_dir: Path, info: PluginSourceInfo) -> None:
+    """Persist install-source metadata next to an installed plugin."""
+    path = plugin_source_metadata_path(plugin_dir)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(info.to_dict(), f, indent=2)
+
+
+def is_git_available() -> bool:
+    """Return whether git is currently available on PATH."""
+    return shutil.which("git") is not None
+
+
+def github_repo_url(owner: str, repo: str) -> str:
+    """Return the canonical GitHub repo URL for an owner/repo pair."""
+    return f"https://github.com/{owner}/{repo}"
+
+
+def github_archive_url(owner: str, repo: str, ref: Optional[str] = None) -> str:
+    """Return the GitHub API tarball URL for a repo/ref."""
+    base = f"{GITHUB_API_URL}/{owner}/{repo}/tarball"
+    if ref:
+        return f"{base}/{quote(ref, safe='')}"
+    return base
+
+
+def _download_url_to_temp(
+    url: str,
+    *,
+    on_progress: Optional[Callable[[str], None]] = None,
+    headers: Optional[dict] = None,
+) -> Path:
+    """Download a URL to a temporary file and return its path."""
+    req_headers = {"User-Agent": HTTP_USER_AGENT}
+    if headers:
+        req_headers.update(headers)
+    req = urllib.request.Request(url, headers=req_headers)
+
+    if on_progress:
+        on_progress(f"Downloading {url}...")
+
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        with tempfile.NamedTemporaryFile(suffix=".archive", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+            try:
+                shutil.copyfileobj(resp, tmp)
+            except Exception:
+                tmp_path.unlink(missing_ok=True)
+                raise
+            return tmp_path
+
+
+def _sanitize_archive_path(name: str) -> Optional[Path]:
+    raw = str(name or "").replace("\\", "/").strip()
+    if not raw:
+        return None
+    raw = raw.lstrip("/")
+    posix = PurePosixPath(raw)
+    parts = [part for part in posix.parts if part not in ("", ".")]
+    if not parts:
+        return None
+    if any(part == ".." for part in parts):
+        raise PluginError(f"Unsafe path in plugin archive: {name}")
+    return Path(*parts)
+
+
+def _strip_common_prefix(paths: list[Path]) -> Optional[str]:
+    first_parts = [path.parts[0] for path in paths if path.parts]
+    if not first_parts:
+        return None
+    prefix = first_parts[0]
+    if all(path.parts and path.parts[0] == prefix for path in paths):
+        return prefix
+    return None
+
+
+def _extract_zip_archive(src: Path, dest: Path) -> None:
+    with zipfile.ZipFile(src) as archive:
+        members: list[tuple[zipfile.ZipInfo, Path]] = []
+        for member in archive.infolist():
+            rel_path = _sanitize_archive_path(member.filename)
+            if rel_path is None:
+                continue
+            members.append((member, rel_path))
+
+        prefix = _strip_common_prefix([path for _, path in members])
+        for member, rel_path in members:
+            if prefix and rel_path.parts and rel_path.parts[0] == prefix:
+                rel_path = Path(*rel_path.parts[1:])
+            if not rel_path.parts:
+                continue
+            target = dest / rel_path
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(member) as in_file, open(target, "wb") as out_file:
+                shutil.copyfileobj(in_file, out_file)
+
+
+def _extract_tar_archive(src: Path, dest: Path) -> None:
+    with tarfile.open(src, "r:*") as archive:
+        members: list[tuple[tarfile.TarInfo, Path]] = []
+        for member in archive.getmembers():
+            rel_path = _sanitize_archive_path(member.name)
+            if rel_path is None:
+                continue
+            members.append((member, rel_path))
+
+        prefix = _strip_common_prefix([path for _, path in members])
+        for member, rel_path in members:
+            if prefix and rel_path.parts and rel_path.parts[0] == prefix:
+                rel_path = Path(*rel_path.parts[1:])
+            if not rel_path.parts:
+                continue
+            target = dest / rel_path
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            if member.issym() or member.islnk():
+                raise PluginError(f"Symlinks are not allowed in plugin archives: {member.name}")
+            if not member.isfile():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                continue
+            with extracted, open(target, "wb") as out_file:
+                shutil.copyfileobj(extracted, out_file)
+
+
+def extract_archive(src: Path, dest: Path) -> None:
+    """Extract a plugin archive into dest with path sanitization."""
+    if zipfile.is_zipfile(src):
+        _extract_zip_archive(src, dest)
+        return
+    if tarfile.is_tarfile(src):
+        _extract_tar_archive(src, dest)
+        return
+    raise PluginError(f"Unsupported plugin archive format: {src}")
+
+
+def prepare_archive_from_download_url(
+    download_url: str,
+    staging_parent: Path,
+    *,
+    temp_prefix: str,
+    on_progress: Optional[Callable[[str], None]] = None,
+    request_headers: Optional[dict] = None,
+    archive_validator: Optional[Callable[[Path], None]] = None,
+) -> Path:
+    """Download and extract an archive into a staging directory."""
+    archive_path = _download_url_to_temp(
+        download_url,
+        on_progress=on_progress,
+        headers=request_headers,
+    )
+    staging_dir = Path(tempfile.mkdtemp(prefix=temp_prefix, dir=staging_parent))
+    try:
+        if archive_validator is not None:
+            archive_validator(archive_path)
+        extract_archive(archive_path, staging_dir)
+        return staging_dir
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def prepare_github_archive(
+    url: str,
+    staging_parent: Path,
+    on_progress: Optional[Callable[[str], None]] = None,
+) -> tuple[Path, PluginSourceInfo]:
+    """Download a GitHub repository archive into a staging directory."""
+    owner, repo, ref = parse_github_url(url)
+    archive_url = github_archive_url(owner, repo, ref)
+
+    if on_progress:
+        ref_text = f"@{ref}" if ref else ""
+        on_progress(f"Downloading {owner}/{repo}{ref_text} archive...")
+
+    staging_dir = prepare_archive_from_download_url(
+        archive_url,
+        staging_parent,
+        temp_prefix=f".{repo}-",
+        request_headers={"Accept": "application/vnd.github+json"},
+    )
+    return staging_dir, PluginSourceInfo(
+        transport="archive",
+        origin=url.strip(),
+        github_url=github_repo_url(owner, repo),
+        owner=owner,
+        repo=repo,
+        requested_ref=ref or "",
+        resolved_ref=ref or "",
+        archive_url=archive_url,
+    )
 
 
 class PluginInstaller:
@@ -367,6 +646,7 @@ def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:
         - owner/repo (assumes GitHub)
     """
     url = url.strip()
+    branch = None
 
     # Handle github: shorthand
     if url.startswith("github:"):
@@ -387,6 +667,10 @@ def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:
         if len(parts) == 2 and not url.startswith("."):
             return parts[0], parts[1], None
 
+    # Handle full URLs with @ref suffix
+    if "@" in url and url.startswith(("http://", "https://", "github.com/", "www.github.com/")):
+        url, branch = url.rsplit("@", 1)
+
     # Normalize URLs without scheme (github.com/owner/repo -> https://github.com/owner/repo)
     if url.startswith("github.com/") or url.startswith("www.github.com/"):
         url = "https://" + url
@@ -404,7 +688,6 @@ def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:
     repo = path_parts[1].removesuffix(".git")
 
     # Check for /tree/branch pattern
-    branch = None
     if len(path_parts) >= 4 and path_parts[2] == "tree":
         branch = path_parts[3]
 

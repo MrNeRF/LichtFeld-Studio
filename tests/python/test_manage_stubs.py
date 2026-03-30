@@ -49,3 +49,38 @@ def test_sync_stubs_skips_and_removes_volatile_build_info(tmp_path):
     assert manage_stubs.sync_stubs(generated, committed) == 0
     assert (committed / "lichtfeld" / "__init__.pyi").read_text() == "value: int\n"
     assert not (committed / "lichtfeld" / "build_info.pyi").exists()
+
+
+def test_check_stubs_prunes_stale_generated_submodules(tmp_path):
+    manage_stubs = _load_manage_stubs()
+    generated = tmp_path / "generated"
+    committed = tmp_path / "committed"
+
+    (generated / "lichtfeld" / "pipeline").mkdir(parents=True)
+    (committed / "lichtfeld" / "pipeline").mkdir(parents=True)
+
+    (generated / "lichtfeld" / "__init__.pyi").write_text(
+        "from . import pipeline as pipeline\n",
+        encoding="utf-8",
+    )
+    (generated / "lichtfeld" / "py.typed").write_text("", encoding="utf-8")
+    (generated / "lichtfeld" / "pipeline" / "__init__.pyi").write_text(
+        "from . import edit as edit\n",
+        encoding="utf-8",
+    )
+    (generated / "lichtfeld" / "pipeline" / "edit.pyi").write_text("value: int\n", encoding="utf-8")
+    (generated / "lichtfeld" / "pipeline" / "undo.pyi").write_text("stale: int\n", encoding="utf-8")
+
+    (committed / "lichtfeld" / "__init__.pyi").write_text(
+        "from . import pipeline as pipeline\n",
+        encoding="utf-8",
+    )
+    (committed / "lichtfeld" / "py.typed").write_text("", encoding="utf-8")
+    (committed / "lichtfeld" / "pipeline" / "__init__.pyi").write_text(
+        "from . import edit as edit\n",
+        encoding="utf-8",
+    )
+    (committed / "lichtfeld" / "pipeline" / "edit.pyi").write_text("value: int\n", encoding="utf-8")
+
+    assert manage_stubs.check_stubs(generated, committed) == 0
+    assert not (generated / "lichtfeld" / "pipeline" / "undo.pyi").exists()

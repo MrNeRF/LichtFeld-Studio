@@ -65,10 +65,8 @@ namespace lfs::vis::tools {
     void BrushTool::onEnabledChanged(bool enabled) {
         if (tool_context_) {
             auto* const rm = tool_context_->getRenderingManager();
-            if (rm) {
-                rm->setOutputScreenPositions(enabled);
-                if (enabled)
-                    rm->markDirty(DirtyFlag::SELECTION);
+            if (rm && enabled) {
+                rm->markDirty(DirtyFlag::SELECTION);
             }
         }
     }

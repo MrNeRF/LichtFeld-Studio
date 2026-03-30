@@ -186,7 +186,7 @@ namespace lfs::vis::op {
         }
 
         entry->captureAfter();
-        undoHistory().push(std::move(entry));
+        pushSceneSnapshotIfChanged(std::move(entry));
 
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);

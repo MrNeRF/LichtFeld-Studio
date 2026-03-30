@@ -155,44 +155,44 @@ class Viewport {
             t += movement;
         }
 
-        void advance_forward(float deltaTime) {
+        void advance_forward(float deltaTime, float additional_speed = 0.0f) {
             const glm::vec3 forward = glm::normalize(R * glm::vec3(0, 0, 1));
-            const glm::vec3 movement = forward * deltaTime * wasdSpeed;
+            const glm::vec3 movement = forward * deltaTime * (wasdSpeed + additional_speed);
             t += movement;
             pivot += movement;
         }
 
-        void advance_backward(float deltaTime) {
+        void advance_backward(float deltaTime, float additional_speed = 0.0f) {
             const glm::vec3 forward = glm::normalize(R * glm::vec3(0, 0, 1));
-            const glm::vec3 movement = -forward * deltaTime * wasdSpeed;
+            const glm::vec3 movement = -forward * deltaTime * (wasdSpeed + additional_speed);
             t += movement;
             pivot += movement;
         }
 
-        void advance_left(float deltaTime) {
+        void advance_left(float deltaTime, float additional_speed = 0.0f) {
             const glm::vec3 right = glm::normalize(R * glm::vec3(1, 0, 0));
-            const glm::vec3 movement = -right * deltaTime * wasdSpeed;
+            const glm::vec3 movement = -right * deltaTime * (wasdSpeed + additional_speed);
             t += movement;
             pivot += movement;
         }
 
-        void advance_right(float deltaTime) {
+        void advance_right(float deltaTime, float additional_speed = 0.0f) {
             const glm::vec3 right = glm::normalize(R * glm::vec3(1, 0, 0));
-            const glm::vec3 movement = right * deltaTime * wasdSpeed;
+            const glm::vec3 movement = right * deltaTime * (wasdSpeed + additional_speed);
             t += movement;
             pivot += movement;
         }
 
-        void advance_up(float deltaTime) {
+        void advance_up(float deltaTime, float additional_speed = 0.0f) {
             const glm::vec3 up = glm::normalize(R * glm::vec3(0, 1, 0));
-            const glm::vec3 movement = -up * deltaTime * wasdSpeed;
+            const glm::vec3 movement = -up * deltaTime * (wasdSpeed + additional_speed);
             t += movement;
             pivot += movement;
         }
 
-        void advance_down(float deltaTime) {
+        void advance_down(float deltaTime, float additional_speed = 0.0f) {
             const glm::vec3 up = glm::normalize(R * glm::vec3(0, 1, 0));
-            const glm::vec3 movement = up * deltaTime * wasdSpeed;
+            const glm::vec3 movement = up * deltaTime * (wasdSpeed + additional_speed);
             t += movement;
             pivot += movement;
         }
