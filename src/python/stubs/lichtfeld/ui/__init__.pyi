@@ -2263,17 +2263,22 @@ def is_windows_platform() -> bool:
 
 def register_file_associations() -> bool:
     """
-    Register LichtFeld Studio as default handler for .ply, .sog, .spz files (Windows only)
+    Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz files (Windows only)
+    """
+
+def open_file_association_settings() -> bool:
+    """
+    Open the Windows Default Apps UI for LichtFeld Studio file associations (Windows only)
     """
 
 def unregister_file_associations() -> bool:
     """
-    Remove LichtFeld Studio file associations for .ply, .sog, .spz (Windows only)
+    Remove LichtFeld Studio file associations for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)
     """
 
 def are_file_associations_registered() -> bool:
     """
-    Check if LichtFeld Studio is the default handler for .ply, .sog, .spz (Windows only)
+    Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)
     """
 
 def get_pivot_mode() -> int:
