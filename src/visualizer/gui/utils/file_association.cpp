@@ -8,6 +8,7 @@
 #include <array>
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
+#include <memory>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
@@ -100,6 +101,16 @@ namespace lfs::vis::gui {
             RegCloseKey(key);
             return delete_res == ERROR_SUCCESS || delete_res == ERROR_FILE_NOT_FOUND;
         }
+
+        struct ComRelease {
+            void operator()(IUnknown* p) const {
+                if (p)
+                    p->Release();
+            }
+        };
+
+        template <typename T>
+        using ComPtr = std::unique_ptr<T, ComRelease>;
 
         class CoInitScope {
         public:
@@ -261,35 +272,26 @@ namespace lfs::vis::gui {
 
     bool areFileAssociationsRegistered() {
         CoInitScope coinit(COINIT_APARTMENTTHREADED);
-        IApplicationAssociationRegistration* registration = nullptr;
+        ComPtr<IApplicationAssociationRegistration> registration;
         if (coinit.ready()) {
+            IApplicationAssociationRegistration* raw = nullptr;
             const HRESULT hr = CoCreateInstance(CLSID_ApplicationAssociationRegistration, nullptr,
                                                 CLSCTX_INPROC_SERVER,
-                                                IID_PPV_ARGS(&registration));
-            if (FAILED(hr))
-                registration = nullptr;
+                                                IID_PPV_ARGS(&raw));
+            if (SUCCEEDED(hr))
+                registration.reset(raw);
         }
 
         const auto classes = std::wstring(L"Software\\Classes\\");
         for (const auto& ext : EXTENSIONS) {
             std::wstring current;
-            if (!queryEffectiveProgId(registration, ext.ext, current)) {
-                if (!getRegString(HKEY_CURRENT_USER, classes + ext.ext, L"", current)) {
-                    if (registration)
-                        registration->Release();
+            if (!queryEffectiveProgId(registration.get(), ext.ext, current)) {
+                if (!getRegString(HKEY_CURRENT_USER, classes + ext.ext, L"", current))
                     return false;
-                }
             }
-
-            if (current != ext.prog_id) {
-                if (registration)
-                    registration->Release();
+            if (current != ext.prog_id)
                 return false;
-            }
         }
-
-        if (registration)
-            registration->Release();
         return true;
     }
 
@@ -306,17 +308,15 @@ namespace lfs::vis::gui {
         if (!coinit.ready())
             return false;
 
-        IApplicationAssociationRegistrationUI* registration_ui = nullptr;
+        IApplicationAssociationRegistrationUI* raw = nullptr;
         const HRESULT hr =
             CoCreateInstance(CLSID_ApplicationAssociationRegistrationUI, nullptr,
-                             CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&registration_ui));
-        if (FAILED(hr) || !registration_ui)
+                             CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&raw));
+        if (FAILED(hr) || !raw)
             return false;
 
-        const HRESULT launch_hr =
-            registration_ui->LaunchAdvancedAssociationUI(REGISTERED_APP_NAME);
-        registration_ui->Release();
-        return SUCCEEDED(launch_hr);
+        ComPtr<IApplicationAssociationRegistrationUI> registration_ui(raw);
+        return SUCCEEDED(registration_ui->LaunchAdvancedAssociationUI(REGISTERED_APP_NAME));
     }
 
 #else
