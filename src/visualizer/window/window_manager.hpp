@@ -6,7 +6,6 @@
 
 #include "input/frame_input_buffer.hpp"
 #include "input/input_router.hpp"
-#include <atomic>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <string>
@@ -41,8 +40,7 @@ namespace lfs::vis {
         bool shouldClose() const;
         void requestClose() { should_close_ = true; }
         void cancelClose();
-        void requestRedraw();
-        bool needsRedraw() const;
+        void wakeEventLoop();
 
         SDL_Window* getWindow() const { return window_; }
         SDL_GLContext getGLContext() const { return gl_context_; }
@@ -77,7 +75,6 @@ namespace lfs::vis {
         InputController* input_controller_ = nullptr;
         input::InputRouter input_router_;
         FrameInputBuffer frame_input_;
-        mutable std::atomic<bool> needs_redraw_{false};
         std::vector<std::string> pending_drop_files_;
     };
 

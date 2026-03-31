@@ -157,6 +157,7 @@ namespace lfs::vis {
         void render();
         void shutdown();
         bool allowclose();
+        void wakeMainLoop() const;
 
         // Event system
         void setupEventHandlers();

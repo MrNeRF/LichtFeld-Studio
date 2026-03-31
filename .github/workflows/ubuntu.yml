@@ -40,6 +40,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Free disk space

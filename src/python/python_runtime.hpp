@@ -89,8 +89,8 @@ namespace lfs::python {
     // UI redraw request mechanism
     LFS_PYTHON_RUNTIME_API void request_redraw();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
-    using RedrawWakeupCallback = void (*)();
-    LFS_PYTHON_RUNTIME_API void set_redraw_wakeup_callback(RedrawWakeupCallback cb);
+    using MainLoopWakeCallback = void (*)();
+    LFS_PYTHON_RUNTIME_API void set_main_loop_wake_callback(MainLoopWakeCallback cb);
 
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();

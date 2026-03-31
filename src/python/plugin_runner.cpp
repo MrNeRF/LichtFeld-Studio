@@ -8,6 +8,7 @@
 #include "runner.hpp"
 
 #include <core/executable_path.hpp>
+#include <core/path_utils.hpp>
 #include <cstdlib>
 #include <print>
 
@@ -76,10 +77,10 @@ namespace lfs::python {
                 }
 
                 const auto& pm = PackageManager::instance();
-                const std::string uv_path = pm.uv_path().string();
-                const std::string site_packages = pm.site_packages_dir().string();
-                const std::string typings_dir = lfs::core::getTypingsDir().string();
-                const std::string python_path = lfs::core::getEmbeddedPython().string();
+                const std::string uv_path = lfs::core::path_to_utf8(pm.uv_path());
+                const std::string site_packages = lfs::core::path_to_utf8(pm.site_packages_dir());
+                const std::string typings_dir = lfs::core::path_to_utf8(lfs::core::getTypingsDir());
+                const std::string python_path = lfs::core::path_to_utf8(lfs::core::getEmbeddedPython());
                 if (uv_path.empty()) {
                     std::println(stderr, "Error: UV not found");
                     result = 1;
@@ -124,8 +125,7 @@ namespace lfs::python {
                     break;
                 }
 
-                const auto plugins_dir =
-                    std::filesystem::path(getenv("HOME")) / ".lichtfeld" / "plugins";
+                const auto plugins_dir = PackageManager::instance().root_dir() / "plugins";
                 const auto plugin_path = plugins_dir / mode.name;
 
                 PyObjectGuard func(PyObject_GetAttrString(validator.get(), "validate_plugin"));
@@ -136,7 +136,7 @@ namespace lfs::python {
                 }
 
                 PyObjectGuard args(
-                    PyTuple_Pack(1, PyUnicode_FromString(plugin_path.string().c_str())));
+                    PyTuple_Pack(1, PyUnicode_FromString(lfs::core::path_to_utf8(plugin_path).c_str())));
                 PyObjectGuard errors(PyObject_CallObject(func.get(), args.get()));
                 if (!errors) {
                     print_python_error();

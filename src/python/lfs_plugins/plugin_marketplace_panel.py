@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import lichtfeld as lf
 
+from . import rml_widgets as w
 from .marketplace import (
     MarketplacePluginEntry,
     PluginMarketplaceCatalog,
@@ -102,6 +103,7 @@ class PluginMarketplacePanel(Panel):
         self._formats_open = False
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
+        self._escape_revert = w.EscapeRevertController()
 
     # ── Data model ────────────────────────────────────────────
 
@@ -166,6 +168,7 @@ class PluginMarketplacePanel(Panel):
         self._last_card_phases.clear()
         self._last_grid_signature = None
         self._stable_layout_width = None
+        self._escape_revert.clear()
 
         formats_header = doc.get_element_by_id("formats-header")
         if formats_header:
@@ -173,7 +176,6 @@ class PluginMarketplacePanel(Panel):
             formats_content = doc.get_element_by_id("formats-content")
             formats_arrow = doc.get_element_by_id("formats-arrow")
             if formats_content:
-                from . import rml_widgets as w
                 w.sync_section_state(formats_content, self._formats_open,
                                      formats_header, formats_arrow)
 
@@ -186,6 +188,16 @@ class PluginMarketplacePanel(Panel):
         if manual_form:
             manual_form.add_event_listener("submit", self._on_manual_form_submit)
             manual_form.add_event_listener("change", self._on_manual_form_change)
+
+        manual_url_input = doc.get_element_by_id("manual-url-input")
+        if manual_url_input:
+            w.bind_select_all_on_focus(manual_url_input)
+            self._escape_revert.bind(
+                manual_url_input,
+                "manual_url",
+                lambda: str(self._manual_url or ""),
+                self._restore_manual_url,
+            )
 
     def on_update(self, doc):
         from .manager import PluginManager
@@ -694,7 +706,6 @@ class PluginMarketplacePanel(Panel):
         content = doc.get_element_by_id("formats-content")
         arrow = doc.get_element_by_id("formats-arrow")
         if content:
-            from . import rml_widgets as w
             w.animate_section_toggle(content, self._formats_open, arrow,
                                      header_element=header)
 
@@ -704,6 +715,11 @@ class PluginMarketplacePanel(Panel):
         self._install_plugin_from_url(mgr, self._manual_url, "__manual_url__")
         if _ev is None and ev_or_handle is not None and hasattr(ev_or_handle, "stop_propagation"):
             ev_or_handle.stop_propagation()
+
+    def _restore_manual_url(self, snapshot):
+        self._manual_url = str(snapshot or "")
+        if self._handle:
+            self._handle.dirty("manual_url")
 
     def _on_manual_form_change(self, ev):
         target = ev.target()

@@ -5,6 +5,7 @@
 #include "py_scripts.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "python/runner.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 
@@ -25,7 +26,7 @@ namespace lfs::python {
                 nb::list result;
                 for (const auto& s : state.scripts()) {
                     nb::dict d;
-                    d["path"] = s.path.string();
+                    d["path"] = lfs::core::path_to_utf8(s.path);
                     d["enabled"] = s.enabled;
                     d["has_error"] = s.has_error;
                     d["error_message"] = s.error_message;
@@ -67,7 +68,7 @@ namespace lfs::python {
                 std::vector<std::filesystem::path> fs_paths;
                 fs_paths.reserve(paths.size());
                 for (const auto& p : paths) {
-                    fs_paths.emplace_back(p);
+                    fs_paths.emplace_back(lfs::core::utf8_to_path(p));
                 }
                 auto result = lfs::python::run_scripts(fs_paths);
                 nb::dict ret;
@@ -89,7 +90,7 @@ namespace lfs::python {
                 auto& state = ScriptState::getInstance();
                 std::vector<std::string> result;
                 for (const auto& p : state.enabledScripts()) {
-                    result.push_back(p.string());
+                    result.push_back(lfs::core::path_to_utf8(p));
                 }
                 return result;
             },

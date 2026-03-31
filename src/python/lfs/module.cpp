@@ -46,6 +46,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
@@ -485,7 +486,7 @@ NB_MODULE(lichtfeld, m) {
         auto user_packages = lfs::python::get_user_packages_dir();
         nb::module_ sys = nb::module_::import_("sys");
         nb::list path = nb::cast<nb::list>(sys.attr("path"));
-        std::string pkg_path = user_packages.string();
+        const std::string pkg_path = lfs::core::path_to_utf8(user_packages);
         bool found = false;
         for (size_t i = 0; i < path.size(); ++i) {
             if (nb::cast<std::string>(path[i]) == pkg_path) {
@@ -1475,13 +1476,13 @@ NB_MODULE(lichtfeld, m) {
     // Run a Python script file
     m.def(
         "run", [](const std::string& path) {
-            const std::filesystem::path script_path(path);
+            const std::filesystem::path script_path = lfs::core::utf8_to_path(path);
             if (!std::filesystem::exists(script_path)) {
                 throw std::runtime_error("Script not found: " + path);
             }
 
-            std::ifstream file(script_path);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(script_path, file)) {
                 throw std::runtime_error("Cannot open script: " + path);
             }
 
@@ -1490,8 +1491,8 @@ NB_MODULE(lichtfeld, m) {
             const std::string code = buffer.str();
 
             // Add script directory to sys.path and set __file__
-            const auto parent = script_path.parent_path().string();
-            const auto abs_path = std::filesystem::absolute(script_path).string();
+            const auto parent = lfs::core::path_to_utf8(script_path.parent_path());
+            const auto abs_path = lfs::core::path_to_utf8(std::filesystem::absolute(script_path));
 
             nb::module_ sys = nb::module_::import_("sys");
             nb::list sys_path = nb::cast<nb::list>(sys.attr("path"));
@@ -1721,16 +1722,16 @@ Example:
 
     nb::class_<lfs::io::DatasetInfo>(m, "DatasetInfo", "Information about a dataset directory")
         .def_prop_ro(
-            "base_path", [](const lfs::io::DatasetInfo& i) { return i.base_path.string(); },
+            "base_path", [](const lfs::io::DatasetInfo& i) { return lfs::core::path_to_utf8(i.base_path); },
             "Root directory of the dataset")
         .def_prop_ro(
-            "images_path", [](const lfs::io::DatasetInfo& i) { return i.images_path.string(); },
+            "images_path", [](const lfs::io::DatasetInfo& i) { return lfs::core::path_to_utf8(i.images_path); },
             "Path to the images directory")
         .def_prop_ro(
-            "sparse_path", [](const lfs::io::DatasetInfo& i) { return i.sparse_path.string(); },
+            "sparse_path", [](const lfs::io::DatasetInfo& i) { return lfs::core::path_to_utf8(i.sparse_path); },
             "Path to the COLMAP sparse reconstruction")
         .def_prop_ro(
-            "masks_path", [](const lfs::io::DatasetInfo& i) { return i.masks_path.string(); },
+            "masks_path", [](const lfs::io::DatasetInfo& i) { return lfs::core::path_to_utf8(i.masks_path); },
             "Path to the masks directory")
         .def_prop_ro(
             "has_masks", [](const lfs::io::DatasetInfo& i) { return i.has_masks; },
@@ -1743,12 +1744,12 @@ Example:
             "Number of masks in the dataset")
         .def("__repr__", [](const lfs::io::DatasetInfo& i) {
             return std::format("DatasetInfo(base_path='{}', images={}, masks={})",
-                               i.base_path.string(), i.image_count, i.mask_count);
+                               lfs::core::path_to_utf8(i.base_path), i.image_count, i.mask_count);
         });
 
     m.def(
         "detect_dataset_info",
-        [](const std::string& path) { return lfs::io::detect_dataset_info(path); },
+        [](const std::string& path) { return lfs::io::detect_dataset_info(lfs::core::utf8_to_path(path)); },
         nb::arg("path"), "Detect dataset information from a directory path");
 
     nb::class_<lfs::core::CheckpointHeader>(m, "CheckpointHeader", "Information from a checkpoint file header")
@@ -1773,14 +1774,14 @@ Example:
 
     nb::class_<lfs::core::param::DatasetConfig>(m, "CheckpointParams", "Training parameters from a checkpoint")
         .def_prop_ro("dataset_path", [](const lfs::core::param::DatasetConfig& c) {
-            return c.data_path.string();
+            return lfs::core::path_to_utf8(c.data_path);
         })
         .def_prop_ro("output_path", [](const lfs::core::param::DatasetConfig& c) {
-            return c.output_path.string();
+            return lfs::core::path_to_utf8(c.output_path);
         })
         .def("__repr__", [](const lfs::core::param::DatasetConfig& c) {
             return std::format("CheckpointParams(dataset_path='{}', output_path='{}')",
-                               c.data_path.string(), c.output_path.string());
+                               lfs::core::path_to_utf8(c.data_path), lfs::core::path_to_utf8(c.output_path));
         });
 
     m.def(
@@ -1801,7 +1802,7 @@ Example:
     });
 
     // Module metadata
-    m.attr("__version__") = "0.1.0";
+    m.attr("__version__") = GIT_TAGGED_VERSION;
     m.attr("__all__") = nb::make_tuple(
         // Core access
         "context", "gaussians", "session", "get_scene",

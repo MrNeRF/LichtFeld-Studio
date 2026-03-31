@@ -441,6 +441,17 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path SaveTextFileDialog(const std::string& defaultName,
+                                             const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("Text Files", ".txt"),
+                                      defaultPath,
+                                      defaultName,
+                                      ".txt"),
+                  result);
+        return result;
+    }
+
     std::filesystem::path SaveSogFileDialog(const std::string& defaultName,
                                             const std::filesystem::path& defaultPath) {
         std::filesystem::path result;

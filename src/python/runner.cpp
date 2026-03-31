@@ -43,6 +43,9 @@ namespace lfs::python {
     static std::mutex g_output_mutex;
     static std::mutex g_plugin_init_mutex;
     static std::atomic<bool> g_python_bridge_ready{false};
+    static std::atomic<bool> g_python_bridge_failed{false};
+    static std::mutex g_python_bridge_failure_mutex;
+    static std::string g_python_bridge_failure_detail;
     static std::atomic<bool> g_plugin_preload_scheduled{false};
     static std::thread g_plugin_preload_thread;
 
@@ -181,6 +184,102 @@ _add_dll_dirs()
             return default_value;
         }
 
+        std::string consume_python_error_detailed() {
+            PyObject* type = nullptr;
+            PyObject* value = nullptr;
+            PyObject* tb = nullptr;
+            PyErr_Fetch(&type, &value, &tb);
+            PyErr_NormalizeException(&type, &value, &tb);
+
+            std::string message = "(unknown error)";
+
+            auto pyobject_to_utf8 = [](PyObject* obj) -> std::string {
+                if (!obj) {
+                    return {};
+                }
+                PyObject* str = PyObject_Str(obj);
+                if (!str) {
+                    return {};
+                }
+                std::string result;
+                if (const char* text = PyUnicode_AsUTF8(str)) {
+                    result = text;
+                }
+                Py_DECREF(str);
+                return result;
+            };
+
+            PyObject* traceback_module = PyImport_ImportModule("traceback");
+            if (traceback_module) {
+                PyObject* format_exception = PyObject_GetAttrString(traceback_module, "format_exception");
+                if (format_exception && PyCallable_Check(format_exception)) {
+                    PyObject* args = PyTuple_Pack(3, type ? type : Py_None, value ? value : Py_None, tb ? tb : Py_None);
+                    PyObject* lines = args ? PyObject_CallObject(format_exception, args) : nullptr;
+                    if (lines) {
+                        PyObject* empty = PyUnicode_FromString("");
+                        PyObject* joined = empty ? PyUnicode_Join(empty, lines) : nullptr;
+                        if (joined) {
+                            if (const char* text = PyUnicode_AsUTF8(joined)) {
+                                message = text;
+                            }
+                            Py_DECREF(joined);
+                        }
+                        Py_XDECREF(empty);
+                        Py_DECREF(lines);
+                    }
+                    Py_XDECREF(args);
+                }
+                Py_XDECREF(format_exception);
+                Py_DECREF(traceback_module);
+            }
+
+            if (message == "(unknown error)" || message.empty()) {
+                if (const auto value_text = pyobject_to_utf8(value); !value_text.empty()) {
+                    message = value_text;
+                } else if (const auto type_text = pyobject_to_utf8(type); !type_text.empty()) {
+                    message = type_text;
+                }
+            }
+
+            Py_XDECREF(type);
+            Py_XDECREF(value);
+            Py_XDECREF(tb);
+            return message;
+        }
+
+        void remember_python_bridge_failure(const std::string& detail) {
+            bool expected = false;
+            if (g_python_bridge_failed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                std::lock_guard lock(g_python_bridge_failure_mutex);
+                g_python_bridge_failure_detail = detail;
+            }
+        }
+
+        std::string python_bridge_failure_detail() {
+            std::lock_guard lock(g_python_bridge_failure_mutex);
+            return g_python_bridge_failure_detail;
+        }
+
+        PyObject* import_lichtfeld_module(const char* context, const bool latch_failure = false) {
+            if (g_python_bridge_failed.load(std::memory_order_acquire)) {
+                LOG_ERROR("{}: skipping lichtfeld import after previous initialization failure. Restart required. {}",
+                          context, python_bridge_failure_detail());
+                return nullptr;
+            }
+
+            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            if (!lf) {
+                const std::string detail = consume_python_error_detailed();
+                LOG_ERROR("{}: {}", context, detail);
+                if (latch_failure) {
+                    remember_python_bridge_failure(detail);
+                }
+                return nullptr;
+            }
+
+            return lf;
+        }
+
         bool ensure_python_bridge_ready_locked() {
             if (g_python_bridge_ready.load(std::memory_order_acquire)) {
                 return true;
@@ -189,9 +288,8 @@ _add_dll_dirs()
             add_dll_directories();
 
             LOG_INFO("Attempting to import lichtfeld module...");
-            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            PyObject* lf = import_lichtfeld_module("Failed to import lichtfeld", true);
             if (!lf) {
-                LOG_ERROR("Failed to import lichtfeld: {}", extract_python_error());
                 return false;
             }
             LOG_INFO("lichtfeld module imported successfully");
@@ -248,9 +346,8 @@ _add_dll_dirs()
         std::vector<std::string> discover_enabled_plugins_locked() {
             std::vector<std::string> names;
 
-            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            PyObject* lf = import_lichtfeld_module("Failed to import lichtfeld for plugin discovery");
             if (!lf) {
-                LOG_ERROR("Failed to import lichtfeld for plugin discovery: {}", extract_python_error());
                 return names;
             }
 
@@ -345,7 +442,7 @@ _add_dll_dirs()
         }
 
         bool load_single_plugin_locked(const std::string& name) {
-            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            PyObject* lf = import_lichtfeld_module("Failed to import lichtfeld while loading plugin");
             if (!lf)
                 return false;
 
@@ -788,10 +885,9 @@ _repl_out.close()
 
         // Pre-import lichtfeld module to catch any initialization errors early
         {
-            PyObject* lf_module = PyImport_ImportModule("lichtfeld");
+            PyObject* lf_module = import_lichtfeld_module("Failed to pre-import lichtfeld module");
             if (!lf_module) {
-                PyErr_Print();
-                return std::unexpected("Failed to import lichtfeld module - check build output");
+                return std::unexpected("Failed to import lichtfeld module - see startup log for traceback");
             }
             Py_DECREF(lf_module);
             LOG_INFO("Successfully pre-imported lichtfeld module");
@@ -1072,9 +1168,8 @@ def _lfs_format_code(code):
         const GilAcquire gil;
         CapabilityResult result;
 
-        PyObject* lichtfeld = PyImport_ImportModule("lichtfeld");
+        PyObject* lichtfeld = import_lichtfeld_module("Failed to import lichtfeld while invoking capability");
         if (!lichtfeld) {
-            PyErr_Print();
             return {false, "", "Failed to import lichtfeld"};
         }
         Py_DECREF(lichtfeld);

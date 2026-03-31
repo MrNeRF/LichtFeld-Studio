@@ -6,6 +6,7 @@ from pathlib import Path
 
 import lichtfeld as lf
 
+from . import rml_widgets as w
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
 
@@ -37,11 +38,23 @@ class _ImportDialogPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._last_lang = lf.ui.get_current_language()
+        self._escape_revert = w.EscapeRevertController()
         doc.add_event_listener("keydown", self._on_keydown)
         self._form = doc.get_element_by_id(self.form_id) if self.form_id else None
         if self._form:
             self._form.add_event_listener("submit", self._on_form_submit)
             self._form.add_event_listener("change", self._on_form_change)
+        for el in doc.query_selector_all('input[type="text"]'):
+            prop = el.get_attribute("data-value", "")
+            if not prop:
+                continue
+            w.bind_select_all_on_focus(el)
+            self._escape_revert.bind(
+                el,
+                prop,
+                lambda p=prop: self._capture_bound_input_value(p),
+                lambda snapshot, p=prop: self._restore_bound_input_value(p, snapshot),
+            )
 
     def _on_keydown(self, event):
         key = int(event.get_parameter("key_identifier", "0"))
@@ -51,6 +64,16 @@ class _ImportDialogPanel(Panel):
         elif key == KI_ESCAPE:
             self._on_do_cancel()
             event.stop_propagation()
+
+    def _capture_bound_input_value(self, prop: str) -> str:
+        return str(getattr(self, f"_{prop}", "") or "")
+
+    def _restore_bound_input_value(self, prop: str, snapshot) -> None:
+        attr = f"_{prop}"
+        if hasattr(self, attr):
+            setattr(self, attr, str(snapshot or ""))
+        if hasattr(self, "_dirty_model"):
+            self._dirty_model()
 
     def _on_form_submit(self, event):
         if self._can_submit_from_keyboard():

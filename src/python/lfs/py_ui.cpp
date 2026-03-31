@@ -2068,14 +2068,14 @@ namespace lfs::python {
     std::tuple<bool, float> PyUILayout::drag_float(const std::string& label, float value,
                                                    float speed, float min, float max) {
         float v = value;
-        bool changed = ImGui::DragFloat(label.c_str(), &v, speed, min, max);
+        bool changed = vis::gui::widgets::DragFloat(label.c_str(), &v, speed, min, max);
         return {changed, v};
     }
 
     std::tuple<bool, int> PyUILayout::drag_int(const std::string& label, int value,
                                                float speed, int min, int max) {
         int v = value;
-        bool changed = ImGui::DragInt(label.c_str(), &v, speed, min, max);
+        bool changed = vis::gui::widgets::DragInt(label.c_str(), &v, speed, min, max);
         return {changed, v};
     }
 
@@ -3102,7 +3102,7 @@ namespace lfs::python {
                 if (subtype == "COLOR" || subtype == "COLOR_GAMMA") {
                     changed = ImGui::ColorEdit3(display_name.c_str(), v);
                 } else {
-                    changed = ImGui::DragFloat3(display_name.c_str(), v, 0.01f);
+                    changed = vis::gui::widgets::DragFloat3(display_name.c_str(), v, 0.01f);
                 }
                 new_value = nb::make_tuple(v[0], v[1], v[2]);
             } else if (size == 4) {
@@ -3111,12 +3111,12 @@ namespace lfs::python {
                 if (subtype == "COLOR" || subtype == "COLOR_GAMMA") {
                     changed = ImGui::ColorEdit4(display_name.c_str(), v);
                 } else {
-                    changed = ImGui::DragFloat4(display_name.c_str(), v, 0.01f);
+                    changed = vis::gui::widgets::DragFloat4(display_name.c_str(), v, 0.01f);
                 }
                 new_value = nb::make_tuple(v[0], v[1], v[2], v[3]);
             } else if (size == 2) {
                 float v[2] = {nb::cast<float>(t[0]), nb::cast<float>(t[1])};
-                changed = ImGui::DragFloat2(display_name.c_str(), v, 0.01f);
+                changed = vis::gui::widgets::DragFloat2(display_name.c_str(), v, 0.01f);
                 new_value = nb::make_tuple(v[0], v[1]);
             }
         } else if (prop_type == "IntVectorProperty") {
@@ -3125,16 +3125,16 @@ namespace lfs::python {
 
             if (size == 3) {
                 int v[3] = {nb::cast<int>(t[0]), nb::cast<int>(t[1]), nb::cast<int>(t[2])};
-                changed = ImGui::DragInt3(display_name.c_str(), v);
+                changed = vis::gui::widgets::DragInt3(display_name.c_str(), v);
                 new_value = nb::make_tuple(v[0], v[1], v[2]);
             } else if (size == 4) {
                 int v[4] = {nb::cast<int>(t[0]), nb::cast<int>(t[1]),
                             nb::cast<int>(t[2]), nb::cast<int>(t[3])};
-                changed = ImGui::DragInt4(display_name.c_str(), v);
+                changed = vis::gui::widgets::DragInt4(display_name.c_str(), v);
                 new_value = nb::make_tuple(v[0], v[1], v[2], v[3]);
             } else if (size == 2) {
                 int v[2] = {nb::cast<int>(t[0]), nb::cast<int>(t[1])};
-                changed = ImGui::DragInt2(display_name.c_str(), v);
+                changed = vis::gui::widgets::DragInt2(display_name.c_str(), v);
                 new_value = nb::make_tuple(v[0], v[1]);
             }
         } else if (prop_type == "TensorProperty") {
@@ -4662,7 +4662,13 @@ namespace lfs::python {
             "register_file_associations", []() -> bool {
                 return lfs::vis::gui::registerFileAssociations();
             },
-            "Register LichtFeld Studio as default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz files (Windows only)");
+            "Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz files (Windows only)");
+
+        m.def(
+            "open_file_association_settings", []() -> bool {
+                return lfs::vis::gui::openFileAssociationSettings();
+            },
+            "Open the Windows Default Apps UI for LichtFeld Studio file associations (Windows only)");
 
         m.def(
             "unregister_file_associations", []() -> bool {

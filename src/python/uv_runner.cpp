@@ -6,6 +6,7 @@
 #include "package_manager.hpp"
 
 #include <core/logger.hpp>
+#include <core/path_utils.hpp>
 
 namespace lfs::python {
 
@@ -26,7 +27,7 @@ namespace lfs::python {
         exit_code_ = -1;
         complete_ = false;
 
-        if (!process_.start(uv.string(), args)) {
+        if (!process_.start(lfs::core::path_to_utf8(uv), args)) {
             LOG_ERROR("Failed to start UV process");
             return false;
         }

@@ -472,6 +472,36 @@ namespace lfs::training {
         LOG_DEBUG("Trainer cleanup complete");
     }
 
+    int Trainer::get_regular_iterations() const {
+        return static_cast<int>(params_.optimization.iterations);
+    }
+
+    int Trainer::get_active_sparsify_steps() const {
+        return params_.optimization.enable_sparsity
+                   ? std::max(0, params_.optimization.sparsify_steps)
+                   : 0;
+    }
+
+    int Trainer::get_sparsity_boundary_iteration() const {
+        return get_regular_iterations();
+    }
+
+    int Trainer::get_total_iterations() const {
+        return get_regular_iterations() + get_active_sparsify_steps();
+    }
+
+    lfs::core::param::OptimizationParameters Trainer::get_runtime_optimization_params() const {
+        auto runtime_params = params_.optimization;
+        runtime_params.iterations = static_cast<size_t>(std::max(0, get_total_iterations()));
+        return runtime_params;
+    }
+
+    void Trainer::sync_strategy_optimization_params() {
+        if (strategy_) {
+            strategy_->set_optimization_params(get_runtime_optimization_params());
+        }
+    }
+
     std::expected<void, std::string> Trainer::initialize_bilateral_grid() {
         if (!params_.optimization.use_bilateral_grid) {
             return {};
@@ -489,7 +519,7 @@ namespace lfs::training {
                 params_.optimization.bilateral_grid_X,
                 params_.optimization.bilateral_grid_Y,
                 params_.optimization.bilateral_grid_W,
-                params_.optimization.iterations,
+                get_total_iterations(),
                 config);
 
             LOG_INFO("Bilateral grid initialized: {}x{}x{} for {} camera slots ({} train images)",
@@ -522,7 +552,7 @@ namespace lfs::training {
             config.color_mean *= reg_weight;
             config.crf_channel *= reg_weight;
 
-            ppisp_ = std::make_unique<PPISP>(params_.optimization.iterations, config);
+            ppisp_ = std::make_unique<PPISP>(get_total_iterations(), config);
             for (const auto& cam : train_dataset_->get_cameras()) {
                 if (cam) {
                     ppisp_->register_frame(cam->uid(), cam->camera_id());
@@ -801,11 +831,11 @@ namespace lfs::training {
             PPISPControllerPool::Config config;
             config.lr = params_.optimization.ppisp_controller_lr;
 
-            const int activation_step = params_.optimization.resolved_ppisp_controller_activation_step();
+            const int activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
             if (params_.optimization.ppisp_controller_activation_step < 0) {
                 params_.optimization.ppisp_controller_activation_step = activation_step;
             }
-            int distillation_iters = static_cast<int>(params_.optimization.iterations) - activation_step;
+            int distillation_iters = get_total_iterations() - activation_step;
             int num_cameras = ppisp_->num_cameras();
 
             ppisp_controller_pool_ = std::make_unique<PPISPControllerPool>(num_cameras, distillation_iters, config);
@@ -1166,6 +1196,15 @@ namespace lfs::training {
             memory_breakdown_logged_first_raster_ = false;
             memory_breakdown_logged_first_step_ = false;
 
+            if (params_.optimization.enable_sparsity) {
+                const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
+                if (params_.optimization.stop_refine > stop_refine_limit) {
+                    LOG_WARN("Sparsity: clamping stop_refine from {} to {} to freeze topology before pruning",
+                             params_.optimization.stop_refine, stop_refine_limit);
+                    params_.optimization.stop_refine = stop_refine_limit;
+                }
+            }
+
             // Create DatasetConfig for lfs::training::CameraDataset
             lfs::training::DatasetConfig dataset_config;
             dataset_config.resize_factor = params.dataset.resize_factor;
@@ -1237,7 +1276,7 @@ namespace lfs::training {
 
             // Re-initialize strategy with new parameters
             strategy_->set_training_dataset(train_dataset_);
-            strategy_->initialize(params.optimization);
+            strategy_->initialize(get_runtime_optimization_params());
             LOG_DEBUG("Strategy initialized");
 
             // Initialize bilateral grid if enabled
@@ -1284,28 +1323,22 @@ namespace lfs::training {
             // Initialize sparsity optimizer
             if (params.optimization.enable_sparsity) {
                 constexpr int UPDATE_INTERVAL = 50;
-                const int sparsify_steps = params.optimization.sparsify_steps;
-                const int stored_iters = static_cast<int>(params.optimization.iterations);
-
-                // Checkpoint already has total iterations; fresh start needs sparsify_steps added
-                const bool is_resume = params.resume_checkpoint.has_value();
-                const int base_iters = is_resume ? (stored_iters - sparsify_steps) : stored_iters;
-
-                if (!is_resume) {
-                    params_.optimization.iterations = static_cast<size_t>(base_iters + sparsify_steps);
-                }
+                const int regular_iters = get_regular_iterations();
+                const int sparsify_steps = get_active_sparsify_steps();
+                const int first_sparsify_iter = sparsify_steps > 0 ? regular_iters + 1 : regular_iters;
 
                 const ADMMSparsityOptimizer::Config config{
                     .sparsify_steps = sparsify_steps,
                     .init_rho = params.optimization.init_rho,
                     .prune_ratio = params.optimization.prune_ratio,
                     .update_every = UPDATE_INTERVAL,
-                    .start_iteration = base_iters};
+                    .start_iteration = get_sparsity_boundary_iteration()};
 
                 sparsity_optimizer_ = SparsityOptimizerFactory::create("admm", config);
                 if (sparsity_optimizer_) {
-                    LOG_INFO("Sparsity: base={}, steps={}, prune={:.0f}%",
-                             base_iters, sparsify_steps, params.optimization.prune_ratio * 100);
+                    LOG_INFO("Sparsity: regular={}, start={}, steps={}, total={}, prune={:.0f}%",
+                             regular_iters, first_sparsify_iter, sparsify_steps, get_total_iterations(),
+                             params.optimization.prune_ratio * 100);
                 }
             }
 
@@ -1366,9 +1399,9 @@ namespace lfs::training {
             // Create progress bar based on headless flag
             if (params.optimization.headless) {
                 progress_ = std::make_unique<TrainingProgress>(
-                    params_.optimization.iterations, // This now includes sparsity steps if enabled
+                    get_total_iterations(),
                     /*update_frequency=*/100);
-                LOG_DEBUG("Progress bar initialized for {} total iterations", params_.optimization.iterations);
+                LOG_DEBUG("Progress bar initialized for {} total iterations", get_total_iterations());
             }
 
             // Initialize the evaluator - it handles all metrics internally
@@ -1432,7 +1465,7 @@ namespace lfs::training {
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
                 lfs::training::CommandCenter::instance().update_snapshot(
-                    ctx, params_.optimization.iterations, is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                     lfs::training::TrainingPhase::SafeControl);
             }
 
@@ -1744,7 +1777,7 @@ namespace lfs::training {
             return background_;
         }
 
-        const float w = inv_weight_piecewise(iter, params_.optimization.iterations);
+        const float w = inv_weight_piecewise(iter, get_total_iterations());
         if (w <= 0.0f) {
             return background_;
         }
@@ -1871,7 +1904,7 @@ namespace lfs::training {
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::IterationStart);
                 lfs::training::CommandCenter::instance().update_snapshot(
-                    ctx, params_.optimization.iterations, is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                     lfs::training::TrainingPhase::IterationStart);
                 lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::IterationStart, ctx);
                 auto view = lfs::training::CommandCenter::instance().snapshot();
@@ -1948,7 +1981,7 @@ namespace lfs::training {
             // Determine controller phase before tile loop (does not depend on tile results)
             const bool known_ppisp_camera = ppisp_ && ppisp_->is_known_camera(cam->camera_id());
             const int ppisp_cam_idx = known_ppisp_camera ? ppisp_->camera_index(cam->camera_id()) : -1;
-            const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step();
+            const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
             const bool ppisp_frozen = is_ppisp_frozen();
             const bool in_controller_phase = ppisp_controller_pool_ && known_ppisp_camera &&
                                              params_.optimization.ppisp_use_controller &&
@@ -2465,7 +2498,7 @@ namespace lfs::training {
 
             if (tiles_processed == 0) {
                 LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
-                return iter < params_.optimization.iterations && !stop_requested_.load() && !stop_token.stop_requested()
+                return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
                            ? StepResult::Continue
                            : StepResult::Stop;
             }
@@ -2551,8 +2584,8 @@ namespace lfs::training {
 
             // Sparsification phase logging (once per phase transition)
             if (params_.optimization.enable_sparsity) {
-                const int base_iterations = params_.optimization.iterations - params_.optimization.sparsify_steps;
-                if (iter == base_iterations + 1) {
+                const int first_sparsify_iter = get_sparsity_boundary_iteration() + 1;
+                if (get_active_sparsify_steps() > 0 && iter == first_sparsify_iter) {
                     LOG_INFO("Entering sparsification: {} Gaussians, target prune={}%",
                              strategy_->get_model().size(), params_.optimization.prune_ratio * 100);
                 }
@@ -2586,8 +2619,8 @@ namespace lfs::training {
                     .emit();
             }
 
-            const bool in_sparsification = params_.optimization.enable_sparsity &&
-                                           iter > (params_.optimization.iterations - params_.optimization.sparsify_steps);
+            const bool in_sparsification = get_active_sparsify_steps() > 0 &&
+                                           iter > get_sparsity_boundary_iteration();
 
             if (!in_sparsification) {
                 strategy_->pre_step(iter, r_output);
@@ -2610,7 +2643,7 @@ namespace lfs::training {
                             .trainer = this};
                         lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::OptimizerStep);
                         lfs::training::CommandCenter::instance().update_snapshot(
-                            ctx, params_.optimization.iterations, is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                            ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                             lfs::training::TrainingPhase::OptimizerStep);
                         lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PreOptimizerStep, ctx);
                     }
@@ -2620,13 +2653,21 @@ namespace lfs::training {
                     }
 
                     // Skip strategy step if we're in controller distillation phase and freeze is enabled
-                    const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step();
+                    const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
                     const bool freeze_gaussians = ppisp_controller_pool_ &&
                                                   params_.optimization.ppisp_use_controller &&
                                                   params_.optimization.ppisp_freeze_gaussians_on_distill &&
                                                   iter >= ppisp_activation_step;
                     if (!freeze_gaussians) {
                         strategy_->step(iter);
+                    }
+
+                    if (sparsity_optimizer_ &&
+                        sparsity_optimizer_->is_initialized() &&
+                        static_cast<size_t>(model.size()) != model_size_before) {
+                        LOG_WARN("Sparsity: resetting ADMM state after topology change at iter {} ({} -> {})",
+                                 iter, model_size_before, model.size());
+                        sparsity_optimizer_->reset();
                     }
 
                     if (auto result = handle_sparsity_update(iter, model); !result) {
@@ -2653,7 +2694,7 @@ namespace lfs::training {
 
                 // Save checkpoint (not PLY) at specified steps
                 for (size_t save_step : params_.optimization.save_steps) {
-                    if (iter == static_cast<int>(save_step) && iter != params_.optimization.iterations) {
+                    if (iter == static_cast<int>(save_step) && iter != get_total_iterations()) {
                         auto result = save_checkpoint(iter);
                         if (!result) {
                             LOG_WARN("Failed to save checkpoint at iteration {}: {}", iter, result.error());
@@ -2709,7 +2750,7 @@ namespace lfs::training {
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
                 lfs::training::CommandCenter::instance().update_snapshot(
-                    ctx, params_.optimization.iterations, is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                     lfs::training::TrainingPhase::SafeControl);
                 lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PostStep, ctx);
             }
@@ -2738,7 +2779,7 @@ namespace lfs::training {
             }
 
             // Return Continue if we should continue training
-            if (iter < params_.optimization.iterations && !stop_requested_.load() && !stop_token.stop_requested()) {
+            if (iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()) {
                 return StepResult::Continue;
             } else {
                 return StepResult::Stop;
@@ -2783,7 +2824,7 @@ namespace lfs::training {
                 .trainer = this};
             lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
             lfs::training::CommandCenter::instance().update_snapshot(
-                ctx, params_.optimization.iterations, is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                 lfs::training::TrainingPhase::SafeControl);
             lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingStart, ctx);
         }
@@ -2862,7 +2903,7 @@ namespace lfs::training {
             }
 
             LOG_DEBUG("Starting training iterations");
-            while (iter <= params_.optimization.iterations) {
+            while (iter <= get_total_iterations()) {
                 lfs::core::Tensor::set_memory_pool_iteration(iter);
 
                 if (stop_token.stop_requested() || stop_requested_.load())
@@ -2974,7 +3015,7 @@ namespace lfs::training {
             // Final save if not already saved by stop request
             if (!stop_requested_.load() && !stop_token.stop_requested()) {
                 auto final_path = params_.dataset.output_path;
-                save_ply(final_path, params_.dataset.output_name, params_.optimization.iterations, /*join=*/true);
+                save_ply(final_path, params_.dataset.output_name, get_total_iterations(), /*join=*/true);
             }
 
             if (progress_) {
@@ -3001,7 +3042,7 @@ namespace lfs::training {
                     .trainer = this};
                 lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
                 lfs::training::CommandCenter::instance().update_snapshot(
-                    ctx, params_.optimization.iterations, is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                     lfs::training::TrainingPhase::SafeControl);
                 lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingEnd, ctx);
             }
@@ -3147,7 +3188,7 @@ namespace lfs::training {
         if (is_ppisp_frozen()) {
             return ppisp_controller_pool_.get();
         }
-        return iteration >= params_.optimization.resolved_ppisp_controller_activation_step()
+        return iteration >= params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations())
                    ? ppisp_controller_pool_.get()
                    : nullptr;
     }
@@ -3205,6 +3246,17 @@ namespace lfs::training {
         if (!result) {
             return result;
         }
+
+        if (params_.optimization.enable_sparsity) {
+            const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
+            if (params_.optimization.stop_refine > stop_refine_limit) {
+                LOG_WARN("Sparsity: clamping stop_refine from {} to {} after checkpoint load",
+                         params_.optimization.stop_refine, stop_refine_limit);
+                params_.optimization.stop_refine = stop_refine_limit;
+            }
+        }
+        sync_strategy_optimization_params();
+
         current_iteration_ = *result;
 
         LOG_INFO("Restored training state from checkpoint at iteration {}", *result);

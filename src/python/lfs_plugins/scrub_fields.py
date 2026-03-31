@@ -209,9 +209,20 @@ class ScrubFieldController:
         if key != KI_ESCAPE:
             return
 
+        if self._active_prop is not None:
+            state = self._fields.get(self._active_prop)
+            if state is not None:
+                self._restore_edit_value(state)
+                state.dragging = False
+                state.field.set_class("is-dragging", False)
+                self._active_prop = None
+                event.stop_propagation()
+                return
+
         for state in self._fields.values():
             if not state.editing:
                 continue
+            self._restore_edit_value(state)
             state.cancel_on_blur = True
             state.input_el.blur()
             event.stop_propagation()
@@ -284,6 +295,10 @@ class ScrubFieldController:
         state.cancel_on_blur = False
         state.field.set_class("is-editing", False)
         self._sync_field(state)
+
+    def _restore_edit_value(self, state: _ScrubFieldState) -> None:
+        self._apply_value(state, state.edit_value_before)
+        state.input_el.set_attribute("value", self._format_value(state.spec, state.edit_value_before))
 
     def _commit_edit_value(self, state: _ScrubFieldState) -> None:
         text = state.input_el.get_attribute("value", "").strip()

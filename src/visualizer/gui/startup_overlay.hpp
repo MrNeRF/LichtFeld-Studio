@@ -39,7 +39,7 @@ namespace lfs::vis::gui {
         void populateLanguages();
         void updateTheme();
         void updateLocalizedText();
-        void forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
+        bool forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
                           float overlay_w, float overlay_h);
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 

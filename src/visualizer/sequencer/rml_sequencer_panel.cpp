@@ -8,6 +8,7 @@
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -85,10 +86,6 @@ namespace lfs::vis {
                 signature *= 1099511628211ull;
             }
             return signature;
-        }
-
-        [[nodiscard]] bool hasFocusedKeyboardTarget(Rml::Element* element) {
-            return element && element->GetTagName() != "body";
         }
 
         void forwardFocusedKeyboardInput(Rml::Context* const context,
@@ -667,10 +664,10 @@ namespace lfs::vis {
             }
 
             auto* const focused = rml_context_->GetFocusElement();
-            if (hasFocusedKeyboardTarget(focused))
+            if (gui::rml_input::hasFocusedKeyboardTarget(focused))
                 forwardFocusedKeyboardInput(rml_context_, input);
 
-            wants_keyboard_ = hasFocusedKeyboardTarget(focused) ||
+            wants_keyboard_ = gui::rml_input::hasFocusedKeyboardTarget(focused) ||
                               dragging_playhead_ || dragging_keyframe_ ||
                               controller_.hasSelection() || !selected_keyframes_.empty();
             return;
@@ -713,10 +710,10 @@ namespace lfs::vis {
         }
 
         auto* const focused = rml_context_->GetFocusElement();
-        if (hasFocusedKeyboardTarget(focused))
+        if (gui::rml_input::hasFocusedKeyboardTarget(focused))
             forwardFocusedKeyboardInput(rml_context_, input);
 
-        wants_keyboard_ = hasFocusedKeyboardTarget(focused) ||
+        wants_keyboard_ = gui::rml_input::hasFocusedKeyboardTarget(focused) ||
                           dragging_playhead_ || dragging_keyframe_ ||
                           controller_.hasSelection() || !selected_keyframes_.empty();
     }

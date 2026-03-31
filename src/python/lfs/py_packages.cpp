@@ -10,6 +10,7 @@
 #include "../package_manager.hpp"
 #include "../runner.hpp"
 #include "core/executable_path.hpp"
+#include "core/path_utils.hpp"
 #include <core/logger.hpp>
 
 namespace lfs::python {
@@ -32,7 +33,7 @@ namespace lfs::python {
                 if (!pm.ensure_venv())
                     throw std::runtime_error("Failed to create venv");
                 update_python_path();
-                return pm.venv_dir().string();
+                return lfs::core::path_to_utf8(pm.venv_dir());
             },
             "Initialize venv at ~/.lichtfeld/venv");
 
@@ -81,7 +82,7 @@ namespace lfs::python {
             "uv_path",
             []() -> std::string {
                 const auto path = PackageManager::instance().uv_path();
-                return path.empty() ? "" : path.string();
+                return path.empty() ? "" : lfs::core::path_to_utf8(path);
             },
             "Get path to uv binary (empty string if not found)");
 
@@ -90,11 +91,12 @@ namespace lfs::python {
             []() -> std::string {
                 const auto p = lfs::core::getEmbeddedPython();
                 if (p.empty()) {
-                    LOG_WARN("Embedded Python not found (exe_dir={})", lfs::core::getExecutableDir().string());
+                    LOG_WARN("Embedded Python not found (exe_dir={})",
+                             lfs::core::path_to_utf8(lfs::core::getExecutableDir()));
                 } else {
-                    LOG_INFO("Embedded Python resolved: {}", p.string());
+                    LOG_INFO("Embedded Python resolved: {}", lfs::core::path_to_utf8(p));
                 }
-                return p.empty() ? "" : p.string();
+                return p.empty() ? "" : lfs::core::path_to_utf8(p);
             },
             "Get path to embedded Python executable (empty string if not available)");
 
@@ -114,7 +116,7 @@ namespace lfs::python {
 
         pkg.def(
             "site_packages_dir",
-            []() { return PackageManager::instance().site_packages_dir().string(); },
+            []() { return lfs::core::path_to_utf8(PackageManager::instance().site_packages_dir()); },
             "Get site-packages path");
 
         pkg.def(
@@ -175,7 +177,7 @@ namespace lfs::python {
             "typings_dir",
             []() -> std::string {
                 const auto dir = lfs::core::getTypingsDir();
-                return dir.empty() ? "" : dir.string();
+                return dir.empty() ? "" : lfs::core::path_to_utf8(dir);
             },
             "Get path to type stubs directory (empty if not found)");
     }

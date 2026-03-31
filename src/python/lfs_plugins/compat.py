@@ -14,7 +14,9 @@ except ImportError:  # pragma: no cover - packaging is expected in release build
     SpecifierSet = Version = None
 
 
-LICHTFELD_VERSION = "0.5.0"
+# Keep this aligned with the latest released LichtFeld host version used for
+# plugin compatibility resolution in source-only Python contexts.
+LICHTFELD_VERSION = "0.5.1"
 PLUGIN_API_VERSION = "1.0"
 SUPPORTED_PLUGIN_FEATURES = (
     "capabilities.v1",

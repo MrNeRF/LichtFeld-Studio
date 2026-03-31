@@ -165,6 +165,7 @@ set(TEST_FILES
     test_dataloader_lfs.cpp
     test_bilateral_grid.cpp
     test_sparsity_debug.cpp
+    test_sparsity_optimizer.cpp
     test_dtype_operations_comprehensive.cpp
     test_tensor_bugs.cpp
     test_densification_performance.cpp
@@ -207,6 +208,7 @@ set(TEST_FILES
     test_mcp_app_utils.cpp
     test_mcp_sequencer_tools.cpp
     test_video_export_utils.cpp
+    test_visualizer_post_work.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp

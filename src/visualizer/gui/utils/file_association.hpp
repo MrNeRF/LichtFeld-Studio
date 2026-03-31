@@ -11,5 +11,6 @@ namespace lfs::vis::gui {
     LFS_VIS_API bool registerFileAssociations();
     LFS_VIS_API bool unregisterFileAssociations();
     LFS_VIS_API bool areFileAssociationsRegistered();
+    LFS_VIS_API bool openFileAssociationSettings();
 
 } // namespace lfs::vis::gui

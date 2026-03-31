@@ -9,6 +9,7 @@
             <div class="scene-tab-bar">
                 <button id="scene-tab" type="button" class="scene-tab">Scene</button>
                 <button id="history-tab" type="button" class="scene-tab">History</button>
+                <button id="logging-tab" type="button" class="scene-tab">Logging</button>
             </div>
         </div>
         <div id="scene-chip-row" class="scene-chip-row">
@@ -76,6 +77,48 @@
                 <span id="history-empty-redo" class="history-empty text-muted">Nothing recorded yet</span>
                 <div id="history-redo-list" class="history-stack-item" style="display:block; width:100%;"></div>
             </div>
+        </div>
+    </div>
+
+    <div id="logging-container">
+        <div class="history-summary">
+            <div id="logging-summary-label" class="history-summary__label text-muted">CLI Log Mirror</div>
+            <div id="logging-summary-value" class="history-summary__value text-default">No buffered CLI logs</div>
+        </div>
+
+        <div class="logging-toolbar">
+            <div class="logging-level-group">
+                <label id="logging-level-label" for="logging-level-select" class="logging-field-label text-muted">Log Level</label>
+                <select id="logging-level-select" class="logging-level-select">
+                    <option value="trace">Trace</option>
+                    <option value="debug">Debug</option>
+                    <option value="info">Info</option>
+                    <option value="performance">Performance</option>
+                    <option value="warn">Warn</option>
+                    <option value="error">Error</option>
+                    <option value="critical">Critical</option>
+                    <option value="off">Off</option>
+                </select>
+            </div>
+
+            <div class="logging-actions">
+                <button id="logging-export-btn"
+                        class="btn btn--secondary history-action"
+                        type="button">Export .txt</button>
+                <button id="logging-copy-btn"
+                        class="btn btn--ghost history-action"
+                        type="button">Copy</button>
+            </div>
+        </div>
+
+        <div id="logging-feedback" class="logging-feedback status-info"></div>
+        <div id="logging-note" class="history-note text-muted">Mirrors console output. Newest entries stay at the top; copy and export keep chronological order.</div>
+
+        <div class="separator"></div>
+
+        <div id="logging-scroll" class="logging-scroll">
+            <span id="logging-empty" class="history-empty text-muted">No logs captured yet</span>
+            <div id="logging-list" class="logging-list"></div>
         </div>
     </div>
 </body>

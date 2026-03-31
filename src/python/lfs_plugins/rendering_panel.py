@@ -189,6 +189,7 @@ class RenderingPanel(Panel):
         self._simplify_progress_value = "0"
         self._simplify_progress_stage = ""
         self._simplify_error_text = ""
+        self._escape_revert = w.EscapeRevertController()
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -213,6 +214,15 @@ class RenderingPanel(Panel):
             body.add_event_listener("click", self._on_body_click)
         for el in doc.query_selector_all("input.color-hex"):
             w.bind_select_all_on_focus(el)
+            data_value = el.get_attribute("data-value", "")
+            if data_value.endswith("_hex"):
+                prop_id = data_value[:-4]
+                self._escape_revert.bind(
+                    el,
+                    data_value,
+                    lambda p=prop_id: self._capture_color_snapshot(p),
+                    lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
+                )
         self._scrub_fields.mount(doc)
         self._sync_section_states()
 
@@ -358,6 +368,7 @@ class RenderingPanel(Panel):
         self._handle = None
         self._popup_el = None
         self._doc = None
+        self._escape_revert.clear()
         self._scrub_fields.unmount()
 
     def _get_scrub_value(self, prop):
@@ -390,6 +401,20 @@ class RenderingPanel(Panel):
         if color:
             setattr(s, prop_id, color)
 
+    def _capture_color_snapshot(self, prop_id):
+        settings = lf.get_render_settings()
+        if not settings:
+            return (0.0, 0.0, 0.0)
+        return tuple(getattr(settings, prop_id, (0.0, 0.0, 0.0)))
+
+    def _restore_color_snapshot(self, prop_id, snapshot):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+        setattr(settings, prop_id, tuple(snapshot or (0.0, 0.0, 0.0)))
+        if self._handle:
+            self._handle.dirty_all()
+
     def _compute_fov(self):
         s = lf.get_render_settings()
         view = lf.get_current_view()
@@ -414,8 +439,6 @@ class RenderingPanel(Panel):
         return header, arrow, content
 
     def _sync_section_states(self):
-        from . import rml_widgets as w
-
         for name in SECTION_NAMES:
             header, arrow, content = self._get_section_elements(name)
             if content:
@@ -434,7 +457,6 @@ class RenderingPanel(Panel):
 
         header, arrow, content = self._get_section_elements(name)
         if content:
-            from . import rml_widgets as w
             w.animate_section_toggle(content, expanding, arrow, header_element=header)
 
     def _on_color_click(self, handle, event, args):

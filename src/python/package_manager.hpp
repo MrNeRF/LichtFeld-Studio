@@ -34,6 +34,7 @@ namespace lfs::python {
         std::filesystem::path uv_path() const;
         bool is_uv_available() const;
 
+        std::filesystem::path root_dir() const;
         std::filesystem::path venv_dir() const;
         std::filesystem::path venv_python() const;
         std::filesystem::path site_packages_dir() const;
@@ -86,6 +87,7 @@ namespace lfs::python {
         PackageManager();
         InstallResult execute_uv(const std::vector<std::string>& args) const;
 
+        std::filesystem::path m_root_dir;
         std::filesystem::path m_venv_dir;
         mutable std::mutex m_mutex;
         mutable bool m_venv_ready = false;

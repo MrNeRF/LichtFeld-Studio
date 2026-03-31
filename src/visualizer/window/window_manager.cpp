@@ -203,19 +203,15 @@ namespace lfs::vis {
         should_close_ = false;
     }
 
-    void WindowManager::requestRedraw() {
-        needs_redraw_ = true;
+    void WindowManager::wakeEventLoop() {
+        if (!SDL_WasInit(SDL_INIT_EVENTS)) {
+            return;
+        }
+
+        // Wake SDL_WaitEventTimeout so queued viewer-thread work is serviced promptly.
         SDL_Event event{};
         event.type = SDL_EVENT_USER;
         SDL_PushEvent(&event);
-    }
-
-    bool WindowManager::needsRedraw() const {
-        bool result = needs_redraw_;
-        if (result) {
-            needs_redraw_ = false;
-        }
-        return result;
     }
 
     void WindowManager::processEvent(const SDL_Event& event) {
@@ -343,7 +339,7 @@ namespace lfs::vis {
         }
 
         updateWindowSize();
-        requestRedraw();
+        wakeEventLoop();
     }
 
 } // namespace lfs::vis

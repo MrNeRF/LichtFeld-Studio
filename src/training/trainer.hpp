@@ -132,6 +132,7 @@ namespace lfs::training {
 
         // Get current training state
         int get_current_iteration() const { return current_iteration_.load(); }
+        int get_total_iterations() const;
         const std::filesystem::path& get_output_path() const { return params_.dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
 
@@ -223,6 +224,11 @@ namespace lfs::training {
             std::stop_token stop_token = {});
 
         void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
+        int get_regular_iterations() const;
+        int get_active_sparsify_steps() const;
+        int get_sparsity_boundary_iteration() const;
+        lfs::core::param::OptimizationParameters get_runtime_optimization_params() const;
+        void sync_strategy_optimization_params();
 
         struct PhotometricLossResult {
             lfs::core::Tensor loss;

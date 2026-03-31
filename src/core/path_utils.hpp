@@ -33,6 +33,8 @@ namespace lfs::core {
      * @return UTF-8 encoded string representation of the path
      */
     namespace detail {
+        inline constexpr char32_t replacement_codepoint = 0xFFFD;
+
         inline bool is_valid_utf8(const std::string& s) {
             const auto* bytes = reinterpret_cast<const uint8_t*>(s.data());
             const size_t len = s.size();
@@ -93,12 +95,132 @@ namespace lfs::core {
             }
             return result;
         }
+
+        inline bool is_valid_unicode_scalar(const char32_t codepoint) {
+            return codepoint <= 0x10FFFF && !(codepoint >= 0xD800 && codepoint <= 0xDFFF);
+        }
+
+        inline void append_utf8_codepoint(std::string& result, char32_t codepoint) {
+            if (!is_valid_unicode_scalar(codepoint)) {
+                codepoint = replacement_codepoint;
+            }
+
+            if (codepoint <= 0x7F) {
+                result.push_back(static_cast<char>(codepoint));
+            } else if (codepoint <= 0x7FF) {
+                result.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+                result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+            } else if (codepoint <= 0xFFFF) {
+                result.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+                result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+                result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+            } else {
+                result.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+                result.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+                result.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+                result.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+            }
+        }
+
+        inline void append_wchar_codepoint(std::wstring& result, char32_t codepoint) {
+            if (!is_valid_unicode_scalar(codepoint)) {
+                codepoint = replacement_codepoint;
+            }
+
+            if constexpr (sizeof(wchar_t) == 2) {
+                if (codepoint <= 0xFFFF) {
+                    result.push_back(static_cast<wchar_t>(codepoint));
+                    return;
+                }
+
+                const char32_t adjusted = codepoint - 0x10000;
+                result.push_back(static_cast<wchar_t>(0xD800 + (adjusted >> 10)));
+                result.push_back(static_cast<wchar_t>(0xDC00 + (adjusted & 0x3FF)));
+            } else {
+                result.push_back(static_cast<wchar_t>(codepoint));
+            }
+        }
+
+        inline char32_t decode_wchar_codepoint(const std::wstring& text, size_t& index) {
+            if constexpr (sizeof(wchar_t) == 2) {
+                const auto lead = static_cast<uint16_t>(text[index]);
+                if (lead >= 0xD800 && lead <= 0xDBFF) {
+                    if (index + 1 < text.size()) {
+                        const auto trail = static_cast<uint16_t>(text[index + 1]);
+                        if (trail >= 0xDC00 && trail <= 0xDFFF) {
+                            ++index;
+                            return 0x10000 + (((lead - 0xD800) << 10) | (trail - 0xDC00));
+                        }
+                    }
+                    return replacement_codepoint;
+                }
+                if (lead >= 0xDC00 && lead <= 0xDFFF) {
+                    return replacement_codepoint;
+                }
+                return lead;
+            } else {
+                return static_cast<char32_t>(text[index]);
+            }
+        }
+
+        inline char32_t decode_utf8_codepoint(const std::string& text, size_t& index) {
+            const auto* bytes = reinterpret_cast<const uint8_t*>(text.data());
+            const size_t len = text.size();
+            const uint8_t first = bytes[index];
+
+            if (first < 0x80) {
+                return first;
+            }
+
+            if ((first & 0xE0) == 0xC0) {
+                if (index + 1 < len && (bytes[index + 1] & 0xC0) == 0x80) {
+                    const char32_t codepoint = ((first & 0x1F) << 6) | (bytes[index + 1] & 0x3F);
+                    if (codepoint >= 0x80) {
+                        index += 1;
+                        return codepoint;
+                    }
+                }
+                return replacement_codepoint;
+            }
+
+            if ((first & 0xF0) == 0xE0) {
+                if (index + 2 < len && (bytes[index + 1] & 0xC0) == 0x80 && (bytes[index + 2] & 0xC0) == 0x80) {
+                    const char32_t codepoint =
+                        ((first & 0x0F) << 12) | ((bytes[index + 1] & 0x3F) << 6) | (bytes[index + 2] & 0x3F);
+                    if (codepoint >= 0x800 && is_valid_unicode_scalar(codepoint)) {
+                        index += 2;
+                        return codepoint;
+                    }
+                }
+                return replacement_codepoint;
+            }
+
+            if ((first & 0xF8) == 0xF0) {
+                if (index + 3 < len && (bytes[index + 1] & 0xC0) == 0x80 && (bytes[index + 2] & 0xC0) == 0x80 &&
+                    (bytes[index + 3] & 0xC0) == 0x80) {
+                    const char32_t codepoint = ((first & 0x07) << 18) | ((bytes[index + 1] & 0x3F) << 12) |
+                                               ((bytes[index + 2] & 0x3F) << 6) | (bytes[index + 3] & 0x3F);
+                    if (codepoint >= 0x10000 && is_valid_unicode_scalar(codepoint)) {
+                        index += 3;
+                        return codepoint;
+                    }
+                }
+                return replacement_codepoint;
+            }
+
+            return replacement_codepoint;
+        }
     } // namespace detail
 
-    inline std::string path_to_utf8(const std::filesystem::path& p) {
+    /**
+     * @brief Convert a wide string to UTF-8 text.
+     *
+     * On Windows this uses the Win32 UTF-16 conversion APIs. On other platforms it
+     * performs an explicit Unicode scalar conversion so the helper remains correct
+     * even if it is reused outside filesystem-path code.
+     */
+    inline std::string wstring_to_utf8(const std::wstring& wstr) {
 #ifdef _WIN32
-        // On Windows, convert wide string to UTF-8
-        const std::wstring wstr = p.wstring();
         if (wstr.empty()) {
             return std::string();
         }
@@ -119,6 +241,60 @@ namespace lfs::core {
         }
         utf8_str.resize(converted);
         return utf8_str;
+#else
+        std::string result;
+        result.reserve(wstr.size());
+        for (size_t i = 0; i < wstr.size(); ++i) {
+            detail::append_utf8_codepoint(result, detail::decode_wchar_codepoint(wstr, i));
+        }
+        return result;
+#endif
+    }
+
+    /**
+     * @brief Convert UTF-8 text to a wide string.
+     *
+     * On Windows this uses the Win32 UTF-16 conversion APIs. On other platforms it
+     * decodes UTF-8 into Unicode scalar values and stores them in the platform wide
+     * representation.
+     */
+    inline std::wstring utf8_to_wstring(const std::string& utf8_str) {
+#ifdef _WIN32
+        const char* str = utf8_str.c_str();
+        const size_t len = std::strlen(str);
+        if (len == 0) {
+            return std::wstring();
+        }
+
+        const int size_needed = MultiByteToWideChar(CP_UTF8, 0, str,
+                                                    static_cast<int>(len),
+                                                    nullptr, 0);
+        if (size_needed <= 0) {
+            return std::wstring();
+        }
+
+        std::wstring wstr(size_needed, 0);
+        const int converted = MultiByteToWideChar(CP_UTF8, 0, str,
+                                                  static_cast<int>(len),
+                                                  &wstr[0], size_needed);
+        if (converted <= 0) {
+            return std::wstring();
+        }
+        wstr.resize(converted);
+        return wstr;
+#else
+        std::wstring result;
+        result.reserve(utf8_str.size());
+        for (size_t i = 0; i < utf8_str.size(); ++i) {
+            detail::append_wchar_codepoint(result, detail::decode_utf8_codepoint(utf8_str, i));
+        }
+        return result;
+#endif
+    }
+
+    inline std::string path_to_utf8(const std::filesystem::path& p) {
+#ifdef _WIN32
+        return wstring_to_utf8(p.wstring());
 #else
         // Linux filesystems are byte-oriented; filenames may not be valid UTF-8.
         std::string s = p.string();
@@ -141,30 +317,10 @@ namespace lfs::core {
      */
     inline std::filesystem::path utf8_to_path(const std::string& utf8_str) {
 #ifdef _WIN32
-        // On Windows, convert UTF-8 string to wide string, then to path
-        // Use c_str() and strlen to handle strings with embedded null characters
-        // (common when using fixed-size buffers like ImGui InputText)
-        const char* str = utf8_str.c_str();
-        const size_t len = std::strlen(str);
-        if (len == 0) {
+        const std::wstring wstr = utf8_to_wstring(utf8_str);
+        if (wstr.empty()) {
             return std::filesystem::path();
         }
-
-        const int size_needed = MultiByteToWideChar(CP_UTF8, 0, str,
-                                                    static_cast<int>(len),
-                                                    nullptr, 0);
-        if (size_needed <= 0) {
-            return std::filesystem::path();
-        }
-
-        std::wstring wstr(size_needed, 0);
-        const int converted = MultiByteToWideChar(CP_UTF8, 0, str,
-                                                  static_cast<int>(len),
-                                                  &wstr[0], size_needed);
-        if (converted <= 0) {
-            return std::filesystem::path();
-        }
-        wstr.resize(converted);
         return std::filesystem::path(wstr);
 #else
         // On Linux/Mac, native encoding is UTF-8, so use string directly

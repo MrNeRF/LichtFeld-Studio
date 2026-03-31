@@ -18,6 +18,9 @@ Usage in Panel.on_mount():
     w.progress(container, "prog", value=0.5, label="50%")
 """
 
+from dataclasses import dataclass
+from typing import Any, Callable
+
 
 def find_ancestor_with_attribute(element, attribute, stop=None):
     """Walk up the DOM tree looking for an element with the given attribute."""
@@ -47,6 +50,60 @@ def bind_select_all_on_focus(element):
     element.set_attribute("data-select-all-bound", "1")
     element.add_event_listener("focus", lambda _event, el=element: _select_all_text(el))
     return element
+
+
+@dataclass
+class _EscapeRevertBinding:
+    element: object
+    capture: Callable[[], Any]
+    restore: Callable[[Any], None]
+    snapshot: Any = None
+
+
+class EscapeRevertController:
+    """Restore focused text inputs to their pre-edit value on host-dispatched cancel."""
+
+    def __init__(self):
+        self._bindings = {}
+
+    def clear(self):
+        self._bindings.clear()
+
+    def bind(self, element, key, capture, restore):
+        if element is None:
+            return None
+
+        binding_key = str(key)
+        self._bindings[binding_key] = _EscapeRevertBinding(
+            element=element,
+            capture=capture,
+            restore=restore,
+        )
+        element.add_event_listener("focus", lambda _event, k=binding_key: self._capture_binding(k))
+        element.add_event_listener("blur", lambda _event, k=binding_key: self._clear_binding(k))
+        element.add_event_listener("escapecancel", lambda event, k=binding_key: self._restore_binding(k, event))
+        return element
+
+    def _restore_binding(self, key, event):
+        binding = self._bindings.get(key)
+        if binding is None or binding.element.parent() is None:
+            return False
+
+        snapshot = binding.snapshot if binding.snapshot is not None else binding.capture()
+        binding.restore(snapshot)
+        event.stop_propagation()
+        return True
+
+    def _capture_binding(self, key):
+        binding = self._bindings.get(key)
+        if binding is None:
+            return
+        binding.snapshot = binding.capture()
+
+    def _clear_binding(self, key):
+        binding = self._bindings.get(key)
+        if binding is not None:
+            binding.snapshot = None
 
 
 def _section_duration(height_px, duration):

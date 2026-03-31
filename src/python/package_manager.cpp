@@ -3,14 +3,19 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "package_manager.hpp"
+#include "windows_process_utils.hpp"
 
 #include <core/cuda_version.hpp>
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
+#include <core/path_utils.hpp>
 
+#include <algorithm>
 #include <cstdio>
+#include <optional>
 #include <regex>
 #include <sstream>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -48,11 +53,62 @@ namespace lfs::python {
 #endif
         }
 
-        std::pair<int, std::string> execute_command(const std::string& cmd) {
+        std::pair<int, std::string> execute_process_capture(
+            const std::filesystem::path& program,
+            const std::vector<std::string>& args,
+            const std::optional<std::pair<std::string, std::string>>& env_override = std::nullopt) {
             std::string output;
             int exit_code = -1;
 
 #ifdef _WIN32
+            auto build_environment_block =
+                [&](const std::optional<std::pair<std::string, std::string>>& override_pair) {
+                    std::vector<wchar_t> block;
+                    if (!override_pair) {
+                        return block;
+                    }
+
+                    std::vector<std::wstring> entries;
+                    if (LPWCH env = GetEnvironmentStringsW()) {
+                        for (const wchar_t* current = env; *current; current += wcslen(current) + 1) {
+                            entries.emplace_back(current);
+                        }
+                        FreeEnvironmentStringsW(env);
+                    }
+
+                    const std::wstring key = lfs::core::utf8_to_wstring(override_pair->first);
+                    const std::wstring value = lfs::core::utf8_to_wstring(override_pair->second);
+                    const std::wstring entry = key + L"=" + value;
+
+                    bool replaced = false;
+                    for (auto& existing : entries) {
+                        const size_t pos = existing.find(L'=');
+                        if (pos == std::wstring::npos) {
+                            continue;
+                        }
+                        const std::wstring name = existing.substr(0, pos);
+                        if (_wcsicmp(name.c_str(), key.c_str()) == 0) {
+                            existing = entry;
+                            replaced = true;
+                            break;
+                        }
+                    }
+                    if (!replaced) {
+                        entries.push_back(entry);
+                    }
+
+                    std::sort(entries.begin(), entries.end(), [](const std::wstring& a, const std::wstring& b) {
+                        return _wcsicmp(a.c_str(), b.c_str()) < 0;
+                    });
+
+                    for (const auto& existing : entries) {
+                        block.insert(block.end(), existing.begin(), existing.end());
+                        block.push_back(L'\0');
+                    }
+                    block.push_back(L'\0');
+                    return block;
+                };
+
             SECURITY_ATTRIBUTES sa;
             sa.nLength = sizeof(SECURITY_ATTRIBUTES);
             sa.bInheritHandle = TRUE;
@@ -72,12 +128,24 @@ namespace lfs::python {
             si.dwFlags |= STARTF_USESTDHANDLES;
 
             PROCESS_INFORMATION pi = {};
-
-            std::wstring wcmd(cmd.begin(), cmd.end());
-            if (!CreateProcessW(nullptr, wcmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            const std::wstring program_w = program.wstring();
+            if (program_w.empty()) {
                 CloseHandle(hReadPipe);
                 CloseHandle(hWritePipe);
-                return {-1, "Failed to create process"};
+                return {-1, "Failed to resolve process path"};
+            }
+
+            std::wstring cmdline = detail::build_win32_cmdline(program, args);
+
+            std::vector<wchar_t> environment = build_environment_block(env_override);
+            void* environment_ptr = environment.empty() ? nullptr : environment.data();
+
+            // Keep lpApplicationName and argv[0] aligned to the same executable path.
+            if (!CreateProcessW(program_w.c_str(), cmdline.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
+                                environment_ptr, nullptr, &si, &pi)) {
+                CloseHandle(hReadPipe);
+                CloseHandle(hWritePipe);
+                return {-1, std::format("Failed to create process ({})", GetLastError())};
             }
 
             CloseHandle(hWritePipe);
@@ -99,19 +167,55 @@ namespace lfs::python {
             CloseHandle(pi.hThread);
             CloseHandle(hReadPipe);
 #else
-            FILE* pipe = popen((cmd + " 2>&1").c_str(), "r");
-            if (!pipe) {
-                return {-1, "Failed to execute command"};
+            int pipe_fds[2];
+            if (pipe(pipe_fds) != 0) {
+                return {-1, "Failed to create pipe"};
             }
+
+            const pid_t pid = fork();
+            if (pid == -1) {
+                close(pipe_fds[0]);
+                close(pipe_fds[1]);
+                return {-1, "Failed to fork process"};
+            }
+
+            if (pid == 0) {
+                dup2(pipe_fds[1], STDOUT_FILENO);
+                dup2(pipe_fds[1], STDERR_FILENO);
+                close(pipe_fds[0]);
+                close(pipe_fds[1]);
+
+                if (env_override) {
+                    setenv(env_override->first.c_str(), env_override->second.c_str(), 1);
+                }
+
+                const std::string program_utf8 = lfs::core::path_to_utf8(program);
+                std::vector<char*> argv;
+                argv.reserve(args.size() + 2);
+                argv.push_back(const_cast<char*>(program_utf8.c_str()));
+                for (const auto& arg : args) {
+                    argv.push_back(const_cast<char*>(arg.c_str()));
+                }
+                argv.push_back(nullptr);
+
+                execvp(program_utf8.c_str(), argv.data());
+                _exit(127);
+            }
+
+            close(pipe_fds[1]);
 
             char buffer[4096];
-            while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-                output += buffer;
+            ssize_t bytes_read = 0;
+            while ((bytes_read = read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
+                output.append(buffer, static_cast<size_t>(bytes_read));
             }
+            close(pipe_fds[0]);
 
-            exit_code = pclose(pipe);
-            if (WIFEXITED(exit_code)) {
-                exit_code = WEXITSTATUS(exit_code);
+            int status = 0;
+            if (waitpid(pid, &status, 0) == pid && WIFEXITED(status)) {
+                exit_code = WEXITSTATUS(status);
+            } else if (WIFSIGNALED(status)) {
+                exit_code = 128 + WTERMSIG(status);
             }
 #endif
 
@@ -120,16 +224,25 @@ namespace lfs::python {
 
         std::filesystem::path get_lichtfeld_dir() {
 #ifdef _WIN32
-            const char* const home = std::getenv("USERPROFILE");
+            const DWORD size = GetEnvironmentVariableW(L"USERPROFILE", nullptr, 0);
+            if (size > 0) {
+                std::wstring home(size - 1, L'\0');
+                if (GetEnvironmentVariableW(L"USERPROFILE", home.data(), size) == size - 1) {
+                    return std::filesystem::path(home) / ".lichtfeld";
+                }
+            }
+            return std::filesystem::temp_directory_path() / "lichtfeld";
 #else
             const char* const home = std::getenv("HOME");
-#endif
             return std::filesystem::path(home ? home : "/tmp") / ".lichtfeld";
+#endif
         }
 
     } // namespace
 
-    PackageManager::PackageManager() : m_venv_dir(get_lichtfeld_dir() / "venv") {}
+    PackageManager::PackageManager()
+        : m_root_dir(get_lichtfeld_dir()),
+          m_venv_dir(m_root_dir / "venv") {}
 
     PackageManager& PackageManager::instance() {
         static PackageManager inst;
@@ -158,13 +271,17 @@ namespace lfs::python {
         if (cached.empty())
             LOG_WARN("Bundled uv not found");
         else if (bundled)
-            LOG_INFO("Using bundled uv: {}", cached.string());
+            LOG_INFO("Using bundled uv: {}", lfs::core::path_to_utf8(cached));
 
         return cached;
     }
 
     bool PackageManager::is_uv_available() const {
         return !uv_path().empty();
+    }
+
+    std::filesystem::path PackageManager::root_dir() const {
+        return m_root_dir;
     }
 
     std::filesystem::path PackageManager::venv_dir() const {
@@ -190,13 +307,13 @@ namespace lfs::python {
             return true;
 
         if (std::filesystem::exists(venv_python())) {
-            LOG_INFO("Existing venv found: {}", venv_python().string());
+            LOG_INFO("Existing venv found: {}", lfs::core::path_to_utf8(venv_python()));
             m_venv_ready = true;
             return true;
         }
 
         if (std::filesystem::exists(m_venv_dir) && !std::filesystem::exists(venv_python())) {
-            LOG_WARN("Broken venv (missing python), removing: {}", m_venv_dir.string());
+            LOG_WARN("Broken venv (missing python), removing: {}", lfs::core::path_to_utf8(m_venv_dir));
             std::filesystem::remove_all(m_venv_dir);
         }
 
@@ -208,30 +325,34 @@ namespace lfs::python {
 
         const auto embedded_python = lfs::core::getEmbeddedPython();
         if (embedded_python.empty()) {
-            LOG_ERROR("Embedded Python not found (exe_dir={})", lfs::core::getExecutableDir().string());
+            LOG_ERROR("Embedded Python not found (exe_dir={})",
+                      lfs::core::path_to_utf8(lfs::core::getExecutableDir()));
             return false;
         }
 
-        LOG_INFO("Creating venv at {} with {}", m_venv_dir.string(), embedded_python.string());
+        LOG_INFO("Creating venv at {} with {}",
+                 lfs::core::path_to_utf8(m_venv_dir),
+                 lfs::core::path_to_utf8(embedded_python));
 
         const auto python_home = lfs::core::getPythonHome();
-        LOG_INFO("Python home: {}", python_home.empty() ? "(empty)" : python_home.string());
+        LOG_INFO("Python home: {}", python_home.empty() ? "(empty)" : lfs::core::path_to_utf8(python_home));
 
-        std::ostringstream cmd;
-#ifdef _WIN32
-        if (!python_home.empty())
-            cmd << "set PYTHONHOME=" << python_home.string() << "&& ";
-#else
-        if (!python_home.empty())
-            cmd << "PYTHONHOME=\"" << python_home.string() << "\" ";
-#endif
-        cmd << "\"" << uv.string() << "\" venv"
-            << " \"" << m_venv_dir.string() << "\""
-            << " --python \"" << embedded_python.string() << "\""
-            << " --no-managed-python --no-python-downloads";
+        std::vector<std::string> args = {
+            "venv",
+            lfs::core::path_to_utf8(m_venv_dir),
+            "--python",
+            lfs::core::path_to_utf8(embedded_python),
+            "--no-managed-python",
+            "--no-python-downloads"};
 
-        LOG_INFO("Executing: {}", cmd.str());
-        const auto [exit_code, output] = execute_command(cmd.str());
+        std::optional<std::pair<std::string, std::string>> env_override;
+        if (!python_home.empty()) {
+            env_override = std::make_pair(std::string("PYTHONHOME"), lfs::core::path_to_utf8(python_home));
+        }
+
+        LOG_INFO("Executing uv venv create for {}", lfs::core::path_to_utf8(m_venv_dir));
+        LOG_DEBUG("UV command: {}", detail::format_command_for_log(uv, args));
+        const auto [exit_code, output] = execute_process_capture(uv, args, env_override);
 
         if (exit_code != 0) {
             LOG_ERROR("Failed to create venv: {}", output);
@@ -272,13 +393,9 @@ namespace lfs::python {
         if (uv.empty())
             return {.error = "uv not found"};
 
-        std::ostringstream cmd;
-        cmd << "\"" << uv.string() << "\"";
-        for (const auto& arg : args)
-            cmd << " " << arg;
-
-        LOG_INFO("Executing uv: {}", cmd.str());
-        const auto [exit_code, output] = execute_command(cmd.str());
+        LOG_INFO("Executing uv command with {} args", args.size());
+        LOG_DEBUG("UV command: {}", detail::format_command_for_log(uv, args));
+        const auto [exit_code, output] = execute_process_capture(uv, args);
 
         InstallResult result;
         result.output = output;
@@ -294,7 +411,7 @@ namespace lfs::python {
 
         std::lock_guard lock(m_mutex);
         LOG_INFO("Installing {}", package);
-        return execute_uv({"pip", "install", package, "--python", venv_python().string()});
+        return execute_uv({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())});
     }
 
     InstallResult PackageManager::uninstall(const std::string& package) {
@@ -303,7 +420,7 @@ namespace lfs::python {
 
         std::lock_guard lock(m_mutex);
         LOG_INFO("Uninstalling {}", package);
-        return execute_uv({"pip", "uninstall", package, "--python", venv_python().string()});
+        return execute_uv({"pip", "uninstall", package, "--python", lfs::core::path_to_utf8(venv_python())});
     }
 
     InstallResult PackageManager::install_torch(const std::string& cuda_version,
@@ -324,7 +441,7 @@ namespace lfs::python {
         LOG_INFO("Installing {} from {}", package, cuda_tag);
 
         std::vector<std::string> args = {"pip", "install", package, "--extra-index-url", index_url,
-                                         "--python", venv_python().string()};
+                                         "--python", lfs::core::path_to_utf8(venv_python())};
         if (torch_version.empty())
             args.push_back("--upgrade");
 
@@ -362,7 +479,7 @@ namespace lfs::python {
                 }
 
                 packages.push_back(
-                    {.name = pkg_name, .version = match[2].str(), .path = pkg_path.string()});
+                    {.name = pkg_name, .version = match[2].str(), .path = lfs::core::path_to_utf8(pkg_path)});
             }
         }
         return packages;
@@ -403,7 +520,7 @@ namespace lfs::python {
         m_runner->set_output_callback(std::move(on_output));
         m_runner->set_completion_callback(std::move(on_complete));
 
-        return m_runner->start({"pip", "install", package, "--python", venv_python().string()});
+        return m_runner->start({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())});
     }
 
     bool PackageManager::uninstall_async(const std::string& package,
@@ -426,7 +543,7 @@ namespace lfs::python {
         m_runner->set_output_callback(std::move(on_output));
         m_runner->set_completion_callback(std::move(on_complete));
 
-        return m_runner->start({"pip", "uninstall", package, "-y", "--python", venv_python().string()});
+        return m_runner->start({"pip", "uninstall", package, "-y", "--python", lfs::core::path_to_utf8(venv_python())});
     }
 
     bool PackageManager::install_torch_async(const std::string& cuda_version,
@@ -460,7 +577,7 @@ namespace lfs::python {
         m_runner->set_completion_callback(std::move(on_complete));
 
         std::vector<std::string> args = {"pip", "install", package, "--extra-index-url", index_url,
-                                         "--python", venv_python().string()};
+                                         "--python", lfs::core::path_to_utf8(venv_python())};
         if (torch_version.empty())
             args.push_back("--upgrade");
 
@@ -487,7 +604,7 @@ namespace lfs::python {
         m_runner->set_raw_output_callback(std::move(on_output));
         m_runner->set_completion_callback(std::move(on_complete));
 
-        return m_runner->start({"pip", "install", package, "--python", venv_python().string()});
+        return m_runner->start({"pip", "install", package, "--python", lfs::core::path_to_utf8(venv_python())});
     }
 
     bool PackageManager::install_torch_async_raw(const std::string& cuda_version,
@@ -521,7 +638,7 @@ namespace lfs::python {
         m_runner->set_completion_callback(std::move(on_complete));
 
         std::vector<std::string> args = {"pip", "install", package, "--extra-index-url", index_url,
-                                         "--python", venv_python().string()};
+                                         "--python", lfs::core::path_to_utf8(venv_python())};
         if (torch_version.empty())
             args.push_back("--upgrade");
 

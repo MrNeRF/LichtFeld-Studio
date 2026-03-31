@@ -24,6 +24,8 @@ namespace lfs::vis::gui {
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveJsonFileDialog(const std::string& defaultName,
                                                          const std::filesystem::path& defaultPath = {});
+    LFS_VIS_API std::filesystem::path SaveTextFileDialog(const std::string& defaultName,
+                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveSogFileDialog(const std::string& defaultName,
                                                         const std::filesystem::path& defaultPath = {});
     LFS_VIS_API std::filesystem::path SaveSpzFileDialog(const std::string& defaultName,

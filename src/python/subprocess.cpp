@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "subprocess.hpp"
+#include "windows_process_utils.hpp"
 
 #include <core/logger.hpp>
+#include <core/path_utils.hpp>
 
 #ifndef _WIN32
 #include <cerrno>
@@ -180,20 +182,24 @@ namespace lfs::python {
             return false;
         }
 
-        std::wstring cmdline;
-        cmdline += L"\"";
-        cmdline += std::wstring(program.begin(), program.end());
-        cmdline += L"\"";
-        for (const auto& arg : args) {
-            cmdline += L" \"";
-            cmdline += std::wstring(arg.begin(), arg.end());
-            cmdline += L"\"";
+        const std::wstring program_w = lfs::core::utf8_to_wstring(program);
+        if (program_w.empty()) {
+            LOG_ERROR("Invalid UTF-8 subprocess path: {}", program);
+            DeleteProcThreadAttributeList(si.lpAttributeList);
+            HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
+            ClosePseudoConsole(hpc);
+            CloseHandle(pipe_stdout_);
+            pipe_stdout_ = INVALID_HANDLE_VALUE;
+            return false;
         }
+
+        std::wstring cmdline = detail::build_win32_cmdline(lfs::core::utf8_to_path(program), args);
 
         SetEnvironmentVariableW(L"UV_HTTP_TIMEOUT", L"300");
 
         PROCESS_INFORMATION pi = {};
-        const BOOL success = CreateProcessW(nullptr, cmdline.data(), nullptr, nullptr, FALSE,
+        // Keep lpApplicationName and argv[0] aligned to the same executable path.
+        const BOOL success = CreateProcessW(program_w.c_str(), cmdline.data(), nullptr, nullptr, FALSE,
                                             EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
                                             &si.StartupInfo, &pi);
 

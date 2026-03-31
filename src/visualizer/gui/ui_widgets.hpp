@@ -25,6 +25,22 @@ namespace lfs::vis::gui::widgets {
                                 const char* format = "%.3f", ImGuiInputTextFlags flags = 0);
     LFS_VIS_API bool InputInt(const char* label, int* v, int step = 1, int step_fast = 100,
                               ImGuiInputTextFlags flags = 0);
+    LFS_VIS_API bool DragFloat(const char* label, float* v, float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                               const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt(const char* label, int* v, float speed = 1.0f, int min = 0, int max = 0,
+                             const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragFloat2(const char* label, float v[2], float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                                const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragFloat3(const char* label, float v[3], float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                                const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragFloat4(const char* label, float v[4], float speed = 1.0f, float min = 0.0f, float max = 0.0f,
+                                const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt2(const char* label, int v[2], float speed = 1.0f, int min = 0, int max = 0,
+                              const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt3(const char* label, int v[3], float speed = 1.0f, int min = 0, int max = 0,
+                              const char* format = "%d", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API bool DragInt4(const char* label, int v[4], float speed = 1.0f, int min = 0, int max = 0,
+                              const char* format = "%d", ImGuiSliderFlags flags = 0);
 
     // Slider helpers enter text edit mode on click-release-without-drag and select the full value.
     LFS_VIS_API bool SliderFloat(const char* label, float* v, float min, float max,
@@ -35,6 +51,7 @@ namespace lfs::vis::gui::widgets {
                                   const char* format = "%.3f", ImGuiSliderFlags flags = 0);
     LFS_VIS_API bool SliderFloat3(const char* label, float v[3], float min, float max,
                                   const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+    LFS_VIS_API void RequestActiveEditCancel();
 
     // Reusable UI widgets
     bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,

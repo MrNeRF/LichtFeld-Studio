@@ -9,6 +9,7 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -185,37 +186,6 @@ namespace lfs::vis::gui {
 
         float maxCornerRadius(const Rml::CornerSizes& radii) {
             return std::max({radii[0], radii[1], radii[2], radii[3]});
-        }
-
-        bool isTextEditableElement(Rml::Element* element) {
-            if (!element)
-                return false;
-
-            const auto tag = element->GetTagName();
-            if (tag == "textarea")
-                return true;
-            if (tag != "input")
-                return false;
-
-            const auto input_type = element->GetAttribute<Rml::String>("type", "text");
-            return input_type.empty() || input_type == "text" || input_type == "password" ||
-                   input_type == "search" || input_type == "email" || input_type == "url";
-        }
-
-        bool hasFocusedKeyboardTarget(Rml::Element* element) {
-            if (!element)
-                return false;
-
-            return element->GetTagName() != "body";
-        }
-
-        bool isSingleLineTextInput(Rml::Element* element) {
-            if (!element || element->GetTagName() != "input")
-                return false;
-
-            const auto input_type = element->GetAttribute<Rml::String>("type", "text");
-            return input_type.empty() || input_type == "text" || input_type == "password" ||
-                   input_type == "search" || input_type == "email" || input_type == "url";
         }
 
     } // namespace
@@ -899,7 +869,7 @@ namespace lfs::vis::gui {
         const float mouse_x = input.mouse_x;
         const float mouse_y = input.mouse_y;
         const auto sync_text_focus = [&]() {
-            const bool want_text = isTextEditableElement(rml_context_->GetFocusElement());
+            const bool want_text = rml_input::isTextEditableElement(rml_context_->GetFocusElement());
             if (want_text == has_text_focus_)
                 return;
 
@@ -933,7 +903,7 @@ namespace lfs::vis::gui {
             if (!focused)
                 return;
 
-            if (isTextEditableElement(focused))
+            if (rml_input::isTextEditableElement(focused))
                 flush_pending_text_input();
             focused->Blur();
             sync_text_focus();
@@ -1012,9 +982,10 @@ namespace lfs::vis::gui {
         }
 
         bool forward_keys =
-            hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
+            rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
             !input.viewport_keyboard_focus;
         bool commit_requested = false;
+        bool escape_requested = false;
         const bool composing = text_input_handler && text_input_handler->isComposing();
         auto isNumpadTextKey = [](int sc) {
             return (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_0) ||
@@ -1025,6 +996,15 @@ namespace lfs::vis::gui {
             const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                           input.key_alt, input.key_super);
             for (int sc : input.keys_pressed) {
+                if (!composing && sc == SDL_SCANCODE_ESCAPE) {
+                    if (auto* const focused = rml_context_->GetFocusElement();
+                        focused && (rml_input::isTextEditableElement(focused) ||
+                                    rml_input::isSelectRelatedElement(focused))) {
+                        escape_requested = true;
+                        had_input = true;
+                        continue;
+                    }
+                }
                 const bool is_submit_key =
                     (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER);
                 if (composing && (is_submit_key || sc == SDL_SCANCODE_ESCAPE))
@@ -1044,6 +1024,8 @@ namespace lfs::vis::gui {
                     commit_requested = true;
             }
             for (int sc : input.keys_released) {
+                if (escape_requested && sc == SDL_SCANCODE_ESCAPE)
+                    continue;
                 if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
                                   sc == SDL_SCANCODE_ESCAPE))
                     continue;
@@ -1057,13 +1039,22 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (!composing && commit_requested && isSingleLineTextInput(rml_context_->GetFocusElement()))
+        if (!composing && escape_requested) {
+            if (rml_input::cancelFocusedElement(*rml_context_)) {
+                sync_text_focus();
+                had_input = true;
+            }
+        }
+
+        if (!composing && commit_requested &&
+            rml_input::isSingleLineTextInput(rml_context_->GetFocusElement())) {
             blur_focused_element();
+        }
 
         sync_text_focus();
 
         auto* const focused = rml_context_->GetFocusElement();
-        wants_keyboard_ = hasFocusedKeyboardTarget(focused);
+        wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused);
         if (wants_keyboard_)
             s_frame_wants_keyboard = true;
 

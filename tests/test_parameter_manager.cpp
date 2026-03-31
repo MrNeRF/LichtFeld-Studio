@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "core/parameter_manager.hpp"
+#include "core/parameters.hpp"
 
 namespace {
 
@@ -124,6 +125,17 @@ namespace {
         EXPECT_EQ(recreated.dataset.images, "images_8");
         EXPECT_EQ(recreated.dataset.data_path, "/tmp/override_dataset");
         EXPECT_EQ(recreated.dataset.output_path, "/tmp/override_output");
+    }
+
+    TEST(ParameterManagerTest, PpispAutoControllerUsesPlannedTotalIterations) {
+        auto params = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        params.ppisp_use_controller = true;
+        params.iterations = 10'000;
+        params.enable_sparsity = true;
+        params.sparsify_steps = 15'000;
+
+        EXPECT_EQ(params.resolved_total_iterations(), 25'000);
+        EXPECT_EQ(params.resolved_ppisp_controller_activation_step(params.resolved_total_iterations()), 20'000);
     }
 
 } // namespace

@@ -288,11 +288,6 @@ SCRUB_FIELD_DEFS = {
     "prune_ratio": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
 }
 
-DIRECT_SET_PROPS = {
-    "iterations", "max_cap", "means_lr", "shs_lr",
-    "opacity_lr", "scaling_lr", "rotation_lr", "ppisp_controller_lr",
-}
-
 RENDER_SYNC = {
     "gut": "gut",
     "mip_filter": "mip_filter",
@@ -365,6 +360,7 @@ class TrainingPanel(Panel):
         self._loss_tick_mid = ""
         self._loss_tick_min = ""
         self._last_panel_label = ""
+        self._escape_revert = w.EscapeRevertController()
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -626,6 +622,48 @@ class TrainingPanel(Panel):
         if self._handle:
             self._handle.dirty(key)
 
+    def _capture_number_input_snapshot(self, key):
+        canonical = self._canonical_text_buf_value(key)
+        if canonical is not None:
+            return canonical
+        return str(self._text_bufs.get(key, "") or "")
+
+    def _restore_number_input_snapshot(self, key, snapshot):
+        self._text_bufs[key] = str(snapshot or "")
+        self._mark_text_buf_dirty(key)
+
+    def _capture_ppisp_sidecar_path_snapshot(self):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return ""
+        return str(params.ppisp_sidecar_path or "")
+
+    def _restore_ppisp_sidecar_path_snapshot(self, snapshot):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        params.ppisp_sidecar_path = str(snapshot or "")
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _capture_bg_color_snapshot(self):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return (0.0, 0.0, 0.0)
+        return tuple(params.bg_color)
+
+    def _restore_bg_color_snapshot(self, snapshot):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        color = tuple(snapshot or (0.0, 0.0, 0.0))
+        params.bg_color = color
+        rs = lf.get_render_settings()
+        if rs:
+            rs.set("background_color", color)
+        if self._handle:
+            self._handle.dirty_all()
+
     def _canonical_text_buf_value(self, key):
         p = lf.optimization_params()
         d = lf.dataset_params()
@@ -798,10 +836,34 @@ class TrainingPanel(Panel):
             body.add_event_listener("mouseup", self._on_step_mouseup)
         for el in doc.query_selector_all("input.number-input"):
             w.bind_select_all_on_focus(el)
+            key = el.get_attribute("data-value", "")
+            if key:
+                self._escape_revert.bind(
+                    el,
+                    key,
+                    lambda k=key: self._capture_number_input_snapshot(k),
+                    lambda snapshot, k=key: self._restore_number_input_snapshot(k, snapshot),
+                )
             el.add_event_listener("change", self._on_number_input_change)
             el.add_event_listener("blur", self._on_number_input_blur)
         for el in doc.query_selector_all("input.color-hex"):
             w.bind_select_all_on_focus(el)
+            if el.get_attribute("data-value", "") == "bg_color_hex":
+                self._escape_revert.bind(
+                    el,
+                    "bg_color_hex",
+                    self._capture_bg_color_snapshot,
+                    self._restore_bg_color_snapshot,
+                )
+        sidecar_input = doc.query_selector('input[data-value="ppisp_sidecar_path"]')
+        if sidecar_input:
+            w.bind_select_all_on_focus(sidecar_input)
+            self._escape_revert.bind(
+                sidecar_input,
+                "ppisp_sidecar_path",
+                self._capture_ppisp_sidecar_path_snapshot,
+                self._restore_ppisp_sidecar_path_snapshot,
+            )
         self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
         self._scrub_fields.mount(doc)
         self._sync_section_states()
@@ -915,6 +977,7 @@ class TrainingPanel(Panel):
         doc.remove_data_model("training")
         self._handle = None
         self._doc = None
+        self._escape_revert.clear()
         self._scrub_fields.unmount()
 
     def _update_loss_graph(self):
@@ -1093,15 +1156,16 @@ class TrainingPanel(Panel):
         if max_v is not None:
             val = min(val, dtype(max_v))
 
-        if prop == "steps_scaler":
-            params.apply_step_scaling(val)
-            if self._handle:
-                self._sync_text_bufs()
-                self._handle.dirty_all()
-        elif prop in DIRECT_SET_PROPS:
-            setattr(params, prop, val)
-        else:
-            params.set(prop, val)
+        try:
+            if prop == "steps_scaler":
+                params.apply_step_scaling(val)
+                if self._handle:
+                    self._sync_text_bufs()
+                    self._handle.dirty_all()
+            else:
+                params.set(prop, val)
+        except (ValueError, TypeError, RuntimeError):
+            return False
         return True
 
     def _set_ppisp_activation_step(self, val_str):
@@ -1265,8 +1329,6 @@ class TrainingPanel(Panel):
         return header, arrow, content
 
     def _sync_section_states(self):
-        from . import rml_widgets as w
-
         for name in SECTIONS:
             header, arrow, content = self._get_section_elements(name)
             if content:
@@ -1285,7 +1347,6 @@ class TrainingPanel(Panel):
 
         header, arrow, content = self._get_section_elements(name)
         if content:
-            from . import rml_widgets as w
             w.animate_section_toggle(content, expanding, arrow, header_element=header)
 
     def _on_color_click(self, handle, event, args):

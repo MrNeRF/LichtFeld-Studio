@@ -168,7 +168,7 @@ namespace {
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
             ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", "Enable sparsity optimization", {"enable-sparsity"});
-            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", "Number of steps for sparsification (default: 15000)", {"sparsify-steps"});
+            ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", "Number of sparsification steps to run after regular training (default: 15000)", {"sparsify-steps"});
             ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", "Initial ADMM penalty parameter (default: 0.0005)", {"init-rho"});
             ::args::ValueFlag<float> prune_ratio(sparsity_group, "prune_ratio", "Final pruning ratio for sparsity (default: 0.6)", {"prune-ratio"});
 
@@ -678,7 +678,8 @@ namespace {
             return;
 
         if (opt.ppisp_controller_activation_step < 0) {
-            opt.ppisp_controller_activation_step = opt.resolved_ppisp_controller_activation_step();
+            opt.ppisp_controller_activation_step =
+                opt.resolved_ppisp_controller_activation_step(opt.resolved_total_iterations());
         }
     }
 

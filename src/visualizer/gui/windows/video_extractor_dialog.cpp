@@ -482,7 +482,7 @@ namespace lfs::gui {
         ImGui::PushItemWidth(80);
         ImGui::PushStyleColor(ImGuiCol_FrameBg,
                               lfs::vis::toU32WithAlpha(t.palette.success, 0.2f));
-        if (ImGui::DragFloat("##trim_start", &trim_start_, 0.1f, 0.0f, trim_end_ - 0.1f, "%.1fs")) {
+        if (lfs::vis::gui::widgets::DragFloat("##trim_start", &trim_start_, 0.1f, 0.0f, trim_end_ - 0.1f, "%.1fs")) {
             trim_start_ = std::clamp(trim_start_, 0.0f, trim_end_ - 0.1f);
         }
         ImGui::PopStyleColor();
@@ -504,7 +504,7 @@ namespace lfs::gui {
         // End time
         ImGui::PushItemWidth(80);
         ImGui::PushStyleColor(ImGuiCol_FrameBg, lfs::vis::toU32WithAlpha(t.palette.error, 0.2f));
-        if (ImGui::DragFloat("##trim_end", &trim_end_, 0.1f, trim_start_ + 0.1f, duration, "%.1fs")) {
+        if (lfs::vis::gui::widgets::DragFloat("##trim_end", &trim_end_, 0.1f, trim_start_ + 0.1f, duration, "%.1fs")) {
             trim_end_ = std::clamp(trim_end_, trim_start_ + 0.1f, duration);
         }
         ImGui::PopStyleColor();

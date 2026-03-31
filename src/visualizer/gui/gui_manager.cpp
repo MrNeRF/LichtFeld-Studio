@@ -90,6 +90,32 @@ namespace lfs::vis::gui {
             return result;
         }
 
+        PanelInputState maskInputForBlockedUi(PanelInputState input) {
+            input.mouse_x = -1.0e9f;
+            input.mouse_y = -1.0e9f;
+            for (auto& value : input.mouse_down)
+                value = false;
+            for (auto& value : input.mouse_clicked)
+                value = false;
+            for (auto& value : input.mouse_released)
+                value = false;
+            input.mouse_wheel = 0.0f;
+            input.key_ctrl = false;
+            input.key_shift = false;
+            input.key_alt = false;
+            input.key_super = false;
+            input.viewport_keyboard_focus = false;
+            input.keys_pressed.clear();
+            input.keys_released.clear();
+            input.text_codepoints.clear();
+            input.text_inputs.clear();
+            input.text_editing.clear();
+            input.text_editing_start = -1;
+            input.text_editing_length = -1;
+            input.has_text_editing = false;
+            return input;
+        }
+
         void applyFrameInputCapture(RmlRightPanel* right_panel = nullptr) {
             const bool panel_hosts_want_keyboard = RmlPanelHost::consumeFrameWantsKeyboard();
             const bool panel_hosts_want_text_input = RmlPanelHost::consumeFrameWantsTextInput();
@@ -214,8 +240,7 @@ namespace lfs::vis::gui {
 
         LayoutState state;
         state.load();
-
-        if (!state.file_association.empty())
+        if (state.file_association == "declined")
             return;
         if (areFileAssociationsRegistered())
             return;
@@ -236,7 +261,8 @@ namespace lfs::vis::gui {
 
             if (result.button_label == LOC(FileAssociation::YES)) {
                 registerFileAssociations();
-                ls.file_association = "registered";
+                openFileAssociationSettings();
+                return;
             } else if (result.button_label == LOC(FileAssociation::DONT_ASK)) {
                 ls.file_association = "declined";
             } else {
@@ -929,12 +955,16 @@ namespace lfs::vis::gui {
             focus.want_text_input = ImGui::GetIO().WantTextInput;
         }
         rmlui_manager_.beginFrameCursorTracking();
+        const bool modal_overlay_open = rml_modal_overlay_->isOpen();
+        const bool context_menu_open = global_context_menu_ && global_context_menu_->isOpen();
+        const bool block_underlay_input = modal_overlay_open || context_menu_open;
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
             auto* editor = panels::PythonConsoleState::getInstance().getEditor();
             const bool editor_owns_escape =
                 editor && (editor->isFocused() || editor->hasActiveCompletion());
             if (!editor_owns_escape) {
+                widgets::RequestActiveEditCancel();
                 ImGui::ClearActiveID();
                 if (editor != nullptr) {
                     editor->unfocus();
@@ -999,6 +1029,8 @@ namespace lfs::vis::gui {
                 menu_input.screen_w = static_cast<int>(main_viewport->Size.x);
                 menu_input.screen_h = static_cast<int>(main_viewport->Size.y);
             }
+            if (block_underlay_input)
+                menu_input = maskInputForBlockedUi(std::move(menu_input));
 
             rml_menu_bar_.processInput(menu_input);
 
@@ -1087,11 +1119,12 @@ namespace lfs::vis::gui {
         panel_input.screen_y = mvp_input->Pos.y;
         panel_input.bg_draw_list = ImGui::GetBackgroundDrawList(mvp_input);
         panel_input.fg_draw_list = ImGui::GetForegroundDrawList(mvp_input);
+        PanelInputState raw_panel_input = panel_input;
+        if (block_underlay_input)
+            panel_input = maskInputForBlockedUi(std::move(panel_input));
         RmlPanelHost::clearQueuedForegroundComposites();
-
-        global_context_menu_->processInput(panel_input);
-        if (global_context_menu_->isOpen())
-            panel_input.mouse_wheel = 0;
+        if (!modal_overlay_open)
+            global_context_menu_->processInput(raw_panel_input);
 
         ScreenState screen;
         screen.work_pos = {mvp_input->WorkPos.x, mvp_input->WorkPos.y};
@@ -1304,7 +1337,7 @@ namespace lfs::vis::gui {
         python::draw_python_modals(scene);
         python::draw_python_popups(scene);
 
-        rml_modal_overlay_->processInput(panel_input);
+        rml_modal_overlay_->processInput(raw_panel_input);
         rml_viewport_overlay_.compositeToScreen(panel_input.screen_w, panel_input.screen_h);
         if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
             apply_rml_cursor(rmlui_manager_.consumeCursorRequest());
@@ -1761,7 +1794,10 @@ namespace lfs::vis::gui {
             return;
 
         auto& focus = guiFocusState();
-        const bool any_popup_or_modal_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const bool any_popup_or_modal_open =
+            ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+            isModalWindowOpen() ||
+            (global_context_menu_ && global_context_menu_->isOpen());
         const bool imgui_wants_input = focus.want_text_input || focus.want_capture_keyboard;
 
         if ((ImGuizmo::IsOver() || ImGuizmo::IsUsing()) && !any_popup_or_modal_open) {

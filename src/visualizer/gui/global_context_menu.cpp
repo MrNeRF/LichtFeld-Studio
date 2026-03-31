@@ -21,6 +21,7 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
+#include <algorithm>
 #include <cassert>
 #include <format>
 
@@ -225,8 +226,9 @@ namespace lfs::vis::gui {
             if (el_ctx_menu_ && el_backdrop_) {
                 items_ = pending_items_;
                 menu_model_.DirtyVariable("items");
-                el_ctx_menu_->SetProperty("left", std::format("{:.0f}dp", pending_x_ - screen_x));
-                el_ctx_menu_->SetProperty("top", std::format("{:.0f}dp", pending_y_ - screen_y));
+                const float dp = std::max(mgr_ ? mgr_->getDpRatio() : 1.0f, 1.0f);
+                el_ctx_menu_->SetProperty("left", std::format("{:.0f}dp", (pending_x_ - screen_x) / dp));
+                el_ctx_menu_->SetProperty("top", std::format("{:.0f}dp", (pending_y_ - screen_y) / dp));
                 el_ctx_menu_->SetClass("visible", true);
                 el_backdrop_->SetProperty("display", "block");
                 open_ = true;

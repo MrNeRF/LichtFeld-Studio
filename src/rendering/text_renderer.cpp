@@ -6,11 +6,16 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gl_state_guard.hpp"
+#include <array>
 #include <format>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
 namespace lfs::rendering {
+
+    namespace {
+        constexpr std::array<unsigned char, 3> kViewportGizmoGlyphs = {'X', 'Y', 'Z'};
+    } // namespace
 
     TextRenderer::TextRenderer(unsigned int width, unsigned int height)
         : screenWidth(width),
@@ -75,9 +80,10 @@ namespace lfs::rendering {
         FT_Set_Pixel_Sizes(face, 0, fontSize);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-        // Load only needed characters
+        // This renderer is currently used only for viewport gizmo axis labels, so we keep
+        // the glyph atlas intentionally narrow instead of building a general text cache.
         int loaded_count = 0;
-        for (unsigned char c : {'X', 'Y', 'Z'}) {
+        for (unsigned char c : kViewportGizmoGlyphs) {
             if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
                 // Continue with other characters even if one fails
                 LOG_WARN("Failed to load glyph for character: {}", static_cast<char>(c));
@@ -118,11 +124,12 @@ namespace lfs::rendering {
         glBindTexture(GL_TEXTURE_2D, 0);
 
         if (characters.empty()) {
-            LOG_ERROR("Failed to load any characters from font");
-            return std::unexpected("Failed to load any characters from font");
+            LOG_ERROR("Failed to load any viewport gizmo axis glyphs from font");
+            return std::unexpected("Failed to load any viewport gizmo axis glyphs from font");
         }
 
-        LOG_INFO("Successfully loaded {} characters from font", loaded_count);
+        LOG_INFO("Successfully loaded {} viewport gizmo axis glyphs from font (X, Y, Z)",
+                 loaded_count);
         return {};
     }
 

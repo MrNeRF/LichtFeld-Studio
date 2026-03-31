@@ -99,6 +99,11 @@ namespace lfs::training {
          * @brief Check if the optimizer has been initialized
          */
         virtual bool is_initialized() const = 0;
+
+        /**
+         * @brief Reset cached state after Gaussian topology changes
+         */
+        virtual void reset() = 0;
     };
 
     /**
@@ -136,26 +141,32 @@ namespace lfs::training {
 
         bool should_update(int iter) const override {
             int relative_iter = iter - config_.start_iteration;
-            return iter >= config_.start_iteration &&
-                   relative_iter > 0 &&
+            return config_.sparsify_steps > 0 &&
+                   iter > config_.start_iteration &&
                    relative_iter < config_.sparsify_steps &&
                    relative_iter % config_.update_every == 0;
         }
 
         bool should_apply_loss(int iter) const override {
-            return iter >= config_.start_iteration &&
-                   iter < (config_.start_iteration + config_.sparsify_steps);
+            return config_.sparsify_steps > 0 &&
+                   iter > config_.start_iteration &&
+                   iter <= (config_.start_iteration + config_.sparsify_steps);
         }
 
         bool should_prune(int iter) const override {
-            return iter == (config_.start_iteration + config_.sparsify_steps);
+            return config_.sparsify_steps > 0 &&
+                   iter == (config_.start_iteration + config_.sparsify_steps);
         }
 
         int get_num_to_prune(const lfs::core::Tensor& opacities) override;
 
         bool is_initialized() const override { return initialized_; }
 
+        void reset() override;
+
     private:
+        std::expected<void, std::string> ensure_state_matches(const lfs::core::Tensor& opacities, const char* phase);
+
         /**
          * @brief Apply soft thresholding to enforce sparsity
          * @param z Input tensor [N, 1]

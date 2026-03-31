@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/path_utils.hpp"
 #include "py_tensor.hpp"
 #include "training/dataset.hpp"
 #include <memory>
@@ -39,8 +40,8 @@ namespace lfs::python {
         int camera_width() const { return cam_->camera_width(); }
         int camera_height() const { return cam_->camera_height(); }
         std::string image_name() const { return cam_->image_name(); }
-        std::string image_path() const { return cam_->image_path().string(); }
-        std::string mask_path() const { return cam_->mask_path().string(); }
+        std::string image_path() const { return lfs::core::path_to_utf8(cam_->image_path()); }
+        std::string mask_path() const { return lfs::core::path_to_utf8(cam_->mask_path()); }
         bool has_mask() const { return cam_->has_mask(); }
         int uid() const { return cam_->uid(); }
 

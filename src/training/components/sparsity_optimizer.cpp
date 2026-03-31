@@ -23,6 +23,41 @@ namespace lfs::training {
         : config_(config) {
     }
 
+    void ADMMSparsityOptimizer::reset() {
+        u_ = {};
+        z_ = {};
+        opa_sigmoid_ = {};
+        initialized_ = false;
+    }
+
+    std::expected<void, std::string>
+    ADMMSparsityOptimizer::ensure_state_matches(const lfs::core::Tensor& opacities, const char* phase) {
+        if (!initialized_) {
+            return initialize(opacities);
+        }
+
+        if (!u_.is_valid() || !z_.is_valid() || !opa_sigmoid_.is_valid()) {
+            LOG_WARN("Sparsity: resetting ADMM state during {} because cached tensors are invalid", phase);
+            reset();
+            return initialize(opacities);
+        }
+
+        if (u_.shape() != opacities.shape() ||
+            z_.shape() != opacities.shape() ||
+            opa_sigmoid_.shape() != opacities.shape()) {
+            LOG_WARN("Sparsity: resetting ADMM state during {} after topology change (opacity={}, z={}, u={}, opa={})",
+                     phase,
+                     opacities.shape().str(),
+                     z_.shape().str(),
+                     u_.shape().str(),
+                     opa_sigmoid_.shape().str());
+            reset();
+            return initialize(opacities);
+        }
+
+        return {};
+    }
+
     std::expected<void, std::string> ADMMSparsityOptimizer::initialize(const lfs::core::Tensor& opacities) {
         try {
             if (opacities.numel() == 0) {
@@ -53,14 +88,12 @@ namespace lfs::training {
     std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string>
     ADMMSparsityOptimizer::compute_loss_forward(const lfs::core::Tensor& opacities) {
         try {
-            if (!initialized_) {
-                SparsityLossContext empty_ctx{};
-                auto zero_loss = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                return std::make_pair(std::move(zero_loss), empty_ctx);
-            }
-
             if (opacities.numel() == 0) {
                 return std::unexpected("Invalid opacity tensor for loss computation");
+            }
+
+            if (auto result = ensure_state_matches(opacities, "loss forward"); !result) {
+                return std::unexpected(result.error());
             }
 
             // Compute ADMM sparsity loss (manual - no autograd)
@@ -136,12 +169,12 @@ namespace lfs::training {
 
     std::expected<void, std::string> ADMMSparsityOptimizer::update_state(const lfs::core::Tensor& opacities) {
         try {
-            if (!initialized_) {
-                return initialize(opacities);
-            }
-
             if (opacities.numel() == 0) {
                 return std::unexpected("Invalid opacity tensor for state update");
+            }
+
+            if (auto result = ensure_state_matches(opacities, "state update"); !result) {
+                return std::unexpected(result.error());
             }
 
             // ADMM update step

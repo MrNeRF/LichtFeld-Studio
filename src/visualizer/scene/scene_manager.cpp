@@ -1682,6 +1682,43 @@ namespace lfs::vis {
         }
     }
 
+    void SceneManager::syncDatasetCameraFrustumsToRenderSettings() {
+        auto* rm = services().renderingOrNull();
+        if (!rm || scene_.getAllCameras().empty())
+            return;
+
+        auto settings = rm->getSettings();
+        if (settings.show_camera_frustums)
+            return;
+
+        settings.show_camera_frustums = true;
+        rm->updateSettings(settings);
+    }
+
+    void SceneManager::finalizeDatasetSceneLoad(
+        const std::filesystem::path& dataset_path,
+        const std::filesystem::path& scene_path,
+        const lfs::core::events::state::SceneLoaded::Type type,
+        const size_t num_gaussians,
+        const int checkpoint_iteration) {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            content_type_ = ContentType::Dataset;
+            dataset_path_ = dataset_path;
+        }
+
+        state::SceneLoaded{
+            .scene = nullptr,
+            .path = scene_path,
+            .type = type,
+            .num_gaussians = num_gaussians,
+            .checkpoint_iteration = checkpoint_iteration}
+            .emit();
+
+        python::set_application_scene(&scene_);
+        syncDatasetCameraFrustumsToRenderSettings();
+    }
+
     std::expected<void, std::string> SceneManager::applyLoadedDataset(
         const std::filesystem::path& path,
         const lfs::core::param::TrainingParameters& params,
@@ -1716,24 +1753,11 @@ namespace lfs::vis {
                 services().trainerOrNull()->setTrainer(std::move(trainer));
             }
 
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                content_type_ = ContentType::Dataset;
-                dataset_path_ = path;
-            }
-
             const size_t num_gaussians = scene_.getTrainingModelGaussianCount();
             const auto* point_cloud = scene_.getVisiblePointCloud();
             const size_t num_points = point_cloud ? point_cloud->size() : 0;
 
-            state::SceneLoaded{
-                .scene = nullptr,
-                .path = path,
-                .type = state::SceneLoaded::Type::Dataset,
-                .num_gaussians = num_gaussians}
-                .emit();
-
-            python::set_application_scene(&scene_);
+            finalizeDatasetSceneLoad(path, path, state::SceneLoaded::Type::Dataset, num_gaussians);
 
             if ((num_gaussians > 0 || num_points > 0) && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
                 ui::PointCloudModeChanged{.enabled = true, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
@@ -1812,13 +1836,6 @@ namespace lfs::vis {
                 throw std::runtime_error("No trainer manager available");
             }
 
-            // Update content state
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                content_type_ = ContentType::Dataset;
-                dataset_path_ = path;
-            }
-
             // Get info from scene
             const size_t num_gaussians = scene_.getTrainingModelGaussianCount();
             const auto* point_cloud = scene_.getVisiblePointCloud();
@@ -1828,14 +1845,7 @@ namespace lfs::vis {
             LOG_INFO("Dataset loaded successfully - {} images, {} initial points/gaussians",
                      num_cameras, num_gaussians > 0 ? num_gaussians : num_points);
 
-            state::SceneLoaded{
-                .scene = nullptr,
-                .path = path,
-                .type = state::SceneLoaded::Type::Dataset,
-                .num_gaussians = num_gaussians}
-                .emit();
-
-            python::set_application_scene(&scene_);
+            finalizeDatasetSceneLoad(path, path, state::SceneLoaded::Type::Dataset, num_gaussians);
 
             state::DatasetLoadCompleted{
                 .path = path,
@@ -2058,12 +2068,6 @@ namespace lfs::vis {
             services().trainerOrNull()->setScene(&scene_);
             services().trainerOrNull()->setTrainerFromCheckpoint(std::move(trainer), checkpoint_iteration);
 
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                content_type_ = ContentType::Dataset;
-                dataset_path_ = checkpoint_params.dataset.data_path;
-            }
-
             // Keep the viewer's editable state aligned with the restored trainer state.
             if (auto* param_mgr = services().paramsOrNull()) {
                 param_mgr->importTrainingParams(checkpoint_params);
@@ -2071,15 +2075,12 @@ namespace lfs::vis {
 
             LOG_INFO("Checkpoint loaded: {} gaussians, iteration {}", num_gaussians, checkpoint_iteration);
 
-            state::SceneLoaded{
-                .scene = nullptr,
-                .path = path,
-                .type = state::SceneLoaded::Type::Checkpoint,
-                .num_gaussians = num_gaussians,
-                .checkpoint_iteration = checkpoint_iteration}
-                .emit();
-
-            python::set_application_scene(&scene_);
+            finalizeDatasetSceneLoad(
+                checkpoint_params.dataset.data_path,
+                path,
+                state::SceneLoaded::Type::Checkpoint,
+                num_gaussians,
+                checkpoint_iteration);
 
             ui::PointCloudModeChanged{.enabled = false, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
             selectNode(MODEL_NAME);

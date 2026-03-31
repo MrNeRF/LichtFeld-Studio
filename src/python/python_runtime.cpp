@@ -170,7 +170,7 @@ namespace lfs::python {
 
         // Redraw request flag
         std::atomic<bool> g_redraw_requested{false};
-        RedrawWakeupCallback g_redraw_wakeup_callback = nullptr;
+        MainLoopWakeCallback g_main_loop_wake_callback = nullptr;
     } // namespace
 
     // Bridge API
@@ -206,16 +206,16 @@ namespace lfs::python {
     // Redraw request mechanism
     void request_redraw() {
         const bool was_requested = g_redraw_requested.exchange(true, std::memory_order_acq_rel);
-        if (!was_requested && g_redraw_wakeup_callback)
-            g_redraw_wakeup_callback();
+        if (!was_requested && g_main_loop_wake_callback)
+            g_main_loop_wake_callback();
     }
 
     bool consume_redraw_request() {
         return g_redraw_requested.exchange(false, std::memory_order_acq_rel);
     }
 
-    void set_redraw_wakeup_callback(RedrawWakeupCallback cb) {
-        g_redraw_wakeup_callback = cb;
+    void set_main_loop_wake_callback(MainLoopWakeCallback cb) {
+        g_main_loop_wake_callback = cb;
     }
 
     // Operation context (short-lived)

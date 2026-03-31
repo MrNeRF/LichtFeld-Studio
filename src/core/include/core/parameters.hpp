@@ -135,7 +135,7 @@ namespace lfs::core {
             std::filesystem::path ppisp_sidecar_path = {};
             bool ppisp_use_controller = false;
             bool ppisp_freeze_gaussians_on_distill = true;
-            int ppisp_controller_activation_step = -1; // Negative values use the default tail schedule
+            int ppisp_controller_activation_step = -1; // Negative values use the last-5000-steps default schedule
             float ppisp_controller_lr = 2e-3f;
 
             // Shared densification thresholds and reset controls
@@ -181,7 +181,8 @@ namespace lfs::core {
             void scale_steps(float ratio);
             void apply_step_scaling();
             void remove_step_scaling();
-            [[nodiscard]] int resolved_ppisp_controller_activation_step() const;
+            [[nodiscard]] int resolved_total_iterations() const;
+            [[nodiscard]] int resolved_ppisp_controller_activation_step(int total_iterations) const;
 
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);

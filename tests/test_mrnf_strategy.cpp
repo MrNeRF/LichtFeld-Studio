@@ -232,14 +232,16 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     EXPECT_NEAR(opacities_ptr[initial_size], std::log(0.3f / 0.7f), 1e-5f);
 }
 
-TEST(MRNFStrategyTest, StepScalingAlsoScalesGrowUntilIter) {
+TEST(MRNFStrategyTest, StepScalingDoesNotScaleSparsifySteps) {
     auto params = param::OptimizationParameters::mrnf_defaults();
     params.grow_until_iter = 15000;
+    params.sparsify_steps = 15000;
     params.steps_scaler = 0.5f;
 
     params.apply_step_scaling();
 
     EXPECT_EQ(params.grow_until_iter, 7500u);
+    EXPECT_EQ(params.sparsify_steps, 15000);
     EXPECT_EQ(params.refine_every, 100u);
     EXPECT_EQ(params.stop_refine, 14250u);
 }

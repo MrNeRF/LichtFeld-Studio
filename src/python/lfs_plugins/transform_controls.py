@@ -8,6 +8,7 @@ from typing import List
 
 import lichtfeld as lf
 
+from . import rml_widgets as w
 from .types import Panel
 
 TRANSLATE_STEP = 0.01
@@ -106,6 +107,7 @@ class TransformControlsPanel(Panel):
         self._step_repeat_last = 0.0
 
         self._focus_active = False
+        self._escape_revert = w.EscapeRevertController()
 
     @classmethod
     def poll(cls, context):
@@ -154,6 +156,7 @@ class TransformControlsPanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
+        self._escape_revert.clear()
 
         header = doc.get_element_by_id("hdr-transform")
         if header:
@@ -161,7 +164,6 @@ class TransformControlsPanel(Panel):
             section = doc.get_element_by_id("transform-section")
             arrow = doc.get_element_by_id("arrow-transform")
             if section:
-                from . import rml_widgets as w
                 w.sync_section_state(section, not self._collapsed, header, arrow)
 
         body = doc.get_element_by_id("body")
@@ -174,6 +176,12 @@ class TransformControlsPanel(Panel):
             el = doc.get_element_by_id(input_id)
             if el:
                 el.add_event_listener("focus", self._on_input_focus)
+                self._escape_revert.bind(
+                    el,
+                    input_id,
+                    lambda: True,
+                    lambda _snapshot: self._cancel_active_edit(),
+                )
                 el.add_event_listener("blur", self._on_input_blur)
 
     def on_update(self, doc):
@@ -511,7 +519,6 @@ class TransformControlsPanel(Panel):
         section = self._doc.get_element_by_id("transform-section")
         arrow = self._doc.get_element_by_id("arrow-transform")
         if section:
-            from . import rml_widgets as w
             w.animate_section_toggle(section, not self._collapsed, arrow, header_element=header)
 
     def _on_input_focus(self, event):
@@ -531,6 +538,20 @@ class TransformControlsPanel(Panel):
             self._commit_single_edit()
         elif self._state.multi_editing_active:
             self._commit_multi_edit()
+
+    def _cancel_active_edit(self):
+        if self._state.editing_active and self._state.editing_node_names and self._state.transforms_before_edit:
+            node_name = self._state.editing_node_names[0]
+            lf.set_node_transform(node_name, self._state.transforms_before_edit[0])
+            self._state.reset_single_edit()
+            self._update_single_node()
+            return
+
+        if self._state.multi_editing_active and self._state.multi_node_names and self._state.multi_transforms_before:
+            for name, transform in zip(self._state.multi_node_names, self._state.multi_transforms_before):
+                lf.set_node_transform(name, transform)
+            self._state.reset_multi_edit()
+            self._update_multi_selection()
 
     def _commit_single_edit(self):
         if not self._state.editing_node_names or not self._state.transforms_before_edit:
