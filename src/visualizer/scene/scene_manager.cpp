@@ -1406,6 +1406,19 @@ namespace lfs::vis {
         return scene_.getNodeTransform(node_name);
     }
 
+    glm::mat4 SceneManager::getSelectedNodeWorldTransform() const {
+        std::shared_lock slock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        if (ids.empty())
+            return glm::mat4(1.0f);
+
+        const auto* node = scene_.getNodeById(*ids.begin());
+        if (!node)
+            return glm::mat4(1.0f);
+
+        return dataWorldTransform(scene_, node->id);
+    }
+
     glm::mat4 SceneManager::getSelectedNodeVisualizerWorldTransform() const {
         std::shared_lock slock(selection_.mutex());
         const auto& ids = selection_.selectedNodeIds();
@@ -1447,6 +1460,47 @@ namespace lfs::vis {
                 total_max = glm::max(total_max, node_max);
                 has_bounds = true;
             }
+        }
+
+        return has_bounds ? (total_min + total_max) * 0.5f : glm::vec3(0.0f);
+    }
+
+    glm::vec3 SceneManager::getSelectionWorldCenter() const {
+        std::shared_lock slock(selection_.mutex());
+        const auto& ids = selection_.selectedNodeIds();
+        if (ids.empty())
+            return glm::vec3(0.0f);
+
+        glm::vec3 total_min(std::numeric_limits<float>::max());
+        glm::vec3 total_max(std::numeric_limits<float>::lowest());
+        bool has_bounds = false;
+
+        for (const core::NodeId id : ids) {
+            const auto* node = scene_.getNodeById(id);
+            if (!node)
+                continue;
+
+            glm::vec3 local_min, local_max;
+            if (!scene_.getNodeBounds(node->id, local_min, local_max))
+                continue;
+
+            const glm::mat4 world_transform = dataWorldTransform(scene_, node->id);
+            const glm::vec3 corners[8] = {
+                {local_min.x, local_min.y, local_min.z},
+                {local_max.x, local_min.y, local_min.z},
+                {local_min.x, local_max.y, local_min.z},
+                {local_max.x, local_max.y, local_min.z},
+                {local_min.x, local_min.y, local_max.z},
+                {local_max.x, local_min.y, local_max.z},
+                {local_min.x, local_max.y, local_max.z},
+                {local_max.x, local_max.y, local_max.z}};
+
+            for (const auto& corner : corners) {
+                const glm::vec3 world_corner = glm::vec3(world_transform * glm::vec4(corner, 1.0f));
+                total_min = glm::min(total_min, world_corner);
+                total_max = glm::max(total_max, world_corner);
+            }
+            has_bounds = true;
         }
 
         return has_bounds ? (total_min + total_max) * 0.5f : glm::vec3(0.0f);

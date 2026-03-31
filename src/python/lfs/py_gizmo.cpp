@@ -32,10 +32,15 @@ namespace lfs::python {
 
     std::optional<std::tuple<float, float>> PyGizmoContext::world_to_screen(std::tuple<float, float, float> pos) const {
         const auto [wx, wy, wz] = pos;
-        if (wz <= 0.0f)
+
+        // Match the documented visualizer-world convention with a default camera
+        // at +Z looking along -Z.
+        const float view_z = wz - DEFAULT_CAMERA_Z;
+        if (view_z >= -1e-6f)
             return std::nullopt;
-        const float sx = DEFAULT_VIEWPORT_WIDTH / 2.0f + wx * PROJECTION_SCALE / wz;
-        const float sy = DEFAULT_VIEWPORT_HEIGHT / 2.0f - wy * PROJECTION_SCALE / wz;
+        const float depth = -view_z;
+        const float sx = DEFAULT_VIEWPORT_WIDTH / 2.0f + wx * PROJECTION_SCALE / depth;
+        const float sy = DEFAULT_VIEWPORT_HEIGHT / 2.0f - wy * PROJECTION_SCALE / depth;
         return std::make_tuple(sx, sy);
     }
 

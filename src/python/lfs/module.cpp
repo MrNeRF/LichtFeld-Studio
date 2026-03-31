@@ -997,10 +997,10 @@ NB_MODULE(lichtfeld, m) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || !sm->hasSelectedNode())
                 return std::nullopt;
-            const auto c = sm->getSelectionVisualizerWorldCenter();
+            const auto c = sm->getSelectionWorldCenter();
             return std::vector<float>{c.x, c.y, c.z};
         },
-        "Deprecated alias for get_selection_visualizer_world_center()");
+        "Get center of current selection in legacy data-world space");
 
     m.def(
         "has_scene", []() -> bool {

@@ -262,6 +262,43 @@ TEST_F(OperatorRegistryPropsTest, VisualizerFacingTransformSelectionUsesVisualiz
     EXPECT_NEAR(selected_world[3].z, -30.0f, 1e-5f);
 }
 
+TEST_F(OperatorRegistryPropsTest, LegacySelectionWorldCenterRemainsDataWorld) {
+    add_node("target", {
+                           0.0f,
+                           0.0f,
+                           0.0f,
+                           2.0f,
+                           4.0f,
+                           6.0f,
+                       });
+    scene_manager_->setNodeTransform(
+        "target",
+        glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f)));
+    scene_manager_->selectNode("target");
+
+    const glm::vec3 data_center = scene_manager_->getSelectionWorldCenter();
+    EXPECT_NEAR(data_center.x, 11.0f, 1e-5f);
+    EXPECT_NEAR(data_center.y, 22.0f, 1e-5f);
+    EXPECT_NEAR(data_center.z, 33.0f, 1e-5f);
+
+    const glm::vec3 expected_visualizer_center =
+        lfs::rendering::visualizerWorldPointFromDataWorld(data_center);
+    const glm::vec3 visualizer_center = scene_manager_->getSelectionVisualizerWorldCenter();
+    EXPECT_NEAR(visualizer_center.x, expected_visualizer_center.x, 1e-5f);
+    EXPECT_NEAR(visualizer_center.y, expected_visualizer_center.y, 1e-5f);
+    EXPECT_NEAR(visualizer_center.z, expected_visualizer_center.z, 1e-5f);
+
+    const glm::mat4 data_world = scene_manager_->getSelectedNodeWorldTransform();
+    EXPECT_NEAR(data_world[3].x, 10.0f, 1e-5f);
+    EXPECT_NEAR(data_world[3].y, 20.0f, 1e-5f);
+    EXPECT_NEAR(data_world[3].z, 30.0f, 1e-5f);
+
+    const glm::mat4 visualizer_world = scene_manager_->getSelectedNodeVisualizerWorldTransform();
+    EXPECT_NEAR(visualizer_world[3].x, 10.0f, 1e-5f);
+    EXPECT_NEAR(visualizer_world[3].y, -20.0f, 1e-5f);
+    EXPECT_NEAR(visualizer_world[3].z, -30.0f, 1e-5f);
+}
+
 TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {
     auto& scene = scene_manager_->getScene();
     const auto parent_id = scene.addGroup("crop_parent");
