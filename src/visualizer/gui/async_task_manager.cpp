@@ -33,6 +33,12 @@ namespace lfs::vis::gui {
 
     using ExportFormat = lfs::core::ExportFormat;
 
+    namespace {
+        [[nodiscard]] glm::mat4 data_world_transform(const lfs::core::Scene& scene, const lfs::core::NodeId node_id) {
+            return scene.getWorldTransform(node_id);
+        }
+    } // namespace
+
     [[nodiscard]] const char* getDatasetTypeName(const std::filesystem::path& path) {
         switch (lfs::io::Loader::getDatasetType(path)) {
         case lfs::io::DatasetType::COLMAP: return "COLMAP";
@@ -603,7 +609,7 @@ namespace lfs::vis::gui {
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
             if (node && node->type == core::NodeType::SPLAT && node->model) {
-                splats.emplace_back(node->model.get(), scene.getWorldTransform(node->id));
+                splats.emplace_back(node->model.get(), data_world_transform(scene, node->id));
             }
         }
         if (splats.empty())

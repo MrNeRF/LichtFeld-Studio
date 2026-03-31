@@ -5,6 +5,7 @@
 #include "split_view_composition.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 #include "viewport_request_builder.hpp"
 #include <cassert>
@@ -161,7 +162,8 @@ namespace lfs::vis {
                                      ctx.viewport,
                                      ctx.render_size,
                                      *visible_nodes[left_idx]->model,
-                                     scene.getWorldTransform(visible_nodes[left_idx]->id),
+                                     lfs::rendering::dataWorldTransformToVisualizerWorld(
+                                         scene.getWorldTransform(visible_nodes[left_idx]->id)),
                                      false,
                                      std::nullopt),
                              .presentation =
@@ -178,7 +180,8 @@ namespace lfs::vis {
                                      ctx.viewport,
                                      ctx.render_size,
                                      *visible_nodes[right_idx]->model,
-                                     scene.getWorldTransform(visible_nodes[right_idx]->id),
+                                     lfs::rendering::dataWorldTransformToVisualizerWorld(
+                                         scene.getWorldTransform(visible_nodes[right_idx]->id)),
                                      false,
                                      std::nullopt),
                              .presentation =

@@ -341,8 +341,11 @@ def set_selected_node_transform(matrix: Sequence[float]) -> None:
 def get_selection_center() -> list[float] | None:
     """Get center of current selection (local space)"""
 
+def get_selection_visualizer_world_center() -> list[float] | None:
+    """Get center of current selection in visualizer-world space"""
+
 def get_selection_world_center() -> list[float] | None:
-    """Get center of current selection (world space)"""
+    """Deprecated alias for get_selection_visualizer_world_center()"""
 
 def has_scene() -> bool:
     """Check if a scene is loaded"""
@@ -365,8 +368,14 @@ def get_num_gaussians() -> int:
 def get_node_transform(name: str) -> list[float] | None:
     """Get node transform matrix (16 floats, column-major)"""
 
+def get_node_visualizer_world_transform(name: str) -> list[float] | None:
+    """Get node visualizer-world transform matrix (16 floats, column-major)"""
+
 def set_node_transform(name: str, matrix: Sequence[float]) -> None:
     """Set node transform matrix (16 floats, column-major)"""
+
+def set_node_visualizer_world_transform(name: str, matrix: Sequence[float]) -> None:
+    """Set node visualizer-world transform matrix (16 floats, column-major)"""
 
 def capture_selection_transforms() -> dict:
     """Capture transforms of all selected nodes"""
@@ -1170,7 +1179,7 @@ class GizmoContext:
 
     @property
     def selection_center(self) -> tuple[float, float, float]:
-        """Selection center in world space (x, y, z)"""
+        """Selection center in visualizer-world space (x, y, z)"""
 
     @property
     def selection_center_screen(self) -> tuple[float, float]:
@@ -1178,17 +1187,17 @@ class GizmoContext:
 
     @property
     def camera_position(self) -> tuple[float, float, float]:
-        """Camera position in world space (x, y, z)"""
+        """Camera position in visualizer-world space (x, y, z)"""
 
     @property
     def camera_forward(self) -> tuple[float, float, float]:
         """Camera forward direction (x, y, z)"""
 
     def world_to_screen(self, pos: tuple[float, float, float]) -> tuple[float, float] | None:
-        """Project world position to screen coordinates"""
+        """Project visualizer-world position to screen coordinates"""
 
     def screen_to_world_ray(self, pos: tuple[float, float]) -> tuple[float, float, float] | None:
-        """Get world-space ray direction from screen point"""
+        """Get visualizer-world ray direction from screen point"""
 
     def draw_line(self, start: tuple[float, float], end: tuple[float, float], color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
         """Draw a 2D line"""

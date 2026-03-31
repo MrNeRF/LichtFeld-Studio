@@ -148,12 +148,12 @@ namespace lfs::vis {
 
         // Full transform for selected node (includes rotation and scale)
         void setSelectedNodeTransform(const glm::mat4& transform);
-        glm::mat4 getSelectedNodeTransform() const;      // Returns local transform
-        glm::mat4 getSelectedNodeWorldTransform() const; // Returns world transform
+        glm::mat4 getSelectedNodeTransform() const; // Returns local transform
+        [[nodiscard]] glm::mat4 getSelectedNodeVisualizerWorldTransform() const;
 
         // Multi-selection support
         [[nodiscard]] glm::vec3 getSelectionCenter() const;
-        [[nodiscard]] glm::vec3 getSelectionWorldCenter() const;
+        [[nodiscard]] glm::vec3 getSelectionVisualizerWorldCenter() const;
 
         // Cropbox operations for selected node
         core::NodeId getSelectedNodeCropBoxId() const;

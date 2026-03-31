@@ -210,31 +210,31 @@ namespace lfs::vis::op {
             {
                 make_schema("node", "Optional node name; defaults to the current selected node(s)",
                             PropertyType::STRING),
-                make_schema("translation", "Optional XYZ translation", PropertyType::FLOAT_VECTOR, 3),
-                make_schema("rotation", "Optional XYZ Euler rotation in radians",
+                make_schema("translation", "Optional visualizer-world XYZ translation", PropertyType::FLOAT_VECTOR, 3),
+                make_schema("rotation", "Optional visualizer-world XYZ Euler rotation in radians",
                             PropertyType::FLOAT_VECTOR, 3),
-                make_schema("scale", "Optional XYZ scale", PropertyType::FLOAT_VECTOR, 3),
+                make_schema("scale", "Optional visualizer-world XYZ scale", PropertyType::FLOAT_VECTOR, 3),
             });
         propertySchemas().registerSchema(
             TransformTranslateOperator::DESCRIPTOR.id(),
             {
                 make_schema("node", "Optional node name; defaults to the current selected node(s)",
                             PropertyType::STRING),
-                make_schema("value", "XYZ translation delta", PropertyType::FLOAT_VECTOR, 3),
+                make_schema("value", "Visualizer-world XYZ translation delta", PropertyType::FLOAT_VECTOR, 3),
             });
         propertySchemas().registerSchema(
             TransformRotateOperator::DESCRIPTOR.id(),
             {
                 make_schema("node", "Optional node name; defaults to the current selected node(s)",
                             PropertyType::STRING),
-                make_schema("value", "XYZ Euler delta in radians", PropertyType::FLOAT_VECTOR, 3),
+                make_schema("value", "Visualizer-world XYZ Euler delta in radians", PropertyType::FLOAT_VECTOR, 3),
             });
         propertySchemas().registerSchema(
             TransformScaleOperator::DESCRIPTOR.id(),
             {
                 make_schema("node", "Optional node name; defaults to the current selected node(s)",
                             PropertyType::STRING),
-                make_schema("value", "XYZ scale multiplier", PropertyType::FLOAT_VECTOR, 3),
+                make_schema("value", "Visualizer-world XYZ scale multiplier", PropertyType::FLOAT_VECTOR, 3),
             });
         propertySchemas().registerSchema(
             TransformApplyBatchOperator::DESCRIPTOR.id(),

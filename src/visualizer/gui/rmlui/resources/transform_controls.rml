@@ -15,6 +15,7 @@
     <div id="transform-section" class="section-content collapsed">
       <div class="info-row" data-if="is_single">
         <span class="info-label">{{node_name}}</span>
+        <span class="info-sublabel">Space: World</span>
       </div>
       <div class="info-row" data-if="is_multi">
         <span class="info-label">{{multi_label}}</span>

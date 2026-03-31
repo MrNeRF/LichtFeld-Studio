@@ -60,6 +60,7 @@ class TransformPanelState:
         self.multi_editing_active = False
         self.multi_node_names: List[str] = []
         self.multi_transforms_before: List[List[float]] = []
+        self.multi_visualizer_world_transforms_before: List[List[float]] = []
         self.pivot_world = [0.0, 0.0, 0.0]
         self.display_translation = [0.0, 0.0, 0.0]
         self.display_euler = [0.0, 0.0, 0.0]
@@ -74,6 +75,7 @@ class TransformPanelState:
         self.multi_editing_active = False
         self.multi_node_names = []
         self.multi_transforms_before = []
+        self.multi_visualizer_world_transforms_before = []
 
 
 class TransformControlsPanel(Panel):
@@ -215,7 +217,7 @@ class TransformControlsPanel(Panel):
 
     def _update_single_node(self):
         node_name = self._selected[0]
-        transform = lf.get_node_transform(node_name)
+        transform = lf.get_node_visualizer_world_transform(node_name)
         if transform is None:
             return
 
@@ -237,7 +239,7 @@ class TransformControlsPanel(Panel):
         self._euler = self._state.euler_display
 
     def _update_multi_selection(self):
-        world_center = lf.get_selection_world_center()
+        world_center = lf.get_selection_visualizer_world_center()
         if world_center is None:
             return
 
@@ -295,14 +297,18 @@ class TransformControlsPanel(Panel):
             if self._state.multi_editing_active:
                 return
             self._state.multi_editing_active = True
-            center = lf.get_selection_world_center()
+            center = lf.get_selection_visualizer_world_center()
             self._state.pivot_world = list(center) if center else [0.0, 0.0, 0.0]
             self._state.multi_node_names = list(self._selected)
             self._state.multi_transforms_before = []
+            self._state.multi_visualizer_world_transforms_before = []
             for name in self._selected:
                 t = lf.get_node_transform(name)
                 if t is not None:
                     self._state.multi_transforms_before.append(t)
+                world_t = lf.get_node_visualizer_world_transform(name)
+                if world_t is not None:
+                    self._state.multi_visualizer_world_transforms_before.append(world_t)
 
     def _set_value(self, group, idx, value_str):
         try:
@@ -359,27 +365,26 @@ class TransformControlsPanel(Panel):
             euler_to_use = self._euler
             self._state.euler_display = self._euler.copy()
         else:
-            decomp_current = lf.decompose_transform(lf.get_node_transform(node_name))
+            current_transform = lf.get_node_visualizer_world_transform(node_name)
+            decomp_current = lf.decompose_transform(current_transform) if current_transform else None
             euler_to_use = decomp_current["rotation_euler_deg"] if decomp_current else self._euler
 
         new_transform = lf.compose_transform(self._trans, euler_to_use, self._scale)
-        lf.set_node_transform(node_name, new_transform)
+        lf.set_node_visualizer_world_transform(node_name, new_transform)
 
         if self._active_tool == "builtin.rotate":
             new_decomp = lf.decompose_transform(new_transform)
             self._state.euler_display_rotation = new_decomp["rotation_quat"].copy()
 
     def _apply_multi_transform(self, tool: str):
-        if not self._state.multi_node_names:
+        if (not self._state.multi_node_names or
+                len(self._state.multi_visualizer_world_transforms_before) != len(self._state.multi_node_names)):
             return
 
         pivot = self._state.pivot_world
 
         for i, name in enumerate(self._state.multi_node_names):
-            if i >= len(self._state.multi_transforms_before):
-                continue
-
-            original = self._state.multi_transforms_before[i]
+            original = self._state.multi_visualizer_world_transforms_before[i]
             decomp = lf.decompose_transform(original)
             pos = list(decomp["translation"])
 
@@ -387,7 +392,7 @@ class TransformControlsPanel(Panel):
                 delta = [self._state.display_translation[j] - pivot[j] for j in range(3)]
                 new_pos = [pos[j] + delta[j] for j in range(3)]
                 new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], decomp["scale"])
-                lf.set_node_transform(name, new_transform)
+                lf.set_node_visualizer_world_transform(name, new_transform)
 
             elif tool == "builtin.rotate":
                 euler_rad = [math.radians(e) for e in self._state.display_euler]
@@ -407,7 +412,7 @@ class TransformControlsPanel(Panel):
                 orig_euler = list(decomp["rotation_euler_deg"])
                 new_euler = [orig_euler[j] + self._state.display_euler[j] for j in range(3)]
                 new_transform = lf.compose_transform(new_pos, new_euler, decomp["scale"])
-                lf.set_node_transform(name, new_transform)
+                lf.set_node_visualizer_world_transform(name, new_transform)
 
             elif tool == "builtin.scale":
                 rel = [pos[j] - pivot[j] for j in range(3)]
@@ -416,7 +421,7 @@ class TransformControlsPanel(Panel):
                 orig_scale = list(decomp["scale"])
                 new_scale = [orig_scale[j] * self._state.display_scale[j] for j in range(3)]
                 new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], new_scale)
-                lf.set_node_transform(name, new_transform)
+                lf.set_node_visualizer_world_transform(name, new_transform)
 
     def _on_num_step(self, handle, event, args):
         if len(args) < 2:
@@ -576,7 +581,7 @@ class TransformControlsPanel(Panel):
             return
 
         identity = lf.compose_transform([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
-        lf.set_node_transform(node_name, identity)
+        lf.set_node_visualizer_world_transform(node_name, identity)
         lf.ops.invoke("transform.apply_batch",
                       node_names=[node_name],
                       old_transforms=[current])
@@ -602,7 +607,7 @@ class TransformControlsPanel(Panel):
 
         identity = lf.compose_transform([0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [1.0, 1.0, 1.0])
         for name in selected:
-            lf.set_node_transform(name, identity)
+            lf.set_node_visualizer_world_transform(name, identity)
 
         lf.ops.invoke("transform.apply_batch",
                       node_names=selected,

@@ -75,6 +75,7 @@ namespace lfs::vis {
             bool node_gizmo_active_ = false;
             std::vector<std::string> node_gizmo_node_names_;
             std::vector<glm::mat4> node_transforms_before_drag_;
+            std::vector<glm::mat4> node_original_visualizer_world_transforms_;
             std::vector<glm::vec3> node_original_world_positions_;
             std::vector<glm::mat4> node_parent_world_inverses_;
             std::vector<glm::mat3> node_original_rotations_;
@@ -117,6 +118,7 @@ namespace lfs::vis {
             bool node_bounds_scale_active_ = false;
             glm::vec3 node_bounds_min_{0.0f};
             glm::vec3 node_bounds_max_{0.0f};
+            glm::mat4 node_bounds_orig_visualizer_world_transform_{1.0f};
             glm::vec3 node_bounds_orig_scale_{1.0f};
             glm::mat3 node_bounds_orig_rotation_{1.0f};
             glm::vec3 node_bounds_world_scale_{1.0f};

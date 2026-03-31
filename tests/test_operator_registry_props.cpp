@@ -13,6 +13,7 @@
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
 #include "operator/property_schema.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
@@ -124,7 +125,7 @@ TEST_F(OperatorRegistryPropsTest, DeleteOperatorCanDeleteNamedNodeWithoutSelecti
     EXPECT_EQ(resolved->front(), "delete_me");
 }
 
-TEST_F(OperatorRegistryPropsTest, TransformTranslateOperatorUsesNamedNodeWithoutSelection) {
+TEST_F(OperatorRegistryPropsTest, TransformTranslateOperatorUsesVisualizerWorldCoordinates) {
     add_node("move_me");
     EXPECT_FALSE(scene_manager_->hasSelectedNode());
 
@@ -138,8 +139,16 @@ TEST_F(OperatorRegistryPropsTest, TransformTranslateOperatorUsesNamedNodeWithout
     const auto components = lfs::vis::cap::decomposeTransform(
         scene_manager_->getScene().getNodeTransform("move_me"));
     EXPECT_FLOAT_EQ(components.translation.x, 1.0f);
-    EXPECT_FLOAT_EQ(components.translation.y, 2.0f);
-    EXPECT_FLOAT_EQ(components.translation.z, 3.0f);
+    EXPECT_FLOAT_EQ(components.translation.y, -2.0f);
+    EXPECT_FLOAT_EQ(components.translation.z, -3.0f);
+
+    const auto* const node = scene_manager_->getScene().getNode("move_me");
+    ASSERT_NE(node, nullptr);
+    const glm::mat4 world_transform =
+        lfs::rendering::dataWorldTransformToVisualizerWorld(scene_manager_->getScene().getWorldTransform(node->id));
+    EXPECT_FLOAT_EQ(world_transform[3].x, 1.0f);
+    EXPECT_FLOAT_EQ(world_transform[3].y, 2.0f);
+    EXPECT_FLOAT_EQ(world_transform[3].z, 3.0f);
 
     const auto resolved = props.get<std::vector<std::string>>("resolved_node_names");
     ASSERT_TRUE(resolved.has_value());
@@ -217,6 +226,42 @@ TEST_F(OperatorRegistryPropsTest, LegacyTransformRotateUsesEditableTargetPivotOn
     EXPECT_FLOAT_EQ(locked_components.translation.z, 0.0f);
 }
 
+TEST_F(OperatorRegistryPropsTest, VisualizerFacingTransformSelectionUsesVisualizerWorldCenter) {
+    add_node("target", {
+                           0.0f,
+                           0.0f,
+                           0.0f,
+                           2.0f,
+                           4.0f,
+                           6.0f,
+                       });
+    scene_manager_->setNodeTransform(
+        "target",
+        glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 20.0f, 30.0f)));
+    scene_manager_->selectNode("target");
+
+    const auto resolved = lfs::vis::cap::resolveEditableTransformSelection(*scene_manager_, std::nullopt);
+    ASSERT_TRUE(resolved.has_value());
+    ASSERT_EQ(resolved->node_names.size(), 1u);
+    EXPECT_EQ(resolved->node_names.front(), "target");
+
+    const glm::vec3 expected_center =
+        lfs::rendering::visualizerWorldPointFromDataWorld(glm::vec3(11.0f, 22.0f, 33.0f));
+    EXPECT_NEAR(resolved->world_center.x, expected_center.x, 1e-5f);
+    EXPECT_NEAR(resolved->world_center.y, expected_center.y, 1e-5f);
+    EXPECT_NEAR(resolved->world_center.z, expected_center.z, 1e-5f);
+
+    const glm::vec3 selection_center = scene_manager_->getSelectionVisualizerWorldCenter();
+    EXPECT_NEAR(selection_center.x, expected_center.x, 1e-5f);
+    EXPECT_NEAR(selection_center.y, expected_center.y, 1e-5f);
+    EXPECT_NEAR(selection_center.z, expected_center.z, 1e-5f);
+
+    const glm::mat4 selected_world = scene_manager_->getSelectedNodeVisualizerWorldTransform();
+    EXPECT_NEAR(selected_world[3].x, 10.0f, 1e-5f);
+    EXPECT_NEAR(selected_world[3].y, -20.0f, 1e-5f);
+    EXPECT_NEAR(selected_world[3].z, -30.0f, 1e-5f);
+}
+
 TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {
     auto& scene = scene_manager_->getScene();
     const auto parent_id = scene.addGroup("crop_parent");
@@ -256,6 +301,31 @@ TEST_F(OperatorRegistryPropsTest, SetTransformMatrixCreatesUndoableEntry) {
     EXPECT_FLOAT_EQ(components.translation.x, 0.0f);
     EXPECT_FLOAT_EQ(components.translation.y, 0.0f);
     EXPECT_FLOAT_EQ(components.translation.z, 0.0f);
+}
+
+TEST_F(OperatorRegistryPropsTest, TransformSetOperatorUsesVisualizerWorldCoordinates) {
+    add_node("target");
+
+    lfs::vis::op::OperatorProperties props;
+    props.set("node", std::string("target"));
+    props.set("translation", glm::vec3(4.0f, 5.0f, 6.0f));
+
+    const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::TransformSet, &props);
+    ASSERT_TRUE(result.is_finished());
+
+    const auto components = lfs::vis::cap::decomposeTransform(
+        scene_manager_->getScene().getNodeTransform("target"));
+    EXPECT_FLOAT_EQ(components.translation.x, 4.0f);
+    EXPECT_FLOAT_EQ(components.translation.y, -5.0f);
+    EXPECT_FLOAT_EQ(components.translation.z, -6.0f);
+
+    const auto* const node = scene_manager_->getScene().getNode("target");
+    ASSERT_NE(node, nullptr);
+    const glm::mat4 world_transform =
+        lfs::rendering::dataWorldTransformToVisualizerWorld(scene_manager_->getScene().getWorldTransform(node->id));
+    EXPECT_FLOAT_EQ(world_transform[3].x, 4.0f);
+    EXPECT_FLOAT_EQ(world_transform[3].y, 5.0f);
+    EXPECT_FLOAT_EQ(world_transform[3].z, 6.0f);
 }
 
 TEST_F(OperatorRegistryPropsTest, BuiltinOperatorSchemasAreRegistered) {

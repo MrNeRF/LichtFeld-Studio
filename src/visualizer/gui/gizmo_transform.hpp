@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
         struct TargetState {
             std::string name;
             glm::mat4 local_transform{1.0f};
+            glm::mat4 visualizer_world_transform{1.0f};
             glm::vec3 world_position{0.0f};
             glm::mat4 parent_world_inverse{1.0f};
             glm::mat3 rotation{1.0f};
@@ -69,6 +70,14 @@ namespace lfs::vis::gui {
         glm::mat3 extractRotation(const glm::mat4& m);
         glm::vec3 extractScale(const glm::mat4& m);
         glm::vec3 extractTranslation(const glm::mat4& m);
+        glm::mat4 visualizerWorldTransform(const core::Scene& scene, core::NodeId node_id);
+        glm::mat4 visualizerWorldTransformToLocal(const core::Scene& scene,
+                                                  core::NodeId node_id,
+                                                  const glm::mat4& visualizer_world_transform);
+        void setNodeVisualizerWorldTransform(core::Scene& scene,
+                                             const std::string& name,
+                                             const glm::mat4& visualizer_world_transform);
+        glm::mat4 visualizerParentWorldInverse(const core::Scene& scene, core::NodeId parent_id);
 
         // World-to-local conversion via sandwich product
         // local_delta = parent_rot_inv * world_delta * parent_rot
@@ -136,6 +145,7 @@ namespace lfs::vis::gui {
         struct MultiNodeCapture {
             std::vector<std::string> node_names;
             std::vector<glm::mat4> local_transforms;
+            std::vector<glm::mat4> visualizer_world_transforms;
             std::vector<glm::vec3> world_positions;
             std::vector<glm::mat4> parent_world_inverses;
             std::vector<glm::mat3> rotations;

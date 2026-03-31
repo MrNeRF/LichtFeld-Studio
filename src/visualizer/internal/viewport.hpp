@@ -95,7 +95,7 @@ class Viewport {
             glm::vec2 delta = pos - prePos;
 
             float y = -delta.x * rotateSpeed;
-            float p = +delta.y * rotateSpeed;
+            float p = -delta.y * rotateSpeed;
             glm::vec3 upVec = enforceUpright ? glm::vec3(0.0f, 1.0f, 0.0f) : R[1];
 
             glm::mat3 Ry = glm::mat3(glm::rotate(glm::mat4(1.0f), y, upVec));
@@ -127,7 +127,7 @@ class Viewport {
             const glm::vec2 delta = pos - prePos;
             const float dist_to_pivot = glm::length(pivot - t);
             const float adaptive_speed = translateSpeed * dist_to_pivot;
-            const glm::vec3 movement = (delta.x * adaptive_speed) * R[0] - (delta.y * adaptive_speed) * R[1];
+            const glm::vec3 movement = -(delta.x * adaptive_speed) * R[0] + (delta.y * adaptive_speed) * R[1];
             t += movement;
             pivot += movement;
             prePos = pos;

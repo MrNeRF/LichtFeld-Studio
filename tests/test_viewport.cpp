@@ -304,6 +304,16 @@ TEST(ViewportTest, OrbitDraggingRightMovesCameraLeftAroundPivot) {
     EXPECT_NEAR(glm::length(viewport.camera.t - viewport.camera.getPivot()), 5.0f, 1e-4f);
 }
 
+TEST(ViewportTest, RotateDraggingUpTiltsCameraUp) {
+    Viewport viewport(100, 100);
+    viewport.camera.R = glm::mat3(1.0f);
+    viewport.camera.initScreenPos(glm::vec2(0.0f, 0.0f));
+
+    viewport.camera.rotate(glm::vec2(0.0f, -100.0f));
+
+    EXPECT_GT(lfs::rendering::cameraForward(viewport.camera.R).y, 0.0f);
+}
+
 TEST(ViewportTest, OrbitDraggingUpMovesCameraDownAroundPivot) {
     Viewport viewport(100, 100);
     viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
@@ -332,7 +342,7 @@ TEST(ViewportTest, OrbitDraggingDownMovesCameraUpAroundPivot) {
     EXPECT_NEAR(glm::length(viewport.camera.t - viewport.camera.getPivot()), 5.0f, 1e-4f);
 }
 
-TEST(ViewportTest, PanDraggingUsesVisualizerRightAndUpAxes) {
+TEST(ViewportTest, PanDraggingRightMovesCameraLeftAndDraggingUpMovesCameraDown) {
     Viewport viewport(100, 100);
     viewport.camera.t = glm::vec3(0.0f, 0.0f, 5.0f);
     viewport.camera.setPivot(glm::vec3(0.0f, 0.0f, 0.0f));
@@ -341,12 +351,43 @@ TEST(ViewportTest, PanDraggingUsesVisualizerRightAndUpAxes) {
 
     viewport.camera.translate(glm::vec2(20.0f, -30.0f));
 
-    EXPECT_GT(viewport.camera.t.x, 0.0f);
-    EXPECT_GT(viewport.camera.t.y, 0.0f);
-    EXPECT_GT(viewport.camera.getPivot().x, 0.0f);
-    EXPECT_GT(viewport.camera.getPivot().y, 0.0f);
+    EXPECT_LT(viewport.camera.t.x, 0.0f);
+    EXPECT_LT(viewport.camera.t.y, 0.0f);
+    EXPECT_LT(viewport.camera.getPivot().x, 0.0f);
+    EXPECT_LT(viewport.camera.getPivot().y, 0.0f);
     EXPECT_NEAR(viewport.camera.t.z, 5.0f, 1e-4f);
     EXPECT_NEAR(viewport.camera.getPivot().z, 0.0f, 1e-4f);
+}
+
+TEST(ViewportTest, PanDraggingMovesProjectedContentWithCursorInVisualizerSpace) {
+    Viewport viewport(100, 100);
+    viewport.camera.t = glm::vec3(3.0f, 2.0f, 5.0f);
+    viewport.camera.setPivot(glm::vec3(0.0f, 0.0f, 0.0f));
+    viewport.camera.R = lfs::rendering::makeVisualizerLookAtRotation(
+        viewport.camera.t, viewport.camera.getPivot());
+    viewport.camera.initScreenPos(glm::vec2(0.0f, 0.0f));
+
+    const glm::vec3 world_point(0.0f, 0.0f, 0.0f);
+    const auto before = lfs::rendering::projectWorldPoint(
+        viewport.camera.R,
+        viewport.camera.t,
+        viewport.windowSize,
+        world_point,
+        lfs::rendering::DEFAULT_FOCAL_LENGTH_MM);
+    ASSERT_TRUE(before.has_value());
+
+    viewport.camera.translate(glm::vec2(20.0f, -30.0f));
+
+    const auto after = lfs::rendering::projectWorldPoint(
+        viewport.camera.R,
+        viewport.camera.t,
+        viewport.windowSize,
+        world_point,
+        lfs::rendering::DEFAULT_FOCAL_LENGTH_MM);
+    ASSERT_TRUE(after.has_value());
+
+    EXPECT_GT(after->x, before->x);
+    EXPECT_LT(after->y, before->y);
 }
 
 TEST(ViewportTest, GaussianRasterSourceMatchesVisualizerLeftRightConvention) {
