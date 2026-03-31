@@ -55,7 +55,6 @@
 #include "config.h"
 #include "core/checkpoint_format.hpp"
 #include "python/runner.hpp"
-#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "training/strategies/istrategy.hpp"
 #include "training/trainer.hpp"
@@ -65,6 +64,7 @@
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operator/operator_registry.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/window/window_manager.hpp"
@@ -107,6 +107,16 @@ namespace {
     using lfs::training::SelectionKind;
     using lfs::training::TrainingPhase;
     using lfs::training::TrainingSnapshot;
+
+    void warn_deprecated_python_api(const std::string_view old_name, const std::string_view replacement) {
+        const std::string message = std::format(
+            "lichtfeld.{}() is deprecated; use lichtfeld.{}() instead",
+            old_name,
+            replacement);
+        if (PyErr_WarnEx(PyExc_DeprecationWarning, message.c_str(), 2) < 0) {
+            throw nb::python_error();
+        }
+    }
 
     CommandCenter* get_command_center_opt() {
         return lfs::event::command_center();
@@ -451,35 +461,6 @@ namespace {
         }
         // Priority 3: Operation context (short-lived, for capability invocations)
         return lfs::python::get_scene_for_python();
-    }
-
-    std::optional<glm::mat4> get_node_visualizer_world_transform(lfs::vis::SceneManager& scene_manager,
-                                                                 const std::string& name) {
-        const auto& scene = scene_manager.getScene();
-        const auto* const node = scene.getNode(name);
-        if (!node)
-            return std::nullopt;
-
-        return lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
-    }
-
-    std::optional<glm::mat4> visualizer_world_transform_to_local(lfs::vis::SceneManager& scene_manager,
-                                                                 const std::string& name,
-                                                                 const glm::mat4& visualizer_world_transform) {
-        const auto& scene = scene_manager.getScene();
-        const auto* const node = scene.getNode(name);
-        if (!node)
-            return std::nullopt;
-
-        const glm::mat4 data_world_transform =
-            lfs::rendering::visualizerWorldTransformToDataWorld(visualizer_world_transform);
-
-        glm::mat4 parent_world_transform(1.0f);
-        if (node->parent_id != lfs::core::NULL_NODE) {
-            parent_world_transform = scene.getWorldTransform(node->parent_id);
-        }
-
-        return glm::inverse(parent_world_transform) * data_world_transform;
     }
 
 } // namespace
@@ -994,13 +975,15 @@ NB_MODULE(lichtfeld, m) {
 
     m.def(
         "get_selection_world_center", []() -> std::optional<std::vector<float>> {
+            warn_deprecated_python_api("get_selection_world_center", "get_selection_visualizer_world_center");
             auto* sm = lfs::python::get_scene_manager();
             if (!sm || !sm->hasSelectedNode())
                 return std::nullopt;
             const auto c = sm->getSelectionWorldCenter();
             return std::vector<float>{c.x, c.y, c.z};
         },
-        "Get center of current selection in legacy data-world space");
+        "Deprecated: get center of current selection in legacy data-world space; use "
+        "get_selection_visualizer_world_center()");
 
     m.def(
         "has_scene", []() -> bool {
@@ -1067,7 +1050,7 @@ NB_MODULE(lichtfeld, m) {
             if (!sm)
                 return std::nullopt;
 
-            const auto transform = get_node_visualizer_world_transform(*sm, name);
+            const auto transform = lfs::vis::scene_coords::nodeVisualizerWorldTransform(sm->getScene(), name);
             if (!transform)
                 return std::nullopt;
 
@@ -1098,7 +1081,8 @@ NB_MODULE(lichtfeld, m) {
             glm::mat4 visualizer_world_transform;
             std::memcpy(&visualizer_world_transform[0][0], mat.data(), 16 * sizeof(float));
 
-            const auto local_transform = visualizer_world_transform_to_local(*sm, name, visualizer_world_transform);
+            const auto local_transform =
+                lfs::vis::scene_coords::nodeLocalTransformFromVisualizerWorld(sm->getScene(), name, visualizer_world_transform);
             if (!local_transform)
                 return;
 

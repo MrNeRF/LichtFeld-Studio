@@ -70,10 +70,6 @@ namespace lfs::vis::gui {
         glm::mat3 extractRotation(const glm::mat4& m);
         glm::vec3 extractScale(const glm::mat4& m);
         glm::vec3 extractTranslation(const glm::mat4& m);
-        glm::mat4 visualizerWorldTransform(const core::Scene& scene, core::NodeId node_id);
-        glm::mat4 visualizerWorldTransformToLocal(const core::Scene& scene,
-                                                  core::NodeId node_id,
-                                                  const glm::mat4& visualizer_world_transform);
         void setNodeVisualizerWorldTransform(core::Scene& scene,
                                              const std::string& name,
                                              const glm::mat4& visualizer_world_transform);

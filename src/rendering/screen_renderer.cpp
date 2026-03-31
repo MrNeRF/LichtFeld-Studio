@@ -103,7 +103,7 @@ namespace lfs::rendering {
             getTextureID(),
             depth_params_,
             getTexcoordScale(),
-            getDepthTexcoordScale(),
+            glm::vec2(1.0f),
             getDepthTextureID(),
             false);
     }
@@ -218,20 +218,6 @@ namespace lfs::rendering {
 #ifdef CUDA_GL_INTEROP_ENABLED
         if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
             return glm::vec2(interop_fb->getTexcoordScaleX(), interop_fb->getTexcoordScaleY());
-        }
-#endif
-        return glm::vec2(1.0f, 1.0f);
-    }
-
-    glm::vec2 ScreenQuadRenderer::getDepthTexcoordScale() const {
-        if (depth_params_.external_depth_texture != 0) {
-            return glm::vec2(1.0f, 1.0f);
-        }
-#ifdef CUDA_GL_INTEROP_ENABLED
-        if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
-            if (interop_fb->hasDepthInterop()) {
-                return glm::vec2(1.0f, 1.0f);
-            }
         }
 #endif
         return glm::vec2(1.0f, 1.0f);

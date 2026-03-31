@@ -10,9 +10,9 @@
 #include "core/splat_data_transform.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
-#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -218,8 +218,7 @@ namespace lfs::vis::cap {
                     continue;
                 }
 
-                const glm::mat4 world_transform =
-                    rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
+                const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
                 const glm::vec3 corners[8] = {
                     {local_min.x, local_min.y, local_min.z},
                     {local_max.x, local_min.y, local_min.z},
@@ -238,36 +237,11 @@ namespace lfs::vis::cap {
             return (total_min + total_max) * 0.5f;
         }
 
-        std::optional<glm::mat4> get_visualizer_world_transform(const core::Scene& scene,
-                                                                const std::string& name) {
-            const auto* const node = scene.getNode(name);
-            if (!node)
-                return std::nullopt;
-            return rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
-        }
-
-        std::optional<glm::mat4> visualizer_world_transform_to_local(const core::Scene& scene,
-                                                                     const std::string& name,
-                                                                     const glm::mat4& visualizer_world_transform) {
-            const auto* const node = scene.getNode(name);
-            if (!node)
-                return std::nullopt;
-
-            glm::mat4 parent_world_transform(1.0f);
-            if (node->parent_id != core::NULL_NODE) {
-                parent_world_transform = scene.getWorldTransform(node->parent_id);
-            }
-
-            const glm::mat4 data_world_transform =
-                rendering::visualizerWorldTransformToDataWorld(visualizer_world_transform);
-            return glm::inverse(parent_world_transform) * data_world_transform;
-        }
-
         std::expected<void, std::string> set_visualizer_world_transform(SceneManager& scene_manager,
                                                                         const std::string& name,
                                                                         const glm::mat4& visualizer_world_transform) {
             const auto local_transform =
-                visualizer_world_transform_to_local(scene_manager.getScene(), name, visualizer_world_transform);
+                scene_coords::nodeLocalTransformFromVisualizerWorld(scene_manager.getScene(), name, visualizer_world_transform);
             if (!local_transform)
                 return std::unexpected("Node not found: " + name);
 
@@ -444,7 +418,7 @@ namespace lfs::vis::cap {
         entry->captureTransforms(targets);
 
         for (const auto& name : targets) {
-            const auto world_transform = get_visualizer_world_transform(scene_manager.getScene(), name);
+            const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
 
@@ -494,7 +468,7 @@ namespace lfs::vis::cap {
         entry->captureTransforms(targets);
 
         for (const auto& name : targets) {
-            const auto world_transform = get_visualizer_world_transform(scene_manager.getScene(), name);
+            const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
 
@@ -521,7 +495,7 @@ namespace lfs::vis::cap {
 
         const glm::mat4 rotation_delta = glm::eulerAngleXYZ(value.x, value.y, value.z);
         for (const auto& name : targets) {
-            const auto world_transform = get_visualizer_world_transform(scene_manager.getScene(), name);
+            const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
 
@@ -550,7 +524,7 @@ namespace lfs::vis::cap {
         entry->captureTransforms(targets);
 
         for (const auto& name : targets) {
-            const auto world_transform = get_visualizer_world_transform(scene_manager.getScene(), name);
+            const auto world_transform = scene_coords::nodeVisualizerWorldTransform(scene_manager.getScene(), name);
             if (!world_transform)
                 return std::unexpected("Node not found: " + name);
 

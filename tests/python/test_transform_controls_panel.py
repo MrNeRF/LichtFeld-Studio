@@ -41,6 +41,7 @@ def _install_lf_stub(monkeypatch):
         local_transforms={},
         visualizer_world_transforms={},
         selection_visualizer_world_center=None,
+        selection_world_center=None,
         set_visualizer_world_calls=[],
         set_local_calls=[],
         op_calls=[],
@@ -78,7 +79,10 @@ def _install_lf_stub(monkeypatch):
         list(state.selection_visualizer_world_center)
         if state.selection_visualizer_world_center is not None else None
     )
-    lf_stub.get_selection_world_center = lf_stub.get_selection_visualizer_world_center
+    lf_stub.get_selection_world_center = lambda: (
+        list(state.selection_world_center)
+        if state.selection_world_center is not None else None
+    )
     lf_stub.get_node_transform = lambda name: state.local_transforms.get(name)
     lf_stub.get_node_visualizer_world_transform = lambda name: state.visualizer_world_transforms.get(name)
 

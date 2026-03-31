@@ -30,6 +30,7 @@
 #include "training/training_setup.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/model_renderability.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include <algorithm>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
@@ -98,13 +99,6 @@ namespace lfs::vis {
             }
         }
 
-        [[nodiscard]] glm::mat4 visualizerWorldTransform(const core::Scene& scene, const core::NodeId node_id) {
-            return rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node_id));
-        }
-
-        [[nodiscard]] glm::mat4 dataWorldTransform(const core::Scene& scene, const core::NodeId node_id) {
-            return scene.getWorldTransform(node_id);
-        }
     } // namespace
 
     using namespace lfs::core::events;
@@ -1087,7 +1081,7 @@ namespace lfs::vis {
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
-            const glm::mat4 local_to_world = visualizerWorldTransform(scene_, node->id);
+            const glm::mat4 local_to_world = scene_coords::nodeVisualizerWorldTransform(scene_, node->id);
             const glm::mat4 world_to_local = glm::inverse(local_to_world);
             const glm::vec3 local_origin = glm::vec3(world_to_local * glm::vec4(ray_origin, 1.0f));
             const glm::vec3 local_dir = glm::vec3(world_to_local * glm::vec4(ray_dir, 0.0f));
@@ -1169,7 +1163,7 @@ namespace lfs::vis {
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
-            const glm::mat4 world_transform = visualizerWorldTransform(scene_, node->id);
+            const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene_, node->id);
 
             if (node->type == core::NodeType::MESH && node->mesh) {
                 auto accessor = CpuMeshAccessor::from(*node->mesh);
@@ -1406,19 +1400,6 @@ namespace lfs::vis {
         return scene_.getNodeTransform(node_name);
     }
 
-    glm::mat4 SceneManager::getSelectedNodeWorldTransform() const {
-        std::shared_lock slock(selection_.mutex());
-        const auto& ids = selection_.selectedNodeIds();
-        if (ids.empty())
-            return glm::mat4(1.0f);
-
-        const auto* node = scene_.getNodeById(*ids.begin());
-        if (!node)
-            return glm::mat4(1.0f);
-
-        return dataWorldTransform(scene_, node->id);
-    }
-
     glm::mat4 SceneManager::getSelectedNodeVisualizerWorldTransform() const {
         std::shared_lock slock(selection_.mutex());
         const auto& ids = selection_.selectedNodeIds();
@@ -1429,7 +1410,7 @@ namespace lfs::vis {
         if (!node)
             return glm::mat4(1.0f);
 
-        return visualizerWorldTransform(scene_, node->id);
+        return scene_coords::nodeVisualizerWorldTransform(scene_, node->id);
     }
 
     glm::vec3 SceneManager::getSelectionCenter() const {
@@ -1484,7 +1465,7 @@ namespace lfs::vis {
             if (!scene_.getNodeBounds(node->id, local_min, local_max))
                 continue;
 
-            const glm::mat4 world_transform = dataWorldTransform(scene_, node->id);
+            const glm::mat4 world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
             const glm::vec3 corners[8] = {
                 {local_min.x, local_min.y, local_min.z},
                 {local_max.x, local_min.y, local_min.z},
@@ -1525,7 +1506,7 @@ namespace lfs::vis {
             if (!scene_.getNodeBounds(node->id, local_min, local_max))
                 continue;
 
-            const glm::mat4 world_transform = visualizerWorldTransform(scene_, node->id);
+            const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene_, node->id);
             const glm::vec3 corners[8] = {
                 {local_min.x, local_min.y, local_min.z},
                 {local_max.x, local_min.y, local_min.z},
@@ -2466,7 +2447,7 @@ namespace lfs::vis {
 
                 // Transform crop box to node's local space if node has a transform
                 lfs::geometry::BoundingBox local_crop_box = crop_box;
-                const glm::mat4 node_world_transform = dataWorldTransform(scene_, node->id);
+                const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
                 static const glm::mat4 IDENTITY_MATRIX(1.0f);
 
                 if (node_world_transform != IDENTITY_MATRIX) {
@@ -2618,7 +2599,7 @@ namespace lfs::vis {
                 const size_t original_visible = node->model->visible_count();
 
                 // Transform means to ellipsoid local space and apply mask
-                const glm::mat4 node_world_transform = dataWorldTransform(scene_, node->id);
+                const glm::mat4 node_world_transform = scene_coords::nodeDataWorldTransform(scene_, node->id);
                 const glm::mat4 combined_transform = inv_world * node_world_transform;
 
                 const auto applied_mask = lfs::core::soft_crop_by_ellipsoid(*node->model, combined_transform, radii, inverse);

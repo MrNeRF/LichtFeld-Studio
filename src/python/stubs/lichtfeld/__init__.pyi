@@ -345,7 +345,7 @@ def get_selection_visualizer_world_center() -> list[float] | None:
     """Get center of current selection in visualizer-world space"""
 
 def get_selection_world_center() -> list[float] | None:
-    """Get center of current selection in legacy data-world space"""
+    """Deprecated: get center of current selection in legacy data-world space; use get_selection_visualizer_world_center()"""
 
 def has_scene() -> bool:
     """Check if a scene is loaded"""

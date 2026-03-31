@@ -34,6 +34,7 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_properties.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -417,17 +418,9 @@ namespace lfs::app {
             return result;
         }
 
-        glm::mat4 visualizer_world_transform(const core::Scene& scene, const core::NodeId node_id) {
-            return rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node_id));
-        }
-
-        glm::mat4 data_world_transform(const core::Scene& scene, const core::NodeId node_id) {
-            return scene.getWorldTransform(node_id);
-        }
-
         json transform_info_json(const core::Scene& scene, const core::SceneNode& node) {
             const glm::mat4 local = scene.getNodeTransform(node.name);
-            const glm::mat4 world = visualizer_world_transform(scene, node.id);
+            const glm::mat4 world = vis::scene_coords::nodeVisualizerWorldTransform(scene, node.id);
             const auto local_components = decompose_transform(local);
             const auto world_components = decompose_transform(world);
 
@@ -616,7 +609,7 @@ namespace lfs::app {
                 {"rotation", vec3_to_json(components.rotation)},
                 {"scale", vec3_to_json(components.scale)},
                 {"local_matrix", mat4_to_json(scene.getNodeTransform(node->name))},
-                {"world_matrix", mat4_to_json(visualizer_world_transform(scene, cropbox_id))},
+                {"world_matrix", mat4_to_json(vis::scene_coords::nodeVisualizerWorldTransform(scene, cropbox_id))},
             };
 
             if (node->parent_id != core::NULL_NODE) {
@@ -1356,7 +1349,7 @@ namespace lfs::app {
                 {"rotation", vec3_to_json(components.rotation)},
                 {"scale", vec3_to_json(components.scale)},
                 {"local_matrix", mat4_to_json(scene.getNodeTransform(node->name))},
-                {"world_matrix", mat4_to_json(visualizer_world_transform(scene, ellipsoid_id))},
+                {"world_matrix", mat4_to_json(vis::scene_coords::nodeVisualizerWorldTransform(scene, ellipsoid_id))},
             };
 
             if (node->parent_id != core::NULL_NODE) {
@@ -1505,7 +1498,7 @@ namespace lfs::app {
             for (const auto& name : node_names) {
                 const auto* const node = scene.getNode(name);
                 if (node && node->type == core::NodeType::SPLAT && node->model) {
-                    splats.emplace_back(node->model.get(), data_world_transform(scene, node->id));
+                    splats.emplace_back(node->model.get(), vis::scene_coords::nodeDataWorldTransform(scene, node->id));
                 }
             }
 

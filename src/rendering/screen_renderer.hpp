@@ -62,7 +62,6 @@ namespace lfs::rendering {
 
         // Get texture coordinate scale for over-allocated textures
         glm::vec2 getTexcoordScale() const;
-        glm::vec2 getDepthTexcoordScale() const;
 
         GLuint getUploadedColorTexture() const { return getTextureID(); }
         GLuint getUploadedDepthTexture() const { return getDepthTextureID(); }

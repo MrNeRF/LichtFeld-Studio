@@ -17,6 +17,9 @@
 
 namespace {
 
+    constexpr float kInvalidScreenPositionSentinel = -10000.0f;
+    constexpr float kInvalidScreenPositionThreshold = -1000.0f;
+
     struct PrimitiveFailureOffender {
         uint primitive_idx = 0;
         uint global_idx = 0;
@@ -179,7 +182,7 @@ namespace lfs::rendering::config {
 __global__ void init_mean2d_kernel(float2* data, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n) {
-        data[idx] = make_float2(-10000.0f, -10000.0f);
+        data[idx] = make_float2(kInvalidScreenPositionSentinel, kInvalidScreenPositionSentinel);
     }
 }
 
@@ -192,7 +195,7 @@ __global__ void invalidate_outside_crop_kernel(
     if (idx >= n)
         return;
     if (outside_crop[idx]) {
-        screen_positions[idx] = make_float2(-10000.0f, -10000.0f);
+        screen_positions[idx] = make_float2(kInvalidScreenPositionSentinel, kInvalidScreenPositionSentinel);
     }
 }
 
@@ -209,9 +212,9 @@ __global__ void copy_screen_positions_kernel(
         return;
 
     float2 pos = mean2d[idx];
-    // Flip Y: window_y = height - rasterizer_y
+    // Convert OpenGL-style rasterizer Y to window-space Y.
     // Keep invalid markers as-is (they have large negative values)
-    if (pos.y > -1000.0f) {
+    if (pos.y > kInvalidScreenPositionThreshold) {
         pos.y = height - pos.y;
     }
     screen_positions_out[idx] = pos;
@@ -233,7 +236,7 @@ __global__ void brush_select_kernel(
     float2 pos = screen_positions[idx];
 
     // Skip invalid/off-screen positions (marked with large negative values)
-    if (pos.x < -1000.0f || pos.y < -1000.0f)
+    if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold)
         return;
 
     float dx = pos.x - mouse_x;
@@ -296,7 +299,7 @@ __global__ void polygon_select_kernel(
         return;
 
     const float2 pos = positions[idx];
-    if (pos.x < -1000.0f)
+    if (pos.x < kInvalidScreenPositionThreshold)
         return; // Invalid position marker
 
     if (point_in_polygon(pos.x, pos.y, polygon, num_verts))
@@ -315,7 +318,7 @@ __global__ void polygon_select_mode_kernel(
         return;
 
     const float2 pos = positions[idx];
-    if (pos.x < -1000.0f)
+    if (pos.x < kInvalidScreenPositionThreshold)
         return;
 
     if (point_in_polygon(pos.x, pos.y, polygon, num_verts))
@@ -332,7 +335,7 @@ __global__ void rect_select_kernel(
         return;
 
     const float2 pos = positions[idx];
-    if (pos.x < -1000.0f)
+    if (pos.x < kInvalidScreenPositionThreshold)
         return;
 
     if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1)
@@ -350,7 +353,7 @@ __global__ void rect_select_mode_kernel(
         return;
 
     const float2 pos = positions[idx];
-    if (pos.x < -1000.0f)
+    if (pos.x < kInvalidScreenPositionThreshold)
         return;
 
     if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1)

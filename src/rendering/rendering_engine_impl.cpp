@@ -658,7 +658,7 @@ namespace lfs::rendering {
         const glm::vec2 depth_texcoord_scale =
             result.external_depth_texture != 0
                 ? result.depth_texcoord_scale
-                : screen_renderer_->getDepthTexcoordScale();
+                : glm::vec2(1.0f);
         const GLuint uploaded_depth_texture =
             result.external_depth_texture != 0
                 ? result.external_depth_texture
@@ -995,7 +995,7 @@ namespace lfs::rendering {
         const glm::vec2 depth_texcoord_scale =
             metadata.external_depth_texture != 0
                 ? metadata.depth_texcoord_scale
-                : screen_renderer_->getDepthTexcoordScale();
+                : glm::vec2(1.0f);
         const GLuint uploaded_depth_texture =
             metadata.external_depth_texture != 0
                 ? metadata.external_depth_texture

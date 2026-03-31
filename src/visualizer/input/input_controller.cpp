@@ -25,6 +25,7 @@
 #include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <format>
@@ -1719,8 +1720,7 @@ namespace lfs::vis {
             if (!scene.getNodeBounds(node->id, local_min, local_max))
                 return;
 
-            const glm::mat4 world_xform =
-                lfs::rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id));
+            const glm::mat4 world_xform = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
             for (int i = 0; i < 8; ++i) {
                 const glm::vec3 corner(
                     (i & 1) ? local_max.x : local_min.x,

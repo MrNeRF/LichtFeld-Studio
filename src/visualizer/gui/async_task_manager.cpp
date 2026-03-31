@@ -18,6 +18,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
@@ -32,12 +33,6 @@
 namespace lfs::vis::gui {
 
     using ExportFormat = lfs::core::ExportFormat;
-
-    namespace {
-        [[nodiscard]] glm::mat4 data_world_transform(const lfs::core::Scene& scene, const lfs::core::NodeId node_id) {
-            return scene.getWorldTransform(node_id);
-        }
-    } // namespace
 
     [[nodiscard]] const char* getDatasetTypeName(const std::filesystem::path& path) {
         switch (lfs::io::Loader::getDatasetType(path)) {
@@ -609,7 +604,7 @@ namespace lfs::vis::gui {
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
             if (node && node->type == core::NodeType::SPLAT && node->model) {
-                splats.emplace_back(node->model.get(), data_world_transform(scene, node->id));
+                splats.emplace_back(node->model.get(), scene_coords::nodeDataWorldTransform(scene, node->id));
             }
         }
         if (splats.empty())

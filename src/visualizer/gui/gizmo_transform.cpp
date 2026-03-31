@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/gizmo_transform.hpp"
-#include "rendering/coordinate_conventions.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include <cassert>
 #include <glm/gtc/matrix_transform.hpp>
 #include <unordered_set>
@@ -40,28 +40,6 @@ namespace lfs::vis::gui {
             return glm::vec3(m[3]);
         }
 
-        glm::mat4 visualizerWorldTransform(const core::Scene& scene, const core::NodeId node_id) {
-            return rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node_id));
-        }
-
-        glm::mat4 visualizerWorldTransformToLocal(const core::Scene& scene,
-                                                  const core::NodeId node_id,
-                                                  const glm::mat4& visualizer_world_transform) {
-            const auto* const node = scene.getNodeById(node_id);
-            if (!node) {
-                return glm::mat4(1.0f);
-            }
-
-            glm::mat4 parent_world_transform(1.0f);
-            if (node->parent_id != core::NULL_NODE) {
-                parent_world_transform = scene.getWorldTransform(node->parent_id);
-            }
-
-            const glm::mat4 data_world_transform =
-                rendering::visualizerWorldTransformToDataWorld(visualizer_world_transform);
-            return glm::inverse(parent_world_transform) * data_world_transform;
-        }
-
         void setNodeVisualizerWorldTransform(core::Scene& scene,
                                              const std::string& name,
                                              const glm::mat4& visualizer_world_transform) {
@@ -69,14 +47,17 @@ namespace lfs::vis::gui {
             if (!node) {
                 return;
             }
-            scene.setNodeTransform(name, visualizerWorldTransformToLocal(scene, node->id, visualizer_world_transform));
+            if (const auto local_transform =
+                    scene_coords::nodeLocalTransformFromVisualizerWorld(scene, node->id, visualizer_world_transform)) {
+                scene.setNodeTransform(name, *local_transform);
+            }
         }
 
         glm::mat4 visualizerParentWorldInverse(const core::Scene& scene, const core::NodeId parent_id) {
             if (parent_id == core::NULL_NODE) {
                 return glm::mat4(1.0f);
             }
-            return glm::inverse(visualizerWorldTransform(scene, parent_id));
+            return glm::inverse(scene_coords::nodeVisualizerWorldTransform(scene, parent_id));
         }
 
         glm::mat3 worldToLocalRotation(const glm::mat3& world_delta, const glm::mat4& parent_world_inverse) {
@@ -170,7 +151,7 @@ namespace lfs::vis::gui {
             state.rotation = extractRotation(state.local_transform);
             state.scale = extractScale(state.local_transform);
 
-            const glm::mat4 world_transform = visualizerWorldTransform(scene, node->id);
+            const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
             state.visualizer_world_transform = world_transform;
             const glm::vec3 bounds_center = (node->cropbox->min + node->cropbox->max) * 0.5f;
             state.world_position = glm::vec3(world_transform * glm::vec4(bounds_center, 1.0f));
@@ -211,7 +192,7 @@ namespace lfs::vis::gui {
             state.rotation = extractRotation(state.local_transform);
             state.scale = extractScale(state.local_transform);
 
-            const glm::mat4 world_transform = visualizerWorldTransform(scene, node->id);
+            const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
             state.visualizer_world_transform = world_transform;
             state.world_position = extractTranslation(world_transform);
             state.parent_world_inverse = visualizerParentWorldInverse(scene, node->parent_id);
@@ -346,7 +327,7 @@ namespace lfs::vis::gui {
                 if (!node)
                     continue;
 
-                const glm::mat4 world_t = visualizerWorldTransform(scene, node->id);
+                const glm::mat4 world_t = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
                 const glm::mat4 local_t = node->local_transform.get();
 
                 capture.node_names.push_back(name);

@@ -8,6 +8,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 #include "viewport_request_builder.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include <cassert>
 #include <format>
 
@@ -157,15 +158,14 @@ namespace lfs::vis {
                         .label = visible_nodes[left_idx]->name,
                         .panel =
                             {.content =
-                                 buildModelPanelContent(
-                                     ctx,
-                                     ctx.viewport,
-                                     ctx.render_size,
-                                     *visible_nodes[left_idx]->model,
-                                     lfs::rendering::dataWorldTransformToVisualizerWorld(
-                                         scene.getWorldTransform(visible_nodes[left_idx]->id)),
-                                     false,
-                                     std::nullopt),
+                                     buildModelPanelContent(ctx,
+                                                            ctx.viewport,
+                                                            ctx.render_size,
+                                                            *visible_nodes[left_idx]->model,
+                                                            scene_coords::nodeVisualizerWorldTransform(
+                                                                scene, visible_nodes[left_idx]->id),
+                                                            false,
+                                                            std::nullopt),
                              .presentation =
                                  {.start_position = 0.0f,
                                   .end_position = ctx.settings.split_position,
@@ -175,15 +175,14 @@ namespace lfs::vis {
                         .label = visible_nodes[right_idx]->name,
                         .panel =
                             {.content =
-                                 buildModelPanelContent(
-                                     ctx,
-                                     ctx.viewport,
-                                     ctx.render_size,
-                                     *visible_nodes[right_idx]->model,
-                                     lfs::rendering::dataWorldTransformToVisualizerWorld(
-                                         scene.getWorldTransform(visible_nodes[right_idx]->id)),
-                                     false,
-                                     std::nullopt),
+                                 buildModelPanelContent(ctx,
+                                                        ctx.viewport,
+                                                        ctx.render_size,
+                                                        *visible_nodes[right_idx]->model,
+                                                        scene_coords::nodeVisualizerWorldTransform(
+                                                            scene, visible_nodes[right_idx]->id),
+                                                        false,
+                                                        std::nullopt),
                              .presentation =
                                  {.start_position = ctx.settings.split_position,
                                   .end_position = 1.0f,

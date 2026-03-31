@@ -288,7 +288,9 @@ TEST_F(OperatorRegistryPropsTest, LegacySelectionWorldCenterRemainsDataWorld) {
     EXPECT_NEAR(visualizer_center.y, expected_visualizer_center.y, 1e-5f);
     EXPECT_NEAR(visualizer_center.z, expected_visualizer_center.z, 1e-5f);
 
-    const glm::mat4 data_world = scene_manager_->getSelectedNodeWorldTransform();
+    const auto* const node = scene_manager_->getScene().getNode("target");
+    ASSERT_NE(node, nullptr);
+    const glm::mat4 data_world = scene_manager_->getScene().getWorldTransform(node->id);
     EXPECT_NEAR(data_world[3].x, 10.0f, 1e-5f);
     EXPECT_NEAR(data_world[3].y, 20.0f, 1e-5f);
     EXPECT_NEAR(data_world[3].z, 30.0f, 1e-5f);
