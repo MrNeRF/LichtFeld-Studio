@@ -25,7 +25,7 @@ namespace lfs::vis {
         [[nodiscard]] SplitViewInfo toInfo() const;
     };
 
-    [[nodiscard]] std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(
+    [[nodiscard]] LFS_VIS_API std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(
         const FrameContext& ctx,
         const FrameResources& res);
 
