@@ -4,7 +4,6 @@
 #include <SDL3/SDL.h>
 
 #include "visualizer/include/visualizer/visualizer.hpp"
-#include "visualizer_impl.hpp"
 
 #include <gtest/gtest.h>
 
@@ -17,10 +16,10 @@ TEST(VisualizerPostWorkTest, QueuedWorkWakesEventLoop) {
 
     bool ran = false;
     {
-        lfs::vis::VisualizerImpl viewer(options);
+        auto viewer = lfs::vis::Visualizer::create(options);
 
         EXPECT_FALSE(SDL_HasEvents(SDL_EVENT_USER, SDL_EVENT_USER));
-        EXPECT_TRUE(viewer.postWork({
+        EXPECT_TRUE(viewer->postWork({
             .run = [&ran]() { ran = true; },
             .cancel = nullptr,
         }));
