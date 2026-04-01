@@ -1,5 +1,11 @@
 {
   "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
+  "default-features": [
+    {
+      "name": "desktop-sdl",
+      "platform": "linux"
+    }
+  ],
   "dependencies": [
     "args",
     "boost-preprocessor",
@@ -16,7 +22,10 @@
     },
     "freetype",
     "glad",
-    "sdl3",
+    {
+      "name": "sdl3",
+      "default-features": false
+    },
     "glm",
     "gtest",
     {
@@ -56,5 +65,25 @@
         "svg"
       ]
     }
-  ]
+  ],
+  "features": {
+    "desktop-sdl": {
+      "description": "Build SDL3 with desktop Linux backends enabled by default.",
+      "dependencies": [
+        {
+          "name": "sdl3",
+          "default-features": false,
+          "features": [
+            "ibus",
+            "wayland",
+            "x11"
+          ],
+          "platform": "linux"
+        }
+      ]
+    },
+    "headless-sdl": {
+      "description": "Build against SDL3 core only, without desktop Linux video backends."
+    }
+  }
 }
