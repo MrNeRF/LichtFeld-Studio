@@ -250,7 +250,7 @@ namespace lfs::vis {
     // Runtime vignette control (does not persist to theme file)
     LFS_VIS_API void setThemeVignetteEnabled(bool enabled);
     LFS_VIS_API void setThemeVignetteIntensity(float intensity);
-    LFS_VIS_API void setThemeVignette(float intensity, float radius, float softness);
+    LFS_VIS_API void setThemeVignetteStyle(float intensity, float radius, float softness);
 
     // Persistence
     LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);

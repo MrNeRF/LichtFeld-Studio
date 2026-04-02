@@ -11,10 +11,11 @@ import pytest
 
 class _BindingModelStub:
     def __init__(self):
+        self.bindings = {}
         self.func_bindings = {}
 
-    def bind(self, _name, _getter, _setter):
-        pass
+    def bind(self, name, getter, setter):
+        self.bindings[name] = (getter, setter)
 
     def bind_func(self, name, getter):
         self.func_bindings[name] = getter
@@ -52,6 +53,9 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
         tr=lambda key: key,
+        theme=lambda: None,
+        set_theme_vignette_enabled=lambda _value: None,
+        set_theme_vignette_intensity=lambda _value: None,
         set_panel_label=lambda _panel_id, _label: True,
         is_windows_platform=lambda: False,
         toggle_system_console=lambda: None,
@@ -94,3 +98,29 @@ def test_rendering_panel_section_headers_use_literals_without_missing_keys(rende
     assert "rendering_panel.section_camera" not in requested_keys
     assert "rendering_panel.section_selection" not in requested_keys
     assert "rendering_panel.section_post_process" not in requested_keys
+
+
+def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):
+    module = rendering_panel_module
+    theme_state = SimpleNamespace(vignette=SimpleNamespace(enabled=True, intensity=0.25))
+    set_calls = {"enabled": [], "intensity": []}
+    module.lf.ui.theme = lambda: theme_state
+    module.lf.ui.set_theme_vignette_enabled = lambda value: set_calls["enabled"].append(value)
+    module.lf.ui.set_theme_vignette_intensity = lambda value: set_calls["intensity"].append(value)
+
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+
+    enabled_getter, enabled_setter = model.bindings["theme_vignette_enabled"]
+    intensity_getter, intensity_setter = model.bindings["theme_vignette_intensity"]
+
+    assert enabled_getter() is True
+    assert intensity_getter() == pytest.approx(0.25)
+
+    enabled_setter(False)
+    intensity_setter(0.4)
+
+    assert set_calls["enabled"] == [False]
+    assert set_calls["intensity"] == [0.4]

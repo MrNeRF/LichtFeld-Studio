@@ -473,8 +473,8 @@
     "mesh_shadow_resolution": "阴影分辨率",
     "camera_frustum_scale": "视锥体缩放",
     "voxel_size": "体素大小",
-    "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette Intensity"
+    "theme_vignette": "暗角",
+    "theme_vignette_intensity": "暗角强度"
   },
   "toolbar": {
     "selection": "选择 (1)",

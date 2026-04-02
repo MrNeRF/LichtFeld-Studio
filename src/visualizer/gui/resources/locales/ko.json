@@ -473,8 +473,8 @@
     "mesh_shadow_resolution": "그림자 해상도",
     "camera_frustum_scale": "절두체 스케일",
     "voxel_size": "복셀 크기",
-    "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette Intensity"
+    "theme_vignette": "비네팅",
+    "theme_vignette_intensity": "비네팅 강도"
   },
   "toolbar": {
     "selection": "선택 (1)",

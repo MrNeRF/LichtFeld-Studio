@@ -473,8 +473,8 @@
     "mesh_shadow_resolution": "影の解像度",
     "camera_frustum_scale": "視錐台スケール",
     "voxel_size": "ボクセルサイズ",
-    "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette Intensity"
+    "theme_vignette": "ビネット",
+    "theme_vignette_intensity": "ビネット強度"
   },
   "toolbar": {
     "selection": "選択 (1)",

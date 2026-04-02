@@ -474,7 +474,7 @@
     "camera_frustum_scale": "Échelle du frustum",
     "voxel_size": "Taille de voxel",
     "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette Intensity"
+    "theme_vignette_intensity": "Intensité du vignettage"
   },
   "toolbar": {
     "selection": "Sélection (1)",

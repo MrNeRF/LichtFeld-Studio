@@ -311,8 +311,25 @@ namespace lfs::vis {
         applyCurrentTheme(t, normalizeThemeIdImpl(t.name));
     }
 
+    namespace {
+        void applyThemePreservingCurrentId(const Theme& t) {
+            ensureInitialized();
+
+            // Keep runtime style tweaks attached to the active preset ID so
+            // RML theme activation and preset hot-reload continue to target
+            // the selected preset even if the theme JSON name is customized.
+            const std::string active_theme_id = g_current_theme_id;
+            applyCurrentTheme(t, active_theme_id);
+        }
+    } // namespace
+
     void applyThemeToImGui() {
         ensureInitialized();
+        if (ImGui::GetCurrentContext() == nullptr) {
+            // Headless Python sessions can still read and mutate theme state
+            // even when no ImGui style exists to update.
+            return;
+        }
         ImGuiStyle& style = ImGui::GetStyle();
         const auto& p = g_current_theme.palette;
         const auto& s = g_current_theme.sizes;
@@ -1198,21 +1215,21 @@ namespace lfs::vis {
     void setThemeVignetteEnabled(bool enabled) {
         Theme t = theme();
         t.vignette.enabled = enabled;
-        setTheme(t);
+        applyThemePreservingCurrentId(t);
     }
 
     void setThemeVignetteIntensity(float intensity) {
         Theme t = theme();
-        t.vignette.intensity = intensity;
-        setTheme(t);
+        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
+        applyThemePreservingCurrentId(t);
     }
 
-    void setThemeVignette(float intensity, float radius, float softness) {
+    void setThemeVignetteStyle(float intensity, float radius, float softness) {
         Theme t = theme();
-        t.vignette.intensity = intensity;
-        t.vignette.radius = radius;
-        t.vignette.softness = softness;
-        setTheme(t);
+        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
+        t.vignette.radius = std::clamp(radius, 0.0f, 1.0f);
+        t.vignette.softness = std::clamp(softness, 0.0f, 1.0f);
+        applyThemePreservingCurrentId(t);
     }
 
 } // namespace lfs::vis

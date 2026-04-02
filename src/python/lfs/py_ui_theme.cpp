@@ -115,7 +115,7 @@ namespace lfs::python {
         m.def("theme", &get_current_theme, "Get the current theme");
         m.def("set_theme_vignette_enabled", &lfs::vis::setThemeVignetteEnabled, "Set theme vignette enabled");
         m.def("set_theme_vignette_intensity", &lfs::vis::setThemeVignetteIntensity, "Set theme vignette intensity");
-        m.def("set_theme_vignette", &lfs::vis::setThemeVignette, "Set all theme vignette parameters");
+        m.def("set_theme_vignette_style", &lfs::vis::setThemeVignetteStyle, "Set vignette intensity, radius, and softness");
     }
 
 } // namespace lfs::python

@@ -474,7 +474,7 @@
     "camera_frustum_scale": "Skala ostrosłupa",
     "voxel_size": "Rozmiar voksela",
     "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette Intensity"
+    "theme_vignette_intensity": "Intensywność winietowania"
   },
   "toolbar": {
     "selection": "Zaznaczenie (1)",
