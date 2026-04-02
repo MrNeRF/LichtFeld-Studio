@@ -472,7 +472,9 @@
     "mesh_shadow_enabled": "Schatten",
     "mesh_shadow_resolution": "Schattenauflösung",
     "camera_frustum_scale": "Frustum-Skalierung",
-    "voxel_size": "Voxelgröße"
+    "voxel_size": "Voxelgröße",
+    "theme_vignette": "Vignette",
+    "theme_vignette_intensity": "Vignette Intensity"
   },
   "toolbar": {
     "selection": "Auswahl (1)",
@@ -575,6 +577,8 @@
     "ppisp_gamma_channel": "Pro-Kanal Gamma-Offset",
     "ppisp_crf_toe": "Schattenkompression (Toe der CRF-Kurve)",
     "ppisp_crf_shoulder": "Lichter-Rolloff (Shoulder der CRF-Kurve)",
+    "theme_vignette": "Vignette am Ansichtsrand aktivieren",
+    "theme_vignette_intensity": "Dunkelheit der Vignette anpassen (0-1)",
     "render_scale": "Viewer-Auflösung (niedriger = weniger VRAM)",
     "point_cloud_forced": "Vor Trainingsstart erzwungen",
     "desaturate_unselected": "Nicht ausgewählte PLYs abdunkeln",

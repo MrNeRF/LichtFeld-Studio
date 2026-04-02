@@ -472,7 +472,9 @@
     "mesh_shadow_enabled": "阴影",
     "mesh_shadow_resolution": "阴影分辨率",
     "camera_frustum_scale": "视锥体缩放",
-    "voxel_size": "体素大小"
+    "voxel_size": "体素大小",
+    "theme_vignette": "Vignette",
+    "theme_vignette_intensity": "Vignette Intensity"
   },
   "toolbar": {
     "selection": "选择 (1)",
@@ -575,6 +577,8 @@
     "ppisp_gamma_channel": "每通道伽马偏移",
     "ppisp_crf_toe": "阴影压缩（CRF曲线的脚趾）",
     "ppisp_crf_shoulder": "高光滚降（CRF曲线的肩部）",
+    "theme_vignette": "启用视口边缘变暗",
+    "theme_vignette_intensity": "调整暗角暗度 (0-1)",
     "render_scale": "查看器分辨率（越低=越少VRAM）",
     "point_cloud_forced": "训练开始前强制启用",
     "desaturate_unselected": "使未选择的PLY变暗",

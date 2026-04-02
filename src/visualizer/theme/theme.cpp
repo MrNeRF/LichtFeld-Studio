@@ -1195,4 +1195,24 @@ namespace lfs::vis {
         return 0.0f;
     }
 
+    void setThemeVignetteEnabled(bool enabled) {
+        Theme t = theme();
+        t.vignette.enabled = enabled;
+        setTheme(t);
+    }
+
+    void setThemeVignetteIntensity(float intensity) {
+        Theme t = theme();
+        t.vignette.intensity = intensity;
+        setTheme(t);
+    }
+
+    void setThemeVignette(float intensity, float radius, float softness) {
+        Theme t = theme();
+        t.vignette.intensity = intensity;
+        t.vignette.radius = radius;
+        t.vignette.softness = softness;
+        setTheme(t);
+    }
+
 } // namespace lfs::vis

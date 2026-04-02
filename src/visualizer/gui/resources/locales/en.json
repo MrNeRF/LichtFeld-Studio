@@ -472,7 +472,9 @@
     "mesh_shadow_enabled": "Shadows",
     "mesh_shadow_resolution": "Shadow Resolution",
     "camera_frustum_scale": "Frustum Scale",
-    "voxel_size": "Voxel Size"
+    "voxel_size": "Voxel Size",
+    "theme_vignette": "Vignette",
+    "theme_vignette_intensity": "Vignette Intensity"
   },
   "toolbar": {
     "selection": "Selection (1)",
@@ -628,7 +630,9 @@
     "seq_export": "Export video from camera path",
     "seq_clear": "Clear all keyframes",
     "seq_interval": "Grid snap interval",
-    "seq_preview_size": "PiP preview scale"
+    "seq_preview_size": "PiP preview scale",
+    "theme_vignette": "Enable viewport edge darkening",
+    "theme_vignette_intensity": "Adjust vignette darkness (0-1)"
   },
   "exit_popup": {
     "title": "Exit Application?",

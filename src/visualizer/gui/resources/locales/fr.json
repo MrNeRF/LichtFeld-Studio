@@ -472,7 +472,9 @@
     "mesh_shadow_enabled": "Ombres",
     "mesh_shadow_resolution": "Résolution des ombres",
     "camera_frustum_scale": "Échelle du frustum",
-    "voxel_size": "Taille de voxel"
+    "voxel_size": "Taille de voxel",
+    "theme_vignette": "Vignette",
+    "theme_vignette_intensity": "Vignette Intensity"
   },
   "toolbar": {
     "selection": "Sélection (1)",
@@ -575,6 +577,8 @@
     "ppisp_gamma_channel": "Décalage gamma par canal",
     "ppisp_crf_toe": "Compression des ombres (toe de la courbe CRF)",
     "ppisp_crf_shoulder": "Atténuation des hautes lumières (shoulder de la courbe CRF)",
+    "theme_vignette": "Activer l'assombrissement des bords",
+    "theme_vignette_intensity": "Ajuster l'obscurité du vignettage (0-1)",
     "render_scale": "Résolution viewer (inférieur = moins VRAM)",
     "point_cloud_forced": "Forcé avant l'entraînement",
     "desaturate_unselected": "Assombrir les PLY non sélectionnés",

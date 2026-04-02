@@ -247,6 +247,11 @@ namespace lfs::vis {
     LFS_VIS_API bool setThemeByName(const std::string& name); // e.g. "dark", "light", "gruvbox", "catppuccin_mocha", "catppuccin_latte", "nord"
     LFS_VIS_API bool checkThemeFileChanges();                 // Call periodically to hot-reload; returns true when any preset changed
 
+    // Runtime vignette control (does not persist to theme file)
+    LFS_VIS_API void setThemeVignetteEnabled(bool enabled);
+    LFS_VIS_API void setThemeVignetteIntensity(float intensity);
+    LFS_VIS_API void setThemeVignette(float intensity, float radius, float softness);
+
     // Persistence
     LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);
     LFS_VIS_API bool loadTheme(Theme& t, const std::string& path);

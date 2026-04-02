@@ -20,20 +20,42 @@ SENSOR_HALF_HEIGHT_MM = 12.0
 DEFAULT_SIMPLIFY_TARGET_RATIO = 0.5
 
 BOOL_PROPS = [
-    "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
-    "point_cloud_mode", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
-    "equirectangular", "gut", "mip_filter",
-    "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
-    "apply_appearance_correction", "ppisp_vignette_enabled",
+    "show_coord_axes",
+    "show_pivot",
+    "show_grid",
+    "show_camera_frustums",
+    "point_cloud_mode",
+    "desaturate_unselected",
+    "desaturate_cropping",
+    "hide_outside_depth_box",
+    "equirectangular",
+    "gut",
+    "mip_filter",
+    "mesh_wireframe",
+    "mesh_backface_culling",
+    "mesh_shadow_enabled",
+    "apply_appearance_correction",
+    "ppisp_vignette_enabled",
 ]
 
 SLIDER_PROPS = [
-    "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
-    "focal_length_mm", "render_scale",
-    "mesh_wireframe_width", "mesh_light_intensity", "mesh_ambient",
-    "ppisp_exposure", "ppisp_vignette_strength", "ppisp_gamma_multiplier",
-    "ppisp_gamma_red", "ppisp_gamma_green", "ppisp_gamma_blue",
-    "ppisp_crf_toe", "ppisp_crf_shoulder",
+    "axes_size",
+    "grid_opacity",
+    "camera_frustum_scale",
+    "voxel_size",
+    "focal_length_mm",
+    "render_scale",
+    "mesh_wireframe_width",
+    "mesh_light_intensity",
+    "mesh_ambient",
+    "ppisp_exposure",
+    "ppisp_vignette_strength",
+    "ppisp_gamma_multiplier",
+    "ppisp_gamma_red",
+    "ppisp_gamma_green",
+    "ppisp_gamma_blue",
+    "ppisp_crf_toe",
+    "ppisp_crf_shoulder",
 ]
 
 SCRUB_FIELD_DEFS = {
@@ -54,23 +76,31 @@ SCRUB_FIELD_DEFS = {
     "ppisp_gamma_blue": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
     "ppisp_crf_toe": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
     "ppisp_crf_shoulder": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
+    "theme_vignette_intensity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
     "simplify_target": ScrubFieldSpec(1.0, 1.0, 1.0, "%d", data_type=int),
 }
 
 SELECT_PROPS = [
-    "grid_plane", "sh_degree", "mesh_shadow_resolution",
+    "grid_plane",
+    "sh_degree",
+    "mesh_shadow_resolution",
 ]
 
 CHROM_FLOAT_PROPS = [
-    "ppisp_color_red_x", "ppisp_color_red_y",
-    "ppisp_color_green_x", "ppisp_color_green_y",
-    "ppisp_color_blue_x", "ppisp_color_blue_y",
-    "ppisp_wb_temperature", "ppisp_wb_tint",
+    "ppisp_color_red_x",
+    "ppisp_color_red_y",
+    "ppisp_color_green_x",
+    "ppisp_color_green_y",
+    "ppisp_color_blue_x",
+    "ppisp_color_blue_y",
+    "ppisp_wb_temperature",
+    "ppisp_wb_tint",
 ]
 
 COLOR_PROPS = [
     "background_color",
-    "selection_color_committed", "selection_color_preview",
+    "selection_color_committed",
+    "selection_color_preview",
     "selection_color_center_marker",
     "mesh_wireframe_color",
 ]
@@ -128,6 +158,8 @@ LOCALE_KEY = {
     "ppisp_gamma_blue": "main_panel.ppisp_gamma_blue",
     "ppisp_crf_toe": "main_panel.ppisp_crf_toe",
     "ppisp_crf_shoulder": "main_panel.ppisp_crf_shoulder",
+    "theme_vignette_enabled": "main_panel.theme_vignette",
+    "theme_vignette_intensity": "main_panel.theme_vignette",
 }
 
 
@@ -152,7 +184,7 @@ def _entry_label(text: str) -> str:
 
 
 def _color_to_hex(c):
-    return f"#{int(c[0]*255):02x}{int(c[1]*255):02x}{int(c[2]*255):02x}"
+    return f"#{int(c[0] * 255):02x}{int(c[1] * 255):02x}{int(c[2] * 255):02x}"
 
 
 def _hex_to_color(h):
@@ -160,7 +192,11 @@ def _hex_to_color(h):
     if len(h) != 6:
         return None
     try:
-        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
+        return (
+            int(h[0:2], 16) / 255.0,
+            int(h[2:4], 16) / 255.0,
+            int(h[4:6], 16) / 255.0,
+        )
     except ValueError:
         return None
 
@@ -223,7 +259,9 @@ class RenderingPanel(Panel):
                     el,
                     data_value,
                     lambda p=prop_id: self._capture_color_snapshot(p),
-                    lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
+                    lambda snapshot, p=prop_id: self._restore_color_snapshot(
+                        p, snapshot
+                    ),
                 )
         self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
@@ -237,98 +275,170 @@ class RenderingPanel(Panel):
         s = lf.get_render_settings
 
         for prop_id in BOOL_PROPS:
-            model.bind(prop_id,
-                       lambda p=prop_id: getattr(s(), p, False),
-                       lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+            model.bind(
+                prop_id,
+                lambda p=prop_id: getattr(s(), p, False),
+                lambda v, p=prop_id: setattr(s(), p, v) if s() else None,
+            )
 
         for prop_id in SLIDER_PROPS:
-            model.bind(prop_id,
-                       lambda p=prop_id: float(getattr(s(), p, 0.0)),
-                       lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
+            model.bind(
+                prop_id,
+                lambda p=prop_id: float(getattr(s(), p, 0.0)),
+                lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None,
+            )
 
         for prop_id in SELECT_PROPS:
-            model.bind(prop_id,
-                       lambda p=prop_id: str(getattr(s(), p, "")),
-                       lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+            model.bind(
+                prop_id,
+                lambda p=prop_id: str(getattr(s(), p, "")),
+                lambda v, p=prop_id: setattr(s(), p, v) if s() else None,
+            )
 
-        model.bind("ppisp_mode",
-                    lambda: str(getattr(s(), "ppisp_mode", "")),
-                    lambda v: self._set_ppisp_mode(v))
+        model.bind(
+            "ppisp_mode",
+            lambda: str(getattr(s(), "ppisp_mode", "")),
+            lambda v: self._set_ppisp_mode(v),
+        )
 
-        all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + ["ppisp_mode"] + COLOR_PROPS
+        all_props = (
+            BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + ["ppisp_mode"] + COLOR_PROPS
+        )
         for prop_id in all_props:
             model.bind_func(f"label_{prop_id}", lambda p=prop_id: _prop_label(p))
 
         for prop_id in COLOR_PROPS:
-            model.bind_func(f"{prop_id}_r",
-                            lambda p=prop_id: f"R:{int(getattr(s(), p, (0,0,0))[0]*255):>3d}")
-            model.bind_func(f"{prop_id}_g",
-                            lambda p=prop_id: f"G:{int(getattr(s(), p, (0,0,0))[1]*255):>3d}")
-            model.bind_func(f"{prop_id}_b",
-                            lambda p=prop_id: f"B:{int(getattr(s(), p, (0,0,0))[2]*255):>3d}")
-            model.bind(f"{prop_id}_hex",
-                       lambda p=prop_id: _color_to_hex(getattr(s(), p, (0,0,0))),
-                       lambda v, p=prop_id: self._set_color_hex(p, v))
+            model.bind_func(
+                f"{prop_id}_r",
+                lambda p=prop_id: f"R:{int(getattr(s(), p, (0, 0, 0))[0] * 255):>3d}",
+            )
+            model.bind_func(
+                f"{prop_id}_g",
+                lambda p=prop_id: f"G:{int(getattr(s(), p, (0, 0, 0))[1] * 255):>3d}",
+            )
+            model.bind_func(
+                f"{prop_id}_b",
+                lambda p=prop_id: f"B:{int(getattr(s(), p, (0, 0, 0))[2] * 255):>3d}",
+            )
+            model.bind(
+                f"{prop_id}_hex",
+                lambda p=prop_id: _color_to_hex(getattr(s(), p, (0, 0, 0))),
+                lambda v, p=prop_id: self._set_color_hex(p, v),
+            )
 
         for prop_id in CHROM_FLOAT_PROPS:
-            model.bind(prop_id,
-                       lambda p=prop_id: float(getattr(s(), p, 0.0)),
-                       lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
+            model.bind(
+                prop_id,
+                lambda p=prop_id: float(getattr(s(), p, 0.0)),
+                lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None,
+            )
 
-        model.bind("simplify_target",
-                   lambda: str(self._compute_simplify_target_count()),
-                   lambda v: self._set_simplify_target_count(v))
+        model.bind(
+            "simplify_target",
+            lambda: str(self._compute_simplify_target_count()),
+            lambda v: self._set_simplify_target_count(v),
+        )
 
-        model.bind_func("ppisp_auto",
-                         lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
+        model.bind_func(
+            "ppisp_auto",
+            lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL",
+        )
 
-        model.bind_func("label_panel_title",
-                         lambda: lf.ui.tr("rendering") or "Rendering")
-        model.bind_func("label_hdr_viewport",
-                         lambda: "Viewport")
-        model.bind_func("label_hdr_camera",
-                         lambda: "Camera & Projection")
-        model.bind_func("label_hdr_simplify",
-                         lambda: "Splat Simplify")
-        model.bind_func("label_hdr_selection",
-                         lambda: "Selection & Overlays")
-        model.bind_func("label_hdr_mesh",
-                         lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
-        model.bind_func("label_hdr_post_process",
-                         lambda: "Post Processing")
-        model.bind_func("label_ppisp_color_balance",
-                         lambda: _entry_label(
-                             lf.ui.tr("main_panel.ppisp_color_balance") or "Color Correction"))
-        model.bind_func("label_ppisp_crf",
-                         lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF")
+        model.bind_func(
+            "label_panel_title", lambda: lf.ui.tr("rendering") or "Rendering"
+        )
+        model.bind_func("label_hdr_viewport", lambda: "Viewport")
+        model.bind_func("label_hdr_camera", lambda: "Camera & Projection")
+        model.bind_func("label_hdr_simplify", lambda: "Splat Simplify")
+        model.bind_func("label_hdr_selection", lambda: "Selection & Overlays")
+        model.bind_func("label_hdr_mesh", lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
+        model.bind_func("label_hdr_post_process", lambda: "Post Processing")
+        model.bind_func(
+            "label_ppisp_color_balance",
+            lambda: _entry_label(
+                lf.ui.tr("main_panel.ppisp_color_balance") or "Color Correction"
+            ),
+        )
+        model.bind_func(
+            "label_ppisp_crf",
+            lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF",
+        )
 
         model.bind_func("fov_display", self._compute_fov)
 
-        model.bind_func("picker_r",
-                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[0])
-                         if self._color_edit_prop and s() else 0.0)
-        model.bind_func("picker_g",
-                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[1])
-                         if self._color_edit_prop and s() else 0.0)
-        model.bind_func("picker_b",
-                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[2])
-                         if self._color_edit_prop and s() else 0.0)
+        model.bind_func(
+            "picker_r",
+            lambda: (
+                float(getattr(s(), self._color_edit_prop, (0, 0, 0))[0])
+                if self._color_edit_prop and s()
+                else 0.0
+            ),
+        )
+        model.bind_func(
+            "picker_g",
+            lambda: (
+                float(getattr(s(), self._color_edit_prop, (0, 0, 0))[1])
+                if self._color_edit_prop and s()
+                else 0.0
+            ),
+        )
+        model.bind_func(
+            "picker_b",
+            lambda: (
+                float(getattr(s(), self._color_edit_prop, (0, 0, 0))[2])
+                if self._color_edit_prop and s()
+                else 0.0
+            ),
+        )
 
         model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
-        model.bind_func("label_console",
-                         lambda: lf.ui.tr("main_panel.console") or "Console")
+        model.bind_func(
+            "label_console", lambda: lf.ui.tr("main_panel.console") or "Console"
+        )
         model.bind_func("simplify_has_source", lambda: bool(self._simplify_source_name))
         model.bind_func("simplify_source_name", lambda: self._simplify_source_name)
-        model.bind_func("simplify_original_count", lambda: f"{self._simplify_original_count:,}")
-        model.bind_func("simplify_target_count", lambda: f"{self._compute_simplify_target_count():,}")
+        model.bind_func(
+            "simplify_original_count", lambda: f"{self._simplify_original_count:,}"
+        )
+        model.bind_func(
+            "simplify_target_count",
+            lambda: f"{self._compute_simplify_target_count():,}",
+        )
         model.bind_func("simplify_output_name", self._simplify_output_name)
         model.bind_func("simplify_can_apply", self._can_run_simplify)
         model.bind_func("simplify_show_progress", lambda: self._simplify_task_active)
-        model.bind_func("simplify_progress_value", lambda: self._simplify_progress_value)
+        model.bind_func(
+            "simplify_progress_value", lambda: self._simplify_progress_value
+        )
         model.bind_func("simplify_progress_pct", self._simplify_progress_pct)
-        model.bind_func("simplify_progress_stage", lambda: self._simplify_progress_stage)
+        model.bind_func(
+            "simplify_progress_stage", lambda: self._simplify_progress_stage
+        )
         model.bind_func("simplify_show_error", lambda: bool(self._simplify_error_text))
         model.bind_func("simplify_error_text", lambda: self._simplify_error_text)
+
+        # Theme vignette bindings (special case - not in render settings)
+        model.bind(
+            "theme_vignette_enabled",
+            lambda: lf.ui.theme().vignette.enabled if lf.ui.theme() else False,
+            lambda v: lf.ui.set_theme_vignette_enabled(bool(v)),
+        )
+        model.bind(
+            "theme_vignette_intensity",
+            lambda: float(lf.ui.theme().vignette.intensity) if lf.ui.theme() else 0.3,
+            lambda v: lf.ui.set_theme_vignette_intensity(float(v)),
+        )
+
+        model.bind_func(
+            "label_theme_vignette_enabled",
+            lambda: _entry_label(lf.ui.tr("main_panel.theme_vignette") or "Vignette"),
+        )
+        model.bind_func(
+            "label_theme_vignette_intensity",
+            lambda: _entry_label(
+                lf.ui.tr("main_panel.theme_vignette_intensity") or "Intensity"
+            ),
+        )
 
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
@@ -336,8 +446,9 @@ class RenderingPanel(Panel):
         model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("simplify_apply", self._on_simplify_apply)
         model.bind_event("simplify_cancel", self._on_simplify_cancel)
-        model.bind_event("toggle_console",
-                         lambda h, e, a: lf.ui.toggle_system_console())
+        model.bind_event(
+            "toggle_console", lambda h, e, a: lf.ui.toggle_system_console()
+        )
 
         self._handle = model.get_handle()
         self._sync_panel_label()
@@ -357,7 +468,9 @@ class RenderingPanel(Panel):
             self._last_swatch_colors[prop_id] = key
             swatch = doc.get_element_by_id(f"swatch-{prop_id}")
             if swatch:
-                swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
+                swatch.set_property(
+                    "background-color", f"rgb({key[1]},{key[2]},{key[3]})"
+                )
                 dirty = True
         dirty |= self._refresh_simplify_source(force=False)
         dirty |= self._sync_simplify_task_state(force=False)
@@ -379,6 +492,9 @@ class RenderingPanel(Panel):
     def _get_scrub_value(self, prop):
         if prop == "simplify_target":
             return float(self._compute_simplify_target_count())
+        if prop == "theme_vignette_intensity":
+            theme = lf.ui.theme()
+            return float(theme.vignette.intensity) if theme else 0.3
         settings = lf.get_render_settings()
         if not settings:
             spec = SCRUB_FIELD_DEFS[prop]
@@ -388,6 +504,11 @@ class RenderingPanel(Panel):
     def _set_scrub_value(self, prop, value):
         if prop == "simplify_target":
             self._set_simplify_target_count(value)
+            return
+        if prop == "theme_vignette_intensity":
+            lf.ui.set_theme_vignette_intensity(float(value))
+            if self._handle:
+                self._handle.dirty(prop)
             return
         settings = lf.get_render_settings()
         if not settings:
@@ -428,7 +549,9 @@ class RenderingPanel(Panel):
         focal_mm = s.focal_length_mm
         vfov = 2.0 * math.degrees(math.atan(SENSOR_HALF_HEIGHT_MM / focal_mm))
         aspect = view.width / view.height
-        hfov = 2.0 * math.degrees(math.atan(aspect * math.tan(math.radians(vfov * 0.5))))
+        hfov = 2.0 * math.degrees(
+            math.atan(aspect * math.tan(math.radians(vfov * 0.5)))
+        )
         fmt = lf.ui.tr("rendering_panel.fov_format")
         if fmt:
             return fmt.format(hfov=hfov, vfov=vfov)
@@ -447,7 +570,9 @@ class RenderingPanel(Panel):
         for name in SECTION_NAMES:
             header, arrow, content = self._get_section_elements(name)
             if content:
-                w.sync_section_state(content, name not in self._collapsed, header, arrow)
+                w.sync_section_state(
+                    content, name not in self._collapsed, header, arrow
+                )
 
     def _on_toggle_section(self, handle, event, args):
         del handle, event
@@ -541,7 +666,10 @@ class RenderingPanel(Panel):
             return None, "", 0
 
         node_type_enum = getattr(getattr(lf, "scene", None), "NodeType", None)
-        if node_type_enum is not None and getattr(node, "type", None) != node_type_enum.SPLAT:
+        if (
+            node_type_enum is not None
+            and getattr(node, "type", None) != node_type_enum.SPLAT
+        ):
             return None, "", 0
 
         try:
@@ -559,7 +687,11 @@ class RenderingPanel(Panel):
 
     def _refresh_simplify_source(self, force: bool) -> bool:
         _node, source_name, source_count = self._active_splat_node()
-        changed = force or source_name != self._simplify_source_name or source_count != self._simplify_original_count
+        changed = (
+            force
+            or source_name != self._simplify_source_name
+            or source_count != self._simplify_original_count
+        )
         if not changed:
             return False
 
@@ -567,9 +699,13 @@ class RenderingPanel(Panel):
         self._simplify_original_count = source_count
         if source_count > 0:
             if self._simplify_target_touched and self._simplify_target_count > 0:
-                self._simplify_target_count = self._clamp_simplify_target_count(self._simplify_target_count, source_count)
+                self._simplify_target_count = self._clamp_simplify_target_count(
+                    self._simplify_target_count, source_count
+                )
             else:
-                self._simplify_target_count = self._default_simplify_target_count(source_count)
+                self._simplify_target_count = self._default_simplify_target_count(
+                    source_count
+                )
         elif not self._simplify_target_touched:
             self._simplify_target_count = 0
         self._sync_simplify_scrub_spec()
@@ -596,18 +732,34 @@ class RenderingPanel(Panel):
         self._scrub_fields.set_spec("simplify_target", spec)
 
     def _default_simplify_target_count(self, original_count=None) -> int:
-        source_count = self._simplify_original_count if original_count is None else int(original_count)
+        source_count = (
+            self._simplify_original_count
+            if original_count is None
+            else int(original_count)
+        )
         if source_count <= 0:
             return 0
-        return max(1, min(source_count, int(math.ceil(source_count * DEFAULT_SIMPLIFY_TARGET_RATIO))))
+        return max(
+            1,
+            min(
+                source_count,
+                int(math.ceil(source_count * DEFAULT_SIMPLIFY_TARGET_RATIO)),
+            ),
+        )
 
     def _clamp_simplify_target_count(self, value, original_count=None):
         try:
-            parsed = int(round(float(str(value).strip().replace(",", "").replace("_", ""))))
+            parsed = int(
+                round(float(str(value).strip().replace(",", "").replace("_", "")))
+            )
         except (TypeError, ValueError):
             return None
         clamped = max(1, parsed)
-        max_count = self._simplify_original_count if original_count is None else int(original_count)
+        max_count = (
+            self._simplify_original_count
+            if original_count is None
+            else int(original_count)
+        )
         if max_count > 0:
             clamped = min(clamped, max_count)
         return clamped
@@ -625,7 +777,9 @@ class RenderingPanel(Panel):
     def _compute_simplify_ratio(self) -> float:
         if self._simplify_original_count <= 0:
             return 0.0
-        return float(self._compute_simplify_target_count()) / float(self._simplify_original_count)
+        return float(self._compute_simplify_target_count()) / float(
+            self._simplify_original_count
+        )
 
     def _simplify_output_name(self) -> str:
         if not self._simplify_source_name:
@@ -648,7 +802,9 @@ class RenderingPanel(Panel):
             return
         self._simplify_target_count = next_value
         self._simplify_target_touched = True
-        self._dirty_model("simplify_target", "simplify_target_count", "simplify_output_name")
+        self._dirty_model(
+            "simplify_target", "simplify_target_count", "simplify_output_name"
+        )
 
     def _simplify_progress_pct(self) -> str:
         try:
@@ -658,16 +814,19 @@ class RenderingPanel(Panel):
 
     def _sync_simplify_task_state(self, force: bool) -> bool:
         active = bool(getattr(lf, "is_splat_simplify_active", lambda: False)())
-        progress = max(0.0, min(1.0, float(getattr(lf, "get_splat_simplify_progress", lambda: 0.0)())))
+        progress = max(
+            0.0,
+            min(1.0, float(getattr(lf, "get_splat_simplify_progress", lambda: 0.0)())),
+        )
         progress_value = f"{progress:.4f}".rstrip("0").rstrip(".") or "0"
         stage = str(getattr(lf, "get_splat_simplify_stage", lambda: "")() or "")
         error_text = str(getattr(lf, "get_splat_simplify_error", lambda: "")() or "")
 
         changed = force or (
-            active != self._simplify_task_active or
-            progress_value != self._simplify_progress_value or
-            stage != self._simplify_progress_stage or
-            error_text != self._simplify_error_text
+            active != self._simplify_task_active
+            or progress_value != self._simplify_progress_value
+            or stage != self._simplify_progress_stage
+            or error_text != self._simplify_error_text
         )
         if not changed:
             return False
