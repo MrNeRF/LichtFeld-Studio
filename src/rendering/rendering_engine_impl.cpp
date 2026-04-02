@@ -520,7 +520,7 @@ namespace lfs::rendering {
     }
 
     bool RenderingEngineImpl::isInitialized() const {
-        return quad_shader_.valid() && vignette_shader_.valid() && screen_renderer_;
+        return quad_shader_.valid() && screen_renderer_;
     }
 
     Result<void> RenderingEngineImpl::initializeShaders() {
@@ -535,10 +535,11 @@ namespace lfs::rendering {
 
         result = load_shader("screen_vignette", "screen_quad.vert", "screen_vignette.frag", false);
         if (!result) {
-            LOG_ERROR("Failed to create vignette shader: {}", result.error().what());
-            return std::unexpected(std::string("Failed to create shaders: ") + result.error().what());
+            LOG_WARN("Failed to create vignette shader, disabling screen-space vignette: {}",
+                     result.error().what());
+        } else {
+            vignette_shader_ = std::move(*result);
         }
-        vignette_shader_ = std::move(*result);
         LOG_DEBUG("Screen quad shader loaded successfully");
         return {};
     }
@@ -1495,13 +1496,17 @@ namespace lfs::rendering {
 
     Result<void> RenderingEngineImpl::renderScreenSpaceVignette(
         const glm::ivec2& viewport_size,
-        const ScreenSpaceVignette vignette) {
+        ScreenSpaceVignette vignette) {
+        if (!vignette.active()) {
+            return {};
+        }
+
         if (!isInitialized()) {
             LOG_ERROR("Rendering engine not initialized");
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (!vignette.active()) {
+        if (!vignette_shader_.valid()) {
             return {};
         }
 

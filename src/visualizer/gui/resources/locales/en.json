@@ -474,7 +474,9 @@
     "camera_frustum_scale": "Frustum Scale",
     "voxel_size": "Voxel Size",
     "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette Intensity"
+    "theme_vignette_intensity": "Vignette Intensity",
+    "theme_vignette_radius": "Vignette Radius",
+    "theme_vignette_softness": "Vignette Softness"
   },
   "toolbar": {
     "selection": "Selection (1)",
@@ -632,7 +634,9 @@
     "seq_interval": "Grid snap interval",
     "seq_preview_size": "PiP preview scale",
     "theme_vignette": "Enable viewport edge darkening",
-    "theme_vignette_intensity": "Adjust vignette darkness (0-1)"
+    "theme_vignette_intensity": "Adjust vignette darkness (0-1)",
+    "theme_vignette_radius": "Adjust where the vignette starts (0-1)",
+    "theme_vignette_softness": "Adjust vignette edge softness (0-1)"
   },
   "exit_popup": {
     "title": "Exit Application?",

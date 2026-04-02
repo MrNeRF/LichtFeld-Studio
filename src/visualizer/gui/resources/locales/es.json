@@ -474,7 +474,9 @@
     "camera_frustum_scale": "Escala de frustum",
     "voxel_size": "Tamaño de vóxel",
     "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Intensidad de viñeta"
+    "theme_vignette_intensity": "Intensidad de viñeta",
+    "theme_vignette_radius": "Radio de viñeta",
+    "theme_vignette_softness": "Suavidad de viñeta"
   },
   "toolbar": {
     "selection": "Selección (1)",
@@ -579,6 +581,8 @@
     "ppisp_crf_shoulder": "Atenuación de luces altas (shoulder de la curva CRF)",
     "theme_vignette": "Activar oscurecimiento en bordes",
     "theme_vignette_intensity": "Ajustar oscuridad de viñeta (0-1)",
+    "theme_vignette_radius": "Ajusta dónde comienza la viñeta (0-1)",
+    "theme_vignette_softness": "Ajusta la suavidad del borde de la viñeta (0-1)",
     "render_scale": "Resolución visor (menor = menos VRAM)",
     "point_cloud_forced": "Forzado antes del entrenamiento",
     "desaturate_unselected": "Oscurecer PLYs no seleccionados",

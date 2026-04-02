@@ -474,7 +474,9 @@
     "camera_frustum_scale": "視錐台スケール",
     "voxel_size": "ボクセルサイズ",
     "theme_vignette": "ビネット",
-    "theme_vignette_intensity": "ビネット強度"
+    "theme_vignette_intensity": "ビネット強度",
+    "theme_vignette_radius": "ビネット半径",
+    "theme_vignette_softness": "ビネットの柔らかさ"
   },
   "toolbar": {
     "selection": "選択 (1)",
@@ -579,6 +581,8 @@
     "ppisp_crf_shoulder": "ハイライトロールオフ（CRFカーブのショルダー）",
     "theme_vignette": "ビューポート端の暗化を有効化",
     "theme_vignette_intensity": "ビネットの暗さを調整 (0-1)",
+    "theme_vignette_radius": "ビネットが始まる位置を調整 (0-1)",
+    "theme_vignette_softness": "ビネット境界の柔らかさを調整 (0-1)",
     "render_scale": "ビューア解像度（低い=VRAM削減）",
     "point_cloud_forced": "トレーニング開始前に強制",
     "desaturate_unselected": "未選択PLYを暗くする",

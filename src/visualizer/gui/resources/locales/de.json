@@ -474,7 +474,9 @@
     "camera_frustum_scale": "Frustum-Skalierung",
     "voxel_size": "Voxelgröße",
     "theme_vignette": "Vignette",
-    "theme_vignette_intensity": "Vignette-Intensität"
+    "theme_vignette_intensity": "Vignette-Intensität",
+    "theme_vignette_radius": "Vignette-Radius",
+    "theme_vignette_softness": "Vignette-Weichheit"
   },
   "toolbar": {
     "selection": "Auswahl (1)",
@@ -579,6 +581,8 @@
     "ppisp_crf_shoulder": "Lichter-Rolloff (Shoulder der CRF-Kurve)",
     "theme_vignette": "Vignette am Ansichtsrand aktivieren",
     "theme_vignette_intensity": "Dunkelheit der Vignette anpassen (0-1)",
+    "theme_vignette_radius": "Anpassen, wo die Vignette beginnt (0-1)",
+    "theme_vignette_softness": "Weichheit des Vignettenrands anpassen (0-1)",
     "render_scale": "Viewer-Auflösung (niedriger = weniger VRAM)",
     "point_cloud_forced": "Vor Trainingsstart erzwungen",
     "desaturate_unselected": "Nicht ausgewählte PLYs abdunkeln",
