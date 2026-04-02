@@ -41,6 +41,7 @@ namespace lfs::rendering {
         // Updated to return Result for consistency
         virtual Result<void> render(std::shared_ptr<Shader> shader) const;
         Result<void> render(ManagedShader& shader) const;
+        Result<void> renderQuad(ManagedShader& shader) const;
         Result<void> renderTexture(ManagedShader& shader,
                                    GLuint color_texture,
                                    const DepthParams& depth_params,

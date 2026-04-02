@@ -81,9 +81,6 @@ namespace lfs::vis::gui::widgets {
                          float rounding = 6.0f);
     void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, float rounding = 6.0f);
 
-    // Vignette effect for viewport
-    void DrawViewportVignette(const ImVec2& pos, const ImVec2& size);
-
     // Icon button with selection state styling
     LFS_VIS_API bool IconButton(const char* id, unsigned int texture, const ImVec2& size, bool selected = false,
                                 const char* fallback_label = "?");

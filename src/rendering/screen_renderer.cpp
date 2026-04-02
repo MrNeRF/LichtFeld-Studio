@@ -98,7 +98,16 @@ namespace lfs::rendering {
     Result<void> ScreenQuadRenderer::render(ManagedShader& shader) const {
         LOG_TIMER_TRACE("ScreenQuadRenderer::render");
 
-        return renderTexture(shader, getTextureID(), depth_params_, getTexcoordScale(), getDepthTextureID());
+        return renderTexture(shader, getTextureID(), depth_params_, getTexcoordScale(),
+                             getDepthTextureID());
+    }
+
+    Result<void> ScreenQuadRenderer::renderQuad(ManagedShader& shader) const {
+        LOG_TIMER_TRACE("ScreenQuadRenderer::renderQuad");
+
+        VAOBinder vao_bind(quadVAO_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        return {};
     }
 
     Result<void> ScreenQuadRenderer::renderTexture(ManagedShader& shader,

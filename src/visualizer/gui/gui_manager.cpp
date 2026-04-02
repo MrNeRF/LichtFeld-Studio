@@ -633,6 +633,9 @@ namespace lfs::vis::gui {
         rmlui_manager_.init(viewer_->getWindow(), current_ui_scale_);
         lfs::vis::setThemeChangeCallback([this](const std::string& theme_id) {
             rmlui_manager_.activateTheme(theme_id);
+            if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+                rendering->markDirty(DirtyFlag::OVERLAY);
+            }
         });
         lfs::python::set_rml_manager(&rmlui_manager_);
 
@@ -1705,12 +1708,6 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::renderViewportDecorations() {
-        if (viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
-            const ImVec2 vp_pos(viewport_layout_.pos.x, viewport_layout_.pos.y);
-            const ImVec2 vp_size(viewport_layout_.size.x, viewport_layout_.size.y);
-            widgets::DrawViewportVignette(vp_pos, vp_size);
-        }
-
         if (!ui_hidden_ && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
             const auto& t = theme();
             const float r = t.viewport.corner_radius;

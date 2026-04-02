@@ -520,7 +520,7 @@ namespace lfs::rendering {
     }
 
     bool RenderingEngineImpl::isInitialized() const {
-        return quad_shader_.valid() && screen_renderer_;
+        return quad_shader_.valid() && vignette_shader_.valid() && screen_renderer_;
     }
 
     Result<void> RenderingEngineImpl::initializeShaders() {
@@ -532,6 +532,13 @@ namespace lfs::rendering {
             return std::unexpected(std::string("Failed to create shaders: ") + result.error().what());
         }
         quad_shader_ = std::move(*result);
+
+        result = load_shader("screen_vignette", "screen_quad.vert", "screen_vignette.frag", false);
+        if (!result) {
+            LOG_ERROR("Failed to create vignette shader: {}", result.error().what());
+            return std::unexpected(std::string("Failed to create shaders: ") + result.error().what());
+        }
+        vignette_shader_ = std::move(*result);
         LOG_DEBUG("Screen quad shader loaded successfully");
         return {};
     }
@@ -1484,6 +1491,52 @@ namespace lfs::rendering {
         return depth_compositor_.presentMeshOnly(
             mesh_renderer_.getColorTexture(),
             mesh_renderer_.getDepthTexture());
+    }
+
+    Result<void> RenderingEngineImpl::renderScreenSpaceVignette(
+        const glm::ivec2& viewport_size,
+        const ScreenSpaceVignette vignette) {
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (!vignette.active()) {
+            return {};
+        }
+
+        GLStateGuard state_guard;
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        if (auto result = vignette_shader_.bind(); !result) {
+            return result;
+        }
+
+        if (auto result = vignette_shader_.set("u_viewport_size", glm::vec2(viewport_size)); !result) {
+            vignette_shader_.unbind();
+            return result;
+        }
+        if (auto result = vignette_shader_.set("u_vignette_intensity", vignette.intensity); !result) {
+            vignette_shader_.unbind();
+            return result;
+        }
+        if (auto result = vignette_shader_.set("u_vignette_radius", vignette.radius); !result) {
+            vignette_shader_.unbind();
+            return result;
+        }
+        if (auto result = vignette_shader_.set("u_vignette_softness", vignette.softness); !result) {
+            vignette_shader_.unbind();
+            return result;
+        }
+
+        auto render_result = screen_renderer_->renderQuad(vignette_shader_);
+        if (auto result = vignette_shader_.unbind(); !result) {
+            return result;
+        }
+        return render_result;
     }
 
 } // namespace lfs::rendering

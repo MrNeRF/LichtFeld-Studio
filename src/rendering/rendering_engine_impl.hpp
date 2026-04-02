@@ -99,6 +99,10 @@ namespace lfs::rendering {
             const glm::ivec2& viewport_pos,
             const glm::ivec2& viewport_size) override;
 
+        Result<void> renderScreenSpaceVignette(
+            const glm::ivec2& viewport_size,
+            ScreenSpaceVignette vignette) override;
+
         Result<void> renderGrid(
             const ViewportData& viewport,
             GridPlane plane,
@@ -190,6 +194,7 @@ namespace lfs::rendering {
         bool mesh_rendered_this_frame_ = false;
 
         ManagedShader quad_shader_;
+        ManagedShader vignette_shader_;
 
         // Cache the last uploaded frame payload to avoid redundant CUDA->GL uploads
         // when presenting the exact same render result repeatedly (idle cached frames).

@@ -464,6 +464,10 @@ namespace lfs::rendering {
             const glm::ivec2& viewport_pos,
             const glm::ivec2& viewport_size) = 0;
 
+        virtual Result<void> renderScreenSpaceVignette(
+            const glm::ivec2& viewport_size,
+            ScreenSpaceVignette vignette) = 0;
+
         // Overlay rendering - now returns Result for consistency
         virtual Result<void> renderGrid(
             const ViewportData& viewport,
