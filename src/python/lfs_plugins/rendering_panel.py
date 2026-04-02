@@ -16,6 +16,22 @@ def tr(key):
     return result if result else key
 
 
+def _theme_vignette():
+    theme = lf.ui.theme()
+    return theme.vignette if theme else None
+
+
+def _set_theme_vignette_style(*, intensity=None, radius=None, softness=None):
+    vignette = _theme_vignette()
+    if vignette is None:
+        return
+    lf.ui.set_theme_vignette_style(
+        float(vignette.intensity if intensity is None else intensity),
+        float(vignette.radius if radius is None else radius),
+        float(vignette.softness if softness is None else softness),
+    )
+
+
 SENSOR_HALF_HEIGHT_MM = 12.0
 DEFAULT_SIMPLIFY_TARGET_RATIO = 0.5
 
@@ -55,6 +71,8 @@ SCRUB_FIELD_DEFS = {
     "ppisp_crf_toe": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
     "ppisp_crf_shoulder": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
     "theme_vignette_intensity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+    "theme_vignette_radius": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+    "theme_vignette_softness": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
     "simplify_target": ScrubFieldSpec(1.0, 1.0, 1.0, "%d", data_type=int),
 }
 
@@ -337,11 +355,21 @@ class RenderingPanel(Panel):
         model.bind("theme_vignette_intensity",
                    lambda: float(lf.ui.theme().vignette.intensity) if lf.ui.theme() else 0.3,
                    lambda v: lf.ui.set_theme_vignette_intensity(float(v)))
+        model.bind("theme_vignette_radius",
+                   lambda: float(lf.ui.theme().vignette.radius) if lf.ui.theme() else 0.75,
+                   lambda v: _set_theme_vignette_style(radius=float(v)))
+        model.bind("theme_vignette_softness",
+                   lambda: float(lf.ui.theme().vignette.softness) if lf.ui.theme() else 0.45,
+                   lambda v: _set_theme_vignette_style(softness=float(v)))
         model.bind_func("label_theme_vignette_enabled",
                          lambda: _entry_label(lf.ui.tr("main_panel.theme_vignette") or "Vignette"))
         model.bind_func("label_theme_vignette_intensity",
                          lambda: _entry_label(
                              lf.ui.tr("main_panel.theme_vignette_intensity") or "Intensity"))
+        model.bind_func("label_theme_vignette_radius",
+                         lambda: _entry_label("Radius"))
+        model.bind_func("label_theme_vignette_softness",
+                         lambda: _entry_label("Softness"))
 
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
@@ -395,6 +423,12 @@ class RenderingPanel(Panel):
         if prop == "theme_vignette_intensity":
             theme = lf.ui.theme()
             return float(theme.vignette.intensity) if theme else 0.3
+        if prop == "theme_vignette_radius":
+            vignette = _theme_vignette()
+            return float(vignette.radius) if vignette else 0.75
+        if prop == "theme_vignette_softness":
+            vignette = _theme_vignette()
+            return float(vignette.softness) if vignette else 0.45
         settings = lf.get_render_settings()
         if not settings:
             spec = SCRUB_FIELD_DEFS[prop]
@@ -407,6 +441,16 @@ class RenderingPanel(Panel):
             return
         if prop == "theme_vignette_intensity":
             lf.ui.set_theme_vignette_intensity(float(value))
+            if self._handle:
+                self._handle.dirty(prop)
+            return
+        if prop == "theme_vignette_radius":
+            _set_theme_vignette_style(radius=float(value))
+            if self._handle:
+                self._handle.dirty(prop)
+            return
+        if prop == "theme_vignette_softness":
+            _set_theme_vignette_style(softness=float(value))
             if self._handle:
                 self._handle.dirty(prop)
             return

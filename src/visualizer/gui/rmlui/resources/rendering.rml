@@ -350,6 +350,20 @@
           <span class="slider-value">{{theme_vignette_intensity | format_float(2)}}</span>
         </div>
       </div>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_theme_vignette_radius}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="theme_vignette_radius" min="0" max="1" step="0.01" />
+          <span class="slider-value">{{theme_vignette_radius | format_float(2)}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned">
+        <span class="setting-row__label-col">{{label_theme_vignette_softness}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="theme_vignette_softness" min="0" max="1" step="0.01" />
+          <span class="slider-value">{{theme_vignette_softness | format_float(2)}}</span>
+        </div>
+      </div>
     </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.appearance_correction">
       <span class="setting-row__label-col">{{label_apply_appearance_correction}}</span>
