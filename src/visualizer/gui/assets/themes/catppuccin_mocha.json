@@ -127,7 +127,7 @@
   "vignette": {
     "_info": "Subtle darkening at viewport edges",
 
-    "enabled": false,
+    "enabled": true,
     "intensity": 0.23,
     "radius": 0.76,
     "softness": 0.44

@@ -102,7 +102,7 @@ namespace lfs::vis {
     };
 
     struct ThemeVignette {
-        bool enabled = false;
+        bool enabled = true;
         float intensity = 0.3f;
         float radius = 0.7f;
         float softness = 0.5f;
