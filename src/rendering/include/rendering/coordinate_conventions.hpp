@@ -13,6 +13,11 @@
 
 namespace lfs::rendering {
 
+    struct CameraPose {
+        glm::mat3 rotation{1.0f};
+        glm::vec3 translation{0.0f};
+    };
+
     // Single coordinate-conversion boundary for the application.
     //
     // Visualizer cameras use OpenGL-style local axes:
@@ -85,6 +90,68 @@ namespace lfs::rendering {
 
     inline glm::mat4 visualizerWorldTransformToDataWorld(const glm::mat4& visualizer_world_transform) {
         return VISUALIZER_TO_DATA_WORLD_AXES_4 * visualizer_world_transform;
+    }
+
+    inline glm::vec3 chooseFallbackUp(const glm::vec3& forward);
+
+    inline glm::mat3 mat3FromRowMajor3x3(const float* const row_major) {
+        glm::mat3 matrix(1.0f);
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                matrix[col][row] = row_major[row * 3 + col];
+            }
+        }
+        return matrix;
+    }
+
+    inline glm::mat3 orthonormalizedRotation(const glm::mat4& transform) {
+        glm::vec3 x = glm::vec3(transform[0]);
+        glm::vec3 y = glm::vec3(transform[1]);
+        glm::vec3 z = glm::vec3(transform[2]);
+
+        const auto normalized_or = [](const glm::vec3& value, const glm::vec3& fallback) {
+            const float length = glm::length(value);
+            return length > 1e-6f ? value / length : fallback;
+        };
+
+        x = normalized_or(x, glm::vec3(1.0f, 0.0f, 0.0f));
+        y = y - glm::dot(y, x) * x;
+        y = normalized_or(y, chooseFallbackUp(x));
+        z = z - glm::dot(z, x) * x - glm::dot(z, y) * y;
+        z = normalized_or(z, glm::cross(x, y));
+
+        if (glm::dot(glm::cross(x, y), z) < 0.0f) {
+            z = -z;
+        }
+
+        return glm::mat3(x, y, z);
+    }
+
+    inline glm::vec3 dataCameraPositionFromWorldToCamera(const glm::mat3& data_world_to_camera,
+                                                         const glm::vec3& data_world_to_camera_translation) {
+        const glm::mat3 data_camera_to_world = glm::transpose(data_world_to_camera);
+        return -data_camera_to_world * data_world_to_camera_translation;
+    }
+
+    inline CameraPose visualizerCameraPoseFromDataCameraToWorld(
+        const glm::mat3& data_camera_to_world,
+        const glm::vec3& data_camera_position,
+        const glm::mat4& visualizer_scene_transform = glm::mat4(1.0f)) {
+        return {
+            .rotation = orthonormalizedRotation(visualizer_scene_transform) *
+                        visualizerRotationFromDataCameraToWorld(data_camera_to_world),
+            .translation = glm::vec3(visualizer_scene_transform * glm::vec4(data_camera_position, 1.0f)),
+        };
+    }
+
+    inline CameraPose visualizerCameraPoseFromDataWorldToCamera(
+        const glm::mat3& data_world_to_camera,
+        const glm::vec3& data_world_to_camera_translation,
+        const glm::mat4& visualizer_scene_transform = glm::mat4(1.0f)) {
+        return visualizerCameraPoseFromDataCameraToWorld(
+            glm::transpose(data_world_to_camera),
+            dataCameraPositionFromWorldToCamera(data_world_to_camera, data_world_to_camera_translation),
+            visualizer_scene_transform);
     }
 
     inline glm::mat4 makeViewMatrix(const glm::mat3& rotation, const glm::vec3& translation) {

@@ -1599,25 +1599,6 @@ namespace lfs::vis {
             return;
         }
 
-        // R_data is world_to_cam rotation stored row-major
-        // We need cam_to_world for the viewport
-        glm::mat3 world_to_cam_R;
-
-        // Load the matrix properly: R_data is row-major, GLM is column-major
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-                // R_data[row * 3 + col] is element at [row][col] in row-major
-                // GLM[col][row] is element at [row][col] when thinking row-major
-                world_to_cam_R[col][row] = R_data[row * 3 + col];
-            }
-        }
-
-        glm::vec3 world_to_cam_T(T_data[0], T_data[1], T_data[2]);
-
-        // Convert to camera-to-world transform
-        glm::mat3 cam_to_world_R = glm::transpose(world_to_cam_R);
-        glm::vec3 cam_to_world_T = -cam_to_world_R * world_to_cam_T;
-
         // Apply scene transform (handles user rotation/translation of the scene)
         glm::mat4 scene_transform(1.0f);
         if (auto* scene_mgr = services().sceneOrNull()) {
@@ -1627,17 +1608,13 @@ namespace lfs::vis {
             }
         }
 
-        // Extract rotation part of scene transform
-        glm::mat3 scene_R(scene_transform);
-        glm::vec3 scene_T(scene_transform[3]);
+        const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+            lfs::rendering::mat3FromRowMajor3x3(R_data),
+            glm::vec3(T_data[0], T_data[1], T_data[2]),
+            scene_transform);
 
-        // Apply scene transform to camera pose
-        glm::mat3 final_R = scene_R *
-                            lfs::rendering::visualizerRotationFromDataCameraToWorld(cam_to_world_R);
-        glm::vec3 final_T = scene_R * cam_to_world_T + scene_T;
-
-        target_viewport.camera.R = final_R;
-        target_viewport.camera.t = final_T;
+        target_viewport.camera.R = pose.rotation;
+        target_viewport.camera.t = pose.translation;
 
         // Update pivot point to be in front of camera
         target_viewport.camera.updatePivotFromCamera();

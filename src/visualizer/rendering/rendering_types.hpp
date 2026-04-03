@@ -263,7 +263,8 @@ namespace lfs::vis {
         glm::ivec2 gpu_aligned_dims{0, 0};
         glm::vec2 render_texcoord_scale{1.0f, 1.0f};
         glm::vec2 gt_texcoord_scale{1.0f, 1.0f};
-        bool gt_needs_flip = false;
+        lfs::rendering::TextureOrigin gt_texture_origin =
+            lfs::rendering::TextureOrigin::BottomLeft;
         glm::mat4 scene_transform{1.0f};
         std::optional<GTRenderCamera> render_camera;
 

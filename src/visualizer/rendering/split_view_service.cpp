@@ -14,17 +14,6 @@
 namespace lfs::vis {
 
     namespace {
-        [[nodiscard]] glm::mat3 normalizedRotation(const glm::mat4& transform) {
-            glm::mat3 rotation(1.0f);
-            const glm::mat3 raw_rotation(transform);
-            for (int axis = 0; axis < 3; ++axis) {
-                const float axis_length = glm::length(raw_rotation[axis]);
-                rotation[axis] =
-                    axis_length > 1e-6f ? raw_rotation[axis] / axis_length : glm::mat3(1.0f)[axis];
-            }
-            return rotation;
-        }
-
         [[nodiscard]] glm::mat4 currentSceneTransform(SceneManager* const scene_manager,
                                                      const int camera_uid) {
             if (!scene_manager) {
@@ -77,23 +66,14 @@ namespace lfs::vis {
                 return std::nullopt;
             }
 
-            glm::mat3 world_to_cam_R(1.0f);
-            for (int row = 0; row < 3; ++row) {
-                for (int col = 0; col < 3; ++col) {
-                    world_to_cam_R[col][row] = R_data[row * 3 + col];
-                }
-            }
-
-            const glm::vec3 world_to_cam_T(T_data[0], T_data[1], T_data[2]);
-            const glm::mat3 cam_to_world_R = glm::transpose(world_to_cam_R);
-            const glm::vec3 cam_to_world_T = -cam_to_world_R * world_to_cam_T;
-            const glm::mat3 scene_rotation = normalizedRotation(scene_transform);
+            const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+                lfs::rendering::mat3FromRowMajor3x3(R_data),
+                glm::vec3(T_data[0], T_data[1], T_data[2]),
+                scene_transform);
 
             GTRenderCamera render_camera;
-            render_camera.rotation =
-                scene_rotation * lfs::rendering::visualizerRotationFromDataCameraToWorld(cam_to_world_R);
-            render_camera.translation =
-                glm::vec3(scene_transform * glm::vec4(cam_to_world_T, 1.0f));
+            render_camera.rotation = pose.rotation;
+            render_camera.translation = pose.translation;
             render_camera.equirectangular =
                 cam.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
 
@@ -350,7 +330,7 @@ namespace lfs::vis {
             gt_context_->dimensions == dims &&
             gt_context_->gpu_aligned_dims == aligned &&
             equalVec2(gt_context_->gt_texcoord_scale, gt_info.texcoord_scale) &&
-            gt_context_->gt_needs_flip == gt_info.needs_flip &&
+            gt_context_->gt_texture_origin == gt_info.origin &&
             equalMat4(gt_context_->scene_transform, scene_transform)) {
             request_viewport_prerender = hasValidGTContext() && !has_viewport_output;
             return;
@@ -363,7 +343,7 @@ namespace lfs::vis {
             .gpu_aligned_dims = aligned,
             .render_texcoord_scale = glm::vec2(dims) / glm::vec2(aligned),
             .gt_texcoord_scale = gt_info.texcoord_scale,
-            .gt_needs_flip = gt_info.needs_flip,
+            .gt_texture_origin = gt_info.origin,
             .scene_transform = scene_transform,
             .render_camera = detail::buildGTRenderCamera(*cam, dims, scene_transform)};
 

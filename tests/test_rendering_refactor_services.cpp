@@ -247,7 +247,24 @@ namespace lfs::vis {
         EXPECT_FALSE(render_camera->equirectangular);
     }
 
-    TEST(SplitViewServiceTest, GtComparisonPlanPreservesGtFlipFlag) {
+    TEST(SplitViewServiceTest, SharedCameraPoseHelperNormalizesSceneRotationAndAppliesVisualizerAxes) {
+        const glm::mat3 world_to_camera = glm::mat3(1.0f);
+        const glm::vec3 world_to_camera_translation(0.0f, 0.0f, 0.0f);
+
+        glm::mat4 scene_transform(1.0f);
+        scene_transform = glm::translate(scene_transform, glm::vec3(1.0f, 2.0f, 3.0f));
+        scene_transform = glm::scale(scene_transform, glm::vec3(2.0f, 3.0f, 4.0f));
+
+        const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+            world_to_camera,
+            world_to_camera_translation,
+            scene_transform);
+
+        expectMat3Near(pose.rotation, lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES);
+        EXPECT_EQ(pose.translation, glm::vec3(1.0f, 2.0f, 3.0f));
+    }
+
+    TEST(SplitViewServiceTest, GtComparisonPlanPreservesGtTextureOrigin) {
         Viewport viewport(640, 480);
         RenderSettings settings;
         settings.split_view_mode = SplitViewMode::GTComparison;
@@ -268,7 +285,7 @@ namespace lfs::vis {
             .gpu_aligned_dims = {320, 256},
             .render_texcoord_scale = {1.0f, 240.0f / 256.0f},
             .gt_texcoord_scale = {1.0f, 1.0f},
-            .gt_needs_flip = true,
+            .gt_texture_origin = lfs::rendering::TextureOrigin::TopLeft,
         };
         res.cached_gpu_frame = lfs::rendering::GpuFrame{
             .color = {.id = 22, .size = {320, 240}},

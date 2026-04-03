@@ -142,7 +142,8 @@ namespace lfs::vis {
                                  {.start_position = 0.0f,
                                   .end_position = ctx.settings.split_position,
                                   .texcoord_scale = res.gt_context->gt_texcoord_scale,
-                                  .flip_y = res.gt_context->gt_needs_flip}}},
+                                  .flip_y = lfs::rendering::presentationFlipYFromTextureOrigin(
+                                      res.gt_context->gt_texture_origin)}}},
                     SplitViewPanelPlan{
                         .label = LOC(lichtfeld::Strings::StatusBar::RENDERED),
                         .panel =

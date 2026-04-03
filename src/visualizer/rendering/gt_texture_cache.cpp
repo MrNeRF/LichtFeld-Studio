@@ -19,7 +19,7 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr bool kTensorTextureNeedsPresentationFlip = true;
+        constexpr auto kTensorTextureOrigin = lfs::rendering::TextureOrigin::TopLeft;
 
         [[nodiscard]] std::string makePipelineLoadSignature(
             const std::filesystem::path& image_path,
@@ -87,7 +87,7 @@ namespace lfs::vis {
                                             ? glm::vec2(entry.interop_texture->getTexcoordScaleX(),
                                                         entry.interop_texture->getTexcoordScaleY())
                                             : glm::vec2(1.0f);
-            return {tex_id, entry.width, entry.height, entry.needs_flip, tex_scale};
+            return {tex_id, entry.width, entry.height, entry.origin, tex_scale};
         }
 
         if (const auto it = texture_cache_.find(cam_id); it != texture_cache_.end()) {
@@ -130,7 +130,7 @@ namespace lfs::vis {
                 entry.texture_id = info.texture_id;
                 entry.width = info.width;
                 entry.height = info.height;
-                entry.needs_flip = false;
+                entry.origin = lfs::rendering::TextureOrigin::BottomLeft;
             }
         }
 
@@ -266,7 +266,7 @@ namespace lfs::vis {
             entry.height = height;
             // CUDA/CPU tensor uploads preserve the conventional top-left image origin,
             // so split-view must flip Y when sampling them as OpenGL textures.
-            entry.needs_flip = kTensorTextureNeedsPresentationFlip;
+            entry.origin = kTensorTextureOrigin;
 
             const glm::vec2 tex_scale(
                 entry.interop_texture->getTexcoordScaleX(),
@@ -276,7 +276,7 @@ namespace lfs::vis {
                 entry.interop_texture->getTextureID(),
                 width,
                 height,
-                kTensorTextureNeedsPresentationFlip,
+                kTensorTextureOrigin,
                 tex_scale};
         } catch (const std::exception& e) {
             LOG_WARN("GT loader path failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
@@ -354,9 +354,9 @@ namespace lfs::vis {
             entry.texture_id = texture;
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = kTensorTextureNeedsPresentationFlip;
+            entry.origin = kTensorTextureOrigin;
 
-            return {texture, width, height, kTensorTextureNeedsPresentationFlip};
+            return {texture, width, height, kTensorTextureOrigin};
         } catch (const std::exception& e) {
             LOG_WARN("GT tensor CPU upload failed: {}", e.what());
             return {};
@@ -395,7 +395,7 @@ namespace lfs::vis {
 
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = kTensorTextureNeedsPresentationFlip;
+            entry.origin = kTensorTextureOrigin;
 
             const glm::vec2 tex_scale(
                 entry.interop_texture->getTexcoordScaleX(),
@@ -405,7 +405,7 @@ namespace lfs::vis {
                 entry.interop_texture->getTextureID(),
                 width,
                 height,
-                kTensorTextureNeedsPresentationFlip,
+                kTensorTextureOrigin,
                 tex_scale};
         } catch (const std::exception& e) {
             LOG_WARN("GPU texture load failed: {}", e.what());

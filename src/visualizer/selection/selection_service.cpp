@@ -189,13 +189,6 @@ namespace lfs::vis {
             const float* const rotation = rotation_cpu.ptr<float>();
             const float* const position = position_cpu.ptr<float>();
 
-            glm::mat3 world_to_camera(1.0f);
-            for (int row = 0; row < 3; ++row) {
-                for (int col = 0; col < 3; ++col) {
-                    world_to_camera[col][row] = rotation[row * 3 + col];
-                }
-            }
-            const glm::mat3 data_camera_to_world = glm::transpose(world_to_camera);
             glm::mat4 scene_transform(1.0f);
             if (auto* const scene_manager = services().sceneOrNull()) {
                 if (const auto transform =
@@ -204,25 +197,17 @@ namespace lfs::vis {
                 }
             }
 
-            glm::mat3 scene_rotation(1.0f);
-            const glm::mat3 raw_scene_rotation(scene_transform);
-            for (int axis = 0; axis < 3; ++axis) {
-                const float axis_length = glm::length(raw_scene_rotation[axis]);
-                scene_rotation[axis] =
-                    axis_length > 1e-6f ? raw_scene_rotation[axis] / axis_length : glm::mat3(1.0f)[axis];
-            }
-
-            const glm::mat3 view_rotation =
-                scene_rotation * rendering::visualizerRotationFromDataCameraToWorld(data_camera_to_world);
-            const glm::vec3 view_translation = glm::vec3(
-                scene_transform * glm::vec4(position[0], position[1], position[2], 1.0f));
+            const auto pose = rendering::visualizerCameraPoseFromDataCameraToWorld(
+                glm::transpose(rendering::mat3FromRowMajor3x3(rotation)),
+                glm::vec3(position[0], position[1], position[2]),
+                scene_transform);
 
             const int width = std::max(camera.image_width(), camera.camera_width());
             const int height = std::max(camera.image_height(), camera.camera_height());
 
             return rendering::ViewportData{
-                .rotation = view_rotation,
-                .translation = view_translation,
+                .rotation = pose.rotation,
+                .translation = pose.translation,
                 .size = glm::ivec2(width, height),
                 .focal_length_mm = rendering::vFovToFocalLength(glm::degrees(camera.FoVy())),
                 .orthographic = false,

@@ -14,6 +14,15 @@ namespace lfs::rendering {
     // Renderer-facing frame contract for the refactor.
     // Rotation/translation are visualizer-space camera-to-world transforms.
 
+    enum class TextureOrigin {
+        BottomLeft,
+        TopLeft,
+    };
+
+    [[nodiscard]] inline bool presentationFlipYFromTextureOrigin(const TextureOrigin origin) {
+        return origin == TextureOrigin::TopLeft;
+    }
+
     struct FrameView {
         glm::mat3 rotation{1.0f};
         glm::vec3 translation{0.0f};

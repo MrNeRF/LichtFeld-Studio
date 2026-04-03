@@ -5,6 +5,7 @@
 #pragma once
 
 #include "rendering/cuda_gl_interop.hpp"
+#include "rendering/frame_contract.hpp"
 #include <chrono>
 #include <filesystem>
 #include <glm/glm.hpp>
@@ -32,7 +33,7 @@ namespace lfs::vis {
             unsigned int texture_id = 0;
             int width = 0;
             int height = 0;
-            bool needs_flip = false;
+            lfs::rendering::TextureOrigin origin = lfs::rendering::TextureOrigin::BottomLeft;
             glm::vec2 texcoord_scale{1.0f};
         };
 
@@ -50,7 +51,7 @@ namespace lfs::vis {
             unsigned int texture_id = 0;
             int width = 0;
             int height = 0;
-            bool needs_flip = false;
+            lfs::rendering::TextureOrigin origin = lfs::rendering::TextureOrigin::BottomLeft;
             std::string load_signature;
             std::chrono::steady_clock::time_point last_access;
         };
