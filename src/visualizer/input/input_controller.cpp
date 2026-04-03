@@ -223,8 +223,12 @@ namespace lfs::vis {
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
-                viewport_.camera.resetToHome();
-                publishCameraMove();
+                if (tool_context_ && handleFocusSelection(viewport_)) {
+                    viewport_.camera.saveHomePosition();
+                } else {
+                    viewport_.camera.resetToHome();
+                    publishCameraMove();
+                }
             }
         });
 
@@ -1617,9 +1621,9 @@ namespace lfs::vis {
         // Apply scene transform (handles user rotation/translation of the scene)
         glm::mat4 scene_transform(1.0f);
         if (auto* scene_mgr = services().sceneOrNull()) {
-            auto visible_transforms = scene_mgr->getScene().getVisibleNodeTransforms();
-            if (!visible_transforms.empty()) {
-                scene_transform = lfs::rendering::dataWorldTransformToVisualizerWorld(visible_transforms[0]);
+            if (const auto transform =
+                    scene_mgr->getScene().getCameraSceneTransformByUid(cam_data->uid())) {
+                scene_transform = lfs::rendering::dataWorldTransformToVisualizerWorld(*transform);
             }
         }
 
@@ -1754,12 +1758,12 @@ namespace lfs::vis {
         }
     }
 
-    void InputController::handleFocusSelection(Viewport& target_viewport) {
+    bool InputController::handleFocusSelection(Viewport& target_viewport) {
         if (!tool_context_)
-            return;
+            return false;
         auto* const sm = tool_context_->getSceneManager();
         if (!sm)
-            return;
+            return false;
 
         const auto& scene = sm->getScene();
         const auto& selected = sm->getSelectedNodeNames();
@@ -1804,7 +1808,9 @@ namespace lfs::vis {
         if (total_min.x <= total_max.x) {
             target_viewport.camera.focusOnBounds(total_min, total_max);
             publishCameraMove(&target_viewport);
+            return true;
         }
+        return false;
     }
 
     // Helpers

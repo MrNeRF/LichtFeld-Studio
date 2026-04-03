@@ -13,16 +13,23 @@
 namespace lfs::vis {
 
     namespace {
-        [[nodiscard]] glm::mat4 currentSceneTransform(SceneManager* const scene_manager) {
+        [[nodiscard]] glm::mat4 currentSceneTransform(SceneManager* const scene_manager,
+                                                     const int camera_uid) {
             if (!scene_manager) {
                 return glm::mat4(1.0f);
             }
 
-            const auto visible_transforms = scene_manager->getScene().getVisibleNodeTransforms();
-            if (visible_transforms.empty()) {
-                return glm::mat4(1.0f);
+            const auto& scene = scene_manager->getScene();
+            if (const auto transform = scene.getCameraSceneTransformByUid(camera_uid)) {
+                return lfs::rendering::dataWorldTransformToVisualizerWorld(*transform);
             }
-            return visible_transforms[0];
+            if (const auto transform = scene.getVisiblePointCloudTransform()) {
+                return lfs::rendering::dataWorldTransformToVisualizerWorld(*transform);
+            }
+            const auto visible_transforms = scene.getVisibleNodeTransforms();
+            return visible_transforms.empty()
+                       ? glm::mat4(1.0f)
+                       : lfs::rendering::dataWorldTransformToVisualizerWorld(visible_transforms[0]);
         }
 
         [[nodiscard]] bool equalVec2(const glm::vec2& a, const glm::vec2& b) {
@@ -318,7 +325,7 @@ namespace lfs::vis {
         const glm::ivec2 aligned(
             ((dims.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
             ((dims.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
-        const glm::mat4 scene_transform = currentSceneTransform(scene_manager);
+        const glm::mat4 scene_transform = currentSceneTransform(scene_manager, current_camera_id);
 
         if (gt_context_ &&
             gt_context_->camera_id == current_camera_id &&

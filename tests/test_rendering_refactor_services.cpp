@@ -7,6 +7,7 @@
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "visualizer/rendering/passes/mesh_pass.hpp"
 #include "visualizer/rendering/passes/point_cloud_pass.hpp"
 #include "visualizer/rendering/passes/splat_raster_pass.hpp"
@@ -20,6 +21,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 
 #include <filesystem>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <vector>
 
@@ -40,6 +42,31 @@ namespace lfs::vis {
                 Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU),
                 Tensor::from_vector({8.0f}, {size_t{1}, size_t{1}}, Device::CPU),
                 1.0f);
+        }
+
+        std::shared_ptr<lfs::core::PointCloud> makeTestPointCloud() {
+            using lfs::core::Device;
+            using lfs::core::Tensor;
+
+            auto means = Tensor::from_vector(
+                {0.0f, 0.0f, 0.0f,
+                 1.0f, 0.0f, 0.0f},
+                {size_t{2}, size_t{3}},
+                Device::CPU);
+            auto colors = Tensor::from_vector(
+                {1.0f, 0.0f, 0.0f,
+                 0.0f, 1.0f, 0.0f},
+                {size_t{2}, size_t{3}},
+                Device::CPU);
+            return std::make_shared<lfs::core::PointCloud>(std::move(means), std::move(colors));
+        }
+
+        void expectVisualizerTranslationFromData(const glm::mat4& transform, const glm::vec3& data_translation) {
+            const glm::vec3 expected =
+                lfs::rendering::visualizerWorldPointFromDataWorld(data_translation);
+            EXPECT_FLOAT_EQ(transform[3][0], expected.x);
+            EXPECT_FLOAT_EQ(transform[3][1], expected.y);
+            EXPECT_FLOAT_EQ(transform[3][2], expected.z);
         }
     } // namespace
 
@@ -200,6 +227,41 @@ namespace lfs::vis {
         EXPECT_EQ(state.combined_model->size(), 0u);
         ASSERT_NE(state.point_cloud, nullptr);
         EXPECT_EQ(state.point_cloud->size(), 1);
+        EXPECT_EQ(state.point_cloud_transform,
+                  lfs::rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f)));
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudTransformIsTrackedSeparatelyFromModelTransforms) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+
+        scene.addPointCloud("PointCloud", makeTestPointCloud());
+        scene.setNodeTransform(
+            "PointCloud",
+            glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, -2.0f, 5.0f)));
+
+        const auto state = manager.buildRenderState();
+        ASSERT_NE(state.point_cloud, nullptr);
+        EXPECT_TRUE(state.model_transforms.empty());
+        expectVisualizerTranslationFromData(state.point_cloud_transform, {3.0f, -2.0f, 5.0f});
+    }
+
+    TEST_F(SceneManagerRenderStateTest, VisiblePointCloudDoesNotPolluteModelTransformArray) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+
+        scene.addPointCloud("PointCloud", makeTestPointCloud());
+        scene.setNodeTransform(
+            "PointCloud",
+            glm::translate(glm::mat4(1.0f), glm::vec3(9.0f, 8.0f, 7.0f)));
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setNodeTransform(
+            "Model",
+            glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+
+        const auto state = manager.buildRenderState();
+        ASSERT_EQ(state.model_transforms.size(), 1u);
+        expectVisualizerTranslationFromData(state.model_transforms[0], {1.0f, 2.0f, 3.0f});
     }
 
     TEST_F(SceneManagerRenderStateTest, PlyComparisonBuildsFullFrameWipeFromCombinedSceneMasks) {

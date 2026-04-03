@@ -523,4 +523,22 @@ namespace lfs::io {
         }
     }
 
+    PointCloud convert_transforms_point_cloud_to_colmap_world(PointCloud point_cloud) {
+        if (!point_cloud.means.is_valid() || point_cloud.size() == 0) {
+            return point_cloud;
+        }
+
+        const auto device = point_cloud.means.device();
+        auto means_cpu = point_cloud.means.cpu().contiguous();
+        auto acc = means_cpu.accessor<float, 2>();
+        const size_t point_count = means_cpu.size(0);
+        for (size_t i = 0; i < point_count; ++i) {
+            acc(i, 1) = -acc(i, 1);
+            acc(i, 2) = -acc(i, 2);
+        }
+
+        point_cloud.means = means_cpu.to(device).contiguous();
+        return point_cloud;
+    }
+
 } // namespace lfs::io

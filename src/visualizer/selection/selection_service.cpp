@@ -198,9 +198,9 @@ namespace lfs::vis {
             const glm::mat3 data_camera_to_world = glm::transpose(world_to_camera);
             glm::mat4 scene_transform(1.0f);
             if (auto* const scene_manager = services().sceneOrNull()) {
-                auto visible_transforms = scene_manager->getScene().getVisibleNodeTransforms();
-                if (!visible_transforms.empty()) {
-                    scene_transform = rendering::dataWorldTransformToVisualizerWorld(visible_transforms[0]);
+                if (const auto transform =
+                        scene_manager->getScene().getCameraSceneTransformByUid(camera.uid())) {
+                    scene_transform = rendering::dataWorldTransformToVisualizerWorld(*transform);
                 }
             }
 

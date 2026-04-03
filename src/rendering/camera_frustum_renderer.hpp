@@ -44,6 +44,7 @@ namespace lfs::rendering {
                             const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
                             std::span<const glm::vec3> per_camera_colors = {},
                             const glm::mat4& scene_transform = glm::mat4(1.0f),
+                            std::span<const glm::mat4> scene_transforms = {},
                             bool equirectangular_view = false,
                             const std::unordered_set<int>& disabled_uids = {},
                             const std::unordered_set<int>& emphasized_uids = {});
@@ -55,7 +56,8 @@ namespace lfs::rendering {
                                const glm::mat4& view,
                                const glm::mat4& projection,
                                float scale = 0.1f,
-                               const glm::mat4& scene_transform = glm::mat4(1.0f));
+                               const glm::mat4& scene_transform = glm::mat4(1.0f),
+                               std::span<const glm::mat4> scene_transforms = {});
 
         void setFocusedCamera(const int index) { focused_camera_ = index; }
 
@@ -112,6 +114,7 @@ namespace lfs::rendering {
                               bool for_picking,
                               const glm::vec3& view_position,
                               const glm::mat4& scene_transform,
+                              std::span<const glm::mat4> scene_transforms,
                               const std::unordered_set<int>& disabled_uids = {},
                               const std::unordered_set<int>& emphasized_uids = {});
 
@@ -178,7 +181,7 @@ namespace lfs::rendering {
         float last_scale_ = -1.0f;
         glm::vec3 last_train_color_{-1, -1, -1};
         glm::vec3 last_eval_color_{-1, -1, -1};
-        glm::mat4 last_scene_transform_{1.0f};
+        std::vector<glm::mat4> last_scene_transforms_;
 
         // Image preview
         bool show_images_ = true;

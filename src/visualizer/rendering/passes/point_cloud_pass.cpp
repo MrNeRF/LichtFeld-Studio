@@ -40,10 +40,7 @@ namespace lfs::vis {
             return;
 
         const lfs::core::PointCloud* point_cloud_to_render = scene_state.point_cloud;
-        glm::mat4 point_cloud_transform(1.0f);
-        if (!scene_state.model_transforms.empty()) {
-            point_cloud_transform = scene_state.model_transforms[0];
-        }
+        const glm::mat4 point_cloud_transform = scene_state.point_cloud_transform;
 
         for (const auto& cb : scene_state.cropboxes) {
             if (!cb.data || (!cb.data->enabled && !ctx.settings.show_crop_box))

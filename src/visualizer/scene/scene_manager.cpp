@@ -1242,11 +1242,6 @@ namespace lfs::vis {
             }
         }
 
-        glm::mat4 cam_scene_transform(1.0f);
-        auto visible_transforms = scene_.getVisibleNodeTransforms();
-        if (!visible_transforms.empty())
-            cam_scene_transform = rendering::dataWorldTransformToVisualizerWorld(visible_transforms[0]);
-
         for (const auto* node : scene_.getNodes()) {
             if (node->type != core::NodeType::CAMERA || !node->camera)
                 continue;
@@ -1270,6 +1265,10 @@ namespace lfs::vis {
                 for (int j = 0; j < 3; ++j)
                     w2c[j][i] = R_acc(i, j);
                 w2c[3][i] = T_acc(i);
+            }
+            glm::mat4 cam_scene_transform(1.0f);
+            if (const auto transform = scene_.getCameraSceneTransformByUid(node->camera->uid())) {
+                cam_scene_transform = rendering::dataWorldTransformToVisualizerWorld(*transform);
             }
             const glm::vec3 cam_pos = glm::vec3((cam_scene_transform * glm::inverse(w2c))[3]);
 
@@ -2200,6 +2199,9 @@ namespace lfs::vis {
         // This keeps dataset "ready" scenes renderable before training has produced gaussians.
         if (!hasRenderableGaussians(state.combined_model)) {
             state.point_cloud = scene_.getVisiblePointCloud();
+            if (const auto transform = scene_.getVisiblePointCloudTransform()) {
+                state.point_cloud_transform = rendering::dataWorldTransformToVisualizerWorld(*transform);
+            }
         }
 
         state.meshes = scene_.getVisibleMeshes();
@@ -2211,6 +2213,10 @@ namespace lfs::vis {
         // Get transforms and indices
         state.model_transforms = scene_.getVisibleNodeTransforms();
         for (auto& transform : state.model_transforms) {
+            transform = rendering::dataWorldTransformToVisualizerWorld(transform);
+        }
+        state.camera_scene_transforms = scene_.getVisibleCameraSceneTransforms();
+        for (auto& transform : state.camera_scene_transforms) {
             transform = rendering::dataWorldTransformToVisualizerWorld(transform);
         }
         state.transform_indices = scene_.getTransformIndices();

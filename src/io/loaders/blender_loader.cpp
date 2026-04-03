@@ -202,7 +202,9 @@ namespace lfs::io {
             std::shared_ptr<PointCloud> point_cloud;
             std::vector<std::string> warnings;
             if (std::filesystem::exists(pointcloud_path)) {
-                point_cloud = std::make_shared<PointCloud>(load_simple_ply_point_cloud(pointcloud_path));
+                auto loaded_point_cloud = load_simple_ply_point_cloud(pointcloud_path);
+                point_cloud = std::make_shared<PointCloud>(
+                    convert_transforms_point_cloud_to_colmap_world(std::move(loaded_point_cloud)));
                 LOG_INFO("Loaded {} points from {}", point_cloud->size(),
                          lfs::core::path_to_utf8(pointcloud_path.filename()));
             } else {

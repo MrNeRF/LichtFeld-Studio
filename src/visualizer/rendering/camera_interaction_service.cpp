@@ -42,10 +42,9 @@ namespace lfs::vis {
             return hovered_camera_id_;
         }
 
-        glm::mat4 scene_transform(1.0f);
-        const auto transforms = scene_manager->getScene().getVisibleNodeTransforms();
-        if (!transforms.empty()) {
-            scene_transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transforms[0]);
+        auto scene_transforms = scene_manager->getScene().getVisibleCameraSceneTransforms();
+        for (auto& transform : scene_transforms) {
+            transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
         }
 
         const lfs::rendering::CameraFrustumPickRequest request{
@@ -54,7 +53,7 @@ namespace lfs::vis {
             .viewport_size = panel->viewport_size,
             .viewport = panel->viewport_data,
             .scale = settings.camera_frustum_scale,
-            .scene_transform = scene_transform};
+            .scene_transforms = std::move(scene_transforms)};
 
         const auto pick_result = engine->pickCameraFrustum(cameras, request);
 

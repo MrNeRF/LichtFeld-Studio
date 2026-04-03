@@ -19,4 +19,6 @@ namespace lfs::io {
 
     PointCloud load_simple_ply_point_cloud(const std::filesystem::path& filepath);
 
+    PointCloud convert_transforms_point_cloud_to_colmap_world(PointCloud point_cloud);
+
 } // namespace lfs::io

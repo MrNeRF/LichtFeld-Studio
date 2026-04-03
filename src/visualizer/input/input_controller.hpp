@@ -123,7 +123,7 @@ namespace lfs::vis {
         };
 
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
-        void handleFocusSelection(Viewport& target_viewport);
+        bool handleFocusSelection(Viewport& target_viewport);
 
         // WASD processing with proper frame timing
         void processWASDMovement();

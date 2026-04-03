@@ -187,12 +187,6 @@ namespace lfs::vis {
                         }
                     }
 
-                    glm::mat4 scene_transform(1.0f);
-                    const auto& visible_transforms = ctx.scene_state.model_transforms;
-                    if (!visible_transforms.empty()) {
-                        scene_transform = visible_transforms[0];
-                    }
-
                     LOG_TRACE("Rendering {} camera frustums with scale {}, focused index: {} (ID: {})",
                               cameras.size(), settings.camera_frustum_scale, focused_index, ctx.hovered_camera_id);
 
@@ -213,7 +207,7 @@ namespace lfs::vis {
                         .eval_color = settings.eval_camera_color,
                         .per_camera_colors = {},
                         .focused_index = focused_index,
-                        .scene_transform = scene_transform,
+                        .scene_transforms = ctx.scene_state.camera_scene_transforms,
                         .equirectangular_view = settings.equirectangular,
                         .disabled_uids = std::move(disabled_uids),
                         .emphasized_uids = std::move(emphasized_uids)};

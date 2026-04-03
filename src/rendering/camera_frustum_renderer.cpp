@@ -22,6 +22,16 @@ namespace lfs::rendering {
         constexpr int INITIAL_TEXTURE_ARRAY_CAPACITY = 256;
         constexpr float EQUIRECTANGULAR_DISPLAY_FOV = 1.0472f; // 60 degrees
 
+        [[nodiscard]] std::vector<glm::mat4> resolveSceneTransforms(
+            const size_t camera_count,
+            const glm::mat4& fallback_scene_transform,
+            const std::span<const glm::mat4> scene_transforms) {
+            if (scene_transforms.size() == camera_count) {
+                return std::vector<glm::mat4>(scene_transforms.begin(), scene_transforms.end());
+            }
+            return std::vector<glm::mat4>(camera_count, fallback_scene_transform);
+        }
+
     } // namespace
 
     CameraFrustumRenderer::~CameraFrustumRenderer() {
@@ -47,6 +57,7 @@ namespace lfs::rendering {
         camera_ids_.clear();
         camera_positions_.clear();
         last_scale_ = -1.0f;
+        last_scene_transforms_.clear();
     }
 
     Result<void> CameraFrustumRenderer::init() {
@@ -298,13 +309,17 @@ namespace lfs::rendering {
         const bool for_picking,
         const glm::vec3& view_position,
         const glm::mat4& scene_transform,
+        const std::span<const glm::mat4> scene_transforms,
         const std::unordered_set<int>& disabled_uids,
         const std::unordered_set<int>& emphasized_uids) {
+
+        const auto resolved_scene_transforms =
+            resolveSceneTransforms(cameras.size(), scene_transform, scene_transforms);
 
         const bool needs_regeneration =
             cached_instances_.size() != cameras.size() ||
             last_scale_ != scale ||
-            last_scene_transform_ != scene_transform;
+            last_scene_transforms_ != resolved_scene_transforms;
 
         if (needs_regeneration) {
             cached_instances_.clear();
@@ -314,7 +329,8 @@ namespace lfs::rendering {
             camera_positions_.clear();
             camera_positions_.reserve(cameras.size());
 
-            for (const auto& cam : cameras) {
+            for (size_t camera_index = 0; camera_index < cameras.size(); ++camera_index) {
+                const auto& cam = cameras[camera_index];
                 if (!cam) {
                     continue;
                 }
@@ -340,7 +356,8 @@ namespace lfs::rendering {
                     w2c[3][i] = T_acc(i);
                 }
 
-                const glm::mat4 transformed_c2w = scene_transform * glm::inverse(w2c);
+                const glm::mat4 transformed_c2w =
+                    resolved_scene_transforms[camera_index] * glm::inverse(w2c);
                 const glm::mat4 visualizer_c2w = transformed_c2w * DATA_TO_VISUALIZER_CAMERA_AXES_4;
                 const glm::vec3 cam_pos = glm::vec3(visualizer_c2w[3]);
                 camera_positions_.push_back(cam_pos);
@@ -373,7 +390,7 @@ namespace lfs::rendering {
         last_scale_ = scale;
         last_train_color_ = train_color;
         last_eval_color_ = eval_color;
-        last_scene_transform_ = scene_transform;
+        last_scene_transforms_ = resolved_scene_transforms;
     }
 
     void CameraFrustumRenderer::updateInstanceAppearance(
@@ -454,6 +471,7 @@ namespace lfs::rendering {
         const glm::vec3& eval_color,
         const std::span<const glm::vec3> per_camera_colors,
         const glm::mat4& scene_transform,
+        const std::span<const glm::mat4> scene_transforms,
         const bool equirectangular_view,
         const std::unordered_set<int>& disabled_uids,
         const std::unordered_set<int>& emphasized_uids) {
@@ -465,7 +483,8 @@ namespace lfs::rendering {
 
         const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
         prepareInstances(cameras, scale, train_color, eval_color, per_camera_colors, false,
-                         view_position, scene_transform, disabled_uids, emphasized_uids);
+                         view_position, scene_transform, scene_transforms,
+                         disabled_uids, emphasized_uids);
 
         if (cached_instances_.empty())
             return {};
@@ -662,18 +681,17 @@ namespace lfs::rendering {
         const glm::mat4& view,
         const glm::mat4& projection,
         const float scale,
-        const glm::mat4& scene_transform) {
+        const glm::mat4& scene_transform,
+        const std::span<const glm::mat4> scene_transforms) {
 
         if (!initialized_ || cameras.empty())
             return -1;
 
-        if (cached_instances_.empty() || camera_ids_.size() != cameras.size()) {
-            const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
-            prepareInstances(cameras, scale, last_train_color_, last_eval_color_, {},
-                             false, view_position, scene_transform);
-            if (cached_instances_.empty())
-                return -1;
-        }
+        const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
+        prepareInstances(cameras, scale, last_train_color_, last_eval_color_, {},
+                         true, view_position, scene_transform, scene_transforms);
+        if (cached_instances_.empty())
+            return -1;
 
         const int vp_width = static_cast<int>(viewport_size.x);
         const int vp_height = static_cast<int>(viewport_size.y);

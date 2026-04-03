@@ -38,6 +38,36 @@ protected:
         fs::remove_all(temp_dir);
     }
 
+    void write_text_file(const fs::path& path, const std::string& contents) const {
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
+        out << contents;
+        out.close();
+        ASSERT_TRUE(out.good()) << "Failed to write " << path;
+    }
+
+    void write_png(const fs::path& path) const {
+        static const std::vector<unsigned char> png_1x1 = {
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+            0x1F, 0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99,
+            0x3D, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+            0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82};
+
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
+        out.write(reinterpret_cast<const char*>(png_1x1.data()),
+                  static_cast<std::streamsize>(png_1x1.size()));
+        out.close();
+        ASSERT_TRUE(out.good()) << "Failed to write " << path;
+    }
+
     static SplatData create_test_splat(size_t num_points, int sh_degree = 0) {
         constexpr int SH_COEFFS[] = {0, 3, 8, 15};
         const size_t sh_coeffs = sh_degree > 0 ? SH_COEFFS[sh_degree] : 0;
@@ -263,6 +293,64 @@ TEST_F(PythonIOTest, DatasetTypeDetection) {
 
     auto unknown_type = Loader::getDatasetType(temp_dir);
     EXPECT_EQ(unknown_type, DatasetType::Unknown);
+}
+
+TEST_F(PythonIOTest, LoadTransformsDatasetConvertsPointCloudToColmapWorld) {
+    const fs::path dataset_dir = temp_dir / "transforms_dataset";
+    write_png(dataset_dir / "frame_0001.png");
+    write_text_file(
+        dataset_dir / "transforms_train.json",
+        R"json({
+  "w": 1,
+  "h": 1,
+  "camera_angle_x": 0.78539816339,
+  "ply_file_path": "pointcloud.ply",
+  "frames": [
+    {
+      "file_path": "frame_0001.png",
+      "transform_matrix": [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0]
+      ]
+    }
+  ]
+})json");
+    write_text_file(
+        dataset_dir / "pointcloud.ply",
+        R"ply(ply
+format ascii 1.0
+element vertex 2
+property float x
+property float y
+property float z
+property uchar red
+property uchar green
+property uchar blue
+end_header
+0 1 -2 255 0 0
+1 -3 4 0 255 0
+)ply");
+
+    auto loader = Loader::create();
+    auto result = loader->load(dataset_dir);
+    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().format();
+    ASSERT_TRUE(std::holds_alternative<LoadedScene>(result->data));
+
+    const auto& scene = std::get<LoadedScene>(result->data);
+    ASSERT_EQ(scene.cameras.size(), 1u);
+    ASSERT_TRUE(scene.point_cloud);
+    ASSERT_EQ(scene.point_cloud->size(), 2u);
+
+    auto means_cpu = scene.point_cloud->means.cpu().contiguous();
+    auto acc = means_cpu.accessor<float, 2>();
+    EXPECT_NEAR(acc(0, 0), 0.0f, EPSILON);
+    EXPECT_NEAR(acc(0, 1), -1.0f, EPSILON);
+    EXPECT_NEAR(acc(0, 2), 2.0f, EPSILON);
+    EXPECT_NEAR(acc(1, 0), 1.0f, EPSILON);
+    EXPECT_NEAR(acc(1, 1), 3.0f, EPSILON);
+    EXPECT_NEAR(acc(1, 2), -4.0f, EPSILON);
 }
 
 // Test loading COLMAP dataset

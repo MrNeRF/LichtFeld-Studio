@@ -53,10 +53,7 @@ namespace lfs::rendering {
 
         [[nodiscard]] glm::mat4 buildPointCloudProjectionMatrix(
             const RenderingPipeline::RasterRequest& request) {
-            glm::mat4 projection = request.getProjectionMatrix();
-            glm::mat4 flip_y(1.0f);
-            flip_y[1][1] = -1.0f;
-            return flip_y * projection;
+            return request.getProjectionMatrix();
         }
 
         [[nodiscard]] bool tensorMatchesGaussianCount(const Tensor* const tensor,

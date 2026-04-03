@@ -102,8 +102,7 @@ namespace lfs::vis::gui {
             snapshot.node_visibility_mask = render_state.node_visibility_mask;
         } else if (render_state.point_cloud && render_state.point_cloud->size() > 0) {
             snapshot.point_cloud = clonePointCloud(*render_state.point_cloud);
-            snapshot.point_cloud_transform =
-                render_state.model_transforms.empty() ? glm::mat4(1.0f) : render_state.model_transforms.front();
+            snapshot.point_cloud_transform = render_state.point_cloud_transform;
         }
 
         snapshot.meshes.reserve(render_state.meshes.size());

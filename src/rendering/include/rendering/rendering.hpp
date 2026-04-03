@@ -377,6 +377,7 @@ namespace lfs::rendering {
         std::vector<glm::vec3> per_camera_colors;
         int focused_index = -1;
         glm::mat4 scene_transform{1.0f};
+        std::vector<glm::mat4> scene_transforms;
         bool equirectangular_view = false;
         std::unordered_set<int> disabled_uids;
         std::unordered_set<int> emphasized_uids;
@@ -389,6 +390,7 @@ namespace lfs::rendering {
         ViewportData viewport;
         float scale = 0.1f;
         glm::mat4 scene_transform{1.0f};
+        std::vector<glm::mat4> scene_transforms;
     };
 
     // Main rendering engine

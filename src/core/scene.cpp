@@ -424,6 +424,15 @@ namespace lfs::core {
         return nullptr;
     }
 
+    std::optional<glm::mat4> Scene::getVisiblePointCloudTransform() const {
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::POINTCLOUD && isNodeEffectivelyVisible(node->id) && node->point_cloud) {
+                return getWorldTransform(node->id);
+            }
+        }
+        return std::nullopt;
+    }
+
     std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes() const {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
@@ -477,6 +486,17 @@ namespace lfs::core {
             if (node->type == NodeType::CAMERA && node->camera &&
                 isNodeEffectivelyVisible(node->id)) {
                 result.push_back(node->camera);
+            }
+        }
+        return result;
+    }
+
+    std::vector<glm::mat4> Scene::getVisibleCameraSceneTransforms() const {
+        std::vector<glm::mat4> result;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera &&
+                isNodeEffectivelyVisible(node->id)) {
+                result.push_back(getWorldTransform(node->id));
             }
         }
         return result;
@@ -673,8 +693,7 @@ namespace lfs::core {
 
         cached_transforms_.clear();
         for (const auto& node : nodes_) {
-            const bool has_renderable = node->model || node->point_cloud || node->mesh;
-            if (has_renderable && isNodeEffectivelyVisible(node->id)) {
+            if (node->model && isNodeEffectivelyVisible(node->id)) {
                 cached_transforms_.push_back(getWorldTransform(node->id));
             }
         }
@@ -2305,6 +2324,15 @@ namespace lfs::core {
             }
         }
         return nullptr;
+    }
+
+    std::optional<glm::mat4> Scene::getCameraSceneTransformByUid(int uid) const {
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {
+                return getWorldTransform(node->id);
+            }
+        }
+        return std::nullopt;
     }
 
     std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getAllCameras() const {

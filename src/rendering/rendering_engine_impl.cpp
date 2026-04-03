@@ -1394,7 +1394,7 @@ namespace lfs::rendering {
         return camera_frustum_renderer_.render(
             cameras, view, proj, request.scale, request.train_color, request.eval_color,
             request.per_camera_colors,
-            request.scene_transform, request.equirectangular_view,
+            request.scene_transform, request.scene_transforms, request.equirectangular_view,
             request.disabled_uids, request.emphasized_uids);
     }
 
@@ -1411,7 +1411,7 @@ namespace lfs::rendering {
 
         return camera_frustum_renderer_.pickCamera(
             cameras, request.mouse_pos, request.viewport_pos, request.viewport_size, view, proj,
-            request.scale, request.scene_transform);
+            request.scale, request.scene_transform, request.scene_transforms);
     }
 
     void RenderingEngineImpl::clearFrustumCache() {

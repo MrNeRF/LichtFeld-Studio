@@ -247,6 +247,7 @@ set(TEST_FILES
     test_rendering_refactor_services.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
+    test_input_controller_dataset_load.cpp
     test_selection_service_interactions.cpp
     test_undo_history.cpp
     test_selection_command_dispatch.cpp

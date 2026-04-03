@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -253,6 +254,7 @@ namespace lfs::core {
             const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats);
 
         [[nodiscard]] const lfs::core::PointCloud* getVisiblePointCloud() const;
+        [[nodiscard]] std::optional<glm::mat4> getVisiblePointCloudTransform() const;
 
         struct VisibleMesh {
             const lfs::core::MeshData* mesh;
@@ -335,6 +337,8 @@ namespace lfs::core {
 
         std::vector<const SceneNode*> getVisibleNodes() const;
         [[nodiscard]] std::vector<std::shared_ptr<const lfs::core::Camera>> getVisibleCameras() const;
+        [[nodiscard]] std::vector<glm::mat4> getVisibleCameraSceneTransforms() const;
+        [[nodiscard]] std::optional<glm::mat4> getCameraSceneTransformByUid(int uid) const;
 
         void pinForExport() const { ++export_pin_count_; }
         void unpinForExport() const {
