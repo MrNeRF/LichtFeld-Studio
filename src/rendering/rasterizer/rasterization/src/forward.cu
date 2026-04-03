@@ -522,6 +522,9 @@ void lfs::rendering::forward(
         init_mean2d_kernel<<<init_grid, init_block, 0, stream>>>(per_primitive_buffers.mean2d, buffer_n_primitives);
     }
 
+    const bool include_low_opacity_selection_queries =
+        (screen_positions_out != nullptr) || (hovered_depth_id != nullptr);
+
     kernels::forward::preprocess_cu<<<div_round_up(buffer_n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         means,
         scales_raw,
@@ -588,6 +591,7 @@ void lfs::rendering::forward(
         deleted_mask,
         focused_gaussian_id,
         hovered_depth_id,
+        include_low_opacity_selection_queries,
         emphasized_node_mask,
         num_selected_nodes,
         dim_non_emphasized,

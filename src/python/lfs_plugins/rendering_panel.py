@@ -16,7 +16,28 @@ def tr(key):
     return result if result else key
 
 
+def _theme():
+    return lf.ui.theme()
+
+
+def _theme_vignette():
+    theme = _theme()
+    return theme.vignette if theme else None
+
+
+def _set_theme_vignette_style(*, intensity=None, radius=None, softness=None):
+    vignette = _theme_vignette()
+    if vignette is None:
+        return
+    lf.ui.set_theme_vignette_style(
+        float(vignette.intensity if intensity is None else intensity),
+        float(vignette.radius if radius is None else radius),
+        float(vignette.softness if softness is None else softness),
+    )
+
+
 SENSOR_HALF_HEIGHT_MM = 12.0
+DEFAULT_SIMPLIFY_TARGET_RATIO = 0.5
 
 BOOL_PROPS = [
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
@@ -53,11 +74,14 @@ SCRUB_FIELD_DEFS = {
     "ppisp_gamma_blue": ScrubFieldSpec(-0.5, 0.5, 0.01, "%.2f"),
     "ppisp_crf_toe": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
     "ppisp_crf_shoulder": ScrubFieldSpec(-1.0, 1.0, 0.01, "%.2f"),
-    "simplify_ratio": ScrubFieldSpec(0.01, 1.0, 0.01, "%.2f"),
+    "theme_vignette_intensity": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+    "theme_vignette_radius": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+    "theme_vignette_softness": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+    "simplify_target": ScrubFieldSpec(1.0, 1.0, 1.0, "%d", data_type=int),
 }
 
 SELECT_PROPS = [
-    "grid_plane", "sh_degree", "mesh_shadow_resolution",
+    "grid_plane", "sh_degree", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
 
 CHROM_FLOAT_PROPS = [
@@ -100,6 +124,7 @@ LOCALE_KEY = {
     "grid_opacity": "main_panel.grid_opacity",
     "focal_length_mm": "main_panel.focal_length",
     "render_scale": "main_panel.render_scale",
+    "camera_metrics_mode": "main_panel.camera_metrics",
     "sh_degree": "main_panel.sh_degree",
     "grid_plane": "main_panel.plane",
     "background_color": "main_panel.color",
@@ -182,7 +207,8 @@ class RenderingPanel(Panel):
         self._picker_click_handled = False
         self._last_swatch_colors = {}
         self._last_panel_label = ""
-        self._simplify_ratio = 0.1
+        self._simplify_target_count = 0
+        self._simplify_target_touched = False
         self._simplify_source_name = ""
         self._simplify_original_count = 0
         self._simplify_task_active = False
@@ -223,6 +249,7 @@ class RenderingPanel(Panel):
                     lambda p=prop_id: self._capture_color_snapshot(p),
                     lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
                 )
+        self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
         self._sync_section_states()
 
@@ -272,7 +299,9 @@ class RenderingPanel(Panel):
                        lambda p=prop_id: float(getattr(s(), p, 0.0)),
                        lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
 
-        model.bind("simplify_ratio", lambda: float(self._simplify_ratio), lambda v: self._set_simplify_ratio(v))
+        model.bind("simplify_target",
+                   lambda: str(self._compute_simplify_target_count()),
+                   lambda v: self._set_simplify_target_count(v))
 
         model.bind_func("ppisp_auto",
                          lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
@@ -325,6 +354,30 @@ class RenderingPanel(Panel):
         model.bind_func("simplify_show_error", lambda: bool(self._simplify_error_text))
         model.bind_func("simplify_error_text", lambda: self._simplify_error_text)
 
+        model.bind("theme_vignette_enabled",
+                   lambda: bool((vignette := _theme_vignette()) and vignette.enabled),
+                   lambda v: lf.ui.set_theme_vignette_enabled(bool(v)))
+        model.bind("theme_vignette_intensity",
+                   lambda: float(vignette.intensity) if (vignette := _theme_vignette()) else 0.3,
+                   lambda v: lf.ui.set_theme_vignette_intensity(float(v)))
+        model.bind("theme_vignette_radius",
+                   lambda: float(vignette.radius) if (vignette := _theme_vignette()) else 0.75,
+                   lambda v: _set_theme_vignette_style(radius=float(v)))
+        model.bind("theme_vignette_softness",
+                   lambda: float(vignette.softness) if (vignette := _theme_vignette()) else 0.45,
+                   lambda v: _set_theme_vignette_style(softness=float(v)))
+        model.bind_func("label_theme_vignette_enabled",
+                         lambda: _entry_label(lf.ui.tr("main_panel.theme_vignette") or "Vignette"))
+        model.bind_func("label_theme_vignette_intensity",
+                         lambda: _entry_label(
+                             lf.ui.tr("main_panel.theme_vignette_intensity") or "Intensity"))
+        model.bind_func("label_theme_vignette_radius",
+                         lambda: _entry_label(
+                             lf.ui.tr("main_panel.theme_vignette_radius") or "Radius"))
+        model.bind_func("label_theme_vignette_softness",
+                         lambda: _entry_label(
+                             lf.ui.tr("main_panel.theme_vignette_softness") or "Softness"))
+
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
         model.bind_event("chrom_change", self._on_chrom_change)
@@ -372,8 +425,17 @@ class RenderingPanel(Panel):
         self._scrub_fields.unmount()
 
     def _get_scrub_value(self, prop):
-        if prop == "simplify_ratio":
-            return self._simplify_ratio
+        if prop == "simplify_target":
+            return float(self._compute_simplify_target_count())
+        if prop == "theme_vignette_intensity":
+            theme = _theme()
+            return float(theme.vignette.intensity) if theme else 0.3
+        if prop == "theme_vignette_radius":
+            vignette = _theme_vignette()
+            return float(vignette.radius) if vignette else 0.75
+        if prop == "theme_vignette_softness":
+            vignette = _theme_vignette()
+            return float(vignette.softness) if vignette else 0.45
         settings = lf.get_render_settings()
         if not settings:
             spec = SCRUB_FIELD_DEFS[prop]
@@ -381,8 +443,23 @@ class RenderingPanel(Panel):
         return float(getattr(settings, prop, 0.0))
 
     def _set_scrub_value(self, prop, value):
-        if prop == "simplify_ratio":
-            self._set_simplify_ratio(value)
+        if prop == "simplify_target":
+            self._set_simplify_target_count(value)
+            return
+        if prop == "theme_vignette_intensity":
+            lf.ui.set_theme_vignette_intensity(float(value))
+            if self._handle:
+                self._handle.dirty(prop)
+            return
+        if prop == "theme_vignette_radius":
+            _set_theme_vignette_style(radius=float(value))
+            if self._handle:
+                self._handle.dirty(prop)
+            return
+        if prop == "theme_vignette_softness":
+            _set_theme_vignette_style(softness=float(value))
+            if self._handle:
+                self._handle.dirty(prop)
             return
         settings = lf.get_render_settings()
         if not settings:
@@ -560,38 +637,90 @@ class RenderingPanel(Panel):
 
         self._simplify_source_name = source_name
         self._simplify_original_count = source_count
+        if source_count > 0:
+            if self._simplify_target_touched and self._simplify_target_count > 0:
+                self._simplify_target_count = self._clamp_simplify_target_count(self._simplify_target_count, source_count)
+            else:
+                self._simplify_target_count = self._default_simplify_target_count(source_count)
+        elif not self._simplify_target_touched:
+            self._simplify_target_count = 0
+        self._sync_simplify_scrub_spec()
         self._dirty_model(
             "simplify_has_source",
             "simplify_source_name",
             "simplify_original_count",
+            "simplify_target",
             "simplify_target_count",
             "simplify_output_name",
             "simplify_can_apply",
         )
         return True
 
+    def _sync_simplify_scrub_spec(self):
+        max_value = max(0, int(self._simplify_original_count))
+        spec = ScrubFieldSpec(
+            1.0 if max_value > 0 else 0.0,
+            float(max_value),
+            1.0,
+            "%d",
+            data_type=int,
+        )
+        self._scrub_fields.set_spec("simplify_target", spec)
+
+    def _default_simplify_target_count(self, original_count=None) -> int:
+        source_count = self._simplify_original_count if original_count is None else int(original_count)
+        if source_count <= 0:
+            return 0
+        return max(1, min(source_count, int(math.ceil(source_count * DEFAULT_SIMPLIFY_TARGET_RATIO))))
+
+    def _clamp_simplify_target_count(self, value, original_count=None):
+        try:
+            parsed = int(round(float(str(value).strip().replace(",", "").replace("_", ""))))
+        except (TypeError, ValueError):
+            return None
+        clamped = max(1, parsed)
+        max_count = self._simplify_original_count if original_count is None else int(original_count)
+        if max_count > 0:
+            clamped = min(clamped, max_count)
+        return clamped
+
     def _compute_simplify_target_count(self) -> int:
         if self._simplify_original_count <= 0:
             return 0
-        return max(1, min(self._simplify_original_count, int(math.ceil(self._simplify_original_count * self._simplify_ratio))))
+        if self._simplify_target_count <= 0:
+            return self._default_simplify_target_count()
+        clamped = self._clamp_simplify_target_count(self._simplify_target_count)
+        if clamped is None:
+            return self._default_simplify_target_count()
+        return clamped
+
+    def _compute_simplify_ratio(self) -> float:
+        if self._simplify_original_count <= 0:
+            return 0.0
+        return float(self._compute_simplify_target_count()) / float(self._simplify_original_count)
 
     def _simplify_output_name(self) -> str:
         if not self._simplify_source_name:
             return ""
-        return f"{self._simplify_source_name} (Simplified {int(round(self._simplify_ratio * 100.0))}%)"
+        return f"{self._simplify_source_name}_{self._compute_simplify_target_count()}"
 
     def _can_run_simplify(self) -> bool:
-        return bool(self._simplify_source_name and self._simplify_original_count > 0 and not self._simplify_task_active)
+        return bool(
+            self._simplify_source_name
+            and self._simplify_original_count > 0
+            and self._compute_simplify_target_count() > 0
+            and not self._simplify_task_active
+        )
 
-    def _set_simplify_ratio(self, value):
-        try:
-            next_value = max(0.01, min(1.0, float(value)))
-        except (TypeError, ValueError):
+    def _set_simplify_target_count(self, value):
+        next_value = self._clamp_simplify_target_count(value)
+        if next_value is None:
             return
-        if abs(next_value - self._simplify_ratio) < 1e-6:
+        if next_value == self._simplify_target_count and self._simplify_target_touched:
             return
-        self._simplify_ratio = next_value
-        self._dirty_model("simplify_ratio", "simplify_target_count", "simplify_output_name")
+        self._simplify_target_count = next_value
+        self._simplify_target_touched = True
+        self._dirty_model("simplify_target", "simplify_target_count", "simplify_output_name")
 
     def _simplify_progress_pct(self) -> str:
         try:
@@ -637,7 +766,7 @@ class RenderingPanel(Panel):
         self._dirty_model("simplify_show_error", "simplify_error_text")
         lf.simplify_splats(
             self._simplify_source_name,
-            ratio=self._simplify_ratio,
+            ratio=self._compute_simplify_ratio(),
         )
         self._sync_simplify_task_state(force=True)
 

@@ -38,16 +38,6 @@
     border-right-width: 1dp;
 }
 
-#filmstrip scrollbarvertical,
-#sidebar scrollbarvertical {
-    width: 4dp;
-}
-
-#filmstrip scrollbarvertical sliderbar,
-#sidebar scrollbarvertical sliderbar {
-    min-height: 10dp;
-}
-
 #filmstrip.hidden {
     display: none;
 }

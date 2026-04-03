@@ -137,6 +137,11 @@ def test_ui_stub_surface_matches_panel_api_names():
     assert "def set_panel_space(panel_id: str, space: PanelSpace)" in stub_text
     assert "    NONE: int = ..." in stub_text
     assert "    None: int = ..." not in stub_text
+    assert "class ThemeVignette:" in stub_text
+    assert "def vignette(self) -> ThemeVignette: ..." in stub_text
+    assert "def set_theme_vignette_enabled(arg: bool, /) -> None:" in stub_text
+    assert "def set_theme_vignette_intensity(arg: float, /) -> None:" in stub_text
+    assert "def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:" in stub_text
 
 
 def test_plugin_stub_surface_exposes_v1_compatibility_contract():

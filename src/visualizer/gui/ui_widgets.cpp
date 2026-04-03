@@ -30,6 +30,7 @@ namespace lfs::vis::gui::widgets {
 
     namespace {
         constexpr float CLICK_THRESHOLD_SQ = 5.0f * 5.0f;
+        constexpr float SCRUB_STYLE_ROUNDING = 6.0f;
         constexpr const char* MULTI_COMPONENT_LABELS[4] = {"##X", "##Y", "##Z", "##W"};
 
         struct WidgetIcons {
@@ -209,6 +210,15 @@ namespace lfs::vis::gui::widgets {
             ImGui::SetActiveID(id, g.CurrentWindow);
         }
 
+        template <typename DrawFn>
+        bool drawWithScrubStyle(const DrawFn& draw_widget) {
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, SCRUB_STYLE_ROUNDING);
+            ImGui::PushStyleVar(ImGuiStyleVar_GrabRounding, SCRUB_STYLE_ROUNDING);
+            const bool changed = draw_widget();
+            ImGui::PopStyleVar(2);
+            return changed;
+        }
+
         template <typename T>
         bool drawTrackedNumericWidget(const T* original_values, T* current_values, const int components,
                                       const auto& draw_widget, const auto& post_draw) {
@@ -324,7 +334,10 @@ namespace lfs::vis::gui::widgets {
         const float original = *v;
         return drawTrackedNumericWidget<float>(
             &original, v, 1,
-            [&]() { return ImGui::DragFloat(label, v, speed, min, max, format, flags); },
+            [&]() {
+                return drawWithScrubStyle(
+                    [&]() { return ImGui::DragFloat(label, v, speed, min, max, format, flags); });
+            },
             []() {});
     }
 
@@ -333,7 +346,10 @@ namespace lfs::vis::gui::widgets {
         const int original = *v;
         return drawTrackedNumericWidget<int>(
             &original, v, 1,
-            [&]() { return ImGui::DragInt(label, v, speed, min, max, format, flags); },
+            [&]() {
+                return drawWithScrubStyle(
+                    [&]() { return ImGui::DragInt(label, v, speed, min, max, format, flags); });
+            },
             []() {});
     }
 
@@ -384,7 +400,10 @@ namespace lfs::vis::gui::widgets {
         const float original = *v;
         return drawTrackedNumericWidget<float>(
             &original, v, 1,
-            [&]() { return ImGui::SliderFloat(label, v, min, max, format, flags); },
+            [&]() {
+                return drawWithScrubStyle(
+                    [&]() { return ImGui::SliderFloat(label, v, min, max, format, flags); });
+            },
             []() { handleSliderClickToInput(); });
     }
 
@@ -393,7 +412,10 @@ namespace lfs::vis::gui::widgets {
         const int original = *v;
         return drawTrackedNumericWidget<int>(
             &original, v, 1,
-            [&]() { return ImGui::SliderInt(label, v, min, max, format, flags); },
+            [&]() {
+                return drawWithScrubStyle(
+                    [&]() { return ImGui::SliderInt(label, v, min, max, format, flags); });
+            },
             []() { handleSliderClickToInput(); });
     }
 
@@ -767,29 +789,6 @@ namespace lfs::vis::gui::widgets {
 
     void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, const float rounding) {
         DrawFloatingWindowShadow(pos, size, rounding);
-    }
-
-    void DrawViewportVignette(const ImVec2& pos, const ImVec2& size) {
-        const auto& t = theme();
-        if (!t.vignette.enabled)
-            return;
-
-        constexpr float EDGE_SCALE = 0.5f;
-        constexpr ImU32 CLEAR_COLOR = IM_COL32(0, 0, 0, 0);
-
-        auto* const draw_list = ImGui::GetBackgroundDrawList();
-        const float edge_mult = (1.0f - t.vignette.radius) * EDGE_SCALE * (1.0f + t.vignette.softness);
-        const float edge_w = size.x * edge_mult;
-        const float edge_h = size.y * edge_mult;
-        const ImU32 dark = IM_COL32(0, 0, 0, static_cast<int>(t.vignette.intensity * 255.0f));
-
-        const float x1 = pos.x, y1 = pos.y;
-        const float x2 = pos.x + size.x, y2 = pos.y + size.y;
-
-        draw_list->AddRectFilledMultiColor({x1, y1}, {x1 + edge_w, y2}, dark, CLEAR_COLOR, CLEAR_COLOR, dark);
-        draw_list->AddRectFilledMultiColor({x2 - edge_w, y1}, {x2, y2}, CLEAR_COLOR, dark, dark, CLEAR_COLOR);
-        draw_list->AddRectFilledMultiColor({x1, y1}, {x2, y1 + edge_h}, dark, dark, CLEAR_COLOR, CLEAR_COLOR);
-        draw_list->AddRectFilledMultiColor({x1, y2 - edge_h}, {x2, y2}, CLEAR_COLOR, CLEAR_COLOR, dark, dark);
     }
 
     bool IconButton(const char* id, const unsigned int texture, const ImVec2& size,

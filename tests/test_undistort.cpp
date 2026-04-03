@@ -333,13 +333,77 @@ TEST(UndistortBlankPixels, ZeroVsNonZero) {
         TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
         radial, Tensor(), CameraModelType::PINHOLE, 0.5f);
 
-    // With blank_pixels > 0, the focal length should be smaller (zoomed out)
-    EXPECT_LT(loose.dst_fx, tight.dst_fx);
-    EXPECT_LT(loose.dst_fy, tight.dst_fy);
+    // COLMAP-style blank pixel handling keeps focal length fixed and expands
+    // the output image instead of zooming the undistorted camera.
+    EXPECT_FLOAT_EQ(loose.dst_fx, tight.dst_fx);
+    EXPECT_FLOAT_EQ(loose.dst_fy, tight.dst_fy);
+    EXPECT_GE(loose.dst_width, tight.dst_width);
+    EXPECT_GE(loose.dst_height, tight.dst_height);
 
     // Both must produce valid results
     validate_params(tight, TEST_W, TEST_H);
     validate_params(loose, TEST_W, TEST_H);
+}
+
+TEST(UndistortColmapParity, SimpleRadialNoBlankPixelsMatchesColmap) {
+    constexpr float kColmapParityTolerance = 1e-4f;
+    auto radial = Tensor::from_vector({0.5f}, TensorShape({1}), Device::CPU);
+
+    const auto params = compute_undistort_params(
+        100.0f, 100.0f, 50.0f, 50.0f, 100, 100,
+        radial, Tensor(), CameraModelType::PINHOLE, 0.0f);
+
+    EXPECT_NEAR(params.dst_fx, 100.0f, kColmapParityTolerance);
+    EXPECT_NEAR(params.dst_fy, 100.0f, kColmapParityTolerance);
+    EXPECT_NEAR(params.dst_cx, 42.0f, kColmapParityTolerance);
+    EXPECT_NEAR(params.dst_cy, 42.0f, kColmapParityTolerance);
+    EXPECT_EQ(params.dst_width, 84);
+    EXPECT_EQ(params.dst_height, 84);
+}
+
+TEST(UndistortColmapParity, SimpleRadialAllowBlankPixelsMatchesColmap) {
+    constexpr float kColmapParityTolerance = 1e-4f;
+    auto radial = Tensor::from_vector({0.5f}, TensorShape({1}), Device::CPU);
+
+    const auto params = compute_undistort_params(
+        100.0f, 100.0f, 50.0f, 50.0f, 100, 100,
+        radial, Tensor(), CameraModelType::PINHOLE, 1.0f);
+
+    EXPECT_NEAR(params.dst_fx, 100.0f, kColmapParityTolerance);
+    EXPECT_NEAR(params.dst_fy, 100.0f, kColmapParityTolerance);
+    EXPECT_NEAR(params.dst_cx, 45.0f, kColmapParityTolerance);
+    EXPECT_NEAR(params.dst_cy, 45.0f, kColmapParityTolerance);
+    EXPECT_EQ(params.dst_width, 90);
+    EXPECT_EQ(params.dst_height, 90);
+}
+
+TEST(ScaleUndistortParams, PreservesPrincipalPointOffset) {
+    UndistortParams params{};
+    params.src_fx = 100.0f;
+    params.src_fy = 120.0f;
+    params.src_cx = 40.0f;
+    params.src_cy = 15.0f;
+    params.src_width = 80;
+    params.src_height = 30;
+    params.dst_fx = 100.0f;
+    params.dst_fy = 120.0f;
+    params.dst_cx = 33.0f;
+    params.dst_cy = 12.0f;
+    params.dst_width = 66;
+    params.dst_height = 24;
+
+    const auto scaled = scale_undistort_params(params, 40, 15);
+
+    EXPECT_FLOAT_EQ(scaled.src_fx, 50.0f);
+    EXPECT_FLOAT_EQ(scaled.src_fy, 60.0f);
+    EXPECT_FLOAT_EQ(scaled.src_cx, 20.0f);
+    EXPECT_FLOAT_EQ(scaled.src_cy, 7.5f);
+    EXPECT_FLOAT_EQ(scaled.dst_fx, 50.0f);
+    EXPECT_FLOAT_EQ(scaled.dst_fy, 60.0f);
+    EXPECT_FLOAT_EQ(scaled.dst_cx, 16.5f);
+    EXPECT_FLOAT_EQ(scaled.dst_cy, 6.0f);
+    EXPECT_EQ(scaled.dst_width, 33);
+    EXPECT_EQ(scaled.dst_height, 12);
 }
 
 // ====================== Mask-image consistency ======================
@@ -550,8 +614,8 @@ TEST(UndistortScale, ScaleUndistortParams) {
     const int expected_dst_h = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
     EXPECT_EQ(scaled.dst_width, expected_dst_w);
     EXPECT_EQ(scaled.dst_height, expected_dst_h);
-    EXPECT_FLOAT_EQ(scaled.dst_cx, scaled.dst_width * 0.5f);
-    EXPECT_FLOAT_EQ(scaled.dst_cy, scaled.dst_height * 0.5f);
+    EXPECT_NEAR(scaled.dst_cx, params.dst_cx * sx, 1e-4f);
+    EXPECT_NEAR(scaled.dst_cy, params.dst_cy * sy, 1e-4f);
 
     run_image_undistort(scaled);
     run_mask_undistort(scaled);

@@ -11,6 +11,7 @@
 #include "internal/viewport.hpp"
 
 #include <gtest/gtest.h>
+#include <variant>
 #include <imgui.h>
 
 namespace lfs::vis {
@@ -162,6 +163,41 @@ namespace lfs::vis {
         EXPECT_TRUE(controller.isContinuousInputActive());
     }
 
+    TEST_F(InputControllerFocusTest, RedoAliasUsesLogicalKeyAndDoesNotTriggerMovement) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.initialize();
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        lfs::event::ScopedHandler handlers;
+        int redo_count = 0;
+        handlers.subscribe<core::events::cmd::Redo>(
+            [&](const auto&) { ++redo_count; });
+
+        router.beginMouseButton(input::ACTION_PRESS, 40.0, 50.0);
+        router.endMouseButton(input::ACTION_RELEASE);
+
+        controller.handleKey(input::KEY_W, input::KEY_Z, 0, input::ACTION_PRESS,
+                             input::KEYMOD_CTRL | input::KEYMOD_SHIFT);
+
+        EXPECT_EQ(redo_count, 1);
+        EXPECT_FALSE(controller.isContinuousInputActive());
+    }
+
+    TEST_F(InputControllerFocusTest, CameraDragBindingsIgnoreExtraShiftModifier) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        EXPECT_EQ(controller.getBindings().getActionForDrag(
+                      input::ToolMode::GLOBAL, input::MouseButton::MIDDLE, input::KEYMOD_SHIFT),
+                  input::Action::CAMERA_ORBIT);
+        EXPECT_EQ(controller.getBindings().getActionForDrag(
+                      input::ToolMode::GLOBAL, input::MouseButton::RIGHT, input::KEYMOD_SHIFT),
+                  input::Action::CAMERA_PAN);
+    }
+
     TEST_F(InputControllerFocusTest, StaleMouseCaptureDoesNotRequireSecondViewportClick) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
@@ -241,6 +277,45 @@ namespace lfs::vis {
         const auto targets = router.pointerTargets(2500.0, 2500.0);
         EXPECT_EQ(targets.pointer_target, input::InputTarget::Viewport);
         EXPECT_EQ(targets.hover_target, input::InputTarget::None);
+    }
+
+    TEST_F(InputControllerFocusTest, NavigationMouseCaptureFinalizesToSingleClickBinding) {
+        input::InputBindings bindings;
+        bindings.startCapture(input::ToolMode::GLOBAL, input::Action::CAMERA_ORBIT);
+        bindings.captureMouseButton(static_cast<int>(input::MouseButton::RIGHT), input::MODIFIER_NONE);
+
+        auto& capture_state = const_cast<input::CaptureState&>(bindings.getCaptureState());
+        capture_state.first_click_time -= std::chrono::milliseconds(500);
+        bindings.updateCapture();
+
+        const auto captured = bindings.getAndClearCaptured();
+        ASSERT_TRUE(captured.has_value());
+
+        const auto* mouse_trigger = std::get_if<input::MouseButtonTrigger>(&*captured);
+        ASSERT_NE(mouse_trigger, nullptr);
+        EXPECT_EQ(mouse_trigger->button, input::MouseButton::RIGHT);
+        EXPECT_EQ(mouse_trigger->modifiers, input::MODIFIER_NONE);
+        EXPECT_FALSE(mouse_trigger->double_click);
+        EXPECT_FALSE(bindings.isCapturing());
+    }
+
+    TEST_F(InputControllerFocusTest, SelectionMouseCaptureStillFinalizesToDragBinding) {
+        input::InputBindings bindings;
+        bindings.startCapture(input::ToolMode::SELECTION, input::Action::SELECTION_REPLACE);
+        bindings.captureMouseButton(static_cast<int>(input::MouseButton::LEFT), input::MODIFIER_NONE);
+
+        auto& capture_state = const_cast<input::CaptureState&>(bindings.getCaptureState());
+        capture_state.first_click_time -= std::chrono::milliseconds(500);
+        bindings.updateCapture();
+
+        const auto captured = bindings.getAndClearCaptured();
+        ASSERT_TRUE(captured.has_value());
+
+        const auto* drag_trigger = std::get_if<input::MouseDragTrigger>(&*captured);
+        ASSERT_NE(drag_trigger, nullptr);
+        EXPECT_EQ(drag_trigger->button, input::MouseButton::LEFT);
+        EXPECT_EQ(drag_trigger->modifiers, input::MODIFIER_NONE);
+        EXPECT_FALSE(bindings.isCapturing());
     }
 
 } // namespace lfs::vis

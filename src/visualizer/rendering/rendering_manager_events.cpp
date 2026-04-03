@@ -70,6 +70,9 @@ namespace lfs::vis {
         }
 
         applySplitModeChange(result);
+        if (!splitViewUsesGTComparison(result.current_mode)) {
+            invalidateCameraMetricsRequests(true);
+        }
     }
 
     void RenderingManager::handleGoToCamView(const int cam_id) {
@@ -139,6 +142,7 @@ namespace lfs::vis {
         LOG_DEBUG("Scene loaded, marking render dirty");
         markDirty();
         gt_texture_cache_.clear();
+        invalidateCameraMetricsRequests(true);
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
 
@@ -162,6 +166,7 @@ namespace lfs::vis {
         viewport_artifact_service_.clearViewportOutput();
         pass_graph_.resetPointCloudCache();
         gt_texture_cache_.clear();
+        invalidateCameraMetricsRequests(true);
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);

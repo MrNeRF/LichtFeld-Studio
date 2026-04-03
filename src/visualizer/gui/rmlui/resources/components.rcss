@@ -90,10 +90,13 @@ scrollbarvertical {
 
 scrollbarvertical slidertrack {
     background-color: rgba(30, 30, 46, 128);
+    border-radius: 6dp;
 }
 
 scrollbarvertical sliderbar {
     background-color: rgba(108, 112, 134, 160);
+    min-height: 16dp;
+    border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
 
@@ -107,10 +110,13 @@ scrollbarhorizontal {
 
 scrollbarhorizontal slidertrack {
     background-color: rgba(30, 30, 46, 128);
+    border-radius: 6dp;
 }
 
 scrollbarhorizontal sliderbar {
     background-color: rgba(108, 112, 134, 160);
+    min-width: 16dp;
+    border-radius: 6dp;
     transition: background-color 0.12s quadratic-out;
 }
 
@@ -154,20 +160,20 @@ input[type="range"] slidertrack {
     height: 4dp;
     background-color: #45475a;
     border-width: 0;
-    border-radius: 2dp;
+    border-radius: 6dp;
 }
 
 input[type="range"] sliderprogress {
     height: 4dp;
     background-color: #89b4fa;
-    border-radius: 2dp;
+    border-radius: 6dp;
 }
 
 input[type="range"] sliderbar {
     width: 10dp;
     height: 10dp;
     background-color: #89b4fa;
-    border-radius: 2dp;
+    border-radius: 6dp;
     margin-top: -3dp;
     transition: background-color 0.12s quadratic-out;
 }

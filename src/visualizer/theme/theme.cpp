@@ -311,8 +311,25 @@ namespace lfs::vis {
         applyCurrentTheme(t, normalizeThemeIdImpl(t.name));
     }
 
+    namespace {
+        void applyThemePreservingCurrentId(const Theme& t) {
+            ensureInitialized();
+
+            // Keep runtime style tweaks attached to the active preset ID so
+            // RML theme activation and preset hot-reload continue to target
+            // the selected preset even if the theme JSON name is customized.
+            const std::string active_theme_id = g_current_theme_id;
+            applyCurrentTheme(t, active_theme_id);
+        }
+    } // namespace
+
     void applyThemeToImGui() {
         ensureInitialized();
+        if (ImGui::GetCurrentContext() == nullptr) {
+            // Headless Python sessions can still read and mutate theme state
+            // even when no ImGui style exists to update.
+            return;
+        }
         ImGuiStyle& style = ImGui::GetStyle();
         const auto& p = g_current_theme.palette;
         const auto& s = g_current_theme.sizes;
@@ -320,7 +337,7 @@ namespace lfs::vis {
         style.WindowRounding = s.window_rounding;
         style.FrameRounding = s.frame_rounding;
         style.PopupRounding = s.popup_rounding;
-        style.ScrollbarRounding = s.scrollbar_rounding;
+        style.ScrollbarRounding = std::max(s.scrollbar_rounding, s.scrollbar_size * 0.5f);
         style.GrabRounding = s.grab_rounding;
         style.TabRounding = s.tab_rounding;
         style.WindowBorderSize = s.border_size;
@@ -364,9 +381,9 @@ namespace lfs::vis {
         colors[ImGuiCol_TitleBgActive] = title_bg_active;
         colors[ImGuiCol_TitleBgCollapsed] = title_bg;
         colors[ImGuiCol_MenuBarBg] = title_bg;
-        colors[ImGuiCol_ScrollbarBg] = darken(p.background, 0.05f);
-        colors[ImGuiCol_ScrollbarGrab] = p.surface_bright;
-        colors[ImGuiCol_ScrollbarGrabHovered] = lighten(p.surface_bright, 0.1f);
+        colors[ImGuiCol_ScrollbarBg] = withAlpha(p.background, 0.5f);
+        colors[ImGuiCol_ScrollbarGrab] = withAlpha(p.text_dim, 0.63f);
+        colors[ImGuiCol_ScrollbarGrabHovered] = withAlpha(p.primary, 0.78f);
         colors[ImGuiCol_ScrollbarGrabActive] = p.primary;
         colors[ImGuiCol_CheckMark] = p.primary;
         colors[ImGuiCol_SliderGrab] = p.primary;
@@ -1193,6 +1210,26 @@ namespace lfs::vis {
             LOG_WARN("Failed to load UI scale preference: {}", e.what());
         }
         return 0.0f;
+    }
+
+    void setThemeVignetteEnabled(bool enabled) {
+        Theme t = theme();
+        t.vignette.enabled = enabled;
+        applyThemePreservingCurrentId(t);
+    }
+
+    void setThemeVignetteIntensity(float intensity) {
+        Theme t = theme();
+        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
+        applyThemePreservingCurrentId(t);
+    }
+
+    void setThemeVignetteStyle(float intensity, float radius, float softness) {
+        Theme t = theme();
+        t.vignette.intensity = std::clamp(intensity, 0.0f, 1.0f);
+        t.vignette.radius = std::clamp(radius, 0.0f, 1.0f);
+        t.vignette.softness = std::clamp(softness, 0.0f, 1.0f);
+        applyThemePreservingCurrentId(t);
     }
 
 } // namespace lfs::vis

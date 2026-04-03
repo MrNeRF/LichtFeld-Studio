@@ -16,6 +16,7 @@
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/ppisp_overrides_utils.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
@@ -1215,6 +1216,18 @@ namespace lfs::vis {
                 }
                 return;
 
+            case input::Action::CANCEL_POLYGON:
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager()) {
+                        if (auto* selection_service = sm->getSelectionService();
+                            selection_service && selection_service->isInteractiveSelectionActive()) {
+                            selection_service->cancelInteractiveSelection();
+                            return;
+                        }
+                    }
+                }
+                return;
+
             case input::Action::DELETE_SELECTED:
                 cmd::DeleteSelected{}.emit();
                 return;
@@ -1334,6 +1347,10 @@ namespace lfs::vis {
 
         // Movement keys only work when viewport has focus and gizmo isn't active
         if (!shouldCameraHandleInput() || drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
+            return;
+
+        // Keep physical movement layout-independent, but do not start it from control/meta chords.
+        if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
             return;
 
         // Use cached movement key bindings
@@ -1627,22 +1644,13 @@ namespace lfs::vis {
         }
 
         // Get camera intrinsics using the proper method
-        auto [focal_x, focal_y, center_x, center_y] = cam_data->get_intrinsics();
-        const float width = static_cast<float>(cam_data->image_width());
+        const auto [focal_x, focal_y, center_x, center_y] = cam_data->get_intrinsics();
+        (void)focal_x;
         const float height = static_cast<float>(cam_data->image_height());
 
         // Calculate vertical FOV using the actual focal length
         const float fov_y_rad = 2.0f * std::atan(height / (2.0f * focal_y));
         const float fov_y_deg = glm::degrees(fov_y_rad);
-
-        // Check for principal point offset (should be near center)
-        const float cx_expected = width / 2.0f;
-        const float cy_expected = height / 2.0f;
-
-        if (std::abs(center_x - cx_expected) > 1.0f || std::abs(center_y - cy_expected) > 1.0f) {
-            LOG_WARN("Camera has non-centered principal point: ({:.1f}, {:.1f}) vs expected ({:.1f}, {:.1f})",
-                     center_x, center_y, cx_expected, cy_expected);
-        }
 
         const bool is_equirectangular =
             cam_data->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
@@ -1677,9 +1685,54 @@ namespace lfs::vis {
             .emit();
         publishCameraMove(&target_viewport);
 
+        auto* const rendering_manager = services().renderingOrNull();
+
         // Set this as the current camera for GT comparison
-        if (services().renderingOrNull()) {
-            services().renderingOrNull()->setCurrentCameraId(event.cam_id);
+        if (rendering_manager) {
+            rendering_manager->setCurrentCameraId(event.cam_id);
+        }
+
+        if (auto* trainer_mgr = services().trainerOrNull(); trainer_mgr && trainer_mgr->getTrainer()) {
+            std::string metrics_suffix;
+            if (rendering_manager) {
+                const auto settings = rendering_manager->getSettings();
+                if (settings.camera_metrics_mode != RenderSettings::CameraMetricsMode::Off) {
+                    const bool include_ssim =
+                        settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
+                    lfs::training::Trainer::CameraMetricsAppearanceConfig appearance{};
+                    appearance.enabled = settings.apply_appearance_correction;
+                    appearance.use_controller =
+                        settings.ppisp_mode == RenderSettings::PPISPMode::AUTO;
+                    appearance.overrides = toTrainerPPISPOverrides(settings.ppisp_overrides);
+
+                    if (auto metrics = trainer_mgr->computeCameraMetricsForCameraId(
+                            event.cam_id, include_ssim, appearance);
+                        metrics) {
+                        metrics_suffix = std::format(", psnr={:.4f}", metrics->psnr);
+                        if (metrics->ssim.has_value()) {
+                            metrics_suffix += std::format(", ssim={:.4f}", *metrics->ssim);
+                        }
+                        rendering_manager->setLatestCameraMetrics({.camera_id = event.cam_id,
+                                                                   .iteration = trainer_mgr->getCurrentIteration(),
+                                                                   .psnr = metrics->psnr,
+                                                                   .ssim = metrics->ssim,
+                                                                   .used_mask = metrics->used_mask});
+                    } else {
+                        rendering_manager->clearLatestCameraMetrics();
+                        LOG_WARN("Camera {} metrics unavailable: {}", event.cam_id, metrics.error());
+                    }
+                } else {
+                    rendering_manager->clearLatestCameraMetrics();
+                }
+            }
+
+            LOG_INFO("Camera {} view: iter={}, last_loss={:.6f}{}",
+                     event.cam_id,
+                     trainer_mgr->getCurrentIteration(),
+                     trainer_mgr->getCurrentLoss(),
+                     metrics_suffix);
+        } else if (rendering_manager) {
+            rendering_manager->clearLatestCameraMetrics();
         }
 
         last_camview_ = event.cam_id;

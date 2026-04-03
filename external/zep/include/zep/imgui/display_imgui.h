@@ -96,15 +96,15 @@ namespace Zep {
             }
         }
 
-        void DrawRectFilled(const NRectf& rc, const NVec4f& color) const override {
+        void DrawRectFilled(const NRectf& rc, const NVec4f& color, float rounding = 0.0f) const override {
             ImDrawList* drawList = ImGui::GetWindowDrawList();
             const auto modulatedColor = GetStyleModulatedColor(color);
             // Background rect for numbers
             if (m_clipRect.Width() == 0) {
-                drawList->AddRectFilled(toImVec2(rc.topLeftPx), toImVec2(rc.bottomRightPx), modulatedColor);
+                drawList->AddRectFilled(toImVec2(rc.topLeftPx), toImVec2(rc.bottomRightPx), modulatedColor, rounding);
             } else {
                 drawList->PushClipRect(toImVec2(m_clipRect.topLeftPx), toImVec2(m_clipRect.bottomRightPx));
-                drawList->AddRectFilled(toImVec2(rc.topLeftPx), toImVec2(rc.bottomRightPx), modulatedColor);
+                drawList->AddRectFilled(toImVec2(rc.topLeftPx), toImVec2(rc.bottomRightPx), modulatedColor, rounding);
                 drawList->PopClipRect();
             }
         }

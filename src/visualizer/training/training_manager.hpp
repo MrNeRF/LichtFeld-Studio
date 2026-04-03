@@ -116,6 +116,10 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Camera> getCamById(int camId) const;
         std::vector<std::shared_ptr<lfs::core::Camera>> getCamList() const;
         std::vector<std::shared_ptr<lfs::core::Camera>> getAllCamList() const;
+        std::expected<lfs::training::Trainer::CameraMetricsSnapshot, std::string> computeCameraMetricsForCameraId(
+            int camera_id,
+            bool include_ssim,
+            const lfs::training::Trainer::CameraMetricsAppearanceConfig& appearance) const;
 
         // Pending parameters (editable in Ready state, applied on start)
         lfs::core::param::OptimizationParameters& getEditableOptParams() { return pending_opt_params_; }
@@ -147,6 +151,7 @@ namespace lfs::vis {
         TrainingStateMachine state_machine_;
         std::string last_error_;
         mutable std::mutex state_mutex_;
+        mutable std::mutex trainer_lifetime_mutex_;
 
         // Synchronization
         std::condition_variable completion_cv_;

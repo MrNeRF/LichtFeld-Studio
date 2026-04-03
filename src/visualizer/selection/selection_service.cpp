@@ -269,6 +269,7 @@ namespace lfs::vis {
                 .translation = viewport.translation,
                 .size = viewport.size,
                 .focal_length_mm = viewport.focal_length_mm,
+                .intrinsics_override = std::nullopt,
                 .far_plane = far_plane,
                 .orthographic = viewport.orthographic,
                 .ortho_scale = viewport.ortho_scale,
@@ -383,6 +384,57 @@ namespace lfs::vis {
         auto& selection = resetBoolScratchBuffer(command_selection_buffer_, total);
         rendering::set_selection_element(selection.ptr<bool>(), *hovered_id, true);
         return commitSelection(selection, mode, effectiveNodeMask(true), filters, "selection.ring");
+    }
+
+    SelectionResult SelectionService::selectAllFiltered() {
+        if (!scene_manager_ || !rendering_manager_) {
+            return {false, 0, "Missing managers"};
+        }
+
+        const size_t total = scene_manager_->getScene().getTotalGaussianCount();
+        if (total == 0) {
+            return {true, 0, {}};
+        }
+
+        const auto filters = defaultFilterState();
+        auto selection = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+        return commitSelection(selection,
+                               SelectionMode::Replace,
+                               effectiveNodeMask(filters.restrict_to_selected_nodes),
+                               filters,
+                               "selection.all.filtered");
+    }
+
+    SelectionResult SelectionService::invertFiltered() {
+        if (!scene_manager_ || !rendering_manager_) {
+            return {false, 0, "Missing managers"};
+        }
+
+        const size_t total = scene_manager_->getScene().getTotalGaussianCount();
+        if (total == 0) {
+            return {true, 0, {}};
+        }
+
+        const auto filters = defaultFilterState();
+        const auto node_mask = effectiveNodeMask(filters.restrict_to_selected_nodes);
+        auto filter_mask = core::Tensor::ones({total}, core::Device::CUDA, core::DataType::Bool);
+        applyFilters(filter_mask, filters, node_mask);
+
+        const auto& scene = scene_manager_->getScene();
+        const uint8_t group_id = scene.getActiveSelectionGroup();
+        const auto existing_mask = scene.getSelectionMask();
+        const auto current_active = (existing_mask && existing_mask->is_valid())
+                                        ? existing_mask->eq(group_id)
+                                        : core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+        const auto any_selected = (existing_mask && existing_mask->is_valid())
+                                      ? existing_mask->gt(0.0f)
+                                      : core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
+        const auto other_selected = any_selected.logical_and(current_active.logical_not());
+        const auto toggle_mask = filter_mask.logical_and(other_selected.logical_not());
+        const auto inverted = current_active.logical_xor(toggle_mask);
+
+        return commitSelection(
+            inverted, SelectionMode::Replace, {}, SelectionFilterState{}, "selection.invert.filtered");
     }
 
     SelectionResult SelectionService::applyMask(const std::vector<uint8_t>& mask, SelectionMode mode) {

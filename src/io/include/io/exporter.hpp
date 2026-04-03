@@ -26,11 +26,25 @@ namespace lfs::io {
     // PLY Export
     // ============================================================================
 
+    struct PlyAttributeBlock {
+        // Per-vertex data shaped [N] or [N,C]. The leading dimension must match the exported
+        // vertex count. When saving SplatData with a deleted mask, exporters accept either
+        // raw-count rows or already-filtered visible-count rows. Values are exported as float32.
+        lfs::core::Tensor values;
+        // Final PLY property names, one per exported column after [N,C] expansion.
+        // names.size() must match the exported column count. Names must be non-empty tokens
+        // without whitespace/control characters, must be unique within the block and across the
+        // final vertex schema, and must not collide with built-in Gaussian/color property ids.
+        std::vector<std::string> names;
+    };
+
     struct PlySaveOptions {
         std::filesystem::path output_path;
         bool binary = true;
         bool async = false;
         ExportProgressCallback progress_callback = nullptr;
+        // Additional per-vertex float properties appended after the built-in PLY schema.
+        std::vector<PlyAttributeBlock> extra_attributes;
     };
 
     /**

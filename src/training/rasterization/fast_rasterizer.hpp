@@ -94,4 +94,20 @@ namespace lfs::training {
         arena.end_frame(result->second.forward_ctx.frame_id);
         return result->first;
     }
+
+    // Inference-only rasterization does not mutate the camera; this overload avoids
+    // forcing callers with const camera handles to cast away constness at the call site.
+    inline RenderOutput fast_rasterize(
+        const lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        bool mip_filter = false,
+        const lfs::core::Tensor& bg_image = {}) {
+        return fast_rasterize(
+            const_cast<lfs::core::Camera&>(viewpoint_camera),
+            gaussian_model,
+            bg_color,
+            mip_filter,
+            bg_image);
+    }
 } // namespace lfs::training

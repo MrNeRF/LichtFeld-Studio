@@ -6,12 +6,26 @@
 #include "core/logger.hpp"
 #include "rendering/gl_state_guard.hpp"
 #include "scene/scene_manager.hpp"
+#include "theme/theme.hpp"
+#include "training/training_manager.hpp"
 #include <algorithm>
 #include <cassert>
 #include <glad/glad.h>
 #include <unordered_set>
 
 namespace lfs::vis {
+
+    namespace {
+        [[nodiscard]] lfs::rendering::ScreenSpaceVignette makeViewportVignette() {
+            const auto& vignette = theme().vignette;
+            return {
+                .enabled = vignette.enabled,
+                .intensity = vignette.intensity,
+                .radius = vignette.radius,
+                .softness = vignette.softness,
+            };
+        }
+    } // namespace
 
     void OverlayPass::execute(lfs::rendering::RenderingEngine& engine,
                               const FrameContext& ctx,
@@ -192,16 +206,29 @@ namespace lfs::vis {
                         }
                     }
 
-                    const lfs::rendering::CameraFrustumRenderRequest request{
+                    lfs::rendering::CameraFrustumRenderRequest request{
                         .viewport = viewport,
                         .scale = settings.camera_frustum_scale,
                         .train_color = settings.train_camera_color,
                         .eval_color = settings.eval_camera_color,
+                        .per_camera_colors = {},
                         .focused_index = focused_index,
                         .scene_transform = scene_transform,
                         .equirectangular_view = settings.equirectangular,
                         .disabled_uids = std::move(disabled_uids),
                         .emphasized_uids = std::move(emphasized_uids)};
+
+                    if (const auto* trainer_manager = ctx.scene_manager->getTrainerManager()) {
+                        if (const auto* trainer = trainer_manager->getTrainer()) {
+                            std::vector<std::array<float, 3>> loss_colors;
+                            if (trainer->fillCameraLossColors(cameras, loss_colors)) {
+                                request.per_camera_colors.reserve(loss_colors.size());
+                                for (const auto& color : loss_colors) {
+                                    request.per_camera_colors.emplace_back(color[0], color[1], color[2]);
+                                }
+                            }
+                        }
+                    }
 
                     if (auto frustum_result = engine.renderCameraFrustums(cameras, request);
                         !frustum_result) {
@@ -225,29 +252,38 @@ namespace lfs::vis {
         };
 
         if (ctx.view_panels.size() > 1 && ctx.render_size.x > 1 && ctx.render_size.y > 0) {
-            lfs::rendering::GLViewportGuard viewport_guard;
-            lfs::rendering::GLScissorEnableGuard scissor_guard;
-            glEnable(GL_SCISSOR_TEST);
+            {
+                lfs::rendering::GLViewportGuard viewport_guard;
+                lfs::rendering::GLScissorEnableGuard scissor_guard;
+                glEnable(GL_SCISSOR_TEST);
 
-            for (const auto& panel : ctx.view_panels) {
-                if (!panel.valid()) {
-                    continue;
+                for (const auto& panel : ctx.view_panels) {
+                    if (!panel.valid()) {
+                        continue;
+                    }
+
+                    glViewport(ctx.viewport_pos.x + panel.viewport_offset.x,
+                               ctx.viewport_pos.y + panel.viewport_offset.y,
+                               panel.render_size.x,
+                               panel.render_size.y);
+                    glScissor(ctx.viewport_pos.x + panel.viewport_offset.x,
+                              ctx.viewport_pos.y + panel.viewport_offset.y,
+                              panel.render_size.x,
+                              panel.render_size.y);
+                    render_overlays(*panel.viewport, ctx.makeViewportData(panel));
                 }
-
-                glViewport(ctx.viewport_pos.x + panel.viewport_offset.x,
-                           ctx.viewport_pos.y + panel.viewport_offset.y,
-                           panel.render_size.x,
-                           panel.render_size.y);
-                glScissor(ctx.viewport_pos.x + panel.viewport_offset.x,
-                          ctx.viewport_pos.y + panel.viewport_offset.y,
-                          panel.render_size.x,
-                          panel.render_size.y);
-                render_overlays(*panel.viewport, ctx.makeViewportData(panel));
             }
-            return;
+        } else {
+            render_overlays(ctx.viewport, ctx.makeViewportData());
         }
 
-        render_overlays(ctx.viewport, ctx.makeViewportData());
+        const auto vignette = makeViewportVignette();
+        if (vignette.active()) {
+            glViewport(ctx.viewport_pos.x, ctx.viewport_pos.y, ctx.render_size.x, ctx.render_size.y);
+            if (auto result = engine.renderScreenSpaceVignette(ctx.render_size, vignette); !result) {
+                LOG_WARN("Screen-space vignette render failed: {}", result.error());
+            }
+        }
     }
 
 } // namespace lfs::vis

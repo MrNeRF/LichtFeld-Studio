@@ -89,19 +89,3 @@ selectbox option {
     padding: 2dp 6dp;
     font-size: 10dp;
 }
-
-selectbox scrollbarvertical {
-    width: 10dp;
-}
-
-selectbox scrollbarvertical slidertrack {
-    background-color: rgba(30, 30, 46, 128);
-}
-
-selectbox scrollbarvertical sliderbar {
-    background-color: rgba(108, 112, 134, 160);
-}
-
-selectbox scrollbarvertical sliderbar:hover {
-    background-color: rgba(137, 180, 250, 200);
-}

@@ -50,6 +50,39 @@ namespace lfs::vis {
             return content;
         }
 
+        [[nodiscard]] lfs::rendering::SplitViewPanelContent buildMaskedPLYComparisonPanelContent(
+            const FrameContext& ctx,
+            const Viewport& viewport,
+            const glm::ivec2 render_size,
+            const size_t visible_node_count,
+            const size_t visible_node_index) {
+            assert(ctx.model);
+            assert(visible_node_index < visible_node_count);
+
+            auto content = buildModelPanelContent(
+                ctx,
+                viewport,
+                render_size,
+                *ctx.model,
+                glm::mat4(1.0f),
+                true,
+                std::nullopt);
+
+            if (content.gaussian_render.has_value()) {
+                auto& state = *content.gaussian_render;
+                state.scene.node_visibility_mask.assign(visible_node_count, false);
+                state.scene.node_visibility_mask[visible_node_index] = true;
+
+                // The compare wipe should reflect the scene render, not a live brush preview that only
+                // exists in the interactive editor state.
+                state.overlay.cursor = {};
+                state.overlay.emphasis.transient_mask = {};
+                state.overlay.emphasis.focused_gaussian_id = -1;
+            }
+
+            return content;
+        }
+
         [[nodiscard]] SplitViewCompositionPlan makePlan(
             const std::array<SplitViewPanelPlan, 2>& panels,
             const glm::ivec2 output_size,
@@ -152,20 +185,30 @@ namespace lfs::vis {
             assert(visible_nodes[left_idx]->model);
             assert(visible_nodes[right_idx]->model);
 
+            const bool use_combined_scene_masks = ctx.model && !ctx.settings.point_cloud_mode;
+
             auto plan = makePlan(
                 std::array<SplitViewPanelPlan, 2>{
                     SplitViewPanelPlan{
                         .label = visible_nodes[left_idx]->name,
                         .panel =
                             {.content =
-                                     buildModelPanelContent(ctx,
-                                                            ctx.viewport,
-                                                            ctx.render_size,
-                                                            *visible_nodes[left_idx]->model,
-                                                            scene_coords::nodeVisualizerWorldTransform(
-                                                                scene, visible_nodes[left_idx]->id),
-                                                            false,
-                                                            std::nullopt),
+                                 use_combined_scene_masks
+                                     ? buildMaskedPLYComparisonPanelContent(
+                                           ctx,
+                                           ctx.viewport,
+                                           ctx.render_size,
+                                           visible_nodes.size(),
+                                           left_idx)
+                                     : buildModelPanelContent(
+                                           ctx,
+                                           ctx.viewport,
+                                           ctx.render_size,
+                                           *visible_nodes[left_idx]->model,
+                                           scene_coords::nodeVisualizerWorldTransform(
+                                               scene, visible_nodes[left_idx]->id),
+                                           false,
+                                           std::nullopt),
                              .presentation =
                                  {.start_position = 0.0f,
                                   .end_position = ctx.settings.split_position,
@@ -175,14 +218,22 @@ namespace lfs::vis {
                         .label = visible_nodes[right_idx]->name,
                         .panel =
                             {.content =
-                                 buildModelPanelContent(ctx,
-                                                        ctx.viewport,
-                                                        ctx.render_size,
-                                                        *visible_nodes[right_idx]->model,
-                                                        scene_coords::nodeVisualizerWorldTransform(
-                                                            scene, visible_nodes[right_idx]->id),
-                                                        false,
-                                                        std::nullopt),
+                                 use_combined_scene_masks
+                                     ? buildMaskedPLYComparisonPanelContent(
+                                           ctx,
+                                           ctx.viewport,
+                                           ctx.render_size,
+                                           visible_nodes.size(),
+                                           right_idx)
+                                     : buildModelPanelContent(
+                                           ctx,
+                                           ctx.viewport,
+                                           ctx.render_size,
+                                           *visible_nodes[right_idx]->model,
+                                           scene_coords::nodeVisualizerWorldTransform(
+                                               scene, visible_nodes[right_idx]->id),
+                                           false,
+                                           std::nullopt),
                              .presentation =
                                  {.start_position = ctx.settings.split_position,
                                   .end_position = 1.0f,

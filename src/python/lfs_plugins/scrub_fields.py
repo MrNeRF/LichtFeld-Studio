@@ -67,6 +67,16 @@ class ScrubFieldController:
         self._active_prop = None
         self._doc = None
 
+    def set_spec(self, prop: str, spec: ScrubFieldSpec) -> bool:
+        self._specs[prop] = spec
+        state = self._fields.get(prop)
+        if state is None:
+            return False
+        state.spec = spec
+        if state.editing:
+            return True
+        return self._sync_field(state)
+
     def sync_all(self) -> bool:
         if self._doc is None:
             return False

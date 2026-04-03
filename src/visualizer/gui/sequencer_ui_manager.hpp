@@ -79,8 +79,6 @@ namespace lfs::vis {
             ImGuizmo::OPERATION keyframe_gizmo_op_ = ImGuizmo::OPERATION(0);
             bool keyframe_gizmo_active_ = false;
             bool edit_entered_mouse_down_ = false;
-            glm::vec3 keyframe_pos_before_drag_{0.0f};
-            glm::quat keyframe_rot_before_drag_{1.0f, 0.0f, 0.0f, 0.0f};
 
             bool film_strip_scrubbing_ = false;
             bool timeline_tooltip_active_ = false;

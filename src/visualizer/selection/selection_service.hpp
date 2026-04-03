@@ -83,6 +83,8 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult selectLasso(const core::Tensor& vertices, SelectionMode mode,
                                                   int camera_index = 0);
         [[nodiscard]] SelectionResult selectRing(float x, float y, SelectionMode mode, int camera_index = 0);
+        [[nodiscard]] SelectionResult selectAllFiltered();
+        [[nodiscard]] SelectionResult invertFiltered();
 
         [[nodiscard]] SelectionResult applyMask(const std::vector<uint8_t>& mask, SelectionMode mode);
         [[nodiscard]] SelectionResult applyMask(const core::Tensor& mask, SelectionMode mode);

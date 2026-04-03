@@ -72,7 +72,7 @@
 
     "indent_spacing": 21.0,
     "scrollbar_size": 12.0,
-    "grab_min_size": 10.0,
+    "grab_min_size": 16.0,
 
     "toolbar_button_size": 24.0,
     "toolbar_padding": 6.0,

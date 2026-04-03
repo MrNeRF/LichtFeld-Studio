@@ -439,6 +439,7 @@
     "equirectangular": "Równokątne",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Filtr Mip",
+    "camera_metrics": "Metryki kamery",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
     "ppisp_mode_manual": "Manual",
@@ -472,7 +473,11 @@
     "mesh_shadow_enabled": "Cienie",
     "mesh_shadow_resolution": "Rozdzielczość cieni",
     "camera_frustum_scale": "Skala ostrosłupa",
-    "voxel_size": "Rozmiar voksela"
+    "voxel_size": "Rozmiar voksela",
+    "theme_vignette": "Vignette",
+    "theme_vignette_intensity": "Intensywność winietowania",
+    "theme_vignette_radius": "Promień winietowania",
+    "theme_vignette_softness": "Miękkość winietowania"
   },
   "toolbar": {
     "selection": "Zaznaczenie (1)",
@@ -575,6 +580,10 @@
     "ppisp_gamma_channel": "Przesunięcie gamma na kanał",
     "ppisp_crf_toe": "Kompresja cieni (toe krzywej CRF)",
     "ppisp_crf_shoulder": "Wygładzanie świateł (shoulder krzywej CRF)",
+    "theme_vignette": "Włącz przyciemnianie krawędzi widoku",
+    "theme_vignette_intensity": "Dostosuj ciemność winietowania (0-1)",
+    "theme_vignette_radius": "Dostosuj, gdzie zaczyna się winietowanie (0-1)",
+    "theme_vignette_softness": "Dostosuj miękkość krawędzi winietowania (0-1)",
     "render_scale": "Rozdzielczość widoku (niższa = mniej VRAM)",
     "point_cloud_forced": "Wymuszone przed rozpoczęciem treningu",
     "desaturate_unselected": "Przyciemnij niezaznaczone PLY",

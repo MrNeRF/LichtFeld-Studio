@@ -57,7 +57,7 @@
     "window_rounding": 6.0,
     "frame_rounding": 2.0,
     "popup_rounding": 4.0,
-    "scrollbar_rounding": 4.0,
+    "scrollbar_rounding": 6.0,
     "grab_rounding": 2.0,
     "tab_rounding": 4.0,
 
@@ -71,8 +71,8 @@
     "item_inner_spacing": [4.0, 4.0],
 
     "indent_spacing": 21.0,
-    "scrollbar_size": 14.0,
-    "grab_min_size": 10.0,
+    "scrollbar_size": 12.0,
+    "grab_min_size": 16.0,
 
     "toolbar_button_size": 24.0,
     "toolbar_padding": 6.0,
@@ -113,6 +113,17 @@
     "border_size": 2.0,
     "border_alpha": 0.35,
     "border_darken": 0.10
+  },
+
+  "vignette": {
+    "_info": "Subtle darkening at viewport edges",
+    "enabled": true,
+    "intensity": 0.25,
+    "_intensity": "How dark the edges get (0-1)",
+    "radius": 0.75,
+    "_radius": "Where vignette starts (0=center, 1=edge)",
+    "softness": 0.45,
+    "_softness": "How gradual the falloff is"
   },
 
   "button": {

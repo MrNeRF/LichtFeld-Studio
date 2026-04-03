@@ -31,7 +31,7 @@ namespace lfs::vis {
 
         auto present_result = engine.presentGpuFrame(*res.cached_gpu_frame,
                                                      ctx.viewport_pos,
-                                                     res.cached_result_size);
+                                                     ctx.render_size);
         if (present_result) {
             res.splats_presented = true;
         } else {

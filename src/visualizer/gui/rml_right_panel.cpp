@@ -380,7 +380,6 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
-        const bool inside_panel = mx >= 0.0f && my >= 0.0f && mx < layout.size.x && my < layout.size.y;
 
         if (mouse_moved)
             rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
@@ -450,7 +449,6 @@ namespace lfs::vis::gui {
                 if (input.mouse_clicked[0]) {
                     splitter_dragging_ = true;
                     input_dirty_ = true;
-                    drag_start_y_ = input.mouse_y;
                     if (splitter_el_)
                         splitter_el_->SetAttribute("class", "dragging");
                 }

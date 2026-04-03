@@ -204,6 +204,8 @@ namespace Zep {
 
     struct EditorConfig {
         uint32_t showScrollBar = 1;
+        float scrollBarSize = 12.0f;
+        float scrollBarMinSize = 16.0f;
         EditorStyle style = EditorStyle::Normal;
         NVec2f lineMargins = NVec2f(1.0f);
         NVec2f widgetMargins = NVec2f(1.0f);

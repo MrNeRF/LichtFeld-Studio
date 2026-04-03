@@ -10,16 +10,15 @@ namespace Zep {
 
     class Scroller : public ZepComponent {
     public:
-        Scroller(ZepEditor& editor, Region& parent);
+        Scroller(ZepEditor& editor, Region& parent, bool vertical);
 
         virtual void Display(ZepTheme& theme);
         virtual void Notify(std::shared_ptr<ZepMessage> message) override;
 
-        float vScrollVisiblePercent = 1.0f;
-        float vScrollPosition = 0.0f;
-        float vScrollLinePercent = 0.0f;
-        float vScrollPagePercent = 0.0f;
-        bool vertical = true;
+        float scrollVisiblePercent = 1.0f;
+        float scrollPosition = 0.0f;
+        float scrollLinePercent = 0.0f;
+        float scrollPagePercent = 0.0f;
 
     private:
         void CheckState();
@@ -28,12 +27,14 @@ namespace Zep {
         void PageUp();
         void PageDown();
         void DoMove(NVec2f pos);
+        float MainSize() const;
+        float PrimaryCoord(const NVec2f& pos) const;
 
         float ThumbSize() const;
-        float ThumbExtra() const;
         NRectf ThumbRect() const;
 
     private:
+        bool m_vertical = true;
         std::shared_ptr<Region> m_region;
         std::shared_ptr<Region> m_topButtonRegion;
         std::shared_ptr<Region> m_bottomButtonRegion;

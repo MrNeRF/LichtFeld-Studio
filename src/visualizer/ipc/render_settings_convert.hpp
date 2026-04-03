@@ -27,6 +27,7 @@ namespace lfs::vis {
         p.mip_filter = s.mip_filter;
         p.sh_degree = s.sh_degree;
         p.render_scale = s.render_scale;
+        p.camera_metrics_mode = static_cast<int>(s.camera_metrics_mode);
         p.show_crop_box = s.show_crop_box;
         p.use_crop_box = s.use_crop_box;
         p.show_ellipsoid = s.show_ellipsoid;
@@ -88,6 +89,7 @@ namespace lfs::vis {
         s.mip_filter = p.mip_filter;
         s.sh_degree = p.sh_degree;
         s.render_scale = p.render_scale;
+        s.camera_metrics_mode = static_cast<RenderSettings::CameraMetricsMode>(p.camera_metrics_mode);
         s.show_crop_box = p.show_crop_box;
         s.use_crop_box = p.use_crop_box;
         s.show_ellipsoid = p.show_ellipsoid;

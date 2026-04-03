@@ -152,8 +152,7 @@ namespace lfs::vis::gui {
         tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
 
         const auto& t = lfs::vis::theme();
-        const float scrollbar_w =
-            std::clamp(t.sizes.scrollbar_size * 0.55f, 6.0f, 10.0f);
+        const float scrollbar_w = t.sizes.scrollbar_size;
         const float scrollbar_pad = 2.0f;
         const float scrollbar_gutter =
             (preloaded_max_scroll > 0.0f && tab_content_h > 0.0f)
@@ -172,7 +171,7 @@ namespace lfs::vis::gui {
             const float track_y = tab_content_y;
             const float track_h = tab_content_h;
             const float ratio = tab_content_h / preloaded_total_h;
-            const float thumb_h = std::max(20.0f, track_h * ratio);
+            const float thumb_h = std::max(t.sizes.grab_min_size, track_h * ratio);
             const float thumb_range = std::max(0.0f, track_h - thumb_h);
             const float scroll_frac = preloaded_max_scroll > 0.0f
                                           ? (tab_scroll_offset_ / preloaded_max_scroll)
@@ -259,11 +258,11 @@ namespace lfs::vis::gui {
             const float track_h = tab_content_h;
 
             const float ratio = tab_content_h / tab_content_total_h_;
-            const float thumb_h = std::max(20.0f, track_h * ratio);
+            const float thumb_h = std::max(t.sizes.grab_min_size, track_h * ratio);
             const float scroll_frac = tab_scroll_offset_ / max_scroll;
             const float thumb_y = track_y + scroll_frac * (track_h - thumb_h);
 
-            const float rounding = t.sizes.scrollbar_rounding;
+            const float rounding = std::max(t.sizes.scrollbar_rounding, scrollbar_w * 0.5f);
             const bool over_scrollbar =
                 input.mouse_x >= content_x + content_draw_w &&
                 input.mouse_x < content_x + content_w &&

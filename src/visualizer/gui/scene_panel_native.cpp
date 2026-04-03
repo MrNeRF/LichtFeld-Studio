@@ -8,22 +8,22 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
-#include "gui/string_keys.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "operation/undo_history.hpp"
 #include "visualizer/core/services.hpp"
 
-#include <SDL3/SDL_clipboard.h>
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
+#include <SDL3/SDL_clipboard.h>
 
 #include <algorithm>
 #include <array>
 #include <ctime>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <limits>
 #include <string_view>
 

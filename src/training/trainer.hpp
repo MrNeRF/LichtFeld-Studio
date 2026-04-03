@@ -19,7 +19,9 @@
 #include "optimizer/scheduler.hpp"
 #include "progress.hpp"
 #include "strategies/istrategy.hpp"
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <expected>
 #include <functional>
 #include <memory>
@@ -79,6 +81,18 @@ namespace lfs::training {
             bool undistort = false;
         };
 
+        struct CameraMetricsAppearanceConfig {
+            bool enabled = false;
+            PPISPViewportOverrides overrides{};
+            bool use_controller = true;
+        };
+
+        struct CameraMetricsSnapshot {
+            float psnr = 0.0f;
+            std::optional<float> ssim;
+            bool used_mask = false;
+        };
+
         // Legacy constructor - takes ownership of strategy and shares datasets
         Trainer(std::shared_ptr<CameraDataset> dataset,
                 std::unique_ptr<IStrategy> strategy,
@@ -135,6 +149,8 @@ namespace lfs::training {
         int get_total_iterations() const;
         const std::filesystem::path& get_output_path() const { return params_.dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
+        bool fillCameraLossColors(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
+                                  std::vector<std::array<float, 3>>& colors) const;
 
         // just for viewer to get model
         const IStrategy& get_strategy() const { return *strategy_; }
@@ -153,6 +169,10 @@ namespace lfs::training {
         lfs::core::Scene* getScene() const { return scene_; }
         std::shared_ptr<lfs::io::PipelinedImageLoader> getActiveImageLoader() const;
         GTLoadConfigSnapshot getGTLoadConfigSnapshot() const;
+        std::expected<CameraMetricsSnapshot, std::string> computeCameraMetrics(
+            const lfs::core::Camera& camera,
+            bool include_ssim,
+            CameraMetricsAppearanceConfig appearance);
 
         /// Apply PPISP correction to a rendered image for viewport display
         /// @param rgb rendered image [C,H,W] or [H,W,C]
@@ -229,6 +249,12 @@ namespace lfs::training {
         int get_sparsity_boundary_iteration() const;
         lfs::core::param::OptimizationParameters get_runtime_optimization_params() const;
         void sync_strategy_optimization_params();
+        std::expected<void, std::string> initialize_camera_loss_heatmap(
+            const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
+        void update_camera_loss_heatmap(const lfs::core::Camera& camera,
+                                        const lfs::core::Tensor& image_loss);
+        void maybe_publish_camera_loss_heatmap(int iter, bool force = false);
+        void publish_camera_loss_heatmap_snapshot();
 
         struct PhotometricLossResult {
             lfs::core::Tensor loss;
@@ -312,9 +338,48 @@ namespace lfs::training {
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
 
-        void save_ply(const std::filesystem::path& save_path, const std::string& filename, int iter_num, bool join_threads = true);
+        void save_ply(const std::filesystem::path& save_path,
+                      const std::string& filename,
+                      int iter_num,
+                      bool join_threads = true,
+                      bool save_checkpoint = true);
         void updateGTLoadConfigSnapshot();
         void clearActiveImageLoader();
+
+        struct CameraLossHeatmapState {
+            std::vector<int> camera_uids;
+            std::unordered_map<int, std::size_t> uid_to_slot;
+            lfs::core::Tensor latest_loss_gpu;
+            lfs::core::Tensor ema_loss_gpu;
+            lfs::core::Tensor ema_loss_stage_cpu;
+            std::vector<std::array<float, 3>> published_colors;
+            std::vector<uint8_t> published_valid;
+            mutable std::shared_mutex snapshot_mutex;
+            cudaStream_t copy_stream = nullptr;
+            cudaEvent_t ready_event = nullptr;
+            cudaEvent_t done_event = nullptr;
+            cudaStream_t producer_stream = nullptr;
+            bool copy_in_flight = false;
+            bool dirty = false;
+
+            ~CameraLossHeatmapState() {
+                if (copy_stream) {
+                    cudaStreamSynchronize(copy_stream);
+                }
+                if (done_event) {
+                    cudaEventDestroy(done_event);
+                }
+                if (ready_event) {
+                    cudaEventDestroy(ready_event);
+                }
+                if (copy_stream) {
+                    cudaStreamDestroy(copy_stream);
+                }
+            }
+        };
+
+        std::shared_ptr<CameraLossHeatmapState> getCameraLossHeatmap() const;
+        void setCameraLossHeatmap(std::shared_ptr<CameraLossHeatmapState> heatmap);
 
         lfs::core::Scene* scene_ = nullptr;
         std::shared_ptr<CameraDataset> base_dataset_;
@@ -333,6 +398,7 @@ namespace lfs::training {
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
         size_t total_cameras_count_ = 0;
+        std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
         lfs::core::Tensor pipelined_mask_;
@@ -376,6 +442,7 @@ namespace lfs::training {
         // Mutex for initialization to ensure thread safety
         mutable std::mutex init_mutex_;
         mutable std::mutex active_image_loader_mutex_;
+        mutable std::mutex camera_loss_heatmap_mutex_;
         mutable std::mutex gt_load_config_mutex_;
 
         // Control flags for thread communication

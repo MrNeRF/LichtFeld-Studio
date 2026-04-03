@@ -439,6 +439,7 @@
     "equirectangular": "正距円筒図法",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "ミップフィルター",
+    "camera_metrics": "カメラ指標",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
     "ppisp_mode_manual": "Manual",
@@ -472,7 +473,11 @@
     "mesh_shadow_enabled": "影",
     "mesh_shadow_resolution": "影の解像度",
     "camera_frustum_scale": "視錐台スケール",
-    "voxel_size": "ボクセルサイズ"
+    "voxel_size": "ボクセルサイズ",
+    "theme_vignette": "ビネット",
+    "theme_vignette_intensity": "ビネット強度",
+    "theme_vignette_radius": "ビネット半径",
+    "theme_vignette_softness": "ビネットの柔らかさ"
   },
   "toolbar": {
     "selection": "選択 (1)",
@@ -575,6 +580,10 @@
     "ppisp_gamma_channel": "チャンネル別ガンマオフセット",
     "ppisp_crf_toe": "シャドウ圧縮（CRFカーブのトー）",
     "ppisp_crf_shoulder": "ハイライトロールオフ（CRFカーブのショルダー）",
+    "theme_vignette": "ビューポート端の暗化を有効化",
+    "theme_vignette_intensity": "ビネットの暗さを調整 (0-1)",
+    "theme_vignette_radius": "ビネットが始まる位置を調整 (0-1)",
+    "theme_vignette_softness": "ビネット境界の柔らかさを調整 (0-1)",
     "render_scale": "ビューア解像度（低い=VRAM削減）",
     "point_cloud_forced": "トレーニング開始前に強制",
     "desaturate_unselected": "未選択PLYを暗くする",

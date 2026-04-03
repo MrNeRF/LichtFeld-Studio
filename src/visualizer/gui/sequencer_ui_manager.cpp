@@ -822,8 +822,6 @@ namespace lfs::vis::gui {
 
         if (is_using && !keyframe_gizmo_active_) {
             keyframe_gizmo_active_ = true;
-            keyframe_pos_before_drag_ = kf->position;
-            keyframe_rot_before_drag_ = kf->rotation;
         }
 
         if (changed) {

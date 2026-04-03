@@ -45,11 +45,15 @@ def load(path: str | os.PathLike, format: str | None = None, resize_factor: int 
 def load_point_cloud(path: str | os.PathLike) -> tuple:
     """Load a PLY as point cloud, returns (means [N,3], colors [N,3]) tensors"""
 
-def save_ply(data: lichtfeld.scene.SplatData, path: str | os.PathLike, binary: bool = True, progress: object | None = None) -> None:
-    """Save splat data as PLY file"""
+def save_ply(data: lichtfeld.scene.SplatData, path: str | os.PathLike, binary: bool = True, progress: object | None = None, extra_attributes: object | None = None) -> None:
+    """
+    Save splat data as PLY file with optional extra per-vertex float attributes
+    """
 
-def save_point_cloud_ply(point_cloud: lichtfeld.scene.PointCloud, path: str | os.PathLike) -> None:
-    """Save a point cloud as PLY file (xyz + colors)"""
+def save_point_cloud_ply(point_cloud: lichtfeld.scene.PointCloud, path: str | os.PathLike, extra_attributes: object | None = None) -> None:
+    """
+    Save a point cloud as PLY file (xyz + colors) with optional extra per-vertex float attributes
+    """
 
 def save_sog(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, use_gpu: bool = True, progress: object | None = None) -> None:
     """Save splat data as SOG compressed file"""

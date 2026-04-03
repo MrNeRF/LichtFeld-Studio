@@ -294,6 +294,7 @@ namespace lfs::rendering {
         const float scale,
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
+        const std::span<const glm::vec3> per_camera_colors,
         const bool for_picking,
         const glm::vec3& view_position,
         const glm::mat4& scene_transform,
@@ -303,99 +304,119 @@ namespace lfs::rendering {
         const bool needs_regeneration =
             cached_instances_.size() != cameras.size() ||
             last_scale_ != scale ||
-            last_train_color_ != train_color ||
-            last_eval_color_ != eval_color ||
-            last_scene_transform_ != scene_transform ||
-            last_disabled_uids_ != disabled_uids ||
-            last_emphasized_uids_ != emphasized_uids;
+            last_scene_transform_ != scene_transform;
 
-        if (!needs_regeneration && !cached_instances_.empty()) {
-            updateInstanceVisibility(view_position);
-            return;
+        if (needs_regeneration) {
+            cached_instances_.clear();
+            cached_instances_.reserve(cameras.size());
+            camera_ids_.clear();
+            camera_ids_.reserve(cameras.size());
+            camera_positions_.clear();
+            camera_positions_.reserve(cameras.size());
+
+            for (const auto& cam : cameras) {
+                if (!cam) {
+                    continue;
+                }
+                auto R_tensor = cam->R();
+                auto T_tensor = cam->T();
+
+                if (!R_tensor.is_valid() || !T_tensor.is_valid())
+                    continue;
+
+                if (R_tensor.device() != lfs::core::Device::CPU)
+                    R_tensor = R_tensor.cpu();
+                if (T_tensor.device() != lfs::core::Device::CPU)
+                    T_tensor = T_tensor.cpu();
+
+                glm::mat4 w2c(1.0f);
+                auto R_acc = R_tensor.accessor<float, 2>();
+                auto T_acc = T_tensor.accessor<float, 1>();
+
+                for (int i = 0; i < 3; ++i) {
+                    for (int j = 0; j < 3; ++j) {
+                        w2c[j][i] = R_acc(i, j);
+                    }
+                    w2c[3][i] = T_acc(i);
+                }
+
+                const glm::mat4 transformed_c2w = scene_transform * glm::inverse(w2c);
+                const glm::mat4 visualizer_c2w = transformed_c2w * DATA_TO_VISUALIZER_CAMERA_AXES_4;
+                const glm::vec3 cam_pos = glm::vec3(visualizer_c2w[3]);
+                camera_positions_.push_back(cam_pos);
+
+                const float aspect = static_cast<float>(cam->image_width()) / static_cast<float>(cam->image_height());
+                const bool is_equirect = cam->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+                const float fov_y = is_equirect ? EQUIRECTANGULAR_DISPLAY_FOV
+                                                : lfs::core::focal2fov(cam->focal_y(), cam->image_height());
+                const float half_height = std::tan(fov_y * 0.5f);
+                const float half_width = half_height * aspect;
+
+                const glm::mat4 fov_scale = glm::scale(
+                    glm::mat4(1.0f),
+                    glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
+                const glm::mat4 model = visualizer_c2w * fov_scale;
+
+                cached_instances_.push_back(
+                    {model, train_color, 1.0f, 0, 0u, is_equirect ? 1u : 0u, 0u, 0u});
+                camera_ids_.push_back(cam->uid());
+            }
         }
 
-        cached_instances_.clear();
-        cached_instances_.reserve(cameras.size());
-        camera_ids_.clear();
-        camera_ids_.reserve(cameras.size());
-        camera_positions_.clear();
-        camera_positions_.reserve(cameras.size());
+        updateInstanceAppearance(cameras, train_color, eval_color, per_camera_colors,
+                                 disabled_uids, emphasized_uids);
 
-        for (const auto& cam : cameras) {
-            auto R_tensor = cam->R();
-            auto T_tensor = cam->T();
-
-            if (!R_tensor.is_valid() || !T_tensor.is_valid())
-                continue;
-
-            if (R_tensor.device() != lfs::core::Device::CPU)
-                R_tensor = R_tensor.cpu();
-            if (T_tensor.device() != lfs::core::Device::CPU)
-                T_tensor = T_tensor.cpu();
-
-            glm::mat4 w2c(1.0f);
-            auto R_acc = R_tensor.accessor<float, 2>();
-            auto T_acc = T_tensor.accessor<float, 1>();
-
-            for (int i = 0; i < 3; ++i) {
-                for (int j = 0; j < 3; ++j) {
-                    w2c[j][i] = R_acc(i, j);
-                }
-                w2c[3][i] = T_acc(i);
-            }
-
-            const glm::mat4 transformed_c2w = scene_transform * glm::inverse(w2c);
-            const glm::mat4 visualizer_c2w = transformed_c2w * DATA_TO_VISUALIZER_CAMERA_AXES_4;
-            const glm::vec3 cam_pos = glm::vec3(visualizer_c2w[3]);
-            camera_positions_.push_back(cam_pos);
-
-            const float aspect = static_cast<float>(cam->image_width()) / static_cast<float>(cam->image_height());
-            const bool is_equirect = cam->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
-            const float fov_y = is_equirect ? EQUIRECTANGULAR_DISPLAY_FOV
-                                            : lfs::core::focal2fov(cam->focal_y(), cam->image_height());
-            const float half_height = std::tan(fov_y * 0.5f);
-            const float half_width = half_height * aspect;
-
-            const glm::mat4 fov_scale =
-                glm::scale(glm::mat4(1.0f), glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
-            const glm::mat4 model = visualizer_c2w * fov_scale;
-
-            const bool is_validation = cam->image_name().find("test") != std::string::npos;
-            const glm::vec3 color = is_validation ? eval_color : train_color;
-
-            float alpha = 1.0f;
-            if (!for_picking) {
-                const float distance = glm::length(cam_pos - view_position);
-                const float fade_start = FADE_START_MULTIPLIER * scale;
-                const float fade_end = FADE_END_MULTIPLIER * scale;
-                const float min_visible = MIN_VISIBLE_MULTIPLIER * scale;
-
-                if (distance < min_visible) {
-                    alpha = 0.0f;
-                } else if (distance < fade_end) {
-                    alpha = MIN_VISIBLE_ALPHA;
-                } else if (distance < fade_start) {
-                    const float t = (distance - fade_end) / (fade_start - fade_end);
-                    alpha = MIN_VISIBLE_ALPHA + (1.0f - MIN_VISIBLE_ALPHA) * (t * t * (3.0f - 2.0f * t));
-                }
-            }
-
-            const bool is_disabled = disabled_uids.count(cam->uid()) > 0;
-            if (is_disabled)
-                alpha *= 0.4f;
-
-            const bool is_emphasized = emphasized_uids.count(cam->uid()) > 0;
-            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, is_disabled ? 1u : 0u, is_emphasized ? 1u : 0u});
-            camera_ids_.push_back(cam->uid());
+        if (!for_picking) {
+            updateInstanceVisibility(view_position);
         }
 
         last_scale_ = scale;
         last_train_color_ = train_color;
         last_eval_color_ = eval_color;
-        last_view_position_ = view_position;
         last_scene_transform_ = scene_transform;
-        last_disabled_uids_ = disabled_uids;
-        last_emphasized_uids_ = emphasized_uids;
+    }
+
+    void CameraFrustumRenderer::updateInstanceAppearance(
+        const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
+        const glm::vec3& train_color,
+        const glm::vec3& eval_color,
+        const std::span<const glm::vec3> per_camera_colors,
+        const std::unordered_set<int>& disabled_uids,
+        const std::unordered_set<int>& emphasized_uids) {
+
+        const bool has_overrides = per_camera_colors.size() == cameras.size();
+        size_t instance_index = 0;
+
+        for (size_t i = 0; i < cameras.size() && instance_index < cached_instances_.size(); ++i) {
+            const auto& cam = cameras[i];
+            if (!cam) {
+                continue;
+            }
+            auto R_tensor = cam->R();
+            auto T_tensor = cam->T();
+            if (!R_tensor.is_valid() || !T_tensor.is_valid()) {
+                continue;
+            }
+            const bool is_validation = cam->image_name().find("test") != std::string::npos;
+
+            glm::vec3 color = is_validation ? eval_color : train_color;
+            if (has_overrides) {
+                const glm::vec3 override_color = per_camera_colors[i];
+                if (std::isfinite(override_color.x) &&
+                    std::isfinite(override_color.y) &&
+                    std::isfinite(override_color.z)) {
+                    color = override_color;
+                }
+            }
+
+            cached_instances_[instance_index].color = color;
+            cached_instances_[instance_index].is_validation = is_validation ? 1u : 0u;
+            cached_instances_[instance_index].is_training_disabled =
+                disabled_uids.count(cam->uid()) > 0 ? 1u : 0u;
+            cached_instances_[instance_index].is_emphasized =
+                emphasized_uids.count(cam->uid()) > 0 ? 1u : 0u;
+            ++instance_index;
+        }
     }
 
     void CameraFrustumRenderer::updateInstanceVisibility(const glm::vec3& view_position) {
@@ -418,9 +439,10 @@ namespace lfs::rendering {
                 const float t = (distance - fade_end) / (fade_start - fade_end);
                 alpha = MIN_VISIBLE_ALPHA + (1.0f - MIN_VISIBLE_ALPHA) * (t * t * (3.0f - 2.0f * t));
             }
+            if (cached_instances_[i].is_training_disabled > 0u)
+                alpha *= 0.4f;
             cached_instances_[i].alpha = alpha;
         }
-        last_view_position_ = view_position;
     }
 
     Result<void> CameraFrustumRenderer::render(
@@ -430,6 +452,7 @@ namespace lfs::rendering {
         const float scale,
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
+        const std::span<const glm::vec3> per_camera_colors,
         const glm::mat4& scene_transform,
         const bool equirectangular_view,
         const std::unordered_set<int>& disabled_uids,
@@ -441,7 +464,8 @@ namespace lfs::rendering {
         uploadReadyThumbnails();
 
         const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
-        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform, disabled_uids, emphasized_uids);
+        prepareInstances(cameras, scale, train_color, eval_color, per_camera_colors, false,
+                         view_position, scene_transform, disabled_uids, emphasized_uids);
 
         if (cached_instances_.empty())
             return {};
@@ -645,7 +669,8 @@ namespace lfs::rendering {
 
         if (cached_instances_.empty() || camera_ids_.size() != cameras.size()) {
             const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
-            prepareInstances(cameras, scale, last_train_color_, last_eval_color_, false, view_position, scene_transform);
+            prepareInstances(cameras, scale, last_train_color_, last_eval_color_, {},
+                             false, view_position, scene_transform);
             if (cached_instances_.empty())
                 return -1;
         }

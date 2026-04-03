@@ -258,6 +258,10 @@ namespace lfs::vis::gui::rml_theme {
         const int fp_y = static_cast<int>(t.sizes.frame_padding.y);
         const int window_rounding = std::max(4, static_cast<int>(t.sizes.window_rounding));
         const int scrollbar_size = static_cast<int>(t.sizes.scrollbar_size);
+        const int scrollbar_min = static_cast<int>(t.sizes.grab_min_size);
+        const int scrollbar_rounding = std::max(1, static_cast<int>(std::max(
+                                                       t.sizes.scrollbar_rounding,
+                                                       t.sizes.scrollbar_size * 0.5f)));
         const auto border_soft = colorToRmlAlpha(p.border, 0.3f);
         const auto border_med = colorToRmlAlpha(p.border, 0.5f);
         const auto text_hi = colorToRmlAlpha(p.text, 0.9f);
@@ -439,15 +443,15 @@ namespace lfs::vis::gui::rml_theme {
                        static_cast<int>(t.sizes.window_rounding)) +
                    std::format(
                        "scrollbarvertical {{ width: {}dp; }}\n"
-                       "scrollbarvertical slidertrack {{ background-color: {}; }}\n"
-                       "scrollbarvertical sliderbar {{ background-color: {}; }}\n"
+                       "scrollbarvertical slidertrack {{ background-color: {}; border-radius: {}dp; }}\n"
+                       "scrollbarvertical sliderbar {{ background-color: {}; min-height: {}dp; border-radius: {}dp; }}\n"
                        "scrollbarvertical sliderbar:hover {{ background-color: {}; }}\n"
                        "scrollbarhorizontal {{ height: {}dp; }}\n"
-                       "scrollbarhorizontal slidertrack {{ background-color: {}; }}\n"
-                       "scrollbarhorizontal sliderbar {{ background-color: {}; }}\n"
+                       "scrollbarhorizontal slidertrack {{ background-color: {}; border-radius: {}dp; }}\n"
+                       "scrollbarhorizontal sliderbar {{ background-color: {}; min-width: {}dp; border-radius: {}dp; }}\n"
                        "scrollbarhorizontal sliderbar:hover {{ background-color: {}; }}\n",
-                       scrollbar_size, scroll_track, scroll_thumb, scroll_hover,
-                       scrollbar_size, scroll_track, scroll_thumb, scroll_hover) +
+                       scrollbar_size, scroll_track, scrollbar_rounding, scroll_thumb, scrollbar_min, scrollbar_rounding, scroll_hover,
+                       scrollbar_size, scroll_track, scrollbar_rounding, scroll_thumb, scrollbar_min, scrollbar_rounding, scroll_hover) +
                    std::format(
                        ".icon-btn:hover {{ background-color: {}; }}\n"
                        ".icon-btn:active {{ background-color: {}; }}\n"

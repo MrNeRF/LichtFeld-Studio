@@ -274,6 +274,7 @@ namespace lfs::vis::gui {
                 .output_path = path,
                 .binary = true,
                 .async = false,
+                .extra_attributes = {},
             };
 
             io::Result<void> result = std::unexpected(

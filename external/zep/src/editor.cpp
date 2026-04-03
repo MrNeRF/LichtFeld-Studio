@@ -167,6 +167,8 @@ namespace Zep {
             m_config.backgroundFadeTime = (float)spConfig->get_qualified_as<double>("editor.background_fade_time").value_or(60.0f);
             m_config.backgroundFadeWait = (float)spConfig->get_qualified_as<double>("editor.background_fade_wait").value_or(60.0f);
             m_config.showScrollBar = spConfig->get_qualified_as<uint32_t>("editor.show_scrollbar").value_or(1);
+            m_config.scrollBarSize = (float)spConfig->get_qualified_as<double>("editor.scrollbar_size").value_or(m_config.scrollBarSize);
+            m_config.scrollBarMinSize = (float)spConfig->get_qualified_as<double>("editor.scrollbar_min_size").value_or(m_config.scrollBarMinSize);
             m_config.lineMargins.x = (float)spConfig->get_qualified_as<double>("editor.line_margin_top").value_or(1);
             m_config.lineMargins.y = (float)spConfig->get_qualified_as<double>("editor.line_margin_bottom").value_or(1);
             m_config.widgetMargins.x = (float)spConfig->get_qualified_as<double>("editor.widget_margin_top").value_or(1);
@@ -207,6 +209,8 @@ namespace Zep {
         table->insert("show_line_numbers", m_config.showLineNumbers);
         table->insert("show_normal_mode_keystrokes", m_config.showNormalModeKeyStrokes);
         table->insert("show_scrollbar", m_config.showScrollBar);
+        table->insert("scrollbar_size", (double)m_config.scrollBarSize);
+        table->insert("scrollbar_min_size", (double)m_config.scrollBarMinSize);
         table->insert("widget_margin_bottom", m_config.widgetMargins.y);
         table->insert("widget_margin_top", m_config.widgetMargins.x);
 

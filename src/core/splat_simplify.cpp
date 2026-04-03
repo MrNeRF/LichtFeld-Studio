@@ -28,13 +28,10 @@ namespace lfs::core {
     namespace {
 
         constexpr float kTwoPiPow1p5 = 0x1.f7fccep+3f;
-        // Match `np.log(2.0 * np.pi).astype(np.float32)` exactly.
-        constexpr float kLog2Pi = 0x1.d67f1cp+0f;
         constexpr float kEpsCov = 1e-8f;
         constexpr float kMinScale = 1e-12f;
         constexpr float kMinQuatNorm = 1e-12f;
         constexpr float kMinProb = 1e-6f;
-        constexpr float kMinDet = 1e-30f;
         constexpr float kMinEval = 1e-18f;
         constexpr int kJacobiIterations = 32;
 
@@ -81,11 +78,6 @@ namespace lfs::core {
 
         struct CacheEntry {
             std::array<float, 9> R{};
-            std::array<float, 9> Rt{};
-            std::array<float, 9> sigma{};
-            std::array<float, 3> variance{};
-            std::array<float, 3> invdiag{};
-            float logdet = 0.0f;
             float mass = 0.0f;
         };
 
@@ -237,18 +229,6 @@ namespace lfs::core {
             return out;
         }
 
-        [[nodiscard]] float strict_sum3_prod(const float a0,
-                                             const float b0,
-                                             const float a1,
-                                             const float b1,
-                                             const float a2,
-                                             const float b2) {
-            const float t0 = strict_mul(a0, b0);
-            const float t1 = strict_mul(a1, b1);
-            const float t2 = strict_mul(a2, b2);
-            return strict_add(strict_add(t0, t1), t2);
-        }
-
         [[nodiscard]] float strict_prod3(const float a, const float b, const float c) {
             return strict_mul(strict_mul(a, b), c);
         }
@@ -264,10 +244,6 @@ namespace lfs::core {
             sum = std::fma(a1, b1, sum);
             sum = std::fma(a2, b2, sum);
             return sum;
-        }
-
-        [[nodiscard]] std::array<float, 3> make_cost_sample() {
-            return {0.12573022f, -0.13210486f, 0.64042264f};
         }
 
         void quat_to_rotmat(const float qw, const float qx, const float qy, const float qz, std::array<float, 9>& out) {
@@ -290,20 +266,6 @@ namespace lfs::core {
             out[6] = 2.0f * (xz - wy);
             out[7] = 2.0f * (yz + wx);
             out[8] = 1.0f - 2.0f * (xx + yy);
-        }
-
-        [[nodiscard]] std::array<float, 9> transpose3(const std::array<float, 9>& src) {
-            return {
-                src[0],
-                src[3],
-                src[6],
-                src[1],
-                src[4],
-                src[7],
-                src[2],
-                src[5],
-                src[8],
-            };
         }
 
         void sigma_from_rot_var(const std::array<float, 9>& R,
@@ -334,113 +296,10 @@ namespace lfs::core {
             }
         }
 
-        void matmul_rowvec3_mat3(const std::array<float, 3>& lhs,
-                                 const std::array<float, 9>& rhs,
-                                 std::array<float, 3>& out) {
-            out[0] = strict_sum3_prod(lhs[0], rhs[0], lhs[1], rhs[3], lhs[2], rhs[6]);
-            out[1] = strict_sum3_prod(lhs[0], rhs[1], lhs[1], rhs[4], lhs[2], rhs[7]);
-            out[2] = strict_sum3_prod(lhs[0], rhs[2], lhs[1], rhs[5], lhs[2], rhs[8]);
-        }
-
         [[nodiscard]] float det3(const std::array<float, 9>& A) {
             return A[0] * (A[4] * A[8] - A[5] * A[7]) -
                    A[1] * (A[3] * A[8] - A[5] * A[6]) +
                    A[2] * (A[3] * A[7] - A[4] * A[6]);
-        }
-
-        template <typename T>
-        [[nodiscard]] float logabsdet3_lu(const std::array<T, 9>& A) {
-            std::array<double, 9> lu{};
-            for (size_t i = 0; i < lu.size(); ++i)
-                lu[i] = static_cast<double>(A[i]);
-            double log_abs_det = 0.0;
-            for (int k = 0; k < 3; ++k) {
-                int pivot = k;
-                double pivot_abs = std::abs(lu[static_cast<size_t>(k * 3 + k)]);
-                for (int row = k + 1; row < 3; ++row) {
-                    const double candidate_abs = std::abs(lu[static_cast<size_t>(row * 3 + k)]);
-                    if (candidate_abs > pivot_abs) {
-                        pivot = row;
-                        pivot_abs = candidate_abs;
-                    }
-                }
-
-                if (pivot_abs <= 0.0)
-                    return static_cast<float>(std::log(kMinDet));
-
-                if (pivot != k) {
-                    for (int col = 0; col < 3; ++col) {
-                        std::swap(
-                            lu[static_cast<size_t>(k * 3 + col)],
-                            lu[static_cast<size_t>(pivot * 3 + col)]);
-                    }
-                }
-
-                const double pivot_value = lu[static_cast<size_t>(k * 3 + k)];
-                log_abs_det += std::log(std::max(std::abs(pivot_value), static_cast<double>(kMinDet)));
-                for (int row = k + 1; row < 3; ++row) {
-                    const double factor = lu[static_cast<size_t>(row * 3 + k)] / pivot_value;
-                    lu[static_cast<size_t>(row * 3 + k)] = factor;
-                    for (int col = k + 1; col < 3; ++col) {
-                        lu[static_cast<size_t>(row * 3 + col)] -=
-                            factor * lu[static_cast<size_t>(k * 3 + col)];
-                    }
-                }
-            }
-            return static_cast<float>(std::max(log_abs_det, std::log(static_cast<double>(kMinDet))));
-        }
-
-        [[nodiscard]] float gauss_logpdf_diagrot(const float x,
-                                                 const float y,
-                                                 const float z,
-                                                 const float mx,
-                                                 const float my,
-                                                 const float mz,
-                                                 const std::array<float, 9>& R,
-                                                 const std::array<float, 3>& invdiag,
-                                                 const float logdet) {
-            const float dx = x - mx;
-            const float dy = y - my;
-            const float dz = z - mz;
-            // NumPy's `np.matmul(d, R)` for these 1x3 row-vector products rounds like
-            // ordinary float32 mul/add, not a fused FMA chain.
-            const float y0 = strict_sum3_prod(dx, R[0], dy, R[3], dz, R[6]);
-            const float y1 = strict_sum3_prod(dx, R[1], dy, R[4], dz, R[7]);
-            const float y2 = strict_sum3_prod(dx, R[2], dy, R[5], dz, R[8]);
-            const float quad = strict_add(
-                strict_add(
-                    strict_mul(strict_mul(y0, y0), invdiag[0]),
-                    strict_mul(strict_mul(y1, y1), invdiag[1])),
-                strict_mul(strict_mul(y2, y2), invdiag[2]));
-            const float term = strict_add(strict_add(strict_mul(3.0f, kLog2Pi), logdet), quad);
-            return strict_mul(-0.5f, term);
-        }
-
-        [[nodiscard]] float log_add_exp(const float a, const float b) {
-            if (a == -std::numeric_limits<float>::infinity())
-                return b;
-            if (b == -std::numeric_limits<float>::infinity())
-                return a;
-            const double da = static_cast<double>(a);
-            const double db = static_cast<double>(b);
-            const double m = std::max(da, db);
-            return static_cast<float>(m + std::log1p(std::exp(-std::abs(da - db))));
-        }
-
-        [[nodiscard]] float pairwise_sum_inplace(float* values, int count) {
-            if (count <= 0)
-                return 0.0f;
-            int active = count;
-            while (active > 1) {
-                int write = 0;
-                int read = 0;
-                for (; read + 1 < active; read += 2)
-                    values[write++] = strict_add(values[read], values[read + 1]);
-                if (read < active)
-                    values[write++] = values[read];
-                active = write;
-            }
-            return values[0];
         }
 
         [[nodiscard]] NativeRows rows_from_workset(const SplatSimplifyWorkset& workset) {
@@ -555,29 +414,12 @@ namespace lfs::core {
                     const float sx = std::max(rows.scales[i3 + 0], kMinScale);
                     const float sy = std::max(rows.scales[i3 + 1], kMinScale);
                     const float sz = std::max(rows.scales[i3 + 2], kMinScale);
-                    entry.variance = {
-                        sx * sx + kEpsCov,
-                        sy * sy + kEpsCov,
-                        sz * sz + kEpsCov,
-                    };
-                    entry.invdiag = {
-                        1.0f / std::max(entry.variance[0], kMinDet),
-                        1.0f / std::max(entry.variance[1], kMinDet),
-                        1.0f / std::max(entry.variance[2], kMinDet),
-                    };
-                    const double variance_prod =
-                        static_cast<double>(std::max(entry.variance[0], kMinDet)) *
-                        static_cast<double>(std::max(entry.variance[1], kMinDet)) *
-                        static_cast<double>(std::max(entry.variance[2], kMinDet));
-                    entry.logdet = static_cast<float>(std::log(std::max(variance_prod, static_cast<double>(kMinDet))));
 
                     const float qw = rows.rotation[i4 + 0];
                     const float qx = rows.rotation[i4 + 1];
                     const float qy = rows.rotation[i4 + 2];
                     const float qz = rows.rotation[i4 + 3];
                     quat_to_rotmat(qw, qx, qy, qz, entry.R);
-                    entry.Rt = transpose3(entry.R);
-                    sigma_from_rot_var(entry.R, entry.variance[0], entry.variance[1], entry.variance[2], entry.sigma);
 
                     const float alpha = rows.opacity[static_cast<size_t>(i)];
                     const float scale_prod = strict_prod3(sx, sy, sz);
@@ -586,156 +428,15 @@ namespace lfs::core {
             });
         }
 
-        [[nodiscard]] float compute_edge_cost(const NativeRows& rows,
-                                              const std::vector<CacheEntry>& cache,
-                                              const int i,
-                                              const int j,
-                                              const std::array<float, 3>& z) {
+        [[nodiscard]] float compute_edge_cost_euclidean(const NativeRows& rows,
+                                                        const int i,
+                                                        const int j) {
             const size_t i3 = static_cast<size_t>(i) * 3;
             const size_t j3 = static_cast<size_t>(j) * 3;
-
-            const float mux = rows.means[i3 + 0];
-            const float muy = rows.means[i3 + 1];
-            const float muz = rows.means[i3 + 2];
-            const float mvx = rows.means[j3 + 0];
-            const float mvy = rows.means[j3 + 1];
-            const float mvz = rows.means[j3 + 2];
-
-            const float wi = cache[static_cast<size_t>(i)].mass;
-            const float wj = cache[static_cast<size_t>(j)].mass;
-            const float W = wi + wj;
-            const float Wsafe = W > 0.0f ? W : 1.0f;
-            const float pi = std::clamp(wi / Wsafe, 1e-12f, 1.0f - 1e-12f);
-            const float pj = 1.0f - pi;
-            const float log_pi = std::log(pi);
-            const float log_pj = std::log(pj);
-
-            const std::array<float, 3> mu_m = {
-                strict_add(strict_mul(pi, mux), strict_mul(pj, mvx)),
-                strict_add(strict_mul(pi, muy), strict_mul(pj, mvy)),
-                strict_add(strict_mul(pi, muz), strict_mul(pj, mvz)),
-            };
-            const std::array<float, 3> d_i = {
-                mux - mu_m[0],
-                muy - mu_m[1],
-                muz - mu_m[2],
-            };
-            const std::array<float, 3> d_j = {
-                mvx - mu_m[0],
-                mvy - mu_m[1],
-                mvz - mu_m[2],
-            };
-
-            std::array<float, 9> sigma_i = cache[static_cast<size_t>(i)].sigma;
-            std::array<float, 9> sigma_j = cache[static_cast<size_t>(j)].sigma;
-            sigma_i[0] = strict_add(sigma_i[0], strict_mul(d_i[0], d_i[0]));
-            sigma_i[1] = strict_add(sigma_i[1], strict_mul(d_i[0], d_i[1]));
-            sigma_i[2] = strict_add(sigma_i[2], strict_mul(d_i[0], d_i[2]));
-            sigma_i[3] = strict_add(sigma_i[3], strict_mul(d_i[1], d_i[0]));
-            sigma_i[4] = strict_add(sigma_i[4], strict_mul(d_i[1], d_i[1]));
-            sigma_i[5] = strict_add(sigma_i[5], strict_mul(d_i[1], d_i[2]));
-            sigma_i[6] = strict_add(sigma_i[6], strict_mul(d_i[2], d_i[0]));
-            sigma_i[7] = strict_add(sigma_i[7], strict_mul(d_i[2], d_i[1]));
-            sigma_i[8] = strict_add(sigma_i[8], strict_mul(d_i[2], d_i[2]));
-            sigma_j[0] = strict_add(sigma_j[0], strict_mul(d_j[0], d_j[0]));
-            sigma_j[1] = strict_add(sigma_j[1], strict_mul(d_j[0], d_j[1]));
-            sigma_j[2] = strict_add(sigma_j[2], strict_mul(d_j[0], d_j[2]));
-            sigma_j[3] = strict_add(sigma_j[3], strict_mul(d_j[1], d_j[0]));
-            sigma_j[4] = strict_add(sigma_j[4], strict_mul(d_j[1], d_j[1]));
-            sigma_j[5] = strict_add(sigma_j[5], strict_mul(d_j[1], d_j[2]));
-            sigma_j[6] = strict_add(sigma_j[6], strict_mul(d_j[2], d_j[0]));
-            sigma_j[7] = strict_add(sigma_j[7], strict_mul(d_j[2], d_j[1]));
-            sigma_j[8] = strict_add(sigma_j[8], strict_mul(d_j[2], d_j[2]));
-
-            std::array<float, 9> sigma_m{};
-            for (int a = 0; a < 9; ++a) {
-                sigma_m[static_cast<size_t>(a)] = strict_add(
-                    strict_mul(pi, sigma_i[static_cast<size_t>(a)]),
-                    strict_mul(pj, sigma_j[static_cast<size_t>(a)]));
-            }
-            sigma_m[1] = sigma_m[3] = strict_mul(0.5f, strict_add(sigma_m[1], sigma_m[3]));
-            sigma_m[2] = sigma_m[6] = strict_mul(0.5f, strict_add(sigma_m[2], sigma_m[6]));
-            sigma_m[5] = sigma_m[7] = strict_mul(0.5f, strict_add(sigma_m[5], sigma_m[7]));
-            sigma_m[0] = strict_add(sigma_m[0], kEpsCov);
-            sigma_m[4] = strict_add(sigma_m[4], kEpsCov);
-            sigma_m[8] = strict_add(sigma_m[8], kEpsCov);
-
-            const float logdet_m = logabsdet3_lu(sigma_m);
-            const float ep_neg_log_q = 0.5f * (3.0f * kLog2Pi + logdet_m + 3.0f);
-
-            const float stdix = std::sqrt(std::max(cache[static_cast<size_t>(i)].variance[0], 0.0f));
-            const float stdiy = std::sqrt(std::max(cache[static_cast<size_t>(i)].variance[1], 0.0f));
-            const float stdiz = std::sqrt(std::max(cache[static_cast<size_t>(i)].variance[2], 0.0f));
-            const float stdjx = std::sqrt(std::max(cache[static_cast<size_t>(j)].variance[0], 0.0f));
-            const float stdjy = std::sqrt(std::max(cache[static_cast<size_t>(j)].variance[1], 0.0f));
-            const float stdjz = std::sqrt(std::max(cache[static_cast<size_t>(j)].variance[2], 0.0f));
-
-            const auto& Rt_i = cache[static_cast<size_t>(i)].Rt;
-            const auto& Rt_j = cache[static_cast<size_t>(j)].Rt;
-            const auto& R_i = cache[static_cast<size_t>(i)].R;
-            const auto& R_j = cache[static_cast<size_t>(j)].R;
-
-            const float zi0 = strict_mul(z[0], stdix);
-            const float zi1 = strict_mul(z[1], stdiy);
-            const float zi2 = strict_mul(z[2], stdiz);
-            const float zj0 = strict_mul(z[0], stdjx);
-            const float zj1 = strict_mul(z[1], stdjy);
-            const float zj2 = strict_mul(z[2], stdjz);
-            std::array<float, 3> zi = {zi0, zi1, zi2};
-            std::array<float, 3> zj = {zj0, zj1, zj2};
-            std::array<float, 3> offset_i{};
-            std::array<float, 3> offset_j{};
-            matmul_rowvec3_mat3(zi, Rt_i, offset_i);
-            matmul_rowvec3_mat3(zj, Rt_j, offset_j);
-            const std::array<float, 3> x_i = {
-                strict_add(mux, offset_i[0]),
-                strict_add(muy, offset_i[1]),
-                strict_add(muz, offset_i[2]),
-            };
-            const std::array<float, 3> x_j = {
-                strict_add(mvx, offset_j[0]),
-                strict_add(mvy, offset_j[1]),
-                strict_add(mvz, offset_j[2]),
-            };
-
-            const float log_ni_on_i = gauss_logpdf_diagrot(
-                x_i[0], x_i[1], x_i[2], mux, muy, muz, R_i, cache[static_cast<size_t>(i)].invdiag, cache[static_cast<size_t>(i)].logdet);
-            const float log_nj_on_i = gauss_logpdf_diagrot(
-                x_i[0], x_i[1], x_i[2], mvx, mvy, mvz, R_j, cache[static_cast<size_t>(j)].invdiag, cache[static_cast<size_t>(j)].logdet);
-            const float log_ni_on_j = gauss_logpdf_diagrot(
-                x_j[0], x_j[1], x_j[2], mux, muy, muz, R_i, cache[static_cast<size_t>(i)].invdiag, cache[static_cast<size_t>(i)].logdet);
-            const float log_nj_on_j = gauss_logpdf_diagrot(
-                x_j[0], x_j[1], x_j[2], mvx, mvy, mvz, R_j, cache[static_cast<size_t>(j)].invdiag, cache[static_cast<size_t>(j)].logdet);
-
-            const float ei = log_add_exp(log_pi + log_ni_on_i, log_pj + log_nj_on_i);
-            const float ej = log_add_exp(log_pi + log_ni_on_j, log_pj + log_nj_on_j);
-            float cost = strict_add(
-                strict_add(
-                    strict_mul(pi, ei),
-                    strict_mul(pj, ej)),
-                ep_neg_log_q);
-
-            const size_t ai = static_cast<size_t>(i) * static_cast<size_t>(rows.app_dim);
-            const size_t aj = static_cast<size_t>(j) * static_cast<size_t>(rows.app_dim);
-            if (rows.app_dim > 0) {
-                std::array<float, 64> stack_sq{};
-                std::vector<float> heap_sq;
-                float* sq = nullptr;
-                if (rows.app_dim <= static_cast<int>(stack_sq.size())) {
-                    sq = stack_sq.data();
-                } else {
-                    heap_sq.resize(static_cast<size_t>(rows.app_dim));
-                    sq = heap_sq.data();
-                }
-                for (int k = 0; k < rows.app_dim; ++k) {
-                    const float d = strict_sub(
-                        rows.appearance[ai + static_cast<size_t>(k)],
-                        rows.appearance[aj + static_cast<size_t>(k)]);
-                    sq[k] = strict_mul(d, d);
-                }
-                cost = strict_add(cost, pairwise_sum_inplace(sq, rows.app_dim));
-            }
-            return cost;
+            const float dx = strict_sub(rows.means[i3 + 0], rows.means[j3 + 0]);
+            const float dy = strict_sub(rows.means[i3 + 1], rows.means[j3 + 1]);
+            const float dz = strict_sub(rows.means[i3 + 2], rows.means[j3 + 2]);
+            return std::sqrt(strict_add(strict_add(strict_mul(dx, dx), strict_mul(dy, dy)), strict_mul(dz, dz)));
         }
 
         [[nodiscard]] Eigen3x3 sort_eigendecomposition(const Eigen3x3& out) {
@@ -969,16 +670,13 @@ namespace lfs::core {
         }
 
         void compute_edge_costs(const NativeRows& rows,
-                                const std::vector<CacheEntry>& cache,
                                 const std::vector<std::pair<int, int>>& edges,
                                 std::vector<float>& costs) {
-            const auto z = make_cost_sample();
             costs.assign(edges.size(), std::numeric_limits<float>::infinity());
-
             tbb::parallel_for(tbb::blocked_range<size_t>(0, edges.size()), [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t i = range.begin(); i != range.end(); ++i) {
                     const auto [u, v] = edges[i];
-                    costs[i] = compute_edge_cost(rows, cache, u, v, z);
+                    costs[i] = compute_edge_cost_euclidean(rows, u, v);
                 }
             });
         }
@@ -1211,8 +909,7 @@ namespace lfs::core {
 
                     if (!report_progress(progress, pass_progress + 0.01f, pass_prefix + "computing edge costs"))
                         return std::unexpected("Cancelled");
-                    build_cache(current, scratch.cache);
-                    compute_edge_costs(current, scratch.cache, edges, scratch.costs);
+                    compute_edge_costs(current, edges, scratch.costs);
 
                     if (!report_progress(progress, pass_progress + 0.02f, pass_prefix + "selecting pairs"))
                         return std::unexpected("Cancelled");
@@ -1236,6 +933,7 @@ namespace lfs::core {
                                          pass_progress + 0.03f,
                                          pass_prefix + "merging " + std::to_string(scratch.pairs.size()) + " pairs"))
                         return std::unexpected("Cancelled");
+                    build_cache(current, scratch.cache);
                     current = merge_pairs(current, scratch.cache, scratch.pairs, scratch.used_rows, scratch.keep_idx);
                     ++pass;
                 }

@@ -53,7 +53,10 @@ namespace lfs::rendering {
 
         [[nodiscard]] glm::mat4 buildPointCloudProjectionMatrix(
             const RenderingPipeline::RasterRequest& request) {
-            return request.getProjectionMatrix();
+            glm::mat4 projection = request.getProjectionMatrix();
+            glm::mat4 flip_y(1.0f);
+            flip_y[1][1] = -1.0f;
+            return flip_y * projection;
         }
 
         [[nodiscard]] bool tensorMatchesGaussianCount(const Tensor* const tensor,
@@ -896,20 +899,35 @@ namespace lfs::rendering {
             {3},
             lfs::core::Device::CPU);
 
-        // Compute field of view from focal length (single conversion point)
-        const float vfov_rad = focalLengthToVFovRad(request.focal_length_mm);
-        glm::vec2 fov = computeFov(vfov_rad,
-                                   request.viewport_size.x,
-                                   request.viewport_size.y);
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        if (request.intrinsics_override.has_value()) {
+            const auto& intrinsics = *request.intrinsics_override;
+            focal_x = intrinsics.focal_x;
+            focal_y = intrinsics.focal_y;
+            center_x = intrinsics.center_x;
+            center_y = intrinsics.center_y;
+        } else {
+            const float vfov_rad = focalLengthToVFovRad(request.focal_length_mm);
+            const glm::vec2 fov = computeFov(vfov_rad,
+                                             request.viewport_size.x,
+                                             request.viewport_size.y);
+            focal_x = lfs::core::fov2focal(fov.x, request.viewport_size.x);
+            focal_y = lfs::core::fov2focal(fov.y, request.viewport_size.y);
+            center_x = request.viewport_size.x / 2.0f;
+            center_y = request.viewport_size.y / 2.0f;
+        }
 
         try {
             return lfs::core::Camera(
                 R_tensor,
                 t_tensor,
-                lfs::core::fov2focal(fov.x, request.viewport_size.x),
-                lfs::core::fov2focal(fov.y, request.viewport_size.y),
-                request.viewport_size.x / 2.0f,
-                request.viewport_size.y / 2.0f,
+                focal_x,
+                focal_y,
+                center_x,
+                center_y,
                 Tensor::empty({0}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
                 Tensor::empty({0}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
                 lfs::core::CameraModelType::PINHOLE,

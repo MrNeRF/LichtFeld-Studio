@@ -71,7 +71,7 @@ namespace Zep {
         // Implement these to draw the buffer using whichever system you prefer
         virtual void DrawLine(const NVec2f& start, const NVec2f& end, const NVec4f& color = NVec4f(1.0f), float width = 1.0f) const = 0;
         virtual void DrawChars(ZepFont& font, const NVec2f& pos, const NVec4f& col, const uint8_t* text_begin, const uint8_t* text_end = nullptr) const = 0;
-        virtual void DrawRectFilled(const NRectf& rc, const NVec4f& col = NVec4f(1.0f)) const = 0;
+        virtual void DrawRectFilled(const NRectf& rc, const NVec4f& col = NVec4f(1.0f), float rounding = 0.0f) const = 0;
         virtual void SetClipRect(const NRectf& rc) = 0;
 
         virtual uint32_t GetCodePointCount(const uint8_t* pCh, const uint8_t* pEnd) const;
@@ -134,9 +134,10 @@ namespace Zep {
             (void)text_begin;
             (void)text_end;
         }
-        virtual void DrawRectFilled(const NRectf& a, const NVec4f& col = NVec4f(1.0f)) const override {
+        virtual void DrawRectFilled(const NRectf& a, const NVec4f& col = NVec4f(1.0f), float rounding = 0.0f) const override {
             (void)a;
             (void)col;
+            (void)rounding;
         };
         virtual void SetClipRect(const NRectf& rc) override {
             (void)rc;

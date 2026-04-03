@@ -68,6 +68,7 @@ namespace lfs::vis {
         const bool resize_completed = resize_result.completed;
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
+
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
         const bool has_renderable_model = hasRenderableGaussians(model);
         const auto* const visible_point_cloud =
@@ -167,6 +168,8 @@ namespace lfs::vis {
             glDisable(GL_SCISSOR_TEST);
         }
 
+        render_lock.reset();
+        queueCameraMetricsRefreshIfStale(scene_manager);
         viewport_interaction_context_.scene_manager = scene_manager;
     }
 

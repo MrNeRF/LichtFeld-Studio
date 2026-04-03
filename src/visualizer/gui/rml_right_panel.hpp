@@ -102,7 +102,6 @@ namespace lfs::vis::gui {
         bool wants_keyboard_ = false;
 
         bool splitter_dragging_ = false;
-        float drag_start_y_ = 0;
 
         bool resize_dragging_ = false;
 

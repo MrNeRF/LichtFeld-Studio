@@ -733,11 +733,19 @@ namespace lfs::python {
         float toolbar_spacing;
     };
 
+    struct PyThemeVignette {
+        bool enabled;
+        float intensity;
+        float radius;
+        float softness;
+    };
+
     // Theme wrapper (read-only)
     struct PyTheme {
         std::string name;
         PyThemePalette palette;
         PyThemeSizes sizes;
+        PyThemeVignette vignette;
     };
 
     // Get current theme

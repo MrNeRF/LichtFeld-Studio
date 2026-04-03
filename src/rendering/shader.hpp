@@ -52,8 +52,7 @@ namespace lfs::rendering {
 
         Shader(const char* vshader_path, const char* fshader_path, const char* gshader_path, bool create_buffer)
             : vshader_path_(vshader_path),
-              fshader_path_(fshader_path),
-              gshader_path_(gshader_path ? gshader_path : "") {
+              fshader_path_(fshader_path) {
             LOG_TIMER_TRACE("Shader::Shader");
             LOG_DEBUG("Creating shader with vertex: {}", vshader_path);
             LOG_DEBUG("Creating shader with fragment: {}", fshader_path);
@@ -448,7 +447,6 @@ namespace lfs::rendering {
         GLuint gshader = 0;
         std::string vshader_path_;
         std::string fshader_path_;
-        std::string gshader_path_;
         std::map<std::string, GLint> uniforms;
         GLuint index_buffer = 0;
         GLuint vertex_array = 0;

@@ -250,6 +250,7 @@ namespace lfs::vis {
             .translation = position,
             .size = {width, height},
             .focal_length_mm = focal_length_mm,
+            .intrinsics_override = std::nullopt,
             .background_color = bg};
 
         bool rendered = false;

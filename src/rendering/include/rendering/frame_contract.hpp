@@ -7,6 +7,7 @@
 #include "coordinate_conventions.hpp"
 #include "render_constants.hpp"
 #include <glm/glm.hpp>
+#include <optional>
 
 namespace lfs::rendering {
 
@@ -18,6 +19,7 @@ namespace lfs::rendering {
         glm::vec3 translation{0.0f};
         glm::ivec2 size{0, 0};
         float focal_length_mm = DEFAULT_FOCAL_LENGTH_MM;
+        std::optional<CameraIntrinsics> intrinsics_override;
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;
@@ -51,6 +53,17 @@ namespace lfs::rendering {
 
         [[nodiscard]] bool valid() const {
             return color.valid();
+        }
+    };
+
+    struct ScreenSpaceVignette {
+        bool enabled = false;
+        float intensity = 0.0f;
+        float radius = 0.75f;
+        float softness = 0.45f;
+
+        [[nodiscard]] bool active() const {
+            return enabled && intensity > 0.0f;
         }
     };
 

@@ -374,6 +374,7 @@ namespace lfs::rendering {
         float scale = 0.1f;
         glm::vec3 train_color{0.0f, 1.0f, 0.0f};
         glm::vec3 eval_color{1.0f, 0.0f, 0.0f};
+        std::vector<glm::vec3> per_camera_colors;
         int focused_index = -1;
         glm::mat4 scene_transform{1.0f};
         bool equirectangular_view = false;
@@ -468,6 +469,10 @@ namespace lfs::rendering {
             const GpuFrame& frame,
             const glm::ivec2& viewport_pos,
             const glm::ivec2& viewport_size) = 0;
+
+        virtual Result<void> renderScreenSpaceVignette(
+            const glm::ivec2& viewport_size,
+            ScreenSpaceVignette vignette) = 0;
 
         // Overlay rendering - now returns Result for consistency
         virtual Result<void> renderGrid(

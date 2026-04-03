@@ -10,8 +10,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
-#include <limits>
 #include <memory>
 #include <random>
 #include <vector>
@@ -25,7 +23,6 @@ using lfs::core::Tensor;
 namespace {
 
     constexpr double kTwoPiPow1p5 = 15.749609945722419;
-    constexpr double kLog2Pi = 1.8378770664093453;
     constexpr double kEpsCov = 1e-8;
     constexpr double kMinScale = 1e-12;
     constexpr double kMinQuatNorm = 1e-12;
@@ -41,16 +38,6 @@ namespace {
         [[nodiscard]] size_t count() const { return means.size() / 3; }
     };
 
-    struct RefCacheEntry {
-        std::array<double, 9> R{};
-        std::array<double, 9> Rt{};
-        std::array<double, 9> sigma{};
-        std::array<double, 3> variance{};
-        std::array<double, 3> invdiag{};
-        double logdet = 0.0;
-        double mass = 0.0;
-    };
-
     struct RefMerge {
         std::array<double, 3> mean{};
         std::array<double, 9> sigma{};
@@ -64,14 +51,6 @@ namespace {
 
     [[nodiscard]] double quat_norm(const double qw, const double qx, const double qy, const double qz) {
         return std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-    }
-
-    [[nodiscard]] std::array<double, 3> make_reference_sample() {
-        return {
-            0.12573022,
-            -0.13210486,
-            0.64042264,
-        };
     }
 
     void quat_to_rotmat(const double qw, const double qx, const double qy, const double qz, std::array<double, 9>& out) {
@@ -96,20 +75,6 @@ namespace {
         out[8] = 1.0 - 2.0 * (xx + yy);
     }
 
-    [[nodiscard]] std::array<double, 9> transpose3(const std::array<double, 9>& src) {
-        return {
-            src[0],
-            src[3],
-            src[6],
-            src[1],
-            src[4],
-            src[7],
-            src[2],
-            src[5],
-            src[8],
-        };
-    }
-
     void sigma_from_rot_var(const std::array<double, 9>& R,
                             const double vx,
                             const double vy,
@@ -127,172 +92,6 @@ namespace {
         out[6] = out[2];
         out[7] = out[5];
         out[8] = r20 * r20 * vx + r21 * r21 * vy + r22 * r22 * vz;
-    }
-
-    [[nodiscard]] double det3(const std::array<double, 9>& A) {
-        return A[0] * (A[4] * A[8] - A[5] * A[7]) -
-               A[1] * (A[3] * A[8] - A[5] * A[6]) +
-               A[2] * (A[3] * A[7] - A[4] * A[6]);
-    }
-
-    [[nodiscard]] double gauss_logpdf_diagrot(const double x,
-                                              const double y,
-                                              const double z,
-                                              const double mx,
-                                              const double my,
-                                              const double mz,
-                                              const std::array<double, 9>& R,
-                                              const std::array<double, 3>& invdiag,
-                                              const double logdet) {
-        const double dx = x - mx;
-        const double dy = y - my;
-        const double dz = z - mz;
-        const double y0 = dx * R[0] + dy * R[3] + dz * R[6];
-        const double y1 = dx * R[1] + dy * R[4] + dz * R[7];
-        const double y2 = dx * R[2] + dy * R[5] + dz * R[8];
-        const double quad = y0 * y0 * invdiag[0] + y1 * y1 * invdiag[1] + y2 * y2 * invdiag[2];
-        return -0.5 * (3.0 * kLog2Pi + logdet + quad);
-    }
-
-    [[nodiscard]] double log_add_exp(const double a, const double b) {
-        if (a == -std::numeric_limits<double>::infinity())
-            return b;
-        if (b == -std::numeric_limits<double>::infinity())
-            return a;
-        const double m = std::max(a, b);
-        return m + std::log(std::exp(a - m) + std::exp(b - m));
-    }
-
-    [[nodiscard]] std::vector<RefCacheEntry> build_cache(const RefInput& input) {
-        std::vector<RefCacheEntry> cache(input.count());
-        for (size_t i = 0; i < input.count(); ++i) {
-            auto& entry = cache[i];
-            const size_t i3 = i * 3;
-            const size_t i4 = i * 4;
-
-            const double sx = std::max(std::exp(input.scaling_raw[i3 + 0]), kMinScale);
-            const double sy = std::max(std::exp(input.scaling_raw[i3 + 1]), kMinScale);
-            const double sz = std::max(std::exp(input.scaling_raw[i3 + 2]), kMinScale);
-            entry.variance = {
-                sx * sx + kEpsCov,
-                sy * sy + kEpsCov,
-                sz * sz + kEpsCov,
-            };
-            entry.invdiag = {
-                1.0 / std::max(entry.variance[0], 1e-30),
-                1.0 / std::max(entry.variance[1], 1e-30),
-                1.0 / std::max(entry.variance[2], 1e-30),
-            };
-            entry.logdet = std::log(std::max(entry.variance[0], 1e-30)) +
-                           std::log(std::max(entry.variance[1], 1e-30)) +
-                           std::log(std::max(entry.variance[2], 1e-30));
-
-            double qw = input.rotation_raw[i4 + 0];
-            double qx = input.rotation_raw[i4 + 1];
-            double qy = input.rotation_raw[i4 + 2];
-            double qz = input.rotation_raw[i4 + 3];
-            const double inv_q = 1.0 / std::max(quat_norm(qw, qx, qy, qz), kMinQuatNorm);
-            qw *= inv_q;
-            qx *= inv_q;
-            qy *= inv_q;
-            qz *= inv_q;
-            quat_to_rotmat(qw, qx, qy, qz, entry.R);
-            entry.Rt = transpose3(entry.R);
-            sigma_from_rot_var(entry.R, entry.variance[0], entry.variance[1], entry.variance[2], entry.sigma);
-
-            const double alpha = sigmoid(input.opacity_raw[i]);
-            entry.mass = kTwoPiPow1p5 * alpha * sx * sy * sz + 1e-12;
-        }
-        return cache;
-    }
-
-    [[nodiscard]] double reference_edge_cost(const RefInput& input,
-                                             const std::vector<RefCacheEntry>& cache,
-                                             const int i,
-                                             const int j,
-                                             const std::array<double, 3>& z) {
-        const size_t i3 = static_cast<size_t>(i) * 3;
-        const size_t j3 = static_cast<size_t>(j) * 3;
-
-        const double mux = input.means[i3 + 0];
-        const double muy = input.means[i3 + 1];
-        const double muz = input.means[i3 + 2];
-        const double mvx = input.means[j3 + 0];
-        const double mvy = input.means[j3 + 1];
-        const double mvz = input.means[j3 + 2];
-
-        const double wi = cache[i].mass;
-        const double wj = cache[j].mass;
-        const double W = wi + wj;
-        const double Wsafe = W > 0.0 ? W : 1.0;
-        double pi = wi / Wsafe;
-        pi = std::max(1e-12, std::min(1.0 - 1e-12, pi));
-        const double pj = 1.0 - pi;
-        const double log_pi = std::log(pi);
-        const double log_pj = std::log(pj);
-
-        const double mmx = pi * mux + pj * mvx;
-        const double mmy = pi * muy + pj * mvy;
-        const double mmz = pi * muz + pj * mvz;
-        const double dix = mux - mmx;
-        const double diy = muy - mmy;
-        const double diz = muz - mmz;
-        const double djx = mvx - mmx;
-        const double djy = mvy - mmy;
-        const double djz = mvz - mmz;
-
-        std::array<double, 9> sigm{};
-        for (int a = 0; a < 9; ++a)
-            sigm[a] = pi * cache[i].sigma[a] + pj * cache[j].sigma[a];
-        sigm[0] += pi * dix * dix + pj * djx * djx;
-        sigm[1] += pi * dix * diy + pj * djx * djy;
-        sigm[2] += pi * dix * diz + pj * djx * djz;
-        sigm[3] += pi * diy * dix + pj * djy * djx;
-        sigm[4] += pi * diy * diy + pj * djy * djy;
-        sigm[5] += pi * diy * diz + pj * djy * djz;
-        sigm[6] += pi * diz * dix + pj * djz * djx;
-        sigm[7] += pi * diz * diy + pj * djz * djy;
-        sigm[8] += pi * diz * diz + pj * djz * djz;
-        sigm[1] = sigm[3] = 0.5 * (sigm[1] + sigm[3]);
-        sigm[2] = sigm[6] = 0.5 * (sigm[2] + sigm[6]);
-        sigm[5] = sigm[7] = 0.5 * (sigm[5] + sigm[7]);
-        sigm[0] += kEpsCov;
-        sigm[4] += kEpsCov;
-        sigm[8] += kEpsCov;
-
-        const double logdet_m = std::log(std::max(std::abs(det3(sigm)), 1e-30));
-        const double ep_neg_log_q = 0.5 * (3.0 * kLog2Pi + logdet_m + 3.0);
-
-        const double stdix = std::sqrt(std::max(cache[i].variance[0], 0.0));
-        const double stdiy = std::sqrt(std::max(cache[i].variance[1], 0.0));
-        const double stdiz = std::sqrt(std::max(cache[i].variance[2], 0.0));
-        const double stdjx = std::sqrt(std::max(cache[j].variance[0], 0.0));
-        const double stdjy = std::sqrt(std::max(cache[j].variance[1], 0.0));
-        const double stdjz = std::sqrt(std::max(cache[j].variance[2], 0.0));
-
-        const double xix = mux + z[0] * stdix * cache[i].Rt[0] + z[1] * stdiy * cache[i].Rt[3] + z[2] * stdiz * cache[i].Rt[6];
-        const double xiy = muy + z[0] * stdix * cache[i].Rt[1] + z[1] * stdiy * cache[i].Rt[4] + z[2] * stdiz * cache[i].Rt[7];
-        const double xiz = muz + z[0] * stdix * cache[i].Rt[2] + z[1] * stdiy * cache[i].Rt[5] + z[2] * stdiz * cache[i].Rt[8];
-        const double xjx = mvx + z[0] * stdjx * cache[j].Rt[0] + z[1] * stdjy * cache[j].Rt[3] + z[2] * stdjz * cache[j].Rt[6];
-        const double xjy = mvy + z[0] * stdjx * cache[j].Rt[1] + z[1] * stdjy * cache[j].Rt[4] + z[2] * stdjz * cache[j].Rt[7];
-        const double xjz = mvz + z[0] * stdjx * cache[j].Rt[2] + z[1] * stdjy * cache[j].Rt[5] + z[2] * stdjz * cache[j].Rt[8];
-
-        const double log_ni_on_i = gauss_logpdf_diagrot(xix, xiy, xiz, mux, muy, muz, cache[i].R, cache[i].invdiag, cache[i].logdet);
-        const double log_nj_on_i = gauss_logpdf_diagrot(xix, xiy, xiz, mvx, mvy, mvz, cache[j].R, cache[j].invdiag, cache[j].logdet);
-        const double log_ni_on_j = gauss_logpdf_diagrot(xjx, xjy, xjz, mux, muy, muz, cache[i].R, cache[i].invdiag, cache[i].logdet);
-        const double log_nj_on_j = gauss_logpdf_diagrot(xjx, xjy, xjz, mvx, mvy, mvz, cache[j].R, cache[j].invdiag, cache[j].logdet);
-
-        const double ei = log_add_exp(log_pi + log_ni_on_i, log_pj + log_nj_on_i);
-        const double ej = log_add_exp(log_pi + log_ni_on_j, log_pj + log_nj_on_j);
-        double cost = pi * ei + pj * ej + ep_neg_log_q;
-
-        const size_t ai = static_cast<size_t>(i) * input.app_dim;
-        const size_t aj = static_cast<size_t>(j) * input.app_dim;
-        for (int k = 0; k < input.app_dim; ++k) {
-            const double d = input.appearance[ai + k] - input.appearance[aj + k];
-            cost += d * d;
-        }
-        return cost;
     }
 
     [[nodiscard]] RefMerge reference_moment_match(const RefInput& input, const int i, const int j) {
@@ -469,6 +268,13 @@ namespace {
     [[nodiscard]] double opacity_from_output_row(const SplatData& splat, const size_t row) {
         const auto opacity = row_values(splat.opacity_raw(), row);
         return sigmoid(opacity[0]);
+    }
+
+    [[nodiscard]] double euclidean_distance(const std::array<double, 3>& a, const std::array<double, 3>& b) {
+        const double dx = a[0] - b[0];
+        const double dy = a[1] - b[1];
+        const double dz = a[2] - b[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
     }
 
     void expect_vec3_near(const std::array<double, 3>& actual, const std::array<double, 3>& expected, const double tol) {
@@ -717,7 +523,7 @@ TEST(SplatSimplify, NoOpSimplifyPreservesAppearanceInPlyPropertyOrder) {
     }
 }
 
-TEST(SplatSimplify, ThreePointSelectionChoosesReferenceLowestCostPairWhenAllPairsAreCandidates) {
+TEST(SplatSimplify, ThreePointSelectionChoosesClosestPairWhenAllPairsAreCandidates) {
     RefInput input{
         .means = {
             0.00,
@@ -774,13 +580,11 @@ TEST(SplatSimplify, ThreePointSelectionChoosesReferenceLowestCostPairWhenAllPair
         .app_dim = 3,
     };
 
-    const auto cache = build_cache(input);
-    const auto z = make_reference_sample();
-    const double cost_01 = reference_edge_cost(input, cache, 0, 1, z);
-    const double cost_02 = reference_edge_cost(input, cache, 0, 2, z);
-    const double cost_12 = reference_edge_cost(input, cache, 1, 2, z);
-    EXPECT_LT(cost_01, cost_02);
-    EXPECT_LT(cost_01, cost_12);
+    const std::array<double, 3> mean0 = {input.means[0], input.means[1], input.means[2]};
+    const std::array<double, 3> mean1 = {input.means[3], input.means[4], input.means[5]};
+    const std::array<double, 3> mean2 = {input.means[6], input.means[7], input.means[8]};
+    EXPECT_LT(euclidean_distance(mean0, mean1), euclidean_distance(mean0, mean2));
+    EXPECT_LT(euclidean_distance(mean0, mean1), euclidean_distance(mean1, mean2));
 
     auto source = make_test_splat(input, 0);
     SplatSimplifyOptions options;
@@ -798,24 +602,17 @@ TEST(SplatSimplify, ThreePointSelectionChoosesReferenceLowestCostPairWhenAllPair
         input.means[8],
     };
 
-    const auto mean0 = mean_from_output_row(**result, 0);
-    const auto mean1 = mean_from_output_row(**result, 1);
-    const auto dist = [](const std::array<double, 3>& a, const std::array<double, 3>& b) {
-        const double dx = a[0] - b[0];
-        const double dy = a[1] - b[1];
-        const double dz = a[2] - b[2];
-        return std::sqrt(dx * dx + dy * dy + dz * dz);
-    };
-
-    const bool first_is_keep = dist(mean0, expected_keep) < dist(mean1, expected_keep);
-    const auto& keep_row = first_is_keep ? mean0 : mean1;
-    const auto& merge_row = first_is_keep ? mean1 : mean0;
+    const auto output_mean0 = mean_from_output_row(**result, 0);
+    const auto output_mean1 = mean_from_output_row(**result, 1);
+    const bool first_is_keep = euclidean_distance(output_mean0, expected_keep) < euclidean_distance(output_mean1, expected_keep);
+    const auto& keep_row = first_is_keep ? output_mean0 : output_mean1;
+    const auto& merge_row = first_is_keep ? output_mean1 : output_mean0;
 
     expect_vec3_near(keep_row, expected_keep, 1e-5);
     expect_vec3_near(merge_row, expected_merge.mean, 5e-4);
 }
 
-TEST(SplatSimplify, ThreePointSelectionMatchesReferenceForRotatedAnisotropicGaussians) {
+TEST(SplatSimplify, ThreePointSelectionUsesMeansEvenForRotatedAnisotropicGaussians) {
     RefInput input{
         .means = {
             0.0976270065,
@@ -881,13 +678,11 @@ TEST(SplatSimplify, ThreePointSelectionMatchesReferenceForRotatedAnisotropicGaus
         .app_dim = 6,
     };
 
-    const auto cache = build_cache(input);
-    const auto z = make_reference_sample();
-    const double cost_01 = reference_edge_cost(input, cache, 0, 1, z);
-    const double cost_02 = reference_edge_cost(input, cache, 0, 2, z);
-    const double cost_12 = reference_edge_cost(input, cache, 1, 2, z);
-    EXPECT_LT(cost_01, cost_02);
-    EXPECT_LT(cost_01, cost_12);
+    const std::array<double, 3> mean0 = {input.means[0], input.means[1], input.means[2]};
+    const std::array<double, 3> mean1 = {input.means[3], input.means[4], input.means[5]};
+    const std::array<double, 3> mean2 = {input.means[6], input.means[7], input.means[8]};
+    EXPECT_LT(euclidean_distance(mean0, mean1), euclidean_distance(mean0, mean2));
+    EXPECT_LT(euclidean_distance(mean0, mean1), euclidean_distance(mean1, mean2));
 
     auto source = make_test_splat(input, 1);
     SplatSimplifyOptions options;
@@ -905,18 +700,100 @@ TEST(SplatSimplify, ThreePointSelectionMatchesReferenceForRotatedAnisotropicGaus
         input.means[8],
     };
 
-    const auto mean0 = mean_from_output_row(**result, 0);
-    const auto mean1 = mean_from_output_row(**result, 1);
-    const auto dist = [](const std::array<double, 3>& a, const std::array<double, 3>& b) {
-        const double dx = a[0] - b[0];
-        const double dy = a[1] - b[1];
-        const double dz = a[2] - b[2];
-        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    const auto output_mean0 = mean_from_output_row(**result, 0);
+    const auto output_mean1 = mean_from_output_row(**result, 1);
+    const bool first_is_keep = euclidean_distance(output_mean0, expected_keep) < euclidean_distance(output_mean1, expected_keep);
+    const auto& keep_row = first_is_keep ? output_mean0 : output_mean1;
+    const auto& merge_row = first_is_keep ? output_mean1 : output_mean0;
+
+    expect_vec3_near(keep_row, expected_keep, 1e-5);
+    expect_vec3_near(merge_row, expected_merge.mean, 5e-4);
+}
+
+TEST(SplatSimplify, IgnoresAppearanceWhenChoosingClosestPair) {
+    RefInput input{
+        .means = {
+            0.00,
+            0.00,
+            0.00,
+            0.02,
+            0.00,
+            0.00,
+            1.00,
+            0.00,
+            0.00,
+        },
+        .scaling_raw = {
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+            std::log(0.10),
+        },
+        .rotation_raw = {
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+        },
+        .opacity_raw = {
+            std::log(0.5 / (1.0 - 0.5)),
+            std::log(0.5 / (1.0 - 0.5)),
+            std::log(0.5 / (1.0 - 0.5)),
+        },
+        .appearance = {
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            -1.0,
+            -1.0,
+            -1.0,
+        },
+        .app_dim = 3,
     };
 
-    const bool first_is_keep = dist(mean0, expected_keep) < dist(mean1, expected_keep);
-    const auto& keep_row = first_is_keep ? mean0 : mean1;
-    const auto& merge_row = first_is_keep ? mean1 : mean0;
+    auto source = make_test_splat(input, 0);
+    SplatSimplifyOptions options;
+    options.ratio = 0.5f;
+    options.knn_k = 16;
+
+    auto result = lfs::core::simplify_splats(*source, options, {});
+    ASSERT_TRUE(result) << result.error();
+    ASSERT_EQ((*result)->size(), 2u);
+
+    const RefMerge expected_merge = reference_moment_match(input, 0, 1);
+    const std::array<double, 3> expected_keep = {
+        input.means[6],
+        input.means[7],
+        input.means[8],
+    };
+
+    const std::array<double, 3> input_mean0 = {input.means[0], input.means[1], input.means[2]};
+    const std::array<double, 3> input_mean1 = {input.means[3], input.means[4], input.means[5]};
+    const std::array<double, 3> input_mean2 = {input.means[6], input.means[7], input.means[8]};
+    EXPECT_LT(euclidean_distance(input_mean0, input_mean1), euclidean_distance(input_mean0, input_mean2));
+    EXPECT_LT(euclidean_distance(input_mean0, input_mean1), euclidean_distance(input_mean1, input_mean2));
+
+    const auto output_mean0 = mean_from_output_row(**result, 0);
+    const auto output_mean1 = mean_from_output_row(**result, 1);
+    const bool first_is_keep = euclidean_distance(output_mean0, expected_keep) < euclidean_distance(output_mean1, expected_keep);
+    const auto& keep_row = first_is_keep ? output_mean0 : output_mean1;
+    const auto& merge_row = first_is_keep ? output_mean1 : output_mean0;
 
     expect_vec3_near(keep_row, expected_keep, 1e-5);
     expect_vec3_near(merge_row, expected_merge.mean, 5e-4);

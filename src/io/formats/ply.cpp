@@ -7,9 +7,11 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "io/error.hpp"
+#include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -21,6 +23,7 @@
 #include <ranges>
 #include <span>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 // TBB includes
@@ -82,6 +85,58 @@ namespace lfs::io {
         constexpr auto SCALE_PREFIX = "scale_"sv;
         constexpr auto ROT_PREFIX = "rot_"sv;
     } // namespace ply_constants
+
+    namespace {
+
+        bool is_valid_ply_property_name_token(const std::string_view name) {
+            if (name.empty()) {
+                return false;
+            }
+
+            return std::ranges::all_of(name, [](const char ch) {
+                const unsigned char uchar = static_cast<unsigned char>(ch);
+                return !std::iscntrl(uchar) && !std::isspace(uchar);
+            });
+        }
+
+        bool is_reserved_ply_vertex_property_name(const std::string_view name) {
+            using namespace ply_constants;
+
+            return name == POS_X || name == POS_Y || name == POS_Z || name == "nx" || name == "ny" || name == "nz" || name == "red" || name == "green" || name == "blue" || name == OPACITY || name.starts_with(DC_PREFIX) || name.starts_with(REST_PREFIX) || name.starts_with(SCALE_PREFIX) || name.starts_with(ROT_PREFIX);
+        }
+
+    } // namespace
+
+    std::vector<std::string> make_ply_extra_attribute_names(const std::string_view base_name,
+                                                            const size_t count) {
+        std::vector<std::string> names;
+        names.reserve(count);
+        if (count == 1) {
+            names.emplace_back(base_name);
+            return names;
+        }
+
+        for (size_t i = 0; i < count; ++i) {
+            names.emplace_back(std::format("{}_{}", base_name, i));
+        }
+        return names;
+    }
+
+    Result<void> validate_reserved_ply_extra_attribute_names(const std::span<const std::string> names,
+                                                             const std::filesystem::path& output_path) {
+        for (const auto& name : names) {
+            if (is_reserved_ply_vertex_property_name(name)) {
+                return make_error(
+                    ErrorCode::INTERNAL_ERROR,
+                    std::format(
+                        "Extra PLY attribute name '{}' is reserved by the exporter; choose a different name",
+                        name),
+                    output_path);
+            }
+        }
+
+        return {};
+    }
 
     struct FastPropertyLayout {
         size_t vertex_count;
@@ -661,6 +716,7 @@ namespace lfs::io {
 
         std::mutex g_save_mutex;
         std::vector<std::future<void>> g_save_futures;
+        using TensorWithNames = std::pair<Tensor, std::vector<std::string>>;
 
         void cleanup_finished_saves() {
             std::lock_guard lock(g_save_mutex);
@@ -681,8 +737,158 @@ namespace lfs::io {
             return names;
         }
 
+        Result<void> validate_extra_attribute_tensor(const Tensor& values,
+                                                     const std::filesystem::path& output_path) {
+            if (!values.is_valid() || values.numel() == 0) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  "Extra PLY attribute tensors must not be empty",
+                                  output_path);
+            }
+
+            if (values.ndim() != 1 && values.ndim() != 2) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  "Extra PLY attribute tensors must be shaped [N] or [N,C]",
+                                  output_path);
+            }
+
+            return {};
+        }
+
+        Result<void> validate_vertex_property_schema(const std::span<const TensorWithNames> float_blocks,
+                                                     const size_t extra_block_offset,
+                                                     const bool has_colors,
+                                                     const std::filesystem::path& output_path) {
+            std::unordered_set<std::string> seen;
+
+            auto register_name = [&](const std::string_view name, const bool is_extra_attribute) -> Result<void> {
+                if (!is_valid_ply_property_name_token(name)) {
+                    return make_error(
+                        ErrorCode::INTERNAL_ERROR,
+                        std::format(
+                            "PLY property name '{}' is invalid; names must be non-empty tokens without whitespace or control characters",
+                            name),
+                        output_path);
+                }
+
+                if (is_extra_attribute && is_reserved_ply_vertex_property_name(name)) {
+                    return make_error(
+                        ErrorCode::INTERNAL_ERROR,
+                        std::format(
+                            "Extra PLY attribute name '{}' is reserved by the exporter; choose a different name",
+                            name),
+                        output_path);
+                }
+
+                if (!seen.emplace(name).second) {
+                    return make_error(
+                        ErrorCode::INTERNAL_ERROR,
+                        std::format("Duplicate PLY property name '{}' in vertex schema", name),
+                        output_path);
+                }
+
+                return {};
+            };
+
+            if (has_colors) {
+                for (const auto color_name : {std::string_view{"red"}, std::string_view{"green"}, std::string_view{"blue"}}) {
+                    if (auto result = register_name(color_name, false); !result) {
+                        return result;
+                    }
+                }
+            }
+
+            for (size_t block_index = 0; block_index < float_blocks.size(); ++block_index) {
+                const bool is_extra_attribute = block_index >= extra_block_offset;
+                const auto& names = float_blocks[block_index].second;
+                for (const auto& name : names) {
+                    if (auto result = register_name(name, is_extra_attribute); !result) {
+                        return result;
+                    }
+                }
+            }
+
+            return {};
+        }
+
+        Result<TensorWithNames> prepare_extra_attribute_block(const PlyAttributeBlock& block,
+                                                              const size_t expected_rows,
+                                                              const std::filesystem::path& output_path) {
+            if (auto result = validate_extra_attribute_tensor(block.values, output_path); !result) {
+                return std::unexpected(result.error());
+            }
+
+            if (static_cast<size_t>(block.values.size(0)) != expected_rows) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("Extra PLY attribute row count {} does not match point count {}",
+                                              block.values.size(0), expected_rows),
+                                  output_path);
+            }
+
+            Tensor prepared = block.values;
+            size_t cols = 1;
+            if (prepared.ndim() == 1) {
+                prepared = prepared.unsqueeze(1);
+            } else {
+                cols = static_cast<size_t>(prepared.size(1));
+            }
+
+            if (cols == 0 || block.names.size() != cols) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("Extra PLY attribute names count {} does not match tensor columns {}",
+                                              block.names.size(), cols),
+                                  output_path);
+            }
+
+            return TensorWithNames{prepared.to(DataType::Float32).cpu().contiguous(), block.names};
+        }
+
+        Result<std::vector<PlyAttributeBlock>> filter_extra_attributes_for_splat_export(
+            const SplatData& splat_data,
+            const std::vector<PlyAttributeBlock>& extra_attributes,
+            const std::filesystem::path& output_path) {
+            if (extra_attributes.empty() || !splat_data.has_deleted_mask()) {
+                return extra_attributes;
+            }
+
+            const auto keep_mask = splat_data.deleted().logical_not();
+            const auto raw_count = static_cast<size_t>(splat_data.size());
+            const auto visible_count = static_cast<size_t>(splat_data.visible_count());
+
+            std::vector<PlyAttributeBlock> filtered;
+            filtered.reserve(extra_attributes.size());
+
+            for (const auto& block : extra_attributes) {
+                if (auto result = validate_extra_attribute_tensor(block.values, output_path); !result) {
+                    return std::unexpected(result.error());
+                }
+
+                const auto rows = static_cast<size_t>(block.values.size(0));
+                if (rows == visible_count) {
+                    filtered.push_back(block);
+                    continue;
+                }
+
+                if (rows != raw_count) {
+                    return make_error(ErrorCode::INTERNAL_ERROR,
+                                      std::format("Extra PLY attribute row count {} must match either raw point count {} or visible point count {}",
+                                                  rows, raw_count, visible_count),
+                                      output_path);
+                }
+
+                auto mask = keep_mask.device() == block.values.device() ? keep_mask : keep_mask.to(block.values.device());
+
+                PlyAttributeBlock filtered_block;
+                filtered_block.values = block.values.index_select(0, mask);
+                filtered_block.names = block.names;
+                filtered.push_back(std::move(filtered_block));
+            }
+
+            return filtered;
+        }
+
         Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
-                                      bool binary = true) {
+                                      bool binary = true,
+                                      std::span<const PlyAttributeBlock> extra_attributes = {}) {
             if (!pc.means.is_valid() || pc.means.ndim() != 2 || pc.means.size(1) != 3) {
                 return make_error(ErrorCode::INTERNAL_ERROR, "PointCloud.means must be [N,3]", output_path);
             }
@@ -691,14 +897,25 @@ namespace lfs::io {
             tinyply::PlyFile ply;
             const size_t N = pc.means.size(0);
 
-            using TensorWithNames = std::pair<Tensor, std::vector<std::string>>;
             std::vector<TensorWithNames> float_blocks;
-            float_blocks.reserve(8);
-            float_blocks.emplace_back(pc.means.cpu().contiguous(), std::vector<std::string>{"x", "y", "z"});
+            float_blocks.reserve(8 + extra_attributes.size());
+            size_t attr_off = 0;
+
+            auto append_builtin_block = [&](Tensor tensor, std::vector<std::string> fallback_names) {
+                const size_t cols = static_cast<size_t>(tensor.size(1));
+                std::vector<std::string> attrs = std::move(fallback_names);
+                if (pc.attribute_names.size() >= attr_off + cols) {
+                    attrs.assign(pc.attribute_names.begin() + static_cast<std::ptrdiff_t>(attr_off),
+                                 pc.attribute_names.begin() + static_cast<std::ptrdiff_t>(attr_off + cols));
+                }
+                float_blocks.emplace_back(std::move(tensor), std::move(attrs));
+                attr_off += cols;
+            };
+
+            append_builtin_block(pc.means.cpu().contiguous(), {"x", "y", "z"});
 
             if (pc.normals.is_valid()) {
-                float_blocks.emplace_back(pc.normals.cpu().contiguous(),
-                                          std::vector<std::string>{"nx", "ny", "nz"});
+                append_builtin_block(pc.normals.cpu().contiguous(), {"nx", "ny", "nz"});
             }
 
             auto process_sh = [](const Tensor& sh) -> Tensor {
@@ -711,28 +928,40 @@ namespace lfs::io {
 
             if (pc.sh0.is_valid()) {
                 auto t = process_sh(pc.sh0);
-                float_blocks.emplace_back(t, make_indexed_names("f_dc_", static_cast<size_t>(t.size(1))));
+                const auto cols = static_cast<size_t>(t.size(1));
+                append_builtin_block(std::move(t), make_indexed_names("f_dc_", cols));
             }
             if (pc.shN.is_valid()) {
                 auto t = process_sh(pc.shN);
-                float_blocks.emplace_back(t, make_indexed_names("f_rest_", static_cast<size_t>(t.size(1))));
+                const auto cols = static_cast<size_t>(t.size(1));
+                append_builtin_block(std::move(t), make_indexed_names("f_rest_", cols));
             }
             if (pc.opacity.is_valid())
-                float_blocks.emplace_back(pc.opacity.cpu().contiguous(), std::vector<std::string>{"opacity"});
+                append_builtin_block(pc.opacity.cpu().contiguous(), {"opacity"});
             if (pc.scaling.is_valid()) {
                 auto t = pc.scaling.cpu().contiguous();
-                float_blocks.emplace_back(t, make_indexed_names("scale_", static_cast<size_t>(t.size(1))));
+                const auto cols = static_cast<size_t>(t.size(1));
+                append_builtin_block(std::move(t), make_indexed_names("scale_", cols));
             }
             if (pc.rotation.is_valid()) {
                 auto t = pc.rotation.cpu().contiguous();
-                float_blocks.emplace_back(t, make_indexed_names("rot_", static_cast<size_t>(t.size(1))));
+                const auto cols = static_cast<size_t>(t.size(1));
+                append_builtin_block(std::move(t), make_indexed_names("rot_", cols));
+            }
+            const size_t extra_block_offset = float_blocks.size();
+            for (const auto& extra_attribute : extra_attributes) {
+                auto prepared = prepare_extra_attribute_block(extra_attribute, N, output_path);
+                if (!prepared) {
+                    return std::unexpected(prepared.error());
+                }
+                float_blocks.emplace_back(std::move(*prepared));
             }
 
-            // Optional colors: write as uchar red/green/blue
+            // Optional colors: normalize to uchar red/green/blue before schema validation.
             Tensor colors_u8;
             if (pc.colors.is_valid() && pc.colors.numel() > 0) {
                 auto colors_cpu = pc.colors.cpu().contiguous();
-                if (colors_cpu.ndim() == 2 && colors_cpu.size(0) == static_cast<int64_t>(N) && colors_cpu.size(1) == 3) {
+                if (colors_cpu.ndim() == 2 && static_cast<size_t>(colors_cpu.size(0)) == N && colors_cpu.size(1) == 3) {
                     if (colors_cpu.dtype() == DataType::UInt8) {
                         colors_u8 = colors_cpu;
                     } else if (colors_cpu.dtype() == DataType::Float32) {
@@ -741,33 +970,28 @@ namespace lfs::io {
                     } else {
                         colors_u8 = colors_cpu.to(DataType::UInt8);
                     }
-
-                    ply.add_properties_to_element(
-                        "vertex", {"red", "green", "blue"}, tinyply::Type::UINT8, N,
-                        const_cast<uint8_t*>(colors_u8.ptr<uint8_t>()),
-                        tinyply::Type::INVALID, 0);
                 }
             }
 
-            size_t attr_off = 0;
-            for (auto& [t, fallback_names] : float_blocks) {
-                const size_t cols = t.size(1);
-                assert(fallback_names.size() == cols);
+            if (auto result = validate_vertex_property_schema(float_blocks, extra_block_offset, colors_u8.is_valid(), output_path);
+                !result) {
+                return std::unexpected(result.error());
+            }
 
-                std::vector<std::string> attrs;
-                if (pc.attribute_names.size() >= attr_off + cols) {
-                    attrs.assign(pc.attribute_names.begin() + static_cast<int64_t>(attr_off),
-                                 pc.attribute_names.begin() + static_cast<int64_t>(attr_off + cols));
-                } else {
-                    attrs = std::move(fallback_names);
-                }
+            if (colors_u8.is_valid()) {
+                ply.add_properties_to_element(
+                    "vertex", {"red", "green", "blue"}, tinyply::Type::UINT8, N,
+                    const_cast<uint8_t*>(colors_u8.ptr<uint8_t>()),
+                    tinyply::Type::INVALID, 0);
+            }
+
+            for (auto& [t, attrs] : float_blocks) {
+                assert(attrs.size() == static_cast<size_t>(t.size(1)));
 
                 ply.add_properties_to_element(
                     "vertex", attrs, tinyply::Type::FLOAT32, t.size(0),
                     reinterpret_cast<uint8_t*>(const_cast<float*>(t.ptr<float>())),
                     tinyply::Type::INVALID, 0);
-
-                attr_off += cols;
             }
 
             std::filebuf fb;
@@ -887,8 +1111,16 @@ namespace lfs::io {
     }
 
     Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options) {
+        auto filtered_extra_attributes = filter_extra_attributes_for_splat_export(
+            splat_data, options.extra_attributes, options.output_path);
+        if (!filtered_extra_attributes) {
+            return std::unexpected(filtered_extra_attributes.error());
+        }
+
         auto pc = lfs::io::to_point_cloud(splat_data);
-        return save_ply(pc, options);
+        auto filtered_options = options;
+        filtered_options.extra_attributes = std::move(*filtered_extra_attributes);
+        return save_ply(pc, filtered_options);
     }
 
     Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options) {
@@ -915,6 +1147,15 @@ namespace lfs::io {
             floats_per_vertex += 3;
         if (point_cloud.rotation.is_valid())
             floats_per_vertex += 4;
+        for (const auto& extra_attribute : options.extra_attributes) {
+            if (!extra_attribute.values.is_valid() || extra_attribute.values.numel() == 0)
+                continue;
+            if (extra_attribute.values.ndim() == 1) {
+                floats_per_vertex += 1;
+            } else if (extra_attribute.values.ndim() == 2) {
+                floats_per_vertex += static_cast<size_t>(extra_attribute.values.size(1));
+            }
+        }
 
         size_t estimated_size = 1024 + vertex_count * floats_per_vertex * sizeof(float);
         if (point_cloud.colors.is_valid() && point_cloud.colors.numel() > 0) {
@@ -950,7 +1191,7 @@ namespace lfs::io {
             const std::lock_guard lock(g_save_mutex);
             g_save_futures.emplace_back(
                 std::async(std::launch::async, [pc = point_cloud, opts = options]() {
-                    if (const auto result = write_ply_binary(pc, opts.output_path, opts.binary); !result) {
+                    if (const auto result = write_ply_binary(pc, opts.output_path, opts.binary, opts.extra_attributes); !result) {
                         LOG_ERROR("PLY save failed: {}", result.error().format());
                     }
                 }));
@@ -960,7 +1201,7 @@ namespace lfs::io {
                     return make_error(ErrorCode::INTERNAL_ERROR, "Export cancelled", options.output_path);
             }
 
-            if (const auto result = write_ply_binary(point_cloud, options.output_path, options.binary);
+            if (const auto result = write_ply_binary(point_cloud, options.output_path, options.binary, options.extra_attributes);
                 !result) {
                 return std::unexpected(result.error());
             }

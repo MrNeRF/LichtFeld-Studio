@@ -48,6 +48,7 @@ namespace lfs::vis::gui {
                 return;
             }
             document_->Show();
+            applyGTMetricsOverlay();
         } catch (const std::exception& e) {
             LOG_ERROR("RmlViewportOverlay: resource not found: {}", e.what());
             return;
@@ -89,6 +90,10 @@ namespace lfs::vis::gui {
         const auto overlay_panel_border = colorToRmlAlpha(t.palette.border, 0.45f);
         const auto overlay_text = colorToRml(t.palette.text);
         const auto overlay_text_dim = colorToRml(t.palette.text_dim);
+        const auto metrics_bg = colorToRmlAlpha(t.palette.background, 0.92f);
+        const auto metrics_border = colorToRmlAlpha(t.palette.primary, 0.55f);
+        const auto metrics_label = colorToRml(t.palette.text_dim);
+        const auto metrics_value = colorToRml(t.palette.text);
 
         return std::format(
             ".toolbar-container {{ background-color: {}; border-radius: {:.0f}dp; }}\n"
@@ -98,6 +103,9 @@ namespace lfs::vis::gui {
             ".icon-btn.selected {{ background-color: {}; }}\n"
             ".icon-btn.selected:hover {{ background-color: {}; }}\n"
             ".icon-btn.selected img {{ image-color: {}; }}\n"
+            ".viewport-metrics-card {{ background-color: {}; border-color: {}; }}\n"
+            ".viewport-metrics-label {{ color: {}; }}\n"
+            ".viewport-metrics-value {{ color: {}; }}\n"
             ".viewport-status-backdrop {{ background-color: {}; }}\n"
             ".viewport-status-panel {{ background-color: {}; border-color: {}; border-radius: {:.0f}dp; }}\n"
             ".viewport-status-title {{ color: {}; }}\n"
@@ -108,6 +116,7 @@ namespace lfs::vis::gui {
             icon_dim,
             hover_bg,
             selected_bg, selected_bg_hover, selected_icon,
+            metrics_bg, metrics_border, metrics_label, metrics_value,
             overlay_backdrop,
             overlay_panel_bg, overlay_panel_border, t.sizes.window_rounding,
             overlay_text, overlay_text_dim, overlay_text_dim);
@@ -174,6 +183,23 @@ namespace lfs::vis::gui {
         updateToolbarRoots();
     }
 
+    void RmlViewportOverlay::setGTMetricsOverlay(GTMetricsOverlayState state) {
+        const bool changed =
+            gt_metrics_overlay_.visible != state.visible ||
+            std::abs(gt_metrics_overlay_.x - state.x) > 0.5f ||
+            std::abs(gt_metrics_overlay_.y - state.y) > 0.5f ||
+            gt_metrics_overlay_.psnr_text != state.psnr_text ||
+            gt_metrics_overlay_.show_ssim != state.show_ssim ||
+            gt_metrics_overlay_.ssim_text != state.ssim_text;
+        if (!changed) {
+            return;
+        }
+
+        gt_metrics_overlay_ = std::move(state);
+        applyGTMetricsOverlay();
+        render_needed_ = true;
+    }
+
     void RmlViewportOverlay::updateToolbarRoots() {
         if (!document_) {
             return;
@@ -195,6 +221,27 @@ namespace lfs::vis::gui {
                    secondary_toolbar_x_,
                    secondary_toolbar_width_,
                    show_secondary_toolbar_ && secondary_toolbar_width_ > 0.0f);
+    }
+
+    void RmlViewportOverlay::applyGTMetricsOverlay() {
+        if (!document_) {
+            return;
+        }
+
+        if (auto* const overlay = document_->GetElementById("gt-metrics-overlay")) {
+            overlay->SetClass("hidden", !gt_metrics_overlay_.visible);
+            overlay->SetProperty("left", std::format("{:.1f}px", gt_metrics_overlay_.x));
+            overlay->SetProperty("top", std::format("{:.1f}px", gt_metrics_overlay_.y));
+        }
+        if (auto* const psnr = document_->GetElementById("gt-metrics-psnr")) {
+            psnr->SetInnerRML(Rml::String(gt_metrics_overlay_.psnr_text));
+        }
+        if (auto* const ssim_row = document_->GetElementById("gt-metrics-ssim-row")) {
+            ssim_row->SetClass("hidden", !gt_metrics_overlay_.show_ssim);
+        }
+        if (auto* const ssim = document_->GetElementById("gt-metrics-ssim")) {
+            ssim->SetInnerRML(Rml::String(gt_metrics_overlay_.ssim_text));
+        }
     }
 
     void RmlViewportOverlay::processInput(const PanelInputState& input) {

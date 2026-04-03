@@ -158,22 +158,6 @@ scene-graph,
     tab-index: auto;
 }
 
-#tree-container scrollbarvertical,
-#history-container scrollbarvertical,
-#logging-scroll scrollbarvertical {
-    width: 14dp;
-}
-
-#tree-container scrollbarvertical sliderbar,
-#history-container scrollbarvertical sliderbar,
-#logging-scroll scrollbarvertical sliderbar {
-    min-height: 40dp;
-}
-
-#logging-scroll scrollbarhorizontal sliderbar {
-    min-width: 40dp;
-}
-
 #history-container {
     flex: 1;
     min-height: 0;

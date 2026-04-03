@@ -103,9 +103,18 @@ namespace lfs::rendering {
             getTextureID(),
             depth_params_,
             getTexcoordScale(),
-            glm::vec2(1.0f),
+            getTexcoordScale(),
             getDepthTextureID(),
             false);
+    }
+
+    Result<void> ScreenQuadRenderer::renderQuad(ManagedShader& shader) const {
+        LOG_TIMER_TRACE("ScreenQuadRenderer::renderQuad");
+        (void)shader;
+
+        VAOBinder vao_bind(quadVAO_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        return {};
     }
 
     Result<void> ScreenQuadRenderer::renderTexture(ManagedShader& shader,
@@ -171,6 +180,8 @@ namespace lfs::rendering {
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_TRUE);
             glDepthFunc(GL_ALWAYS);
+        } else {
+            glDisable(GL_DEPTH_TEST);
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);

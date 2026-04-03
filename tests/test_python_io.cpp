@@ -15,6 +15,7 @@
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
+#include "tinyply.hpp"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -119,6 +120,40 @@ protected:
             std::move(rotation),
             std::move(opacity),
             1.0f);
+    }
+
+    static std::string read_ply_header(const fs::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open PLY header");
+        }
+
+        std::string header_text;
+        std::string line;
+        while (std::getline(file, line) && line != "end_header") {
+            header_text += line + "\n";
+        }
+        return header_text;
+    }
+
+    static std::vector<float> read_ply_float_property(const fs::path& path, const std::string& property_name) {
+        std::ifstream file(path, std::ios::binary);
+        if (!file.is_open()) {
+            throw std::runtime_error("Failed to open PLY file");
+        }
+
+        tinyply::PlyFile ply;
+        ply.parse_header(file);
+        auto property = ply.request_properties_from_element("vertex", {property_name});
+        ply.read(file);
+
+        if (property->t != tinyply::Type::FLOAT32) {
+            throw std::runtime_error("Expected float32 PLY property");
+        }
+
+        std::vector<float> values(property->count);
+        std::memcpy(values.data(), property->buffer.get(), values.size() * sizeof(float));
+        return values;
     }
 
     static void write_external_sh_layout_test_ply(const fs::path& path) {
@@ -549,12 +584,7 @@ TEST_F(PythonIOTest, PlySaveWithColorsUint8) {
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     // Verify header contains red/green/blue properties
-    std::ifstream file(output_path, std::ios::binary);
-    std::string header_text;
-    std::string line;
-    while (std::getline(file, line) && line != "end_header") {
-        header_text += line + "\n";
-    }
+    const std::string header_text = read_ply_header(output_path);
     EXPECT_NE(header_text.find("property uchar red"), std::string::npos);
     EXPECT_NE(header_text.find("property uchar green"), std::string::npos);
     EXPECT_NE(header_text.find("property uchar blue"), std::string::npos);
@@ -588,12 +618,7 @@ TEST_F(PythonIOTest, PlySaveWithColorsFloat32) {
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     // Verify header has uchar color properties (float32 should be converted)
-    std::ifstream file(output_path, std::ios::binary);
-    std::string header_text;
-    std::string line;
-    while (std::getline(file, line) && line != "end_header") {
-        header_text += line + "\n";
-    }
+    const std::string header_text = read_ply_header(output_path);
     EXPECT_NE(header_text.find("property uchar red"), std::string::npos);
 }
 
@@ -624,14 +649,177 @@ TEST_F(PythonIOTest, PlySaveFallbackAttributeNames) {
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
     // Parse header and verify fallback names are present
-    std::ifstream file(output_path, std::ios::binary);
-    std::string header_text;
-    std::string line;
-    while (std::getline(file, line) && line != "end_header") {
-        header_text += line + "\n";
-    }
+    const std::string header_text = read_ply_header(output_path);
     EXPECT_NE(header_text.find("property float x"), std::string::npos);
     EXPECT_NE(header_text.find("property float y"), std::string::npos);
     EXPECT_NE(header_text.find("property float z"), std::string::npos);
     EXPECT_NE(header_text.find("property float opacity"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlySaveWritesExtraAttributePayloads) {
+    PointCloud pc;
+    pc.means = Tensor::from_vector(
+        std::vector<float>{0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
+        {size_t{2}, size_t{3}}, Device::CPU);
+    pc.attribute_names = {"x", "y", "z"};
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "extra_attributes_payload.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor::from_vector(std::vector<float>{0.25f, 0.75f}, {size_t{2}}, Device::CPU),
+            .names = {"confidence"},
+        },
+        PlyAttributeBlock{
+            .values = Tensor::from_vector(
+                std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+                {size_t{2}, size_t{3}}, Device::CPU),
+            .names = {"velocity_0", "velocity_1", "velocity_2"},
+        },
+    };
+
+    const auto result = save_ply(pc, options);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const std::string header_text = read_ply_header(options.output_path);
+    EXPECT_NE(header_text.find("property float confidence"), std::string::npos);
+    EXPECT_NE(header_text.find("property float velocity_0"), std::string::npos);
+    EXPECT_NE(header_text.find("property float velocity_1"), std::string::npos);
+    EXPECT_NE(header_text.find("property float velocity_2"), std::string::npos);
+
+    EXPECT_EQ(read_ply_float_property(options.output_path, "confidence"),
+              (std::vector<float>{0.25f, 0.75f}));
+    EXPECT_EQ(read_ply_float_property(options.output_path, "velocity_0"),
+              (std::vector<float>{1.0f, 4.0f}));
+    EXPECT_EQ(read_ply_float_property(options.output_path, "velocity_1"),
+              (std::vector<float>{2.0f, 5.0f}));
+    EXPECT_EQ(read_ply_float_property(options.output_path, "velocity_2"),
+              (std::vector<float>{3.0f, 6.0f}));
+}
+
+TEST_F(PythonIOTest, PlySaveFiltersExtraAttributesWhenDeletedMaskPresent) {
+    auto splat = create_test_splat(3);
+    splat.deleted() = Tensor::from_vector(std::vector<bool>{false, true, false}, {size_t{3}}, Device::CPU);
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "deleted_mask_extra_attributes.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor::from_vector(std::vector<float>{10.0f, 20.0f, 30.0f}, {size_t{3}}, Device::CPU),
+            .names = {"confidence"},
+        },
+    };
+
+    const auto result = save_ply(splat, options);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    EXPECT_EQ(read_ply_float_property(options.output_path, "x"),
+              (std::vector<float>{0.0f, 2.0f}));
+    EXPECT_EQ(read_ply_float_property(options.output_path, "confidence"),
+              (std::vector<float>{10.0f, 30.0f}));
+}
+
+TEST_F(PythonIOTest, PlySaveRejectsReservedExtraAttributeNames) {
+    PointCloud pc;
+    pc.means = Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU, DataType::Float32);
+    pc.attribute_names = {"x", "y", "z"};
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "reserved_extra_name.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor::ones({size_t{2}}, Device::CPU, DataType::Float32),
+            .names = {"opacity"},
+        },
+    };
+
+    const auto result = save_ply(pc, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().format().find("reserved"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlySaveRejectsDuplicateExtraAttributeNames) {
+    PointCloud pc;
+    pc.means = Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU, DataType::Float32);
+    pc.attribute_names = {"x", "y", "z"};
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "duplicate_extra_name.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor::ones({size_t{2}}, Device::CPU, DataType::Float32),
+            .names = {"confidence"},
+        },
+        PlyAttributeBlock{
+            .values = Tensor::full({size_t{2}}, 2.0f, Device::CPU, DataType::Float32),
+            .names = {"confidence"},
+        },
+    };
+
+    const auto result = save_ply(pc, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().format().find("Duplicate PLY property name 'confidence'"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlySaveRejectsWhitespaceInExtraAttributeNames) {
+    PointCloud pc;
+    pc.means = Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU, DataType::Float32);
+    pc.attribute_names = {"x", "y", "z"};
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "invalid_extra_name.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor::ones({size_t{2}}, Device::CPU, DataType::Float32),
+            .names = {"bad name"},
+        },
+    };
+
+    const auto result = save_ply(pc, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().format().find("without whitespace"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlySaveRejectsExtraAttributeRowCountMismatch) {
+    PointCloud pc;
+    pc.means = Tensor::zeros({size_t{2}, size_t{3}}, Device::CPU, DataType::Float32);
+    pc.attribute_names = {"x", "y", "z"};
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "mismatched_extra_rows.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor::ones({size_t{1}}, Device::CPU, DataType::Float32),
+            .names = {"confidence"},
+        },
+    };
+
+    const auto result = save_ply(pc, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().format().find("row count 1 does not match point count 2"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlySaveRejectsEmptyExtraAttributesWhenDeletedMaskPresent) {
+    auto splat = create_test_splat(3);
+    splat.deleted() = Tensor::from_vector(std::vector<bool>{false, true, false}, {size_t{3}}, Device::CPU);
+
+    PlySaveOptions options;
+    options.output_path = temp_dir / "empty_extra_with_deleted_mask.ply";
+    options.binary = true;
+    options.extra_attributes = {
+        PlyAttributeBlock{
+            .values = Tensor(),
+            .names = {"confidence"},
+        },
+    };
+
+    const auto result = save_ply(splat, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().format().find("must not be empty"), std::string::npos);
 }

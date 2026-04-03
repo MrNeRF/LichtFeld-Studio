@@ -109,9 +109,16 @@ def test_rendering_panel_simplify_tracks_selected_splat_and_applies(rendering_pa
     assert panel._refresh_simplify_source(force=True) is True
     assert panel._simplify_source_name == "Patio"
     assert panel._simplify_original_count == 608_640
-    assert panel._compute_simplify_target_count() == 60_864
-    assert panel._simplify_output_name() == "Patio (Simplified 10%)"
+    assert panel._scrub_fields._specs["simplify_target"].min_value == 1.0
+    assert panel._scrub_fields._specs["simplify_target"].max_value == 608_640.0
+    assert panel._compute_simplify_target_count() == 304_320
+    assert panel._simplify_output_name() == "Patio_304320"
     assert panel._can_run_simplify() is True
+
+    panel._set_scrub_value("simplify_target", 100_000)
+
+    assert panel._compute_simplify_target_count() == 100_000
+    assert panel._simplify_output_name() == "Patio_100000"
 
     panel._start_simplify()
 
@@ -119,10 +126,30 @@ def test_rendering_panel_simplify_tracks_selected_splat_and_applies(rendering_pa
         (
             "Patio",
             {
-                "ratio": 0.1,
+                "ratio": pytest.approx(100_000 / 608_640),
             },
         )
     ]
+
+
+def test_rendering_panel_simplify_target_input_clamps_when_source_changes(rendering_panel_module):
+    module, state = rendering_panel_module
+    panel = module.RenderingPanel()
+    panel._handle = _HandleStub()
+
+    state.selected_name = "Large"
+    state.nodes["Large"] = _make_splat_node(module.lf.scene.NodeType.SPLAT, "Large", 608_640)
+    assert panel._refresh_simplify_source(force=True) is True
+
+    panel._set_scrub_value("simplify_target", 100_000)
+    assert panel._compute_simplify_target_count() == 100_000
+
+    state.selected_name = "Small"
+    state.nodes["Small"] = _make_splat_node(module.lf.scene.NodeType.SPLAT, "Small", 50_000)
+    assert panel._refresh_simplify_source(force=False) is True
+    assert panel._scrub_fields._specs["simplify_target"].max_value == 50_000.0
+    assert panel._compute_simplify_target_count() == 50_000
+    assert panel._simplify_output_name() == "Small_50000"
 
 
 def test_rendering_panel_simplify_progress_and_cancel_update_retained_state(rendering_panel_module):

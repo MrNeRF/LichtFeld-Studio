@@ -55,6 +55,11 @@ namespace lfs::python {
         py_theme.sizes.toolbar_padding = t.sizes.toolbar_padding;
         py_theme.sizes.toolbar_spacing = t.sizes.toolbar_spacing;
 
+        py_theme.vignette.enabled = t.vignette.enabled;
+        py_theme.vignette.intensity = t.vignette.intensity;
+        py_theme.vignette.radius = t.vignette.radius;
+        py_theme.vignette.softness = t.vignette.softness;
+
         return py_theme;
     }
 
@@ -95,12 +100,22 @@ namespace lfs::python {
             .def_ro("toolbar_padding", &PyThemeSizes::toolbar_padding)
             .def_ro("toolbar_spacing", &PyThemeSizes::toolbar_spacing);
 
+        nb::class_<PyThemeVignette>(m, "ThemeVignette")
+            .def_ro("enabled", &PyThemeVignette::enabled)
+            .def_ro("intensity", &PyThemeVignette::intensity)
+            .def_ro("radius", &PyThemeVignette::radius)
+            .def_ro("softness", &PyThemeVignette::softness);
+
         nb::class_<PyTheme>(m, "Theme")
             .def_ro("name", &PyTheme::name)
             .def_ro("palette", &PyTheme::palette)
-            .def_ro("sizes", &PyTheme::sizes);
+            .def_ro("sizes", &PyTheme::sizes)
+            .def_ro("vignette", &PyTheme::vignette);
 
         m.def("theme", &get_current_theme, "Get the current theme");
+        m.def("set_theme_vignette_enabled", &lfs::vis::setThemeVignetteEnabled, "Set theme vignette enabled");
+        m.def("set_theme_vignette_intensity", &lfs::vis::setThemeVignetteIntensity, "Set theme vignette intensity");
+        m.def("set_theme_vignette_style", &lfs::vis::setThemeVignetteStyle, "Set vignette intensity, radius, and softness");
     }
 
 } // namespace lfs::python

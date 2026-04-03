@@ -71,6 +71,39 @@ body {
     justify-content: center;
 }
 
+.viewport-metrics-overlay {
+    position: absolute;
+    pointer-events: none;
+    z-index: 20;
+}
+
+.viewport-metrics-card {
+    min-width: 152dp;
+    padding: 10dp 12dp;
+    border-width: 1dp;
+    border-radius: 10dp;
+    display: flex;
+    flex-direction: column;
+    gap: 6dp;
+}
+
+.viewport-metrics-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 16dp;
+}
+
+.viewport-metrics-label,
+.viewport-metrics-value {
+    font-size: 12dp;
+}
+
+.viewport-metrics-value {
+    font-size: 15dp;
+    font-weight: bold;
+}
+
 .viewport-status-backdrop {
     position: absolute;
     left: 0;

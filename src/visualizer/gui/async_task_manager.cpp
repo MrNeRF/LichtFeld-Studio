@@ -25,6 +25,7 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <functional>
 #include <future>
@@ -170,6 +171,7 @@ namespace lfs::vis::gui {
             .translation = cam_state.position,
             .size = {width, height},
             .focal_length_mm = cam_state.focal_length_mm,
+            .intrinsics_override = std::nullopt,
             .far_plane = render_settings.depth_clip_enabled ? render_settings.depth_clip_far
                                                             : rendering::DEFAULT_FAR_PLANE,
             .orthographic = render_settings.orthographic,
@@ -667,7 +669,8 @@ namespace lfs::vis::gui {
                     const lfs::io::PlySaveOptions options{
                         .output_path = path,
                         .binary = true,
-                        .async = false};
+                        .async = false,
+                        .extra_attributes = {}};
                     if (auto result = lfs::io::save_ply(*splat_data, options); result) {
                         success = true;
                         update_progress(1.0f, "Complete");
@@ -1372,11 +1375,15 @@ namespace lfs::vis::gui {
                     return std::unexpected(std::format("No splat node named '{}'", source_name));
                 }
 
-                const int ratio_pct = static_cast<int>(std::lround(std::clamp(options.ratio, 0.0, 1.0) * 100.0));
+                const auto input_count = static_cast<int64_t>(node->model->size());
+                const auto target_count = std::clamp<int64_t>(
+                    static_cast<int64_t>(std::ceil(std::clamp(options.ratio, 0.0, 1.0) * static_cast<double>(input_count))),
+                    int64_t{1},
+                    std::max<int64_t>(int64_t{1}, input_count));
                 return SimplifyCapture{
                     .model = cloneSplatData(*node->model),
                     .source_name = source_name,
-                    .output_name = std::format("{} (Simplified {}%)", source_name, ratio_pct),
+                    .output_name = std::format("{}_{}", source_name, target_count),
                 };
             });
 

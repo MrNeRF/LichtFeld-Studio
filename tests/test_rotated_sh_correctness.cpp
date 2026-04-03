@@ -211,7 +211,8 @@ TEST_F(RotatedShCorrectnessTest, ExportedPlyPreservesRotatedShAppearance) {
     const auto save_result = lfs::io::save_ply(*merged, lfs::io::PlySaveOptions{
                                                             .output_path = out_path,
                                                             .binary = true,
-                                                            .async = false});
+                                                            .async = false,
+                                                            .extra_attributes = {}});
     ASSERT_TRUE(save_result.has_value()) << save_result.error().message;
 
     auto exported_load = lfs::io::load_ply(out_path);

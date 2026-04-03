@@ -22,11 +22,13 @@
 #include "viewport_overlay_service.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -47,6 +49,7 @@ namespace lfs::core::events::cmd {
 
 namespace lfs::vis {
     class SceneManager;
+    class TrainerManager;
 
     class LFS_VIS_API RenderingManager {
     public:
@@ -63,11 +66,6 @@ namespace lfs::vis {
         // Initialize rendering resources
         void initialize();
         bool isInitialized() const { return initialized_; }
-
-        // Set initial viewport size (must be called before initialize())
-        void setInitialViewportSize(const glm::ivec2& size) {
-            initial_viewport_size_ = size;
-        }
 
         // Main render function
         void renderFrame(const RenderContext& context);
@@ -197,6 +195,18 @@ namespace lfs::vis {
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
         }
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
+
+        struct CameraMetricsOverlayState {
+            int camera_id = -1;
+            int iteration = -1;
+            float psnr = 0.0f;
+            std::optional<float> ssim;
+            bool used_mask = false;
+        };
+
+        void setLatestCameraMetrics(CameraMetricsOverlayState metrics);
+        void clearLatestCameraMetrics();
+        [[nodiscard]] std::optional<CameraMetricsOverlayState> getLatestCameraMetrics() const;
 
         // FPS monitoring
         float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
@@ -333,7 +343,20 @@ namespace lfs::vis {
         bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
     private:
+        struct CameraMetricsJobRequest {
+            uint64_t generation = 0;
+            TrainerManager* trainer_manager = nullptr;
+            int camera_id = -1;
+            int iteration = -1;
+            RenderSettings settings{};
+        };
+
+        static constexpr auto CAMERA_METRICS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
+
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
+        void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
+        void invalidateCameraMetricsRequests(bool clear_latest = false);
+        void cameraMetricsWorkerLoop(std::stop_token stop_token);
         void setupEventHandlers();
         void handleToggleSplitView();
         void handleToggleIndependentSplitView(const lfs::core::events::cmd::ToggleIndependentSplitView& event);
@@ -374,9 +397,16 @@ namespace lfs::vis {
         // Settings
         RenderSettings settings_;
         mutable std::mutex settings_mutex_;
+        mutable std::mutex camera_metrics_mutex_;
+        std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
+        std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;
+        std::optional<CameraMetricsJobRequest> active_camera_metrics_request_;
+        std::condition_variable_any camera_metrics_cv_;
+        std::jthread camera_metrics_worker_;
+        uint64_t camera_metrics_request_generation_ = 0;
+        std::chrono::steady_clock::time_point last_camera_metrics_refresh_time_{};
 
         bool initialized_ = false;
-        glm::ivec2 initial_viewport_size_{1280, 720}; // Default fallback
 
         ViewportInteractionContext viewport_interaction_context_;
 

@@ -13,6 +13,7 @@ add_subdirectory(rasterization/edge_compute)
 
 # LibTorch-free CUDA kernels
 set(LFS_TRAINING_KERNEL_SOURCES
+    kernels/camera_loss_heatmap.cu
     kernels/ssim.cu
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu

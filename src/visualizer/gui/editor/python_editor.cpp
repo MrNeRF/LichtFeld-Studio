@@ -28,6 +28,7 @@
 #include <zep/mode_standard.h>
 #include <zep/mode_vim.h>
 #include <zep/syntax_python.h>
+#include <zep/tab_window.h>
 #include <zep/theme.h>
 #include <zep/window.h>
 
@@ -62,6 +63,10 @@ namespace lfs::vis::editor {
                 a.z + (b.z - a.z) * t,
                 a.w + (b.w - a.w) * t,
             };
+        }
+
+        ImVec4 with_alpha(const ImVec4& color, float alpha) {
+            return {color.x, color.y, color.z, alpha};
         }
 
         std::string rstrip_lines(const std::string& text) {
@@ -483,10 +488,15 @@ namespace lfs::vis::editor {
             config.cursorLineSolid = true;
             config.showNormalModeKeyStrokes = false;
             config.shortTabNames = true;
-            config.showScrollBar = 1;
+            config.showScrollBar = 2;
             config.lineMargins = Zep::NVec2f(1.0f, 1.0f);
 
             buffer = editor->InitWithText("script.py", "");
+            if (auto* tab = editor->GetActiveTabWindow()) {
+                if (auto* window = tab->GetActiveWindow()) {
+                    window->SetWindowFlags(window->GetWindowFlags() & ~Zep::WindowFlags::WrapText);
+                }
+            }
             if (buffer != nullptr) {
                 buffer->SetFileFlags(Zep::FileFlags::InsertTabs, false);
                 buffer->SetPostKeyNotifier([this](uint32_t key, uint32_t modifier) {
@@ -507,6 +517,13 @@ namespace lfs::vis::editor {
 
         void applyTheme(const Theme& app_theme) {
             auto& zep_theme = editor->GetTheme();
+            auto& config = editor->GetConfig();
+            config.scrollBarSize = app_theme.sizes.scrollbar_size;
+            config.scrollBarMinSize = app_theme.sizes.grab_min_size;
+
+            const ImVec4 scroll_track = with_alpha(app_theme.palette.background, 0.5f);
+            const ImVec4 scroll_thumb = with_alpha(app_theme.palette.text_dim, 0.63f);
+            const ImVec4 scroll_hover = with_alpha(app_theme.palette.primary, 0.78f);
             zep_theme.SetThemeType(app_theme.isLightTheme() ? Zep::ThemeType::Light
                                                             : Zep::ThemeType::Dark);
 
@@ -539,9 +556,9 @@ namespace lfs::vis::editor {
                                mix(app_theme.palette.surface_bright, app_theme.palette.primary_dim, 0.2f));
             zep_theme.SetColor(Zep::ThemeColor::TabBorder, to_zep(app_theme.palette.border));
             zep_theme.SetColor(Zep::ThemeColor::WidgetBorder, to_zep(app_theme.palette.border));
-            zep_theme.SetColor(Zep::ThemeColor::WidgetBackground, to_zep(app_theme.palette.surface_bright));
-            zep_theme.SetColor(Zep::ThemeColor::WidgetActive, to_zep(app_theme.palette.primary));
-            zep_theme.SetColor(Zep::ThemeColor::WidgetInactive, to_zep(app_theme.palette.primary_dim));
+            zep_theme.SetColor(Zep::ThemeColor::WidgetBackground, to_zep(scroll_track));
+            zep_theme.SetColor(Zep::ThemeColor::WidgetActive, to_zep(scroll_hover));
+            zep_theme.SetColor(Zep::ThemeColor::WidgetInactive, to_zep(scroll_thumb));
             zep_theme.SetColor(Zep::ThemeColor::Error, to_zep(app_theme.palette.error));
             zep_theme.SetColor(Zep::ThemeColor::Warning, to_zep(app_theme.palette.warning));
             zep_theme.SetColor(Zep::ThemeColor::Info, to_zep(app_theme.palette.info));

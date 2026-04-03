@@ -178,6 +178,19 @@ class ThemeSizes:
     @property
     def toolbar_spacing(self) -> float: ...
 
+class ThemeVignette:
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def intensity(self) -> float: ...
+
+    @property
+    def radius(self) -> float: ...
+
+    @property
+    def softness(self) -> float: ...
+
 class Theme:
     @property
     def name(self) -> str: ...
@@ -188,8 +201,20 @@ class Theme:
     @property
     def sizes(self) -> ThemeSizes: ...
 
+    @property
+    def vignette(self) -> ThemeVignette: ...
+
 def theme() -> Theme:
     """Get the current theme"""
+
+def set_theme_vignette_enabled(arg: bool, /) -> None:
+    """Set theme vignette enabled"""
+
+def set_theme_vignette_intensity(arg: float, /) -> None:
+    """Set theme vignette intensity"""
+
+def set_theme_vignette_style(arg0: float, arg1: float, arg2: float, /) -> None:
+    """Set vignette intensity, radius, and softness"""
 
 class PanelSpace(enum.Enum):
     SIDE_PANEL = 0

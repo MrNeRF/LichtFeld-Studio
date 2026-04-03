@@ -152,4 +152,24 @@ namespace lfs::training {
         return result->first;
     }
 
+    // Inference-only rasterization does not mutate the camera; this overload avoids
+    // forcing callers with const camera handles to cast away constness at the call site.
+    inline RenderOutput gsplat_rasterize(
+        const lfs::core::Camera& viewpoint_camera,
+        lfs::core::SplatData& gaussian_model,
+        lfs::core::Tensor& bg_color,
+        float scaling_modifier = 1.0f,
+        bool antialiased = false,
+        GsplatRenderMode render_mode = GsplatRenderMode::RGB,
+        bool use_gut = false) {
+        return gsplat_rasterize(
+            const_cast<lfs::core::Camera&>(viewpoint_camera),
+            gaussian_model,
+            bg_color,
+            scaling_modifier,
+            antialiased,
+            render_mode,
+            use_gut);
+    }
+
 } // namespace lfs::training

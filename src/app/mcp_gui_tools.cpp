@@ -1513,7 +1513,9 @@ namespace lfs::app {
 
             switch (format) {
             case core::ExportFormat::PLY: {
-                if (auto result = io::save_ply(*merged, io::PlySaveOptions{.output_path = path, .binary = true}); !result)
+                if (auto result = io::save_ply(
+                        *merged, io::PlySaveOptions{.output_path = path, .binary = true, .async = false, .extra_attributes = {}});
+                    !result)
                     return std::unexpected(result.error().message);
                 break;
             }

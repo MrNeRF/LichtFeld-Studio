@@ -12,6 +12,7 @@
 #include "visualizer/rendering/passes/splat_raster_pass.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/split_view_composition.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
@@ -23,6 +24,24 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    namespace {
+        std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
+            using lfs::core::DataType;
+            using lfs::core::Device;
+            using lfs::core::Tensor;
+
+            return std::make_unique<lfs::core::SplatData>(
+                0,
+                Tensor::from_vector({x, 0.0f, 2.0f}, {size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 1.0f, 1.0f}, {size_t{1}, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{1}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f}, {size_t{1}, size_t{4}}, Device::CPU),
+                Tensor::from_vector({8.0f}, {size_t{1}, size_t{1}}, Device::CPU),
+                1.0f);
+        }
+    } // namespace
 
     class RenderingManagerEventsTest : public ::testing::Test {
     protected:
@@ -181,6 +200,159 @@ namespace lfs::vis {
         EXPECT_EQ(state.combined_model->size(), 0u);
         ASSERT_NE(state.point_cloud, nullptr);
         EXPECT_EQ(state.point_cloud->size(), 1);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PlyComparisonBuildsFullFrameWipeFromCombinedSceneMasks) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::SplatFiles);
+
+        auto& scene = manager.getScene();
+        const auto left_id = scene.addSplat("left", makeTestSplat(0.0f));
+        const auto right_id = scene.addSplat("right", makeTestSplat(1.0f));
+
+        RenderSettings settings;
+        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_position = 0.35f;
+        settings.show_rings = true;
+        settings.depth_filter_enabled = true;
+        settings.depth_filter_min = {-1.0f, -1.0f, -1.0f};
+        settings.depth_filter_max = {1.0f, 1.0f, 1.0f};
+
+        Viewport viewport(640, 480);
+        const auto scene_state = manager.buildRenderState();
+        ASSERT_NE(scene_state.combined_model, nullptr);
+
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+        };
+
+        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
+        ASSERT_TRUE(plan.has_value());
+        ASSERT_EQ(plan->panels.size(), 2u);
+
+        EXPECT_EQ(plan->panels[0].panel.content.model, ctx.model);
+        EXPECT_EQ(plan->panels[1].panel.content.model, ctx.model);
+        EXPECT_EQ(plan->panels[0].panel.content.model_transform, glm::mat4(1.0f));
+        EXPECT_EQ(plan->panels[1].panel.content.model_transform, glm::mat4(1.0f));
+
+        for (size_t i = 0; i < plan->panels.size(); ++i) {
+            const auto& panel = plan->panels[i].panel;
+            ASSERT_TRUE(panel.content.gaussian_render.has_value());
+            EXPECT_EQ(panel.content.gaussian_render->frame_view.size, ctx.render_size);
+            EXPECT_FALSE(panel.presentation.normalize_x_to_panel);
+            EXPECT_EQ(panel.content.gaussian_render->scene.model_transforms, &ctx.scene_state.model_transforms);
+            EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, ctx.scene_state.transform_indices);
+            ASSERT_EQ(panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
+            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[0], i == 0);
+            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[1], i == 1);
+            EXPECT_TRUE(panel.content.gaussian_render->filters.view_volume.has_value());
+            EXPECT_TRUE(panel.content.gaussian_render->overlay.markers.show_rings);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.mask, ctx.scene_state.selection_mask);
+            EXPECT_FALSE(panel.content.gaussian_render->overlay.cursor.enabled);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
+        }
+
+        EXPECT_EQ(scene.getVisibleNodeIndex(left_id), 0);
+        EXPECT_EQ(scene.getVisibleNodeIndex(right_id), 1);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonUsesCombinedSceneMasks) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+
+        auto& scene = manager.getScene();
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setTrainingModelNode("Model");
+
+        manager.switchToEditMode();
+        const auto trained_id = scene.getNodeIdByName("Trained Model");
+        const auto bike_id = scene.addSplat("bike", makeTestSplat(1.0f));
+
+        const auto cropbox_id = scene.getOrCreateCropBoxForSplat(trained_id);
+        auto* cropbox = scene.getCropBoxData(cropbox_id);
+        ASSERT_NE(cropbox, nullptr);
+        cropbox->min = {-1.0f, -1.0f, -1.0f};
+        cropbox->max = {1.0f, 1.0f, 1.0f};
+
+        auto scene_state = manager.buildRenderState();
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selected_node_mask = {true, false};
+
+        Tensor transient_selection =
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::Bool);
+
+        RenderSettings settings;
+        settings.split_view_mode = SplitViewMode::PLYComparison;
+        settings.split_position = 0.4f;
+        settings.use_crop_box = true;
+        settings.show_rings = true;
+        settings.depth_filter_enabled = true;
+        settings.depth_filter_min = {-2.0f, -2.0f, -2.0f};
+        settings.depth_filter_max = {2.0f, 2.0f, 2.0f};
+        settings.desaturate_unselected = true;
+
+        Viewport viewport(640, 480);
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = std::move(scene_state),
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+            .cursor_preview =
+                {.active = true,
+                 .x = 32.0f,
+                 .y = 24.0f,
+                 .radius = 10.0f,
+                 .add_mode = true,
+                 .selection_tensor = &transient_selection,
+                 .preview_selection = &transient_selection,
+                 .focused_gaussian_id = 0},
+        };
+
+        const auto plan = buildSplitViewCompositionPlan(ctx, FrameResources{});
+        ASSERT_TRUE(plan.has_value());
+        ASSERT_EQ(plan->panels.size(), 2u);
+
+        for (size_t i = 0; i < plan->panels.size(); ++i) {
+            const auto& panel = plan->panels[i].panel;
+            ASSERT_TRUE(panel.content.gaussian_render.has_value());
+            EXPECT_EQ(panel.content.model, ctx.model);
+            EXPECT_EQ(panel.content.model_transform, glm::mat4(1.0f));
+            EXPECT_EQ(panel.content.gaussian_render->scene.model_transforms, &ctx.scene_state.model_transforms);
+            EXPECT_EQ(panel.content.gaussian_render->scene.transform_indices, ctx.scene_state.transform_indices);
+            ASSERT_EQ(panel.content.gaussian_render->scene.node_visibility_mask.size(), 2u);
+            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[0], i == 0);
+            EXPECT_EQ(panel.content.gaussian_render->scene.node_visibility_mask[1], i == 1);
+
+            EXPECT_TRUE(panel.content.gaussian_render->filters.crop_region.has_value());
+            EXPECT_EQ(panel.content.gaussian_render->filters.crop_region->parent_node_index, 0);
+            EXPECT_TRUE(panel.content.gaussian_render->filters.view_volume.has_value());
+            EXPECT_TRUE(panel.content.gaussian_render->overlay.markers.show_rings);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.mask, ctx.scene_state.selection_mask);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.emphasized_node_mask,
+                      ctx.scene_state.selected_node_mask);
+            EXPECT_TRUE(panel.content.gaussian_render->overlay.emphasis.dim_non_emphasized);
+            EXPECT_FALSE(panel.content.gaussian_render->overlay.cursor.enabled);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.transient_mask.mask, nullptr);
+            EXPECT_EQ(panel.content.gaussian_render->overlay.emphasis.focused_gaussian_id, -1);
+        }
+
+        EXPECT_EQ(scene.getVisibleNodeIndex(trained_id), 0);
+        EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
     }
 
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {

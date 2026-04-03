@@ -88,6 +88,7 @@ namespace lfs::rendering::kernels::forward {
         const bool* deleted_mask,
         const int focused_gaussian_id,
         unsigned long long* hovered_depth_id,
+        const bool include_low_opacity_selection_queries,
         const bool* emphasized_node_mask,
         const int num_selected_nodes,
         const bool dim_non_emphasized,
@@ -240,7 +241,7 @@ namespace lfs::rendering::kernels::forward {
         // load opacity
         const float raw_opacity = raw_opacities[global_idx];
         const float opacity = 1.0f / (1.0f + expf(-raw_opacity));
-        if (opacity < config::min_alpha_threshold)
+        if (opacity < config::min_alpha_threshold && !include_low_opacity_selection_queries)
             active = false;
 
         // compute 3d covariance from raw scale and rotation
@@ -330,12 +331,32 @@ namespace lfs::rendering::kernels::forward {
         const float det_safe = fmaxf(det, 1e-8f);
         const float det_rcp = 1.0f / det_safe;
         const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
-        if (output_opacity < config::min_alpha_threshold)
+        const bool low_opacity_query_only =
+            output_opacity < config::min_alpha_threshold && include_low_opacity_selection_queries;
+        if (output_opacity < config::min_alpha_threshold && !include_low_opacity_selection_queries)
             active = false;
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
         const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
+
+        if (low_opacity_query_only) {
+            primitive_mean2d[primitive_idx] = mean2d;
+
+            constexpr float LOW_OPACITY_QUERY_RADIUS_SQ = 6.25f;
+            const bool selectable = !(outside_crop || outside_view_volume);
+            if (cursor_active && hovered_depth_id != nullptr && selectable) {
+                const float dx = mean2d.x - cursor_x;
+                const float dy = mean2d.y - cursor_y;
+                if (dx * dx + dy * dy <= LOW_OPACITY_QUERY_RADIUS_SQ) {
+                    const unsigned int depth_bits = __float_as_uint(depth);
+                    const unsigned long long packed =
+                        (static_cast<unsigned long long>(depth_bits) << 32) | global_idx;
+                    atomicMin(hovered_depth_id, packed);
+                }
+            }
+            return;
+        }
 
         // Compute bounds
         const float safe_output_opacity = fmaxf(output_opacity, config::min_alpha_threshold);

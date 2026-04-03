@@ -49,6 +49,28 @@ namespace lfs::vis::gui {
         bool is_training = false;
     };
 
+    struct FloatingPanelAnchor {
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+    };
+
+    struct FloatingPanelPlacement {
+        float x = 0.0f;
+        float y = 0.0f;
+    };
+
+    [[nodiscard]] LFS_VIS_API FloatingPanelPlacement computeFloatingPanelPlacement(
+        const FloatingPanelAnchor& anchor,
+        float panel_width,
+        float panel_height,
+        float stored_x,
+        float stored_y,
+        bool auto_center,
+        float title_height,
+        float visible_fraction = 0.1f);
+
     class IPanel {
     public:
         virtual ~IPanel() = default;
@@ -107,6 +129,7 @@ namespace lfs::vis::gui {
         float original_height = 0;
         float float_x = NAN;
         float float_y = NAN;
+        bool float_auto_center = true;
         uint64_t float_stack_order = 0;
         bool float_dragging = false;
         float float_drag_ox = 0;

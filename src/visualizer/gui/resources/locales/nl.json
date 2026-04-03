@@ -439,6 +439,7 @@
     "equirectangular": "Equirectangulair",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
+    "camera_metrics": "Camerametrieken",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
     "ppisp_mode_manual": "Manual",
@@ -472,7 +473,11 @@
     "mesh_shadow_enabled": "Schaduwen",
     "mesh_shadow_resolution": "Schaduwresolutie",
     "camera_frustum_scale": "Frustum schaal",
-    "voxel_size": "Voxelgrootte"
+    "voxel_size": "Voxelgrootte",
+    "theme_vignette": "Vignette",
+    "theme_vignette_intensity": "Vignet-intensiteit",
+    "theme_vignette_radius": "Vignetstraal",
+    "theme_vignette_softness": "Vignetzachtheid"
   },
   "toolbar": {
     "selection": "Selectie (1)",
@@ -575,6 +580,10 @@
     "ppisp_gamma_channel": "Gamma-offset per kanaal",
     "ppisp_crf_toe": "Schaduwcompressie (toe van CRF-curve)",
     "ppisp_crf_shoulder": "Hooglicht-roll-off (shoulder van CRF-curve)",
+    "theme_vignette": "Donker maken van viewportranden inschakelen",
+    "theme_vignette_intensity": "Donkerheid van vignet aanpassen (0-1)",
+    "theme_vignette_radius": "Aanpassen waar het vignet begint (0-1)",
+    "theme_vignette_softness": "Zachtheid van de vignetrand aanpassen (0-1)",
     "render_scale": "Viewer resolutie (lager = minder VRAM)",
     "point_cloud_forced": "Gedwongen voor training start",
     "desaturate_unselected": "Dim niet-geselecteerde PLY's",

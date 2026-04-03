@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -23,6 +24,13 @@ namespace lfs::rendering {
     constexpr float DEFAULT_FOCAL_LENGTH_MM = 35.0f;
 
     constexpr float DEFAULT_ORTHO_SCALE = 100.0f;
+
+    struct CameraIntrinsics {
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+    };
 
     inline float focalLengthToVFovRad(const float focal_mm) {
         return 2.0f * std::atan(SENSOR_HEIGHT_35MM / (2.0f * focal_mm));
@@ -59,6 +67,23 @@ namespace lfs::rendering {
                                                      const float far_plane = DEFAULT_FAR_PLANE) {
         const float vfov = focalLengthToVFov(focal_length_mm);
         return createProjectionMatrix(viewport_size, vfov, orthographic, ortho_scale, near_plane, far_plane);
+    }
+
+    inline glm::mat4 createProjectionMatrixFromIntrinsics(const glm::ivec2& viewport_size,
+                                                          const CameraIntrinsics& intrinsics,
+                                                          const float near_plane = DEFAULT_NEAR_PLANE,
+                                                          const float far_plane = DEFAULT_FAR_PLANE) {
+        // This produces an image-space frustum (Y down). OpenGL callers must apply a Y flip.
+        const float width = static_cast<float>(viewport_size.x);
+        const float height = static_cast<float>(viewport_size.y);
+        const float fx = std::max(intrinsics.focal_x, 1e-6f);
+        const float fy = std::max(intrinsics.focal_y, 1e-6f);
+
+        const float left = -intrinsics.center_x * near_plane / fx;
+        const float right = (width - intrinsics.center_x) * near_plane / fx;
+        const float top = (height - intrinsics.center_y) * near_plane / fy;
+        const float bottom = -intrinsics.center_y * near_plane / fy;
+        return glm::frustum(left, right, bottom, top, near_plane, far_plane);
     }
 
 } // namespace lfs::rendering
