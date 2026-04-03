@@ -14,6 +14,20 @@ namespace lfs::vis {
     class GTTextureCache;
     class SceneManager;
     struct FrameResources;
+} // namespace lfs::vis
+
+namespace lfs::core {
+    class Camera;
+} // namespace lfs::core
+
+namespace lfs::vis {
+
+    namespace detail {
+        [[nodiscard]] LFS_VIS_API std::optional<GTRenderCamera> buildGTRenderCamera(
+            const lfs::core::Camera& cam,
+            glm::ivec2 render_size,
+            const glm::mat4& scene_transform);
+    } // namespace detail
 
     class LFS_VIS_API SplitViewService {
     public:

@@ -19,6 +19,7 @@
 namespace lfs::vis {
 
     namespace {
+        constexpr bool kTensorTextureNeedsPresentationFlip = true;
 
         [[nodiscard]] std::string makePipelineLoadSignature(
             const std::filesystem::path& image_path,
@@ -263,15 +264,20 @@ namespace lfs::vis {
 
             entry.width = width;
             entry.height = height;
-            // Loader tensors arrive in display orientation already. Keep the split-view
-            // sampler unflipped to avoid inverting the GT panel.
-            entry.needs_flip = false;
+            // CUDA/CPU tensor uploads preserve the conventional top-left image origin,
+            // so split-view must flip Y when sampling them as OpenGL textures.
+            entry.needs_flip = kTensorTextureNeedsPresentationFlip;
 
             const glm::vec2 tex_scale(
                 entry.interop_texture->getTexcoordScaleX(),
                 entry.interop_texture->getTexcoordScaleY());
 
-            return {entry.interop_texture->getTextureID(), width, height, false, tex_scale};
+            return {
+                entry.interop_texture->getTextureID(),
+                width,
+                height,
+                kTensorTextureNeedsPresentationFlip,
+                tex_scale};
         } catch (const std::exception& e) {
             LOG_WARN("GT loader path failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
             entry.interop_texture.reset();
@@ -348,9 +354,9 @@ namespace lfs::vis {
             entry.texture_id = texture;
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = false;
+            entry.needs_flip = kTensorTextureNeedsPresentationFlip;
 
-            return {texture, width, height, false};
+            return {texture, width, height, kTensorTextureNeedsPresentationFlip};
         } catch (const std::exception& e) {
             LOG_WARN("GT tensor CPU upload failed: {}", e.what());
             return {};
@@ -389,13 +395,18 @@ namespace lfs::vis {
 
             entry.width = width;
             entry.height = height;
-            entry.needs_flip = false;
+            entry.needs_flip = kTensorTextureNeedsPresentationFlip;
 
             const glm::vec2 tex_scale(
                 entry.interop_texture->getTexcoordScaleX(),
                 entry.interop_texture->getTexcoordScaleY());
 
-            return {entry.interop_texture->getTextureID(), width, height, false, tex_scale};
+            return {
+                entry.interop_texture->getTextureID(),
+                width,
+                height,
+                kTensorTextureNeedsPresentationFlip,
+                tex_scale};
         } catch (const std::exception& e) {
             LOG_WARN("GPU texture load failed: {}", e.what());
             entry.interop_texture.reset();

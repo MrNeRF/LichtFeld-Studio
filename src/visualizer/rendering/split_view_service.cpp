@@ -5,6 +5,7 @@
 #include "split_view_service.hpp"
 #include "gt_texture_cache.hpp"
 #include "render_pass.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -13,6 +14,17 @@
 namespace lfs::vis {
 
     namespace {
+        [[nodiscard]] glm::mat3 normalizedRotation(const glm::mat4& transform) {
+            glm::mat3 rotation(1.0f);
+            const glm::mat3 raw_rotation(transform);
+            for (int axis = 0; axis < 3; ++axis) {
+                const float axis_length = glm::length(raw_rotation[axis]);
+                rotation[axis] =
+                    axis_length > 1e-6f ? raw_rotation[axis] / axis_length : glm::mat3(1.0f)[axis];
+            }
+            return rotation;
+        }
+
         [[nodiscard]] glm::mat4 currentSceneTransform(SceneManager* const scene_manager,
                                                      const int camera_uid) {
             if (!scene_manager) {
@@ -46,11 +58,13 @@ namespace lfs::vis {
             }
             return true;
         }
+    } // namespace
 
-        [[nodiscard]] std::optional<GTRenderCamera> buildGTRenderCamera(
-            const lfs::core::Camera& cam,
-            const glm::ivec2 render_size,
-            const glm::mat4& scene_transform) {
+    namespace detail {
+
+        std::optional<GTRenderCamera> buildGTRenderCamera(const lfs::core::Camera& cam,
+                                                          const glm::ivec2 render_size,
+                                                          const glm::mat4& scene_transform) {
             if (render_size.x <= 0 || render_size.y <= 0) {
                 return std::nullopt;
             }
@@ -73,10 +87,13 @@ namespace lfs::vis {
             const glm::vec3 world_to_cam_T(T_data[0], T_data[1], T_data[2]);
             const glm::mat3 cam_to_world_R = glm::transpose(world_to_cam_R);
             const glm::vec3 cam_to_world_T = -cam_to_world_R * world_to_cam_T;
+            const glm::mat3 scene_rotation = normalizedRotation(scene_transform);
 
             GTRenderCamera render_camera;
-            render_camera.rotation = glm::mat3(scene_transform) * cam_to_world_R;
-            render_camera.translation = glm::mat3(scene_transform) * cam_to_world_T + glm::vec3(scene_transform[3]);
+            render_camera.rotation =
+                scene_rotation * lfs::rendering::visualizerRotationFromDataCameraToWorld(cam_to_world_R);
+            render_camera.translation =
+                glm::vec3(scene_transform * glm::vec4(cam_to_world_T, 1.0f));
             render_camera.equirectangular =
                 cam.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
 
@@ -94,7 +111,7 @@ namespace lfs::vis {
 
             return render_camera;
         }
-    } // namespace
+    } // namespace detail
 
     bool SplitViewService::hasValidGTContext() const {
         return gt_context_ && gt_context_->valid();
@@ -348,7 +365,7 @@ namespace lfs::vis {
             .gt_texcoord_scale = gt_info.texcoord_scale,
             .gt_needs_flip = gt_info.needs_flip,
             .scene_transform = scene_transform,
-            .render_camera = buildGTRenderCamera(*cam, dims, scene_transform)};
+            .render_camera = detail::buildGTRenderCamera(*cam, dims, scene_transform)};
 
         request_viewport_prerender = hasValidGTContext() && !has_viewport_output;
     }
