@@ -7,6 +7,7 @@
 #include "render_constants.hpp"
 #include <cmath>
 #include <glm/glm.hpp>
+#include <iterator>
 #include <optional>
 #include <utility>
 
