@@ -303,12 +303,13 @@ namespace lfs::app {
 
             mcp_http.stop();
 
+            python::finalize();
+
             viewer.reset();
 
             core::Tensor::shutdown_memory_pool();
             core::PinnedMemoryAllocator::instance().shutdown();
 
-            python::finalize();
             std::_Exit(0);
         }
 
