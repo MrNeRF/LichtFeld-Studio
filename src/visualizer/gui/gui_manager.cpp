@@ -801,8 +801,10 @@ namespace lfs::vis::gui {
             lfs::python::acquire_gil_main_thread();
 
         lfs::python::shutdown_python_gl_resources();
+        lfs::python::set_modal_enqueue_callback({});
 
         global_context_menu_->destroyGLResources();
+        rml_modal_overlay_.reset();
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
