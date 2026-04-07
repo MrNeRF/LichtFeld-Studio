@@ -9,13 +9,37 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <string>
 
 namespace lfs::training {
     class TrainingProgress {
+    public:
+        enum class Phase {
+            Train,
+            Refine,
+            Controller,
+            Sparse
+        };
+
+    private:
         std::unique_ptr<indicators::ProgressBar> progress_bar_;
         std::chrono::steady_clock::time_point start_time_;
         int total_iterations_;
         int update_frequency_;
+
+        static const char* phase_label(Phase phase) {
+            switch (phase) {
+            case Phase::Train:
+                return "";
+            case Phase::Refine:
+                return "(+)";
+            case Phase::Controller:
+                return "Ctrl";
+            case Phase::Sparse:
+                return "(-)";
+            }
+            return "";
+        }
 
     public:
         TrainingProgress(int total_iterations, int update_frequency = 100)
@@ -25,20 +49,22 @@ namespace lfs::training {
             progress_bar_ = std::make_unique<indicators::ProgressBar>();
 
             // Configure the progress bar after creation using constructor syntax
-            progress_bar_->set_option(indicators::option::BarWidth(40));
             progress_bar_->set_option(indicators::option::Start("["));
 
             // Use ASCII characters on Windows, Unicode on other platforms
 #ifdef _WIN32
+            progress_bar_->set_option(indicators::option::BarWidth(38));
             progress_bar_->set_option(indicators::option::Fill("="));
             progress_bar_->set_option(indicators::option::Lead(">"));
             progress_bar_->set_option(indicators::option::Remainder(" "));
 #else
+            progress_bar_->set_option(indicators::option::BarWidth(40));
             progress_bar_->set_option(indicators::option::Fill("█"));
             progress_bar_->set_option(indicators::option::Lead("▌"));
             progress_bar_->set_option(indicators::option::Remainder("░"));
 #endif
             progress_bar_->set_option(indicators::option::End("]"));
+
             progress_bar_->set_option(indicators::option::PrefixText("Training "));
             progress_bar_->set_option(indicators::option::PostfixText("Initializing..."));
             progress_bar_->set_option(indicators::option::ShowPercentage(true));
@@ -56,7 +82,7 @@ namespace lfs::training {
             start_time_ = std::chrono::steady_clock::now();
         }
 
-        void update(int current_iteration, float loss, int splat_count, bool is_refining = false) {
+        void update(int current_iteration, float loss, int splat_count, Phase phase = Phase::Train) {
             if (current_iteration % update_frequency_ != 0)
                 return;
 
@@ -66,11 +92,8 @@ namespace lfs::training {
             std::ostringstream postfix;
             postfix << current_iteration << "/" << total_iterations_
                     << " | Loss: " << std::fixed << std::setprecision(4) << loss
-                    << " | Splats: " << splat_count;
-
-            if (is_refining) {
-                postfix << " (+)";
-            }
+                    << " | Splats: " << splat_count
+                    << " " << phase_label(phase);
 
             progress_bar_->set_option(indicators::option::PostfixText(postfix.str()));
         }
@@ -82,11 +105,11 @@ namespace lfs::training {
             }
         }
 
-        void resume(int current_iteration, float loss, int splat_count) {
+        void resume(int current_iteration, float loss, int splat_count, Phase phase = Phase::Train) {
             // Reset the progress bar
             progress_bar_->set_progress(static_cast<size_t>(
                 static_cast<float>(current_iteration) / total_iterations_ * 100));
-            update(current_iteration, loss, splat_count, false);
+            update(current_iteration, loss, splat_count, phase);
         }
 
         void complete() {
