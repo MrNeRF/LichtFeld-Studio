@@ -55,6 +55,12 @@ class ToolRegistry:
         if not tool.can_activate(context):
             return False
 
+        if tool.action_only:
+            if not tool.operator:
+                return False
+            lf.ui.ops.invoke(tool.operator)
+            return True
+
         lf.ui.ops.cancel_modal()
         lf.ui.clear_gizmo()
 

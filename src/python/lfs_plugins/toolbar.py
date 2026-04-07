@@ -2,11 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Viewport toolbars rendered from a retained RmlUI data model."""
 
+from pathlib import Path
+from urllib.parse import quote
+
 from .histogram_support import histogram_mode_available
 from .tools import ToolRegistry
 
 
 _TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
+_RML_PATH_SAFE_CHARS = "/:._-~"
 
 _toolbar_controller = None
 
@@ -16,6 +20,26 @@ def _icon_src(icon_name):
     if "." in icon_name:
         return f"../icon/{icon_name}"
     return f"../icon/{icon_name}.png"
+
+
+def _tool_icon_src(tool_def):
+    """Resolve builtin toolbar icons or plugin-provided toolbar icons."""
+    plugin_path = getattr(tool_def, "plugin_path", "") or ""
+    if plugin_path:
+        candidate = Path(plugin_path) / "icons" / f"{tool_def.icon}.png"
+        if candidate.exists():
+            return quote(candidate.as_posix(), safe=_RML_PATH_SAFE_CHARS)
+    return _icon_src(tool_def.icon)
+
+
+def _tool_selected(tool_def, active_tool_id, context):
+    selected_fn = getattr(tool_def, "selected", None)
+    if callable(selected_fn):
+        try:
+            return bool(selected_fn(context))
+        except Exception:
+            return False
+    return active_tool_id == tool_def.id
 
 
 def _tooltip_text(label, shortcut=""):
@@ -129,10 +153,10 @@ class _GizmoToolbarController:
             f"tool-{tool_def.id}",
             "tool",
             tool_def.id,
-            _icon_src(tool_def.icon),
+            _tool_icon_src(tool_def),
             tooltip_key=tooltip_key,
             tooltip_text="" if tooltip_key else _tooltip_text(tool_def.label, tool_def.shortcut),
-            selected=active_tool_id == tool_def.id,
+            selected=_tool_selected(tool_def, active_tool_id, context),
             enabled=tool_def.can_activate(context),
         )
 
