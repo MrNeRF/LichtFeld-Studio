@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/native_panels.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/line_renderer.hpp"
@@ -11,6 +12,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/startup_overlay.hpp"
+#include "gui/string_keys.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -31,7 +33,23 @@ namespace lfs::vis::gui::native_panels {
 
     void VideoExtractorPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
-        if (!widget_ || !widget_->render())
+        if (!widget_) {
+            PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
+            return;
+        }
+
+        bool open = true;
+        const auto& t = lfs::vis::theme();
+        ImGui::SetNextWindowSize(ImVec2(750, 600), ImGuiCond_FirstUseEver);
+        t.pushModalStyle();
+        if (ImGui::Begin(LOC(lichtfeld::Strings::VideoExtractor::TITLE), &open)) {
+            if (!widget_->render())
+                open = false;
+        }
+        ImGui::End();
+        t.popModalStyle();
+
+        if (!open)
             PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
     }
 

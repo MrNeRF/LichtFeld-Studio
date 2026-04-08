@@ -237,6 +237,7 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::renderVideoPreview() {
+        const auto& t = lfs::vis::theme();
         // Update playback with wall clock time
         const double current_time = ImGui::GetTime();
 
@@ -285,7 +286,7 @@ namespace lfs::gui {
             const ImVec2 region = ImGui::GetContentRegionAvail();
             ImGui::SetCursorPos(ImVec2((region.x - text_size.x) * 0.5f,
                                        (region.y - text_size.y) * 0.5f));
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "%s", hint);
+            ImGui::TextColored(t.palette.text_dim, "%s", hint);
         }
 
         ImGui::EndChild();
@@ -513,10 +514,11 @@ namespace lfs::gui {
 
         // Show estimated frame count
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), LOC(VideoExtractor::ESTIMATED_FRAMES), calculateEstimatedFrames());
+        ImGui::TextColored(t.palette.text_dim, LOC(VideoExtractor::ESTIMATED_FRAMES), calculateEstimatedFrames());
     }
 
     void VideoExtractorDialog::renderFileSelection() {
+        const auto& t = lfs::vis::theme();
         ImGui::SeparatorText(LOC(VideoExtractor::INPUT_VIDEO));
 
         // Video file selection with browse button inline
@@ -526,7 +528,7 @@ namespace lfs::gui {
         const std::string video_display =
             video_path_.empty() ? LOC(VideoExtractor::NO_FILE)
                                 : lfs::core::path_to_utf8(video_path_.filename());
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", video_display.c_str());
+        ImGui::TextColored(t.palette.text_dim, "%s", video_display.c_str());
 
         ImGui::SameLine();
         ImGui::PushID("video");
@@ -545,7 +547,7 @@ namespace lfs::gui {
         const std::string output_display =
             output_dir_.empty() ? LOC(VideoExtractor::NO_DIR)
                                 : lfs::core::path_to_utf8(output_dir_);
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", output_display.c_str());
+        ImGui::TextColored(t.palette.text_dim, "%s", output_display.c_str());
 
         ImGui::SameLine();
         ImGui::PushID("output");
@@ -609,6 +611,7 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::renderResolutionSettings() {
+        const auto& t = lfs::vis::theme();
         ImGui::SeparatorText(LOC(VideoExtractor::RESOLUTION));
 
         const char* res_modes[] = {LOC(VideoExtractor::RES_ORIGINAL), LOC(VideoExtractor::RES_SCALE), LOC(VideoExtractor::RES_CUSTOM)};
@@ -656,11 +659,12 @@ namespace lfs::gui {
             }
 
             ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC(VideoExtractor::OUTPUT_RES), out_w, out_h);
+            ImGui::TextColored(t.palette.text_dim, LOC(VideoExtractor::OUTPUT_RES), out_w, out_h);
         }
     }
 
     void VideoExtractorDialog::renderOutputSettings() {
+        const auto& t = lfs::vis::theme();
         ImGui::SeparatorText(LOC(VideoExtractor::NAMING));
 
         ImGui::Text("%s", LOC(VideoExtractor::PATTERN));
@@ -674,10 +678,11 @@ namespace lfs::gui {
         const char* ext = format_selection_ == 0 ? ".png" : ".jpg";
         char preview[128];
         std::snprintf(preview, sizeof(preview), filename_pattern_.data(), 1);
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC(VideoExtractor::EXAMPLE), preview, ext);
+        ImGui::TextColored(t.palette.text_dim, LOC(VideoExtractor::EXAMPLE), preview, ext);
     }
 
     bool VideoExtractorDialog::render() {
+        const auto& t = lfs::vis::theme();
         renderVideoPreview();
 
         ImGui::Spacing();
@@ -769,7 +774,7 @@ namespace lfs::gui {
 
         if (video_path_.empty() || output_dir_.empty()) {
             ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f),
+            ImGui::TextColored(t.palette.warning,
                                "%s", LOC(VideoExtractor::SELECT_BOTH));
         }
 
@@ -799,7 +804,7 @@ namespace lfs::gui {
             ImGui::Spacing();
 
             const int total = current_frame_.load();
-            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
+            ImGui::TextColored(t.palette.success,
                                "%s", LOC(VideoExtractor::COMPLETE));
             ImGui::Text(LOC(VideoExtractor::EXTRACTED), total);
 
@@ -814,7 +819,7 @@ namespace lfs::gui {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), LOC(VideoExtractor::ERROR_MSG),
+            ImGui::TextColored(t.palette.error, LOC(VideoExtractor::ERROR_MSG),
                                extraction_status.error_message.c_str());
 
             if (ImGui::Button(LOC(VideoExtractor::DISMISS), ImVec2(100, 30))) {
