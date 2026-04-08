@@ -79,6 +79,19 @@ namespace lfs::vis {
                                                            std::move(before), std::move(after)));
         }
 
+        [[nodiscard]] std::vector<const core::SceneNode*> effectiveVisibleSplatNodes(const core::Scene& scene) {
+            std::vector<const core::SceneNode*> nodes;
+            for (const auto* node : scene.getNodes()) {
+                if (!node || !node->model) {
+                    continue;
+                }
+                if (scene.isNodeEffectivelyVisible(node->id)) {
+                    nodes.push_back(node);
+                }
+            }
+            return nodes;
+        }
+
         [[nodiscard]] bool hasActiveSelectionFilter(const RenderingManager* const rendering_manager) {
             if (!rendering_manager) {
                 return false;
@@ -1258,6 +1271,15 @@ namespace lfs::vis {
                      a_max.y < b_min.y || b_max.y < a_min.y);
         };
 
+        const float camera_frustum_scale = [&]() {
+            if (const auto* const rendering_manager = services().renderingOrNull()) {
+                const auto settings = rendering_manager->getSettings();
+                if (settings.show_camera_frustums)
+                    return std::max(settings.camera_frustum_scale, 0.0f);
+            }
+            return 0.0f;
+        }();
+
         for (const auto* node : scene_.getNodes()) {
             if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
                 continue;
@@ -1364,7 +1386,74 @@ namespace lfs::vis {
             if (const auto transform = scene_.getCameraSceneTransformByUid(node->camera->uid())) {
                 cam_scene_transform = rendering::dataWorldTransformToVisualizerWorld(*transform);
             }
-            const glm::vec3 cam_pos = glm::vec3((cam_scene_transform * glm::inverse(w2c))[3]);
+
+            const glm::mat4 visualizer_c2w =
+                cam_scene_transform * glm::inverse(w2c) * rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+            const glm::vec3 cam_pos = glm::vec3(visualizer_c2w[3]);
+
+            const bool is_equirect =
+                node->camera->camera_model_type() == core::CameraModelType::EQUIRECTANGULAR;
+            if (camera_frustum_scale > 0.0f &&
+                node->camera->image_width() > 0 &&
+                node->camera->image_height() > 0 &&
+                (is_equirect || node->camera->focal_y() > 0.0f)) {
+                const float aspect = static_cast<float>(node->camera->image_width()) /
+                                     static_cast<float>(node->camera->image_height());
+                const float fov_y = is_equirect
+                                        ? glm::radians(60.0f)
+                                        : core::focal2fov(node->camera->focal_y(), node->camera->image_height());
+                const float half_height = std::tan(fov_y * 0.5f);
+                const float half_width = half_height * aspect;
+
+                glm::mat4 frustum_scale(1.0f);
+                frustum_scale[0][0] = half_width * 2.0f * camera_frustum_scale;
+                frustum_scale[1][1] = half_height * 2.0f * camera_frustum_scale;
+                frustum_scale[2][2] = camera_frustum_scale;
+
+                const glm::mat4 frustum_model = visualizer_c2w * frustum_scale;
+
+                glm::vec2 screen_min(1e10f);
+                glm::vec2 screen_max(-1e10f);
+                bool any_visible = false;
+
+                if (is_equirect) {
+                    for (int i = 0; i < BBOX_CORNERS; ++i) {
+                        const glm::vec3 local_corner(
+                            (i & 1) ? 0.5f : -0.5f,
+                            (i & 2) ? 0.5f : -0.5f,
+                            (i & 4) ? 0.5f : -0.5f);
+                        const glm::vec2 screen_pos = projectToScreen(
+                            glm::vec3(frustum_model * glm::vec4(local_corner, 1.0f)));
+                        if (screen_pos.x > BEHIND_CAMERA + 1e5f) {
+                            screen_min = glm::min(screen_min, screen_pos);
+                            screen_max = glm::max(screen_max, screen_pos);
+                            any_visible = true;
+                        }
+                    }
+                } else {
+                    constexpr glm::vec3 FRUSTUM_POINTS[] = {
+                        {-0.5f, -0.5f, -1.0f},
+                        {0.5f, -0.5f, -1.0f},
+                        {0.5f, 0.5f, -1.0f},
+                        {-0.5f, 0.5f, -1.0f},
+                        {0.0f, 0.0f, 0.0f},
+                    };
+                    for (const auto& local_point : FRUSTUM_POINTS) {
+                        const glm::vec2 screen_pos = projectToScreen(
+                            glm::vec3(frustum_model * glm::vec4(local_point, 1.0f)));
+                        if (screen_pos.x > BEHIND_CAMERA + 1e5f) {
+                            screen_min = glm::min(screen_min, screen_pos);
+                            screen_max = glm::max(screen_max, screen_pos);
+                            any_visible = true;
+                        }
+                    }
+                }
+
+                if (any_visible && rectsOverlap(rect_min, rect_max, screen_min, screen_max)) {
+                    result.push_back(node->name);
+                    continue;
+                }
+            }
 
             const glm::vec2 screen_pos = projectToScreen(cam_pos);
             if (screen_pos.x <= BEHIND_CAMERA + 1e5f)
@@ -2389,7 +2478,7 @@ namespace lfs::vis {
 
         case ContentType::SplatFiles:
             info.has_model = scene_.hasNodes();
-            info.num_gaussians = scene_.getTotalGaussianCount();
+            info.num_gaussians = scene_.getVisibleGaussianCount();
             info.num_nodes = scene_.getNodeCount();
             info.source_type = "Splat";
             if (!splat_paths_.empty()) {
@@ -3678,51 +3767,89 @@ namespace lfs::vis {
         python::set_selection_service(selection_service_.get());
     }
 
-    void SceneManager::deleteSelectedGaussians() {
+    std::expected<void, std::string> SceneManager::softDeleteSelectedGaussians() {
         auto selection = scene_.getSelectionMask();
         if (!selection || !selection->is_valid()) {
+            return std::unexpected("Nothing selected");
+        }
+
+        if (selection->count_nonzero() == 0) {
+            return std::unexpected("Nothing selected");
+        }
+
+        auto selection_mask = selection->to(lfs::core::DataType::Bool);
+        if (scene_.isConsolidated()) {
+            auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
+            if (!combined) {
+                return std::unexpected("No visible nodes");
+            }
+            if (static_cast<size_t>(selection_mask.numel()) != static_cast<size_t>(combined->size())) {
+                return std::unexpected("Selection size mismatch");
+            }
+
+            combined->soft_delete(selection_mask);
+        } else {
+            const auto nodes = effectiveVisibleSplatNodes(scene_);
+            if (nodes.empty()) {
+                return std::unexpected("No visible nodes");
+            }
+
+            size_t total_visible = 0;
+            for (const auto* node : nodes) {
+                total_visible += static_cast<size_t>(node->model->size());
+            }
+            if (static_cast<size_t>(selection_mask.numel()) != total_visible) {
+                return std::unexpected("Selection size mismatch");
+            }
+
+            size_t offset = 0;
+            for (const auto* node : nodes) {
+                const size_t node_size = static_cast<size_t>(node->model->size());
+                if (node_size == 0) {
+                    continue;
+                }
+
+                auto* mutable_node = scene_.getMutableNode(node->name);
+                if (!mutable_node || !mutable_node->model) {
+                    return std::unexpected(std::format("Visible node '{}' is missing a mutable model", node->name));
+                }
+
+                mutable_node->model->soft_delete(selection_mask.slice(0, offset, offset + node_size));
+                offset += node_size;
+            }
+        }
+
+        {
+            core::Scene::Transaction txn(scene_);
+            scene_.clearSelection();
+            scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
+
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+        }
+
+        return {};
+    }
+
+    void SceneManager::deleteSelectedGaussians() {
+        if (const auto selection = scene_.getSelectionMask(); !selection || !selection->is_valid()) {
             LOG_INFO("No Gaussians selected to delete");
             return;
         }
-
-        auto nodes = scene_.getVisibleNodes();
-        if (nodes.empty())
-            return;
 
         auto entry = std::make_unique<op::SceneSnapshot>(*this, "edit.delete");
         entry->captureTopology();
         entry->captureSelection();
 
-        size_t offset = 0;
-        bool any_deleted = false;
-
-        for (const auto* node : nodes) {
-            if (!node || !node->model)
-                continue;
-
-            const size_t node_size = node->model->size();
-            if (node_size == 0)
-                continue;
-
-            auto node_selection = selection->slice(0, offset, offset + node_size);
-            auto bool_mask = node_selection.to(lfs::core::DataType::Bool);
-            node->model->soft_delete(bool_mask);
-
-            any_deleted = true;
-            offset += node_size;
+        if (const auto result = softDeleteSelectedGaussians(); !result) {
+            LOG_WARN("Failed to delete selected Gaussians: {}", result.error());
+            return;
         }
 
-        if (any_deleted) {
-            LOG_INFO("Deleted selected Gaussians");
-            scene_.markDirty();
-            scene_.clearSelection();
-
-            entry->captureAfter();
-            op::pushSceneSnapshotIfChanged(std::move(entry));
-
-            if (auto* rm = services().renderingOrNull())
-                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
-        }
+        LOG_INFO("Deleted selected Gaussians");
+        entry->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(entry));
     }
 
     void SceneManager::invertSelection() {

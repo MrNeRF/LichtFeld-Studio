@@ -60,6 +60,14 @@ namespace lfs::vis {
         }
     } // namespace
 
+    int RenderingManager::clampGridPlane(const int plane) {
+        return std::clamp(plane, 0, 2);
+    }
+
+    void RenderingManager::syncGridPlanesLocked(const int plane) {
+        panel_grid_planes_.fill(clampGridPlane(plane));
+    }
+
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
         camera_metrics_worker_ = std::jthread([this](std::stop_token stop_token) {
@@ -112,6 +120,9 @@ namespace lfs::vis {
         bool frustum_visibility_changed = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const int focused_panel_index =
+                static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
+            const bool grid_plane_changed = settings_.grid_plane != new_settings.grid_plane;
 
             // Update preview color if changed
             if (settings_.selection_color_preview != new_settings.selection_color_preview) {
@@ -138,6 +149,14 @@ namespace lfs::vis {
             frustum_visibility_changed = settings_.show_camera_frustums != new_settings.show_camera_frustums;
 
             settings_ = new_settings;
+            settings_.grid_plane = clampGridPlane(settings_.grid_plane);
+            if (split_view_service_.isIndependentDualActive(settings_)) {
+                if (grid_plane_changed) {
+                    panel_grid_planes_[focused_panel_index] = settings_.grid_plane;
+                }
+            } else {
+                syncGridPlanesLocked(settings_.grid_plane);
+            }
             markDirty();
         }
 
@@ -318,6 +337,34 @@ namespace lfs::vis {
     float RenderingManager::getSplitPosition() const {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         return settings_.split_position;
+    }
+
+    void RenderingManager::setFocusedSplitPanel(const SplitViewPanelId panel) {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        split_view_service_.setFocusedPanel(panel);
+        if (split_view_service_.isIndependentDualActive(settings_)) {
+            settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(panel)];
+        }
+    }
+
+    int RenderingManager::getGridPlaneForPanel(const SplitViewPanelId panel) const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return panel_grid_planes_[splitViewPanelIndex(panel)];
+    }
+
+    void RenderingManager::setGridPlaneForPanel(const SplitViewPanelId panel, const int plane) {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        const int clamped_plane = clampGridPlane(plane);
+        const bool independent_split_active = split_view_service_.isIndependentDualActive(settings_);
+        if (independent_split_active) {
+            panel_grid_planes_[splitViewPanelIndex(panel)] = clamped_plane;
+        } else {
+            syncGridPlanesLocked(clamped_plane);
+        }
+        if (!independent_split_active || split_view_service_.focusedPanel() == panel) {
+            settings_.grid_plane = clamped_plane;
+        }
+        markDirty(DirtyFlag::OVERLAY);
     }
 
     void RenderingManager::setLatestCameraMetrics(CameraMetricsOverlayState metrics) {

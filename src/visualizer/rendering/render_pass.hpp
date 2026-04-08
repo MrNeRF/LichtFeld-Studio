@@ -53,6 +53,7 @@ namespace lfs::vis {
         glm::ivec2 viewport_offset{0};
         float start_position = 0.0f;
         float end_position = 1.0f;
+        int grid_plane = 1;
 
         [[nodiscard]] bool valid() const {
             return viewport != nullptr && render_size.x > 0 && render_size.y > 0;

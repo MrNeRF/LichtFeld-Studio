@@ -1184,6 +1184,21 @@ namespace lfs::vis::op {
 
     void SceneSnapshot::captureTopology() {
         captureDeletedMasks(deleted_masks_before_);
+        combined_deleted_before_.reset();
+        combined_deleted_storage_ = {};
+        if (scene_.getScene().isConsolidated()) {
+            if (const auto* combined = scene_.getScene().getCombinedModel()) {
+                TensorPresenceSnapshot snapshot;
+                snapshot.total_size = combined->size();
+                snapshot.device = combined->means_raw().device();
+                snapshot.present = combined->has_deleted_mask();
+                if (snapshot.present) {
+                    snapshot.tensor =
+                        std::make_shared<lfs::core::Tensor>(combined->deleted().clone());
+                }
+                combined_deleted_before_ = std::move(snapshot);
+            }
+        }
         captured_ = captured_ | ModifiesFlag::TOPOLOGY;
     }
 
@@ -1213,6 +1228,7 @@ namespace lfs::vis::op {
 
     void SceneSnapshot::compactTopology() {
         deleted_mask_storage_.clear();
+        combined_deleted_storage_ = {};
 
         for (const auto& [node_name, before] : deleted_masks_before_) {
             const auto* node = scene_.getScene().getNode(node_name);
@@ -1240,6 +1256,32 @@ namespace lfs::vis::op {
         }
 
         deleted_masks_before_.clear();
+
+        if (combined_deleted_before_) {
+            const auto& before = *combined_deleted_before_;
+            const auto* combined = scene_.getScene().isConsolidated()
+                                       ? scene_.getScene().getCombinedModel()
+                                       : nullptr;
+            const auto* after_tensor =
+                (combined && combined->has_deleted_mask()) ? &combined->deleted() : nullptr;
+            const size_t model_size = combined ? static_cast<size_t>(combined->size()) : 0;
+            const size_t total_size =
+                std::max({before.total_size,
+                          tensorNumel(before.tensor),
+                          tensorNumel(after_tensor),
+                          model_size});
+
+            combined_deleted_storage_ = buildTensorSwapStorage(
+                before.tensor,
+                after_tensor,
+                total_size,
+                before.device,
+                lfs::core::DataType::Bool,
+                before.present,
+                combined && combined->has_deleted_mask());
+        }
+
+        combined_deleted_before_.reset();
     }
 
     void SceneSnapshot::captureAfter() {
@@ -1269,7 +1311,8 @@ namespace lfs::vis::op {
             return true;
         }
 
-        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY) && !deleted_mask_storage_.empty()) {
+        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY) &&
+            (!deleted_mask_storage_.empty() || combined_deleted_storage_.hasChanges())) {
             return true;
         }
 
@@ -1348,8 +1391,43 @@ namespace lfs::vis::op {
             restored_any = true;
         }
 
+        if (combined_deleted_storage_.hasChanges()) {
+            if (!scene_.getScene().isConsolidated()) {
+                throw std::runtime_error("Cannot replay consolidated topology history after scene unconsolidated");
+            }
+
+            auto* combined = const_cast<lfs::core::SplatData*>(scene_.getScene().getCombinedModel());
+            if (!combined) {
+                throw std::runtime_error("Cannot restore consolidated deleted mask without combined model");
+            }
+
+            if (combined_deleted_storage_.mode == TensorSwapStorageMode::SPARSE &&
+                combined->size() != combined_deleted_storage_.total_size) {
+                throw std::runtime_error("Cannot replay consolidated topology history after gaussian count changed");
+            }
+
+            const bool target_present =
+                undo_direction ? combined_deleted_storage_.before_present : combined_deleted_storage_.after_present;
+            const lfs::core::Tensor* current_deleted =
+                combined->has_deleted_mask() ? &combined->deleted() : nullptr;
+            const size_t model_size = static_cast<size_t>(combined->size());
+            const size_t total_size =
+                std::max({combined_deleted_storage_.total_size, model_size, tensorNumel(current_deleted)});
+            auto working_mask = materializeMaskTensor(
+                current_deleted, total_size, combined_deleted_storage_.device, lfs::core::DataType::Bool);
+
+            applyTensorSwapStorage(working_mask, combined_deleted_storage_);
+
+            if (target_present) {
+                combined->deleted() = std::move(working_mask);
+            } else {
+                combined->deleted() = lfs::core::Tensor{};
+            }
+            restored_any = true;
+        }
+
         if (restored_any) {
-            scene_.getScene().markDirty();
+            scene_.getScene().notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
         }
     }
 
@@ -1390,6 +1468,7 @@ namespace lfs::vis::op {
         for (const auto& [_, storage] : deleted_mask_storage_) {
             total += storage.estimatedBytes();
         }
+        total += combined_deleted_storage_.estimatedBytes();
         for (const auto& [node_name, _] : transforms_before_) {
             total += sizeof(glm::mat4) + node_name.size();
         }
@@ -1408,6 +1487,7 @@ namespace lfs::vis::op {
         for (const auto& [_, storage] : deleted_mask_storage_) {
             total += storage.memoryBreakdown();
         }
+        total += combined_deleted_storage_.memoryBreakdown();
         for (const auto& [node_name, _] : transforms_before_) {
             total.cpu_bytes += sizeof(glm::mat4) + node_name.size();
         }
@@ -1422,6 +1502,7 @@ namespace lfs::vis::op {
         for (auto& [_, storage] : deleted_mask_storage_) {
             storage.offloadToCPU();
         }
+        combined_deleted_storage_.offloadToCPU();
     }
 
     void SceneSnapshot::restoreToPreferredDevice() {
@@ -1429,6 +1510,7 @@ namespace lfs::vis::op {
         for (auto& [_, storage] : deleted_mask_storage_) {
             storage.restoreToDevice();
         }
+        combined_deleted_storage_.restoreToDevice();
     }
 
     UndoMetadata SceneSnapshot::metadata() const {

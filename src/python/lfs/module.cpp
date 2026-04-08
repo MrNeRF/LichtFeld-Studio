@@ -1113,10 +1113,9 @@ NB_MODULE(lichtfeld, m) {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm)
                 return 0;
-            const auto* model = sm->getScene().getCombinedModel();
-            return model ? model->size() : 0;
+            return sm->getScene().getVisibleGaussianCount();
         },
-        "Get total number of gaussians in scene");
+        "Get number of active gaussians in scene");
 
     m.def(
         "get_node_transform", [](const std::string& name) -> std::optional<std::vector<float>> {
@@ -1306,11 +1305,14 @@ NB_MODULE(lichtfeld, m) {
             const auto* controller = lfs::vis::InputController::instance();
             if (!controller)
                 return "orbit";
-            return controller->cameraNavigationMode() == lfs::vis::InputController::CameraNavigationMode::FPV
-                       ? "fpv"
-                       : "orbit";
+            switch (controller->cameraNavigationMode()) {
+            case lfs::vis::InputController::CameraNavigationMode::Orbit: return "orbit";
+            case lfs::vis::InputController::CameraNavigationMode::Trackball: return "trackball";
+            case lfs::vis::InputController::CameraNavigationMode::FPV: return "fpv";
+            }
+            return "orbit";
         },
-        "Get the active camera navigation mode ('orbit' or 'fpv')");
+        "Get the active camera navigation mode ('orbit', 'trackball', or 'fpv')");
     m.def(
         "set_camera_navigation_mode", [](const std::string& mode) {
             auto* controller = lfs::vis::InputController::instance();
@@ -1322,6 +1324,11 @@ NB_MODULE(lichtfeld, m) {
                     lfs::vis::InputController::CameraNavigationMode::Orbit);
                 return;
             }
+            if (mode == "trackball" || mode == "turntable") {
+                controller->setCameraNavigationMode(
+                    lfs::vis::InputController::CameraNavigationMode::Trackball);
+                return;
+            }
             if (mode == "fpv" || mode == "fly") {
                 controller->setCameraNavigationMode(
                     lfs::vis::InputController::CameraNavigationMode::FPV);
@@ -1329,9 +1336,23 @@ NB_MODULE(lichtfeld, m) {
             }
 
             throw std::invalid_argument(
-                "camera navigation mode must be 'orbit', 'fpv', or 'fly'");
+                "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', or 'fly'");
         },
         nb::arg("mode"), "Set the active camera navigation mode");
+    m.def(
+        "get_camera_view_snap_enabled", []() -> bool {
+            const auto* controller = lfs::vis::InputController::instance();
+            return controller ? controller->cameraViewSnapEnabled() : false;
+        },
+        "Check whether camera axis-view snapping is enabled");
+    m.def(
+        "set_camera_view_snap_enabled", [](bool enabled) {
+            auto* controller = lfs::vis::InputController::instance();
+            if (!controller)
+                return;
+            controller->setCameraViewSnapEnabled(enabled);
+        },
+        nb::arg("enabled"), "Enable or disable camera axis-view snapping");
     m.def(
         "toggle_fullscreen", []() { lfs::core::events::ui::ToggleFullscreen{}.emit(); },
         "Toggle fullscreen mode");
@@ -1797,7 +1818,8 @@ Mesh-to-Splat:
   lf.get_mesh2splat_error()      - Get error message
 
 Splat Simplify:
-  lf.simplify_splats("name")         - Simplify a splat node into a new output node
+  lf.simplify_splats("name", ratio=..., knn_k=..., merge_cap=..., opacity_prune_threshold=...)
+                                    - Simplify a splat node into a new output node
   lf.cancel_splat_simplify()         - Cancel the active simplify job
   lf.is_splat_simplify_active()      - Check if simplification is running
   lf.get_splat_simplify_progress()   - Get progress (0.0-1.0)

@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_controller.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -41,6 +43,8 @@ namespace lfs::vis {
 
     namespace {
         constexpr float kWasdShiftSpeedBonus = 20.0f;
+        constexpr double kCameraContextMenuDragThreshold = 4.0;
+        namespace string_keys = lichtfeld::Strings;
 
         bool dispatchKeyToModals(int key, int scancode, int action, int mods,
                                  double x, double y, const bool over_gui) {
@@ -252,6 +256,7 @@ namespace lfs::vis {
 
         window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
+            clearSelectedCameraContextMenuGesture();
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
             hovered_camera_id_ = -1;
 
@@ -532,15 +537,22 @@ namespace lfs::vis {
             switch (bound_action) {
             case input::Action::CAMERA_PAN:
                 if (const auto interaction = resolvePanelInteraction(x, y); interaction && interaction->valid()) {
-                    interaction->viewport->camera.initScreenPos(glm::vec2(x, y));
-                    drag_viewport_ = interaction->viewport;
-                    drag_split_panel_ = interaction->panel;
-                    focusSplitPanel(interaction->panel);
+                    if (button == static_cast<int>(input::AppMouseButton::RIGHT) &&
+                        hovered_camera_id_ >= 0 &&
+                        canOpenSelectedCameraContextMenu(hovered_camera_id_)) {
+                        pending_camera_context_menu_ = {
+                            .active = true,
+                            .camera_uid = hovered_camera_id_,
+                            .press_pos = {x, y},
+                            .interaction = *interaction,
+                        };
+                        break;
+                    }
+
+                    beginPanDrag(*interaction, button, x, y);
                 } else {
                     break;
                 }
-                drag_mode_ = DragMode::Pan;
-                drag_button_ = button;
                 break;
 
             case input::Action::CAMERA_ORBIT:
@@ -704,8 +716,17 @@ namespace lfs::vis {
                 break;
             }
         } else if (action == input::ACTION_RELEASE) {
+            if (button == static_cast<int>(input::AppMouseButton::RIGHT) &&
+                pending_camera_context_menu_.active) {
+                const int camera_uid = pending_camera_context_menu_.camera_uid;
+                clearSelectedCameraContextMenuGesture();
+                openSelectedCameraContextMenu(camera_uid, static_cast<float>(x), static_cast<float>(y));
+                return;
+            }
+
             bool was_dragging = false;
             Viewport* released_viewport = drag_viewport_;
+            const SplitViewPanelId released_panel = drag_split_panel_;
 
             if (drag_mode_ == DragMode::Pan) {
                 drag_mode_ = DragMode::None;
@@ -720,6 +741,11 @@ namespace lfs::vis {
                     drag_viewport_->camera.endRotateAroundCenter();
                 } else {
                     viewport_.camera.endRotateAroundCenter();
+                }
+                if (released_viewport) {
+                    snapViewportToNearestAxis(*released_viewport, released_panel);
+                } else {
+                    snapViewportToNearestAxis(viewport_, released_panel);
                 }
                 drag_mode_ = DragMode::None;
                 drag_button_ = -1;
@@ -861,6 +887,17 @@ namespace lfs::vis {
             return;
         }
 
+        if (pending_camera_context_menu_.active &&
+            glm::length(current_pos - pending_camera_context_menu_.press_pos) >= kCameraContextMenuDragThreshold) {
+            const auto interaction = pending_camera_context_menu_.interaction;
+            clearSelectedCameraContextMenuGesture();
+            if (interaction.valid()) {
+                beginPanDrag(interaction,
+                             static_cast<int>(input::AppMouseButton::RIGHT),
+                             x, y);
+            }
+        }
+
         // Camera frustum hover detection with improved throttling
         // (frustum visibility is now controlled by scene graph, not a checkbox)
         if (services().renderingOrNull() &&
@@ -976,7 +1013,11 @@ namespace lfs::vis {
                 break;
             case DragMode::Orbit: {
                 float current_time = static_cast<float>(SDL_GetTicks() / 1000.0);
-                target_viewport->camera.updateRotateAroundCenter(pos, current_time);
+                if (camera_navigation_mode_ == CameraNavigationMode::Trackball) {
+                    target_viewport->camera.updateTrackballRotateAroundCenter(pos, current_time);
+                } else {
+                    target_viewport->camera.updateRotateAroundCenter(pos, current_time);
+                }
                 break;
             }
             default:
@@ -1405,19 +1446,34 @@ namespace lfs::vis {
             input_router_->syncPressedMouseButtons(any_mouse_buttons_pressed);
         }
 
+        if (pending_camera_context_menu_.active &&
+            !isMouseButtonPressed(static_cast<int>(input::AppMouseButton::RIGHT))) {
+            clearSelectedCameraContextMenuGesture();
+        }
+
         const bool drag_button_released = drag_button_ >= 0 &&
                                           !isMouseButtonPressed(drag_button_);
 
         // Handle missed mouse release events (e.g., outside window)
         if (drag_mode_ == DragMode::Orbit && drag_button_released) {
+            auto* const released_viewport = drag_viewport_ ? drag_viewport_ : &viewport_;
+            const SplitViewPanelId released_panel = drag_split_panel_;
             if (drag_viewport_) {
                 drag_viewport_->camera.endRotateAroundCenter();
+                snapViewportToNearestAxis(*drag_viewport_, released_panel);
             } else {
                 viewport_.camera.endRotateAroundCenter();
+                snapViewportToNearestAxis(viewport_, released_panel);
             }
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
             drag_viewport_ = nullptr;
+
+            ui::CameraMove{
+                .rotation = released_viewport->getRotationMatrix(),
+                .translation = released_viewport->getTranslation()}
+                .emit();
+            onCameraMovementEnd();
         }
 
         if (drag_mode_ == DragMode::Pan && drag_button_released) {
@@ -1934,6 +1990,20 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::clearSelectedCameraContextMenuGesture() {
+        pending_camera_context_menu_ = {};
+    }
+
+    void InputController::beginPanDrag(const PanelInteractionState& interaction, const int button,
+                                       const double x, const double y) {
+        interaction.viewport->camera.initScreenPos(glm::vec2(x, y));
+        drag_viewport_ = interaction.viewport;
+        drag_split_panel_ = interaction.panel;
+        focusSplitPanel(interaction.panel);
+        drag_mode_ = DragMode::Pan;
+        drag_button_ = button;
+    }
+
     void InputController::clearViewportDragState() {
         const bool was_camera_drag =
             drag_mode_ == DragMode::Orbit ||
@@ -1952,10 +2022,175 @@ namespace lfs::vis {
         drag_button_ = -1;
         drag_viewport_ = nullptr;
         drag_split_panel_ = SplitViewPanelId::Left;
+        clearSelectedCameraContextMenuGesture();
 
         if (was_camera_drag) {
             onCameraMovementEnd();
         }
+    }
+
+    bool InputController::canOpenSelectedCameraContextMenu(const int hovered_camera_uid) const {
+        if (hovered_camera_uid < 0 || !tool_context_) {
+            return false;
+        }
+
+        const auto* const trainer = services().trainerOrNull();
+        if (!trainer || trainer->getState() != TrainingState::Ready) {
+            return false;
+        }
+
+        const auto* const scene_manager = tool_context_->getSceneManager();
+        if (!scene_manager) {
+            return false;
+        }
+
+        const auto& scene = scene_manager->getScene();
+        for (const auto& selected_name : scene_manager->getSelectedNodeNames()) {
+            const auto* const node = scene.getNode(selected_name);
+            if (node && node->type == core::NodeType::CAMERA && node->camera_uid == hovered_camera_uid) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void InputController::applyCameraTrainingStateToSelection(
+        const std::vector<std::string>& selected_names, const bool enabled) {
+        if (!tool_context_) {
+            return;
+        }
+
+        auto* const scene_manager = tool_context_->getSceneManager();
+        if (!scene_manager) {
+            return;
+        }
+
+        auto& scene = scene_manager->getScene();
+        for (const auto& selected_name : selected_names) {
+            const auto* const node = scene.getNode(selected_name);
+            if (node && node->type == core::NodeType::CAMERA) {
+                scene.setCameraTrainingEnabled(node->name, enabled);
+            }
+        }
+    }
+
+    void InputController::openSelectedCameraContextMenu(const int hovered_camera_uid,
+                                                        const float screen_x,
+                                                        const float screen_y) {
+        auto* const gui = services().guiOrNull();
+        if (!gui || !canOpenSelectedCameraContextMenu(hovered_camera_uid)) {
+            return;
+        }
+
+        auto* const scene_manager = tool_context_ ? tool_context_->getSceneManager() : nullptr;
+        if (!scene_manager) {
+            return;
+        }
+
+        const auto selected_names = scene_manager->getSelectedNodeNames();
+        if (selected_names.empty()) {
+            return;
+        }
+
+        auto& scene = scene_manager->getScene();
+        const core::SceneNode* hovered_node = nullptr;
+        bool all_selected_cameras = selected_names.size() > 1;
+
+        for (const auto& selected_name : selected_names) {
+            const auto* const node = scene.getNode(selected_name);
+            if (!node || node->type != core::NodeType::CAMERA) {
+                all_selected_cameras = false;
+                continue;
+            }
+
+            if (node->camera_uid == hovered_camera_uid) {
+                hovered_node = node;
+            }
+        }
+
+        if (!hovered_node) {
+            return;
+        }
+
+        std::vector<gui::ContextMenuItem> items;
+        if (all_selected_cameras) {
+            items.push_back({
+                .label = LOC(string_keys::Scene::ENABLE_ALL_TRAINING),
+                .action = "enable_all_train",
+            });
+            items.push_back({
+                .label = LOC(string_keys::Scene::DISABLE_ALL_TRAINING),
+                .action = "disable_all_train",
+            });
+
+            gui->globalContextMenu().request(
+                std::move(items), screen_x, screen_y,
+                [this, selected_names](std::string_view action) {
+                    if (action == "enable_all_train") {
+                        applyCameraTrainingStateToSelection(selected_names, true);
+                    } else if (action == "disable_all_train") {
+                        applyCameraTrainingStateToSelection(selected_names, false);
+                    }
+                });
+            return;
+        }
+
+        items.push_back({
+            .label = LOC(string_keys::Scene::GO_TO_CAMERA_VIEW),
+            .action = "go_to_camera",
+        });
+        items.push_back({
+            .label = hovered_node->training_enabled
+                         ? LOC(string_keys::Scene::DISABLE_FOR_TRAINING)
+                         : LOC(string_keys::Scene::ENABLE_FOR_TRAINING),
+            .action = hovered_node->training_enabled ? "disable_train" : "enable_train",
+            .separator_before = true,
+        });
+
+        const std::string camera_name = hovered_node->name;
+        gui->globalContextMenu().request(
+            std::move(items), screen_x, screen_y,
+            [this, camera_name, hovered_camera_uid](std::string_view action) {
+                if (action == "go_to_camera") {
+                    cmd::GoToCamView{.cam_id = hovered_camera_uid}.emit();
+                    return;
+                }
+
+                if (!tool_context_) {
+                    return;
+                }
+                auto* const scene_manager = tool_context_->getSceneManager();
+                if (!scene_manager) {
+                    return;
+                }
+
+                if (action == "enable_train") {
+                    scene_manager->getScene().setCameraTrainingEnabled(camera_name, true);
+                } else if (action == "disable_train") {
+                    scene_manager->getScene().setCameraTrainingEnabled(camera_name, false);
+                }
+            });
+    }
+
+    bool InputController::snapViewportToNearestAxis(Viewport& target_viewport,
+                                                    const SplitViewPanelId panel) {
+        if (!camera_view_snap_enabled_) {
+            return false;
+        }
+
+        constexpr float kAxisSnapAngleDegrees = 10.0f;
+        int snapped_axis = -1;
+        if (!target_viewport.camera.snapToNearestAxisView(
+                kAxisSnapAngleDegrees, &snapped_axis, nullptr)) {
+            return false;
+        }
+
+        if (auto* const rendering = services().renderingOrNull()) {
+            rendering->setGridPlaneForPanel(panel, snapped_axis);
+        }
+
+        return true;
     }
 
     Viewport& InputController::activeKeyboardViewport() {

@@ -65,6 +65,10 @@ def register_builtin_panels():
         from .image_preview_panel import open_camera_preview_by_uid
         lf.ui.on_open_camera_preview(open_camera_preview_by_uid)
 
+        from .histogram_panel import HistogramPanel
+        lf.register_class(HistogramPanel)
+        lf.ui.set_panel_enabled("lfs.histogram", False)
+
         from .scripts_panel import ScriptsPanel
         lf.register_class(ScriptsPanel)
         lf.ui.set_panel_enabled("lfs.scripts", False)

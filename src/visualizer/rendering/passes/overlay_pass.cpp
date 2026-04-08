@@ -36,7 +36,8 @@ namespace lfs::vis {
             return;
 
         const auto render_overlays = [&](const Viewport& source_viewport,
-                                         const lfs::rendering::ViewportData& viewport) {
+                                         const lfs::rendering::ViewportData& viewport,
+                                         const int grid_plane) {
             if (settings.depth_filter_enabled) {
                 const lfs::rendering::BoundingBox depth_box{
                     .min = settings.depth_filter_min,
@@ -236,7 +237,7 @@ namespace lfs::vis {
                 !settings.equirectangular) {
                 if (const auto result = engine.renderGrid(
                         viewport,
-                        static_cast<lfs::rendering::GridPlane>(settings.grid_plane),
+                        static_cast<lfs::rendering::GridPlane>(grid_plane),
                         settings.grid_opacity);
                     !result) {
                     LOG_WARN("Grid render failed: {}", result.error());
@@ -263,11 +264,11 @@ namespace lfs::vis {
                               ctx.viewport_pos.y + panel.viewport_offset.y,
                               panel.render_size.x,
                               panel.render_size.y);
-                    render_overlays(*panel.viewport, ctx.makeViewportData(panel));
+                    render_overlays(*panel.viewport, ctx.makeViewportData(panel), panel.grid_plane);
                 }
             }
         } else {
-            render_overlays(ctx.viewport, ctx.makeViewportData());
+            render_overlays(ctx.viewport, ctx.makeViewportData(), settings.grid_plane);
         }
 
         const auto vignette = makeViewportVignette();

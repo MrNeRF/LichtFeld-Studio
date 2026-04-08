@@ -22,6 +22,7 @@ import zipfile
 
 logger = logging.getLogger(__name__)
 
+from .http import urlopen
 from .plugin import PluginInstance
 from .errors import PluginDependencyError, PluginError
 try:
@@ -143,7 +144,7 @@ def _download_url_to_temp(
     if on_progress:
         on_progress(f"Downloading {url}...")
 
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with urlopen(req, timeout=60) as resp:
         with tempfile.NamedTemporaryFile(suffix=".archive", delete=False) as tmp:
             tmp_path = Path(tmp.name)
             try:

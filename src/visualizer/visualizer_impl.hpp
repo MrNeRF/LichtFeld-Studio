@@ -48,7 +48,7 @@ namespace lfs::vis {
         class SelectionTool;
     } // namespace tools
 
-    class VisualizerImpl : public Visualizer {
+    class LFS_VIS_API VisualizerImpl : public Visualizer {
     public:
         explicit VisualizerImpl(const ViewerOptions& options);
         ~VisualizerImpl() override;
@@ -63,7 +63,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> clearScene() override;
         core::Scene& getScene() override { return scene_manager_->getScene(); }
         bool postWork(WorkItem work) override;
-        LFS_VIS_API bool postRenderWork(WorkItem work);
+        bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
         }

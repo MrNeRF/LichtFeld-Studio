@@ -9,7 +9,9 @@
 #include <RmlUi/Core/EventListener.h>
 #include <core/export.hpp>
 #include <cstddef>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Rml {
@@ -37,13 +39,16 @@ namespace lfs::vis::gui {
 
     class LFS_VIS_API GlobalContextMenu {
     public:
+        using ActionCallback = std::function<void(std::string_view)>;
+
         explicit GlobalContextMenu(RmlUIManager* mgr);
         ~GlobalContextMenu();
 
         GlobalContextMenu(const GlobalContextMenu&) = delete;
         GlobalContextMenu& operator=(const GlobalContextMenu&) = delete;
 
-        void request(std::vector<ContextMenuItem> items, float screen_x, float screen_y);
+        void request(std::vector<ContextMenuItem> items, float screen_x, float screen_y,
+                     ActionCallback callback = {});
         std::string pollResult();
         [[nodiscard]] bool isOpen() const { return open_ || pending_open_; }
 
@@ -78,6 +83,7 @@ namespace lfs::vis::gui {
         bool focus_first_item_ = false;
         std::vector<ContextMenuItem> items_;
         std::vector<ContextMenuItem> pending_items_;
+        ActionCallback callback_;
         float pending_x_ = 0;
         float pending_y_ = 0;
         std::string result_;

@@ -558,6 +558,7 @@ namespace lfs::vis::gui {
         }();
 
         const auto nodes = scene.getNodes();
+        const auto active_gaussian_counts = scene.getActiveGaussianCountsByNode();
         snapshots.reserve(nodes.size());
         root_ids.reserve(nodes.size());
 
@@ -575,9 +576,12 @@ namespace lfs::vis::gui {
 
             switch (node->type) {
             case core::NodeType::SPLAT:
-                snapshot.label = node->gaussian_count > 0
-                                     ? std::format("{}  ({})", node->name, node->gaussian_count.load())
-                                     : node->name;
+                if (const auto it = active_gaussian_counts.find(node->id);
+                    it != active_gaussian_counts.end() && it->second > 0) {
+                    snapshot.label = std::format("{}  ({})", node->name, it->second);
+                } else {
+                    snapshot.label = node->name;
+                }
                 break;
             case core::NodeType::POINTCLOUD:
                 snapshot.label = (node->point_cloud && node->point_cloud->size() > 0)

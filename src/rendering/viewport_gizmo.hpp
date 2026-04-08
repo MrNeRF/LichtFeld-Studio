@@ -6,6 +6,8 @@
 
 #include "gl_resources.hpp"
 #include "shader_manager.hpp"
+#include <array>
+#include <cstddef>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -83,8 +85,16 @@ namespace lfs::rendering {
             float radius = 0.0f;
             bool visible = false;
         };
+        struct HitCache {
+            glm::vec2 viewport_pos{0.0f};
+            glm::vec2 viewport_size{0.0f};
+            std::array<HitInfo, 3> sphere_hits{};
+            std::array<HitInfo, 3> ring_hits{};
+        };
         mutable HitInfo sphere_hits_[3];
         mutable HitInfo ring_hits_[3];
+        mutable std::array<HitCache, 2> hit_caches_{};
+        mutable size_t hit_cache_count_ = 0;
 
         static constexpr glm::vec3 AXIS_COLORS[3] = {
             {0.89f, 0.15f, 0.21f},

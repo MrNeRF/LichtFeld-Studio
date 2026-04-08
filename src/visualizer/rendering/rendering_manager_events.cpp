@@ -54,6 +54,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             result = split_view_service_.toggleMode(settings_, SplitViewMode::IndependentDual, event.viewport);
+            syncGridPlanesLocked(settings_.grid_plane);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::CAMERA);
         }
         applySplitModeChange(result);
@@ -133,10 +134,15 @@ namespace lfs::vis {
     void RenderingManager::handleGridSettingsChanged(const ui::GridSettingsChanged& event) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         settings_.show_grid = event.enabled;
-        settings_.grid_plane = event.plane;
+        settings_.grid_plane = clampGridPlane(event.plane);
         settings_.grid_opacity = event.opacity;
+        if (split_view_service_.isIndependentDualActive(settings_)) {
+            panel_grid_planes_[splitViewPanelIndex(split_view_service_.focusedPanel())] = settings_.grid_plane;
+        } else {
+            syncGridPlanesLocked(settings_.grid_plane);
+        }
         LOG_TRACE("Grid settings updated - enabled: {}, plane: {}, opacity: {}",
-                  event.enabled, event.plane, event.opacity);
+                  event.enabled, settings_.grid_plane, event.opacity);
         markDirty(DirtyFlag::OVERLAY);
     }
 
@@ -166,6 +172,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             result = split_view_service_.handleSceneLoaded(settings_);
+            syncGridPlanesLocked(settings_.grid_plane);
         }
         applySplitModeChange(result);
         if (splitViewUsesGTComparison(result.previous_mode) && !splitViewUsesGTComparison(result.current_mode)) {
@@ -188,6 +195,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             result = split_view_service_.handleSceneCleared(settings_);
+            syncGridPlanesLocked(settings_.grid_plane);
         }
         clearFrustumThumbnailState();
         if (engine_) {

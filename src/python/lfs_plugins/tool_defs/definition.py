@@ -96,6 +96,8 @@ class ToolDef:
         poll: Optional callable to check if tool is available.
         plugin_name: Plugin name for custom icons.
         plugin_path: Plugin path for custom icons.
+        action_only: Invoke operator without becoming the active tool.
+        selected: Optional callable for custom toolbar highlight state.
     """
 
     id: str
@@ -112,6 +114,8 @@ class ToolDef:
     poll: Callable[[Any], bool] | None = None
     plugin_name: str = ""
     plugin_path: str = ""
+    action_only: bool = False
+    selected: Callable[[Any], bool] | None = None
 
     def can_activate(self, context: Any) -> bool:
         """Check if this tool can be activated in the given context.
@@ -148,4 +152,5 @@ class ToolDef:
             ],
             "plugin_name": self.plugin_name,
             "plugin_path": self.plugin_path,
+            "action_only": self.action_only,
         }

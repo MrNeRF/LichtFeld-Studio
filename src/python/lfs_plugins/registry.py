@@ -21,6 +21,7 @@ from .compat import (
     validate_manifest_compatibility_fields,
 )
 from .errors import PluginNotFoundError, RegistryOfflineError, VersionNotFoundError
+from .http import urlopen
 
 try:
     from packaging.version import Version
@@ -284,7 +285,7 @@ class RegistryClient:
     def _fetch_json(self, url: str) -> Dict:
         """Fetch JSON from URL."""
         req = urllib.request.Request(url, headers={"User-Agent": "LichtFeld-PluginManager/1.0"})
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
+        with urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
             return json.loads(resp.read().decode())
 
     def _fetch_json_with_fallback(self, urls: List[str]) -> Dict:

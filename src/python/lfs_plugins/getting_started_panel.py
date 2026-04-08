@@ -7,6 +7,7 @@ import threading
 from urllib.parse import quote
 
 import lichtfeld as lf
+from .http import urlopen
 from .types import Panel
 
 _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "lichtfeld-studio", "thumbnails")
@@ -30,7 +31,6 @@ def _download_thumbnail(video_id, on_done):
         on_done(video_id, path)
         return
     try:
-        from urllib.request import urlopen
         data = urlopen(f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg", timeout=5).read()
         with open(path, "wb") as f:
             f.write(data)

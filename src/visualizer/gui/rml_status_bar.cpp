@@ -433,8 +433,7 @@ namespace lfs::vis::gui {
         bool show_splats = !show_training && content_type != SceneManager::ContentType::Empty;
         size_t total_gaussians = 0;
         if (show_splats && sm) {
-            const auto* model = sm->getScene().getCombinedModel();
-            total_gaussians = model ? model->size() : 0;
+            total_gaussians = sm->getScene().getVisibleGaussianCount();
             if (total_gaussians == 0)
                 show_splats = false;
         }

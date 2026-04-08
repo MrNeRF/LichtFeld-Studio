@@ -22,6 +22,17 @@ namespace lfs::rendering {
         constexpr float HOVER_SCALE = 1.2f;
         constexpr float HOVER_BRIGHTNESS = 1.3f;
         constexpr float HIT_RADIUS_SCALE = 2.5f;
+
+        [[nodiscard]] bool sameViewportRect(const glm::vec2& lhs_pos,
+                                            const glm::vec2& lhs_size,
+                                            const glm::vec2& rhs_pos,
+                                            const glm::vec2& rhs_size) {
+            constexpr float EPSILON = 0.5f;
+            return std::abs(lhs_pos.x - rhs_pos.x) <= EPSILON &&
+                   std::abs(lhs_pos.y - rhs_pos.y) <= EPSILON &&
+                   std::abs(lhs_size.x - rhs_size.x) <= EPSILON &&
+                   std::abs(lhs_size.y - rhs_size.y) <= EPSILON;
+        }
     } // namespace
 
     constexpr glm::vec3 ViewportGizmo::AXIS_COLORS[];
@@ -555,6 +566,40 @@ namespace lfs::rendering {
             glDisable(GL_STENCIL_TEST);
         }
 
+        bool cache_updated = false;
+        for (size_t i = 0; i < hit_cache_count_; ++i) {
+            auto& cache = hit_caches_[i];
+            if (!sameViewportRect(cache.viewport_pos, cache.viewport_size, viewport_pos, viewport_size)) {
+                continue;
+            }
+
+            cache.viewport_pos = viewport_pos;
+            cache.viewport_size = viewport_size;
+            for (int i = 0; i < 3; ++i) {
+                cache.sphere_hits[i] = sphere_hits_[i];
+                cache.ring_hits[i] = ring_hits_[i];
+            }
+            cache_updated = true;
+            break;
+        }
+
+        if (!cache_updated) {
+            HitCache cache{
+                .viewport_pos = viewport_pos,
+                .viewport_size = viewport_size,
+            };
+            for (int i = 0; i < 3; ++i) {
+                cache.sphere_hits[i] = sphere_hits_[i];
+                cache.ring_hits[i] = ring_hits_[i];
+            }
+            if (hit_cache_count_ < hit_caches_.size()) {
+                hit_caches_[hit_cache_count_++] = cache;
+            } else {
+                hit_caches_[0] = hit_caches_[1];
+                hit_caches_[1] = cache;
+            }
+        }
+
         // State automatically restored by GLStateGuard destructor
         return {};
     }
@@ -575,13 +620,25 @@ namespace lfs::rendering {
             return std::nullopt;
         }
 
+        const HitCache* cache = nullptr;
+        for (size_t i = 0; i < hit_cache_count_; ++i) {
+            const auto& candidate = hit_caches_[i];
+            if (sameViewportRect(candidate.viewport_pos, candidate.viewport_size, viewport_pos, viewport_size)) {
+                cache = &candidate;
+                break;
+            }
+        }
+        if (!cache) {
+            return std::nullopt;
+        }
+
         // Check spheres (positive axes)
         for (int i = 0; i < 3; ++i) {
-            if (!sphere_hits_[i].visible)
+            if (!cache->sphere_hits[i].visible)
                 continue;
-            const float dx = click_pos.x - sphere_hits_[i].screen_pos.x;
-            const float dy = click_pos.y - sphere_hits_[i].screen_pos.y;
-            const float r = sphere_hits_[i].radius * HIT_RADIUS_SCALE;
+            const float dx = click_pos.x - cache->sphere_hits[i].screen_pos.x;
+            const float dy = click_pos.y - cache->sphere_hits[i].screen_pos.y;
+            const float r = cache->sphere_hits[i].radius * HIT_RADIUS_SCALE;
             if (dx * dx + dy * dy <= r * r) {
                 return GizmoHitResult{static_cast<GizmoAxis>(i), false};
             }
@@ -589,11 +646,11 @@ namespace lfs::rendering {
 
         // Check rings (negative axes)
         for (int i = 0; i < 3; ++i) {
-            if (!ring_hits_[i].visible)
+            if (!cache->ring_hits[i].visible)
                 continue;
-            const float dx = click_pos.x - ring_hits_[i].screen_pos.x;
-            const float dy = click_pos.y - ring_hits_[i].screen_pos.y;
-            const float r = ring_hits_[i].radius * HIT_RADIUS_SCALE;
+            const float dx = click_pos.x - cache->ring_hits[i].screen_pos.x;
+            const float dy = click_pos.y - cache->ring_hits[i].screen_pos.y;
+            const float r = cache->ring_hits[i].radius * HIT_RADIUS_SCALE;
             if (dx * dx + dy * dy <= r * r) {
                 return GizmoHitResult{static_cast<GizmoAxis>(i), true};
             }

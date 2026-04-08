@@ -150,8 +150,8 @@ namespace lfs::vis::tools {
         const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
         const float half_height = depthBoxHalfHeight(*tool_context_, frustum_half_width_);
         settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
-        settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, depth_near_);
-        settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, depth_far_);
+        settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, -depth_far_);
+        settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, -depth_near_);
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION);
     }
@@ -236,8 +236,8 @@ namespace lfs::vis::tools {
             const glm::quat camera_quat = glm::quat_cast(viewport.camera.R);
             const float half_height = depthBoxHalfHeight(ctx, frustum_half_width_);
             settings.depth_filter_transform = lfs::geometry::EuclideanTransform(camera_quat, viewport.camera.t);
-            settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, depth_near_);
-            settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, depth_far_);
+            settings.depth_filter_min = glm::vec3(-frustum_half_width_, -half_height, -depth_far_);
+            settings.depth_filter_max = glm::vec3(frustum_half_width_, half_height, -depth_near_);
         }
         rm->updateSettings(settings);
         rm->markDirty(DirtyFlag::SELECTION);

@@ -2327,6 +2327,67 @@ namespace lfs::core {
         return node->gaussian_count.load(std::memory_order_acquire);
     }
 
+    size_t Scene::getVisibleGaussianCount() const {
+        const auto* model = getCombinedModel();
+        if (!model) {
+            return 0;
+        }
+        return model->visible_count();
+    }
+
+    std::unordered_map<NodeId, size_t> Scene::getActiveGaussianCountsByNode() const {
+        std::unordered_map<NodeId, size_t> counts;
+        counts.reserve(nodes_.size());
+
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::SPLAT) {
+                continue;
+            }
+
+            const size_t count = node->model
+                                     ? static_cast<size_t>(node->model->visible_count())
+                                     : node->gaussian_count.load(std::memory_order_acquire);
+            counts.emplace(node->id, count);
+        }
+
+        if (!consolidated_) {
+            return counts;
+        }
+
+        rebuildCacheIfNeeded();
+        if (!cached_combined_ || !cached_combined_->has_deleted_mask() ||
+            !cached_transform_indices_ || !cached_transform_indices_->is_valid()) {
+            return counts;
+        }
+
+        const auto transform_indices_cpu = cached_transform_indices_->cpu();
+        const auto deleted_cpu = cached_combined_->deleted().cpu();
+        const size_t total = static_cast<size_t>(transform_indices_cpu.numel());
+        if (total != static_cast<size_t>(deleted_cpu.numel())) {
+            LOG_WARN("Active gaussian count map skipped: transform/deleted size mismatch ({} vs {})",
+                     total, deleted_cpu.numel());
+            return counts;
+        }
+
+        std::vector<size_t> slot_counts(consolidated_node_ids_.size(), 0);
+        const int* transform_indices = transform_indices_cpu.ptr<int>();
+        const bool* deleted = deleted_cpu.ptr<bool>();
+
+        for (size_t i = 0; i < total; ++i) {
+            const int slot = transform_indices[i];
+            if (slot < 0 || static_cast<size_t>(slot) >= slot_counts.size() || deleted[i]) {
+                continue;
+            }
+            ++slot_counts[slot];
+        }
+
+        for (size_t slot = 0; slot < consolidated_node_ids_.size(); ++slot) {
+            counts[consolidated_node_ids_[slot]] = slot_counts[slot];
+        }
+
+        return counts;
+    }
+
     std::shared_ptr<const lfs::core::Camera> Scene::getCameraByUid(int uid) const {
         for (const auto& node : nodes_) {
             if (node->type == NodeType::CAMERA && node->camera && node->camera->uid() == uid) {

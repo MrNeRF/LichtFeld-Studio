@@ -12,6 +12,8 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Dict, List, Set, Tuple
 
+from .http import urlopen
+
 _log = logging.getLogger(__name__)
 
 try:
@@ -254,7 +256,7 @@ def _fetch_repo_metadata(owner: str, repo: str) -> dict:
             "User-Agent": "LichtFeld-PluginMarketplace/1.0",
         },
     )
-    with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT_SEC) as resp:
+    with urlopen(req, timeout=GITHUB_TIMEOUT_SEC) as resp:
         raw = resp.read().decode("utf-8")
     return json.loads(raw)
 

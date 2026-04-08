@@ -129,8 +129,10 @@ namespace lfs::vis {
         [[nodiscard]] float getSplitPosition() const;
         [[nodiscard]] std::optional<float> getSplitDividerScreenX(const glm::vec2& viewport_pos,
                                                                   const glm::vec2& viewport_size) const;
-        void setFocusedSplitPanel(SplitViewPanelId panel) { split_view_service_.setFocusedPanel(panel); }
+        void setFocusedSplitPanel(SplitViewPanelId panel);
         [[nodiscard]] SplitViewPanelId getFocusedSplitPanel() const { return split_view_service_.focusedPanel(); }
+        [[nodiscard]] int getGridPlaneForPanel(SplitViewPanelId panel) const;
+        void setGridPlaneForPanel(SplitViewPanelId panel, int plane);
         [[nodiscard]] Viewport& resolvePanelViewport(Viewport& primary_viewport,
                                                      SplitViewPanelId panel = SplitViewPanelId::Left);
         [[nodiscard]] const Viewport& resolvePanelViewport(const Viewport& primary_viewport,
@@ -387,6 +389,8 @@ namespace lfs::vis {
         void handleCropBoxChanged(bool enabled);
         void handleEllipsoidChanged(bool enabled);
         void handlePointCloudModeChanged(const lfs::core::events::ui::PointCloudModeChanged& event);
+        [[nodiscard]] static int clampGridPlane(int plane);
+        void syncGridPlanesLocked(int plane);
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
@@ -408,6 +412,7 @@ namespace lfs::vis {
 
         // Settings
         RenderSettings settings_;
+        std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;
         mutable std::mutex frustum_loader_sync_mutex_;

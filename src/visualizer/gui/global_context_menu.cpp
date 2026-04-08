@@ -128,8 +128,10 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(doc_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
-    void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x, float screen_y) {
+    void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x, float screen_y,
+                                    ActionCallback callback) {
         pending_items_ = std::move(items);
+        callback_ = std::move(callback);
         pending_x_ = screen_x;
         pending_y_ = screen_y;
         pending_open_ = true;
@@ -148,6 +150,7 @@ namespace lfs::vis::gui {
 
         open_ = false;
         focus_first_item_ = false;
+        callback_ = {};
         el_ctx_menu_->SetClass("visible", false);
         el_backdrop_->SetProperty("display", "none");
     }
@@ -305,8 +308,13 @@ namespace lfs::vis::gui {
 
         const auto action = target->GetAttribute<Rml::String>("data-ctx-action", "");
         if (!action.empty()) {
-            owner->result_ = action;
+            auto callback = owner->callback_;
             owner->hide();
+            if (callback) {
+                callback(action);
+            } else {
+                owner->result_ = action;
+            }
         }
     }
 

@@ -16,7 +16,11 @@ namespace lfs::python {
     void register_splat_simplify(nb::module_& m) {
         m.def(
             "simplify_splats",
-            [](const std::string& source_name, double ratio, int knn_k, double merge_cap) {
+            [](const std::string& source_name,
+               double ratio,
+               int knn_k,
+               double merge_cap,
+               float opacity_prune_threshold) {
                 auto* scene = get_application_scene();
                 if (!scene)
                     throw std::runtime_error("No scene available");
@@ -32,12 +36,14 @@ namespace lfs::python {
                 opts.ratio = ratio;
                 opts.knn_k = knn_k;
                 opts.merge_cap = merge_cap;
+                opts.opacity_prune_threshold = opacity_prune_threshold;
                 invoke_splat_simplify_start(source_name, opts);
             },
             nb::arg("source_name"),
             nb::arg("ratio") = 0.1,
             nb::arg("knn_k") = 16,
             nb::arg("merge_cap") = 0.5,
+            nb::arg("opacity_prune_threshold") = 0.1f,
             "Simplify a splat node asynchronously and create a new output node.");
 
         m.def(

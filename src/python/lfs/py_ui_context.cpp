@@ -58,7 +58,7 @@ namespace lfs::python {
 
     size_t PyAppContext::num_gaussians() const {
         if (auto* scene = get_application_scene()) {
-            return scene->getTotalGaussianCount();
+            return scene->getVisibleGaussianCount();
         }
         const auto* cc = lfs::event::command_center();
         return cc ? cc->snapshot().num_gaussians : 0;

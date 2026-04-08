@@ -241,6 +241,18 @@ class Viewport {
             prePos = pos;
         }
 
+        void updateTrackballRotateAroundCenter(const glm::vec2& pos, float /*time*/) {
+            if (!isOrbiting)
+                return;
+
+            glm::vec2 delta = pos - prePos;
+            float yaw = -delta.x * rotateCenterSpeed;
+            float pitch = -delta.y * rotateCenterSpeed;
+
+            applyTrackballRotationAroundCenter(yaw, pitch);
+            prePos = pos;
+        }
+
         void endRotateAroundCenter() {
             isOrbiting = false;
             // No velocity to clear
@@ -251,7 +263,113 @@ class Viewport {
             // Inertia disabled - do nothing
         }
 
+        void setAxisAlignedView(int axis, bool negative) {
+            float dist_to_pivot = glm::length(pivot - t);
+            if (!std::isfinite(dist_to_pivot) || dist_to_pivot < 0.1f)
+                dist_to_pivot = 5.0f;
+
+            R = axisViewRotation(axis, negative);
+            const glm::vec3 forward = lfs::rendering::cameraForward(R);
+            t = pivot - forward * dist_to_pivot;
+        }
+
+        [[nodiscard]] bool snapToNearestAxisView(const float max_angle_degrees,
+                                                 int* snapped_axis = nullptr,
+                                                 bool* snapped_negative = nullptr) {
+            const glm::vec3 forward = glm::normalize(lfs::rendering::cameraForward(R));
+            if (!std::isfinite(forward.x) || !std::isfinite(forward.y) || !std::isfinite(forward.z)) {
+                return false;
+            }
+
+            float best_dot = -1.0f;
+            int best_axis = -1;
+            bool best_negative = false;
+
+            for (int axis = 0; axis < 3; ++axis) {
+                for (const bool negative : {false, true}) {
+                    const float dot = glm::dot(forward, axisViewForward(axis, negative));
+                    if (dot > best_dot) {
+                        best_dot = dot;
+                        best_axis = axis;
+                        best_negative = negative;
+                    }
+                }
+            }
+
+            const float snap_dot = std::cos(glm::radians(max_angle_degrees));
+            if (best_axis < 0 || best_dot < snap_dot) {
+                return false;
+            }
+
+            setAxisAlignedView(best_axis, best_negative);
+            if (snapped_axis) {
+                *snapped_axis = best_axis;
+            }
+            if (snapped_negative) {
+                *snapped_negative = best_negative;
+            }
+            return true;
+        }
+
     private:
+        [[nodiscard]] static glm::vec3 axisViewForward(const int axis, const bool negative) {
+            const float sign = negative ? -1.0f : 1.0f;
+            switch (axis) {
+            case 0: return glm::vec3(-sign, 0.0f, 0.0f);
+            case 1: return glm::vec3(0.0f, -sign, 0.0f);
+            case 2: return glm::vec3(0.0f, 0.0f, -sign);
+            default: return glm::vec3(0.0f, 0.0f, -1.0f);
+            }
+        }
+
+        [[nodiscard]] static glm::vec3 axisViewUp(const int axis, const bool negative) {
+            const float sign = negative ? -1.0f : 1.0f;
+            switch (axis) {
+            case 0: return glm::vec3(0.0f, 1.0f, 0.0f);
+            case 1: return glm::vec3(0.0f, 0.0f, sign);
+            case 2: return glm::vec3(0.0f, 1.0f, 0.0f);
+            default: return glm::vec3(0.0f, 1.0f, 0.0f);
+            }
+        }
+
+        [[nodiscard]] static glm::mat3 axisViewRotation(const int axis, const bool negative) {
+            return lfs::rendering::makeVisualizerLookAtRotation(
+                glm::vec3(0.0f),
+                axisViewForward(axis, negative),
+                axisViewUp(axis, negative));
+        }
+
+        [[nodiscard]] static glm::mat3 orthonormalizeRotation(const glm::mat3& rotation) {
+            glm::vec3 right = rotation[0];
+            glm::vec3 up = rotation[1];
+
+            if (glm::length2(right) < 1e-10f) {
+                right = glm::vec3(1.0f, 0.0f, 0.0f);
+            }
+            right = glm::normalize(right);
+
+            up -= right * glm::dot(up, right);
+            if (glm::length2(up) < 1e-10f) {
+                const glm::vec3 fallback_forward = glm::normalize(-rotation[2]);
+                const glm::vec3 fallback_up =
+                    std::abs(fallback_forward.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f)
+                                                         : glm::vec3(1.0f, 0.0f, 0.0f);
+                right = glm::normalize(glm::cross(fallback_forward, fallback_up));
+                up = glm::normalize(glm::cross(right, fallback_forward));
+                return glm::mat3(right, up, -fallback_forward);
+            }
+            up = glm::normalize(up);
+
+            glm::vec3 back = glm::cross(right, up);
+            if (glm::length2(back) < 1e-10f) {
+                back = glm::vec3(0.0f, 0.0f, 1.0f);
+            } else {
+                back = glm::normalize(back);
+            }
+
+            return glm::mat3(right, up, back);
+        }
+
         void applyRotationAroundCenter(const float yaw, const float pitch) {
             constexpr glm::vec3 WORLD_UP(0.0f, 1.0f, 0.0f);
             constexpr float MAX_VERTICAL_DOT = 0.98f;
@@ -291,6 +409,17 @@ class Viewport {
             R[0] = right;
             R[1] = glm::normalize(glm::cross(-forward, right));
             R[2] = -forward;
+        }
+
+        void applyTrackballRotationAroundCenter(const float yaw, const float pitch) {
+            const glm::vec3 local_up = glm::normalize(R[1]);
+            const glm::vec3 local_right = glm::normalize(R[0]);
+            const glm::mat3 Ry = glm::mat3(glm::rotate(glm::mat4(1.0f), yaw, local_up));
+            const glm::mat3 Rp = glm::mat3(glm::rotate(glm::mat4(1.0f), pitch, local_right));
+            const glm::mat3 U = Rp * Ry;
+
+            t = pivot + U * (t - pivot);
+            R = orthonormalizeRotation(U * R);
         }
     };
 

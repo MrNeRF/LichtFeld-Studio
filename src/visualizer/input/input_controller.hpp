@@ -16,6 +16,8 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 struct SDL_Window;
 struct SDL_Cursor;
@@ -38,6 +40,7 @@ namespace lfs::vis {
     public:
         enum class CameraNavigationMode {
             Orbit,
+            Trackball,
             FPV
         };
 
@@ -86,6 +89,8 @@ namespace lfs::vis {
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
+        [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
+        void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
         [[nodiscard]] static InputController* instance() { return instance_; }
 
         // Update function for continuous input (WASD movement and inertia)
@@ -159,6 +164,12 @@ namespace lfs::vis {
         std::pair<glm::vec3, glm::vec3> computePickRay(double x, double y) const;
         input::ToolMode getCurrentToolMode() const;
         void clearViewportDragState();
+        void clearSelectedCameraContextMenuGesture();
+        void beginPanDrag(const PanelInteractionState& interaction, int button, double x, double y);
+        [[nodiscard]] bool canOpenSelectedCameraContextMenu(int hovered_camera_uid) const;
+        void openSelectedCameraContextMenu(int hovered_camera_uid, float screen_x, float screen_y);
+        void applyCameraTrainingStateToSelection(const std::vector<std::string>& selected_names, bool enabled);
+        bool snapViewportToNearestAxis(Viewport& target_viewport, SplitViewPanelId panel);
 
         // Training pause/resume helpers
         void onCameraMovementStart();
@@ -195,6 +206,7 @@ namespace lfs::vis {
         };
         DragMode drag_mode_ = DragMode::None;
         CameraNavigationMode camera_navigation_mode_ = CameraNavigationMode::Orbit;
+        bool camera_view_snap_enabled_ = false;
         int drag_button_ = -1;
         glm::dvec2 last_mouse_pos_{0, 0};
         float splitter_start_pos_ = 0.5f;
@@ -202,6 +214,12 @@ namespace lfs::vis {
         Viewport* drag_viewport_ = nullptr;
         SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
+        struct PendingCameraContextMenuGesture {
+            bool active = false;
+            int camera_uid = -1;
+            glm::dvec2 press_pos{0.0, 0.0};
+            PanelInteractionState interaction{};
+        } pending_camera_context_menu_;
 
         // Key states
         bool key_r_pressed_ = false;

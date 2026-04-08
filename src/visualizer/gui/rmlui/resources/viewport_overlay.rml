@@ -61,6 +61,19 @@
             </div>
         </div>
 
+        <div id="primary-utility-bottom-toolbar" class="toolbar-container toolbar-vertical toolbar-bottom">
+            <div class="icon-btn"
+                 data-for="button : utility_bottom_buttons"
+                 data-attr-id="button.button_id"
+                 data-class-selected="button.selected"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text"
+                 data-attrif-disabled="!button.enabled"
+                 data-event-click="toolbar_action(button.action, button.value)">
+                <img data-attr-src="button.icon_src" />
+            </div>
+        </div>
+
         <div class="toolbar-hcenter" style="top: 5dp;">
             <div id="primary-gizmo-toolbar" class="toolbar-container"
                  data-class-hidden="!show_gizmo_toolbar">
@@ -154,6 +167,18 @@
             <div class="toolbar-separator" data-if="show_render_controls"></div>
             <div class="icon-btn"
                  data-for="button : utility_extra_buttons"
+                 data-class-selected="button.selected"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text"
+                 data-attrif-disabled="!button.enabled"
+                 data-event-click="toolbar_action(button.action, button.value)">
+                <img data-attr-src="button.icon_src" />
+            </div>
+        </div>
+
+        <div id="secondary-utility-bottom-toolbar" class="toolbar-container toolbar-vertical toolbar-bottom">
+            <div class="icon-btn"
+                 data-for="button : utility_bottom_buttons"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-title="button.tooltip_text"

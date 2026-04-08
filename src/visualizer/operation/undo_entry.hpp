@@ -188,6 +188,8 @@ namespace lfs::vis::op {
 
         std::unordered_map<std::string, TensorPresenceSnapshot> deleted_masks_before_;
         std::unordered_map<std::string, TensorSwapStorage> deleted_mask_storage_;
+        std::optional<TensorPresenceSnapshot> combined_deleted_before_;
+        TensorSwapStorage combined_deleted_storage_;
 
         ModifiesFlag captured_ = ModifiesFlag::NONE;
 

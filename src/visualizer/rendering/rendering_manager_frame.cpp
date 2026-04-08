@@ -169,6 +169,7 @@ namespace lfs::vis {
              .model = model,
              .render_lock_held = render_lock.has_value(),
              .settings = settings_,
+             .grid_planes = panel_grid_planes_,
              .frame_dirty = frame_dirty,
              .selection_flash_intensity = getSelectionFlashIntensity(),
              .current_camera_id = camera_interaction_service_.currentCameraId(),

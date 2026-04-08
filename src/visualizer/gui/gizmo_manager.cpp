@@ -1301,8 +1301,6 @@ namespace lfs::vis::gui {
                 break;
             }
         }
-        engine->setViewportGizmoHover(hovered_axis);
-
         if (!ui_wants_mouse) {
             const glm::vec2 capture_mouse_pos(mouse_x, mouse_y);
             const float time = static_cast<float>(SDL_GetTicks()) / 1000.0f;
@@ -1318,20 +1316,8 @@ namespace lfs::vis::gui {
                 if (hovered_axis >= 0 && hovered_axis <= 5) {
                     const int axis = hovered_axis % 3;
                     const bool negative = hovered_axis >= 3;
-                    const glm::mat3 rotation = engine->getAxisViewRotation(axis, negative);
-                    const float dist = glm::length(active_viewport.camera.pivot - active_viewport.camera.t);
-
-                    active_viewport.camera.pivot = glm::vec3(0.0f);
-                    active_viewport.camera.R = rotation;
-                    active_viewport.camera.t = rotation[2] * dist;
-
-                    const auto& settings = rendering_manager->getSettings();
-                    lfs::core::events::ui::GridSettingsChanged{
-                        .enabled = settings.show_grid,
-                        .plane = axis,
-                        .opacity = settings.grid_opacity}
-                        .emit();
-
+                    active_viewport.camera.setAxisAlignedView(axis, negative);
+                    rendering_manager->setGridPlaneForPanel(hovered_panel->panel, axis);
                     rendering_manager->markDirty(DirtyFlag::CAMERA);
                 } else {
                     viewport_gizmo_dragging_ = true;
@@ -1349,11 +1335,28 @@ namespace lfs::vis::gui {
             if (viewport_gizmo_dragging_) {
                 if (auto* const active_panel = find_panel(viewport_gizmo_active_panel_);
                     active_panel && frame_input.mouse_down[0]) {
-                    active_panel->viewport->camera.updateRotateAroundCenter(capture_mouse_pos, time);
+                    if (const auto* const input_controller = viewer_->getInputController();
+                        input_controller &&
+                        input_controller->cameraNavigationMode() ==
+                            InputController::CameraNavigationMode::Trackball) {
+                        active_panel->viewport->camera.updateTrackballRotateAroundCenter(capture_mouse_pos, time);
+                    } else {
+                        active_panel->viewport->camera.updateRotateAroundCenter(capture_mouse_pos, time);
+                    }
                     rendering_manager->markDirty(DirtyFlag::CAMERA);
                 } else {
                     if (auto* const active_panel = find_panel(viewport_gizmo_active_panel_)) {
                         active_panel->viewport->camera.endRotateAroundCenter();
+                        if (const auto* const input_controller = viewer_->getInputController();
+                            input_controller && input_controller->cameraViewSnapEnabled()) {
+                            constexpr float kAxisSnapAngleDegrees = 10.0f;
+                            int snapped_axis = -1;
+                            if (active_panel->viewport->camera.snapToNearestAxisView(
+                                    kAxisSnapAngleDegrees, &snapped_axis, nullptr)) {
+                                rendering_manager->setGridPlaneForPanel(active_panel->panel, snapped_axis);
+                            }
+                        }
+                        rendering_manager->markDirty(DirtyFlag::CAMERA);
                     }
                     viewport_gizmo_dragging_ = false;
 
@@ -1368,6 +1371,9 @@ namespace lfs::vis::gui {
         }
 
         for (const auto& panel : panels) {
+            const int panel_hover_axis =
+                hovered_panel && hovered_panel->panel == panel.panel ? hovered_axis : -1;
+            engine->setViewportGizmoHover(panel_hover_axis);
             if (auto result = engine->renderViewportGizmo(panel.viewport->getRotationMatrix(),
                                                           panel.pos,
                                                           panel.size);
@@ -1375,6 +1381,7 @@ namespace lfs::vis::gui {
                 LOG_WARN("Failed to render viewport gizmo: {}", result.error());
             }
         }
+        engine->setViewportGizmoHover(-1);
 
         if (viewport_gizmo_dragging_) {
             if (const auto* const active_panel = find_panel(viewport_gizmo_active_panel_)) {

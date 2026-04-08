@@ -28,10 +28,6 @@
 
 namespace lfs::vis {
 
-    namespace detail {
-        glm::mat4 currentSceneTransform(SceneManager* scene_manager, int camera_uid);
-    }
-
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
             using lfs::core::DataType;
@@ -944,6 +940,63 @@ namespace lfs::vis {
 
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
         EXPECT_EQ(manager.getFocusedSplitPanel(), SplitViewPanelId::Left);
+    }
+
+    TEST_F(RenderingManagerEventsTest, IndependentSplitGridPlaneTracksPanelsIndependently) {
+        RenderingManager manager;
+        Viewport primary_viewport(800, 600);
+
+        auto settings = manager.getSettings();
+        settings.grid_plane = 2;
+        manager.updateSettings(settings);
+
+        lfs::core::events::cmd::ToggleIndependentSplitView{
+            .viewport = &primary_viewport,
+        }
+            .emit();
+
+        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 2);
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
+
+        manager.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        manager.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
+
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 1);
+
+        manager.setFocusedSplitPanel(SplitViewPanelId::Left);
+        EXPECT_EQ(manager.getSettings().grid_plane, 0);
+
+        manager.setFocusedSplitPanel(SplitViewPanelId::Right);
+        EXPECT_EQ(manager.getSettings().grid_plane, 1);
+    }
+
+    TEST_F(RenderingManagerEventsTest, GridSettingsChangedOnlyUpdatesFocusedPanelInIndependentSplit) {
+        RenderingManager manager;
+        Viewport primary_viewport(800, 600);
+
+        lfs::core::events::cmd::ToggleIndependentSplitView{
+            .viewport = &primary_viewport,
+        }
+            .emit();
+
+        ASSERT_EQ(manager.getSettings().split_view_mode, SplitViewMode::IndependentDual);
+
+        manager.setGridPlaneForPanel(SplitViewPanelId::Left, 0);
+        manager.setGridPlaneForPanel(SplitViewPanelId::Right, 1);
+        manager.setFocusedSplitPanel(SplitViewPanelId::Right);
+
+        lfs::core::events::ui::GridSettingsChanged{
+            .enabled = true,
+            .plane = 2,
+            .opacity = 0.25f,
+        }
+            .emit();
+
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
+        EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
+        EXPECT_EQ(manager.getSettings().grid_plane, 2);
     }
 
 } // namespace lfs::vis

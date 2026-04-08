@@ -53,6 +53,7 @@ namespace lfs::vis {
                 .viewport_offset = {0, 0},
                 .start_position = 0.0f,
                 .end_position = 1.0f,
+                .grid_plane = context.grid_planes[splitViewPanelIndex(SplitViewPanelId::Left)],
             });
 
             const auto layouts = split_view_service.panelLayouts(context.settings, render_size.x);
@@ -70,6 +71,7 @@ namespace lfs::vis {
                 .viewport_offset = {(*layouts)[0].x, 0},
                 .start_position = (*layouts)[0].start_position,
                 .end_position = (*layouts)[0].end_position,
+                .grid_plane = context.grid_planes[splitViewPanelIndex(SplitViewPanelId::Left)],
             });
             panels.push_back({
                 .panel = SplitViewPanelId::Right,
@@ -78,6 +80,7 @@ namespace lfs::vis {
                 .viewport_offset = {(*layouts)[1].x, 0},
                 .start_position = (*layouts)[1].start_position,
                 .end_position = (*layouts)[1].end_position,
+                .grid_plane = context.grid_planes[splitViewPanelIndex(SplitViewPanelId::Right)],
             });
             return panels;
         }

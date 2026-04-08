@@ -35,6 +35,11 @@ body {
     pointer-events: auto;
 }
 
+.toolbar-bottom {
+    top: auto;
+    bottom: 5dp;
+}
+
 .toolbar-hcenter {
     position: absolute;
     left: 0;

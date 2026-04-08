@@ -232,6 +232,7 @@ namespace lfs::vis {
         /// Mirror selected gaussians along specified axis
         bool executeMirror(lfs::core::MirrorAxis axis);
 
+        [[nodiscard]] std::expected<void, std::string> softDeleteSelectedGaussians();
         void deleteSelectedGaussians();
         void invertSelection();
         void deselectAllGaussians();

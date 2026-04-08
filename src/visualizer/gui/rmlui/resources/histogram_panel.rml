@@ -1,0 +1,135 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="histogram_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="histogram_panel">
+  <div id="histogram-shell">
+    <div id="histogram-hero">
+      <div class="hero-copy">
+        <span class="hero-eyebrow">{{ analysis_label }}</span>
+        <span class="hero-title">{{ metric_title }}</span>
+        <span class="hero-description">{{ metric_description }}</span>
+      </div>
+      <div id="histogram-controls">
+        <span class="control-label">{{ field_label }}</span>
+        <select id="metric-select" class="histogram-select" data-value="metric_id">
+          <option data-for="option : metric_options" data-attr-value="option.value">{{ option.label }}</option>
+        </select>
+        <div class="histogram-toggle-row">
+          <span class="histogram-toggle-label">{{ log_scale_label }}</span>
+          <label class="histogram-toggle-control">
+            <input type="checkbox" data-checked="log_scale_enabled" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="histogram-empty" data-class-hidden="!show_empty_state">
+      <div class="empty-card">
+        <span class="empty-title">{{ empty_title }}</span>
+        <span class="empty-message">{{ empty_message }}</span>
+      </div>
+    </div>
+
+    <div id="histogram-content" data-class-hidden="!show_chart">
+      <div id="histogram-stats">
+        <div class="stat-card">
+          <span class="stat-label">{{ samples_label }}</span>
+          <span class="stat-value">{{ sample_count }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">{{ range_label }}</span>
+          <span class="stat-value stat-value--small">{{ range_text }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">{{ mean_label }}</span>
+          <span class="stat-value">{{ mean_text }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">{{ median_label }}</span>
+          <span class="stat-value">{{ median_text }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">{{ p95_label }}</span>
+          <span class="stat-value">{{ p95_text }}</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">{{ peak_bin_label }}</span>
+          <span class="stat-value">{{ peak_text }}</span>
+        </div>
+      </div>
+
+      <div id="histogram-card">
+        <div id="histogram-card-header">
+          <span id="histogram-summary">{{ summary_text }}</span>
+          <span id="histogram-bin-count">{{ bin_count_text }}</span>
+        </div>
+
+        <div id="histogram-chart">
+          <div class="histogram-grid-line" style="top: 16%;"></div>
+          <div class="histogram-grid-line" style="top: 36%;"></div>
+          <div class="histogram-grid-line" style="top: 56%;"></div>
+          <div class="histogram-grid-line" style="top: 76%;"></div>
+
+          <div id="histogram-bars">
+            <div id="histogram-selection"
+                 data-class-hidden="!show_selection_overlay"
+                 data-style-left="selection_left_style"
+                 data-style-width="selection_width_style"></div>
+            <div class="histogram-bar"
+                 data-for="bin : bins"
+                 data-class-selected="bin.selected"
+                 data-attr-title="bin.tooltip">
+              <div class="histogram-bar-fill"
+                   data-style-height="bin.height_style"
+                   data-style-opacity="bin.opacity_style"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="histogram-axis">
+          <span class="axis-label">{{ axis_min }}</span>
+          <span class="axis-label">{{ axis_max }}</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="histogram-footer">
+      <div class="footer-stat">
+        <span class="footer-label">{{ marked_label }}</span>
+        <span class="footer-value">{{ marked_range_text }}</span>
+      </div>
+      <div class="footer-stat">
+        <span class="footer-label">{{ count_label }}</span>
+        <span class="footer-value">{{ marked_count_text }}</span>
+      </div>
+      <span class="footer-hint">{{ status_hint }}</span>
+      <div class="footer-history-actions">
+        <button type="button"
+                class="btn btn--secondary histogram-history-btn"
+                data-attr-title="undo_tooltip"
+                data-event-click="undo_history()"
+                data-attrif-disabled="!undo_enabled">
+          <img class="histogram-history-icon" src="../icon/undo.png" />
+        </button>
+        <button type="button"
+                class="btn btn--secondary histogram-history-btn"
+                data-attr-title="redo_tooltip"
+                data-event-click="redo_history()"
+                data-attrif-disabled="!redo_enabled">
+          <img class="histogram-history-icon" src="../icon/redo.png" />
+        </button>
+      </div>
+      <div class="footer-text-actions">
+        <button class="btn btn--secondary footer-text-action"
+                data-event-click="clear_mark()"
+                data-attrif-disabled="!clear_enabled">{{ clear_label }}</button>
+        <button class="btn btn--error footer-text-action"
+                data-event-click="delete_marked()"
+                data-attrif-disabled="!delete_enabled">{{ delete_label }}</button>
+      </div>
+    </div>
+  </div>
+</body>
+</rml>
