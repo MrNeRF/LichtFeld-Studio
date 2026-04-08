@@ -523,7 +523,7 @@ scene-graph,
 }
 
 .node-name.training-disabled {
-    color: #9399b2;
+    color: #a6adc8;
 }
 
 
