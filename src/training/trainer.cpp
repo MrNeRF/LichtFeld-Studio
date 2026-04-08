@@ -2225,6 +2225,27 @@ namespace lfs::training {
         }
     }
 
+    TrainingProgress::Phase Trainer::get_progress_phase(
+        const int iter,
+        const bool in_controller_phase) const {
+
+        if (in_controller_phase) {
+            return TrainingProgress::Phase::Controller;
+        }
+
+        const bool in_sparsification = get_active_sparsify_steps() > 0 &&
+                                       iter > get_sparsity_boundary_iteration();
+        if (in_sparsification) {
+            return TrainingProgress::Phase::Sparse;
+        }
+
+        if (strategy_ && strategy_->is_refining(iter)) {
+            return TrainingProgress::Phase::Refine;
+        }
+
+        return TrainingProgress::Phase::Train;
+    }
+
     void Trainer::handle_control_requests(int iter, std::stop_token stop_token) {
         // Check stop token first
         if (stop_token.stop_requested()) {
@@ -2243,14 +2264,11 @@ namespace lfs::training {
         } else if (!pause_requested_.load() && is_paused_.load()) {
             is_paused_ = false;
             if (progress_) {
-                const bool in_sparsification = get_active_sparsify_steps() > 0 &&
-                                               iter > get_sparsity_boundary_iteration();
-                const auto phase = in_sparsification
-                                       ? TrainingProgress::Phase::Sparse
-                                       : (strategy_->is_refining(iter)
-                                              ? TrainingProgress::Phase::Refine
-                                              : TrainingProgress::Phase::Train);
-                progress_->resume(iter, current_loss_.load(), static_cast<int>(strategy_->get_model().size()), phase);
+                progress_->resume(
+                    iter,
+                    current_loss_.load(),
+                    static_cast<int>(strategy_->get_model().size()),
+                    get_progress_phase(iter));
             }
             LOG_INFO("Training resumed at iteration {}", iter);
         }
@@ -3148,19 +3166,12 @@ namespace lfs::training {
                 }
 
                 current_loss_ = loss_value;
-                const bool in_sparsification = get_active_sparsify_steps() > 0 &&
-                                               iter > get_sparsity_boundary_iteration();
                 if (progress_) {
-                    const auto phase = in_controller_phase
-                                           ? TrainingProgress::Phase::Controller
-                                           : (in_sparsification
-                                                  ? TrainingProgress::Phase::Sparse
-                                                  : (strategy_->is_refining(iter)
-                                                         ? TrainingProgress::Phase::Refine
-                                                         : TrainingProgress::Phase::Train));
-                    progress_->update(iter, loss_value,
-                                      static_cast<int>(strategy_->get_model().size()),
-                                      phase);
+                    progress_->update(
+                        iter,
+                        loss_value,
+                        static_cast<int>(strategy_->get_model().size()),
+                        get_progress_phase(iter, in_controller_phase));
                 }
                 lfs::core::events::state::TrainingProgress{
                     .iteration = iter,
@@ -3398,16 +3409,11 @@ namespace lfs::training {
             const RenderMode render_mode = RenderMode::RGB;
 
             if (progress_) {
-                const bool in_sparsification = get_active_sparsify_steps() > 0 &&
-                                               iter > get_sparsity_boundary_iteration();
-                const auto phase = in_sparsification
-                                       ? TrainingProgress::Phase::Sparse
-                                       : (strategy_->is_refining(iter)
-                                              ? TrainingProgress::Phase::Refine
-                                              : TrainingProgress::Phase::Train);
-                progress_->update(iter, current_loss_.load(),
-                                  static_cast<int>(strategy_->get_model().size()),
-                                  phase);
+                progress_->update(
+                    iter,
+                    current_loss_.load(),
+                    static_cast<int>(strategy_->get_model().size()),
+                    get_progress_phase(iter));
             }
 
             // Conservative prefetch to avoid VRAM exhaustion

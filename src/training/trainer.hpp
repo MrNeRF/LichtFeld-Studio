@@ -334,6 +334,9 @@ namespace lfs::training {
                    !params_.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
+        [[nodiscard]] TrainingProgress::Phase get_progress_phase(
+            int iter,
+            bool in_controller_phase = false) const;
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
