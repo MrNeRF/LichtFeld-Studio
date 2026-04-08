@@ -23,6 +23,9 @@ namespace lfs::core {
 namespace lfs::vis {
 
     namespace detail {
+        [[nodiscard]] LFS_VIS_API glm::mat4 currentSceneTransform(SceneManager* const scene_manager,
+                                                                  const int camera_uid);
+
         [[nodiscard]] LFS_VIS_API std::optional<GTRenderCamera> buildGTRenderCamera(
             const lfs::core::Camera& cam,
             glm::ivec2 render_size,

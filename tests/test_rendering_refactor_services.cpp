@@ -28,10 +28,6 @@
 
 namespace lfs::vis {
 
-    namespace detail {
-        glm::mat4 currentSceneTransform(SceneManager* scene_manager, int camera_uid);
-    }
-
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
             using lfs::core::DataType;
