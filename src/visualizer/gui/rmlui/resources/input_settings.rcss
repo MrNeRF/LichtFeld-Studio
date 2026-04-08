@@ -74,7 +74,7 @@
 .is-binding-desc {
     flex: 1;
     font-size: 10dp;
-    color: #89b4fa;
+    color: #cdd6f4;
     min-width: 0;
 }
 
