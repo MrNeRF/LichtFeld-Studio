@@ -228,10 +228,23 @@ namespace lfs::vis::gui {
         const auto row_selected = colorToRmlAlpha(p.primary, 0.28f);
         const auto row_selected_hover = colorToRmlAlpha(p.primary, 0.38f);
 
+        const auto tab_inactive_bg = colorToRmlAlpha(p.surface_bright, 0.55f);
+        const auto tab_hover_bg = colorToRmlAlpha(p.primary, 0.09f);
+        const auto tab_hover_border = colorToRmlAlpha(p.primary, 0.43f);
+        const auto tab_active_bg = colorToRmlAlpha(p.primary, 0.11f);
+        const auto tab_active_border = colorToRmlAlpha(p.primary, 0.52f);
+        const auto tab_active_bottom = colorToRml(p.primary);
+        const auto chip_bg = colorToRml(p.surface_bright);
+        const auto chip_accent_bg = colorToRmlAlpha(p.primary, 0.28f);
+        const auto chip_accent_border = colorToRmlAlpha(p.primary, 0.59f);
+
         return std::format(
             "body {{ color: {0}; background-color: {12}; }}\n"
             "#search-container {{ background-color: {2}; border-color: {4}; }}\n"
+            "#search-icon {{ image-color: {1}; }}\n"
             "#filter-input {{ color: {0}; }}\n"
+            "#filter-clear img {{ image-color: {1}; }}\n"
+            "#filter-clear:hover img {{ image-color: {0}; }}\n"
             ".tree-row.even {{ background-color: {5}; }}\n"
             ".tree-row.odd {{ background-color: {6}; }}\n"
             ".tree-row:hover {{ background-color: {7}; border-left-color: {8}; }}\n"
@@ -243,10 +256,19 @@ namespace lfs::vis::gui {
             ".node-name {{ color: {0}; }}\n"
             ".node-name.training-disabled {{ color: {1}; }}\n"
             ".rename-input {{ color: {0}; background-color: {2}; border-width: 1dp; border-color: {3}; }}\n"
-            ".row-icon {{ image-color: {0}; }}\n",
+            ".row-icon {{ image-color: {0}; }}\n"
+            ".row-icon.type-icon {{ image-color: {1}; }}\n"
+            ".section-arrow {{ color: {1}; }}\n"
+            ".scene-tab {{ color: {1}; background-color: {13}; border-color: {4}; }}\n"
+            ".scene-tab:hover, .scene-tab:focus-visible {{ color: {0}; border-color: {14}; background-color: {15}; }}\n"
+            ".scene-tab.active {{ color: {0}; background-color: {16}; border-color: {17}; border-bottom-color: {18}; }}\n"
+            ".scene-chip {{ color: {0}; background-color: {19}; border-color: {4}; }}\n"
+            ".scene-chip--accent {{ color: {0}; background-color: {20}; border-color: {21}; }}\n",
             text, text_dim, surface, primary, border, row_even, row_odd,
             row_hover, row_hover_border, row_selected, row_selected_hover,
-            row_hover_border_selected, body_bg);
+            row_hover_border_selected, body_bg, tab_inactive_bg, tab_hover_border,
+            tab_hover_bg, tab_active_bg, tab_active_border, tab_active_bottom,
+            chip_bg, chip_accent_bg, chip_accent_border);
     }
 
     bool RmlPanelHost::syncThemeProperties() {
