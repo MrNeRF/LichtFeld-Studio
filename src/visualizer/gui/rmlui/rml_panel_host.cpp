@@ -237,6 +237,8 @@ namespace lfs::vis::gui {
         const auto chip_bg = colorToRml(p.surface_bright);
         const auto chip_accent_bg = colorToRmlAlpha(p.primary, 0.28f);
         const auto chip_accent_border = colorToRmlAlpha(p.primary, 0.59f);
+        const auto primary_bg_soft = colorToRmlAlpha(p.primary, 0.16f);
+        const auto warning = colorToRml(p.warning);
 
         return std::format(
             "body {{ color: {0}; background-color: {12}; }}\n"
@@ -263,12 +265,19 @@ namespace lfs::vis::gui {
             ".scene-tab:hover, .scene-tab:focus-visible {{ color: {0}; border-color: {14}; background-color: {15}; }}\n"
             ".scene-tab.active {{ color: {0}; background-color: {16}; border-color: {17}; border-bottom-color: {18}; }}\n"
             ".scene-chip {{ color: {0}; background-color: {19}; border-color: {4}; }}\n"
-            ".scene-chip--accent {{ color: {0}; background-color: {20}; border-color: {21}; }}\n",
+            ".scene-chip--accent {{ color: {0}; background-color: {20}; border-color: {21}; }}\n"
+            ".is-section-title {{ color: {3}; }}\n"
+            ".is-hint {{ color: {1}; }}\n"
+            ".is-label {{ color: {0}; }}\n"
+            ".is-binding-section {{ color: {3}; background-color: {22}; }}\n"
+            ".is-action-name {{ color: {0}; }}\n"
+            ".is-binding-desc {{ color: {0}; }}\n"
+            ".is-binding-desc.is-capturing {{ color: {23}; }}\n",
             text, text_dim, surface, primary, border, row_even, row_odd,
             row_hover, row_hover_border, row_selected, row_selected_hover,
             row_hover_border_selected, body_bg, tab_inactive_bg, tab_hover_border,
             tab_hover_bg, tab_active_bg, tab_active_border, tab_active_bottom,
-            chip_bg, chip_accent_bg, chip_accent_border);
+            chip_bg, chip_accent_bg, chip_accent_border, primary_bg_soft, warning);
     }
 
     bool RmlPanelHost::syncThemeProperties() {
