@@ -270,6 +270,10 @@ namespace lfs::vis::gui {
                         warning);
         const auto histogram_selection_fill = colorToRmlAlpha(p.warning, t.isLightTheme() ? 0.14f : 0.18f);
         const auto histogram_history_icon_disabled = colorToRmlAlpha(p.text_dim, 0.48f);
+        const auto background = colorToRml(p.background);
+        const auto primary_border_soft = colorToRmlAlpha(p.primary, 0.33f);
+        const auto primary_border_faint = colorToRmlAlpha(p.primary, 0.13f);
+        const auto primary_accent = colorToRmlAlpha(p.primary, 0.22f);
 
         return std::format(
             "body {{ color: {0}; background-color: {12}; }}\n"
@@ -322,7 +326,15 @@ namespace lfs::vis::gui {
             "#histogram-selection, #compare-selection {{ border-color: {23}; background-color: {33}; decorator: none; }}\n"
             ".histogram-history-icon {{ image-color: {0}; }}\n"
             ".histogram-history-btn:disabled .histogram-history-icon {{ image-color: {34}; }}\n"
-            ".footer-history-actions {{ background-color: {35}; border-color: {28}; }}\n",
+            ".footer-history-actions {{ background-color: {35}; border-color: {28}; }}\n"
+            ".training-panel-title {{ color: {0}; border-top-color: {36}; }}\n"
+            ".training-panel-title-icon {{ image-color: {3}; }}\n"
+            ".training-subsection-title {{ color: {1}; border-top-color: {37}; }}\n"
+            ".loss-graph-wrap {{ background-color: {38}; }}\n"
+            ".loss-tick {{ color: {1}; }}\n"
+            ".color-picker-popup {{ background-color: {2}; border-color: {4}; }}\n"
+            ".mask-settings-group {{ border-left-color: {39}; }}\n"
+            ".mask-settings-divider {{ background-color: {37}; }}\n",
             text, text_dim, surface, primary, border, row_even, row_odd,
             row_hover, row_hover_border, row_selected, row_selected_hover,
             row_hover_border_selected, body_bg, tab_inactive_bg, tab_hover_border,
@@ -331,7 +343,8 @@ namespace lfs::vis::gui {
             histogram_hero_decor, histogram_surface, histogram_chart_bg, histogram_grid,
             histogram_toolbar_divider, histogram_toolbar_item, histogram_toolbar_select,
             histogram_fill_decor, histogram_fill_selected_decor, histogram_selection_fill,
-            histogram_history_icon_disabled, histogram_footer_chip);
+            histogram_history_icon_disabled, histogram_footer_chip, primary_border_soft,
+            primary_border_faint, background, primary_accent);
     }
 
     bool RmlPanelHost::syncThemeProperties() {

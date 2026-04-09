@@ -4,6 +4,8 @@
 
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 
+#include "theme/theme.hpp"
+
 #include <RmlUi/Core/RenderManager.h>
 #include <algorithm>
 #include <cassert>
@@ -60,9 +62,12 @@ namespace lfs::vis::gui {
         if (graph_h <= 0.f)
             return;
 
+        const auto& pal = lfs::vis::theme().palette;
+        const auto to_byte = [](float v) { return static_cast<Rml::byte>(std::clamp(v * 255.0f, 0.0f, 255.0f)); };
         {
             Rml::Mesh mesh;
-            Rml::ColourbPremultiplied bg_col(25, 25, 25, 255);
+            Rml::ColourbPremultiplied bg_col(to_byte(pal.background.x), to_byte(pal.background.y),
+                                             to_byte(pal.background.z), 255);
             mesh.vertices.push_back({{0, 0}, bg_col, {0, 0}});
             mesh.vertices.push_back({{w, 0}, bg_col, {0, 0}});
             mesh.vertices.push_back({{w, h}, bg_col, {0, 0}});
@@ -73,7 +78,8 @@ namespace lfs::vis::gui {
 
         {
             Rml::Mesh mesh;
-            Rml::ColourbPremultiplied grid_col(60, 60, 60, 255);
+            Rml::ColourbPremultiplied grid_col(to_byte(pal.border.x), to_byte(pal.border.y),
+                                               to_byte(pal.border.z), 255);
             const float line_h = 1.0f;
 
             for (int i = 0; i < TICK_COUNT; ++i) {
@@ -103,7 +109,8 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const Rml::ColourbPremultiplied line_col(137, 180, 250, 255);
+            const Rml::ColourbPremultiplied line_col(to_byte(pal.primary.x), to_byte(pal.primary.y),
+                                                     to_byte(pal.primary.z), 255);
             const float half_lw = LINE_WIDTH * 0.5f;
             const float range = data_max_ - data_min_;
             assert(range > 0.0f);
