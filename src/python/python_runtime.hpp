@@ -717,4 +717,65 @@ namespace lfs::python {
                                                         void* overlay_renderer,
                                                         void* draw_list);
 
+    // ── Video player callbacks ───────────────────────────────────
+    // VideoPlayer operations go through callbacks set by the visualizer
+    // so the Python module doesn't need to link lfs_video.
+
+    struct VideoPlayerCallbacks {
+        std::function<bool(const std::string&)> open;
+        std::function<void()> close;
+        std::function<bool()> is_open;
+        std::function<void()> play;
+        std::function<void()> pause;
+        std::function<void()> toggle_play_pause;
+        std::function<bool()> is_playing;
+        std::function<void(double)> seek;
+        std::function<void()> step_forward;
+        std::function<void()> step_backward;
+        std::function<bool()> update;
+        std::function<const uint8_t*()> current_frame_data;
+        std::function<int()> width;
+        std::function<int()> height;
+        std::function<double()> current_time;
+        std::function<double()> duration;
+        std::function<double()> fps;
+        std::function<int64_t()> total_frames;
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_video_player_callbacks(const VideoPlayerCallbacks& cbs);
+    LFS_PYTHON_RUNTIME_API const VideoPlayerCallbacks& get_video_player_callbacks();
+
+    // ── Video frame extraction callback ──────────────────────
+    struct VideoExtractParams {
+        std::string video_path;
+        std::string output_dir;
+        int mode = 0;
+        double fps = 1.0;
+        int frame_interval = 1;
+        int format = 0;
+        int jpg_quality = 95;
+        double start_time = 0.0;
+        double end_time = -1.0;
+        int resolution_mode = 0;
+        float scale = 1.0f;
+        int custom_width = 0;
+        int custom_height = 0;
+        std::string filename_pattern = "frame_%d";
+    };
+
+    struct VideoExtractState {
+        bool active = false;
+        int current = 0;
+        int total = 0;
+        std::string error;
+    };
+
+    using VideoExtractFn = std::function<void(const VideoExtractParams&)>;
+    using VideoExtractStateFn = std::function<VideoExtractState()>;
+
+    LFS_PYTHON_RUNTIME_API void set_video_extract_callbacks(VideoExtractFn extract_fn,
+                                                            VideoExtractStateFn state_fn);
+    LFS_PYTHON_RUNTIME_API void invoke_video_extract(const VideoExtractParams& params);
+    LFS_PYTHON_RUNTIME_API VideoExtractState get_video_extract_state();
+
 } // namespace lfs::python

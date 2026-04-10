@@ -4,11 +4,13 @@
 
 #include "py_io.hpp"
 #include "py_cameras.hpp"
+#include "py_rml.hpp"
 #include "py_scene.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
 
 #include <nanobind/stl/filesystem.h>
+#include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -18,9 +20,11 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
+#include "gui/rmlui/elements/video_preview_element.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/ply_export_internal.hpp"
+#include "python_runtime.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
@@ -397,6 +401,201 @@ namespace lfs::python {
             },
             nb::arg("path"), nb::arg("image"),
             "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].");
+
+        // ── Video player bindings (callback-based, no lfs_video link) ──
+
+        m.def(
+            "video_player_open",
+            [](const std::string& path) {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (!cbs.open)
+                    throw std::runtime_error("Video player not available");
+                if (!cbs.open(path))
+                    throw std::runtime_error("Failed to open video: " + path);
+            },
+            nb::arg("path"), "Open a video file for playback");
+
+        m.def(
+            "video_player_close",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.close)
+                    cbs.close();
+            },
+            "Close the current video");
+
+        m.def(
+            "video_player_is_open",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.is_open ? cbs.is_open() : false;
+            },
+            "Check if a video is currently open");
+
+        m.def(
+            "video_player_play", [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.play) cbs.play();
+            },
+            "Start video playback");
+
+        m.def(
+            "video_player_pause", [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.pause) cbs.pause();
+            },
+            "Pause video playback");
+
+        m.def(
+            "video_player_toggle_play_pause", [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.toggle_play_pause) cbs.toggle_play_pause();
+            },
+            "Toggle play/pause");
+
+        m.def(
+            "video_player_is_playing",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.is_playing ? cbs.is_playing() : false;
+            },
+            "Check if video is currently playing");
+
+        m.def(
+            "video_player_seek",
+            [](double seconds) {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.seek) cbs.seek(seconds);
+            },
+            nb::arg("seconds"), "Seek to a specific time");
+
+        m.def(
+            "video_player_step_forward", [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.step_forward) cbs.step_forward();
+            },
+            "Step forward one frame");
+
+        m.def(
+            "video_player_step_backward", [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                if (cbs.step_backward) cbs.step_backward();
+            },
+            "Step backward one frame");
+
+        m.def(
+            "video_player_update",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.update ? cbs.update() : false;
+            },
+            "Update video playback, returns True if frame changed");
+
+        m.def(
+            "video_player_current_time",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.current_time ? cbs.current_time() : 0.0;
+            },
+            "Get current playback time in seconds");
+
+        m.def(
+            "video_player_duration",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.duration ? cbs.duration() : 0.0;
+            },
+            "Get video duration in seconds");
+
+        m.def(
+            "video_player_fps",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.fps ? cbs.fps() : 0.0;
+            },
+            "Get video FPS");
+
+        m.def(
+            "video_player_total_frames",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.total_frames ? cbs.total_frames() : int64_t{0};
+            },
+            "Get total frame count");
+
+        // ── Feed preview element ──
+
+        m.def(
+            "feed_preview_element",
+            [](PyRmlElement& py_elem) {
+                auto* raw = py_elem.raw();
+                auto* preview = dynamic_cast<lfs::vis::gui::VideoPreviewElement*>(raw);
+                if (!preview)
+                    return;
+
+                const auto& cbs = python::get_video_player_callbacks();
+                if (!cbs.current_frame_data || !cbs.width || !cbs.height)
+                    return;
+
+                const uint8_t* data = cbs.current_frame_data();
+                if (!data)
+                    return;
+
+                const int w = cbs.width();
+                const int h = cbs.height();
+                preview->setFrameData(data, w, h);
+            },
+            nb::arg("element"),
+            "Feed current video frame to a VideoPreviewElement");
+
+        // ── Video frame extraction ──
+
+        m.def(
+            "video_extract_frames",
+            [](const std::string& video_path, const std::string& output_dir,
+               int mode, double fps, int frame_interval, int format,
+               int jpg_quality, double start_time, double end_time,
+               int resolution_mode, float scale, int custom_width,
+               int custom_height, const std::string& filename_pattern) {
+                python::VideoExtractParams params;
+                params.video_path = video_path;
+                params.output_dir = output_dir;
+                params.mode = mode;
+                params.fps = fps;
+                params.frame_interval = frame_interval;
+                params.format = format;
+                params.jpg_quality = jpg_quality;
+                params.start_time = start_time;
+                params.end_time = end_time;
+                params.resolution_mode = resolution_mode;
+                params.scale = scale;
+                params.custom_width = custom_width;
+                params.custom_height = custom_height;
+                params.filename_pattern = filename_pattern;
+                python::invoke_video_extract(params);
+            },
+            nb::arg("video_path"), nb::arg("output_dir"),
+            nb::arg("mode") = 0, nb::arg("fps") = 1.0,
+            nb::arg("frame_interval") = 1, nb::arg("format") = 0,
+            nb::arg("jpg_quality") = 95, nb::arg("start_time") = 0.0,
+            nb::arg("end_time") = -1.0, nb::arg("resolution_mode") = 0,
+            nb::arg("scale") = 1.0f, nb::arg("custom_width") = 0,
+            nb::arg("custom_height") = 0,
+            nb::arg("filename_pattern") = "frame_%d",
+            "Extract frames from a video file");
+
+        m.def(
+            "video_extract_state",
+            [] {
+                auto state = python::get_video_extract_state();
+                nb::dict result;
+                result["active"] = state.active;
+                result["current"] = state.current;
+                result["total"] = state.total;
+                result["error"] = state.error;
+                return result;
+            },
+            "Get current video extraction state");
     }
 
 } // namespace lfs::python

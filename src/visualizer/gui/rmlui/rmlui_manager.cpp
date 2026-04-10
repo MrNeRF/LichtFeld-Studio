@@ -12,6 +12,7 @@
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/elements/video_preview_element.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
@@ -127,6 +128,7 @@ namespace lfs::vis::gui {
         static Rml::ElementInstancerGeneric<PythonEditorElement> python_editor_instancer;
         static Rml::ElementInstancerGeneric<SceneGraphElement> scene_graph_instancer;
         static Rml::ElementInstancerGeneric<TerminalElement> terminal_instancer;
+        static Rml::ElementInstancerGeneric<VideoPreviewElement> video_preview_instancer;
         Rml::Factory::RegisterElementInstancer("chromaticity-diagram", &chromaticity_instancer);
         Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
@@ -134,6 +136,7 @@ namespace lfs::vis::gui {
         Rml::Factory::RegisterElementInstancer("python-editor-view", &python_editor_instancer);
         Rml::Factory::RegisterElementInstancer("scene-graph", &scene_graph_instancer);
         Rml::Factory::RegisterElementInstancer("terminal-view", &terminal_instancer);
+        Rml::Factory::RegisterElementInstancer("video-preview", &video_preview_instancer);
 
         try {
             struct FontSpec {

@@ -1212,4 +1212,36 @@ namespace lfs::python {
         }
     }
 
+    // ── Video player callbacks ─────────────────────────────────
+
+    namespace {
+        VideoPlayerCallbacks g_video_player_cbs;
+        VideoExtractFn g_video_extract_fn;
+        VideoExtractStateFn g_video_extract_state_fn;
+    } // namespace
+
+    void set_video_player_callbacks(const VideoPlayerCallbacks& cbs) {
+        g_video_player_cbs = cbs;
+    }
+
+    const VideoPlayerCallbacks& get_video_player_callbacks() {
+        return g_video_player_cbs;
+    }
+
+    void set_video_extract_callbacks(VideoExtractFn extract_fn, VideoExtractStateFn state_fn) {
+        g_video_extract_fn = std::move(extract_fn);
+        g_video_extract_state_fn = std::move(state_fn);
+    }
+
+    void invoke_video_extract(const VideoExtractParams& params) {
+        if (g_video_extract_fn)
+            g_video_extract_fn(params);
+    }
+
+    VideoExtractState get_video_extract_state() {
+        if (g_video_extract_state_fn)
+            return g_video_extract_state_fn();
+        return {};
+    }
+
 } // namespace lfs::python

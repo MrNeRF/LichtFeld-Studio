@@ -21,6 +21,8 @@
 #include "operator/ops/scene_ops.hpp"
 #include "operator/ops/selection_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
+#include "io/video_frame_extractor.hpp"
+#include "io/video_player.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -264,6 +266,107 @@ namespace lfs::vis {
                 return gm ? gm->asyncTasks().getSplatSimplifyError() : std::string{};
             });
         callback_cleanup_.add([] { python::set_splat_simplify_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr); });
+
+        // Video player callbacks (singleton per-process)
+        {
+            static auto s_video_player = std::make_unique<io::VideoPlayer>();
+            static std::unique_ptr<io::VideoFrameExtractor> s_extractor;
+            static std::optional<std::jthread> s_extract_thread;
+            static std::atomic<bool> s_extracting{false};
+            static std::atomic<int> s_extract_current{0};
+            static std::atomic<int> s_extract_total{0};
+            static std::mutex s_extract_status_mutex;
+            static std::string s_extract_error;
+
+            python::VideoPlayerCallbacks vp_cbs;
+            vp_cbs.open = [](const std::string& path) -> bool {
+                return s_video_player->open(lfs::core::utf8_to_path(path));
+            };
+            vp_cbs.close = [] { s_video_player->close(); };
+            vp_cbs.is_open = [] { return s_video_player->isOpen(); };
+            vp_cbs.play = [] { s_video_player->play(); };
+            vp_cbs.pause = [] { s_video_player->pause(); };
+            vp_cbs.toggle_play_pause = [] { s_video_player->togglePlayPause(); };
+            vp_cbs.is_playing = [] { return s_video_player->isPlaying(); };
+            vp_cbs.seek = [](double secs) { s_video_player->seek(secs); };
+            vp_cbs.step_forward = [] { s_video_player->stepForward(); };
+            vp_cbs.step_backward = [] { s_video_player->stepBackward(); };
+            vp_cbs.update = [] { return s_video_player->update(0.0); };
+            vp_cbs.current_frame_data = [] { return s_video_player->currentFrameData(); };
+            vp_cbs.width = [] { return s_video_player->width(); };
+            vp_cbs.height = [] { return s_video_player->height(); };
+            vp_cbs.current_time = [] { return s_video_player->currentTime(); };
+            vp_cbs.duration = [] { return s_video_player->duration(); };
+            vp_cbs.fps = [] { return s_video_player->fps(); };
+            vp_cbs.total_frames = [] { return s_video_player->totalFrames(); };
+            python::set_video_player_callbacks(vp_cbs);
+
+            python::set_video_extract_callbacks(
+                [](const python::VideoExtractParams& params) {
+                    if (s_extract_thread && s_extract_thread->joinable())
+                        s_extract_thread->join();
+                    s_extract_thread.reset();
+
+                    s_extracting.store(true);
+                    s_extract_current.store(0);
+                    s_extract_total.store(0);
+                    {
+                        std::lock_guard lock(s_extract_status_mutex);
+                        s_extract_error.clear();
+                    }
+
+                    s_extract_thread.emplace([params]() {
+                        io::VideoFrameExtractor extractor;
+                        io::VideoFrameExtractor::Params ep;
+                        ep.video_path = lfs::core::utf8_to_path(params.video_path);
+                        ep.output_dir = lfs::core::utf8_to_path(params.output_dir);
+                        ep.mode = static_cast<io::ExtractionMode>(params.mode);
+                        ep.fps = params.fps;
+                        ep.frame_interval = params.frame_interval;
+                        ep.format = static_cast<io::ImageFormat>(params.format);
+                        ep.jpg_quality = params.jpg_quality;
+                        ep.start_time = params.start_time;
+                        ep.end_time = params.end_time;
+                        ep.resolution_mode = static_cast<io::ResolutionMode>(params.resolution_mode);
+                        ep.scale = params.scale;
+                        ep.custom_width = params.custom_width;
+                        ep.custom_height = params.custom_height;
+                        ep.filename_pattern = params.filename_pattern;
+                        ep.progress_callback = [](int current, int total) {
+                            s_extract_current.store(current);
+                            s_extract_total.store(total);
+                        };
+
+                        std::string error;
+                        if (!extractor.extract(ep, error)) {
+                            std::lock_guard lock(s_extract_status_mutex);
+                            s_extract_error = error;
+                        }
+                        s_extracting.store(false);
+                    });
+                },
+                []() -> python::VideoExtractState {
+                    python::VideoExtractState state;
+                    state.active = s_extracting.load();
+                    state.current = s_extract_current.load();
+                    state.total = s_extract_total.load();
+                    {
+                        std::lock_guard lock(s_extract_status_mutex);
+                        state.error = s_extract_error;
+                    }
+                    return state;
+                });
+
+            callback_cleanup_.add([] {
+                python::set_video_player_callbacks({});
+                python::set_video_extract_callbacks(nullptr, nullptr);
+                s_video_player->close();
+                if (s_extract_thread && s_extract_thread->joinable())
+                    s_extract_thread->join();
+                s_extract_thread.reset();
+            });
+        }
+
         python::set_selected_camera_callback([]() -> int {
             const auto* gm = python::get_gui_manager();
             return gm ? gm->getHighlightedCameraUid() : -1;

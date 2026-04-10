@@ -95,6 +95,10 @@ def register_builtin_panels():
         lf.register_class(Mesh2SplatPanel)
         lf.ui.set_panel_enabled("native.mesh2splat", False)
 
+        from .video_extractor_panel import VideoExtractorPanel
+        lf.register_class(VideoExtractorPanel)
+        lf.ui.set_panel_enabled("lfs.video_extractor", False)
+
         lf.register_class(PluginMarketplacePanel)
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
 

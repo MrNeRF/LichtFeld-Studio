@@ -116,7 +116,7 @@ class ExtractVideoFramesOperator(Operator):
     description = "Extract frames from a video file"
 
     def execute(self, context) -> set:
-        lf.ui.set_panel_enabled("native.video_extractor", True)
+        lf.ui.set_panel_enabled("lfs.video_extractor", True)
         return {"FINISHED"}
 
 

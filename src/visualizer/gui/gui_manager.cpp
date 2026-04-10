@@ -3493,12 +3493,7 @@ namespace lfs::vis::gui {
             reg_panel("lfs.scene", "Scene", panel, PanelSpace::SceneHeader, 0);
         }
 
-        reg_panel("native.video_extractor", "Video Extractor",
-                  make_panel(VideoExtractorPanel(video_widget_.get())),
-                  PanelSpace::Floating, 11,
-                  static_cast<uint32_t>(PanelOption::SELF_MANAGED),
-                  750.0f);
-        reg.set_panel_enabled("native.video_extractor", false);
+        // Video extractor panel is now Python-managed (lfs.video_extractor)
 
         // Viewport overlays (ordered by draw priority)
         reg_panel("native.selection_overlay", "Selection Overlay",

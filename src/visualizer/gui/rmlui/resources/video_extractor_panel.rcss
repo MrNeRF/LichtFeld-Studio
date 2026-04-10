@@ -1,0 +1,169 @@
+/* Video extractor panel styles */
+
+#content-wrap {
+    min-width: 0;
+    overflow-x: hidden;
+}
+
+/* ── Preview area ─────────────────────────────────── */
+
+.vep-preview-area {
+    position: relative;
+    min-height: 200dp;
+    margin-bottom: 4dp;
+}
+
+.vep-preview-area video-preview {
+    width: 100%;
+    height: 200dp;
+}
+
+.vep-placeholder {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 10dp;
+    color: #6c7086;
+}
+
+/* ── Transport controls ───────────────────────────── */
+
+.vep-transport {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+    margin-bottom: 4dp;
+    padding: 2dp 0;
+}
+
+.vep-transport-btn {
+    font-size: 12dp;
+    padding: 2dp 8dp;
+    min-width: 28dp;
+    text-align: center;
+}
+
+.vep-time-display {
+    font-size: 10dp;
+    color: #a6adc8;
+    margin-left: auto;
+}
+
+/* ── Timeline & Trim ─────────────────────────────── */
+
+.vep-timeline-section {
+    margin-bottom: 4dp;
+}
+
+.vep-trim-section {
+    margin-bottom: 4dp;
+}
+
+/* ── Sections ─────────────────────────────────────── */
+
+.vep-section {
+    margin-bottom: 4dp;
+}
+
+.vep-section-title {
+    font-size: 10dp;
+    font-weight: bold;
+    color: #89b4fa;
+    margin-bottom: 4dp;
+}
+
+/* ── File paths ───────────────────────────────────── */
+
+.vep-path-row {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+}
+
+.vep-path-text {
+    font-size: 10dp;
+    color: #cdd6f4;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vep-browse-btn {
+    font-size: 10dp;
+    padding: 1dp 8dp;
+    flex-shrink: 0;
+}
+
+/* ── Info text ────────────────────────────────────── */
+
+.vep-info-text {
+    display: block;
+    font-size: 10dp;
+    color: #a6adc8;
+    padding: 2dp 0;
+}
+
+/* ── Action area ──────────────────────────────────── */
+
+.vep-warning {
+    display: block;
+    font-size: 10dp;
+    color: #fab387;
+    margin-bottom: 4dp;
+}
+
+.vep-buttons {
+    display: flex;
+    gap: 6dp;
+    margin-top: 4dp;
+}
+
+.vep-action-btn {
+    flex: 1;
+    text-align: center;
+}
+
+/* ── Progress section ─────────────────────────────── */
+
+.vep-progress-section {
+    margin-top: 6dp;
+}
+
+@keyframes vep-pulse {
+    from { background-color: #89b4fa; }
+    to   { background-color: #b4d0fb; }
+}
+
+.vep-progress-wrap {
+    position: relative;
+    margin: 6dp 0;
+}
+
+.vep-progress fill {
+    animation: vep-pulse 1.2s quadratic-in-out infinite alternate;
+}
+
+.vep-stage-text {
+    display: block;
+    font-size: 10dp;
+    color: #a6adc8;
+    margin-bottom: 6dp;
+}
+
+/* ── Messages ─────────────────────────────────────── */
+
+.vep-message-section {
+    margin-top: 4dp;
+}
+
+.vep-success-text {
+    font-size: 10dp;
+    color: #a6e3a1;
+}
+
+.vep-error-text {
+    font-size: 10dp;
+    color: #f38ba8;
+}
