@@ -604,9 +604,9 @@
 
   <!-- ── Status Section ────────────────────────────────── -->
   <div class="section-gap">
-    <span class="status-text status-info training-status-line">{{status_mode}}</span>
-    <span class="status-text status-info training-status-line">{{status_iteration}}</span>
-    <span class="status-text status-info training-status-line">{{status_gaussians}}</span>
+    <span class="status-text text-default training-status-line">{{status_mode}}</span>
+    <span class="status-text text-default training-status-line">{{status_iteration}}</span>
+    <span class="status-text text-default training-status-line">{{status_gaussians}}</span>
     <div data-if="show_progress">
       <div style="position: relative;">
         <progress id="training-progress" max="1" data-attr-value="progress_value" />
@@ -614,7 +614,7 @@
       </div>
     </div>
     <div id="loss-graph-container">
-      <span id="loss-label" class="status-text status-info training-status-line">{{loss_label}}</span>
+      <span id="loss-label" class="status-text text-default training-status-line">{{loss_label}}</span>
       <div class="loss-graph-wrap">
         <div class="loss-graph-ticks">
           <span id="loss-tick-max" class="loss-tick">{{loss_tick_max}}</span>
