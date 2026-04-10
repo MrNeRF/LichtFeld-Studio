@@ -9,13 +9,16 @@
 
 .vep-preview-area {
     position: relative;
-    min-height: 200dp;
+    min-height: 300dp;
     margin-bottom: 4dp;
+    background-color: rgba(20, 20, 25, 255);
+    border-width: 1dp;
+    border-color: rgba(80, 85, 105, 120);
 }
 
 .vep-preview-area video-preview {
     width: 100%;
-    height: 200dp;
+    height: 300dp;
 }
 
 .vep-placeholder {
@@ -44,10 +47,25 @@
     text-align: center;
 }
 
+.vep-round-btn {
+    width: 28dp;
+    height: 28dp;
+    border-radius: 14dp;
+    font-size: 9dp;
+    text-align: center;
+    padding: 0;
+    border-width: 0;
+    cursor: pointer;
+    transition: background-color 0.12s quadratic-out;
+}
+
+.vep-play-btn {
+    font-size: 11dp;
+}
+
 .vep-time-display {
-    font-size: 10dp;
-    color: #a6adc8;
-    margin-left: auto;
+    font-size: 11dp;
+    margin-left: 16dp;
 }
 
 /* ── Timeline & Trim ─────────────────────────────── */
@@ -66,11 +84,15 @@
     margin-bottom: 4dp;
 }
 
-.vep-section-title {
+.vep-section-title,
+.section-header-text {
+    display: block;
     font-size: 10dp;
     font-weight: bold;
-    color: #89b4fa;
     margin-bottom: 4dp;
+    padding-top: 4dp;
+    border-top-width: 1dp;
+    border-top-color: rgba(110, 118, 138, 80);
 }
 
 /* ── File paths ───────────────────────────────────── */

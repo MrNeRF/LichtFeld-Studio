@@ -30,7 +30,7 @@ class VideoExtractorPanel(Panel):
     order = 11
     template = "rmlui/video_extractor_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (420, 0)
+    size = (750, 0)
     update_interval_ms = 16
 
     def __init__(self):
