@@ -91,3 +91,10 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 |---------|-------------|---------|
 | [Tabler Icons](https://github.com/tabler/tabler-icons) | UI icons | MIT |
 | [Lucide Icons](https://github.com/lucide-icons/lucide) | UI icons (fork of Feather) | ISC |
+
+## Fonts
+| Project | Description | License |
+|---------|-------------|---------|
+| [JetBrains Mono](https://github.com/jetbrains/jetbrainsmono) | A typeface made for developers | OFL-1.1 |
+| [Inter](https://github.com/rsms/inter) | A typeface carefully crafted & designed for computer screens | OFL-1.1 |
+| [Noto](https://fonts.google.com/noto) | A typeface for the world | OFL-1.1 |
