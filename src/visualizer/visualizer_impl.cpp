@@ -291,7 +291,12 @@ namespace lfs::vis {
             vp_cbs.seek = [](double secs) { s_video_player->seek(secs); };
             vp_cbs.step_forward = [] { s_video_player->stepForward(); };
             vp_cbs.step_backward = [] { s_video_player->stepBackward(); };
-            vp_cbs.update = [] { return s_video_player->update(0.0); };
+            vp_cbs.update = [] {
+                static const auto start = std::chrono::steady_clock::now();
+                const double wall_time = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count();
+                return s_video_player->update(wall_time);
+            };
             vp_cbs.current_frame_data = [] { return s_video_player->currentFrameData(); };
             vp_cbs.width = [] { return s_video_player->width(); };
             vp_cbs.height = [] { return s_video_player->height(); };

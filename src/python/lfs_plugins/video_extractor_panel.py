@@ -75,6 +75,7 @@ class VideoExtractorPanel(Panel):
 
         # Video player handle
         self._player_open = False
+        self._needs_preview_update = False
         self._extraction_thread = None
 
     # ── Data model ────────────────────────────────────────────
@@ -170,8 +171,10 @@ class VideoExtractorPanel(Panel):
         if self._has_video and self._player_open:
             try:
                 updated = lf.io.video_player_update()
-                if updated:
-                    # Feed frame data to the preview element
+                needs_feed = updated or getattr(self, '_needs_preview_update', False)
+                self._needs_preview_update = False
+
+                if needs_feed:
                     preview = doc.get_element_by_id("video-preview")
                     if preview is not None:
                         lf.io.feed_preview_element(preview)
@@ -259,6 +262,7 @@ class VideoExtractorPanel(Panel):
         self._current_time = target_time
         try:
             lf.io.video_player_seek(target_time)
+            self._needs_preview_update = True
         except Exception:
             pass
         self._dirty_model("time_display", "timeline_pos")
@@ -457,6 +461,10 @@ class VideoExtractorPanel(Panel):
             self._trim_end = self._duration
             self._current_time = 0.0
             self._is_playing = False
+            self._needs_preview_update = True
+
+            # Decode first frame
+            lf.io.video_player_update()
 
             if not self._output_path:
                 base = os.path.splitext(os.path.basename(path))[0]
@@ -480,6 +488,7 @@ class VideoExtractorPanel(Panel):
             return
         try:
             lf.io.video_player_step_backward()
+            self._needs_preview_update = True
         except Exception:
             pass
 
@@ -488,6 +497,7 @@ class VideoExtractorPanel(Panel):
             return
         try:
             lf.io.video_player_toggle_play_pause()
+            self._dirty_model("play_pause_label")
         except Exception:
             pass
 
@@ -496,6 +506,7 @@ class VideoExtractorPanel(Panel):
             return
         try:
             lf.io.video_player_step_forward()
+            self._needs_preview_update = True
         except Exception:
             pass
 
