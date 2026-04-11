@@ -169,16 +169,16 @@ class VideoExtractorPanel(Panel):
 
         if self._has_video and self._player_open:
             try:
-                updated = lf.video_player_update()
+                updated = lf.io.video_player_update()
                 if updated:
                     # Feed frame data to the preview element
                     preview = doc.get_element_by_id("video-preview")
                     if preview is not None:
-                        lf.feed_preview_element(preview)
+                        lf.io.feed_preview_element(preview)
                     dirty = True
 
-                current_time = lf.video_player_current_time()
-                is_playing = lf.video_player_is_playing()
+                current_time = lf.io.video_player_current_time()
+                is_playing = lf.io.video_player_is_playing()
 
                 if current_time != self._current_time or is_playing != self._is_playing:
                     self._current_time = current_time
@@ -192,7 +192,7 @@ class VideoExtractorPanel(Panel):
 
         if self._is_extracting:
             try:
-                state = lf.video_extract_state()
+                state = lf.io.video_extract_state()
                 progress_current = state.get("current", 0)
                 progress_total = state.get("total", 0)
                 is_active = state.get("active", False)
@@ -258,7 +258,7 @@ class VideoExtractorPanel(Panel):
         target_time = pos / 1000.0 * self._duration
         self._current_time = target_time
         try:
-            lf.video_player_seek(target_time)
+            lf.io.video_player_seek(target_time)
         except Exception:
             pass
         self._dirty_model("time_display", "timeline_pos")
@@ -406,7 +406,7 @@ class VideoExtractorPanel(Panel):
         if self._mode_index == 0:
             return max(1, int(trim_duration * self._fps_value))
         try:
-            video_fps = lf.video_player_fps()
+            video_fps = lf.io.video_player_fps()
         except Exception:
             video_fps = 30.0
         if video_fps <= 0:
@@ -431,7 +431,7 @@ class VideoExtractorPanel(Panel):
     def _close_video(self):
         if self._player_open:
             try:
-                lf.video_player_close()
+                lf.io.video_player_close()
             except Exception:
                 pass
             self._player_open = False
@@ -449,10 +449,10 @@ class VideoExtractorPanel(Panel):
         self._error_text = ""
 
         try:
-            lf.video_player_open(path)
+            lf.io.video_player_open(path)
             self._player_open = True
             self._has_video = True
-            self._duration = lf.video_player_duration()
+            self._duration = lf.io.video_player_duration()
             self._trim_start = 0.0
             self._trim_end = self._duration
             self._current_time = 0.0
@@ -479,7 +479,7 @@ class VideoExtractorPanel(Panel):
         if not self._has_video:
             return
         try:
-            lf.video_player_step_backward()
+            lf.io.video_player_step_backward()
         except Exception:
             pass
 
@@ -487,7 +487,7 @@ class VideoExtractorPanel(Panel):
         if not self._has_video:
             return
         try:
-            lf.video_player_toggle_play_pause()
+            lf.io.video_player_toggle_play_pause()
         except Exception:
             pass
 
@@ -495,7 +495,7 @@ class VideoExtractorPanel(Panel):
         if not self._has_video:
             return
         try:
-            lf.video_player_step_forward()
+            lf.io.video_player_step_forward()
         except Exception:
             pass
 
@@ -514,7 +514,7 @@ class VideoExtractorPanel(Panel):
         scale = SCALE_VALUES[self._scale_index] if self._scale_index < len(SCALE_VALUES) else 1.0
 
         try:
-            lf.video_extract_frames(
+            lf.io.video_extract_frames(
                 video_path=self._video_path,
                 output_dir=self._output_path,
                 mode=self._mode_index,
