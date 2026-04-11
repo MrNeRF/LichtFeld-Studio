@@ -76,6 +76,8 @@ class VideoExtractorPanel(Panel):
         # Video player handle
         self._player_open = False
         self._needs_preview_update = False
+        self._last_update_time = 0.0
+        self._frame_accumulator = 0.0
         self._extraction_thread = None
 
     # ── Data model ────────────────────────────────────────────
@@ -176,20 +178,29 @@ class VideoExtractorPanel(Panel):
                 if self._is_playing:
                     if not hasattr(self, '_last_update_time') or self._last_update_time <= 0:
                         self._last_update_time = now
+                        self._frame_accumulator = 0.0
 
                     delta = now - self._last_update_time
                     self._last_update_time = now
 
-                    new_time = self._current_time + delta
-                    if new_time >= self._duration:
-                        new_time = self._duration
-                        self._is_playing = False
+                    fps = lf.io.video_player_fps() or 30.0
+                    self._frame_accumulator += delta
+                    frame_time = 1.0 / fps
 
-                    lf.io.video_player_seek(new_time)
-                    self._current_time = lf.io.video_player_current_time()
-                    self._needs_preview_update = True
-                    self._dirty_model("time_display", "timeline_pos", "play_pause_label")
-                    dirty = True
+                    if self._frame_accumulator >= frame_time:
+                        frames_to_advance = int(self._frame_accumulator / frame_time)
+                        self._frame_accumulator -= frames_to_advance * frame_time
+
+                        for _ in range(min(frames_to_advance, 3)):
+                            lf.io.video_player_step_forward()
+
+                        self._current_time = lf.io.video_player_current_time()
+                        if self._current_time >= self._duration - frame_time:
+                            self._is_playing = False
+
+                        self._needs_preview_update = True
+                        self._dirty_model("time_display", "timeline_pos", "play_pause_label")
+                        dirty = True
 
                 if self._needs_preview_update:
                     self._needs_preview_update = False
@@ -500,11 +511,21 @@ class VideoExtractorPanel(Panel):
         if not self._has_video:
             return
         try:
-            fps = lf.io.video_player_fps() or 30.0
-            new_time = max(0.0, self._current_time - 1.0 / fps)
-            lf.io.video_player_seek(new_time)
-            self._current_time = lf.io.video_player_current_time()
             self._is_playing = False
+            fps = lf.io.video_player_fps() or 30.0
+            frame_dur = 1.0 / fps
+            target = max(0.0, self._current_time - frame_dur)
+
+            # seek() snaps to keyframes and decodes forward, so if the
+            # result doesn't actually go back, seek further back
+            lf.io.video_player_seek(target)
+            result = lf.io.video_player_current_time()
+
+            if result >= self._current_time - frame_dur * 0.25 and target > 0:
+                lf.io.video_player_seek(max(0.0, target - frame_dur * 2))
+                result = lf.io.video_player_current_time()
+
+            self._current_time = result
             self._needs_preview_update = True
             self._dirty_model("time_display", "timeline_pos", "play_pause_label")
         except Exception as e:
@@ -526,11 +547,11 @@ class VideoExtractorPanel(Panel):
         if not self._has_video:
             return
         try:
-            fps = lf.io.video_player_fps() or 30.0
-            new_time = min(self._duration, self._current_time + 1.0 / fps)
-            lf.io.video_player_seek(new_time)
-            self._current_time = lf.io.video_player_current_time()
             self._is_playing = False
+            fps = lf.io.video_player_fps() or 30.0
+            self._current_time = min(self._duration, self._current_time + 1.0 / fps)
+            lf.io.video_player_seek(self._current_time)
+            self._current_time = lf.io.video_player_current_time()
             self._needs_preview_update = True
             self._dirty_model("time_display", "timeline_pos", "play_pause_label")
         except Exception as e:
