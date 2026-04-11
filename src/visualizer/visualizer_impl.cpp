@@ -284,9 +284,21 @@ namespace lfs::vis {
             };
             vp_cbs.close = [] { s_video_player->close(); };
             vp_cbs.is_open = [] { return s_video_player->isOpen(); };
-            vp_cbs.play = [] { s_video_player->play(); };
+            vp_cbs.play = [] {
+                // Seek to current position to reset eof_reached_ flag
+                // before playing, otherwise update() immediately auto-pauses.
+                s_video_player->seek(s_video_player->currentTime());
+                s_video_player->play();
+            };
             vp_cbs.pause = [] { s_video_player->pause(); };
-            vp_cbs.toggle_play_pause = [] { s_video_player->togglePlayPause(); };
+            vp_cbs.toggle_play_pause = [] {
+                if (!s_video_player->isPlaying()) {
+                    s_video_player->seek(s_video_player->currentTime());
+                    s_video_player->play();
+                } else {
+                    s_video_player->pause();
+                }
+            };
             vp_cbs.is_playing = [] { return s_video_player->isPlaying(); };
             vp_cbs.seek = [](double secs) { s_video_player->seek(secs); };
             vp_cbs.step_forward = [] { s_video_player->stepForward(); };

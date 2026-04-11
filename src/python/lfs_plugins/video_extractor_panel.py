@@ -170,28 +170,37 @@ class VideoExtractorPanel(Panel):
 
         if self._has_video and self._player_open:
             try:
-                updated = lf.io.video_player_update()
-                needs_feed = updated or getattr(self, '_needs_preview_update', False)
-                self._needs_preview_update = False
+                import time as _time
+                now = _time.monotonic()
 
-                if needs_feed:
+                if self._is_playing:
+                    if not hasattr(self, '_last_update_time') or self._last_update_time <= 0:
+                        self._last_update_time = now
+
+                    delta = now - self._last_update_time
+                    self._last_update_time = now
+
+                    new_time = self._current_time + delta
+                    if new_time >= self._duration:
+                        new_time = self._duration
+                        self._is_playing = False
+
+                    lf.io.video_player_seek(new_time)
+                    self._current_time = lf.io.video_player_current_time()
+                    self._needs_preview_update = True
+                    self._dirty_model("time_display", "timeline_pos", "play_pause_label")
+                    dirty = True
+
+                if self._needs_preview_update:
+                    self._needs_preview_update = False
                     preview = doc.get_element_by_id("video-preview")
                     if preview is not None:
                         lf.io.feed_preview_element(preview)
                     dirty = True
-
-                current_time = lf.io.video_player_current_time()
-                is_playing = lf.io.video_player_is_playing()
-
-                if current_time != self._current_time or is_playing != self._is_playing:
-                    self._current_time = current_time
-                    self._is_playing = is_playing
-                    self._dirty_model(
-                        "time_display", "timeline_pos", "play_pause_label"
-                    )
-                    dirty = True
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[VEP] on_update error: {e}")
+                import traceback
+                traceback.print_exc()
 
         if self._is_extracting:
             try:
@@ -464,13 +473,17 @@ class VideoExtractorPanel(Panel):
             self._needs_preview_update = True
 
             # Decode first frame
-            lf.io.video_player_update()
+            updated = lf.io.video_player_update()
+            print(f"[VEP] Opened video: {path}, duration={self._duration:.2f}s, first_update={updated}")
 
             if not self._output_path:
                 base = os.path.splitext(os.path.basename(path))[0]
                 parent = os.path.dirname(path)
                 self._output_path = os.path.join(parent, f"{base}_frames")
         except Exception as e:
+            print(f"[VEP] Open video error: {e}")
+            import traceback
+            traceback.print_exc()
             self._has_video = False
             self._show_error = True
             self._error_text = str(e)
@@ -487,28 +500,41 @@ class VideoExtractorPanel(Panel):
         if not self._has_video:
             return
         try:
-            lf.io.video_player_step_backward()
+            fps = lf.io.video_player_fps() or 30.0
+            new_time = max(0.0, self._current_time - 1.0 / fps)
+            lf.io.video_player_seek(new_time)
+            self._current_time = lf.io.video_player_current_time()
+            self._is_playing = False
             self._needs_preview_update = True
-        except Exception:
-            pass
+            self._dirty_model("time_display", "timeline_pos", "play_pause_label")
+        except Exception as e:
+            print(f"[VEP] step_back error: {e}")
 
     def _on_play_pause(self, _handle=None, _ev=None, _args=None):
         if not self._has_video:
             return
-        try:
-            lf.io.video_player_toggle_play_pause()
-            self._dirty_model("play_pause_label")
-        except Exception:
-            pass
+        self._is_playing = not self._is_playing
+        if self._is_playing:
+            import time as _time
+            self._last_update_time = _time.monotonic()
+            if self._current_time >= self._duration:
+                self._current_time = 0.0
+                lf.io.video_player_seek(0.0)
+        self._dirty_model("play_pause_label")
 
     def _on_step_fwd(self, _handle=None, _ev=None, _args=None):
         if not self._has_video:
             return
         try:
-            lf.io.video_player_step_forward()
+            fps = lf.io.video_player_fps() or 30.0
+            new_time = min(self._duration, self._current_time + 1.0 / fps)
+            lf.io.video_player_seek(new_time)
+            self._current_time = lf.io.video_player_current_time()
+            self._is_playing = False
             self._needs_preview_update = True
-        except Exception:
-            pass
+            self._dirty_model("time_display", "timeline_pos", "play_pause_label")
+        except Exception as e:
+            print(f"[VEP] step_fwd error: {e}")
 
     def _on_start_extract(self, _handle=None, _ev=None, _args=None):
         if not self._can_extract():

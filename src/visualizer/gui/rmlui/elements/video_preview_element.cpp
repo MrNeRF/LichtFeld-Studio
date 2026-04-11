@@ -69,7 +69,8 @@ namespace lfs::vis::gui {
 
         glBindTexture(GL_TEXTURE_2D, gl_texture_);
 
-        if (texture_width_ != w || texture_height_ != h) {
+        const bool size_changed = (texture_width_ != w || texture_height_ != h);
+        if (size_changed) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data());
             texture_width_ = w;
             texture_height_ = h;
@@ -80,18 +81,20 @@ namespace lfs::vis::gui {
 
         glBindTexture(GL_TEXTURE_2D, 0);
 
-        // Rebuild the callback texture source to point to our GL texture
-        auto* rm = GetRenderManager();
-        if (rm) {
-            const uint32_t tex_id = gl_texture_;
-            const int tw = texture_width_;
-            const int th = texture_height_;
-            texture_source_ = Rml::CallbackTextureSource(
-                [tex_id, tw, th](const Rml::CallbackTextureInterface& iface) -> bool {
-                    iface.SetTextureHandle(static_cast<Rml::TextureHandle>(tex_id),
-                                           Rml::Vector2i(tw, th));
-                    return true;
-                });
+        // Only rebuild the callback texture source when texture or size changes
+        if (size_changed) {
+            auto* rm = GetRenderManager();
+            if (rm) {
+                const uint32_t tex_id = gl_texture_;
+                const int tw = texture_width_;
+                const int th = texture_height_;
+                texture_source_ = Rml::CallbackTextureSource(
+                    [tex_id, tw, th](const Rml::CallbackTextureInterface& iface) -> bool {
+                        iface.SetTextureHandle(static_cast<Rml::TextureHandle>(tex_id),
+                                               Rml::Vector2i(tw, th));
+                        return true;
+                    });
+            }
         }
     }
 
