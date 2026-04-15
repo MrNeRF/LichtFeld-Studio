@@ -18,6 +18,9 @@
 #include <string>
 #include <vector>
 
+#include <pxr/base/tf/diagnostic.h>
+#include <pxr/base/tf/diagnosticMgr.h>
+#include <pxr/base/tf/errorMark.h>
 #include <pxr/base/gf/half.h>
 #include <pxr/base/gf/matrix4d.h>
 #include <pxr/base/gf/quatf.h>
@@ -766,7 +769,24 @@ namespace lfs::io {
 
         const auto sh_coefficients = flatten_sh_coefficients(splat_data);
 
-        auto stage = pxr::UsdStage::CreateNew(lfs::core::path_to_utf8(options.output_path));
+        // TfErrorMark captures OpenUSD diagnostic errors that don't throw.
+        pxr::TfErrorMark error_mark;
+
+        pxr::UsdStageRefPtr stage;
+        try {
+            stage = pxr::UsdStage::CreateNew(lfs::core::path_to_utf8(options.output_path));
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              std::format("UsdStage::CreateNew threw: {}", e.what()),
+                              options.output_path);
+        }
+        if (!error_mark.IsClean()) {
+            for (const auto& err : error_mark) {
+                LOG_ERROR("OpenUSD error during stage creation: {} ({}:{})",
+                          err.GetCommentary(), err.GetSourceFileName(), err.GetSourceLineNumber());
+            }
+            error_mark.Clear();
+        }
         if (!stage) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to create USD stage",
@@ -774,37 +794,62 @@ namespace lfs::io {
         }
 
         const pxr::SdfPath prim_path("/GaussianSplats");
-        auto splat_prim = pxr::UsdVolParticleField3DGaussianSplat::Define(stage, prim_path);
+        pxr::UsdVolParticleField3DGaussianSplat splat_prim;
+        try {
+            splat_prim = pxr::UsdVolParticleField3DGaussianSplat::Define(stage, prim_path);
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              std::format("ParticleField3DGaussianSplat::Define threw: {}", e.what()),
+                              options.output_path);
+        }
         if (!splat_prim) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to define USD gaussian prim",
                               options.output_path);
         }
 
-        stage->SetDefaultPrim(splat_prim.GetPrim());
-        pxr::UsdGeomSetStageUpAxis(stage, pxr::UsdGeomTokens->y);
-        pxr::UsdGeomSetStageMetersPerUnit(stage, 1.0);
-
-        pxr::UsdGeomBoundable boundable(splat_prim.GetPrim());
-
-        if (!splat_prim.CreatePositionsAttr().Set(make_vec3_array(means_ptr, num_gaussians)) ||
-            !splat_prim.CreateOrientationsAttr().Set(make_quat_array(rotation_ptr, num_gaussians)) ||
-            !splat_prim.CreateScalesAttr().Set(make_vec3_array(scales_linear.data(), num_gaussians)) ||
-            !splat_prim.CreateOpacitiesAttr().Set(make_scalar_array(opacity_linear.data(), num_gaussians)) ||
-            !splat_prim.CreateRadianceSphericalHarmonicsDegreeAttr().Set(splat_data.get_max_sh_degree()) ||
-            !splat_prim.CreateRadianceSphericalHarmonicsCoefficientsAttr().Set(
-                make_vec3_array(sh_coefficients.data(),
-                                num_gaussians * static_cast<size_t>((splat_data.get_max_sh_degree() + 1) *
-                                                                    (splat_data.get_max_sh_degree() + 1)))) ||
-            !boundable.CreateExtentAttr().Set(make_extent_array(means_ptr, num_gaussians))) {
+        try {
+            stage->SetDefaultPrim(splat_prim.GetPrim());
+            pxr::UsdGeomSetStageUpAxis(stage, pxr::UsdGeomTokens->y);
+            pxr::UsdGeomSetStageMetersPerUnit(stage, 1.0);
+        } catch (const std::exception& e) {
             return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to author USD gaussian attributes",
+                              std::format("Stage metadata threw: {}", e.what()),
                               options.output_path);
         }
 
-        if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
+        pxr::UsdGeomBoundable boundable(splat_prim.GetPrim());
+
+        try {
+            if (!splat_prim.CreatePositionsAttr().Set(make_vec3_array(means_ptr, num_gaussians)) ||
+                !splat_prim.CreateOrientationsAttr().Set(make_quat_array(rotation_ptr, num_gaussians)) ||
+                !splat_prim.CreateScalesAttr().Set(make_vec3_array(scales_linear.data(), num_gaussians)) ||
+                !splat_prim.CreateOpacitiesAttr().Set(make_scalar_array(opacity_linear.data(), num_gaussians)) ||
+                !splat_prim.CreateRadianceSphericalHarmonicsDegreeAttr().Set(splat_data.get_max_sh_degree()) ||
+                !splat_prim.CreateRadianceSphericalHarmonicsCoefficientsAttr().Set(
+                    make_vec3_array(sh_coefficients.data(),
+                                    num_gaussians * static_cast<size_t>((splat_data.get_max_sh_degree() + 1) *
+                                                                        (splat_data.get_max_sh_degree() + 1)))) ||
+                !boundable.CreateExtentAttr().Set(make_extent_array(means_ptr, num_gaussians))) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to author USD gaussian attributes",
+                                  options.output_path);
+            }
+        } catch (const std::exception& e) {
             return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to save USD stage",
+                              std::format("Authoring attributes threw: {}", e.what()),
+                              options.output_path);
+        }
+
+        try {
+            if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  "Failed to save USD stage",
+                                  options.output_path);
+            }
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              std::format("Layer save threw: {}", e.what()),
                               options.output_path);
         }
 

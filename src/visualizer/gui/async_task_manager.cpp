@@ -757,6 +757,8 @@ namespace lfs::vis::gui {
                 bool success = false;
                 std::string error_msg;
 
+                try {
+
                 switch (format) {
                 case ExportFormat::PLY: {
                     update_progress(0.1f, "Writing PLY");
@@ -831,6 +833,14 @@ namespace lfs::vis::gui {
                     }
                     break;
                 }
+                }
+
+                } catch (const std::exception& e) {
+                    error_msg = std::string("Export crashed with exception: ") + e.what();
+                    LOG_ERROR("{}", error_msg);
+                } catch (...) {
+                    error_msg = "Export crashed with unknown exception";
+                    LOG_ERROR("{}", error_msg);
                 }
 
                 if (success) {
