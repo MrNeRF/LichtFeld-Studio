@@ -86,6 +86,27 @@ namespace lfs::vis {
                     context->ProcessKeyUp(rml_key, mods);
             }
         }
+
+        struct ElementBounds {
+            float x = 0.0f;
+            float y = 0.0f;
+            float width = 0.0f;
+            float height = 0.0f;
+        };
+
+        bool measureElement(Rml::Element* const el,
+                            const Rml::Vector2f& document_offset,
+                            ElementBounds& out) {
+            if (!el)
+                return false;
+            const auto offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = el->GetBox().GetSize(Rml::BoxArea::Border);
+            out.x = offset.x - document_offset.x;
+            out.y = offset.y - document_offset.y;
+            out.width = size.x;
+            out.height = size.y;
+            return true;
+        }
     } // namespace
 
     using namespace panel_config;
@@ -95,43 +116,25 @@ namespace lfs::vis {
         if (!elements_cached_ || timeline_width <= 0.0f)
             return;
 
-        struct ElementBounds {
-            float x = 0.0f;
-            float y = 0.0f;
-            float width = 0.0f;
-            float height = 0.0f;
-        };
-
         const auto document_offset = document_->GetAbsoluteOffset(Rml::BoxArea::Border);
-        const auto measure = [document_offset](Rml::Element* const el) -> std::optional<ElementBounds> {
-            if (!el)
-                return std::nullopt;
-
-            const auto offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
-            const auto size = el->GetBox().GetSize(Rml::BoxArea::Border);
-            ElementBounds bounds;
-            bounds.x = offset.x - document_offset.x;
-            bounds.y = offset.y - document_offset.y;
-            bounds.width = size.x;
-            bounds.height = size.y;
-            return bounds;
-        };
-
-        const auto timeline_bounds = measure(el_timeline_);
-        const auto easing_bounds = measure(el_easing_stripe_);
-        if (!timeline_bounds.has_value() || !easing_bounds.has_value())
+        ElementBounds timeline_bounds;
+        ElementBounds easing_bounds;
+        if (!measureElement(el_timeline_, document_offset, timeline_bounds))
+            return;
+        if (!measureElement(el_easing_stripe_, document_offset, easing_bounds))
             return;
 
-        float guide_left = timeline_bounds->x;
-        float guide_top = timeline_bounds->y;
-        float guide_width = timeline_bounds->width;
-        float guide_bottom = std::max(timeline_bounds->y + timeline_bounds->height,
-                                      easing_bounds->y + easing_bounds->height);
+        float guide_left = timeline_bounds.x;
+        float guide_top = timeline_bounds.y;
+        float guide_width = timeline_bounds.width;
+        float guide_bottom = std::max(timeline_bounds.y + timeline_bounds.height,
+                                      easing_bounds.y + easing_bounds.height);
 
         if (film_strip_attached_) {
-            if (const auto film_strip_bounds = measure(el_film_strip_panel_); film_strip_bounds.has_value()) {
+            ElementBounds film_strip_bounds;
+            if (measureElement(el_film_strip_panel_, document_offset, film_strip_bounds)) {
                 guide_bottom = std::max(guide_bottom,
-                                        film_strip_bounds->y + film_strip_bounds->height);
+                                        film_strip_bounds.y + film_strip_bounds.height);
             }
         }
 
