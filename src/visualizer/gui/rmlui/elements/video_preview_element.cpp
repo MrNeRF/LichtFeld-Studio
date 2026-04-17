@@ -26,6 +26,10 @@ namespace lfs::vis::gui {
 
     void VideoPreviewElement::OnResize() { geom_dirty_ = true; }
 
+    void VideoPreviewElement::setVideoSource(VideoSource source) {
+        video_source_ = std::move(source);
+    }
+
     void VideoPreviewElement::setFrameData(const uint8_t* rgb_data, int w, int h) {
         if (!rgb_data || w <= 0 || h <= 0)
             return;
@@ -37,6 +41,31 @@ namespace lfs::vis::gui {
         pending_width_ = w;
         pending_height_ = h;
         has_pending_ = true;
+    }
+
+    void VideoPreviewElement::pullSourceFrame() {
+        if (!video_source_.is_open || !video_source_.frame_data || !video_source_.width || !video_source_.height)
+            return;
+        if (!video_source_.is_open()) {
+            last_frame_ptr_ = nullptr;
+            return;
+        }
+
+        if (playing_ && video_source_.update) {
+            video_source_.update();
+        }
+
+        const uint8_t* frame_ptr = video_source_.frame_data();
+        const int w = video_source_.width();
+        const int h = video_source_.height();
+        if (!frame_ptr || w <= 0 || h <= 0)
+            return;
+
+        if (frame_ptr == last_frame_ptr_ && texture_width_ == w && texture_height_ == h)
+            return;
+
+        last_frame_ptr_ = frame_ptr;
+        setFrameData(frame_ptr, w, h);
     }
 
     void VideoPreviewElement::uploadTexture() {
@@ -71,31 +100,31 @@ namespace lfs::vis::gui {
 
         const bool size_changed = (texture_width_ != w || texture_height_ != h);
         if (size_changed) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data.data());
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB,
+                         GL_UNSIGNED_BYTE, data.data());
             texture_width_ = w;
             texture_height_ = h;
             geom_dirty_ = true;
-        } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, data.data());
-        }
 
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        // Only rebuild the callback texture source when texture or size changes
-        if (size_changed) {
             auto* rm = GetRenderManager();
             if (rm) {
                 const uint32_t tex_id = gl_texture_;
-                const int tw = texture_width_;
-                const int th = texture_height_;
+                const int tw = w;
+                const int th = h;
                 texture_source_ = Rml::CallbackTextureSource(
                     [tex_id, tw, th](const Rml::CallbackTextureInterface& iface) -> bool {
-                        iface.SetTextureHandle(static_cast<Rml::TextureHandle>(tex_id),
-                                               Rml::Vector2i(tw, th));
+                        iface.SetTextureHandle(
+                            static_cast<Rml::TextureHandle>(tex_id),
+                            Rml::Vector2i(tw, th));
                         return true;
                     });
             }
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB,
+                            GL_UNSIGNED_BYTE, data.data());
         }
+
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     void VideoPreviewElement::rebuildGeometry() {
@@ -108,7 +137,6 @@ namespace lfs::vis::gui {
         if (box_w <= 0.f || box_h <= 0.f)
             return;
 
-        // Background quad (always drawn)
         {
             Rml::Mesh mesh;
             Rml::ColourbPremultiplied bg(20, 20, 20, 255);
@@ -120,7 +148,6 @@ namespace lfs::vis::gui {
             bg_geom_ = rm->MakeGeometry(std::move(mesh));
         }
 
-        // Video quad (only when we have a texture)
         if (gl_texture_ != 0 && texture_width_ > 0 && texture_height_ > 0) {
             const float video_aspect =
                 static_cast<float>(texture_width_) / static_cast<float>(texture_height_);
@@ -155,17 +182,15 @@ namespace lfs::vis::gui {
     }
 
     void VideoPreviewElement::OnRender() {
+        pullSourceFrame();
         uploadTexture();
 
         if (geom_dirty_)
             rebuildGeometry();
 
         const auto offset = GetAbsoluteOffset(Rml::BoxArea::Content);
-
-        // Draw dark background
         bg_geom_.Render(offset);
 
-        // Draw video frame with texture
         auto* rm = GetRenderManager();
         if (rm && gl_texture_ != 0 && texture_width_ > 0) {
             Rml::Texture tex = texture_source_.GetTexture(*rm);

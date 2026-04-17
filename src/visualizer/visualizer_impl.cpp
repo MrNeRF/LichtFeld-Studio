@@ -284,16 +284,10 @@ namespace lfs::vis {
             };
             vp_cbs.close = [] { s_video_player->close(); };
             vp_cbs.is_open = [] { return s_video_player->isOpen(); };
-            vp_cbs.play = [] {
-                // Seek to current position to reset eof_reached_ flag
-                // before playing, otherwise update() immediately auto-pauses.
-                s_video_player->seek(s_video_player->currentTime());
-                s_video_player->play();
-            };
+            vp_cbs.play = [] { s_video_player->play(); };
             vp_cbs.pause = [] { s_video_player->pause(); };
             vp_cbs.toggle_play_pause = [] {
                 if (!s_video_player->isPlaying()) {
-                    s_video_player->seek(s_video_player->currentTime());
                     s_video_player->play();
                 } else {
                     s_video_player->pause();
@@ -304,9 +298,9 @@ namespace lfs::vis {
             vp_cbs.step_forward = [] { s_video_player->stepForward(); };
             vp_cbs.step_backward = [] { s_video_player->stepBackward(); };
             vp_cbs.update = [] {
-                static const auto start = std::chrono::steady_clock::now();
+                static const auto wall_clock_zero = std::chrono::steady_clock::now();
                 const double wall_time = std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - start).count();
+                    std::chrono::steady_clock::now() - wall_clock_zero).count();
                 return s_video_player->update(wall_time);
             };
             vp_cbs.current_frame_data = [] { return s_video_player->currentFrameData(); };

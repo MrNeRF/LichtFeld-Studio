@@ -531,6 +531,8 @@ namespace lfs::vis::gui {
     bool RmlPythonPanelAdapter::needsAnimationFrame() const {
         if (content_dirty_)
             return true;
+        if (isMounted() && update_interval_ms_ > 0)
+            return true;
         if (!host_)
             return false;
 

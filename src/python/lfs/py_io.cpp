@@ -516,6 +516,22 @@ namespace lfs::python {
             "Get video FPS");
 
         m.def(
+            "video_player_width",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.width ? cbs.width() : 0;
+            },
+            "Get video width in pixels");
+
+        m.def(
+            "video_player_height",
+            [] {
+                const auto& cbs = python::get_video_player_callbacks();
+                return cbs.height ? cbs.height() : 0;
+            },
+            "Get video height in pixels");
+
+        m.def(
             "video_player_total_frames",
             [] {
                 const auto& cbs = python::get_video_player_callbacks();
@@ -547,6 +563,37 @@ namespace lfs::python {
             },
             nb::arg("element"),
             "Feed current video frame to a VideoPreviewElement");
+
+        m.def(
+            "connect_video_source",
+            [](PyRmlElement& py_elem) {
+                auto* raw = py_elem.raw();
+                auto* preview = dynamic_cast<lfs::vis::gui::VideoPreviewElement*>(raw);
+                if (!preview)
+                    return;
+
+                const auto& cbs = python::get_video_player_callbacks();
+                lfs::vis::gui::VideoPreviewElement::VideoSource src;
+                src.update = cbs.update;
+                src.frame_data = cbs.current_frame_data;
+                src.width = cbs.width;
+                src.height = cbs.height;
+                src.is_open = cbs.is_open;
+                preview->setVideoSource(std::move(src));
+            },
+            nb::arg("element"),
+            "Connect video player directly to preview element for zero-copy rendering");
+
+        m.def(
+            "set_preview_playing",
+            [](PyRmlElement& py_elem, bool playing) {
+                auto* raw = py_elem.raw();
+                auto* preview = dynamic_cast<lfs::vis::gui::VideoPreviewElement*>(raw);
+                if (preview)
+                    preview->setPlaying(playing);
+            },
+            nb::arg("element"), nb::arg("playing"),
+            "Set whether the preview element should advance frames");
 
         // ── Video frame extraction ──
 

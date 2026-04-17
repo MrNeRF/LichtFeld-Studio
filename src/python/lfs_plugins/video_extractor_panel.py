@@ -18,7 +18,7 @@ def _format_time(seconds: float) -> str:
     return f"{mins}:{secs:05.2f}"
 
 
-SCALE_VALUES = (0.125, 0.25, 0.5, 1.0, 2.0)
+SCALE_VALUES = (0.25, 0.5, 0.75, 1.0)
 
 
 class VideoExtractorPanel(Panel):
@@ -72,13 +72,13 @@ class VideoExtractorPanel(Panel):
         self._show_completion = False
         self._show_error = False
         self._error_text = ""
+        self._debug_status = "idle"
 
         # Video player handle
         self._player_open = False
         self._needs_preview_update = False
-        self._last_update_time = 0.0
-        self._frame_accumulator = 0.0
         self._extraction_thread = None
+        self._pending_timeline_pos = None
 
     # ── Data model ────────────────────────────────────────────
 
@@ -92,19 +92,26 @@ class VideoExtractorPanel(Panel):
         model.bind_func("has_video", lambda: self._has_video)
 
         # Transport
-        model.bind_func("play_pause_label", lambda: "\u23F8" if self._is_playing else "\u25B6")
+        model.bind_func("playing", lambda: self._is_playing)
         model.bind_func("time_display", self._get_time_display)
+        model.bind_func("debug_status", lambda: self._debug_status)
 
         # Timeline
         model.bind("timeline_pos", self._get_timeline_pos, self._set_timeline_pos)
+        model.bind_func("timeline_progress_width_style", self._get_timeline_progress_width_style)
+        model.bind_func("timeline_playhead_left_style", self._get_timeline_playhead_left_style)
+        model.bind_func("timeline_trim_left_style", self._get_timeline_trim_left_style)
+        model.bind_func("timeline_trim_end_left_style", self._get_timeline_trim_end_left_style)
+        model.bind_func("timeline_trim_width_style", self._get_timeline_trim_width_style)
+        model.bind_func("timeline_ticks", self._get_timeline_ticks)
         model.bind("trim_start", self._get_trim_start_slider, self._set_trim_start_slider)
         model.bind("trim_end", self._get_trim_end_slider, self._set_trim_end_slider)
         model.bind_func("trim_start_text", lambda: _format_time(self._trim_start))
         model.bind_func("trim_end_text", lambda: _format_time(self._trim_end))
 
         # File paths
-        model.bind_func("video_path", lambda: self._video_path or "—")
-        model.bind_func("output_path", lambda: self._output_path or "—")
+        model.bind_func("video_path", self._get_video_display_path)
+        model.bind_func("output_path", self._get_output_display_path)
 
         # Extraction settings
         model.bind("mode_index", lambda: str(self._mode_index), self._set_mode_index)
@@ -148,6 +155,8 @@ class VideoExtractorPanel(Panel):
         model.bind_func("error_text", lambda: self._error_text)
 
         # Events
+        model.bind_func("resolution_text", self._get_resolution_text)
+
         model.bind_event("do_step_back", self._on_step_back)
         model.bind_event("do_play_pause", self._on_play_pause)
         model.bind_event("do_step_fwd", self._on_step_fwd)
@@ -156,6 +165,11 @@ class VideoExtractorPanel(Panel):
         model.bind_event("do_start_extract", self._on_start_extract)
         model.bind_event("do_cancel", self._on_cancel)
         model.bind_event("do_cancel_extract", self._on_cancel_extract)
+        model.bind_event("do_set_trim_start", self._on_set_trim_start)
+        model.bind_event("do_set_trim_end", self._on_set_trim_end)
+        model.bind_event("do_reset_trim", self._on_reset_trim)
+        model.bind_event("do_dismiss_completion", self._on_dismiss_completion)
+        model.bind_event("do_dismiss_error", self._on_dismiss_error)
 
         self._handle = model.get_handle()
 
@@ -163,55 +177,44 @@ class VideoExtractorPanel(Panel):
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._doc = doc
         self._show_completion = False
         self._show_error = False
         self._error_text = ""
+        self._connect_preview_source(doc)
 
     def on_update(self, doc):
         dirty = False
 
         if self._has_video and self._player_open:
             try:
-                import time as _time
-                now = _time.monotonic()
-
-                if self._is_playing:
-                    if not hasattr(self, '_last_update_time') or self._last_update_time <= 0:
-                        self._last_update_time = now
-                        self._frame_accumulator = 0.0
-
-                    delta = now - self._last_update_time
-                    self._last_update_time = now
-
-                    fps = lf.io.video_player_fps() or 30.0
-                    self._frame_accumulator += delta
-                    frame_time = 1.0 / fps
-
-                    if self._frame_accumulator >= frame_time:
-                        frames_to_advance = int(self._frame_accumulator / frame_time)
-                        self._frame_accumulator -= frames_to_advance * frame_time
-
-                        for _ in range(min(frames_to_advance, 3)):
-                            lf.io.video_player_step_forward()
-
-                        self._current_time = lf.io.video_player_current_time()
-                        if self._current_time >= self._duration - frame_time:
-                            self._is_playing = False
-
-                        self._needs_preview_update = True
-                        self._dirty_model("time_display", "timeline_pos", "play_pause_label")
-                        dirty = True
-
                 if self._needs_preview_update:
                     self._needs_preview_update = False
-                    preview = doc.get_element_by_id("video-preview")
-                    if preview is not None:
-                        lf.io.feed_preview_element(preview)
+                    self._current_time = lf.io.video_player_current_time()
+                    self._refresh_preview(doc)
+                    self._dirty_time_model()
                     dirty = True
+
+                if self._is_playing:
+                    frame_changed = bool(lf.io.video_player_update())
+                    new_time = lf.io.video_player_current_time()
+                    if frame_changed:
+                        self._refresh_preview(doc)
+                    if frame_changed or abs(new_time - self._current_time) > 1e-6:
+                        self._current_time = new_time
+                        self._dirty_time_model()
+                        dirty = True
+
+                    if not lf.io.video_player_is_playing():
+                        if self._current_time >= self._duration - 0.1:
+                            self._is_playing = False
+                            self._connect_preview_source(doc)
+                            self._dirty_model("playing")
+                            dirty = True
             except Exception as e:
+                self._is_playing = False
+                self._connect_preview_source(doc)
                 print(f"[VEP] on_update error: {e}")
-                import traceback
-                traceback.print_exc()
 
         if self._is_extracting:
             try:
@@ -263,29 +266,139 @@ class VideoExtractorPanel(Panel):
         for field in fields:
             self._handle.dirty(field)
 
+    def _dirty_time_model(self, *extra_fields):
+        self._pending_timeline_pos = self._get_timeline_pos()
+        self._dirty_model(
+            "time_display",
+            "timeline_pos",
+            "timeline_progress_width_style",
+            "timeline_playhead_left_style",
+            *extra_fields,
+        )
+
+    def _refresh_preview(self, doc=None):
+        if not self._has_video or not self._player_open:
+            return
+        preview_doc = doc or getattr(self, "_doc", None)
+        if preview_doc is None:
+            return
+        preview = preview_doc.get_element_by_id("video-preview")
+        if preview is not None:
+            lf.io.feed_preview_element(preview)
+
+    def _set_debug_status(self, message: str):
+        self._debug_status = message
+        self._dirty_model("debug_status")
+
+    def _connect_preview_source(self, doc=None):
+        preview_doc = doc or getattr(self, "_doc", None)
+        if preview_doc is None:
+            return
+        preview = preview_doc.get_element_by_id("video-preview")
+        if preview is None:
+            return
+        try:
+            lf.io.connect_video_source(preview)
+            lf.io.set_preview_playing(preview, self._is_playing)
+        except Exception:
+            pass
+
     def _get_time_display(self) -> str:
+        if not self._has_video or self._duration <= 0:
+            return "--:--.- / --:--.-"
         return f"{_format_time(self._current_time)} / {_format_time(self._duration)}"
+
+    def _get_video_display_path(self) -> str:
+        if not self._video_path:
+            return lf.ui.tr("video_extractor.no_file")
+        return os.path.basename(self._video_path)
+
+    def _get_output_display_path(self) -> str:
+        if not self._output_path:
+            return lf.ui.tr("video_extractor.no_dir")
+        return self._output_path
+
+    def _timeline_fraction(self, seconds: float) -> float:
+        if self._duration <= 0:
+            return 0.0
+        return max(0.0, min(1.0, seconds / self._duration))
+
+    def _timeline_pct(self, seconds: float) -> str:
+        return f"{self._timeline_fraction(seconds) * 100.0:.3f}%"
 
     def _get_timeline_pos(self) -> str:
         if self._duration <= 0:
             return "0"
         return str(int(self._current_time / self._duration * 1000))
 
+    def _get_timeline_progress_width_style(self) -> str:
+        return self._timeline_pct(self._current_time)
+
+    def _get_timeline_playhead_left_style(self) -> str:
+        return self._timeline_pct(self._current_time)
+
+    def _get_timeline_trim_left_style(self) -> str:
+        return self._timeline_pct(self._trim_start)
+
+    def _get_timeline_trim_end_left_style(self) -> str:
+        return self._timeline_pct(self._trim_end)
+
+    def _get_timeline_trim_width_style(self) -> str:
+        start = self._timeline_fraction(self._trim_start)
+        end = self._timeline_fraction(self._trim_end)
+        return f"{max(0.0, end - start) * 100.0:.3f}%"
+
+    def _get_timeline_ticks(self):
+        if self._duration <= 0:
+            return []
+
+        tick_count = max(13, min(33, int(round(self._duration)) + 1))
+        last_tick = max(1, tick_count - 1)
+        ticks = []
+        for idx in range(tick_count):
+            ratio = idx / last_tick
+            ticks.append(
+                {
+                    "left_style": f"{ratio * 100.0:.3f}%",
+                    "major": idx == 0 or idx == last_tick or idx % 5 == 0,
+                }
+            )
+        return ticks
+
+    def _timeline_seek_tolerance(self) -> float:
+        if self._duration <= 0:
+            return 1e-6
+        slider_step = self._duration / 1000.0
+        try:
+            fps = lf.io.video_player_fps() if self._player_open else 0.0
+        except Exception:
+            fps = 0.0
+        frame_step = 0.5 / fps if fps > 0 else 0.0
+        return max(slider_step, frame_step, 1e-6)
+
     def _set_timeline_pos(self, value):
         try:
             pos = max(0, min(1000, int(float(value))))
         except (ValueError, TypeError):
             return
+        pos_str = str(pos)
+        if self._pending_timeline_pos == pos_str:
+            self._pending_timeline_pos = None
+            return
         if self._duration <= 0:
             return
         target_time = pos / 1000.0 * self._duration
+        if abs(target_time - self._current_time) <= self._timeline_seek_tolerance():
+            return
         self._current_time = target_time
         try:
             lf.io.video_player_seek(target_time)
-            self._needs_preview_update = True
-        except Exception:
-            pass
-        self._dirty_model("time_display", "timeline_pos")
+            self._current_time = lf.io.video_player_current_time()
+            self._refresh_preview()
+            self._set_debug_status(f"seek -> {self._current_time:0.3f}s")
+        except Exception as e:
+            self._set_debug_status(f"seek error: {e}")
+        self._dirty_time_model()
 
     def _get_trim_start_slider(self) -> str:
         if self._duration <= 0:
@@ -300,7 +413,13 @@ class VideoExtractorPanel(Panel):
         self._trim_start = pos / 1000.0 * self._duration
         if self._trim_start > self._trim_end:
             self._trim_start = self._trim_end
-        self._dirty_model("trim_start", "trim_start_text", "estimated_frames_text")
+        self._dirty_model(
+            "trim_start",
+            "trim_start_text",
+            "estimated_frames_text",
+            "timeline_trim_left_style",
+            "timeline_trim_width_style",
+        )
 
     def _get_trim_end_slider(self) -> str:
         if self._duration <= 0:
@@ -315,7 +434,13 @@ class VideoExtractorPanel(Panel):
         self._trim_end = pos / 1000.0 * self._duration
         if self._trim_end < self._trim_start:
             self._trim_end = self._trim_start
-        self._dirty_model("trim_end", "trim_end_text", "estimated_frames_text")
+        self._dirty_model(
+            "trim_end",
+            "trim_end_text",
+            "estimated_frames_text",
+            "timeline_trim_end_left_style",
+            "timeline_trim_width_style",
+        )
 
     def _set_mode_index(self, value):
         try:
@@ -375,7 +500,7 @@ class VideoExtractorPanel(Panel):
         if idx == self._resolution_mode:
             return
         self._resolution_mode = idx
-        self._dirty_model("resolution_mode", "show_scale", "show_custom_res")
+        self._dirty_model("resolution_mode", "show_scale", "show_custom_res", "resolution_text")
 
     def _set_scale_index(self, value):
         try:
@@ -385,7 +510,7 @@ class VideoExtractorPanel(Panel):
         if idx == self._scale_index:
             return
         self._scale_index = idx
-        self._dirty_model("scale_index")
+        self._dirty_model("scale_index", "resolution_text")
 
     def _set_custom_width(self, value):
         try:
@@ -393,7 +518,7 @@ class VideoExtractorPanel(Panel):
         except (ValueError, TypeError):
             return
         self._custom_width = v
-        self._dirty_model("custom_width")
+        self._dirty_model("custom_width", "resolution_text")
 
     def _set_custom_height(self, value):
         try:
@@ -401,7 +526,7 @@ class VideoExtractorPanel(Panel):
         except (ValueError, TypeError):
             return
         self._custom_height = v
-        self._dirty_model("custom_height")
+        self._dirty_model("custom_height", "resolution_text")
 
     def _set_filename_pattern(self, value):
         self._filename_pattern = value or "frame_%d"
@@ -410,16 +535,22 @@ class VideoExtractorPanel(Panel):
     def _get_pattern_example(self) -> str:
         ext = "png" if self._format_index == 0 else "jpg"
         try:
-            name = self._filename_pattern.replace("%d", "0001")
+            name = self._filename_pattern.replace("%d", "1")
         except Exception:
-            name = "frame_0001"
-        return f"e.g. {name}.{ext}"
+            name = "frame_1"
+        template = lf.ui.tr("video_extractor.example")
+        if template:
+            return template.replace("%s", name, 1).replace("%s", f".{ext}", 1)
+        return f"Example: {name}.{ext}"
 
     def _get_estimated_frames_text(self) -> str:
         if not self._has_video:
             return ""
         count = self._calculate_estimated_frames()
-        return f"~{count} frames"
+        template = lf.ui.tr("video_extractor.estimated_frames")
+        if template:
+            return template.replace("%d", str(count), 1)
+        return f"(~{count} frames)"
 
     def _calculate_estimated_frames(self) -> int:
         if not self._has_video or self._duration <= 0:
@@ -438,11 +569,11 @@ class VideoExtractorPanel(Panel):
         return max(1, int((trim_duration * video_fps) / self._interval_value))
 
     def _get_warning_text(self) -> str:
-        if not self._video_path:
+        if not self._video_path and not self._output_path:
             return ""
-        if not self._output_path:
-            return lf.ui.tr("video_extractor.no_output_dir")
-        return ""
+        if self._video_path and self._output_path:
+            return ""
+        return lf.ui.tr("video_extractor.select_both")
 
     def _can_extract(self) -> bool:
         return bool(
@@ -451,6 +582,87 @@ class VideoExtractorPanel(Panel):
             and self._output_path
             and not self._is_extracting
         )
+
+    def _get_resolution_text(self) -> str:
+        if not self._has_video:
+            return ""
+        try:
+            width = int(lf.io.video_player_width())
+            height = int(lf.io.video_player_height())
+        except Exception:
+            return ""
+        if width <= 0 or height <= 0:
+            return ""
+        if self._resolution_mode == 1:
+            scale = SCALE_VALUES[self._scale_index] if self._scale_index < len(SCALE_VALUES) else 1.0
+            width = max(1, int(width * scale))
+            height = max(1, int(height * scale))
+        elif self._resolution_mode == 2:
+            width = self._custom_width
+            height = self._custom_height
+        template = lf.ui.tr("video_extractor.output_res")
+        if template:
+            return template.replace("%d", str(width), 1).replace("%d", str(height), 1)
+        return f"Output: {width}x{height}"
+
+    def _on_set_trim_start(self, _handle=None, _ev=None, _args=None):
+        if not self._has_video:
+            return
+        self._trim_start = self._current_time
+        if self._trim_start > self._trim_end:
+            self._trim_end = self._trim_start
+        self._dirty_model(
+            "trim_start",
+            "trim_end",
+            "trim_start_text",
+            "trim_end_text",
+            "estimated_frames_text",
+            "timeline_trim_left_style",
+            "timeline_trim_end_left_style",
+            "timeline_trim_width_style",
+        )
+
+    def _on_set_trim_end(self, _handle=None, _ev=None, _args=None):
+        if not self._has_video:
+            return
+        self._trim_end = self._current_time
+        if self._trim_end < self._trim_start:
+            self._trim_start = self._trim_end
+        self._dirty_model(
+            "trim_start",
+            "trim_end",
+            "trim_start_text",
+            "trim_end_text",
+            "estimated_frames_text",
+            "timeline_trim_left_style",
+            "timeline_trim_end_left_style",
+            "timeline_trim_width_style",
+        )
+
+    def _on_reset_trim(self, _handle=None, _ev=None, _args=None):
+        if not self._has_video:
+            return
+        self._trim_start = 0.0
+        self._trim_end = self._duration
+        self._dirty_model(
+            "trim_start",
+            "trim_end",
+            "trim_start_text",
+            "trim_end_text",
+            "estimated_frames_text",
+            "timeline_trim_left_style",
+            "timeline_trim_end_left_style",
+            "timeline_trim_width_style",
+        )
+
+    def _on_dismiss_completion(self, _handle=None, _ev=None, _args=None):
+        self._show_completion = False
+        self._dirty_model("show_completion")
+
+    def _on_dismiss_error(self, _handle=None, _ev=None, _args=None):
+        self._show_error = False
+        self._error_text = ""
+        self._dirty_model("show_error", "error_text")
 
     def _close_video(self):
         if self._player_open:
@@ -479,13 +691,11 @@ class VideoExtractorPanel(Panel):
             self._duration = lf.io.video_player_duration()
             self._trim_start = 0.0
             self._trim_end = self._duration
-            self._current_time = 0.0
+            self._current_time = lf.io.video_player_current_time()
             self._is_playing = False
-            self._needs_preview_update = True
-
-            # Decode first frame
-            updated = lf.io.video_player_update()
-            print(f"[VEP] Opened video: {path}, duration={self._duration:.2f}s, first_update={updated}")
+            self._needs_preview_update = False
+            self._connect_preview_source()
+            self._refresh_preview()
 
             if not self._output_path:
                 base = os.path.splitext(os.path.basename(path))[0]
@@ -512,49 +722,52 @@ class VideoExtractorPanel(Panel):
             return
         try:
             self._is_playing = False
-            fps = lf.io.video_player_fps() or 30.0
-            frame_dur = 1.0 / fps
-            target = max(0.0, self._current_time - frame_dur)
-
-            # seek() snaps to keyframes and decodes forward, so if the
-            # result doesn't actually go back, seek further back
-            lf.io.video_player_seek(target)
-            result = lf.io.video_player_current_time()
-
-            if result >= self._current_time - frame_dur * 0.25 and target > 0:
-                lf.io.video_player_seek(max(0.0, target - frame_dur * 2))
-                result = lf.io.video_player_current_time()
-
-            self._current_time = result
-            self._needs_preview_update = True
-            self._dirty_model("time_display", "timeline_pos", "play_pause_label")
+            self._connect_preview_source()
+            lf.io.video_player_step_backward()
+            self._current_time = lf.io.video_player_current_time()
+            self._refresh_preview()
+            self._set_debug_status(f"step_back -> {self._current_time:0.3f}s")
+            self._dirty_time_model("playing")
         except Exception as e:
+            self._set_debug_status(f"step_back error: {e}")
             print(f"[VEP] step_back error: {e}")
 
     def _on_play_pause(self, _handle=None, _ev=None, _args=None):
         if not self._has_video:
             return
-        self._is_playing = not self._is_playing
-        if self._is_playing:
-            import time as _time
-            self._last_update_time = _time.monotonic()
-            if self._current_time >= self._duration:
-                self._current_time = 0.0
-                lf.io.video_player_seek(0.0)
-        self._dirty_model("play_pause_label")
+        try:
+            self._is_playing = not self._is_playing
+            self._connect_preview_source()
+            if self._is_playing:
+                if self._current_time >= self._duration - 0.1:
+                    self._current_time = 0.0
+                    lf.io.video_player_seek(0.0)
+                    self._current_time = lf.io.video_player_current_time()
+                    self._refresh_preview()
+                lf.io.video_player_play()
+                self._set_debug_status(f"play -> {self._current_time:0.3f}s")
+            else:
+                lf.io.video_player_pause()
+                self._set_debug_status(f"pause -> {self._current_time:0.3f}s")
+            self._dirty_time_model("playing")
+        except Exception as e:
+            self._is_playing = False
+            self._set_debug_status(f"play/pause error: {e}")
+            print(f"[VEP] play_pause error: {e}")
 
     def _on_step_fwd(self, _handle=None, _ev=None, _args=None):
         if not self._has_video:
             return
         try:
             self._is_playing = False
-            fps = lf.io.video_player_fps() or 30.0
-            self._current_time = min(self._duration, self._current_time + 1.0 / fps)
-            lf.io.video_player_seek(self._current_time)
+            self._connect_preview_source()
+            lf.io.video_player_step_forward()
             self._current_time = lf.io.video_player_current_time()
-            self._needs_preview_update = True
-            self._dirty_model("time_display", "timeline_pos", "play_pause_label")
+            self._refresh_preview()
+            self._set_debug_status(f"step_fwd -> {self._current_time:0.3f}s")
+            self._dirty_time_model("playing")
         except Exception as e:
+            self._set_debug_status(f"step_fwd error: {e}")
             print(f"[VEP] step_fwd error: {e}")
 
     def _on_start_extract(self, _handle=None, _ev=None, _args=None):

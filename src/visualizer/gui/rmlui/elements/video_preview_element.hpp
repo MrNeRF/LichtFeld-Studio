@@ -10,6 +10,7 @@
 #include <core/export.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -22,12 +23,24 @@ namespace lfs::vis::gui {
 
         LFS_VIS_API void setFrameData(const uint8_t* rgb_data, int w, int h);
 
+        // Direct C++ video source — bypasses Python for frame updates
+        struct VideoSource {
+            std::function<bool()> update;
+            std::function<const uint8_t*()> frame_data;
+            std::function<int()> width;
+            std::function<int()> height;
+            std::function<bool()> is_open;
+        };
+        LFS_VIS_API void setVideoSource(VideoSource source);
+        LFS_VIS_API void setPlaying(bool playing) { playing_ = playing; }
+
     protected:
         void OnRender() override;
         void OnResize() override;
         bool GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) override;
 
     private:
+        void pullSourceFrame();
         void uploadTexture();
         void rebuildGeometry();
 
@@ -45,6 +58,10 @@ namespace lfs::vis::gui {
         Rml::Geometry video_geom_;
         Rml::CallbackTextureSource texture_source_;
         bool geom_dirty_ = true;
+
+        VideoSource video_source_;
+        bool playing_ = false;
+        const uint8_t* last_frame_ptr_ = nullptr;
     };
 
 } // namespace lfs::vis::gui

@@ -198,6 +198,13 @@ else()
 endif()
 if(NVIDIA_SMI)
     execute_process(
+            COMMAND ${NVIDIA_SMI} --query-gpu=name --format=csv,noheader
+            OUTPUT_VARIABLE DETECTED_GPU_NAME
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(REGEX REPLACE "\n.*" "" DETECTED_GPU_NAME "${DETECTED_GPU_NAME}")
+
+    execute_process(
             COMMAND ${NVIDIA_SMI} --query-gpu=compute_cap --format=csv,noheader
             OUTPUT_VARIABLE DETECTED_COMPUTE_CAP
             OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -210,18 +217,51 @@ if(NVIDIA_SMI)
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
     string(REGEX REPLACE "\n.*" "" NVIDIA_DRIVER_VERSION "${NVIDIA_DRIVER_VERSION}")
+
+    if(NOT NVIDIA_DRIVER_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$")
+        execute_process(
+                COMMAND ${NVIDIA_SMI}
+                OUTPUT_VARIABLE NVIDIA_SMI_TEXT
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        string(REGEX MATCH "Driver Version: *([0-9]+(\\.[0-9]+)*)" _nvidia_driver_match "${NVIDIA_SMI_TEXT}")
+        if(CMAKE_MATCH_1)
+            set(NVIDIA_DRIVER_VERSION "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+
     message(STATUS "Detected NVIDIA driver: ${NVIDIA_DRIVER_VERSION}")
-    if(NVIDIA_DRIVER_VERSION VERSION_LESS "570")
+    if(NVIDIA_DRIVER_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$" AND NVIDIA_DRIVER_VERSION VERSION_LESS "570")
         message(FATAL_ERROR "NVIDIA driver ${NVIDIA_DRIVER_VERSION} is too old. "
             "CUDA Toolkit 12.8 requires driver >= 570. "
             "Please update: https://www.nvidia.com/drivers")
+    elseif(NOT NVIDIA_DRIVER_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$")
+        message(WARNING "Could not determine NVIDIA driver version from nvidia-smi output. "
+            "Skipping minimum driver check.")
+    endif()
+
+    if(NOT DETECTED_COMPUTE_CAP MATCHES "^[0-9]+\\.[0-9]+$")
+        if(DETECTED_GPU_NAME MATCHES "RTX 40" OR DETECTED_GPU_NAME MATCHES "RTX 4090" OR
+           DETECTED_GPU_NAME MATCHES "RTX 4080" OR DETECTED_GPU_NAME MATCHES "RTX 4070" OR
+           DETECTED_GPU_NAME MATCHES "RTX 4060")
+            set(DETECTED_COMPUTE_CAP "8.9")
+        elseif(DETECTED_GPU_NAME MATCHES "RTX 30" OR DETECTED_GPU_NAME MATCHES "A10" OR
+               DETECTED_GPU_NAME MATCHES "A16" OR DETECTED_GPU_NAME MATCHES "A2")
+            set(DETECTED_COMPUTE_CAP "8.6")
+        elseif(DETECTED_GPU_NAME MATCHES "H100" OR DETECTED_GPU_NAME MATCHES "H200")
+            set(DETECTED_COMPUTE_CAP "9.0")
+        else()
+            set(DETECTED_COMPUTE_CAP "8.6")
+        endif()
+        message(WARNING "Could not determine GPU compute capability from nvidia-smi query. "
+            "Using ${DETECTED_COMPUTE_CAP} for '${DETECTED_GPU_NAME}'.")
     endif()
 
     message(STATUS "Detected GPU compute capability: ${DETECTED_COMPUTE_CAP}")
     if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.1)
         string(REPLACE "." "" LichtFeld-Studio_CUDA_ARCH "${DETECTED_COMPUTE_CAP}")
     else()
-        set(LichtFeld-Studio_CUDA_ARCH "native")
+        string(REPLACE "." "" LichtFeld-Studio_CUDA_ARCH "${DETECTED_COMPUTE_CAP}")
     endif()
 else()
     message(WARNING "nvidia-smi not found! We are likely in CI, default to 8.6.")

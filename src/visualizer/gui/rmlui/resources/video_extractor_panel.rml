@@ -5,54 +5,79 @@
 </head>
 <body template="floating-window" data-model="video_extractor">
 
-  <!-- 1. Video preview -->
   <div class="vep-preview-area">
     <video-preview id="video-preview" />
     <span class="vep-placeholder" data-if="show_placeholder">@tr:video_extractor.select_preview</span>
   </div>
 
-  <!-- 2. Transport controls -->
   <div class="vep-transport">
-    <button id="btn-step-back" type="button" class="vep-round-btn" data-event-click="do_step_back">&#x25C0;&#x25C0;</button>
-    <button id="btn-play-pause" type="button" class="vep-round-btn vep-play-btn" data-event-click="do_play_pause">&#x25B6;</button>
-    <button id="btn-step-fwd" type="button" class="vep-round-btn" data-event-click="do_step_fwd">&#x25B6;&#x25B6;</button>
+    <button id="btn-step-back" type="button" class="vep-transport-btn" data-event-click="do_step_back">
+      <span class="vep-icon-tri-left"></span>
+      <span class="vep-icon-bar-left"></span>
+    </button>
+    <button id="btn-play-pause" type="button" class="vep-transport-btn vep-play-btn" data-event-click="do_play_pause">
+      <span class="vep-play-icon" data-class-hidden="playing"></span>
+      <span class="vep-pause-icon" data-class-hidden="!playing">
+        <span class="vep-pause-bar"></span>
+        <span class="vep-pause-bar"></span>
+      </span>
+    </button>
+    <button id="btn-step-fwd" type="button" class="vep-transport-btn" data-event-click="do_step_fwd">
+      <span class="vep-icon-bar-right"></span>
+      <span class="vep-icon-tri-right"></span>
+    </button>
     <span class="vep-time-display text-muted">{{time_display}}</span>
   </div>
 
-  <!-- 3. Timeline -->
   <div class="vep-timeline-section" data-if="has_video">
-    <input type="range" class="vep-timeline-slider" data-value="timeline_pos" min="0" max="1000" step="1" />
+    <div class="vep-timeline-shell">
+      <div class="vep-timeline-track"></div>
+      <div class="vep-timeline-trim-region"
+           data-style-left="timeline_trim_left_style"
+           data-style-width="timeline_trim_width_style"></div>
+      <div class="vep-timeline-progress"
+           data-style-width="timeline_progress_width_style"></div>
+      <div class="vep-timeline-marker vep-timeline-marker--start"
+           data-style-left="timeline_trim_left_style"></div>
+      <div class="vep-timeline-marker vep-timeline-marker--end"
+           data-style-left="timeline_trim_end_left_style"></div>
+      <div class="vep-timeline-tick"
+           data-for="tick : timeline_ticks"
+           data-class-major="tick.major"
+           data-style-left="tick.left_style"></div>
+      <div class="vep-timeline-playhead-cap"
+           data-style-left="timeline_playhead_left_style"></div>
+      <div class="vep-timeline-playhead"
+           data-style-left="timeline_playhead_left_style"></div>
+      <input type="range" class="vep-timeline-slider" data-value="timeline_pos" min="0" max="1000" step="1" />
+    </div>
   </div>
 
-  <!-- 4. Trim controls -->
-  <div class="vep-trim-section" data-if="has_video">
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:video_extractor.trim_range</span>
-      <div class="setting-row__control-col setting-row__control-col--slider">
-        <input type="range" class="setting-slider" data-value="trim_start" min="0" max="1000" step="1" />
-        <span class="slider-value">{{trim_start_text}}</span>
-      </div>
-    </div>
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col"></span>
-      <div class="setting-row__control-col setting-row__control-col--slider">
-        <input type="range" class="setting-slider" data-value="trim_end" min="0" max="1000" step="1" />
-        <span class="slider-value">{{trim_end_text}}</span>
-      </div>
-    </div>
+  <div class="vep-trim-row" data-if="has_video">
+    <span class="vep-trim-label">@tr:video_extractor.trim_range</span>
+    <input type="text" class="vep-trim-input vep-trim-start" data-value="trim_start_text" />
+    <button type="button" class="btn btn--secondary vep-trim-btn" data-event-click="do_set_trim_start">@tr:video_extractor.set</button>
+    <span class="vep-trim-dash">-</span>
+    <input type="text" class="vep-trim-input vep-trim-end" data-value="trim_end_text" />
+    <button type="button" class="btn btn--secondary vep-trim-btn" data-event-click="do_set_trim_end">@tr:video_extractor.set</button>
+    <button type="button" class="btn btn--secondary vep-trim-btn" data-event-click="do_reset_trim">@tr:video_extractor.reset</button>
+    <span class="vep-trim-frames text-muted">{{estimated_frames_text}}</span>
   </div>
 
-  <!-- 5. File selection -->
   <div class="vep-section">
-    <span class="section-header-text">@tr:video_extractor.input_video</span>
-    <div class="setting-row setting-row--aligned">
+    <div class="vep-separator-row">
+      <span class="vep-separator-cap"></span>
+      <span class="vep-separator-text">@tr:video_extractor.input_video</span>
+      <span class="vep-separator-line"></span>
+    </div>
+    <div class="setting-row setting-row--aligned vep-file-row">
       <span class="setting-row__label-col">@tr:video_extractor.video</span>
       <div class="setting-row__control-col vep-path-row">
         <span class="vep-path-text text-muted">{{video_path}}</span>
         <button type="button" class="btn btn--secondary vep-browse-btn" data-event-click="do_browse_video">@tr:video_extractor.browse</button>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned vep-file-row">
       <span class="setting-row__label-col">@tr:video_extractor.output</span>
       <div class="setting-row__control-col vep-path-row">
         <span class="vep-path-text text-muted">{{output_path}}</span>
@@ -61,117 +86,90 @@
     </div>
   </div>
 
-  <!-- 6. Extraction settings -->
   <div class="vep-section">
-    <span class="section-header-text">@tr:video_extractor.settings</span>
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:video_extractor.mode</span>
-      <div class="setting-row__control-col">
-        <select id="mode-select" data-value="mode_index">
-          <option value="0">@tr:video_extractor.mode_fps</option>
-          <option value="1">@tr:video_extractor.mode_interval</option>
-        </select>
-      </div>
+    <div class="vep-separator-row">
+      <span class="vep-separator-cap"></span>
+      <span class="vep-separator-text">@tr:video_extractor.settings</span>
+      <span class="vep-separator-line"></span>
     </div>
-    <div class="setting-row setting-row--aligned" data-if="show_fps">
-      <span class="setting-row__label-col">@tr:video_extractor.fps_label</span>
-      <div class="setting-row__control-col setting-row__control-col--slider">
-        <input type="range" class="setting-slider" data-value="fps_value" min="1" max="60" step="1" />
-        <span class="slider-value">{{fps_text}}</span>
-      </div>
-    </div>
-    <div class="setting-row setting-row--aligned" data-if="show_interval">
-      <span class="setting-row__label-col">@tr:video_extractor.every_label</span>
-      <div class="setting-row__control-col setting-row__control-col--slider">
-        <input type="range" class="setting-slider" data-value="interval_value" min="1" max="100" step="1" />
-        <span class="slider-value">{{interval_text}}</span>
-      </div>
-    </div>
-    <span class="vep-info-text text-muted" data-if="has_video">{{estimated_frames_text}}</span>
-  </div>
-
-  <!-- 7. Format settings -->
-  <div class="vep-section">
-    <span class="section-header-text">@tr:video_extractor.output_format</span>
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:video_extractor.format</span>
-      <div class="setting-row__control-col">
-        <select id="format-select" data-value="format_index">
-          <option value="0">PNG</option>
-          <option value="1">JPG</option>
-        </select>
-      </div>
-    </div>
-    <div class="setting-row setting-row--aligned" data-if="show_quality">
-      <span class="setting-row__label-col">@tr:video_extractor.quality_label</span>
-      <div class="setting-row__control-col setting-row__control-col--slider">
-        <input type="range" class="setting-slider" data-value="jpg_quality" min="1" max="100" step="1" />
-        <span class="slider-value">{{quality_text}}</span>
-      </div>
+    <div class="vep-mode-row">
+      <span class="vep-mode-label">@tr:video_extractor.mode</span>
+      <select id="mode-select" class="vep-mode-select" data-value="mode_index">
+        <option value="0">@tr:video_extractor.mode_fps</option>
+        <option value="1">@tr:video_extractor.mode_interval</option>
+      </select>
+      <input type="range" class="vep-mode-slider" data-value="fps_value" min="1" max="60" step="1" data-if="show_fps" />
+      <span class="vep-mode-value" data-if="show_fps">{{fps_text}}</span>
+      <span class="vep-mode-unit text-muted" data-if="show_fps">@tr:video_extractor.fps_label</span>
+      <input type="range" class="vep-mode-slider" data-value="interval_value" min="1" max="100" step="1" data-if="show_interval" />
+      <span class="vep-mode-value" data-if="show_interval">{{interval_text}}</span>
     </div>
   </div>
 
-  <!-- 8. Resolution settings -->
   <div class="vep-section">
-    <span class="section-header-text">@tr:video_extractor.resolution</span>
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:video_extractor.resolution_label</span>
-      <div class="setting-row__control-col">
-        <select id="resolution-select" data-value="resolution_mode">
-          <option value="0">@tr:video_extractor.res_original</option>
-          <option value="1">@tr:video_extractor.res_scale</option>
-          <option value="2">@tr:video_extractor.res_custom</option>
-        </select>
-      </div>
+    <div class="vep-separator-row">
+      <span class="vep-separator-cap"></span>
+      <span class="vep-separator-text">@tr:video_extractor.output_format</span>
+      <span class="vep-separator-line"></span>
     </div>
-    <div class="setting-row setting-row--aligned" data-if="show_scale">
-      <span class="setting-row__label-col">@tr:video_extractor.res_scale</span>
-      <div class="setting-row__control-col">
-        <select id="scale-select" data-value="scale_index">
-          <option value="0">0.25x</option>
-          <option value="1">0.5x</option>
-          <option value="2">0.75x</option>
-          <option value="3">1x</option>
-        </select>
-      </div>
-    </div>
-    <div data-if="show_custom_res">
-      <div class="setting-row setting-row--aligned">
-        <span class="setting-row__label-col">@tr:video_extractor.width</span>
-        <div class="setting-row__control-col">
-          <input type="text" class="setting-input" data-value="custom_width" />
-        </div>
-      </div>
-      <div class="setting-row setting-row--aligned">
-        <span class="setting-row__label-col">@tr:video_extractor.height</span>
-        <div class="setting-row__control-col">
-          <input type="text" class="setting-input" data-value="custom_height" />
-        </div>
-      </div>
+    <div class="vep-mode-row">
+      <span class="vep-mode-label">@tr:video_extractor.format</span>
+      <select id="format-select" class="vep-format-select" data-value="format_index">
+        <option value="0">PNG (lossless)</option>
+        <option value="1">JPEG (smaller)</option>
+      </select>
+      <span class="vep-inline-label text-muted" data-if="show_quality">@tr:video_extractor.quality_label</span>
+      <input type="range" class="vep-mode-slider" data-value="jpg_quality" min="1" max="100" step="1" data-if="show_quality" />
+      <span class="vep-mode-value" data-if="show_quality">{{quality_text}}</span>
     </div>
   </div>
 
-  <!-- 9. Output naming -->
   <div class="vep-section">
-    <span class="section-header-text">@tr:video_extractor.naming</span>
-    <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">@tr:video_extractor.pattern</span>
-      <div class="setting-row__control-col">
-        <input type="text" class="setting-input" data-value="filename_pattern" />
-      </div>
+    <div class="vep-separator-row">
+      <span class="vep-separator-cap"></span>
+      <span class="vep-separator-text">@tr:video_extractor.resolution</span>
+      <span class="vep-separator-line"></span>
     </div>
-    <span class="vep-info-text text-muted">{{pattern_example}}</span>
+    <div class="vep-resolution-row">
+      <span class="vep-mode-label">@tr:video_extractor.resolution_label</span>
+      <select id="resolution-select" class="vep-mode-select" data-value="resolution_mode">
+        <option value="0">@tr:video_extractor.res_original</option>
+        <option value="1">@tr:video_extractor.res_scale</option>
+        <option value="2">@tr:video_extractor.res_custom</option>
+      </select>
+      <select id="scale-select" class="vep-inline-select" data-value="scale_index" data-if="show_scale">
+        <option value="0">25%</option>
+        <option value="1">50%</option>
+        <option value="2">75%</option>
+        <option value="3">100%</option>
+      </select>
+      <input type="text" class="vep-custom-res-input" data-value="custom_width" data-if="show_custom_res" />
+      <span class="vep-custom-res-sep" data-if="show_custom_res">x</span>
+      <input type="text" class="vep-custom-res-input" data-value="custom_height" data-if="show_custom_res" />
+      <span class="vep-resolution-text text-muted">{{resolution_text}}</span>
+    </div>
   </div>
 
-  <!-- 10. Action buttons -->
+  <div class="vep-section">
+    <div class="vep-separator-row">
+      <span class="vep-separator-cap"></span>
+      <span class="vep-separator-text">@tr:video_extractor.naming</span>
+      <span class="vep-separator-line"></span>
+    </div>
+    <div class="vep-pattern-row">
+      <span class="vep-mode-label">@tr:video_extractor.pattern</span>
+      <input type="text" class="vep-pattern-input" data-value="filename_pattern" />
+      <span class="vep-pattern-example text-muted">{{pattern_example}}</span>
+    </div>
+  </div>
+
   <span class="vep-warning status-warning" data-if="show_warning">@tr:video_extractor.select_both</span>
   <div class="vep-buttons">
-    <button type="button" class="btn btn--primary vep-action-btn" data-event-click="do_start_extract"
+    <button type="button" class="btn btn--primary vep-action-btn vep-action-btn--start" data-event-click="do_start_extract"
             data-attrif-disabled="!can_extract">@tr:video_extractor.start</button>
-    <button type="button" class="btn btn--secondary vep-action-btn" data-event-click="do_cancel">@tr:video_extractor.cancel</button>
+    <button type="button" class="btn btn--secondary vep-action-btn vep-action-btn--cancel" data-event-click="do_cancel">@tr:video_extractor.cancel</button>
   </div>
 
-  <!-- 11. Progress bar -->
   <div class="vep-progress-section" data-if="is_extracting">
     <div class="vep-progress-wrap">
       <progress class="vep-progress" max="1" data-attr-value="progress_value" />
@@ -180,7 +178,6 @@
     <span class="vep-stage-text text-muted">{{progress_stage}}</span>
   </div>
 
-  <!-- 12. Completion / Error messages -->
   <div class="vep-message-section" data-if="show_completion">
     <span class="status-success">@tr:video_extractor.complete</span>
     <button type="button" class="btn btn--secondary" data-event-click="do_dismiss_completion">@tr:video_extractor.ok</button>

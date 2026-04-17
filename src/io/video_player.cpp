@@ -19,6 +19,8 @@ extern "C" {
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <cerrno>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -29,7 +31,6 @@ namespace lfs::io {
 
         constexpr size_t FRAME_QUEUE_SIZE = 16;
         constexpr int MAX_PREVIEW_HEIGHT = 720;
-        constexpr size_t MIN_BUFFERED_FRAMES = 4;
         constexpr int MAX_SW_DECODE_THREADS = 4;
 
         const char* getHwDecoderName(const AVCodecID codec_id) {
@@ -249,6 +250,15 @@ namespace lfs::io {
             using_hw_decode_ = false;
             current_time_ = 0;
             current_frame_ = 0;
+            playback_start_time_ = -1;
+            eof_reached_ = false;
+            decode_generation_.store(0, std::memory_order_release);
+            seek_requested_ = false;
+            seek_completed_ = false;
+            seek_found_frame_ = false;
+            seek_target_ = 0;
+            completed_seek_generation_ = 0;
+            need_seek_to_resume_ = false;
         }
 
         [[nodiscard]] bool isOpen() const { return is_open_; }
@@ -259,10 +269,23 @@ namespace lfs::io {
             }
 
             {
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                if (eof_reached_ && frame_queue_.empty()) {
+                    // Re-seek only when playback had previously run dry at EOF.
+                    // Regular pause/resume should not force an expensive seek.
+                    need_seek_to_resume_ = true;
+                }
+            }
+
+            if (need_seek_to_resume_) {
+                need_seek_to_resume_ = false;
+                seek(current_time_);
+            }
+
+            {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
                 queue_cv_.wait_for(lock, std::chrono::milliseconds(100), [this] {
-                    return frame_queue_.size() >= MIN_BUFFERED_FRAMES || eof_reached_ ||
-                           stop_decode_thread_;
+                    return !frame_queue_.empty() || eof_reached_ || stop_decode_thread_;
                 });
             }
 
@@ -270,7 +293,10 @@ namespace lfs::io {
             playback_start_time_ = -1;
         }
 
-        void pause() { is_playing_ = false; }
+        void pause() {
+            is_playing_ = false;
+            playback_start_time_ = -1;
+        }
 
         void togglePlayPause() {
             if (is_playing_) {
@@ -290,6 +316,7 @@ namespace lfs::io {
             pause();
             seconds = std::clamp(seconds, 0.0, duration_);
 
+            uint64_t seek_generation = 0;
             {
                 std::lock_guard<std::mutex> lock(queue_mutex_);
                 while (!frame_queue_.empty()) {
@@ -297,14 +324,21 @@ namespace lfs::io {
                 }
                 seek_target_ = seconds;
                 seek_requested_ = true;
+                seek_completed_ = false;
+                seek_found_frame_ = false;
+                seek_generation = ++decode_generation_;
             }
             queue_cv_.notify_all();
 
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
-                queue_cv_.wait(lock, [this] { return !seek_requested_ || stop_decode_thread_; });
+                queue_cv_.wait(lock, [this, seek_generation] {
+                    return stop_decode_thread_ ||
+                           (seek_completed_ &&
+                            completed_seek_generation_ == seek_generation);
+                });
 
-                if (!frame_queue_.empty()) {
+                if (seek_found_frame_ && !frame_queue_.empty()) {
                     auto frame = std::move(frame_queue_.front());
                     frame_queue_.pop();
                     display_buffer_ = std::move(frame.data);
@@ -312,6 +346,8 @@ namespace lfs::io {
                     current_frame_ = frame.frame_number;
                 }
             }
+
+            playback_start_time_ = -1;
         }
 
         void seekFrame(const int64_t frame_number) { seek(static_cast<double>(frame_number) / fps_); }
@@ -321,18 +357,12 @@ namespace lfs::io {
                 return;
             }
             pause();
-
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            if (!frame_queue_.empty()) {
-                auto frame = std::move(frame_queue_.front());
-                frame_queue_.pop();
-                lock.unlock();
-                queue_cv_.notify_all();
-
-                display_buffer_ = std::move(frame.data);
-                current_time_ = frame.pts;
-                current_frame_ = frame.frame_number;
+            if (fps_ <= 0.0) {
+                return;
             }
+
+            const double frame_duration = 1.0 / fps_;
+            seek(std::min(duration_, current_time_ + frame_duration));
         }
 
         void stepBackward() {
@@ -340,16 +370,24 @@ namespace lfs::io {
                 return;
             }
             pause();
-            const int64_t target = std::max<int64_t>(0, current_frame_ - 1);
-            seekFrame(target);
+            if (fps_ <= 0.0) {
+                return;
+            }
+
+            const double frame_duration = 1.0 / fps_;
+            seek(std::max(0.0, current_time_ - frame_duration));
         }
 
-        bool update(double /*current_wall_time*/) {
+        bool update(const double current_wall_time) {
             if (!is_open_ || !is_playing_) {
                 return false;
             }
 
             std::unique_lock<std::mutex> lock(queue_mutex_);
+
+            if (playback_start_time_ < 0.0) {
+                playback_start_time_ = current_wall_time - current_time_;
+            }
 
             if (frame_queue_.empty()) {
                 lock.unlock();
@@ -359,16 +397,37 @@ namespace lfs::io {
                 return false;
             }
 
-            auto& front = frame_queue_.front();
-            display_buffer_ = std::move(front.data);
-            current_time_ = front.pts;
-            current_frame_ = front.frame_number;
-            frame_queue_.pop();
+            const double target_time = std::max(0.0, current_wall_time - playback_start_time_);
+            const double frame_tolerance = fps_ > 0.0 ? 0.5 / fps_ : 0.0;
+
+            if (target_time + frame_tolerance < frame_queue_.front().pts) {
+                return false;
+            }
+
+            bool frame_changed = false;
+            while (!frame_queue_.empty()) {
+                auto& front = frame_queue_.front();
+                if (front.pts > target_time + frame_tolerance) {
+                    break;
+                }
+
+                display_buffer_ = std::move(front.data);
+                current_time_ = front.pts;
+                current_frame_ = front.frame_number;
+                frame_queue_.pop();
+                frame_changed = true;
+            }
 
             lock.unlock();
-            queue_cv_.notify_all();
+            if (frame_changed) {
+                queue_cv_.notify_all();
+            }
 
-            return true;
+            if (eof_reached_ && frame_queue_.empty() && current_time_ >= duration_ - frame_tolerance) {
+                is_playing_ = false;
+            }
+
+            return frame_changed;
         }
 
         [[nodiscard]] const uint8_t* currentFrameData() const {
@@ -432,62 +491,107 @@ namespace lfs::io {
                 }
 
                 if (seek_requested_) {
+                    const double seek_target = seek_target_;
+                    const uint64_t seek_generation = decode_generation_.load(std::memory_order_acquire);
                     lock.unlock();
-                    performSeek(seek_target_);
+                    const bool found_frame = performSeek(seek_target, seek_generation);
                     lock.lock();
-                    seek_requested_ = false;
+                    if (decode_generation_.load(std::memory_order_acquire) == seek_generation) {
+                        seek_requested_ = false;
+                        seek_completed_ = true;
+                        seek_found_frame_ = found_frame;
+                        completed_seek_generation_ = seek_generation;
+                    }
                     lock.unlock();
                     queue_cv_.notify_all();
                     continue;
                 }
 
+                const uint64_t decode_generation =
+                    decode_generation_.load(std::memory_order_acquire);
                 lock.unlock();
 
                 if (decodeNextFrame()) {
                     std::lock_guard<std::mutex> qlock(queue_mutex_);
-                    frame_queue_.push(std::move(decoded_frame_));
+                    if (!seek_requested_ &&
+                        decode_generation_.load(std::memory_order_acquire) == decode_generation) {
+                        frame_queue_.push(std::move(decoded_frame_));
+                        queue_cv_.notify_all();
+                    }
                 } else {
                     eof_reached_ = true;
                 }
             }
         }
 
-        void performSeek(const double seconds) {
+        bool performSeek(const double seconds, const uint64_t seek_generation) {
             const int64_t timestamp = static_cast<int64_t>(seconds / time_base_);
             avcodec_flush_buffers(codec_ctx_);
             av_seek_frame(fmt_ctx_, video_stream_idx_, timestamp, AVSEEK_FLAG_BACKWARD);
             eof_reached_ = false;
 
+            const double frame_tolerance = fps_ > 0.0 ? 0.5 / fps_ : 0.0;
             while (decodeNextFrame()) {
-                if (decoded_frame_.pts >= seconds - 0.5 / fps_) {
+                if (decode_generation_.load(std::memory_order_acquire) != seek_generation) {
+                    return false;
+                }
+
+                if (decoded_frame_.pts + frame_tolerance >= seconds) {
                     std::lock_guard<std::mutex> lock(queue_mutex_);
-                    frame_queue_.push(std::move(decoded_frame_));
-                    break;
-                }
-            }
-        }
-
-        bool decodeNextFrame() {
-            while (av_read_frame(fmt_ctx_, packet_) >= 0) {
-                if (packet_->stream_index == video_stream_idx_) {
-                    if (avcodec_send_packet(codec_ctx_, packet_) == 0) {
-                        if (avcodec_receive_frame(codec_ctx_, frame_) == 0) {
-                            convertFrameToBuffer();
-                            av_packet_unref(packet_);
-                            return true;
-                        }
+                    if (decode_generation_.load(std::memory_order_acquire) == seek_generation) {
+                        frame_queue_.push(std::move(decoded_frame_));
+                        queue_cv_.notify_all();
+                        return true;
                     }
+                    return false;
                 }
-                av_packet_unref(packet_);
-            }
-
-            avcodec_send_packet(codec_ctx_, nullptr);
-            if (avcodec_receive_frame(codec_ctx_, frame_) == 0) {
-                convertFrameToBuffer();
-                return true;
             }
 
             return false;
+        }
+
+        bool decodeNextFrame() {
+            while (true) {
+                const int receive_result = avcodec_receive_frame(codec_ctx_, frame_);
+                if (receive_result == 0) {
+                    convertFrameToBuffer();
+                    return true;
+                }
+                if (receive_result != AVERROR(EAGAIN) && receive_result != AVERROR_EOF) {
+                    return false;
+                }
+
+                while (true) {
+                    const int read_result = av_read_frame(fmt_ctx_, packet_);
+                    if (read_result < 0) {
+                        av_packet_unref(packet_);
+                        const int flush_result = avcodec_send_packet(codec_ctx_, nullptr);
+                        if (flush_result == AVERROR_EOF) {
+                            return false;
+                        }
+                        if (flush_result == 0 || flush_result == AVERROR(EAGAIN)) {
+                            break;
+                        }
+                        return false;
+                    }
+
+                    if (packet_->stream_index != video_stream_idx_) {
+                        av_packet_unref(packet_);
+                        continue;
+                    }
+
+                    const int send_result = avcodec_send_packet(codec_ctx_, packet_);
+                    av_packet_unref(packet_);
+
+                    if (send_result == 0 || send_result == AVERROR(EAGAIN)) {
+                        break;
+                    }
+                    if (send_result == AVERROR_EOF) {
+                        return false;
+                    }
+                    return false;
+                }
+            }
         }
 
         void convertFrameToBuffer() {
@@ -552,8 +656,13 @@ namespace lfs::io {
         DecodedFrame decoded_frame_;
         std::atomic<bool> stop_decode_thread_{false};
         std::atomic<bool> eof_reached_{false};
+        std::atomic<uint64_t> decode_generation_{0};
         bool seek_requested_ = false;
+        bool seek_completed_ = false;
+        bool seek_found_frame_ = false;
         double seek_target_ = 0;
+        uint64_t completed_seek_generation_ = 0;
+        bool need_seek_to_resume_ = false;
     };
 
     VideoPlayer::VideoPlayer() : impl_(std::make_unique<Impl>()) {}
