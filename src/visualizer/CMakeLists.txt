@@ -129,6 +129,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         sequencer/sequencer_controller.cpp
         sequencer/rml_sequencer_panel.cpp
         sequencer/rml_sequencer_panel_timeline.cpp
+        sequencer/rml_sequencer_panel_timeline_input.cpp
 
         # Operator system (Blender-style)
         operator/operator_context.cpp
