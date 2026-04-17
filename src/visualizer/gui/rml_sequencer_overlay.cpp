@@ -29,7 +29,7 @@
 #include <SDL3/SDL_video.h>
 #include <algorithm>
 #include <cassert>
-#include <format>
+#include <fmt/format.h>
 
 namespace lfs::vis::gui {
 
@@ -176,7 +176,7 @@ namespace lfs::vis::gui {
         const auto sep_color = colorToRmlAlpha(p.border, 0.5f);
         const int rounding = static_cast<int>(t.sizes.window_rounding);
 
-        return std::format(
+        return fmt::format(
             ".overlay-panel {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
             ".overlay-text {{ color: {}; }}\n"
             ".overlay-text-dim {{ color: {}; }}\n"
@@ -242,7 +242,7 @@ namespace lfs::vis::gui {
         html.reserve(1024);
 
         using namespace lichtfeld::Strings;
-        html += std::format(
+        html += fmt::format(
             R"(<div class="context-menu-item" id="ctx-add">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">K</span></div>)",
             LOC(Sequencer::ADD_KEYFRAME_HERE));
 
@@ -255,13 +255,13 @@ namespace lfs::vis::gui {
             const bool is_last = (idx == timeline.size() - 1);
 
             html += R"(<div class="context-menu-separator"></div>)";
-            html += std::format(
+            html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-update">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">U</span></div>)",
                 LOC(Sequencer::UPDATE_TO_CURRENT_VIEW));
-            html += std::format(
+            html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-goto">{}</div>)",
                 LOC(Sequencer::GO_TO_KEYFRAME));
-            html += std::format(
+            html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-focal">{}</div>)",
                 LOC(Sequencer::EDIT_FOCAL_LENGTH));
             html += R"(<div class="context-menu-separator"></div>)";
@@ -269,10 +269,10 @@ namespace lfs::vis::gui {
             const bool translate_active = edit_mode == SequencerViewportEditMode::Translate;
             const bool rotate_active = edit_mode == SequencerViewportEditMode::Rotate;
 
-            html += std::format(
+            html += fmt::format(
                 R"(<div class="context-menu-item{}" id="ctx-translate">{}</div>)",
                 translate_active ? " active" : "", LOC(Sequencer::MOVE_TRANSLATE));
-            html += std::format(
+            html += fmt::format(
                 R"(<div class="context-menu-item{}" id="ctx-rotate">{}</div>)",
                 rotate_active ? " active" : "", LOC(Sequencer::ROTATE));
 
@@ -280,27 +280,27 @@ namespace lfs::vis::gui {
 
             if (!is_last) {
                 const auto current_easing = timeline.keyframes()[idx].easing;
-                html += std::format(R"(<div class="context-menu-label">{}</div>)", LOC(Sequencer::EASING));
+                html += fmt::format(R"(<div class="context-menu-label">{}</div>)", LOC(Sequencer::EASING));
                 for (int e = 0; e < 4; ++e) {
                     const auto easing = static_cast<lfs::sequencer::EasingType>(e);
                     const bool active = (current_easing == easing);
-                    html += std::format(
+                    html += fmt::format(
                         R"(<div class="context-menu-item submenu-item{}" id="ctx-easing-{}">{}</div>)",
                         active ? " active" : "", e, easingName(easing));
                 }
             } else {
-                html += std::format(
+                html += fmt::format(
                     R"(<div class="context-menu-label">{}</div>)", LOC(Sequencer::EASING_LAST_KEYFRAME));
             }
 
             html += R"(<div class="context-menu-separator"></div>)";
 
             if (is_first)
-                html += std::format(
+                html += fmt::format(
                     R"(<div class="context-menu-item disabled" id="ctx-delete-disabled">{}</div>)",
                     LOC(Sequencer::DELETE_KEYFRAME));
             else
-                html += std::format(
+                html += fmt::format(
                     R"(<div class="context-menu-item" id="ctx-delete">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">Del</span></div>)",
                     LOC(Sequencer::DELETE_KEYFRAME));
         }
@@ -332,8 +332,8 @@ namespace lfs::vis::gui {
                             ? std::max(0.0f, screen_y - menu_h)
                             : screen_y;
 
-        el_context_menu_->SetProperty("left", std::format("{:.0f}dp", screen_x / dp));
-        el_context_menu_->SetProperty("top", std::format("{:.0f}dp", y / dp));
+        el_context_menu_->SetProperty("left", fmt::format("{:.0f}dp", screen_x / dp));
+        el_context_menu_->SetProperty("top", fmt::format("{:.0f}dp", y / dp));
     }
 
     void RmlSequencerOverlay::hideContextMenu() {
@@ -354,13 +354,13 @@ namespace lfs::vis::gui {
         time_edit_active_ = true;
         time_edit_index_ = index;
 
-        el_time_input_->SetAttribute("value", std::format("{:.2f}", current_time));
+        el_time_input_->SetAttribute("value", fmt::format("{:.2f}", current_time));
 
         const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
         const float popup_x = static_cast<float>(width_) / (2.0f * dp) - 110.0f;
         const float popup_y = static_cast<float>(height_) / (2.0f * dp) - 60.0f;
-        el_time_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
-        el_time_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
+        el_time_popup_->SetProperty("left", fmt::format("{:.0f}dp", popup_x));
+        el_time_popup_->SetProperty("top", fmt::format("{:.0f}dp", popup_y));
         el_time_popup_->SetProperty("display", "block");
         el_popup_backdrop_->SetProperty("display", "block");
 
@@ -375,13 +375,13 @@ namespace lfs::vis::gui {
         focal_edit_active_ = true;
         focal_edit_index_ = index;
 
-        el_focal_input_->SetAttribute("value", std::format("{:.1f}", current_focal_mm));
+        el_focal_input_->SetAttribute("value", fmt::format("{:.1f}", current_focal_mm));
 
         const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
         const float popup_x = static_cast<float>(width_) / (2.0f * dp) - 110.0f;
         const float popup_y = static_cast<float>(height_) / (2.0f * dp) - 60.0f;
-        el_focal_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
-        el_focal_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
+        el_focal_popup_->SetProperty("left", fmt::format("{:.0f}dp", popup_x));
+        el_focal_popup_->SetProperty("top", fmt::format("{:.0f}dp", popup_y));
         el_focal_popup_->SetProperty("display", "block");
         el_popup_backdrop_->SetProperty("display", "block");
 
@@ -432,8 +432,8 @@ namespace lfs::vis::gui {
         const float left = right_x / dp - OVERLAY_WIDTH - MARGIN;
         const float top = top_y / dp + MARGIN;
 
-        el_edit_overlay_->SetProperty("left", std::format("{:.0f}dp", left));
-        el_edit_overlay_->SetProperty("top", std::format("{:.0f}dp", top));
+        el_edit_overlay_->SetProperty("left", fmt::format("{:.0f}dp", left));
+        el_edit_overlay_->SetProperty("top", fmt::format("{:.0f}dp", top));
 
         overlay_px_left_ = left * dp;
         overlay_px_top_ = top * dp;
@@ -441,8 +441,9 @@ namespace lfs::vis::gui {
         overlay_px_height_ = 80.0f * dp;
 
         const size_t kf_num = selected + 1;
-        el_edit_label_->SetInnerRML(std::vformat(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME), std::make_format_args(kf_num)));
-        el_edit_delta_->SetInnerRML(std::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
+        el_edit_label_->SetInnerRML(
+            fmt::format(fmt::runtime(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME)), kf_num));
+        el_edit_delta_->SetInnerRML(fmt::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
 
         if (!edit_overlay_visible_) {
             el_edit_overlay_->SetProperty("display", "block");
@@ -470,7 +471,7 @@ namespace lfs::vis::gui {
         if (!render || !el_preview_window_ || !el_preview_title_ || !el_preview_image_)
             return;
 
-        const std::string new_source = std::format("sequencer-preview://{}", texture_id);
+        const std::string new_source = fmt::format("sequencer-preview://{}", texture_id);
         if (!preview_source_.empty() && preview_source_ != new_source) {
             el_preview_image_->SetAttribute("src", "");
             render->unregister_external_texture(preview_source_);
@@ -480,13 +481,13 @@ namespace lfs::vis::gui {
         render->register_external_texture(preview_source_, texture_id,
                                           static_cast<int>(width), static_cast<int>(height), true);
 
-        el_preview_window_->SetProperty("left", std::format("{:.1f}px", left));
-        el_preview_window_->SetProperty("top", std::format("{:.1f}px", top));
-        el_preview_window_->SetProperty("width", std::format("{:.1f}px", width + 8.0f));
+        el_preview_window_->SetProperty("left", fmt::format("{:.1f}px", left));
+        el_preview_window_->SetProperty("top", fmt::format("{:.1f}px", top));
+        el_preview_window_->SetProperty("width", fmt::format("{:.1f}px", width + 8.0f));
         el_preview_title_->SetInnerRML(title);
         el_preview_window_->SetClass("playing", playing);
-        el_preview_image_->SetProperty("width", std::format("{:.1f}px", width));
-        el_preview_image_->SetProperty("height", std::format("{:.1f}px", height));
+        el_preview_image_->SetProperty("width", fmt::format("{:.1f}px", width));
+        el_preview_image_->SetProperty("height", fmt::format("{:.1f}px", height));
 
         const auto current_source = el_preview_image_->GetAttribute<Rml::String>("src", "");
         if (current_source != preview_source_)

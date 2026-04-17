@@ -95,21 +95,60 @@ namespace lfs::core {
                 // Create result tensor (needs Tensor::empty)
                 Tensor result = Tensor::empty(shape, device, dtype);
 
-                // Check dtype to determine correct template instantiation
+                // Check dtype to determine correct template instantiation.
+                // Important: keep integer-only instantiations out of float-only ops to avoid
+                // MSVC template blow-ups (and pointless double->int warning floods).
                 if (input_tensor.dtype() == DataType::Int32) {
-                    // Int32 -> Int32 operations (abs, neg, sign, etc.)
-                    if (device == Device::CUDA) {
-                        tensor_ops::launch_unary_op_generic(
-                            input_tensor.template ptr<int>(),
-                            result.template ptr<int>(),
-                            result.numel(), op, result.stream());
+                    if constexpr (ops::supports_int32_v<UnaryOp>) {
+                        // Int32 -> Int32 operations (abs, neg, sign, etc.)
+                        if (device == Device::CUDA) {
+                            tensor_ops::launch_unary_op_generic(
+                                input_tensor.template ptr<int>(),
+                                result.template ptr<int>(),
+                                result.numel(), op, result.stream());
+                        } else {
+                            // CPU fallback
+                            const int* in_ptr = input_tensor.template ptr<int>();
+                            int* out_ptr = result.template ptr<int>();
+                            const size_t n = result.numel();
+                            for (size_t i = 0; i < n; ++i) {
+                                out_ptr[i] = op(in_ptr[i]);
+                            }
+                        }
                     } else {
-                        // CPU fallback
-                        const int* in_ptr = input_tensor.template ptr<int>();
-                        int* out_ptr = result.template ptr<int>();
-                        size_t n = result.numel();
-                        for (size_t i = 0; i < n; ++i) {
-                            out_ptr[i] = op(in_ptr[i]);
+                        // Float-only op on Int32 input: evaluate in Float32 and cast if needed.
+                        if (device == Device::CUDA) {
+                            Tensor input_f = input_tensor.to(DataType::Float32);
+
+                            if (dtype == DataType::Int32) {
+                                Tensor tmp_f = Tensor::empty(shape, device, DataType::Float32);
+                                tensor_ops::launch_unary_op_generic(
+                                    input_f.template ptr<float>(),
+                                    tmp_f.template ptr<float>(),
+                                    tmp_f.numel(), op, tmp_f.stream());
+                                result = tmp_f.to(DataType::Int32);
+                            } else {
+                                // Expected Float32 output.
+                                tensor_ops::launch_unary_op_generic(
+                                    input_f.template ptr<float>(),
+                                    result.template ptr<float>(),
+                                    result.numel(), op, result.stream());
+                            }
+                        } else {
+                            // CPU fallback: cast element-wise to avoid instantiating op(int).
+                            const int* in_ptr = input_tensor.template ptr<int>();
+                            const size_t n = result.numel();
+                            if (dtype == DataType::Int32) {
+                                int* out_ptr = result.template ptr<int>();
+                                for (size_t i = 0; i < n; ++i) {
+                                    out_ptr[i] = static_cast<int>(op(static_cast<float>(in_ptr[i])));
+                                }
+                            } else {
+                                float* out_ptr = result.template ptr<float>();
+                                for (size_t i = 0; i < n; ++i) {
+                                    out_ptr[i] = op(static_cast<float>(in_ptr[i]));
+                                }
+                            }
                         }
                     }
                 } else {
@@ -123,7 +162,7 @@ namespace lfs::core {
                         // CPU fallback: apply operation element-wise
                         const float* in_ptr = input_tensor.template ptr<float>();
                         float* out_ptr = result.template ptr<float>();
-                        size_t n = result.numel();
+                        const size_t n = result.numel();
                         for (size_t i = 0; i < n; ++i) {
                             out_ptr[i] = op(in_ptr[i]);
                         }

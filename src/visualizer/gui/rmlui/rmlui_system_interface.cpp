@@ -5,6 +5,8 @@
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
+#include "gui/rmlui/rml_path_utils.hpp"
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_keyboard.h>
@@ -120,6 +122,29 @@ namespace lfs::vis::gui {
     void RmlSystemInterface::JoinPath(Rml::String& translated_path,
                                       const Rml::String& document_path,
                                       const Rml::String& path) {
+        if (path.empty()) {
+            translated_path = document_path;
+            return;
+        }
+
+        if (const auto absolute_path = rml_paths::pathReferenceToFilesystemPath(path)) {
+            translated_path = rml_paths::normalizeFilesystemPath(*absolute_path);
+            return;
+        }
+
+        if (rml_paths::hasUriScheme(path)) {
+            translated_path = path;
+            return;
+        }
+
+        if (const auto document_fs_path = rml_paths::pathReferenceToFilesystemPath(document_path)) {
+            const auto resolved_path =
+                (document_fs_path->parent_path() / lfs::core::utf8_to_path(std::string(path)))
+                    .lexically_normal();
+            translated_path = rml_paths::normalizeFilesystemPath(resolved_path);
+            return;
+        }
+
 #ifndef _WIN32
         if (!path.empty() && path[0] == '/') {
             translated_path = path;

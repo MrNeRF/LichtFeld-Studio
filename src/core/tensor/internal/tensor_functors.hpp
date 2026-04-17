@@ -1195,6 +1195,84 @@ namespace lfs::core {
             return composed_unary_op_4<F, G, H, K>{f, g, h, k};
         }
 
+        // ============= TYPE TRAITS FOR INT32 VALIDITY (UNARY OPS) =============
+        //
+        // Many unary ops are mathematically float-only (exp/log/trig/etc.). If we let them be
+        // instantiated for `int`, MSVC ends up compiling pointless `op<int>` paths through the
+        // expression-template evaluator, causing warning floods (e.g. double->int) and, in large
+        // translation units, internal compiler errors.
+        //
+        // This trait lets the evaluator avoid instantiating `op(int)` at all for float-only ops.
+        template <typename Op>
+        struct supports_int32 : std::true_type {};
+
+        // Float-only unary ops (treat Int32 inputs via promotion in the evaluator).
+        template <>
+        struct supports_int32<exp_op> : std::false_type {};
+        template <>
+        struct supports_int32<exp2_op> : std::false_type {};
+        template <>
+        struct supports_int32<log_op> : std::false_type {};
+        template <>
+        struct supports_int32<log2_op> : std::false_type {};
+        template <>
+        struct supports_int32<log10_op> : std::false_type {};
+        template <>
+        struct supports_int32<log1p_op> : std::false_type {};
+        template <>
+        struct supports_int32<sqrt_op> : std::false_type {};
+        template <>
+        struct supports_int32<rsqrt_op> : std::false_type {};
+        template <>
+        struct supports_int32<cbrt_op> : std::false_type {};
+        template <>
+        struct supports_int32<sin_op> : std::false_type {};
+        template <>
+        struct supports_int32<cos_op> : std::false_type {};
+        template <>
+        struct supports_int32<tan_op> : std::false_type {};
+        template <>
+        struct supports_int32<asin_op> : std::false_type {};
+        template <>
+        struct supports_int32<acos_op> : std::false_type {};
+        template <>
+        struct supports_int32<atan_op> : std::false_type {};
+        template <>
+        struct supports_int32<sinh_op> : std::false_type {};
+        template <>
+        struct supports_int32<cosh_op> : std::false_type {};
+        template <>
+        struct supports_int32<tanh_op> : std::false_type {};
+        template <>
+        struct supports_int32<sigmoid_op> : std::false_type {};
+        template <>
+        struct supports_int32<gelu_op> : std::false_type {};
+        template <>
+        struct supports_int32<swish_op> : std::false_type {};
+
+        // These are defined for integral types today but are not meaningful/safe for Int32
+        // (they can introduce integer division-by-zero via epsilon truncation).
+        template <>
+        struct supports_int32<reciprocal_op> : std::false_type {};
+        template <>
+        struct supports_int32<inverse_op> : std::false_type {};
+
+        // Propagate through composed ops (valid on Int32 only if all components are).
+        template <typename Op>
+        inline constexpr bool supports_int32_v = supports_int32<Op>::value;
+
+        template <typename F, typename G>
+        struct supports_int32<composed_unary_op<F, G>>
+            : std::bool_constant<supports_int32_v<F> && supports_int32_v<G>> {};
+
+        template <typename F, typename G, typename H>
+        struct supports_int32<composed_unary_op_3<F, G, H>>
+            : std::bool_constant<supports_int32_v<F> && supports_int32_v<G> && supports_int32_v<H>> {};
+
+        template <typename F, typename G, typename H, typename K>
+        struct supports_int32<composed_unary_op_4<F, G, H, K>>
+            : std::bool_constant<supports_int32_v<F> && supports_int32_v<G> && supports_int32_v<H> && supports_int32_v<K>> {};
+
         // ============= TYPE TRAITS FOR BOOL-RETURNING OPERATIONS =============
 
         // Default: operations return the same type as input

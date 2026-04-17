@@ -21,7 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <format>
+#include <fmt/format.h>
 
 namespace lfs::vis {
 
@@ -35,7 +35,7 @@ namespace lfs::vis {
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
             const float secs = seconds - static_cast<float>(mins * 60);
-            return std::format("{}:{:05.2f}", mins, secs);
+            return fmt::format("{}:{:05.2f}", mins, secs);
         }
 
         [[nodiscard]] bool hasSelectedKeyframe(const std::vector<sequencer::KeyframeId>& selected_keyframes,
@@ -136,10 +136,10 @@ namespace lfs::vis {
         }
 
         guide_width = std::max(guide_width, 0.0f);
-        el_panel_guides_->SetProperty("left", std::format("{:.1f}px", guide_left));
-        el_panel_guides_->SetProperty("top", std::format("{:.1f}px", guide_top));
-        el_panel_guides_->SetProperty("width", std::format("{:.1f}px", guide_width));
-        el_panel_guides_->SetProperty("height", std::format("{:.1f}px", std::max(0.0f, guide_bottom - guide_top)));
+        el_panel_guides_->SetProperty("left", fmt::format("{:.1f}px", guide_left));
+        el_panel_guides_->SetProperty("top", fmt::format("{:.1f}px", guide_top));
+        el_panel_guides_->SetProperty("width", fmt::format("{:.1f}px", guide_width));
+        el_panel_guides_->SetProperty("height", fmt::format("{:.1f}px", std::max(0.0f, guide_bottom - guide_top)));
 
         const auto set_guide = [guide_width](Rml::Element* const el,
                                              const std::optional<float> x,
@@ -152,8 +152,8 @@ namespace lfs::vis {
             }
             const float clamped_center = clampCenteredSpan(*x, guide_width, width_px);
             el->SetProperty("display", "block");
-            el->SetProperty("left", std::format("{:.1f}px", clamped_center - width_px * 0.5f));
-            el->SetProperty("width", std::format("{:.1f}px", width_px));
+            el->SetProperty("left", fmt::format("{:.1f}px", clamped_center - width_px * 0.5f));
+            el->SetProperty("width", fmt::format("{:.1f}px", width_px));
         };
 
         std::optional<float> strip_hover_x;
@@ -395,7 +395,7 @@ namespace lfs::vis {
                     (current_time - last_click_time_) < DOUBLE_CLICK_TIME) {
                     editing_keyframe_time_ = true;
                     editing_keyframe_index_ = i;
-                    time_edit_buffer_ = std::format("{:.2f}", keyframes[i].time);
+                    time_edit_buffer_ = fmt::format("{:.2f}", keyframes[i].time);
                     last_clicked_keyframe_ = std::nullopt;
                 } else {
                     last_click_time_ = current_time;
@@ -605,7 +605,7 @@ namespace lfs::vis {
     void RmlSequencerPanel::openFocalLengthEdit(const size_t index, const float current_focal_mm) {
         editing_focal_length_ = true;
         editing_focal_index_ = index;
-        focal_edit_buffer_ = std::format("{:.1f}", current_focal_mm);
+        focal_edit_buffer_ = fmt::format("{:.1f}", current_focal_mm);
     }
 
     float RmlSequencerPanel::getDisplayEndTime() const {

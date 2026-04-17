@@ -5,6 +5,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/rmlui/rml_path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
@@ -38,28 +39,13 @@ namespace lfs::vis::gui::rml_theme {
     }
 
     std::string pathToRmlImageSource(const std::filesystem::path& path) {
-        constexpr std::string_view SAFE_CHARS = "/:._-~";
+        const std::string normalized = rml_paths::normalizeFilesystemPath(path);
 
-        const std::string utf8 = lfs::core::path_to_utf8(path);
-        std::string encoded;
-        encoded.reserve(utf8.size());
-
-        const auto is_ascii_alnum = [](const unsigned char ch) {
-            return (ch >= '0' && ch <= '9') ||
-                   (ch >= 'A' && ch <= 'Z') ||
-                   (ch >= 'a' && ch <= 'z');
-        };
-
-        for (const unsigned char ch : utf8) {
-            if (is_ascii_alnum(ch) || SAFE_CHARS.find(static_cast<char>(ch)) != std::string_view::npos) {
-                encoded.push_back(static_cast<char>(ch));
-                continue;
-            }
-
-            encoded += std::format("%{:02X}", static_cast<unsigned int>(ch));
-        }
-
-        return encoded;
+#ifdef _WIN32
+        return rml_paths::filesystemPathToFileUri(path);
+#else
+        return rml_paths::percentEncode(normalized);
+#endif
     }
 
     std::string loadBaseRCSS(const std::string& asset_name) {
@@ -538,7 +524,8 @@ namespace lfs::vis::gui::rml_theme {
     std::string generateSpriteSheetRCSS() {
         std::string result;
         try {
-            const auto atlas = lfs::vis::getAssetPath("icon/scene/scene-sprites.png").string();
+            const auto atlas =
+                pathToRmlImageSource(lfs::vis::getAssetPath("icon/scene/scene-sprites.png"));
             result = std::format(
                 "@spritesheet scene-icons {{\n"
                 "    src: {};\n"

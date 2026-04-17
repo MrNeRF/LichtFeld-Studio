@@ -33,7 +33,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
-#include <format>
+#include <fmt/format.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui.h>
 
@@ -63,8 +63,8 @@ namespace lfs::vis {
 
         [[nodiscard]] std::string formatSpeed(const float speed) {
             if (speed >= 1.0f)
-                return std::format("{}x", static_cast<int>(speed));
-            return std::format("{:.2g}x", speed);
+                return fmt::format("{}x", static_cast<int>(speed));
+            return fmt::format("{:.2g}x", speed);
         }
 
         [[nodiscard]] std::string formatPresetShort(const lfs::io::video::VideoPreset preset) {
@@ -74,16 +74,16 @@ namespace lfs::vis {
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
             const float secs = seconds - static_cast<float>(mins * 60);
-            return std::format("{}:{:05.2f}", mins, secs);
+            return fmt::format("{}:{:05.2f}", mins, secs);
         }
 
         [[nodiscard]] std::string formatTimeShort(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
             const int secs = static_cast<int>(seconds) % 60;
             if (mins > 0) {
-                return std::format("{}:{:02d}", mins, secs);
+                return fmt::format("{}:{:02d}", mins, secs);
             }
-            return std::format("{}s", secs);
+            return fmt::format("{}s", secs);
         }
 
         [[nodiscard]] bool hasSelectedKeyframe(const std::vector<sequencer::KeyframeId>& selected_keyframes,
@@ -484,10 +484,10 @@ namespace lfs::vis {
         const int rounding = static_cast<int>(t.sizes.window_rounding);
 
         const std::string radius_str = film_strip_attached_
-                                           ? std::format("{}dp {}dp 0dp 0dp", rounding, rounding)
-                                           : std::format("{}dp", rounding);
+                                           ? fmt::format("{}dp {}dp 0dp 0dp", rounding, rounding)
+                                           : fmt::format("{}dp", rounding);
 
-        std::string css = std::format(
+        std::string css = fmt::format(
             "#panel {{ background-color: {}; border-width: 1dp; border-color: {}; "
             "border-radius: {}; }}\n"
             ".transport-icon {{ image-color: {}; }}\n"
@@ -552,7 +552,7 @@ namespace lfs::vis {
             error,
             text_dim_half);
 
-        css += std::format(
+        css += fmt::format(
             "#film-strip-panel {{ background-color: {}; border-left: 1dp {}; border-right: 1dp {}; border-bottom: 1dp {}; border-radius: 0dp 0dp {}dp {}dp; }}\n"
             "#film-strip-groove {{ background-color: {}; }}\n"
             ".film-strip-gap {{ background-color: {}; }}\n"
@@ -686,7 +686,7 @@ namespace lfs::vis {
             timeToX(controller_.playhead(), 0.0f, tl_width),
             tl_width,
             PLAYHEAD_HANDLE_WIDTH * cached_dp_ratio_);
-        el_playhead_->SetProperty("left", std::format("{:.1f}px", x));
+        el_playhead_->SetProperty("left", fmt::format("{:.1f}px", x));
     }
 
     void RmlSequencerPanel::updateTimeDisplay() {
@@ -780,7 +780,7 @@ namespace lfs::vis {
             el->SetClassNames("keyframe");
             el->SetClass("loop-point", is_loop);
             el->SetClass("selected", selected);
-            el->SetProperty("left", std::format("{:.1f}px", x));
+            el->SetProperty("left", fmt::format("{:.1f}px", x));
             el->SetProperty("background-color", colorToRml(fill));
             el->SetProperty("border-color", selected ? colorToRml(p.text) : colorToRml(fill));
         }
@@ -840,15 +840,15 @@ namespace lfs::vis {
             const bool is_major = major_phase < 0.01f || (major_interval - major_phase) < 0.01f;
 
             if (is_major) {
-                html += std::format(
+                html += fmt::format(
                     "<div class=\"ruler-tick major\" style=\"left: {:.1f}px;\" />", x);
                 if (x + label_margin <= timeline_width) {
-                    html += std::format(
+                    html += fmt::format(
                         "<span class=\"ruler-label\" style=\"left: {:.1f}px;\">{}</span>",
                         x + 4.0f * cached_dp_ratio_, formatTimeShort(t_val));
                 }
             } else {
-                html += std::format(
+                html += fmt::format(
                     "<div class=\"ruler-tick minor\" style=\"left: {:.1f}px;\" />",
                     x);
             }
@@ -922,7 +922,7 @@ namespace lfs::vis {
             const int w = custom ? ui_state_.custom_width : info.width;
             const int h = custom ? ui_state_.custom_height : info.height;
             const int fps = custom ? ui_state_.framerate : info.framerate;
-            el_resolution_info_->SetInnerRML(std::format("{}x{} @ {}fps", w, h, fps));
+            el_resolution_info_->SetInnerRML(fmt::format("{}x{} @ {}fps", w, h, fps));
         }
         if (!quality_scrub_editing_)
             syncQualityScrub();
@@ -1002,7 +1002,7 @@ namespace lfs::vis {
         }
 
         if (elements_cached_) {
-            el_timeline_->SetProperty("width", std::format("{:.1f}px", timelineWidth()));
+            el_timeline_->SetProperty("width", fmt::format("{:.1f}px", timelineWidth()));
         }
 
         forwardInput(input);
@@ -1150,7 +1150,7 @@ namespace lfs::vis {
         const int value = std::clamp(ui_state_.quality, QUALITY_MIN, QUALITY_MAX);
         const float t = static_cast<float>(value - QUALITY_MIN) /
                         static_cast<float>(QUALITY_MAX - QUALITY_MIN);
-        const std::string pct = std::format("{:.1f}%", t * 100.0f);
+        const std::string pct = fmt::format("{:.1f}%", t * 100.0f);
         el_quality_fill_->SetProperty("width", pct);
         el_quality_display_->SetInnerRML(std::to_string(value));
     }

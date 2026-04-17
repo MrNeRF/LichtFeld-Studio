@@ -13,6 +13,7 @@
 #include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/rmlui/rml_path_utils.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "rendering/gl_state_guard.hpp"
 #include "scene/scene_manager.hpp"
@@ -868,11 +869,16 @@ namespace lfs::vis::gui {
 
         int w = 0, h = 0, channels = 0;
         std::string decoded_source;
-        std::string attempted_source = source;
-        unsigned char* data = stbi_load(source.c_str(), &w, &h, &channels, 4);
-        if (!data && source.find('%') != Rml::String::npos) {
-            decoded_source = percent_decode(source);
-            if (decoded_source != source) {
+        std::string resolved_source = source;
+        if (const auto file_uri_path = rml_paths::fileUriToPath(source)) {
+            resolved_source = rml_paths::normalizeFilesystemPath(*file_uri_path);
+        }
+
+        std::string attempted_source = resolved_source;
+        unsigned char* data = stbi_load(resolved_source.c_str(), &w, &h, &channels, 4);
+        if (!data && resolved_source.find('%') != std::string::npos) {
+            decoded_source = percent_decode(resolved_source);
+            if (decoded_source != resolved_source) {
                 attempted_source = decoded_source;
                 data = stbi_load(decoded_source.c_str(), &w, &h, &channels, 4);
             }

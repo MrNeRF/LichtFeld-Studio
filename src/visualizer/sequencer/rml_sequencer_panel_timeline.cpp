@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <format>
+#include <fmt/format.h>
 
 namespace lfs::vis {
 
@@ -31,7 +31,7 @@ namespace lfs::vis {
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
             const float secs = seconds - static_cast<float>(mins * 60);
-            return std::format("{}:{:05.2f}", mins, secs);
+            return fmt::format("{}:{:05.2f}", mins, secs);
         }
 
         [[nodiscard]] bool hasSelectedKeyframe(const std::vector<sequencer::KeyframeId>& selected_keyframes,
@@ -122,7 +122,7 @@ namespace lfs::vis {
             if (x1 <= x0)
                 continue;
 
-            segments_html += std::format(
+            segments_html += fmt::format(
                 "<div class=\"easing-segment {}\" style=\"left:{:.1f}px;width:{:.1f}px;\"></div>",
                 (i % 2 == 0) ? "primary" : "secondary",
                 x0, x1 - x0);
@@ -130,7 +130,7 @@ namespace lfs::vis {
             const auto easing = keyframes[i].easing;
             if (easing == sequencer::EasingType::LINEAR) {
                 const float len = x1 - x0;
-                curves_html += std::format(
+                curves_html += fmt::format(
                     "<div class=\"easing-curve-segment\" style=\"left:{:.1f}px;top:{:.1f}px;width:{:.1f}px;transform:rotate(0deg);\"></div>",
                     x0, y_center, len);
                 continue;
@@ -152,7 +152,7 @@ namespace lfs::vis {
                     continue;
 
                 const float angle_deg = std::atan2(dy, dx) * 57.2957795f;
-                curves_html += std::format(
+                curves_html += fmt::format(
                     "<div class=\"easing-curve-segment\" style=\"left:{:.1f}px;top:{:.1f}px;width:{:.1f}px;transform:rotate({:.2f}deg);\"></div>",
                     px0, py0, len, angle_deg);
             }
@@ -161,7 +161,7 @@ namespace lfs::vis {
         for (size_t i = 0; i < keyframes.size(); ++i) {
             const float kx = localTimeToX(keyframes[i].time);
             const char* tone = (i % 2 == 0) ? "primary" : "secondary";
-            indicators_html += std::format(
+            indicators_html += fmt::format(
                 "<div class=\"easing-dot {}\" style=\"left:{:.1f}px;top:{:.1f}px;\"></div>",
                 tone, kx, y_center);
 
@@ -178,7 +178,7 @@ namespace lfs::vis {
             default: break;
             }
 
-            indicators_html += std::format(
+            indicators_html += fmt::format(
                 "<div class=\"easing-indicator {} {}\" style=\"left:{:.1f}px;top:{:.1f}px;\"></div>",
                 easing_class, tone, kx, iy);
         }
@@ -276,7 +276,7 @@ namespace lfs::vis {
         std::string divider_html;
         divider_html.reserve(256);
         for (int i = 1; i < num_thumbs; ++i) {
-            divider_html += std::format(
+            divider_html += fmt::format(
                 "<div class=\"film-strip-divider\" style=\"left:{:.1f}px;\"></div>",
                 gui::FilmStripRenderer::THUMB_PADDING + actual_thumb_w * static_cast<float>(i));
         }
@@ -291,9 +291,9 @@ namespace lfs::vis {
         for (int i = 0; i < sprocket_count; ++i) {
             const float cx = sprocket_start + static_cast<float>(i) * gui::FilmStripRenderer::SPROCKET_SPACING;
             const float sx = cx - gui::FilmStripRenderer::SPROCKET_W * 0.5f;
-            sprocket_top_html += std::format(
+            sprocket_top_html += fmt::format(
                 "<div class=\"film-strip-sprocket top\" style=\"left:{:.1f}px;\"></div>", sx);
-            sprocket_bottom_html += std::format(
+            sprocket_bottom_html += fmt::format(
                 "<div class=\"film-strip-sprocket bottom\" style=\"left:{:.1f}px;\"></div>", sx);
         }
         el_film_strip_sprockets_top_->SetInnerRML(sprocket_top_html);
@@ -374,14 +374,14 @@ namespace lfs::vis {
                 if (x_max <= x_min)
                     return;
 
-                gaps_html += std::format(
+                gaps_html += fmt::format(
                     "<div class=\"film-strip-gap\" style=\"left:{:.1f}px;width:{:.1f}px;\">",
                     x_min, x_max - x_min);
                 const float stripe_span = gui::FilmStripRenderer::STRIP_HEIGHT -
                                           gui::FilmStripRenderer::THUMB_PADDING * 2.0f;
                 for (float stripe_x = -stripe_span; stripe_x < (x_max - x_min) + stripe_span;
                      stripe_x += 10.0f) {
-                    gaps_html += std::format(
+                    gaps_html += fmt::format(
                         "<div class=\"film-strip-gap-stripe\" style=\"left:{:.1f}px;top:{:.1f}px;height:{:.1f}px;transform:rotate(45deg);\"></div>",
                         stripe_x, stripe_span, stripe_span * 1.4142f);
                 }
@@ -421,7 +421,7 @@ namespace lfs::vis {
             }
 
             const std::string source =
-                std::format("sequencer-film-slot://{}-{}", thumb.slot_idx, texture_id);
+                fmt::format("sequencer-film-slot://{}-{}", thumb.slot_idx, texture_id);
             if (render)
                 render->register_external_texture(source, texture_id,
                                                   gui::FilmStripRenderer::THUMB_WIDTH,
@@ -430,8 +430,8 @@ namespace lfs::vis {
             active_sources.insert(source);
 
             thumb_el->SetProperty("display", "block");
-            thumb_el->SetProperty("left", std::format("{:.1f}px", thumb.screen_x - groove_origin_x));
-            thumb_el->SetProperty("width", std::format("{:.1f}px", thumb.screen_width));
+            thumb_el->SetProperty("left", fmt::format("{:.1f}px", thumb.screen_x - groove_origin_x));
+            thumb_el->SetProperty("width", fmt::format("{:.1f}px", thumb.screen_width));
             thumb_el->SetClassNames("film-thumb");
             thumb_el->SetClass("hovered", thumb.hovered);
             thumb_el->SetClass("contains-selected", thumb.contains_selected);
@@ -456,7 +456,7 @@ namespace lfs::vis {
         std::string markers_html;
         markers_html.reserve(film_strip.markers().size() * 196);
         for (const auto& marker : film_strip.markers()) {
-            markers_html += std::format(
+            markers_html += fmt::format(
                 "<div class=\"film-strip-marker{}{}\" style=\"left:{:.1f}px;\">"
                 "<div class=\"film-strip-marker-line shadow\"></div>"
                 "<div class=\"film-strip-marker-line main\"></div>"

@@ -259,6 +259,7 @@ set(TEST_FILES
     test_background_image.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
+    test_rml_path_utils.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
