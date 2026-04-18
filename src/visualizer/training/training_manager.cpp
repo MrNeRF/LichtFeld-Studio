@@ -34,6 +34,7 @@ namespace lfs::vis {
             // Emit events on state changes
             if (new_state == TrainingState::Idle) {
                 loss_buffer_.clear();
+                psnr_buffer_.clear();
                 last_error_.clear();
             }
         });
@@ -497,6 +498,19 @@ namespace lfs::vis {
     std::deque<float> TrainerManager::getLossBuffer() const {
         std::lock_guard<std::mutex> lock(loss_buffer_mutex_);
         return loss_buffer_;
+    }
+
+    void TrainerManager::updatePSNR(float psnr) {
+        std::lock_guard<std::mutex> lock(psnr_buffer_mutex_);
+        psnr_buffer_.push_back(psnr);
+        while (psnr_buffer_.size() > static_cast<size_t>(MAX_PSNR_POINTS)) {
+            psnr_buffer_.pop_front();
+        }
+    }
+
+    std::deque<float> TrainerManager::getPSNRBuffer() const {
+        std::lock_guard<std::mutex> lock(psnr_buffer_mutex_);
+        return psnr_buffer_;
     }
 
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {

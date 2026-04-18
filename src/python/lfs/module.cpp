@@ -881,6 +881,31 @@ NB_MODULE(lichtfeld, m) {
         },
         "Push loss data to a loss-graph element, returns (data_min, data_max)");
 
+    m.def(
+        "psnr_buffer", []() -> std::vector<float> {
+            const auto* const tm = lfs::python::get_trainer_manager();
+            if (!tm)
+                return {};
+            auto psnr_deque = tm->getPSNRBuffer();
+            return std::vector<float>(psnr_deque.begin(), psnr_deque.end());
+        },
+        "Get the recent PSNR history as a list of floats");
+
+    m.def(
+        "push_psnr_to_element",
+        [](lfs::python::PyRmlElement& elem, const std::vector<float>& data) -> nb::tuple {
+            auto* raw = elem.raw();
+            if (!raw)
+                return nb::make_tuple(0.0f, 1.0f);
+            auto* lg = dynamic_cast<lfs::vis::gui::LossGraphElement*>(raw);
+            if (!lg)
+                return nb::make_tuple(0.0f, 1.0f);
+            std::deque<float> deque(data.begin(), data.end());
+            lg->setData(deque);
+            return nb::make_tuple(lg->getDataMin(), lg->getDataMax());
+        },
+        "Push PSNR data to a psnr-graph element, returns (data_min, data_max)");
+
     // Trainer status bar bindings
     m.def(
         "trainer_elapsed_seconds", []() -> float {

@@ -12,6 +12,8 @@
 #include "core/splat_data.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
+#include "python/python_runtime.hpp"
+#include "visualizer/training/training_manager.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -535,6 +537,12 @@ namespace lfs::training {
         }
         const size_t elapsed_denom = evaluated_images > 0 ? evaluated_images : std::max<size_t>(val_dataset_size, 1);
         result.elapsed_time = elapsed / static_cast<float>(elapsed_denom);
+
+        // Update the training manager with the latest PSNR for GUI display
+        if (auto* tm = lfs::python::get_trainer_manager()) {
+            tm->updatePSNR(result.psnr);
+            tm->setLastPSNR(result.psnr);
+        }
 
         if (skipped_images > 0) {
             LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);
