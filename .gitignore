@@ -38,6 +38,7 @@ build*/**
 !weights/*.pt
 lichtfeld-studio.aps
 __pycache__/
+.vs__pycache__/
 *.pyc
 *.pyo
 src/python/stubs/lichtfeld/build_info.pyi
