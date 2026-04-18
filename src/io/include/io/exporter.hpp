@@ -135,4 +135,20 @@ namespace lfs::io {
      */
     [[nodiscard]] LFS_IO_API Result<void> save_nurec_usdz(const SplatData& splat_data, const NurecUsdzSaveOptions& options);
 
+    // ============================================================================
+    // RAD Export (Random Access Dataset format)
+    // ============================================================================
+
+    struct RadSaveOptions {
+        std::filesystem::path output_path;
+        int compression_level = 6;     // gzip compression level (0-9, default 6)
+        std::vector<float> lod_ratios; // Custom LOD ratios (e.g., {0.2, 0.5, 1.0}), empty = use defaults
+    };
+
+    /**
+     * @brief Save SplatData to RAD (Random Access Dataset) format
+     * @return Result<void> - success or Error with details
+     */
+    [[nodiscard]] LFS_IO_API Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options);
+
 } // namespace lfs::io

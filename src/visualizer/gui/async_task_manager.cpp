@@ -686,7 +686,8 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::performExport(ExportFormat format, const std::filesystem::path& path,
-                                         const std::vector<std::string>& node_names, int sh_degree) {
+                                         const std::vector<std::string>& node_names, int sh_degree,
+                                         const std::vector<float>& rad_lod_ratios) {
         if (isExporting())
             return;
 
@@ -712,6 +713,12 @@ namespace lfs::vis::gui {
 
         if (sh_degree < merged->get_max_sh_degree()) {
             truncateSHDegree(*merged, sh_degree);
+        }
+
+        // Store RAD LOD ratios for use during export
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.rad_lod_ratios = rad_lod_ratios;
         }
 
         startAsyncExport(format, path, std::move(merged));
@@ -837,6 +844,25 @@ namespace lfs::vis::gui {
                         update_progress(0.1f, "Writing USDZ");
                         const lfs::io::NurecUsdzSaveOptions options{.output_path = path};
                         if (auto result = lfs::io::save_nurec_usdz(*splat_data, options); result) {
+                            success = true;
+                            update_progress(1.0f, "Complete");
+                        } else {
+                            error_msg = result.error().message;
+                        }
+                        break;
+                    }
+                    case ExportFormat::RAD: {
+                        update_progress(0.1f, "Writing RAD");
+                        std::vector<float> lod_ratios;
+                        {
+                            const std::lock_guard lock(export_state_.mutex);
+                            lod_ratios = export_state_.rad_lod_ratios;
+                        }
+                        const lfs::io::RadSaveOptions options{
+                            .output_path = path,
+                            .compression_level = 6,
+                            .lod_ratios = lod_ratios};
+                        if (auto result = lfs::io::save_rad(*splat_data, options); result) {
                             success = true;
                             update_progress(1.0f, "Complete");
                         } else {

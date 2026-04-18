@@ -393,6 +393,7 @@
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML Viewer",
+    "format.rad_random_access": "RAD (SparkJS)",
     "select_models": "Selecteer Modellen:",
     "all": "Alle",
     "none": "Geen",
@@ -403,7 +404,13 @@
     "writing_spz": "SPZ Schrijven",
     "complete": "Voltooid",
     "failed": "Mislukt",
-    "select_at_least_one": "Selecteer minimaal één model"
+    "select_at_least_one": "Selecteer minimaal één model",
+    "tooltip": {
+      "rad_lod_input": "LOD-percentage (1-100). Standaard: 100",
+      "rad_lod_add": "Dit LOD-niveau toevoegen",
+      "rad_lod_remove": "Dit LOD-niveau verwijderen",
+      "rad_lod_select": "Selecteer LOD-niveau om te verwijderen"
+    }
   },
   "common": {
     "ok": "OK",
@@ -806,7 +813,10 @@
     "models": "MODELLEN",
     "no_models": "Geen modellen in scène",
     "sh_degree": "SH DEGREE",
-    "export_merged": "Exporteer Samengevoegd..."
+    "export_merged": "Exporteer Samengevoegd...",
+    "rad_customize_lod": "LOD aanpassen",
+    "rad_lod_levels": "LOD-niveaus",
+    "no_lod_settings": "Geen LOD-instellingen (standaardwaarden gebruiken)"
   },
   "selection_group": {
     "lock": "Vergrendelen",

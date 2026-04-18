@@ -393,6 +393,7 @@
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTMLビューアー",
+    "format.rad_random_access": "RAD (SparkJS)",
     "select_models": "モデルを選択:",
     "all": "すべて",
     "none": "なし",
@@ -403,7 +404,13 @@
     "writing_spz": "SPZを書き込み中",
     "complete": "完了",
     "failed": "失敗",
-    "select_at_least_one": "少なくとも1つのモデルを選択してください"
+    "select_at_least_one": "少なくとも1つのモデルを選択してください",
+    "tooltip": {
+      "rad_lod_input": "LODパーセンテージ (1-100)。デフォルト: 100",
+      "rad_lod_add": "このLODレベルを追加",
+      "rad_lod_remove": "このLODレベルを削除",
+      "rad_lod_select": "削除するLODレベルを選択"
+    }
   },
   "common": {
     "ok": "OK",
@@ -806,7 +813,10 @@
     "models": "モデル",
     "no_models": "シーンにモデルがありません",
     "sh_degree": "SH Degree",
-    "export_merged": "結合してエクスポート..."
+    "export_merged": "結合してエクスポート...",
+    "rad_customize_lod": "LODをカスタマイズ",
+    "rad_lod_levels": "LODレベル",
+    "no_lod_settings": "LOD設定なし（デフォルトを使用）"
   },
   "selection_group": {
     "lock": "ロック",

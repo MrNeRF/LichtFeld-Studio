@@ -46,7 +46,8 @@ namespace lfs::vis {
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
-                               const std::vector<std::string>& node_names, int sh_degree);
+                               const std::vector<std::string>& node_names, int sh_degree,
+                               const std::vector<float>& rad_lod_ratios = {});
             [[nodiscard]] bool isExporting() const { return export_state_.active.load(); }
             [[nodiscard]] float getExportProgress() const { return export_state_.progress.load(); }
             [[nodiscard]] std::string getExportStage() const {
@@ -185,6 +186,7 @@ namespace lfs::vis {
                 std::string stage;
                 std::string error;
                 std::filesystem::path path;
+                std::vector<float> rad_lod_ratios; // Custom LOD ratios for RAD export
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };

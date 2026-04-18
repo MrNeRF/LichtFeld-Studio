@@ -517,6 +517,17 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path SaveRadFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("RAD Files", ".rad"),
+                                      defaultPath,
+                                      defaultName,
+                                      ".rad"),
+                  result);
+        return result;
+    }
+
     std::filesystem::path SaveMp4FileDialog(const std::string& defaultName,
                                             const std::filesystem::path& defaultPath) {
         std::filesystem::path result;

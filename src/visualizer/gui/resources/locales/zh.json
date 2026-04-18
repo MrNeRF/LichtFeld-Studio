@@ -393,6 +393,7 @@
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML查看器",
+    "format.rad_random_access": "RAD (SparkJS)",
     "select_models": "选择模型：",
     "all": "全部",
     "none": "无",
@@ -403,7 +404,13 @@
     "writing_spz": "写入SPZ",
     "complete": "完成",
     "failed": "失败",
-    "select_at_least_one": "至少选择一个模型"
+    "select_at_least_one": "至少选择一个模型",
+    "tooltip": {
+      "rad_lod_input": "LOD百分比 (1-100)。默认: 100",
+      "rad_lod_add": "添加此LOD级别",
+      "rad_lod_remove": "移除此LOD级别",
+      "rad_lod_select": "选择要移除的LOD级别"
+    }
   },
   "common": {
     "ok": "确定",
@@ -806,7 +813,10 @@
     "models": "模型",
     "no_models": "场景中无模型",
     "sh_degree": "SH Degree",
-    "export_merged": "导出合并的..."
+    "export_merged": "导出合并的...",
+    "rad_customize_lod": "自定义LOD",
+    "rad_lod_levels": "LOD级别",
+    "no_lod_settings": "无LOD设置（使用默认值）"
   },
   "selection_group": {
     "lock": "锁定",

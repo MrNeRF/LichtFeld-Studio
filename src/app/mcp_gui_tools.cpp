@@ -1559,6 +1559,11 @@ namespace lfs::app {
                     return std::unexpected(result.error().message);
                 break;
             }
+            case core::ExportFormat::RAD: {
+                if (auto result = io::save_rad(*merged, io::RadSaveOptions{.output_path = path}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
             }
 
             return {};
@@ -2776,6 +2781,45 @@ namespace lfs::app {
                         {"started", false},
                         {"completed", true},
                         {"format", "html"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_rad",
+                .description = "Export one or more scene nodes to RAD (Random Access Dataset) format",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::RAD, path, sh_degree); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "rad"},
                         {"path", core::path_to_utf8(path)},
                         {"nodes", *node_names},
                     };

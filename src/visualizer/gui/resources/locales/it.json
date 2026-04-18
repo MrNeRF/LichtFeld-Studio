@@ -393,6 +393,7 @@
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "Visualizzatore HTML",
+    "format.rad_random_access": "RAD (SparkJS)",
     "select_models": "Seleziona Modelli:",
     "all": "Tutti",
     "none": "Nessuno",
@@ -403,7 +404,13 @@
     "writing_spz": "Scrittura SPZ",
     "complete": "Completato",
     "failed": "Fallito",
-    "select_at_least_one": "Seleziona almeno un modello"
+    "select_at_least_one": "Seleziona almeno un modello",
+    "tooltip": {
+      "rad_lod_input": "Percentuale LOD (1-100). Predefinito: 100",
+      "rad_lod_add": "Aggiungi questo livello LOD",
+      "rad_lod_remove": "Rimuovi questo livello LOD",
+      "rad_lod_select": "Seleziona il livello LOD da rimuovere"
+    }
   },
   "common": {
     "ok": "OK",
@@ -806,7 +813,10 @@
     "models": "MODELLI",
     "no_models": "Nessun modello nella scena",
     "sh_degree": "SH DEGREE",
-    "export_merged": "Esporta Unito..."
+    "export_merged": "Esporta Unito...",
+    "rad_customize_lod": "Personalizza LOD",
+    "rad_lod_levels": "Livelli LOD",
+    "no_lod_settings": "Nessuna impostazione LOD (uso valori predefiniti)"
   },
   "selection_group": {
     "lock": "Blocca",

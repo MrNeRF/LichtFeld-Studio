@@ -1947,6 +1947,11 @@ def save_html_file_dialog(default_name: str = 'viewer') -> str:
     Open a save file dialog for HTML viewer files. Returns empty string if cancelled.
     """
 
+def save_rad_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for RAD files. Returns empty string if cancelled.
+    """
+
 def open_dataset_folder_dialog() -> str:
     """
     Open a folder dialog to select a dataset. Returns empty string if cancelled.
@@ -2096,6 +2101,22 @@ def execute_mirror(axis: str) -> None:
 
 def go_to_camera_view(cam_uid: int) -> None:
     """Go to camera view by UID"""
+
+def open_camera_preview(cam_uid: int) -> None:
+    """Open the image preview panel for a camera UID"""
+
+def toggle_gt_comparison() -> None:
+    """Toggle ground-truth comparison split view"""
+
+def is_gt_comparison_active() -> bool:
+    """
+    Returns true if ground-truth comparison split view is currently enabled.
+    """
+
+def reveal_in_file_manager(path: str) -> bool:
+    """
+    Reveal a file or directory in the OS file manager. Returns true on success.
+    """
 
 def apply_cropbox() -> None:
     """Apply the selected cropbox"""

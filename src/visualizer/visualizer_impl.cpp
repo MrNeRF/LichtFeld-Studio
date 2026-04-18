@@ -522,15 +522,24 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_scene_manager(nullptr); });
 
         python::set_export_callback([](int format, const char* path, const char** node_names,
-                                       int node_count, int sh_degree) {
+                                       int node_count, int sh_degree, const float* rad_lod_ratios,
+                                       int rad_lod_count) {
             if (auto* gm = python::get_gui_manager()) {
                 std::vector<std::string> names;
                 names.reserve(node_count);
                 for (int i = 0; i < node_count; ++i) {
                     names.emplace_back(node_names[i]);
                 }
+                std::vector<float> lod_ratios;
+                if (rad_lod_ratios && rad_lod_count > 0) {
+                    lod_ratios.reserve(rad_lod_count);
+                    for (int i = 0; i < rad_lod_count; ++i) {
+                        lod_ratios.push_back(rad_lod_ratios[i]);
+                    }
+                }
                 gm->asyncTasks().performExport(static_cast<lfs::core::ExportFormat>(format),
-                                               lfs::core::utf8_to_path(path), names, sh_degree);
+                                               lfs::core::utf8_to_path(path), names, sh_degree,
+                                               lod_ratios);
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });

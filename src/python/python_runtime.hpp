@@ -169,10 +169,13 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_popup_draw_callback(DrawPopupsCallback cb);
     LFS_PYTHON_RUNTIME_API void draw_python_popups(lfs::core::Scene* scene = nullptr);
 
-    using ExportCallback = void (*)(int format, const char* path, const char** node_names, int node_count, int sh_degree);
+    using ExportCallback = void (*)(int format, const char* path, const char** node_names,
+                                    int node_count, int sh_degree,
+                                    const float* rad_lod_ratios, int rad_lod_count);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
     LFS_PYTHON_RUNTIME_API void invoke_export(int format, const std::string& path,
-                                              const std::vector<std::string>& node_names, int sh_degree);
+                                              const std::vector<std::string>& node_names, int sh_degree,
+                                              const std::vector<float>& rad_lod_ratios = {});
 
     using HasToolbarCallback = bool (*)();
 

@@ -393,6 +393,7 @@
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML 뷰어",
+    "format.rad_random_access": "RAD (SparkJS)",
     "select_models": "모델 선택:",
     "all": "전체",
     "none": "없음",
@@ -403,7 +404,13 @@
     "writing_spz": "SPZ 쓰는 중",
     "complete": "완료",
     "failed": "실패",
-    "select_at_least_one": "최소 하나의 모델을 선택하세요"
+    "select_at_least_one": "최소 하나의 모델을 선택하세요",
+    "tooltip": {
+      "rad_lod_input": "LOD 백분율 (1-100). 기본값: 100",
+      "rad_lod_add": "이 LOD 레벨 추가",
+      "rad_lod_remove": "이 LOD 레벨 제거",
+      "rad_lod_select": "제거할 LOD 레벨 선택"
+    }
   },
   "common": {
     "ok": "확인",
@@ -806,7 +813,10 @@
     "models": "모델",
     "no_models": "씬에 모델 없음",
     "sh_degree": "SH Degree",
-    "export_merged": "병합하여 내보내기..."
+    "export_merged": "병합하여보내기...",
+    "rad_customize_lod": "LOD 사용자 정의",
+    "rad_lod_levels": "LOD 레벨",
+    "no_lod_settings": "LOD 설정 없음 (기본값 사용)"
   },
   "selection_group": {
     "lock": "잠금",

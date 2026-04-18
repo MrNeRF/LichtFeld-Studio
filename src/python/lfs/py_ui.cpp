@@ -3875,6 +3875,15 @@ namespace lfs::python {
             "Open a save file dialog for HTML viewer files. Returns empty string if cancelled.");
 
         m.def(
+            "save_rad_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveRadFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for RAD files. Returns empty string if cancelled.");
+
+        m.def(
             "open_dataset_folder_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenDatasetFolderDialog();

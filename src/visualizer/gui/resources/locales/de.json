@@ -393,6 +393,7 @@
     "format.usd_openusd": "USD (OpenUSD)",
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML Viewer",
+    "format.rad_random_access": "RAD (SparkJS)",
     "select_models": "Modelle auswählen:",
     "all": "Alle",
     "none": "Keine",
@@ -403,7 +404,13 @@
     "writing_spz": "Schreibe SPZ",
     "complete": "Abgeschlossen",
     "failed": "Fehlgeschlagen",
-    "select_at_least_one": "Mindestens ein Modell auswählen"
+    "select_at_least_one": "Mindestens ein Modell auswählen",
+    "tooltip": {
+      "rad_lod_input": "LOD-Prozentsatz (1-100). Standard: 100",
+      "rad_lod_add": "Diese LOD-Stufe hinzufügen",
+      "rad_lod_remove": "Diese LOD-Stufe entfernen",
+      "rad_lod_select": "LOD-Stufe zum Entfernen auswählen"
+    }
   },
   "common": {
     "ok": "OK",
@@ -806,7 +813,10 @@
     "models": "MODELLE",
     "no_models": "Keine Modelle in der Szene",
     "sh_degree": "SH GRAD",
-    "export_merged": "Zusammengeführt exportieren..."
+    "export_merged": "Zusammengeführt exportieren...",
+    "rad_customize_lod": "LOD anpassen",
+    "rad_lod_levels": "LOD-Stufen",
+    "no_lod_settings": "Keine LOD-Einstellungen (Verwendung von Standardwerten)"
   },
   "selection_group": {
     "lock": "Sperren",

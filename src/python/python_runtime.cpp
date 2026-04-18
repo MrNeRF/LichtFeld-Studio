@@ -901,7 +901,8 @@ namespace lfs::python {
     void set_export_callback(ExportCallback cb) { g_export_callback = cb; }
 
     void invoke_export(int format, const std::string& path,
-                       const std::vector<std::string>& node_names, int sh_degree) {
+                       const std::vector<std::string>& node_names, int sh_degree,
+                       const std::vector<float>& rad_lod_ratios) {
         if (!g_export_callback)
             return;
 
@@ -911,7 +912,8 @@ namespace lfs::python {
             names_ptrs.push_back(name.c_str());
         }
         g_export_callback(format, path.c_str(), names_ptrs.data(),
-                          static_cast<int>(names_ptrs.size()), sh_degree);
+                          static_cast<int>(names_ptrs.size()), sh_degree,
+                          rad_lod_ratios.data(), static_cast<int>(rad_lod_ratios.size()));
     }
 
     bool has_python_toolbar() {
