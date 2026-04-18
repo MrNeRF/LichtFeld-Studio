@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <RmlUi/Core/SystemInterface.h>
 
 #include <cstdint>
@@ -30,7 +31,7 @@ namespace lfs::vis::gui {
         NotAllowed,
     };
 
-    class RmlSystemInterface final : public Rml::SystemInterface {
+    class LFS_VIS_API RmlSystemInterface final : public Rml::SystemInterface {
     public:
         explicit RmlSystemInterface(SDL_Window* window);
 
