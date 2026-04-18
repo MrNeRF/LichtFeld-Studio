@@ -1505,7 +1505,11 @@ class TrainingPanel(Panel):
             return False
         try:
             val = int(_parse_num(str(val_str), int))
-            if 1 <= val <= 100:
+            # Get max from dataset camera count, fallback to 100 if no scene
+            scene = lf.get_scene()
+            max_val = scene.active_camera_count if scene else 100
+            max_val = max(1, max_val)  # Ensure at least 1
+            if 1 <= val <= max_val:
                 d.test_every = val
                 return True
         except (ValueError, TypeError, RuntimeError):
@@ -1624,7 +1628,11 @@ class TrainingPanel(Panel):
             d = lf.dataset_params()
             if not d or not d.has_params():
                 return
-            new_val = max(1, min(100, d.test_every + direction))
+            # Get max from dataset camera count, fallback to 100 if no scene
+            scene = lf.get_scene()
+            max_test_every = scene.active_camera_count if scene else 100
+            max_test_every = max(1, max_test_every)  # Ensure at least 1
+            new_val = max(1, min(max_test_every, d.test_every + direction))
             d.test_every = new_val
             self._text_bufs["test_every_str"] = f"{new_val:,}"
             if self._handle:

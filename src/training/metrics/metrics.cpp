@@ -6,14 +6,13 @@
 #include "../rasterization/fast_rasterizer.hpp"
 #include "../rasterization/gsplat_rasterizer.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
-#include "python/python_runtime.hpp"
-#include "visualizer/training/training_manager.hpp"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -538,11 +537,15 @@ namespace lfs::training {
         const size_t elapsed_denom = evaluated_images > 0 ? evaluated_images : std::max<size_t>(val_dataset_size, 1);
         result.elapsed_time = elapsed / static_cast<float>(elapsed_denom);
 
-        // Update the training manager with the latest PSNR for GUI display
-        if (auto* tm = lfs::python::get_trainer_manager()) {
-            tm->updatePSNR(result.psnr);
-            tm->setLastPSNR(result.psnr);
-        }
+        // Emit evaluation completed event for GUI display and other subscribers
+        lfs::core::events::state::EvaluationCompleted{
+            .iteration = result.iteration,
+            .psnr = result.psnr,
+            .ssim = result.ssim,
+            .lpips = 0.0f, // LPIPS not computed in this code path
+            .elapsed_time = result.elapsed_time,
+            .num_gaussians = result.num_gaussians}
+            .emit();
 
         if (skipped_images > 0) {
             LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);

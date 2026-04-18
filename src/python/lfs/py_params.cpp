@@ -399,7 +399,7 @@ namespace lfs::python {
             [](DatasetConfig& c, int v) { c.resize_factor = v; });
 
         add_int(
-            "test_every", "Test Every", 8, 1, 100, "Use every Nth image for testing", true,
+            "test_every", "Test Every", 8, 1, 10000, "Use every Nth image for testing", true,
             [](const DatasetConfig& c) { return c.test_every; });
 
         add_int(
@@ -1346,8 +1346,8 @@ namespace lfs::python {
                 [](PyDatasetConfig& self, int v) {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
-                    if (v < 1 || v > 100)
-                        throw std::invalid_argument("test_every must be between 1 and 100");
+                    if (v < 1)
+                        throw std::invalid_argument("test_every must be at least 1");
                     self.params().test_every = v;
                 },
                 "Use every Nth image for testing")

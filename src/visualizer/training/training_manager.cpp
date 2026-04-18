@@ -619,6 +619,12 @@ namespace lfs::vis {
         state::TrainingProgress::when([this](const auto& event) {
             updateLoss(event.loss);
         });
+
+        // Listen for evaluation completed events - update PSNR buffer
+        state::EvaluationCompleted::when([this](const auto& event) {
+            updatePSNR(event.psnr);
+            setLastPSNR(event.psnr);
+        });
     }
 
     std::shared_ptr<const lfs::core::Camera> TrainerManager::getCamById(int camId) const {
