@@ -31,6 +31,7 @@ def _install_lf_stub(monkeypatch):
     )
     lf_stub.optimization_params = lambda: None
     lf_stub.dataset_params = lambda: None
+    lf_stub.get_scene = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
     lf_stub.get_render_settings = lambda: None
@@ -92,6 +93,9 @@ class _ParamsStub:
         self.reset_every = 3000
         self.sh_degree_interval = 1000
         self.ppisp_controller_activation_step = 5678
+        self.enable_eval = False
+        self.save_steps = [7000]
+        self.eval_steps = []
 
     def has_params(self):
         return True
@@ -107,10 +111,17 @@ class _ParamsStub:
     def set(self, prop, value):
         setattr(self, prop, value)
 
+    def clear_eval_steps(self):
+        self.eval_steps.clear()
+
+    def add_eval_step(self, step):
+        self.eval_steps.append(step)
+
 
 class _DatasetStub:
     def __init__(self):
         self.max_width = 2048
+        self.test_every = 8
 
     def has_params(self):
         return True
@@ -438,6 +449,98 @@ def test_legacy_negative_ppisp_activation_step_displays_resolved_value(training_
 
     getter, _setter = model.bindings["ppisp_activation_step_str"]
     assert getter() == "50,000"
+
+
+def test_eval_test_every_one_clamps_to_preserve_training_split(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = _ParamsStub()
+    params.enable_eval = True
+    dataset = _DatasetStub()
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            get_scene=lambda: SimpleNamespace(active_camera_count=5),
+        ),
+    )
+
+    assert panel._set_test_every("1") is True
+    assert dataset.test_every == 2
+
+
+def test_eval_test_every_stepper_keeps_lower_bound_at_two(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    params.enable_eval = True
+    dataset = _DatasetStub()
+    dataset.test_every = 2
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            get_scene=lambda: SimpleNamespace(active_camera_count=5),
+        ),
+    )
+
+    panel._apply_num_step("test_every", -1)
+
+    assert dataset.test_every == 2
+    assert panel._text_bufs["test_every_str"] == "2"
+    assert panel._handle.dirty_fields == ["test_every_str"]
+
+
+def test_enabling_eval_clamps_existing_bad_test_every(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    dataset.test_every = 1
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            get_render_settings=lambda: None,
+            get_scene=lambda: SimpleNamespace(active_camera_count=5),
+        ),
+    )
+
+    panel._set_bool_prop("enable_eval", True)
+
+    assert params.enable_eval is True
+    assert dataset.test_every == 2
+    assert panel._text_bufs["test_every_str"] == "2"
+    assert params.eval_steps == params.save_steps
+
+
+def test_enabling_eval_rejects_single_camera_split(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            get_render_settings=lambda: None,
+            get_scene=lambda: SimpleNamespace(active_camera_count=1),
+        ),
+    )
+
+    panel._set_bool_prop("enable_eval", True)
+
+    assert params.enable_eval is False
 
 
 def test_training_rml_no_longer_includes_ppisp_auto_toggle():

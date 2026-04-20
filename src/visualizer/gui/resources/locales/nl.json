@@ -445,6 +445,7 @@
     "loss": "Verlies",
     "eta": "ETA",
     "psnr": "PSNR",
+    "ssim": "SSIM",
     "unknown": "Onbekend",
     "dataset_no_trainer": "Dataset (Geen Trainer)",
     "dataset_ready": "Dataset (Gereed)",

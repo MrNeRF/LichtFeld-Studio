@@ -445,6 +445,7 @@
     "loss": "Perte",
     "eta": "Temps Restant",
     "psnr": "PSNR",
+    "ssim": "SSIM",
     "unknown": "Inconnu",
     "dataset_no_trainer": "Dataset (Sans Entraîneur)",
     "dataset_ready": "Dataset (Prêt)",

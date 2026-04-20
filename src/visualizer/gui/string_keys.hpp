@@ -50,7 +50,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.help";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* ABOUT = "window.about";
@@ -96,7 +96,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ENABLED = "about.interop.enabled";
             inline constexpr const char* DISABLED = "about.interop.disabled";
         } // namespace Interop
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -285,7 +285,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -392,6 +392,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STEP = "status.step";
         inline constexpr const char* LOSS = "status.loss";
         inline constexpr const char* ETA = "status.eta";
+        inline constexpr const char* PSNR = "status.psnr";
+        inline constexpr const char* SSIM = "status.ssim";
         inline constexpr const char* UNKNOWN = "status.unknown";
         inline constexpr const char* DATASET_NO_TRAINER = "status.dataset_no_trainer";
         inline constexpr const char* DATASET_READY = "status.dataset_ready";

@@ -537,7 +537,17 @@ namespace lfs::training {
         const size_t elapsed_denom = evaluated_images > 0 ? evaluated_images : std::max<size_t>(val_dataset_size, 1);
         result.elapsed_time = elapsed / static_cast<float>(elapsed_denom);
 
-        // Emit evaluation completed event for GUI display and other subscribers
+        if (skipped_images > 0) {
+            LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);
+        }
+        if (evaluated_images == 0) {
+            LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
+            return result;
+        }
+
+        result.valid = true;
+
+        // Emit evaluation completed event for GUI display and other subscribers.
         lfs::core::events::state::EvaluationCompleted{
             .iteration = result.iteration,
             .psnr = result.psnr,
@@ -546,13 +556,6 @@ namespace lfs::training {
             .elapsed_time = result.elapsed_time,
             .num_gaussians = result.num_gaussians}
             .emit();
-
-        if (skipped_images > 0) {
-            LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);
-        }
-        if (evaluated_images == 0) {
-            LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
-        }
 
         // Add metrics to reporter
         _reporter->add_metrics(result);

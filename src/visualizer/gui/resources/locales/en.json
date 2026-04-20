@@ -445,6 +445,7 @@
     "loss": "Loss",
     "eta": "ETA",
     "psnr": "PSNR",
+    "ssim": "SSIM",
     "unknown": "Unknown",
     "dataset_no_trainer": "Dataset (No Trainer)",
     "dataset_ready": "Dataset (Ready)",

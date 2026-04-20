@@ -11,10 +11,23 @@
 
 #include <cmath>
 #include <format>
+#include <mutex>
+#include <optional>
 
 namespace lfs::python {
 
     using namespace lfs::core::events;
+
+    namespace {
+        struct LatestEvaluationMetrics {
+            int iteration = 0;
+            float psnr = 0.0f;
+            float ssim = 0.0f;
+        };
+
+        std::mutex g_latest_eval_metrics_mutex;
+        std::optional<LatestEvaluationMetrics> g_latest_eval_metrics;
+    } // namespace
 
     static std::string formatDuration(const float seconds) {
         const float clamped = std::max(0.0f, seconds);
@@ -119,6 +132,19 @@ namespace lfs::python {
                 MessageStyle::Error);
         });
 
+        state::TrainingStarted::when([](const auto&) {
+            std::lock_guard lock(g_latest_eval_metrics_mutex);
+            g_latest_eval_metrics.reset();
+        });
+
+        state::EvaluationCompleted::when([](const auto& e) {
+            std::lock_guard lock(g_latest_eval_metrics_mutex);
+            g_latest_eval_metrics = LatestEvaluationMetrics{
+                .iteration = e.iteration,
+                .psnr = e.psnr,
+                .ssim = e.ssim};
+        });
+
         state::TrainingCompleted::when([](const auto& e) {
             if (e.user_stopped)
                 return;
@@ -126,12 +152,29 @@ namespace lfs::python {
             if (e.success) {
                 namespace Str = lichtfeld::Strings::Training::Button;
 
-                const auto message = std::format(
-                    "Training completed successfully!\n\n"
-                    "Iterations: {}\n"
-                    "Final loss: {:.6f}\n"
-                    "Duration: {}",
+                auto message = std::format(
+                    "Training completed successfully.\n\n"
+                    "{} iterations | loss {:.6f} | {}",
                     e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));
+                std::optional<LatestEvaluationMetrics> eval_snapshot;
+                {
+                    std::lock_guard lock(g_latest_eval_metrics_mutex);
+                    eval_snapshot = g_latest_eval_metrics;
+                }
+                if (eval_snapshot.has_value()) {
+                    if (eval_snapshot->iteration == e.iteration) {
+                        message += std::format(
+                            "\nFinal metrics: PSNR {:.2f} | SSIM {:.4f}",
+                            eval_snapshot->psnr,
+                            eval_snapshot->ssim);
+                    } else {
+                        message += std::format(
+                            "\nLast eval @ {}: PSNR {:.2f} | SSIM {:.4f}",
+                            eval_snapshot->iteration,
+                            eval_snapshot->psnr,
+                            eval_snapshot->ssim);
+                    }
+                }
 
                 const std::string edit_label = LOC(Str::SWITCH_EDIT_MODE);
                 PyModalRegistry::instance().show_confirm(

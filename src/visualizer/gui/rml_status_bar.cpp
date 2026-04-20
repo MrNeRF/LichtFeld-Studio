@@ -173,6 +173,8 @@ namespace lfs::vis::gui {
         ctor.Bind("step_value", &model_.step_value);
         ctor.Bind("loss_label", &model_.loss_label);
         ctor.Bind("loss_value", &model_.loss_value);
+        ctor.Bind("show_eval_metrics", &model_.show_eval_metrics);
+        ctor.Bind("eval_metrics_value", &model_.eval_metrics_value);
         ctor.Bind("gaussians_label", &model_.gaussians_label);
         ctor.Bind("gaussians_value", &model_.gaussians_value);
         ctor.Bind("time_value", &model_.time_value);
@@ -420,11 +422,26 @@ namespace lfs::vis::gui {
                            std::format("{}/{}", fmtCount(num_splats), fmtCount(max_g)));
             setModelString("time_value", model_.time_value, fmtTime(elapsed));
             setModelString("eta_value", model_.eta_value, fmtTime(eta));
+
+            const auto eval_metrics = tm->getLastEvaluationMetrics();
+            setModelBool("show_eval_metrics", model_.show_eval_metrics, eval_metrics.has_value());
+            if (eval_metrics) {
+                setModelString("eval_metrics_value", model_.eval_metrics_value,
+                               std::format("{} {:.2f} / {} {:.4f}",
+                                           LOC(lichtfeld::Strings::Status::PSNR),
+                                           eval_metrics->psnr,
+                                           LOC(lichtfeld::Strings::Status::SSIM),
+                                           eval_metrics->ssim));
+            } else {
+                setModelString("eval_metrics_value", model_.eval_metrics_value, "");
+            }
         } else {
             setModelString("progress_width", model_.progress_width, "0%");
             setModelString("progress_text", model_.progress_text, "");
             setModelString("step_value", model_.step_value, "");
             setModelString("loss_value", model_.loss_value, "");
+            setModelBool("show_eval_metrics", model_.show_eval_metrics, false);
+            setModelString("eval_metrics_value", model_.eval_metrics_value, "");
             setModelString("gaussians_value", model_.gaussians_value, "");
             setModelString("time_value", model_.time_value, "");
             setModelString("eta_value", model_.eta_value, "");

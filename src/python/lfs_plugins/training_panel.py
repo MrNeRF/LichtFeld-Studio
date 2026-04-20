@@ -432,7 +432,6 @@ class TrainingPanel(Panel):
         self._handle = model.get_handle()
         self._sync_panel_label()
 
-        # Sync eval_steps with save_steps on panel load if enable_eval is already true
         params = lf.optimization_params()
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
@@ -1359,8 +1358,9 @@ class TrainingPanel(Panel):
             params.ppisp = True
         elif prop == "ppisp" and not val:
             params.ppisp_freeze_from_sidecar = False
+        if prop == "enable_eval" and val and not self._clamp_current_test_every_for_eval():
+            return
         setattr(params, prop, val)
-        # Sync eval_steps with save_steps when enable_eval is turned on
         if prop == "enable_eval" and val:
             self._sync_eval_steps_with_save_steps(params)
         rs = lf.get_render_settings()
@@ -1499,19 +1499,68 @@ class TrainingPanel(Panel):
             return False
         return False
 
+    def _active_camera_count(self):
+        get_scene = getattr(lf, "get_scene", None)
+        if not callable(get_scene):
+            return None
+        try:
+            scene = get_scene()
+        except (AttributeError, RuntimeError, TypeError):
+            return None
+        if scene is None:
+            return None
+        try:
+            return max(0, int(getattr(scene, "active_camera_count")))
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _test_every_max(self):
+        camera_count = self._active_camera_count()
+        return max(1, camera_count if camera_count is not None else 100)
+
+    def _eval_requires_training_split(self):
+        params = lf.optimization_params()
+        return bool(
+            params and params.has_params() and getattr(params, "enable_eval", False)
+        )
+
+    def _coerce_test_every_for_current_eval_split(self, val):
+        camera_count = self._active_camera_count()
+        if camera_count is not None and camera_count < 2:
+            return None
+        return max(2, val)
+
+    def _clamp_current_test_every_for_eval(self):
+        d = lf.dataset_params()
+        if not d or not d.has_params():
+            return True
+        val = max(1, min(self._test_every_max(), int(getattr(d, "test_every", 8))))
+        val = self._coerce_test_every_for_current_eval_split(val)
+        if val is None:
+            return False
+        if getattr(d, "test_every", None) != val:
+            try:
+                d.test_every = val
+            except RuntimeError:
+                return False
+            self._text_bufs["test_every_str"] = f"{val:,}"
+        return True
+
     def _set_test_every(self, val_str):
         d = lf.dataset_params()
         if not d or not d.has_params():
             return False
         try:
             val = int(_parse_num(str(val_str), int))
-            # Get max from dataset camera count, fallback to 100 if no scene
-            scene = lf.get_scene()
-            max_val = scene.active_camera_count if scene else 100
-            max_val = max(1, max_val)  # Ensure at least 1
-            if 1 <= val <= max_val:
-                d.test_every = val
-                return True
+            max_val = self._test_every_max()
+            if not (1 <= val <= max_val):
+                return False
+            if self._eval_requires_training_split():
+                val = self._coerce_test_every_for_current_eval_split(val)
+                if val is None:
+                    return False
+            d.test_every = val
+            return True
         except (ValueError, TypeError, RuntimeError):
             return False
         return False
@@ -1628,11 +1677,12 @@ class TrainingPanel(Panel):
             d = lf.dataset_params()
             if not d or not d.has_params():
                 return
-            # Get max from dataset camera count, fallback to 100 if no scene
-            scene = lf.get_scene()
-            max_test_every = scene.active_camera_count if scene else 100
-            max_test_every = max(1, max_test_every)  # Ensure at least 1
+            max_test_every = self._test_every_max()
             new_val = max(1, min(max_test_every, d.test_every + direction))
+            if self._eval_requires_training_split():
+                new_val = self._coerce_test_every_for_current_eval_split(new_val)
+                if new_val is None:
+                    return
             d.test_every = new_val
             self._text_bufs["test_every_str"] = f"{new_val:,}"
             if self._handle:
@@ -1771,7 +1821,6 @@ class TrainingPanel(Panel):
             params = lf.optimization_params()
             if params and params.has_params() and self._new_save_step > 0:
                 params.add_save_step(self._new_save_step)
-                # Sync eval_steps with save_steps when enable_eval is true
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
                 self._last_save_steps = []
@@ -1779,7 +1828,6 @@ class TrainingPanel(Panel):
     def _action_start(self):
         params = lf.optimization_params()
 
-        # Sync eval_steps with save_steps before training starts if enable_eval is true
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
 
@@ -1874,27 +1922,21 @@ class TrainingPanel(Panel):
         if 0 <= idx < len(steps):
             step_to_remove = steps[idx]
             params.remove_save_step(step_to_remove)
-            # Also remove from eval_steps when enable_eval is true
             if params.enable_eval:
                 self._remove_from_eval_steps(params, step_to_remove)
             self._last_save_steps = []
 
     def _sync_eval_steps_with_save_steps(self, params):
-        """Sync eval_steps to match save_steps when enable_eval is true."""
         if not params or not params.has_params():
             return
-        # Copy save_steps to eval_steps using the methods
         save_steps_list = list(params.save_steps)
-        # Clear and repopulate eval_steps to match save_steps
         params.clear_eval_steps()
         for step in save_steps_list:
             params.add_eval_step(step)
 
     def _remove_from_eval_steps(self, params, step):
-        """Remove a specific step from eval_steps."""
         if not params or not params.has_params():
             return
-        # Remove the step from eval_steps if it exists
         params.remove_eval_step(step)
 
     def _try_auto_scale_steps(self, params):
@@ -3051,7 +3093,6 @@ class TrainingPanel(Panel):
             if layout.button(tr("common.add") + "##py_add"):
                 if self._new_save_step > 0:
                     params.add_save_step(self._new_save_step)
-                    # Sync eval_steps with save_steps when enable_eval is true
                     if params.enable_eval:
                         self._sync_eval_steps_with_save_steps(params)
 
@@ -3064,13 +3105,11 @@ class TrainingPanel(Panel):
                 if changed and new_val > 0 and new_val != step:
                     params.remove_save_step(step)
                     params.add_save_step(new_val)
-                    # Sync eval_steps with save_steps when enable_eval is true
                     if params.enable_eval:
                         self._sync_eval_steps_with_save_steps(params)
                 layout.same_line()
                 if layout.button(tr("common.remove") + "##rm"):
                     params.remove_save_step(step)
-                    # Also remove from eval_steps when enable_eval is true
                     if params.enable_eval:
                         self._remove_from_eval_steps(params, step)
                 layout.pop_id()
