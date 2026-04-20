@@ -529,14 +529,14 @@ endif()
 # =============================================================================
 # vcpkg's VCPKG_APPLOCAL_DEPS feature may not copy all needed DLLs.
 # This explicitly copies vcpkg DLLs to ensure they're available at runtime.
-# We copy from both release and debug directories since:
-# 1. Some dependencies (like zlib) are linked against release libraries even in Debug builds
-# 2. Debug DLLs have different names (e.g., zlibd1.dll vs zlib1.dll) so no conflicts
+# 
+# IMPORTANT: For Release builds, copy ONLY release DLLs to avoid loading debug CRT.
+# For Debug builds, copy both because some vcpkg packages (e.g., zlib) are release-only.
 if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     set(_vcpkg_debug_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
     set(_vcpkg_release_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
     
-    # Copy release DLLs first
+    # Always copy release DLLs - needed for both Release and Debug builds
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${_vcpkg_release_bin_dir}"
@@ -544,15 +544,33 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
         COMMENT "Copying vcpkg release DLLs"
     )
     
-    # Copy debug DLLs second (they have different names, so this adds to rather than replaces)
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${_vcpkg_debug_bin_dir}"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-        COMMENT "Copying vcpkg debug DLLs"
-    )
-    
-    message(STATUS "Post-build: vcpkg DLLs will be copied from both release and debug directories")
+    # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
+    # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
+    # For multi-config generators (VS, Xcode): use generator expression
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_is_multi_config)
+        # Multi-config: use generator expression to conditionally copy
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,copy_directory,true>
+                "${_vcpkg_debug_bin_dir}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying vcpkg debug DLLs (Debug config only)"
+        )
+        message(STATUS "Post-build: vcpkg DLLs - release always, debug for Debug config only (multi-config)")
+    else()
+        # Single-config: check CMAKE_BUILD_TYPE at configure time
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${_vcpkg_debug_bin_dir}"
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                COMMENT "Copying vcpkg debug DLLs"
+            )
+            message(STATUS "Post-build: vcpkg DLLs - copying both release and debug (Debug build)")
+        else()
+            message(STATUS "Post-build: vcpkg DLLs - copying release only (${CMAKE_BUILD_TYPE} build)")
+        endif()
+    endif()
 endif()
 
 # Before extension post-build copying: remove stale 'extensions' file if present (prevent mkdir failure)
