@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lfs::io {
@@ -1721,6 +1722,79 @@ namespace lfs::io {
                 level.count = order.size();
             }
 
+            static uint64_t expand_morton_21(uint32_t value) {
+                uint64_t x = static_cast<uint64_t>(value) & 0x1fffffULL;
+                x = (x | (x << 32)) & 0x1f00000000ffffULL;
+                x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
+                x = (x | (x << 8)) & 0x100f00f00f00f00fULL;
+                x = (x | (x << 4)) & 0x10c30c30c30c30c3ULL;
+                x = (x | (x << 2)) & 0x1249249249249249ULL;
+                return x;
+            }
+
+            static uint64_t morton_code_3d(uint32_t x, uint32_t y, uint32_t z) {
+                return expand_morton_21(x) |
+                       (expand_morton_21(y) << 1) |
+                       (expand_morton_21(z) << 2);
+            }
+
+            static void sort_level_spatially(PackedSplatData& level) {
+                if (level.count <= 1 || level.means.size() < level.count * 3) {
+                    return;
+                }
+
+                std::array<float, 3> min_corner{
+                    std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity(),
+                    std::numeric_limits<float>::infinity()};
+                std::array<float, 3> max_corner{
+                    -std::numeric_limits<float>::infinity(),
+                    -std::numeric_limits<float>::infinity(),
+                    -std::numeric_limits<float>::infinity()};
+
+                for (size_t i = 0; i < level.count; ++i) {
+                    for (size_t d = 0; d < 3; ++d) {
+                        const float value = level.means[i * 3 + d];
+                        min_corner[d] = std::min(min_corner[d], value);
+                        max_corner[d] = std::max(max_corner[d], value);
+                    }
+                }
+
+                std::array<float, 3> inv_extent{};
+                for (size_t d = 0; d < 3; ++d) {
+                    const float extent = max_corner[d] - min_corner[d];
+                    inv_extent[d] = extent > 1.0e-20f ? 1.0f / extent : 0.0f;
+                }
+
+                std::vector<std::pair<uint64_t, size_t>> keyed_order;
+                keyed_order.reserve(level.count);
+                for (size_t i = 0; i < level.count; ++i) {
+                    std::array<uint32_t, 3> q{};
+                    for (size_t d = 0; d < 3; ++d) {
+                        const float normalized = std::clamp(
+                            (level.means[i * 3 + d] - min_corner[d]) * inv_extent[d],
+                            0.0f,
+                            1.0f);
+                        q[d] = static_cast<uint32_t>(std::round(normalized * 2097151.0f));
+                    }
+                    keyed_order.emplace_back(morton_code_3d(q[0], q[1], q[2]), i);
+                }
+
+                std::sort(keyed_order.begin(), keyed_order.end(), [](const auto& a, const auto& b) {
+                    if (a.first != b.first) {
+                        return a.first < b.first;
+                    }
+                    return a.second < b.second;
+                });
+
+                std::vector<size_t> order;
+                order.reserve(level.count);
+                for (const auto& [_, index] : keyed_order) {
+                    order.push_back(index);
+                }
+                reorder_level(level, order);
+            }
+
             static std::vector<size_t> assign_to_nearest_parent(const std::vector<float>& child_means,
                                                                 size_t child_count,
                                                                 const std::vector<float>& parent_means,
@@ -1855,7 +1929,7 @@ namespace lfs::io {
                     ratios.push_back(1.0f);
                 }
 
-                constexpr size_t kMaxChildrenPerNode = static_cast<size_t>(std::numeric_limits<uint16_t>::max());
+                constexpr size_t kUpperLodFanout = 64;
 
                 // Build all LOD levels
                 std::vector<PackedSplatData> levels;
@@ -1900,6 +1974,8 @@ namespace lfs::io {
                     }
                 }
 
+                sort_level_spatially(levels.front());
+
                 // Build parent-child relationships and reorder levels
                 // Process from coarsest to finest (reverse order of ratios)
                 for (size_t i = 0; i < levels.size() - 1; ++i) {
@@ -1937,37 +2013,6 @@ namespace lfs::io {
                     }
 
                     reorder_level(fine, fine_order);
-                }
-
-                // Build final packed data with tree structure
-                // Spark expects a single tree root at index 0
-                const size_t finest_idx = levels.size() - 1;
-                const size_t coarsest_idx = 0;
-
-                // Check if we need a super level
-                const bool needs_super_level = levels[coarsest_idx].count > kMaxChildrenPerNode;
-                const size_t super_count = needs_super_level
-                                               ? (levels[coarsest_idx].count + kMaxChildrenPerNode - 1) / kMaxChildrenPerNode
-                                               : 0;
-
-                if (super_count > kMaxChildrenPerNode) {
-                    LOG_WARN("RAD export: top-level fanout exceeds u16 child limits, falling back to non-LOD");
-                    return std::nullopt;
-                }
-
-                // Calculate base indices
-                const size_t root_count = 1;
-                size_t current_base = root_count + super_count;
-                std::vector<size_t> level_bases(levels.size());
-                for (size_t i = 0; i < levels.size(); ++i) {
-                    level_bases[i] = current_base;
-                    current_base += levels[i].count;
-                }
-                const size_t total_count = current_base;
-
-                if (total_count > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-                    LOG_WARN("RAD export: packed LOD exceeds u32 index range, falling back to non-LOD");
-                    return std::nullopt;
                 }
 
                 // Aggregate node helper
@@ -2038,6 +2083,80 @@ namespace lfs::io {
                     return node;
                 };
 
+                auto append_node_to_level = [&](PackedSplatData& dst, const AggregateNode& node) {
+                    dst.means.insert(dst.means.end(), node.center.begin(), node.center.end());
+                    dst.opacity.push_back(node.opacity);
+                    dst.sh0.insert(dst.sh0.end(), node.sh0.begin(), node.sh0.end());
+                    dst.scales.insert(dst.scales.end(), node.scale.begin(), node.scale.end());
+                    dst.rotation.insert(dst.rotation.end(), node.rotation.begin(), node.rotation.end());
+                    if (dst.sh_coeffs > 0) {
+                        if (!node.shN.empty()) {
+                            dst.shN.insert(dst.shN.end(), node.shN.begin(), node.shN.end());
+                        } else {
+                            dst.shN.insert(dst.shN.end(), static_cast<size_t>(dst.sh_coeffs) * 3, 0.0f);
+                        }
+                    }
+                };
+
+                auto make_upper_level = [&](const PackedSplatData& child_level) {
+                    PackedSplatData parent_level;
+                    parent_level.count = (child_level.count + kUpperLodFanout - 1) / kUpperLodFanout;
+                    parent_level.sh_degree = sh_degree;
+                    parent_level.sh_coeffs = child_level.sh_coeffs;
+                    parent_level.lod_tree = true;
+                    parent_level.means.reserve(parent_level.count * 3);
+                    parent_level.opacity.reserve(parent_level.count);
+                    parent_level.sh0.reserve(parent_level.count * 3);
+                    parent_level.scales.reserve(parent_level.count * 3);
+                    parent_level.rotation.reserve(parent_level.count * 4);
+                    if (parent_level.sh_coeffs > 0) {
+                        parent_level.shN.reserve(parent_level.count * static_cast<size_t>(parent_level.sh_coeffs) * 3);
+                    }
+
+                    for (size_t g = 0; g < parent_level.count; ++g) {
+                        const size_t group_start = g * kUpperLodFanout;
+                        const size_t group_count = std::min(kUpperLodFanout, child_level.count - group_start);
+                        append_node_to_level(parent_level, aggregate_range(child_level, group_start, group_count));
+                    }
+                    return parent_level;
+                };
+
+                // Build a bounded-fanout hierarchy above the coarsest simplified level.
+                // The previous implementation connected the root to arbitrary 65k-wide
+                // row groups, which creates scene-sized blobs and weak paging boundaries.
+                std::vector<PackedSplatData> upper_levels;
+                const PackedSplatData* child_level = &levels.front();
+                while (true) {
+                    upper_levels.push_back(make_upper_level(*child_level));
+                    if (upper_levels.back().count == 1) {
+                        break;
+                    }
+                    child_level = &upper_levels.back();
+                }
+
+                // Build final packed data with tree structure. Upper levels are stored
+                // root-first, followed by original LOD levels from coarsest to finest.
+                const size_t finest_idx = levels.size() - 1;
+                size_t current_base = 0;
+                std::vector<size_t> upper_bases(upper_levels.size());
+                for (size_t out = 0; out < upper_levels.size(); ++out) {
+                    const size_t upper_idx = upper_levels.size() - 1 - out;
+                    upper_bases[upper_idx] = current_base;
+                    current_base += upper_levels[upper_idx].count;
+                }
+
+                std::vector<size_t> level_bases(levels.size());
+                for (size_t i = 0; i < levels.size(); ++i) {
+                    level_bases[i] = current_base;
+                    current_base += levels[i].count;
+                }
+                const size_t total_count = current_base;
+
+                if (total_count > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
+                    LOG_WARN("RAD export: packed LOD exceeds u32 index range, falling back to non-LOD");
+                    return std::nullopt;
+                }
+
                 // Build final packed data
                 PackedSplatData packed;
                 packed.count = total_count;
@@ -2051,21 +2170,6 @@ namespace lfs::io {
                     dst.insert(dst.end(), src.begin(), src.end());
                 };
 
-                auto append_node = [&](const AggregateNode& node) {
-                    packed.means.insert(packed.means.end(), node.center.begin(), node.center.end());
-                    packed.opacity.push_back(node.opacity);
-                    packed.sh0.insert(packed.sh0.end(), node.sh0.begin(), node.sh0.end());
-                    packed.scales.insert(packed.scales.end(), node.scale.begin(), node.scale.end());
-                    packed.rotation.insert(packed.rotation.end(), node.rotation.begin(), node.rotation.end());
-                    if (packed.sh_coeffs > 0) {
-                        if (!node.shN.empty()) {
-                            packed.shN.insert(packed.shN.end(), node.shN.begin(), node.shN.end());
-                        } else {
-                            packed.shN.insert(packed.shN.end(), static_cast<size_t>(packed.sh_coeffs) * 3, 0.0f);
-                        }
-                    }
-                };
-
                 // Reserve space
                 packed.means.reserve(packed.count * 3);
                 packed.opacity.reserve(packed.count);
@@ -2076,16 +2180,16 @@ namespace lfs::io {
                     packed.shN.reserve(packed.count * static_cast<size_t>(packed.sh_coeffs) * 3);
                 }
 
-                // Add root node (aggregate of coarsest level)
-                append_node(aggregate_range(levels[coarsest_idx], 0, levels[coarsest_idx].count));
-
-                // Add super level if needed
-                if (needs_super_level) {
-                    for (size_t g = 0; g < super_count; ++g) {
-                        const size_t group_start = g * kMaxChildrenPerNode;
-                        const size_t group_count = std::min(kMaxChildrenPerNode,
-                                                            levels[coarsest_idx].count - group_start);
-                        append_node(aggregate_range(levels[coarsest_idx], group_start, group_count));
+                // Add upper hierarchy root-first.
+                for (size_t out = 0; out < upper_levels.size(); ++out) {
+                    const size_t upper_idx = upper_levels.size() - 1 - out;
+                    append_rows(packed.means, upper_levels[upper_idx].means);
+                    packed.opacity.insert(packed.opacity.end(), upper_levels[upper_idx].opacity.begin(), upper_levels[upper_idx].opacity.end());
+                    append_rows(packed.sh0, upper_levels[upper_idx].sh0);
+                    append_rows(packed.scales, upper_levels[upper_idx].scales);
+                    append_rows(packed.rotation, upper_levels[upper_idx].rotation);
+                    if (packed.sh_coeffs > 0) {
+                        append_rows(packed.shN, upper_levels[upper_idx].shN);
                     }
                 }
 
@@ -2102,30 +2206,25 @@ namespace lfs::io {
                 }
 
                 // Set up child links
-                // Root linkage
-                if (needs_super_level) {
-                    packed.child_count[0] = static_cast<uint16_t>(super_count);
-                    packed.child_start[0] = 1;
+                for (size_t upper_idx = 0; upper_idx < upper_levels.size(); ++upper_idx) {
+                    const bool points_to_coarsest = upper_idx == 0;
+                    const size_t child_base = points_to_coarsest ? level_bases[0] : upper_bases[upper_idx - 1];
+                    const size_t child_total = points_to_coarsest ? levels[0].count : upper_levels[upper_idx - 1].count;
 
-                    for (size_t g = 0; g < super_count; ++g) {
-                        const size_t group_start = g * kMaxChildrenPerNode;
-                        const size_t group_count = std::min(kMaxChildrenPerNode,
-                                                            levels[coarsest_idx].count - group_start);
-                        const size_t super_index = 1 + g;
-                        packed.child_count[super_index] = static_cast<uint16_t>(group_count);
-                        packed.child_start[super_index] = static_cast<uint32_t>(level_bases[coarsest_idx] + group_start);
+                    for (size_t j = 0; j < upper_levels[upper_idx].count; ++j) {
+                        const size_t group_start = j * kUpperLodFanout;
+                        const size_t group_count = std::min(kUpperLodFanout, child_total - group_start);
+                        const size_t idx = upper_bases[upper_idx] + j;
+                        packed.child_count[idx] = static_cast<uint16_t>(group_count);
+                        packed.child_start[idx] = static_cast<uint32_t>(child_base + group_start);
                     }
-                } else {
-                    packed.child_count[0] = static_cast<uint16_t>(levels[coarsest_idx].count);
-                    packed.child_start[0] = 1;
                 }
 
                 // Level-to-level links
-                const uint32_t index_shift = static_cast<uint32_t>(level_bases[coarsest_idx]);
+                const uint32_t index_shift = static_cast<uint32_t>(level_bases[0]);
 
                 for (size_t i = 0; i < levels.size() - 1; ++i) {
                     size_t coarse_level_idx = i;
-                    size_t fine_level_idx = i + 1;
 
                     for (size_t j = 0; j < levels[coarse_level_idx].count; ++j) {
                         const size_t idx = level_bases[coarse_level_idx] + j;
