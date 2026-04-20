@@ -61,6 +61,14 @@ function(lfs_force_python_release_abi target_name)
     endif()
 endfunction()
 
+function(lfs_suppress_python_debug_abi target_name)
+    if(MSVC)
+        target_compile_options(${target_name} PRIVATE
+            "$<$<AND:$<PLATFORM_ID:Windows>,$<CONFIG:Debug>>:/U_DEBUG>"
+        )
+    endif()
+endfunction()
+
 # Apply to both Python::Python (for embedded Python) and Python::Module (for nanobind)
 lfs_force_python_release_abi(Python::Python)
 if(TARGET Python::Module)
@@ -207,6 +215,7 @@ set_target_properties(lfs_py PROPERTIES
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
 )
+lfs_suppress_python_debug_abi(lfs_py)
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
@@ -307,10 +316,11 @@ endif()
 # Type stubs for IDE support (output to typings/ to avoid runtime conflicts)
 option(BUILD_PYTHON_STUBS "Generate Python type stubs (requires loading the module)" ON)
 
-# Skip stubgen for Debug builds on Windows: the nanobind module links to python312_d.dll (debug)
-# but vcpkg only provides a release Python interpreter (python312.dll), causing ABI mismatch.
+# Skip stubgen for Debug builds on Windows: vcpkg provides a release Python
+# interpreter, while Debug extension loading still has ABI-sensitive edges.
 # Stubs are primarily useful for IDE support and can be generated from Release builds.
-if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+get_property(LFS_GENERATOR_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(WIN32 AND NOT LFS_GENERATOR_IS_MULTI_CONFIG AND CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Skipping Python stubs for Debug build (vcpkg Python is release-only)")
     set(BUILD_PYTHON_STUBS OFF)
 endif()
@@ -319,6 +329,10 @@ if(BUILD_PYTHON_STUBS)
     set(GENERATED_STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
     set(COMMITTED_STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
     set(PYTHON_STUB_WORKFLOW_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/manage_stubs.py")
+    set(GENERATED_STUBS_MARKER "${GENERATED_STUBS_DIR}/lichtfeld/py.typed")
+    if(WIN32 AND LFS_GENERATOR_IS_MULTI_CONFIG)
+        set(GENERATED_STUBS_MARKER "${GENERATED_STUBS_DIR}/$<CONFIG>/lichtfeld/py.typed")
+    endif()
 
     if(WIN32)
         # On Windows, we need to set PATH for DLL loading before running stubgen
@@ -338,7 +352,13 @@ if(BUILD_PYTHON_STUBS)
             # Use file(GENERATE) to evaluate generator expressions at generation time
             set(STUBGEN_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/run_stubgen_$<CONFIG>.py")
             file(GENERATE OUTPUT "${STUBGEN_WRAPPER}" CONTENT "
-import os, sys
+import os, pathlib, sys
+
+stub_marker = pathlib.Path(r'${GENERATED_STUBS_MARKER}')
+if '$<CONFIG>' == 'Debug':
+    stub_marker.parent.mkdir(parents=True, exist_ok=True)
+    stub_marker.touch()
+    sys.exit(0)
 
 # Add DLL directories (Python 3.8+ requirement on Windows)
 dll_dirs = [
@@ -375,16 +395,19 @@ for pyi in glob.glob(r'${GENERATED_STUBS_DIR}/**/*.pyi', recursive=True):
         if count == 0:
             break
     p.write_bytes(content.encode('utf-8'))
+
+stub_marker.parent.mkdir(parents=True, exist_ok=True)
+stub_marker.touch()
 ")
 
             add_custom_command(
-                OUTPUT ${GENERATED_STUBS_DIR}/lichtfeld/py.typed
+                OUTPUT "${GENERATED_STUBS_MARKER}"
                 COMMAND "${Python_EXECUTABLE}" "${STUBGEN_WRAPPER}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
                 DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}"
                 COMMENT "Generating Python stubs for lichtfeld (Windows)"
             )
-            add_custom_target(lichtfeld_stub ALL DEPENDS ${GENERATED_STUBS_DIR}/lichtfeld/py.typed)
+            add_custom_target(lichtfeld_stub ALL DEPENDS "${GENERATED_STUBS_MARKER}")
         endif()
     else()
         nanobind_add_stub(lichtfeld_stub
@@ -409,19 +432,50 @@ for pyi in glob.glob(r'${GENERATED_STUBS_DIR}/**/*.pyi', recursive=True):
         VERBATIM
     )
 
+    set(PYTHON_STUB_CHECK_STAMP "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp")
+    set(PYTHON_STUB_CHECK_COMMAND
+        "${Python_EXECUTABLE}" "${PYTHON_STUB_WORKFLOW_SCRIPT}"
+        check
+        --generated "${GENERATED_STUBS_DIR}"
+        --committed "${COMMITTED_STUBS_DIR}"
+    )
+    if(WIN32 AND LFS_GENERATOR_IS_MULTI_CONFIG)
+        set(PYTHON_STUB_CHECK_STAMP "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check_$<CONFIG>.stamp")
+        set(PYTHON_STUB_CHECK_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/check_python_stubs_$<CONFIG>.py")
+        file(GENERATE OUTPUT "${PYTHON_STUB_CHECK_WRAPPER}" CONTENT "
+import pathlib, subprocess, sys
+
+stamp = pathlib.Path(r'${PYTHON_STUB_CHECK_STAMP}')
+if '$<CONFIG>' == 'Debug':
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.touch()
+    sys.exit(0)
+
+result = subprocess.run([
+    r'${Python_EXECUTABLE}',
+    r'${PYTHON_STUB_WORKFLOW_SCRIPT}',
+    'check',
+    '--generated', r'${GENERATED_STUBS_DIR}',
+    '--committed', r'${COMMITTED_STUBS_DIR}',
+])
+if result.returncode != 0:
+    sys.exit(result.returncode)
+stamp.parent.mkdir(parents=True, exist_ok=True)
+stamp.touch()
+")
+        set(PYTHON_STUB_CHECK_COMMAND "${Python_EXECUTABLE}" "${PYTHON_STUB_CHECK_WRAPPER}")
+    endif()
+
     add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
-        COMMAND "${Python_EXECUTABLE}" "${PYTHON_STUB_WORKFLOW_SCRIPT}"
-            check
-            --generated "${GENERATED_STUBS_DIR}"
-            --committed "${COMMITTED_STUBS_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
+        OUTPUT "${PYTHON_STUB_CHECK_STAMP}"
+        COMMAND ${PYTHON_STUB_CHECK_COMMAND}
+        COMMAND ${CMAKE_COMMAND} -E touch "${PYTHON_STUB_CHECK_STAMP}"
         DEPENDS lichtfeld_stub "${PYTHON_STUB_WORKFLOW_SCRIPT}" ${COMMITTED_STUB_FILES}
         COMMENT "Checking committed Python stubs against generated stubs"
         VERBATIM
     )
     add_custom_target(check_python_stubs ALL
-        DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
+        DEPENDS "${PYTHON_STUB_CHECK_STAMP}"
     )
 endif()
 

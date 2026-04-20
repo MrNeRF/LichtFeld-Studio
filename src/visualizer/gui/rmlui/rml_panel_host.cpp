@@ -204,9 +204,8 @@ namespace lfs::vis::gui {
     RmlPanelHost::~RmlPanelHost() {
         std::erase_if(queued_foreground_composites_,
                       [this](const CompositeCommand& cmd) { return cmd.fbo == &fbo_; });
-        // Don't call destroyContext here - at destruction time, RmlUIManager or
-        // RmlUI itself may already be shut down. The RmlUIManager::shutdown()
-        // method handles cleanup of all contexts.
+        if (manager_ && manager_->isInitialized())
+            manager_->destroyContext(context_name_);
         rml_context_ = nullptr;
         document_ = nullptr;
     }
