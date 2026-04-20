@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "イーズアウト",
     "keyframe_easing.ease_in_out": "イーズインアウト",
     "keyframe_label": "キーフレーム {index}  ({time:.2f}s)",
-    "search": "検索"
+    "search": "検索",
+    "show_in_file_manager": "ファイルマネージャーで表示",
+    "go_to_image": "画像を表示",
+    "open_in_gt_compare": "GT 比較で開く"
   },
   "export": {
     "title": "エクスポート",
@@ -988,7 +991,9 @@
     "zoom": "ズーム",
     "fit": "フィット",
     "storage_section": "ストレージ",
-    "color_picker": "スポイト"
+    "color_picker": "スポイト",
+    "rotate_left": "90° 左に回転",
+    "rotate_right": "90° 右に回転"
   },
   "startup": {
     "supported_by": "サポート",

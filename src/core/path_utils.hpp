@@ -17,7 +17,10 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// clang-format off
 #include <windows.h>
+#include <shellapi.h>
+// clang-format on
 #endif
 
 namespace lfs::core {
@@ -402,6 +405,43 @@ namespace lfs::core {
         const std::filesystem::path& path,
         std::ifstream& stream) {
         return open_file_for_read(path, std::ios::in, stream);
+    }
+
+    /**
+     * @brief Reveal a file or directory in the OS file manager.
+     *
+     * Highlights the entry where the platform supports it, otherwise opens
+     * the parent directory. Returns false when the path does not exist or
+     * the platform helper could not be launched.
+     */
+    inline bool reveal_in_file_manager(const std::filesystem::path& path) {
+        std::error_code ec;
+        const std::filesystem::path absolute = std::filesystem::weakly_canonical(path, ec);
+        if (ec || absolute.empty() || !std::filesystem::exists(absolute, ec))
+            return false;
+
+#ifdef _WIN32
+        const std::wstring args = L"/select,\"" + absolute.wstring() + L"\"";
+        const auto result = ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                                          args.c_str(), nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<INT_PTR>(result) > 32;
+#else
+        const std::string utf8_path = path_to_utf8(absolute);
+        const std::string dbus_cmd =
+            "gdbus call --session --dest org.freedesktop.FileManager1 "
+            "--object-path /org/freedesktop/FileManager1 "
+            "--method org.freedesktop.FileManager1.ShowItems "
+            "'[\"file://" +
+            utf8_path + "\"]' '' >/dev/null 2>&1";
+        if (std::system(dbus_cmd.c_str()) == 0)
+            return true;
+
+        const std::filesystem::path parent = absolute.parent_path();
+        if (parent.empty())
+            return false;
+        const std::string fallback = "xdg-open \"" + path_to_utf8(parent) + "\" >/dev/null 2>&1 &";
+        return std::system(fallback.c_str()) == 0;
+#endif
     }
 
 } // namespace lfs::core

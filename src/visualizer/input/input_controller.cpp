@@ -2088,24 +2088,16 @@ namespace lfs::vis {
             return false;
         }
 
-        const auto* const trainer = services().trainerOrNull();
-        if (!trainer || trainer->getState() != TrainingState::Ready) {
-            return false;
-        }
-
         const auto* const scene_manager = tool_context_->getSceneManager();
         if (!scene_manager) {
             return false;
         }
 
         const auto& scene = scene_manager->getScene();
-        for (const auto& selected_name : scene_manager->getSelectedNodeNames()) {
-            const auto* const node = scene.getNode(selected_name);
-            if (node && node->type == core::NodeType::CAMERA && node->camera_uid == hovered_camera_uid) {
+        for (const auto* const node : scene.getNodes()) {
+            if (node && node->type == core::NodeType::CAMERA && node->camera_uid == hovered_camera_uid)
                 return true;
-            }
         }
-
         return false;
     }
 
@@ -2142,33 +2134,34 @@ namespace lfs::vis {
             return;
         }
 
-        const auto selected_names = scene_manager->getSelectedNodeNames();
-        if (selected_names.empty()) {
+        auto& scene = scene_manager->getScene();
+        const core::SceneNode* hovered_node = nullptr;
+        for (const auto* const node : scene.getNodes()) {
+            if (node && node->type == core::NodeType::CAMERA && node->camera_uid == hovered_camera_uid) {
+                hovered_node = node;
+                break;
+            }
+        }
+        if (!hovered_node) {
             return;
         }
 
-        auto& scene = scene_manager->getScene();
-        const core::SceneNode* hovered_node = nullptr;
+        const auto selected_names = scene_manager->getSelectedNodeNames();
+        bool hovered_in_selection = false;
         bool all_selected_cameras = selected_names.size() > 1;
-
         for (const auto& selected_name : selected_names) {
             const auto* const node = scene.getNode(selected_name);
             if (!node || node->type != core::NodeType::CAMERA) {
                 all_selected_cameras = false;
                 continue;
             }
-
-            if (node->camera_uid == hovered_camera_uid) {
-                hovered_node = node;
-            }
+            if (node->camera_uid == hovered_camera_uid)
+                hovered_in_selection = true;
         }
-
-        if (!hovered_node) {
-            return;
-        }
+        const bool use_multi_menu = all_selected_cameras && hovered_in_selection;
 
         std::vector<gui::ContextMenuItem> items;
-        if (all_selected_cameras) {
+        if (use_multi_menu) {
             items.push_back({
                 .label = LOC(string_keys::Scene::ENABLE_ALL_TRAINING),
                 .action = "enable_all_train",
@@ -2195,6 +2188,21 @@ namespace lfs::vis {
             .action = "go_to_camera",
         });
         items.push_back({
+            .label = LOC(string_keys::Scene::GO_TO_IMAGE),
+            .action = "go_to_image",
+        });
+        items.push_back({
+            .label = LOC(string_keys::Scene::OPEN_IN_GT_COMPARE),
+            .action = "open_in_gt_compare",
+        });
+        const std::string image_path = hovered_node->image_path;
+        if (!image_path.empty()) {
+            items.push_back({
+                .label = LOC(string_keys::Scene::SHOW_IN_FILE_MANAGER),
+                .action = "show_in_file_manager",
+            });
+        }
+        items.push_back({
             .label = hovered_node->training_enabled
                          ? LOC(string_keys::Scene::DISABLE_FOR_TRAINING)
                          : LOC(string_keys::Scene::ENABLE_FOR_TRAINING),
@@ -2205,9 +2213,27 @@ namespace lfs::vis {
         const std::string camera_name = hovered_node->name;
         gui->globalContextMenu().request(
             std::move(items), screen_x, screen_y,
-            [this, camera_name, hovered_camera_uid](std::string_view action) {
+            [this, camera_name, hovered_camera_uid, image_path](std::string_view action) {
                 if (action == "go_to_camera") {
                     cmd::GoToCamView{.cam_id = hovered_camera_uid}.emit();
+                    return;
+                }
+                if (action == "go_to_image") {
+                    cmd::OpenCameraPreview{.cam_id = hovered_camera_uid}.emit();
+                    return;
+                }
+                if (action == "open_in_gt_compare") {
+                    cmd::GoToCamView{.cam_id = hovered_camera_uid}.emit();
+                    auto* const rm = services().renderingOrNull();
+                    if (!rm || !rm->isGTComparisonActive())
+                        cmd::ToggleGTComparison{}.emit();
+                    return;
+                }
+                if (action == "show_in_file_manager") {
+                    if (!image_path.empty() &&
+                        !lfs::core::reveal_in_file_manager(lfs::core::utf8_to_path(image_path))) {
+                        LOG_WARN("Failed to reveal image in file manager: {}", image_path);
+                    }
                     return;
                 }
 

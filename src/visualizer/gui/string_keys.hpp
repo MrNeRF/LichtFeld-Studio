@@ -296,6 +296,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RENAME = "scene.rename";
         inline constexpr const char* DUPLICATE_ITEM = "scene.duplicate";
         inline constexpr const char* GO_TO_CAMERA_VIEW = "scene.go_to_camera_view";
+        inline constexpr const char* GO_TO_IMAGE = "scene.go_to_image";
+        inline constexpr const char* OPEN_IN_GT_COMPARE = "scene.open_in_gt_compare";
+        inline constexpr const char* SHOW_IN_FILE_MANAGER = "scene.show_in_file_manager";
         inline constexpr const char* GO_TO_CAM_VIEW = "scene.go_to_cam_view";
         inline constexpr const char* FIT_TO_SCENE = "scene.fit_to_scene";
         inline constexpr const char* FIT_TO_SCENE_TRIMMED = "scene.fit_to_scene_trimmed";

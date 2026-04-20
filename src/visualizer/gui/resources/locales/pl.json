@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "Lagodne wyjscie",
     "keyframe_easing.ease_in_out": "Lagodne wejscie/wyjscie",
     "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)",
-    "search": "Szukaj"
+    "search": "Szukaj",
+    "show_in_file_manager": "Pokaż w menedżerze plików",
+    "go_to_image": "Przejdź do obrazu",
+    "open_in_gt_compare": "Otwórz w porównaniu GT"
   },
   "export": {
     "title": "Eksportuj",
@@ -988,7 +991,9 @@
     "zoom": "Zoom",
     "fit": "Dopasuj",
     "storage_section": "MAGAZYN",
-    "color_picker": "Pobierz"
+    "color_picker": "Pobierz",
+    "rotate_left": "Obróć 90° w lewo",
+    "rotate_right": "Obróć 90° w prawo"
   },
   "startup": {
     "supported_by": "Wspierane przez",

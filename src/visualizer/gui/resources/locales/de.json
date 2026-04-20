@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "Langsam aus",
     "keyframe_easing.ease_in_out": "Langsam ein/aus",
     "keyframe_label": "Schluesselbild {index}  ({time:.2f}s)",
-    "search": "Suchen"
+    "search": "Suchen",
+    "show_in_file_manager": "Im Dateimanager anzeigen",
+    "go_to_image": "Zum Bild gehen",
+    "open_in_gt_compare": "In GT-Vergleich öffnen"
   },
   "export": {
     "title": "Exportieren",
@@ -988,7 +991,9 @@
     "zoom": "Zoom",
     "fit": "Anpassen",
     "storage_section": "SPEICHER",
-    "color_picker": "Pipette"
+    "color_picker": "Pipette",
+    "rotate_left": "90° nach links drehen",
+    "rotate_right": "90° nach rechts drehen"
   },
   "startup": {
     "supported_by": "Unterstützt von",

@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "Uscita morbida",
     "keyframe_easing.ease_in_out": "Ingresso/Uscita morbidi",
     "keyframe_label": "Fotogramma chiave {index}  ({time:.2f}s)",
-    "search": "Cerca"
+    "search": "Cerca",
+    "show_in_file_manager": "Mostra nel file manager",
+    "go_to_image": "Vai all'immagine",
+    "open_in_gt_compare": "Apri nel confronto GT"
   },
   "export": {
     "title": "Esporta",
@@ -988,7 +991,9 @@
     "zoom": "Zoom",
     "fit": "Adatta",
     "storage_section": "ARCHIVIAZIONE",
-    "color_picker": "Preleva"
+    "color_picker": "Preleva",
+    "rotate_left": "Ruota 90° a sinistra",
+    "rotate_right": "Ruota 90° a destra"
   },
   "startup": {
     "supported_by": "Supportato da",

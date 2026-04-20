@@ -108,6 +108,10 @@ class ImagePreviewPanel(Panel):
             ("btn-copy-path", lambda _ev: self._copy_path_to_clipboard()),
             ("btn-rotate-left", lambda _ev: self._rotate(-1)),
             ("btn-rotate-right", lambda _ev: self._rotate(1)),
+            ("btn-go-to-camera", lambda _ev: self._action_go_to_camera_view()),
+            ("btn-gt-compare", lambda _ev: self._action_open_in_gt_compare()),
+            ("btn-toggle-training", lambda _ev: self._action_toggle_training()),
+            ("btn-show-in-folder", lambda _ev: self._action_show_in_file_manager()),
         ]:
             el = doc.get_element_by_id(eid)
             if el:
@@ -233,6 +237,46 @@ class ImagePreviewPanel(Panel):
     def _copy_path_to_clipboard(self):
         if self._image_paths:
             lf.ui.set_clipboard_text(str(self._image_paths[self._current_index]))
+
+    def _current_camera_uid(self) -> int:
+        if 0 <= self._current_index < len(self._camera_uids):
+            return self._camera_uids[self._current_index]
+        return -1
+
+    def _current_camera_node(self):
+        uid = self._current_camera_uid()
+        if uid < 0:
+            return None
+        scene = lf.get_scene()
+        for node in scene.get_nodes():
+            if node.type == lf.scene.NodeType.CAMERA and node.camera_uid == uid:
+                return node
+        return None
+
+    def _action_go_to_camera_view(self):
+        uid = self._current_camera_uid()
+        if uid >= 0:
+            lf.ui.go_to_camera_view(uid)
+
+    def _action_open_in_gt_compare(self):
+        uid = self._current_camera_uid()
+        if uid < 0:
+            return
+        lf.ui.go_to_camera_view(uid)
+        if not lf.ui.is_gt_comparison_active():
+            lf.ui.toggle_gt_comparison()
+
+    def _action_toggle_training(self):
+        node = self._current_camera_node()
+        if node is None:
+            return
+        lf.set_camera_training_enabled(node.name, not node.training_enabled)
+        self._dirty = True
+
+    def _action_show_in_file_manager(self):
+        if not self._image_paths:
+            return
+        lf.ui.reveal_in_file_manager(str(self._image_paths[self._current_index]))
 
     def _rotate(self, delta_quadrants: int):
         if not self._image_paths:
@@ -712,10 +756,37 @@ class ImagePreviewPanel(Panel):
             copy_btn.set_attribute("title", tr("image_preview.copy_full_path"))
         rotate_left_btn = doc.get_element_by_id("btn-rotate-left")
         if rotate_left_btn:
-            rotate_left_btn.set_attribute("title", "Rotate 90° Left")
+            rotate_left_btn.set_attribute("title", tr("image_preview.rotate_left"))
         rotate_right_btn = doc.get_element_by_id("btn-rotate-right")
         if rotate_right_btn:
-            rotate_right_btn.set_attribute("title", "Rotate 90° Right")
+            rotate_right_btn.set_attribute("title", tr("image_preview.rotate_right"))
+
+        node = self._current_camera_node()
+        for eid, key in (
+            ("btn-go-to-camera", "scene.go_to_camera_view"),
+            ("btn-gt-compare", "scene.open_in_gt_compare"),
+            ("btn-show-in-folder", "scene.show_in_file_manager"),
+        ):
+            el = doc.get_element_by_id(eid)
+            if el:
+                el.set_attribute("title", tr(key))
+
+        train_btn = doc.get_element_by_id("btn-toggle-training")
+        if train_btn:
+            train_key = (
+                "scene.disable_for_training"
+                if node and node.training_enabled
+                else "scene.enable_for_training"
+            )
+            train_btn.set_attribute("title", tr(train_key))
+        train_icon = doc.get_element_by_id("btn-toggle-training-icon")
+        if train_icon:
+            icon_src = (
+                "../icon/scene/visible.png"
+                if node and node.training_enabled
+                else "../icon/scene/hidden.png"
+            )
+            train_icon.set_attribute("src", icon_src)
 
     def _update_sidebar(self, doc, has_images: bool):
         sidebar = doc.get_element_by_id("sidebar")

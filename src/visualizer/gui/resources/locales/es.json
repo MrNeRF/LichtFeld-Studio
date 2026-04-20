@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "Desaceleracion suave",
     "keyframe_easing.ease_in_out": "Aceleracion/desaceleracion suave",
     "keyframe_label": "Fotograma clave {index}  ({time:.2f}s)",
-    "search": "Buscar"
+    "search": "Buscar",
+    "show_in_file_manager": "Mostrar en el explorador de archivos",
+    "go_to_image": "Ir a la imagen",
+    "open_in_gt_compare": "Abrir en comparación GT"
   },
   "export": {
     "title": "Exportar",
@@ -988,7 +991,9 @@
     "zoom": "Zoom",
     "fit": "Ajustar",
     "storage_section": "ALMACENAMIENTO",
-    "color_picker": "cuentagotas"
+    "color_picker": "cuentagotas",
+    "rotate_left": "Girar 90° a la izquierda",
+    "rotate_right": "Girar 90° a la derecha"
   },
   "startup": {
     "supported_by": "Apoyado por",

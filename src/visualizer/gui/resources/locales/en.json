@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "Ease Out",
     "keyframe_easing.ease_in_out": "Ease In-Out",
     "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
-    "search": "Search"
+    "search": "Search",
+    "show_in_file_manager": "Show in File Manager",
+    "go_to_image": "Go to Image",
+    "open_in_gt_compare": "Open in GT Compare"
   },
   "export": {
     "title": "Export",
@@ -1000,7 +1003,9 @@
     "hidden": "Hidden",
     "mask_section": "MASK",
     "storage_section": "STORAGE",
-    "color_picker": "Pick"
+    "color_picker": "Pick",
+    "rotate_left": "Rotate 90° Left",
+    "rotate_right": "Rotate 90° Right"
   },
   "startup": {
     "supported_by": "Supported by",

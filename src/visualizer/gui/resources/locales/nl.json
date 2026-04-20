@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "Langzaam uit",
     "keyframe_easing.ease_in_out": "Langzaam in/uit",
     "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
-    "search": "Zoeken"
+    "search": "Zoeken",
+    "show_in_file_manager": "Tonen in bestandsbeheer",
+    "go_to_image": "Ga naar afbeelding",
+    "open_in_gt_compare": "Openen in GT-vergelijking"
   },
   "export": {
     "title": "Exporteren",
@@ -988,7 +991,9 @@
     "zoom": "Zoom",
     "fit": "Passend",
     "storage_section": "OPSLAG",
-    "color_picker": "Pipet"
+    "color_picker": "Pipet",
+    "rotate_left": "90° linksom draaien",
+    "rotate_right": "90° rechtsom draaien"
   },
   "startup": {
     "supported_by": "Ondersteund door",

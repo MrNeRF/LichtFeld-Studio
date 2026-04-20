@@ -383,7 +383,10 @@
     "keyframe_easing.ease_out": "점진적 종료",
     "keyframe_easing.ease_in_out": "점진적 시작/종료",
     "keyframe_label": "키프레임 {index}  ({time:.2f}s)",
-    "search": "검색"
+    "search": "검색",
+    "show_in_file_manager": "파일 관리자에서 표시",
+    "go_to_image": "이미지로 이동",
+    "open_in_gt_compare": "GT 비교에서 열기"
   },
   "export": {
     "title": "내보내기",
@@ -988,7 +991,9 @@
     "zoom": "줌",
     "fit": "맞춤",
     "storage_section": "저장소",
-    "color_picker": "스포이트"
+    "color_picker": "스포이트",
+    "rotate_left": "90° 왼쪽으로 회전",
+    "rotate_right": "90° 오른쪽으로 회전"
   },
   "startup": {
     "supported_by": "지원:",

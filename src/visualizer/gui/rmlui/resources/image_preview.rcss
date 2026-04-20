@@ -350,6 +350,17 @@
                 color 0.12s quadratic-out, opacity 0.12s quadratic-out;
 }
 
+.view-btn--icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.view-btn--icon img {
+    width: 14dp;
+    height: 14dp;
+}
+
 .view-btn:hover {
     background-color: rgba(255, 255, 255, 26);
     border-color: rgba(137, 180, 250, 110);
