@@ -85,10 +85,10 @@ namespace lfs::vis::gui::rml_input {
         using RestoreCallback = std::function<void(Rml::Element&)>;
 
         ~TextInputEscapeRevertController() override {
-            // Don't call clear() here - at destruction time, RmlUI may already
-            // be shut down, causing crashes when trying to remove event listeners.
-            // RmlUI will clean up the listeners when elements are destroyed anyway.
-            bindings_.clear();
+            if (Rml::GetSystemInterface())
+                clear();
+            else
+                bindings_.clear();
         }
 
         void bind(Rml::Element* element, RestoreCallback restore_callback = {}) {

@@ -37,8 +37,9 @@ namespace lfs::vis::gui {
 
     RmlModalOverlay::~RmlModalOverlay() {
         fbo_.destroy();
-        text_input_revert_.clear();
-        if (rml_context_ && rml_manager_)
+        if (Rml::GetSystemInterface())
+            text_input_revert_.clear();
+        if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("modal_overlay");
     }
 
