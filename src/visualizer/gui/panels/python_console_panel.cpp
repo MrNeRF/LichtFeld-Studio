@@ -19,7 +19,7 @@
 #include <thread>
 #include <imgui.h>
 
-#include <Python.h>
+#include "python/python_compat.hpp"
 #include <filesystem>
 #include <mutex>
 

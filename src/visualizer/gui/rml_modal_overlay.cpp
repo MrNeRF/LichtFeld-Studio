@@ -362,6 +362,11 @@ namespace lfs::vis::gui {
                 rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
         }
 
+        // Re-check active_ since RmlUI event processing above may have triggered
+        // dismiss() or cancel() callbacks that reset it
+        if (!active_)
+            return;
+
         if (!composing && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
             (hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
              hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER))) {

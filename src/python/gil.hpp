@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <Python.h>
+#include "python_compat.hpp"
 
 #include "python_runtime.hpp"
 

@@ -10,46 +10,64 @@ find_package(nanobind CONFIG REQUIRED)
 
 # vcpkg extension modules use release ABI; debug libpython has Py_DEBUG which
 # changes _PyRuntimeState layout, causing ABI mismatch crashes.
-get_target_property(_py_debug_lib Python::Python IMPORTED_LOCATION_DEBUG)
-if(_py_debug_lib AND _py_debug_lib MATCHES "python3\\.([0-9]+)d\\.a$")
-    # Linux: libpython3.XXd.a -> libpython3.XX.a
-    string(REGEX REPLACE "debug/lib/libpython3\\.([0-9]+)d\\.a$"
-                         "lib/libpython3.\\1.a" _py_release_lib "${_py_debug_lib}")
-    if(EXISTS "${_py_release_lib}")
-        set_target_properties(Python::Python PROPERTIES
-            IMPORTED_LOCATION_DEBUG "${_py_release_lib}")
-        message(STATUS "Python: forced release ABI for debug build (Linux)")
+# Force release Python library for debug builds on both Python::Python and Python::Module
+# (nanobind uses Python::Module for extension modules)
+function(lfs_force_python_release_abi target_name)
+    # On Windows, check the import library (.lib); on Linux, check the library location
+    if(WIN32)
+        get_target_property(_py_debug_lib ${target_name} IMPORTED_IMPLIB_DEBUG)
+    else()
+        get_target_property(_py_debug_lib ${target_name} IMPORTED_LOCATION_DEBUG)
     endif()
-elseif(_py_debug_lib AND _py_debug_lib MATCHES "python3([0-9]+)_?d\\.lib$")
-    # Windows: python312_d.lib or python312d.lib -> python312.lib
-    string(REGEX REPLACE "python3([0-9]+)_?d\\.lib$"
-                         "python3\\1.lib" _py_release_lib "${_py_debug_lib}")
-    # Also check debug/ -> lib/ path variant
-    string(REPLACE "/debug/lib/" "/lib/" _py_release_lib_alt "${_py_release_lib}")
-    if(EXISTS "${_py_release_lib}")
-        set(_py_win_release "${_py_release_lib}")
-    elseif(EXISTS "${_py_release_lib_alt}")
-        set(_py_win_release "${_py_release_lib_alt}")
+    if(NOT _py_debug_lib)
+        return()
     endif()
-    if(_py_win_release)
-        set_target_properties(Python::Python PROPERTIES
-            IMPORTED_LOCATION_DEBUG "${_py_win_release}")
-        # Override import library for Windows linker
-        get_target_property(_py_debug_implib Python::Python IMPORTED_IMPLIB_DEBUG)
-        if(_py_debug_implib)
-            string(REGEX REPLACE "python3([0-9]+)_?d\\.lib$"
-                                 "python3\\1.lib" _py_release_implib "${_py_debug_implib}")
-            string(REPLACE "/debug/lib/" "/lib/" _py_release_implib_alt "${_py_release_implib}")
-            if(EXISTS "${_py_release_implib}")
-                set_target_properties(Python::Python PROPERTIES
-                    IMPORTED_IMPLIB_DEBUG "${_py_release_implib}")
-            elseif(EXISTS "${_py_release_implib_alt}")
-                set_target_properties(Python::Python PROPERTIES
-                    IMPORTED_IMPLIB_DEBUG "${_py_release_implib_alt}")
-            endif()
+
+    if(_py_debug_lib MATCHES "python3\\.([0-9]+)d\\.a$")
+        # Linux: libpython3.XXd.a -> libpython3.XX.a
+        string(REGEX REPLACE "debug/lib/libpython3\\.([0-9]+)d\\.a$"
+                             "lib/libpython3.\\1.a" _py_release_lib "${_py_debug_lib}")
+        if(EXISTS "${_py_release_lib}")
+            set_target_properties(${target_name} PROPERTIES
+                IMPORTED_LOCATION_DEBUG "${_py_release_lib}")
+            message(STATUS "Python: forced release ABI for ${target_name} (Linux)")
         endif()
-        message(STATUS "Python: forced release ABI for debug build (Windows)")
+    elseif(_py_debug_lib MATCHES "python3([0-9]+)_?d\\.lib$")
+        # Windows: python312_d.lib -> python312.lib (import library)
+        # We already have _py_debug_lib as the import library path
+        string(REGEX REPLACE "python3([0-9]+)_?d\\.lib$"
+                             "python3\\1.lib" _py_release_implib "${_py_debug_lib}")
+        string(REPLACE "/debug/lib/" "/lib/" _py_release_implib "${_py_release_implib}")
+        
+        if(EXISTS "${_py_release_implib}")
+            # Set the release import library for Debug config
+            set_target_properties(${target_name} PROPERTIES
+                IMPORTED_IMPLIB_DEBUG "${_py_release_implib}")
+            
+            # Also update the DLL location to use release python312.dll
+            get_target_property(_py_debug_dll ${target_name} IMPORTED_LOCATION_DEBUG)
+            if(_py_debug_dll)
+                string(REGEX REPLACE "python3([0-9]+)_?d\\.dll$"
+                                     "python3\\1.dll" _py_release_dll "${_py_debug_dll}")
+                string(REPLACE "/debug/bin/" "/bin/" _py_release_dll "${_py_release_dll}")
+                if(EXISTS "${_py_release_dll}")
+                    set_target_properties(${target_name} PROPERTIES
+                        IMPORTED_LOCATION_DEBUG "${_py_release_dll}")
+                endif()
+            endif()
+            
+            message(STATUS "Python: forced release ABI for ${target_name} (Windows) - using ${_py_release_implib}")
+        endif()
     endif()
+endfunction()
+
+# Apply to both Python::Python (for embedded Python) and Python::Module (for nanobind)
+lfs_force_python_release_abi(Python::Python)
+if(TARGET Python::Module)
+    lfs_force_python_release_abi(Python::Module)
+endif()
+if(TARGET Python::SABIModule)
+    lfs_force_python_release_abi(Python::SABIModule)
 endif()
 
 # Shared library for Python runtime state - must be shared to avoid duplicate statics
@@ -288,6 +306,15 @@ endif()
 
 # Type stubs for IDE support (output to typings/ to avoid runtime conflicts)
 option(BUILD_PYTHON_STUBS "Generate Python type stubs (requires loading the module)" ON)
+
+# Skip stubgen for Debug builds on Windows: the nanobind module links to python312_d.dll (debug)
+# but vcpkg only provides a release Python interpreter (python312.dll), causing ABI mismatch.
+# Stubs are primarily useful for IDE support and can be generated from Release builds.
+if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "Skipping Python stubs for Debug build (vcpkg Python is release-only)")
+    set(BUILD_PYTHON_STUBS OFF)
+endif()
+
 if(BUILD_PYTHON_STUBS)
     set(GENERATED_STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
     set(COMMITTED_STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")

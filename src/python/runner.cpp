@@ -21,7 +21,7 @@
 #include "gil.hpp"
 #include "python_runtime.hpp"
 #include "training/control/control_boundary.hpp"
-#include <Python.h>
+#include "python_compat.hpp"
 #include <atomic>
 #include <mutex>
 #ifndef _WIN32
@@ -47,7 +47,19 @@ namespace lfs::python {
     static std::mutex g_python_bridge_failure_mutex;
     static std::string g_python_bridge_failure_detail;
     static std::atomic<bool> g_plugin_preload_scheduled{false};
-    static std::thread g_plugin_preload_thread;
+    
+    // RAII wrapper for the plugin preload thread that ensures proper cleanup
+    // at static destruction time to avoid crashes from std::thread::~thread()
+    // calling std::terminate() on a joinable thread.
+    struct PluginPreloadThread {
+        std::thread thread;
+        ~PluginPreloadThread() {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    };
+    static PluginPreloadThread g_plugin_preload_thread;
 
     // Python C extension for capturing output
     static PyObject* capture_write(PyObject* self, PyObject* args) {
@@ -606,7 +618,7 @@ _add_dll_dirs()
             return;
         }
 
-        g_plugin_preload_thread = std::thread([]() {
+        g_plugin_preload_thread.thread = std::thread([]() {
             ensure_plugins_loaded();
         });
     }
@@ -642,8 +654,8 @@ _add_dll_dirs()
     }
 
     void join_plugin_preload() {
-        if (g_plugin_preload_thread.joinable()) {
-            g_plugin_preload_thread.join();
+        if (g_plugin_preload_thread.thread.joinable()) {
+            g_plugin_preload_thread.thread.join();
         }
     }
 

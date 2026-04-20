@@ -14,7 +14,7 @@
 #include <mutex>
 #include <unordered_set>
 
-#include <Python.h>
+#include "python_compat.hpp"
 
 namespace lfs::python {
 

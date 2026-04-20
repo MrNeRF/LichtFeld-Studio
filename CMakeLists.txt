@@ -524,6 +524,37 @@ if(WIN32 AND CUDAToolkit_FOUND)
     message(STATUS "Post-build: CUDA DLLs will be copied from ${CUDAToolkit_BIN_DIR}")
 endif()
 
+# =============================================================================
+# VCPKG DLL COPYING - Ensure all vcpkg DLLs are available at runtime
+# =============================================================================
+# vcpkg's VCPKG_APPLOCAL_DEPS feature may not copy all needed DLLs.
+# This explicitly copies vcpkg DLLs to ensure they're available at runtime.
+# We copy from both release and debug directories since:
+# 1. Some dependencies (like zlib) are linked against release libraries even in Debug builds
+# 2. Debug DLLs have different names (e.g., zlibd1.dll vs zlib1.dll) so no conflicts
+if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(_vcpkg_debug_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
+    set(_vcpkg_release_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
+    
+    # Copy release DLLs first
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${_vcpkg_release_bin_dir}"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMENT "Copying vcpkg release DLLs"
+    )
+    
+    # Copy debug DLLs second (they have different names, so this adds to rather than replaces)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${_vcpkg_debug_bin_dir}"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+        COMMENT "Copying vcpkg debug DLLs"
+    )
+    
+    message(STATUS "Post-build: vcpkg DLLs will be copied from both release and debug directories")
+endif()
+
 # Before extension post-build copying: remove stale 'extensions' file if present (prevent mkdir failure)
 set(_target_extensions_dir "${CMAKE_BINARY_DIR}/extensions")
 if(EXISTS "${_target_extensions_dir}" AND NOT IS_DIRECTORY "${_target_extensions_dir}")

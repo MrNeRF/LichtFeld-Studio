@@ -36,8 +36,10 @@ namespace lfs::vis::gui {
             DxgiMemoryState() = default;
 
             ~DxgiMemoryState() {
-                if (adapter3)
-                    adapter3->Release();
+                // Intentionally not releasing adapter3 here.
+                // At static destruction time, DXGI/DirectX runtime may already be
+                // unloaded, causing a crash. The OS will clean up the COM reference
+                // when the process exits anyway.
             }
 
             void ensureInit() {

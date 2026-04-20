@@ -12,7 +12,7 @@
 #include <cstdlib>
 #include <print>
 
-#include <Python.h>
+#include "python_compat.hpp"
 
 namespace lfs::python {
 
