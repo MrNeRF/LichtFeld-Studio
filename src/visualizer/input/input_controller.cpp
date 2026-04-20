@@ -277,6 +277,7 @@ namespace lfs::vis {
         window_focus_lost_handler_id_ = internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
             clearSelectedCameraContextMenuGesture();
+            press_selected_camera_frustum_ = false;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
             hovered_camera_id_ = -1;
 
@@ -428,6 +429,15 @@ namespace lfs::vis {
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
         auto* gui = services().guiOrNull();
+        const bool is_left_button = button == static_cast<int>(input::AppMouseButton::LEFT);
+        const bool press_consumed_camera_frustum =
+            action == input::ACTION_RELEASE &&
+            is_left_button &&
+            press_selected_camera_frustum_;
+        if (action == input::ACTION_PRESS && is_left_button)
+            press_selected_camera_frustum_ = false;
+        if (action == input::ACTION_RELEASE && is_left_button)
+            press_selected_camera_frustum_ = false;
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
         const bool over_gui = isPointerOverBlockingUi(x, y);
         const bool over_gui_hover = isPointerOverUiHover(x, y);
@@ -453,7 +463,7 @@ namespace lfs::vis {
 
         // Check for splitter drag FIRST
         if (!over_gui &&
-            button == static_cast<int>(input::AppMouseButton::LEFT) &&
+            is_left_button &&
             action == input::ACTION_PRESS) {
             if (isInViewport(x, y) && isIndependentSplitViewActive()) {
                 focusSplitPanel(splitPanelForScreenX(x));
@@ -485,6 +495,7 @@ namespace lfs::vis {
                 last_click_pos_ = {x, y};
                 last_clicked_camera_id_ = hovered_camera_id_;
                 selectCameraByUid(hovered_camera_id_);
+                press_selected_camera_frustum_ = true;
             } else {
                 last_click_time_ = std::chrono::steady_clock::time_point();
                 last_click_pos_ = {-1000, -1000};
@@ -734,7 +745,7 @@ namespace lfs::vis {
                 const bool has_node_binding = (pick_action == input::Action::NODE_PICK ||
                                                drag_action == input::Action::NODE_RECT_SELECT);
 
-                if (!over_gui && !over_gizmo && button == static_cast<int>(input::AppMouseButton::LEFT) && tool_context_ &&
+                if (!over_gui && !over_gizmo && is_left_button && tool_context_ &&
                     !ImGuizmo::IsOver() && !ImGuizmo::IsUsing() && has_node_binding) {
                     is_node_rect_dragging_ = true;
                     node_rect_panel_ = splitPanelForScreenX(x);
@@ -795,9 +806,9 @@ namespace lfs::vis {
             }
 
             // Node picking on release
-            if (is_node_rect_dragging_ && button == static_cast<int>(input::AppMouseButton::LEFT)) {
+            if (is_node_rect_dragging_ && is_left_button) {
                 is_node_rect_dragging_ = false;
-                if (tool_context_ && !isPointerOverBlockingUi(x, y)) {
+                if (!press_consumed_camera_frustum && tool_context_ && !isPointerOverBlockingUi(x, y)) {
                     auto* scene_manager = tool_context_->getSceneManager();
                     if (scene_manager) {
                         constexpr float CLICK_THRESHOLD_PX = 5.0f;
@@ -1520,6 +1531,7 @@ namespace lfs::vis {
             !isMouseButtonPressed(static_cast<int>(input::AppMouseButton::LEFT))) {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
+            press_selected_camera_frustum_ = false;
             SDL_SetCursor(SDL_GetDefaultCursor());
         }
 
@@ -1711,6 +1723,8 @@ namespace lfs::vis {
             LOG_ERROR("Camera ID {} not found", event.cam_id);
             return;
         }
+        if (input_router_)
+            input_router_->focusViewportKeyboard();
 
         // Get rotation and translation tensors and ensure they're on CPU
         auto R_tensor = cam_data->R().cpu();
@@ -2062,6 +2076,7 @@ namespace lfs::vis {
         drag_viewport_ = nullptr;
         drag_split_panel_ = SplitViewPanelId::Left;
         clearSelectedCameraContextMenuGesture();
+        press_selected_camera_frustum_ = false;
 
         if (was_camera_drag) {
             onCameraMovementEnd();

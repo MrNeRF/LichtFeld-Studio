@@ -4,7 +4,7 @@
 
 import os
 import threading
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 import lichtfeld as lf
 from .http import urlopen
@@ -19,8 +19,20 @@ def _encode_rml_path(path):
 
 
 def _extract_video_id(url):
-    if "v=" in url:
-        return url.split("v=")[1].split("&")[0]
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+
+    if host in ("youtu.be", "www.youtu.be"):
+        return parsed.path.strip("/").split("/", 1)[0] or None
+
+    if host == "youtube.com" or host.endswith(".youtube.com"):
+        if parsed.path == "/watch":
+            return parse_qs(parsed.query).get("v", [None])[0]
+
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) >= 2 and parts[0] in ("embed", "shorts"):
+            return parts[1]
+
     return None
 
 
@@ -51,34 +63,13 @@ class GettingStartedPanel(Panel):
     size = (560, 0)
     update_interval_ms = 100
 
-    WIKI_URL = "https://github.com/MrNeRF/LichtFeld-Studio/wiki"
-
-    VIDEO_CARDS = [
-        ("card-intro", "getting_started.video_intro", "https://www.youtube.com/watch?v=b1Olu_IU1sM"),
-        ("card-latest", "getting_started.video_latest", "https://www.youtube.com/watch?v=zWIzBHRc-60"),
-        ("card-masks", "getting_started.video_masks", "https://www.youtube.com/watch?v=956qR8N3Xk4"),
-        ("card-reality-scan", "getting_started.video_reality_scan", "https://www.youtube.com/watch?v=JWmkhTlbDvg"),
-        ("card-colmap", "getting_started.video_colmap", "https://www.youtube.com/watch?v=-3TBbukYN00"),
-        ("card-lichtfeld", "getting_started.video_lichtfeld", "https://www.youtube.com/watch?v=aX8MTlr9Ypc"),
-    ]
-
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("getting_started")
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("getting_started.title"))
-        model.bind_func("title", lambda: tr("getting_started.title"))
-        model.bind_func("description", lambda: tr("getting_started.description"))
-        model.bind_func("wiki_section", lambda: tr("getting_started.wiki_section"))
-
-        for _elem_id, title_key, _url in self.VIDEO_CARDS:
-            binding_name = title_key.split(".")[-1]
-            model.bind_func(binding_name, lambda k=title_key: tr(k))
-
-        self._handle = model.get_handle()
+        model.bind_func("panel_label", lambda: lf.ui.tr("getting_started.title"))
+        model.bind_event("open_url", self._on_open_url)
 
     def on_mount(self, doc):
         super().on_mount(doc)
@@ -87,21 +78,27 @@ class GettingStartedPanel(Panel):
         self._ready_queue = []
         self._thumb_card_map = {}
 
-        for elem_id, _title_key, url in self.VIDEO_CARDS:
-            el = doc.get_element_by_id(elem_id)
-            if el:
-                el.add_event_listener("click", lambda _ev, u=url: lf.ui.open_url(u))
+        for card in doc.query_selector_all(".video-card"):
+            url = card.get_attribute("data-url", "").strip()
+            if not url:
+                continue
 
             vid = _extract_video_id(url)
-            if vid:
+            elem_id = card.get_attribute("id", "") or card.id()
+            if vid and elem_id:
                 self._thumb_card_map[vid] = elem_id
                 threading.Thread(target=_download_thumbnail,
                                  args=(vid, self._on_thumb_ready),
                                  daemon=True).start()
 
-        wiki_section = doc.get_element_by_id("wiki-section")
-        if wiki_section:
-            wiki_section.add_event_listener("click", lambda _ev: lf.ui.open_url(self.WIKI_URL))
+    def _on_open_url(self, _handle, event, _args):
+        target = event.current_target()
+        if target is None:
+            return
+
+        url = target.get_attribute("data-url", "").strip()
+        if url:
+            lf.ui.open_url(url)
 
     def _on_thumb_ready(self, video_id, path):
         with self._ready_lock:

@@ -109,6 +109,28 @@ namespace lfs::vis {
         EXPECT_EQ(toggle_split_count, 1);
     }
 
+    TEST_F(InputControllerFocusTest, ProgrammaticViewportFocusAllowsViewportHotkeys) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        lfs::event::ScopedHandler handlers;
+        int toggle_gt_count = 0;
+        handlers.subscribe<core::events::cmd::ToggleGTComparison>(
+            [&](const auto&) { ++toggle_gt_count; });
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+
+        router.focusViewportKeyboard();
+        controller.handleKey(input::KEY_G, input::ACTION_PRESS, input::KEYMOD_NONE);
+
+        EXPECT_EQ(toggle_gt_count, 1);
+    }
+
     TEST_F(InputControllerFocusTest, ViewportViewHotkeysStayBlockedDuringTextEntry) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);

@@ -23,7 +23,7 @@ namespace lfs::vis::gui::rml_documents {
 
         std::string injectParseTimeFontFallback(std::string document_rml,
                                                 const std::filesystem::path& fallback_rcss_path) {
-            const std::string fallback_href = fallback_rcss_path.generic_string();
+            const std::string fallback_href = rml_paths::filesystemPathToFileUri(fallback_rcss_path);
             if (document_rml.find(fallback_href) != std::string::npos ||
                 document_rml.find(kFallbackFontResource) != std::string::npos) {
                 return document_rml;
@@ -131,10 +131,10 @@ namespace lfs::vis::gui::rml_documents {
 
         if (auto document_source = loadDocumentSource(document_path)) {
             return context->LoadDocumentFromMemory(*document_source,
-                                                   document_path.generic_string());
+                                                   rml_paths::filesystemPathToFileUri(document_path));
         }
 
-        return context->LoadDocument(document_path.string());
+        return context->LoadDocument(rml_paths::filesystemPathToFileUri(document_path));
     }
 
 } // namespace lfs::vis::gui::rml_documents

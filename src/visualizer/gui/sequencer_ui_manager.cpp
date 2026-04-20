@@ -31,8 +31,11 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <glm/gtc/type_ptr.hpp>
 #include <string_view>
 #include <vector>
+#include <imgui.h>
+#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
@@ -77,7 +80,7 @@ namespace lfs::vis::gui {
             ui_state_.show_pip_preview = false;
 
         viewport_edit_mode_ = SequencerViewportEditMode::None;
-        finalizeViewportTransformDrag(false);
+        keyframe_gizmo_active_ = false;
         pip_last_keyframe_ = std::nullopt;
         pip_needs_update_ = true;
         last_panel_frame_time_ = std::chrono::steady_clock::now();
@@ -93,7 +96,8 @@ namespace lfs::vis::gui {
         if (auto* sm = viewer_->getSceneManager())
             sm->clearSelection();
         viewport_keyframe_edit_snapshot_ = *keyframe;
-        finalizeViewportTransformDrag(false);
+        viewport_edit_mode_ = SequencerViewportEditMode::None;
+        keyframe_gizmo_active_ = false;
         edit_entered_mouse_down_ = true;
     }
 
@@ -101,24 +105,6 @@ namespace lfs::vis::gui {
         viewport_keyframe_edit_snapshot_ = std::nullopt;
         if (overlay_)
             overlay_->hideEditOverlay();
-    }
-
-    void SequencerUIManager::finalizeViewportTransformDrag(const bool emit_change_event) {
-        const bool changed = viewport_transform_drag_changed_;
-        viewport_transform_drag_active_ = false;
-        viewport_transform_drag_changed_ = false;
-        viewport_transform_drag_world_offset_ = glm::vec3(0.0f);
-        viewport_transform_drag_view_depth_ = 1.0f;
-        viewport_transform_drag_focal_length_mm_ = 0.0f;
-
-        if (emit_change_event && changed) {
-            lfs::core::events::state::KeyframeListChanged{
-                .count = controller_.timeline().realKeyframeCount()}
-                .emit();
-        }
-
-        if (auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr)
-            rm->markDirty(DirtyFlag::OVERLAY);
     }
 
     sequencer::CameraState SequencerUIManager::currentViewportCameraState() const {
@@ -210,7 +196,7 @@ namespace lfs::vis::gui {
         ui::NodeSelected::when([this](const auto& e) {
             if (e.type != "KEYFRAME") {
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
             }
         });
@@ -288,8 +274,7 @@ namespace lfs::vis::gui {
 
         if (ui_state_.show_camera_path && !actively_following) {
             renderCameraPath(viewport);
-        } else if (viewport_transform_drag_active_) {
-            finalizeViewportTransformDrag(true);
+            renderKeyframeGizmo(ctx, viewport);
         }
         renderKeyframePreview(ctx);
         renderSequencerPanel(ctx, viewport, panel_x, panel_y, panel_width, panel_height, panel_input);
@@ -540,10 +525,6 @@ namespace lfs::vis::gui {
         constexpr float FRUSTUM_DEPTH = 0.25f;
         constexpr float SENSOR_ASPECT = rendering::SENSOR_WIDTH_35MM / rendering::SENSOR_HEIGHT_35MM;
         constexpr float HIT_RADIUS = 15.0f;
-        constexpr float TRANSLATE_HANDLE_RADIUS = 9.0f;
-        constexpr float ROTATE_HANDLE_RADIUS = 12.0f;
-        constexpr float HANDLE_THICKNESS = 2.0f;
-        constexpr int HANDLE_RING_SEGMENTS = 24;
 
         const auto& timeline = controller_.timeline();
         if (timeline.empty())
@@ -656,7 +637,7 @@ namespace lfs::vis::gui {
                     : nullptr;
             if (!selected_keyframe || selected_keyframe->is_loop_point) {
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
             }
         }
 
@@ -704,46 +685,6 @@ namespace lfs::vis::gui {
                    projected->y <= static_cast<float>(panel.render_size.y) + margin_y;
         };
 
-        const auto worldPointAtDepth = [&](const CameraPathPanel& panel,
-                                           const float screen_x,
-                                           const float screen_y,
-                                           const float depth) -> glm::vec3 {
-            const float scale_x =
-                static_cast<float>(panel.render_size.x) / std::max(panel.projection_size.x, 1.0f);
-            const float scale_y =
-                static_cast<float>(panel.render_size.y) / std::max(panel.projection_size.y, 1.0f);
-            const float local_x = (screen_x - panel.projection_pos.x) * scale_x;
-            const float local_y = (screen_y - panel.projection_pos.y) * scale_y;
-            const glm::mat3 viewport_rotation = panel.viewport->getRotationMatrix();
-            const glm::vec3 viewport_translation = panel.viewport->getTranslation();
-
-            if (settings.orthographic) {
-                if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f)
-                    return viewport_transform_drag_start_position_;
-
-                const float cx = static_cast<float>(panel.render_size.x) * 0.5f;
-                const float cy = static_cast<float>(panel.render_size.y) * 0.5f;
-                const glm::vec3 view_pos(
-                    (local_x - cx) / settings.ortho_scale,
-                    (cy - local_y) / settings.ortho_scale,
-                    -depth);
-                return viewport_rotation * view_pos + viewport_translation;
-            }
-
-            const float focal_length_mm =
-                viewport_transform_drag_focal_length_mm_ > 0.0f
-                    ? viewport_transform_drag_focal_length_mm_
-                    : settings.focal_length_mm;
-            return lfs::rendering::unprojectScreenPoint(
-                viewport_rotation,
-                viewport_translation,
-                panel.render_size,
-                local_x,
-                local_y,
-                depth,
-                focal_length_mm);
-        };
-
         const auto toColor = [](const ImVec4& c, const float alpha) -> glm::vec4 {
             return {c.x, c.y, c.z, alpha};
         };
@@ -756,17 +697,6 @@ namespace lfs::vis::gui {
         const int screen_h = screen_size.y;
         const int fb_w = framebuffer_size.x;
         const int fb_h = framebuffer_size.y;
-
-        const auto addCircleOutline = [&](const glm::vec2& center, const float radius,
-                                          const glm::vec4& color, const float thickness) {
-            for (int i = 0; i < HANDLE_RING_SEGMENTS; ++i) {
-                const float a0 = 2.0f * 3.14159265f * static_cast<float>(i) / static_cast<float>(HANDLE_RING_SEGMENTS);
-                const float a1 = 2.0f * 3.14159265f * static_cast<float>(i + 1) / static_cast<float>(HANDLE_RING_SEGMENTS);
-                const glm::vec2 p0 = center + glm::vec2(std::cos(a0), std::sin(a0)) * radius;
-                const glm::vec2 p1 = center + glm::vec2(std::cos(a1), std::sin(a1)) * radius;
-                line_renderer_.addLine(p0, p1, color, thickness);
-            }
-        };
 
         const int path_framerate = std::max(ui_state_.framerate, 1);
         const float base_path_time_step = 1.0f / static_cast<float>(path_framerate);
@@ -895,40 +825,6 @@ namespace lfs::vis::gui {
                 line_renderer_.addTriangleFilled(s_up, s_tl, s_tr, color);
             }
 
-            if (viewport_edit_mode_ != SequencerViewportEditMode::None) {
-                if (const auto selected = controller_.selectedKeyframe();
-                    selected.has_value() && *selected < timeline.size()) {
-                    const auto* const keyframe = timeline.getKeyframe(*selected);
-                    if (keyframe && !keyframe->is_loop_point && isVisible(panel, keyframe->position)) {
-                        const glm::vec2 handle_center = projectToScreen(panel, keyframe->position);
-                        const float radius =
-                            viewport_edit_mode_ == SequencerViewportEditMode::Rotate
-                                ? ROTATE_HANDLE_RADIUS
-                                : TRANSLATE_HANDLE_RADIUS;
-                        const glm::vec4 handle_fill = toColor(
-                            lighten(t.palette.primary, viewport_transform_drag_active_ ? 0.2f : 0.08f),
-                            viewport_transform_drag_active_ ? 0.88f : 0.58f);
-                        const glm::vec4 handle_outline = toColor(lighten(t.palette.primary, 0.35f), 0.96f);
-
-                        line_renderer_.addCircleFilled(handle_center, radius, handle_fill, 18);
-                        if (viewport_edit_mode_ == SequencerViewportEditMode::Translate) {
-                            line_renderer_.addLine(handle_center + glm::vec2(-radius * 1.5f, 0.0f),
-                                                   handle_center + glm::vec2(radius * 1.5f, 0.0f),
-                                                   handle_outline, HANDLE_THICKNESS);
-                            line_renderer_.addLine(handle_center + glm::vec2(0.0f, -radius * 1.5f),
-                                                   handle_center + glm::vec2(0.0f, radius * 1.5f),
-                                                   handle_outline, HANDLE_THICKNESS);
-                        } else {
-                            addCircleOutline(handle_center, radius + 2.0f, handle_outline, HANDLE_THICKNESS);
-                            line_renderer_.addLine(handle_center + glm::vec2(radius * 0.2f, -radius * 1.4f),
-                                                   handle_center + glm::vec2(radius * 1.1f, -radius * 0.5f),
-                                                   handle_outline, HANDLE_THICKNESS);
-                        }
-                        line_renderer_.addCircleFilled(handle_center, 2.5f, handle_outline, 10);
-                    }
-                }
-            }
-
             if (!controller_.isStopped()) {
                 const auto state = controller_.currentCameraState();
                 if (isVisible(panel, state.position)) {
@@ -984,124 +880,13 @@ namespace lfs::vis::gui {
             overlay_->wantsInput() || overlay_->isMouseOverEditOverlay(mouse_x, mouse_y);
         const bool mouse_blocked_by_ui =
             overlay_blocks_mouse ||
-            (!viewport_transform_drag_active_ && guiFocusState().want_capture_mouse);
-
-        const auto beginTransformDrag = [&](const size_t keyframe_index) {
-            if (viewport_edit_mode_ == SequencerViewportEditMode::None)
-                return;
-
-            const auto* const keyframe = timeline.getKeyframe(keyframe_index);
-            if (!keyframe || keyframe->is_loop_point)
-                return;
-
-            const CameraPathPanel* const active_panel =
-                mouse_panel ? mouse_panel : (panels.empty() ? nullptr : &panels.front());
-            if (!active_panel || !active_panel->valid())
-                return;
-
-            endViewportKeyframeEdit();
-            controller_.selectKeyframe(keyframe_index);
-            if (auto* const sm = viewer_->getSceneManager())
-                sm->clearSelection();
-
-            const glm::mat3 viewport_rotation = active_panel->viewport->getRotationMatrix();
-            const glm::vec3 viewport_translation = active_panel->viewport->getTranslation();
-            const glm::vec3 view_pos =
-                glm::transpose(viewport_rotation) * (keyframe->position - viewport_translation);
-            viewport_transform_drag_active_ = true;
-            viewport_transform_drag_changed_ = false;
-            viewport_transform_drag_start_mouse_ = {mouse_x, mouse_y};
-            viewport_transform_drag_start_position_ = keyframe->position;
-            viewport_transform_drag_start_rotation_ = keyframe->rotation;
-            viewport_transform_drag_view_depth_ = std::max(-view_pos.z, 1e-3f);
-            viewport_transform_drag_focal_length_mm_ = settings.focal_length_mm;
-            viewport_transform_drag_world_offset_ =
-                viewport_edit_mode_ == SequencerViewportEditMode::Translate
-                    ? keyframe->position - worldPointAtDepth(
-                                               *active_panel,
-                                               mouse_x, mouse_y, viewport_transform_drag_view_depth_)
-                    : glm::vec3(0.0f);
-            guiFocusState().want_capture_mouse = true;
-            rm->markDirty(DirtyFlag::OVERLAY);
-        };
-
-        if (viewport_transform_drag_active_) {
-            guiFocusState().want_capture_mouse = true;
-
-            const auto selected_id = controller_.selectedKeyframeId();
-            const auto* const keyframe =
-                selected_id.has_value()
-                    ? timeline.getKeyframeById(*selected_id)
-                    : nullptr;
-            const CameraPathPanel* active_panel = mouse_panel;
-            if (!active_panel && rm->isIndependentSplitViewActive()) {
-                const SplitViewPanelId focused_panel = rm->getFocusedSplitPanel();
-                for (const auto& panel : panels) {
-                    if (panel.panel_id == focused_panel) {
-                        active_panel = &panel;
-                        break;
-                    }
-                }
-            }
-            if (!active_panel && !panels.empty())
-                active_panel = &panels.front();
-            if (!selected_id.has_value() || !keyframe || keyframe->is_loop_point ||
-                viewport_edit_mode_ == SequencerViewportEditMode::None ||
-                !active_panel || !active_panel->valid()) {
-                finalizeViewportTransformDrag(false);
-                return;
-            }
-
-            if (!input.mouse_down[0]) {
-                finalizeViewportTransformDrag(true);
-                return;
-            }
-
-            bool changed = false;
-            if (viewport_edit_mode_ == SequencerViewportEditMode::Translate) {
-                const glm::vec3 new_position =
-                    worldPointAtDepth(*active_panel, mouse_x, mouse_y, viewport_transform_drag_view_depth_) +
-                    viewport_transform_drag_world_offset_;
-                changed = controller_.updateKeyframeById(
-                    *selected_id,
-                    new_position,
-                    keyframe->rotation,
-                    keyframe->focal_length_mm);
-            } else if (viewport_edit_mode_ == SequencerViewportEditMode::Rotate) {
-                const glm::vec2 mouse_delta =
-                    glm::vec2(mouse_x, mouse_y) - viewport_transform_drag_start_mouse_;
-                const glm::mat3 viewport_rotation = active_panel->viewport->getRotationMatrix();
-                const glm::quat yaw = glm::angleAxis(
-                    mouse_delta.x * 0.008f,
-                    glm::normalize(rendering::cameraUp(viewport_rotation)));
-                const glm::quat pitch = glm::angleAxis(
-                    -mouse_delta.y * 0.008f,
-                    glm::normalize(rendering::cameraRight(viewport_rotation)));
-                const glm::quat new_rotation =
-                    glm::normalize(yaw * pitch * viewport_transform_drag_start_rotation_);
-                changed = controller_.updateKeyframeById(
-                    *selected_id,
-                    keyframe->position,
-                    new_rotation,
-                    keyframe->focal_length_mm);
-            }
-
-            if (changed) {
-                viewport_transform_drag_changed_ = true;
-                pip_needs_update_ = true;
-                rm->markDirty(DirtyFlag::OVERLAY);
-            }
-            return;
-        }
+            guiFocusState().want_capture_mouse;
 
         if (mouse_panel && !mouse_blocked_by_ui && hovered_keyframe.has_value()) {
             const auto* const hovered = timeline.getKeyframe(*hovered_keyframe);
             if (hovered && !hovered->is_loop_point) {
-                if (input.mouse_clicked[0]) {
-                    if (viewport_edit_mode_ != SequencerViewportEditMode::None)
-                        beginTransformDrag(*hovered_keyframe);
-                    else
-                        beginViewportKeyframeEdit(*hovered_keyframe);
+                if (input.mouse_clicked[0] && !ImGuizmo::IsOver()) {
+                    beginViewportKeyframeEdit(*hovered_keyframe);
                     guiFocusState().want_capture_mouse = true;
                 }
                 if (input.mouse_clicked[1]) {
@@ -1111,6 +896,138 @@ namespace lfs::vis::gui {
                 }
             }
         }
+    }
+
+    void SequencerUIManager::renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
+        if (viewport_edit_mode_ == SequencerViewportEditMode::None)
+            return;
+
+        const auto selected = controller_.selectedKeyframe();
+        const auto selected_id = controller_.selectedKeyframeId();
+        if (!selected.has_value() || !selected_id.has_value()) {
+            viewport_edit_mode_ = SequencerViewportEditMode::None;
+            keyframe_gizmo_active_ = false;
+            return;
+        }
+
+        const auto& timeline = controller_.timeline();
+        const auto* const kf = timeline.getKeyframe(*selected);
+        if (!kf || kf->is_loop_point) {
+            viewport_edit_mode_ = SequencerViewportEditMode::None;
+            keyframe_gizmo_active_ = false;
+            return;
+        }
+
+        auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr;
+        if (!rendering_manager)
+            return;
+
+        auto& primary_viewport = ctx.viewer ? ctx.viewer->getViewport() : viewer_->getViewport();
+        const auto& settings = rendering_manager->getSettings();
+
+        const auto& input = viewer_->getWindowManager()->frameInput();
+        std::optional<glm::vec2> screen_point;
+        if (input.mouse_x >= viewport.pos.x &&
+            input.mouse_x <= viewport.pos.x + viewport.size.x &&
+            input.mouse_y >= viewport.pos.y &&
+            input.mouse_y <= viewport.pos.y + viewport.size.y) {
+            screen_point = glm::vec2(input.mouse_x, input.mouse_y);
+        }
+
+        const Viewport* gizmo_viewport = &primary_viewport;
+        glm::vec2 rect_pos = viewport.pos;
+        glm::vec2 rect_size = viewport.size;
+        glm::ivec2 render_size(static_cast<int>(std::round(viewport.size.x)),
+                               static_cast<int>(std::round(viewport.size.y)));
+
+        if (rendering_manager->isIndependentSplitViewActive()) {
+            auto panel = rendering_manager->resolveViewerPanel(
+                primary_viewport, viewport.pos, viewport.size, screen_point, std::nullopt);
+            if (!panel || !panel->valid()) {
+                panel = rendering_manager->resolveViewerPanel(
+                    primary_viewport,
+                    viewport.pos,
+                    viewport.size,
+                    std::nullopt,
+                    rendering_manager->getFocusedSplitPanel());
+            }
+            if (panel && panel->valid()) {
+                gizmo_viewport = panel->viewport;
+                rect_pos = {panel->x, panel->y};
+                rect_size = {panel->width, panel->height};
+                render_size = {panel->render_width, panel->render_height};
+            }
+        }
+
+        if (!gizmo_viewport || rect_size.x <= 0.0f || rect_size.y <= 0.0f ||
+            render_size.x <= 0 || render_size.y <= 0) {
+            return;
+        }
+
+        const glm::mat4 view = gizmo_viewport->getViewMatrix();
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+            render_size,
+            settings.focal_length_mm,
+            settings.orthographic,
+            settings.ortho_scale);
+
+        const glm::mat3 rot_mat = glm::mat3_cast(kf->rotation);
+        glm::mat4 gizmo_matrix(rot_mat);
+        gizmo_matrix[3] = glm::vec4(kf->position, 1.0f);
+
+        const ImGuizmo::OPERATION op =
+            viewport_edit_mode_ == SequencerViewportEditMode::Rotate
+                ? ImGuizmo::ROTATE
+                : ImGuizmo::TRANSLATE;
+
+        ImGuizmo::SetOrthographic(settings.orthographic);
+        ImGuizmo::SetRect(rect_pos.x, rect_pos.y, rect_size.x, rect_size.y);
+
+        ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
+        const ImVec2 clip_min(rect_pos.x, rect_pos.y);
+        const ImVec2 clip_max(rect_pos.x + rect_size.x, rect_pos.y + rect_size.y);
+        draw_list->PushClipRect(clip_min, clip_max, true);
+        ImGuizmo::SetDrawlist(draw_list);
+
+        glm::mat4 delta(1.0f);
+        const ImGuizmo::MODE mode = op == ImGuizmo::ROTATE ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+        const bool changed = ImGuizmo::Manipulate(
+            glm::value_ptr(view),
+            glm::value_ptr(projection),
+            op,
+            mode,
+            glm::value_ptr(gizmo_matrix),
+            glm::value_ptr(delta),
+            nullptr);
+
+        const bool is_using = ImGuizmo::IsUsing();
+        if (ImGuizmo::IsOver() || is_using)
+            guiFocusState().want_capture_mouse = true;
+
+        if (is_using && !keyframe_gizmo_active_)
+            keyframe_gizmo_active_ = true;
+
+        if (changed) {
+            const glm::vec3 new_pos(gizmo_matrix[3]);
+            const glm::quat new_rot = glm::normalize(glm::quat_cast(glm::mat3(gizmo_matrix)));
+            if (controller_.updateKeyframeById(
+                    *selected_id,
+                    new_pos,
+                    new_rot,
+                    kf->focal_length_mm)) {
+                pip_needs_update_ = true;
+                rendering_manager->markDirty(DirtyFlag::OVERLAY);
+            }
+        }
+
+        if (!is_using && keyframe_gizmo_active_) {
+            keyframe_gizmo_active_ = false;
+            lfs::core::events::state::KeyframeListChanged{
+                .count = controller_.timeline().realKeyframeCount()}
+                .emit();
+        }
+
+        draw_list->PopClipRect();
     }
 
     void SequencerUIManager::handleOverlayActions() {
@@ -1136,26 +1053,26 @@ namespace lfs::vis::gui {
             } break;
             case Action::UPDATE_KEYFRAME:
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 cmd::SequencerUpdateKeyframe{}.emit();
                 break;
             case Action::GOTO_KEYFRAME:
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 cmd::SequencerGoToKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 break;
             case Action::EDIT_FOCAL_LENGTH:
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 panel_->openFocalLengthEdit(
                     action->keyframe_index,
                     controller_.timeline().keyframes()[action->keyframe_index].focal_length_mm);
                 break;
             case Action::SET_TRANSLATE:
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 viewport_edit_mode_ = (viewport_edit_mode_ == SequencerViewportEditMode::Translate)
@@ -1165,7 +1082,7 @@ namespace lfs::vis::gui {
                     rm->markDirty(DirtyFlag::OVERLAY);
                 break;
             case Action::SET_ROTATE:
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 viewport_edit_mode_ = (viewport_edit_mode_ == SequencerViewportEditMode::Rotate)
@@ -1182,7 +1099,7 @@ namespace lfs::vis::gui {
             }
             case Action::DELETE_KEYFRAME:
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 controller_.removeSelectedKeyframe();
@@ -1190,7 +1107,7 @@ namespace lfs::vis::gui {
                 break;
             case Action::CLOSE_EDIT_PANEL:
                 viewport_edit_mode_ = SequencerViewportEditMode::None;
-                finalizeViewportTransformDrag(false);
+                keyframe_gizmo_active_ = false;
                 endViewportKeyframeEdit();
                 break;
             case Action::APPLY_EDIT:

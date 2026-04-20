@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -69,7 +70,7 @@ namespace lfs::vis::gui {
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/global_context_menu.rml");
-            doc_ = ctx_->LoadDocument(rml_path.string());
+            doc_ = rml_documents::loadDocument(ctx_, rml_path);
             if (!doc_) {
                 LOG_ERROR("GlobalContextMenu: failed to load global_context_menu.rml");
                 return;

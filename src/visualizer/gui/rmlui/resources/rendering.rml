@@ -20,19 +20,19 @@
 
       <div data-if="transform_show_translate">
         <div class="rendering-transform-group-label">Position</div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_position_axis">
           <span class="rendering-transform-axis-label">X</span>
           <input type="text" class="number-input" id="transform-pos-x" data-value="transform_pos_x_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_position_axis">
           <span class="rendering-transform-axis-label">Y</span>
           <input type="text" class="number-input" id="transform-pos-y" data-value="transform_pos_y_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_position_axis">
           <span class="rendering-transform-axis-label">Z</span>
           <input type="text" class="number-input" id="transform-pos-z" data-value="transform_pos_z_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', -1)">-</button>
@@ -42,19 +42,19 @@
 
       <div data-if="transform_show_rotate">
         <div class="rendering-transform-group-label">Rotation (degrees)</div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_rotation_axis">
           <span class="rendering-transform-axis-label">X</span>
           <input type="text" class="number-input" id="transform-rot-x" data-value="transform_rot_x_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_rotation_axis">
           <span class="rendering-transform-axis-label">Y</span>
           <input type="text" class="number-input" id="transform-rot-y" data-value="transform_rot_y_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_rotation_axis">
           <span class="rendering-transform-axis-label">Z</span>
           <input type="text" class="number-input" id="transform-rot-z" data-value="transform_rot_z_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', -1)">-</button>
@@ -64,25 +64,25 @@
 
       <div data-if="transform_show_scale">
         <div class="rendering-transform-group-label">Scale</div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_scale_uniform">
           <span class="rendering-transform-axis-label">U</span>
           <input type="text" class="number-input" id="transform-scale-u" data-value="transform_scale_u_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', 1)">+</button>
         </div>
-        <div class="setting-row rendering-transform-scale-separator">
+        <div class="setting-row rendering-transform-scale-separator" data-tooltip="tooltip.transform_scale_axis">
           <span class="rendering-transform-axis-label">X</span>
           <input type="text" class="number-input" id="transform-scale-x" data-value="transform_scale_x_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_scale_axis">
           <span class="rendering-transform-axis-label">Y</span>
           <input type="text" class="number-input" id="transform-scale-y" data-value="transform_scale_y_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.transform_scale_axis">
           <span class="rendering-transform-axis-label">Z</span>
           <input type="text" class="number-input" id="transform-scale-z" data-value="transform_scale_z_str" />
           <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', -1)">-</button>
@@ -90,7 +90,7 @@
         </div>
       </div>
 
-      <button class="btn btn--secondary btn--full"
+      <button class="btn btn--secondary btn--full" data-tooltip="tooltip.transform_reset"
               data-event-click="transform_action('reset')">{{transform_reset_label}}</button>
     </div>
   </div>
@@ -118,44 +118,44 @@
         <span class="slider-value">{{render_scale | format_float(2)}}</span>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.environment_mode">
       <span class="setting-row__label-col">{{label_environment_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="environment_mode">
-          <option value="SOLID_COLOR">Solid Color</option>
-          <option value="EQUIRECTANGULAR">Equirectangular HDRI</option>
+          <option value="SOLID_COLOR" data-tooltip="tooltip.opt.environment_mode.solid_color">Solid Color</option>
+          <option value="EQUIRECTANGULAR" data-tooltip="tooltip.opt.environment_mode.equirect">Equirectangular HDRI</option>
         </select>
       </div>
     </div>
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.environment_map_path">
         <span class="setting-row__label-col">{{label_environment_map_path}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill rendering-environment-map-shell">
           <div class="rendering-environment-map-picker">
             <select id="environment-map-preset" data-value="environment_map_preset">
-              <option value="0">Kloofendal Pure Sky</option>
-              <option value="1">Alps Field</option>
-              <option value="__custom__" data-if="environment_map_has_custom_option">{{environment_map_last_custom_display_name}}</option>
+              <option value="0" data-tooltip="tooltip.opt.environment_map_preset.kloofendal">Kloofendal Pure Sky</option>
+              <option value="1" data-tooltip="tooltip.opt.environment_map_preset.alps">Alps Field</option>
+              <option value="__custom__" data-tooltip="tooltip.opt.environment_map_preset.custom" data-if="environment_map_has_custom_option">{{environment_map_last_custom_display_name}}</option>
             </select>
             <button class="btn btn--secondary" data-event-click="browse_environment_map()">{{label_environment_map_browse}}</button>
           </div>
           <span class="text-muted rendering-environment-map-path" data-if="environment_map_is_custom">{{environment_map_display_name}}</span>
         </div>
       </div>
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.environment_exposure">
         <span class="setting-row__label-col">{{label_environment_exposure}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="environment_exposure" min="-6" max="6" step="0.01" />
           <span class="slider-value">{{environment_exposure | format_float(2)}}</span>
         </div>
       </div>
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.environment_rotation">
         <span class="setting-row__label-col">{{label_environment_rotation_degrees}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="environment_rotation_degrees" min="-180" max="180" step="0.1" />
           <span class="slider-value">{{environment_rotation_degrees | format_float(1)}}&deg;</span>
         </div>
       </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.voxel_size">
       <span class="setting-row__label-col">{{label_voxel_size}}</span>
       <div class="setting-row__control-col setting-row__control-col--slider">
         <input type="range" class="setting-slider" data-value="voxel_size" min="0.001" max="0.1" step="0.001" />
@@ -169,7 +169,7 @@
       </label>
     </div>
     <div data-if="show_coord_axes">
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.axes_size">
         <span class="setting-row__label-col">{{label_axes_size}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="axes_size" min="0.5" max="10" step="0.01" />
@@ -190,17 +190,17 @@
       </label>
     </div>
     <div data-if="show_grid">
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid_plane">
         <span class="setting-row__label-col">{{label_grid_plane}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="grid_plane">
-            <option value="0">YZ (Right)</option>
-            <option value="1">XZ (Top)</option>
-            <option value="2">XY (Front)</option>
+            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">YZ (Right)</option>
+            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">XZ (Top)</option>
+            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">XY (Front)</option>
           </select>
         </div>
       </div>
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.grid_opacity">
         <span class="setting-row__label-col">{{label_grid_opacity}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="grid_opacity" min="0" max="1" step="0.01" />
@@ -215,7 +215,7 @@
       </label>
     </div>
     <div data-if="show_camera_frustums">
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_frustum_scale">
         <span class="setting-row__label-col">{{label_camera_frustum_scale}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="camera_frustum_scale" min="0.01" max="10" step="0.01" />
@@ -248,10 +248,10 @@
       <span class="setting-row__label-col">{{label_sh_degree}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="sh_degree">
-          <option value="0">0</option>
-          <option value="1">1</option>
-          <option value="2">2</option>
-          <option value="3">3</option>
+          <option value="0" data-tooltip="tooltip.opt.sh_degree.0">0</option>
+          <option value="1" data-tooltip="tooltip.opt.sh_degree.1">1</option>
+          <option value="2" data-tooltip="tooltip.opt.sh_degree.2">2</option>
+          <option value="3" data-tooltip="tooltip.opt.sh_degree.3">3</option>
         </select>
       </div>
     </div>
@@ -273,13 +273,13 @@
         <input type="checkbox" data-checked="mip_filter" />
       </label>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_metrics_mode">
       <span class="setting-row__label-col">{{label_camera_metrics_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="camera_metrics_mode">
-          <option value="OFF">Off</option>
-          <option value="PSNR">PSNR</option>
-          <option value="PSNR_SSIM">PSNR + SSIM</option>
+          <option value="OFF" data-tooltip="tooltip.opt.camera_metrics.off">Off</option>
+          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">PSNR</option>
+          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">PSNR + SSIM</option>
         </select>
       </div>
     </div>
@@ -384,7 +384,7 @@
       </label>
     </div>
 
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_color_committed">
       <span class="setting-row__label-col">{{label_selection_color_committed}}</span>
       <div class="setting-row__control-col setting-row__control-col--color">
         <span class="color-comp">{{selection_color_committed_r}}</span>
@@ -394,7 +394,7 @@
         <input type="text" class="color-hex" data-value="selection_color_committed_hex" />
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_color_preview">
       <span class="setting-row__label-col">{{label_selection_color_preview}}</span>
       <div class="setting-row__control-col setting-row__control-col--color">
         <span class="color-comp">{{selection_color_preview_r}}</span>
@@ -404,7 +404,7 @@
         <input type="text" class="color-hex" data-value="selection_color_preview_hex" />
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.selection_color_center_marker">
       <span class="setting-row__label-col">{{label_selection_color_center_marker}}</span>
       <div class="setting-row__control-col setting-row__control-col--color">
         <span class="color-comp">{{selection_color_center_marker_r}}</span>
@@ -422,14 +422,14 @@
     <span class="text-accent">{{label_hdr_mesh}}</span>
   </div>
   <div class="section-content collapsed" id="sec-mesh">
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe">
       <span class="setting-row__label-col">{{label_mesh_wireframe}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="mesh_wireframe" />
       </label>
     </div>
     <div data-if="mesh_wireframe">
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe_color">
         <span class="setting-row__label-col">{{label_mesh_wireframe_color}}</span>
         <div class="setting-row__control-col setting-row__control-col--color">
           <span class="color-comp">{{mesh_wireframe_color_r}}</span>
@@ -439,7 +439,7 @@
           <input type="text" class="color-hex" data-value="mesh_wireframe_color_hex" />
         </div>
       </div>
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe_width">
         <span class="setting-row__label-col">{{label_mesh_wireframe_width}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="mesh_wireframe_width" min="0.5" max="5" step="0.01" />
@@ -447,41 +447,41 @@
         </div>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_light_intensity">
       <span class="setting-row__label-col">{{label_mesh_light_intensity}}</span>
       <div class="setting-row__control-col setting-row__control-col--slider">
         <input type="range" class="setting-slider" data-value="mesh_light_intensity" min="0" max="5" step="0.01" />
         <span class="slider-value">{{mesh_light_intensity | format_float(2)}}</span>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_ambient">
       <span class="setting-row__label-col">{{label_mesh_ambient}}</span>
       <div class="setting-row__control-col setting-row__control-col--slider">
         <input type="range" class="setting-slider" data-value="mesh_ambient" min="0" max="1" step="0.01" />
         <span class="slider-value">{{mesh_ambient | format_float(2)}}</span>
       </div>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_backface_culling">
       <span class="setting-row__label-col">{{label_mesh_backface_culling}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="mesh_backface_culling" />
       </label>
     </div>
-    <div class="setting-row setting-row--aligned">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_shadow_enabled">
       <span class="setting-row__label-col">{{label_mesh_shadow_enabled}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
         <input type="checkbox" data-checked="mesh_shadow_enabled" />
       </label>
     </div>
     <div data-if="mesh_shadow_enabled">
-      <div class="setting-row setting-row--aligned">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_shadow_resolution">
         <span class="setting-row__label-col">{{label_mesh_shadow_resolution}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="mesh_shadow_resolution">
-            <option value="512">512</option>
-            <option value="1024">1024</option>
-            <option value="2048">2048</option>
-            <option value="4096">4096</option>
+            <option value="512" data-tooltip="tooltip.opt.shadow_resolution.512">512</option>
+            <option value="1024" data-tooltip="tooltip.opt.shadow_resolution.1024">1024</option>
+            <option value="2048" data-tooltip="tooltip.opt.shadow_resolution.2048">2048</option>
+            <option value="4096" data-tooltip="tooltip.opt.shadow_resolution.4096">4096</option>
           </select>
         </div>
       </div>
@@ -534,8 +534,8 @@
         <span class="setting-row__label-col">{{label_ppisp_mode}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="ppisp_mode">
-            <option value="MANUAL">Manual</option>
-            <option value="AUTO">Auto (Controller)</option>
+            <option value="MANUAL" data-tooltip="tooltip.opt.ppisp_mode.manual">Manual</option>
+            <option value="AUTO" data-tooltip="tooltip.opt.ppisp_mode.auto">Auto (Controller)</option>
           </select>
         </div>
       </div>
@@ -549,14 +549,14 @@
           </div>
         </div>
 
-        <div class="setting-row setting-row--aligned">
+        <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_vignette_enabled">
           <span class="setting-row__label-col">{{label_ppisp_vignette_enabled}}</span>
           <label class="setting-row__control-col setting-row__control-col--checkbox">
             <input type="checkbox" data-checked="ppisp_vignette_enabled" />
           </label>
         </div>
         <div data-if="ppisp_vignette_enabled">
-          <div class="setting-row setting-row--aligned">
+          <div class="setting-row setting-row--aligned" data-tooltip="tooltip.ppisp_vignette_strength">
             <span class="setting-row__label-col">{{label_ppisp_vignette_strength}}</span>
             <div class="setting-row__control-col setting-row__control-col--slider">
               <input type="range" class="setting-slider" data-value="ppisp_vignette_strength" min="0" max="2" step="0.01" />

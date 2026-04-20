@@ -7,6 +7,7 @@
 
 #include "gui/rml_overlay_context.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -45,7 +46,7 @@ namespace lfs::vis::gui {
 
         try {
             const auto full_path = lfs::vis::getAssetPath(rml_path_);
-            doc_ = ctx_->LoadDocument(full_path.string());
+            doc_ = rml_documents::loadDocument(ctx_, full_path);
             if (doc_) {
                 doc_->Show();
             } else {

@@ -502,6 +502,7 @@ namespace lfs::vis::gui {
         context_menu_node_id_ = core::NULL_NODE;
         drag_source_id_ = core::NULL_NODE;
         drop_target_id_ = core::NULL_NODE;
+        pending_reveal_node_id_ = core::NULL_NODE;
         scene_has_nodes_ = false;
         root_count_ = 0;
         row_top_dp_cache_.clear();
@@ -549,6 +550,10 @@ namespace lfs::vis::gui {
             return false;
 
         selected_ids_ = std::move(selected_ids);
+        if (selected_ids_.size() == 1)
+            pending_reveal_node_id_ = *selected_ids_.begin();
+        else
+            pending_reveal_node_id_ = core::NULL_NODE;
         markStateDirty();
         return true;
     }
@@ -798,8 +803,47 @@ namespace lfs::vis::gui {
             changed = true;
         }
 
+        if (pending_reveal_node_id_ != core::NULL_NODE) {
+            const auto target_it = node_snapshots_.find(pending_reveal_node_id_);
+            if (target_it == node_snapshots_.end()) {
+                pending_reveal_node_id_ = core::NULL_NODE;
+            } else {
+                if (models_collapsed_) {
+                    models_collapsed_ = false;
+                    markStateDirty();
+                    changed = true;
+                }
+                if (!flat_index_by_id_.contains(pending_reveal_node_id_)) {
+                    bool expanded_any = false;
+                    for (core::NodeId ancestor = target_it->second.parent_id;
+                         ancestor != core::NULL_NODE;) {
+                        if (collapsed_ids_.erase(ancestor) > 0)
+                            expanded_any = true;
+                        const auto parent_it = node_snapshots_.find(ancestor);
+                        if (parent_it == node_snapshots_.end())
+                            break;
+                        ancestor = parent_it->second.parent_id;
+                    }
+                    if (expanded_any) {
+                        rebuildFlatRows(*scene);
+                        markStateDirty();
+                        changed = true;
+                    }
+                }
+            }
+        }
+
         if (changed)
             syncVisibleRows(true);
+
+        if (pending_reveal_node_id_ != core::NULL_NODE) {
+            if (flat_index_by_id_.contains(pending_reveal_node_id_)) {
+                scrollNodeIntoViewCentered(pending_reveal_node_id_);
+                syncVisibleRows(true);
+            }
+            pending_reveal_node_id_ = core::NULL_NODE;
+        }
+
         return changed;
     }
 
@@ -1051,6 +1095,24 @@ namespace lfs::vis::gui {
             SetScrollTop(row_top);
         else if (row_bottom > scroll_top + view_h)
             SetScrollTop(row_bottom - view_h);
+    }
+
+    void SceneGraphElement::scrollNodeIntoViewCentered(const core::NodeId node_id) {
+        const auto it = flat_index_by_id_.find(node_id);
+        if (it == flat_index_by_id_.end())
+            return;
+
+        const float view_h = GetClientHeight();
+        if (view_h <= 0.0f) {
+            scrollNodeIntoView(node_id);
+            return;
+        }
+
+        const float row_top = kHeaderHeightDp + static_cast<float>(it->second) * kRowHeightDp;
+        const float content_h = kHeaderHeightDp + static_cast<float>(flat_rows_.size()) * kRowHeightDp;
+        const float max_scroll = std::max(0.0f, content_h - view_h);
+        const float desired = row_top + 0.5f * kRowHeightDp - 0.5f * view_h;
+        SetScrollTop(std::clamp(desired, 0.0f, max_scroll));
     }
 
     void SceneGraphElement::focusTree() {
@@ -1647,6 +1709,7 @@ namespace lfs::vis::gui {
         const std::string& kind = parts[0];
         if (kind == "go_to_camera" && parts.size() >= 2) {
             cmd::GoToCamView{.cam_id = std::stoi(parts[1])}.emit();
+            Blur();
         } else if ((kind == "enable_train" || kind == "disable_train") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (parseNodeId(parts[1], node_id)) {

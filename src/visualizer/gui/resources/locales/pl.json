@@ -35,7 +35,6 @@
     "help.about": "O LichtFeld Studio"
   },
   "window": {
-    "getting_started": "Wprowadzenie",
     "about": "O LichtFeld Studio",
     "input_settings": "Ustawienia Wejścia",
     "debug_info": "Informacje Debugowania",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "PRZEWODNIK SZYBKIEGO STARTU",
+    "title": "Wprowadzenie",
     "description": "Dowiedz się, jak przygotować zbiory danych i rozpocząć pracę z LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Trening na Obrazach Equirectangular 360",
     "video_latest": "LichtFeld v0.3.0 Przegląd Funkcji",
     "video_reality_scan": "Zbiór Danych Reality Scan",
     "video_colmap": "Samouczek COLMAP",
     "video_lichtfeld": "Samouczek LichtFeld",
-    "video_masks": "Samouczek Masek",
-    "loading": "Ładowanie...",
-    "wiki_label": "Wiki:",
-    "watch_tooltip": "Obejrzyj: {title}"
+    "video_masks": "Samouczek Masek"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "options.bg.color": "Kolor",
     "options.bg.modulation": "Modulacja",
     "options.bg.image": "Obraz",
-    "options.bg.random": "Losowe"
+    "options.bg.random": "Losowe",
+    "tooltip": {
+      "btn_switch_edit": "Przełącz na tryb edycji wytrenowanej sceny",
+      "ppisp_freeze_from_sidecar": "Załaduj wagi PPISP z pliku sidecar",
+      "ppisp_sidecar_path": "Ścieżka do pliku sidecar PPISP",
+      "ppisp_sidecar_browse": "Przeglądaj plik sidecar PPISP",
+      "ppisp_sidecar_clear": "Wyczyść wybrany sidecar PPISP",
+      "bg_color": "Jednolity kolor tła używany podczas treningu",
+      "bg_image_path": "Ścieżka do obrazu tła używanego podczas treningu",
+      "bg_image_browse": "Przeglądaj obraz tła",
+      "bg_image_clear": "Wyczyść wybrany obraz tła",
+      "dataset_path": "Ścieżka do załadowanego zbioru danych",
+      "dataset_images": "Liczba obrazów w zbiorze danych",
+      "dataset_output": "Katalog wyjściowy dla wytrenowanych artefaktów",
+      "opt_strategy_display": "Aktywna strategia zagęszczania",
+      "bilateral_grid_x": "Rozdzielczość X siatki bilateralnej",
+      "bilateral_grid_y": "Rozdzielczość Y siatki bilateralnej",
+      "bilateral_grid_w": "Kosze koloru/intensywności siatki bilateralnej",
+      "bilateral_grid_lr": "Współczynnik uczenia siatki bilateralnej",
+      "prune_opacity": "Usuń Gaussy poniżej tego krycia",
+      "revised_opacity": "Użyj zmienionego wzoru krycia",
+      "min_opacity": "Minimalny próg krycia do przycinania",
+      "grow_scale_3d": "Zagęszczaj, gdy skala 3D przekroczy tę wartość",
+      "grow_scale_2d": "Zagęszczaj, gdy skala 2D ekranu przekroczy tę wartość",
+      "prune_scale_3d": "Przycinaj, gdy skala 3D przekroczy tę wartość",
+      "prune_scale_2d": "Przycinaj, gdy skala 2D ekranu przekroczy tę wartość",
+      "pause_refine_after_reset": "Iteracje wstrzymania udoskonalania po zresetowaniu krycia",
+      "sparsify_steps": "Liczba kroków sparsyfikacji",
+      "init_rho": "Początkowa kara sparsity (rho)",
+      "prune_ratio": "Końcowy ułamek Gaussów do przycięcia po sparsyfikacji",
+      "opt": {
+        "strategy": {
+          "mrnf": "Domyślna strategia 3DGS z udoskonalaniem MRNF",
+          "igs_plus": "Ulepszony 3DGS+ z udoskonalonym wzrostem/przycinaniem",
+          "mcmc": "Strategia MCMC z zagęszczaniem opartym na próbkowaniu"
+        },
+        "sh_degree": {
+          "0": "Tylko rozpraszanie — najszybsze, brak koloru zależnego od widoku",
+          "1": "SH pierwszego rzędu — podstawowe wskaźniki lustrzane",
+          "2": "SH drugiego rzędu — lepszy kolor zależny od widoku",
+          "3": "SH trzeciego rzędu — najlepsza jakość, najwięcej VRAM"
+        },
+        "tile_mode": {
+          "full": "Rasteryzacja w pełnej rozdzielczości",
+          "half": "Rasteryzacja w połowicznej rozdzielczości (~4× szybciej)",
+          "quarter": "Rasteryzacja w ćwierć rozdzielczości (~16× szybciej)"
+        },
+        "mask_mode": {
+          "none": "Trenuj na całym obrazie, bez maskowania",
+          "segment": "Użyj maski segmentacji dla pierwszego planu",
+          "ignore": "Ignoruj zamaskowane piksele w stracie",
+          "alpha_consistent": "Wymuś spójność alfa z maską"
+        },
+        "bg_mode": {
+          "color": "Użyj stałego koloru tła",
+          "modulation": "Moduluj tło zrekonstruowaną alfą",
+          "image": "Użyj obrazu tła",
+          "random": "Losowy kolor tła w każdym kroku"
+        },
+        "resize_factor": {
+          "auto": "Automatyczny wybór współczynnika skalowania dla VRAM",
+          "1": "Trenuj w oryginalnej rozdzielczości obrazu",
+          "2": "Trenuj w połowicznej rozdzielczości obrazu",
+          "4": "Trenuj w ćwierć rozdzielczości obrazu",
+          "8": "Trenuj w jednej ósmej rozdzielczości obrazu"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "Dodaj PLY...",
@@ -647,7 +711,72 @@
     "seq_dock": "Zadokuj sekwencer",
     "seq_undock": "Oddokuj sekwencer",
     "seq_interval": "Interwał siatki",
-    "seq_preview_size": "Skala podglądu PiP"
+    "seq_preview_size": "Skala podglądu PiP",
+    "transform_position_axis": "Przesuń zaznaczenie wzdłuż tej osi",
+    "transform_rotation_axis": "Obróć zaznaczenie wokół tej osi (stopnie)",
+    "transform_scale_axis": "Skaluj zaznaczenie wzdłuż tej osi",
+    "transform_scale_uniform": "Jednolite skalowanie na wszystkich osiach",
+    "transform_reset": "Zresetuj transformację do tożsamości",
+    "environment_mode": "Źródło tła: jednolity kolor lub HDRI",
+    "environment_map_path": "Wybierz mapę środowiska HDRI",
+    "environment_exposure": "Ekspozycja HDRI w jednostkach EV",
+    "environment_rotation": "Obróć HDRI wokół osi pionowej",
+    "voxel_size": "Rozmiar komórki voxel dla zapytań przestrzennych",
+    "axes_size": "Długość linii osi współrzędnych",
+    "grid_plane": "Płaszczyzna, na której rysowana jest siatka",
+    "grid_opacity": "Krycie linii siatki",
+    "camera_frustum_scale": "Wizualny rozmiar frustów kamer",
+    "camera_metrics_mode": "Wskaźniki jakości obrazu pokazywane nad kamerami treningowymi",
+    "selection_color_committed": "Kolor zatwierdzonych zaznaczeń",
+    "selection_color_preview": "Kolor podglądu zaznaczenia",
+    "selection_color_center_marker": "Kolor znacznika środka zaznaczenia",
+    "mesh_wireframe": "Renderuj siatkę jako szkielet",
+    "mesh_wireframe_color": "Kolor linii szkieletu",
+    "mesh_wireframe_width": "Szerokość linii szkieletu",
+    "mesh_light_intensity": "Intensywność światła siatki",
+    "mesh_ambient": "Udział światła otoczenia siatki",
+    "mesh_backface_culling": "Pomijaj renderowanie tylnych trójkątów",
+    "mesh_shadow_enabled": "Rzucaj i odbieraj cienie na siatce",
+    "mesh_shadow_resolution": "Rozdzielczość mapy cieni",
+    "ppisp_vignette_enabled": "Zastosuj winietowanie w ramach korekcji",
+    "ppisp_vignette_strength": "Ściemnienie winiety w narożnikach",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "Renderuj z jednolitym kolorem tła",
+        "equirect": "Renderuj z mapą środowiska HDR 360°"
+      },
+      "environment_map_preset": {
+        "kloofendal": "Wbudowany: Kloofendal Pure Sky",
+        "alps": "Wbudowany: Alps Field",
+        "custom": "Ostatnio załadowane niestandardowe HDRI"
+      },
+      "grid_plane": {
+        "yz": "Pokaż siatkę na płaszczyźnie YZ (widok z prawej)",
+        "xz": "Pokaż siatkę na płaszczyźnie XZ (widok z góry)",
+        "xy": "Pokaż siatkę na płaszczyźnie XY (widok z przodu)"
+      },
+      "sh_degree": {
+        "0": "Tylko rozpraszanie — brak oświetlenia zależnego od widoku",
+        "1": "SH pierwszego rzędu — podstawowe oświetlenie zależne od widoku",
+        "2": "SH drugiego rzędu — więcej szczegółów kierunkowych",
+        "3": "SH trzeciego rzędu — pełna jakość zależna od widoku"
+      },
+      "camera_metrics": {
+        "off": "Ukryj wskaźniki jakości",
+        "psnr": "Pokaż PSNR dla każdej kamery treningowej",
+        "psnr_ssim": "Pokaż PSNR i SSIM dla każdej kamery treningowej"
+      },
+      "shadow_resolution": {
+        "512": "Mapa cieni 512×512 (niska jakość, szybko)",
+        "1024": "Mapa cieni 1024×1024 (zrównoważona)",
+        "2048": "Mapa cieni 2048×2048 (wysoka jakość)",
+        "4096": "Mapa cieni 4096×4096 (najlepsza jakość, wolno)"
+      },
+      "ppisp_mode": {
+        "manual": "Ręczny: bezpośrednio dostosuj suwaki korekcji",
+        "auto": "Auto: użyj wyuczonego kontrolera do korekcji"
+      }
+    }
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",

@@ -82,6 +82,10 @@ namespace lfs::vis::input {
         state_.pointer_capture = InputTarget::None;
     }
 
+    void InputRouter::focusViewportKeyboard() {
+        state_.keyboard_focus = InputTarget::Viewport;
+    }
+
     InputTarget InputRouter::hitTestHoverTarget(const double x, const double y) const {
         if (auto* gui = services().guiOrNull()) {
             const auto hit = gui->hitTestPointer(x, y);

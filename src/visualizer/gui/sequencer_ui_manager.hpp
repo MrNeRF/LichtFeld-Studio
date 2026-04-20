@@ -57,12 +57,12 @@ namespace lfs::vis {
                                       float panel_x, float panel_y, float panel_width,
                                       float panel_height, const PanelInputState& panel_input);
             void renderCameraPath(const ViewportLayout& viewport);
+            void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void syncPipPreviewWindow(const ViewportLayout& viewport);
-            void finalizeViewportTransformDrag(bool emit_change_event);
             void beginViewportKeyframeEdit(size_t keyframe_index);
             void endViewportKeyframeEdit();
             [[nodiscard]] sequencer::CameraState currentViewportCameraState() const;
@@ -78,14 +78,7 @@ namespace lfs::vis {
             FilmStripRenderer film_strip_;
 
             SequencerViewportEditMode viewport_edit_mode_ = SequencerViewportEditMode::None;
-            bool viewport_transform_drag_active_ = false;
-            bool viewport_transform_drag_changed_ = false;
-            glm::vec2 viewport_transform_drag_start_mouse_{0.0f, 0.0f};
-            glm::vec3 viewport_transform_drag_start_position_{0.0f, 0.0f, 0.0f};
-            glm::quat viewport_transform_drag_start_rotation_{1.0f, 0.0f, 0.0f, 0.0f};
-            glm::vec3 viewport_transform_drag_world_offset_{0.0f, 0.0f, 0.0f};
-            float viewport_transform_drag_view_depth_ = 1.0f;
-            float viewport_transform_drag_focal_length_mm_ = 0.0f;
+            bool keyframe_gizmo_active_ = false;
             bool edit_entered_mouse_down_ = false;
 
             lfs::vis::PanelInputState panel_input_{};

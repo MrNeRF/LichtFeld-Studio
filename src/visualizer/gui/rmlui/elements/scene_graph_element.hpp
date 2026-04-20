@@ -124,6 +124,7 @@ namespace lfs::vis::gui {
         void updateHeader();
         void updateContentHeight();
         void scrollNodeIntoView(core::NodeId node_id);
+        void scrollNodeIntoViewCentered(core::NodeId node_id);
         void focusTree();
         void beginRename(core::NodeId node_id);
         void confirmRename();
@@ -161,6 +162,7 @@ namespace lfs::vis::gui {
         std::unordered_map<core::NodeId, size_t> flat_index_by_id_;
         std::unordered_set<core::NodeId> collapsed_ids_;
         std::unordered_set<core::NodeId> selected_ids_;
+        core::NodeId pending_reveal_node_id_ = core::NULL_NODE;
 
         std::string filter_text_;
         core::NodeId click_anchor_id_ = core::NULL_NODE;

@@ -27,6 +27,7 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),
         tr=lambda key: key,
         open_url=lambda _url: None,
+        get_ui_scale=lambda: 1.0,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 

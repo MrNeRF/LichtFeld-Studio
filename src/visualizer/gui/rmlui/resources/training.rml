@@ -28,13 +28,13 @@
     </div>
     <div data-if="show_ctrl_completed">
       <span class="status-text status-success">{{label_status_completed}}</span>
-      <button class="btn btn--success btn--full" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
+      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
       <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
     <div data-if="show_ctrl_stopped">
       <span class="status-text status-muted">{{label_status_stopped}}</span>
-      <button class="btn btn--success btn--full" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
+      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
       <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
       <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
     </div>
@@ -63,9 +63,9 @@
       <div class="setting-row" data-tooltip="training.tooltip.strategy">
         <span class="prop-label">{{label_strategy}}</span>
         <select data-value="strategy">
-          <option value="mrnf">{{label_strategy_mrnf}}</option>
-          <option value="igs+">{{label_strategy_igs_plus}}</option>
-          <option value="mcmc">{{label_strategy_mcmc}}</option>
+          <option value="mrnf" data-tooltip="training.tooltip.opt.strategy.mrnf">{{label_strategy_mrnf}}</option>
+          <option value="igs+" data-tooltip="training.tooltip.opt.strategy.igs_plus">{{label_strategy_igs_plus}}</option>
+          <option value="mcmc" data-tooltip="training.tooltip.opt.strategy.mcmc">{{label_strategy_mcmc}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.iterations">
@@ -83,18 +83,18 @@
       <div class="setting-row" data-tooltip="training.tooltip.sh_degree">
         <span class="prop-label">{{label_sh_degree}}</span>
         <select data-value="sh_degree_str">
-          <option value="0">0</option>
-          <option value="1">1</option>
-          <option value="2">2</option>
-          <option value="3">3</option>
+          <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
+          <option value="1" data-tooltip="training.tooltip.opt.sh_degree.1">1</option>
+          <option value="2" data-tooltip="training.tooltip.opt.sh_degree.2">2</option>
+          <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.tile_mode">
         <span class="prop-label">{{label_tile_mode}}</span>
         <select data-value="tile_mode_str">
-          <option value="1">{{label_tile_full}}</option>
-          <option value="2">{{label_tile_half}}</option>
-          <option value="4">{{label_tile_quarter}}</option>
+          <option value="1" data-tooltip="training.tooltip.opt.tile_mode.full">{{label_tile_full}}</option>
+          <option value="2" data-tooltip="training.tooltip.opt.tile_mode.half">{{label_tile_half}}</option>
+          <option value="4" data-tooltip="training.tooltip.opt.tile_mode.quarter">{{label_tile_quarter}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.steps_scaler">
@@ -114,10 +114,10 @@
       <div class="setting-row" data-tooltip="training.tooltip.mask_mode">
         <span class="prop-label">{{label_mask_mode}}</span>
         <select data-value="mask_mode_str">
-          <option value="0">{{label_mask_none}}</option>
-          <option value="1">{{label_mask_segment}}</option>
-          <option value="2">{{label_mask_ignore}}</option>
-          <option value="3">{{label_mask_alpha_consistent}}</option>
+          <option value="0" data-tooltip="training.tooltip.opt.mask_mode.none">{{label_mask_none}}</option>
+          <option value="1" data-tooltip="training.tooltip.opt.mask_mode.segment">{{label_mask_segment}}</option>
+          <option value="2" data-tooltip="training.tooltip.opt.mask_mode.ignore">{{label_mask_ignore}}</option>
+          <option value="3" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
         </select>
       </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
@@ -172,19 +172,19 @@
         <input type="checkbox" data-checked="ppisp" />
       </div>
       <div data-if="dep_ppisp">
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.ppisp_freeze_from_sidecar">
           <span class="prop-label">{{label_ppisp_freeze_from_sidecar}}</span>
           <input type="checkbox" data-checked="ppisp_freeze_from_sidecar" />
         </div>
         <div data-if="dep_ppisp_frozen_sidecar">
-          <div class="setting-row">
+          <div class="setting-row" data-tooltip="training.tooltip.ppisp_sidecar_path">
             <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
             <input type="text" data-value="ppisp_sidecar_path" />
-            <button class="btn btn--secondary" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
+            <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_browse" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">&#160;</span>
-            <button class="btn btn--secondary" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
+            <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_clear" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
           </div>
         </div>
         <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller">
@@ -213,13 +213,13 @@
       <div class="setting-row" data-tooltip="training.tooltip.bg_modulation">
         <span class="prop-label">{{label_bg_mode}}</span>
         <select data-value="bg_mode_str">
-          <option value="0">{{label_bg_option_color}}</option>
-          <option value="1">{{label_bg_option_modulation}}</option>
-          <option value="2">{{label_bg_option_image}}</option>
-          <option value="3">{{label_bg_option_random}}</option>
+          <option value="0" data-tooltip="training.tooltip.opt.bg_mode.color">{{label_bg_option_color}}</option>
+          <option value="1" data-tooltip="training.tooltip.opt.bg_mode.modulation">{{label_bg_option_modulation}}</option>
+          <option value="2" data-tooltip="training.tooltip.opt.bg_mode.image">{{label_bg_option_image}}</option>
+          <option value="3" data-tooltip="training.tooltip.opt.bg_mode.random">{{label_bg_option_random}}</option>
         </select>
       </div>
-      <div class="setting-row setting-row--aligned" data-if="dep_bg_color">
+      <div class="setting-row setting-row--aligned" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color">
         <span class="setting-row__label-col">{{label_bg_color}}</span>
         <div class="setting-row__control-col setting-row__control-col--color">
           <span class="color-comp">{{bg_color_r}}</span>
@@ -230,14 +230,14 @@
         </div>
       </div>
       <div data-if="dep_bg_image">
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.bg_image_path">
           <span class="prop-label">{{label_bg_image}}</span>
           <span class="text-disabled">{{bg_image_path_display}}</span>
         </div>
         <div class="setting-row">
           <span class="prop-label">&#160;</span>
-          <button class="btn btn--secondary" data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
-          <button class="btn btn--secondary" data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
+          <button class="btn btn--secondary" data-tooltip="training.tooltip.bg_image_browse" data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
+          <button class="btn btn--secondary" data-tooltip="training.tooltip.bg_image_clear" data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
         </div>
       </div>
     </div>
@@ -258,22 +258,22 @@
       </div>
       <div class="section-content collapsed" id="sec-dataset">
         <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
-          <div class="setting-row">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_path">
             <span class="prop-label">{{label_dataset_path}}</span>
             <span class="text-disabled">{{dataset_path_display}}</span>
           </div>
-          <div class="setting-row">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_images">
             <span class="prop-label">{{label_dataset_images}}</span>
             <span class="text-disabled">{{dataset_images_display}}</span>
           </div>
           <div class="setting-row" data-tooltip="training.tooltip.resize_factor">
             <span class="prop-label">{{label_resize_factor}}</span>
             <select data-value="resize_factor_str">
-              <option value="-1">{{label_auto}}</option>
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
+              <option value="-1" data-tooltip="training.tooltip.opt.resize_factor.auto">{{label_auto}}</option>
+              <option value="1" data-tooltip="training.tooltip.opt.resize_factor.1">1</option>
+              <option value="2" data-tooltip="training.tooltip.opt.resize_factor.2">2</option>
+              <option value="4" data-tooltip="training.tooltip.opt.resize_factor.4">4</option>
+              <option value="8" data-tooltip="training.tooltip.opt.resize_factor.8">8</option>
             </select>
           </div>
           <div class="setting-row" data-tooltip="training.tooltip.max_width">
@@ -300,7 +300,7 @@
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('test_every', 1)">+</button>
           </div>
-          <div class="setting-row">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_output">
             <span class="prop-label">{{label_dataset_output}}</span>
             <span class="text-disabled">{{dataset_output_display}}</span>
           </div>
@@ -317,7 +317,7 @@
       </div>
       <div class="section-content collapsed" id="sec-optimization">
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row">
+          <div class="setting-row" data-tooltip="training.tooltip.opt_strategy_display">
             <span class="prop-label">{{label_opt_strategy}}</span>
             <span class="text-disabled">{{opt_strategy_display}}</span>
           </div>
@@ -395,13 +395,13 @@
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', 1)">+</button>
           </div>
-          <div class="setting-row" data-if="dep_igs">
+          <div class="setting-row" data-if="dep_igs" data-tooltip="training.tooltip.prune_opacity">
             <span class="prop-label">{{label_prune_opacity}}</span>
             <input type="text" class="number-input" data-value="prune_opacity_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', 1)">+</button>
           </div>
-          <div class="setting-row" data-if="dep_igs">
+          <div class="setting-row" data-if="dep_igs" data-tooltip="training.tooltip.revised_opacity">
             <span class="prop-label">{{label_revised_opacity}}</span>
             <input type="checkbox" data-checked="revised_opacity" />
           </div>
@@ -413,25 +413,25 @@
     <div class="training-subsection" data-if="dep_bilateral">
       <div class="training-subsection-title">{{label_hdr_bilateral}}</div>
       <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_x">
           <span class="prop-label">{{label_bilateral_grid_x}}</span>
           <input type="text" class="number-input" data-value="bilateral_grid_x_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_y">
           <span class="prop-label">{{label_bilateral_grid_y}}</span>
           <input type="text" class="number-input" data-value="bilateral_grid_y_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_w">
           <span class="prop-label">{{label_bilateral_grid_w}}</span>
           <input type="text" class="number-input" data-value="bilateral_grid_w_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.bilateral_grid_lr">
           <span class="prop-label">{{label_bilateral_grid_lr}}</span>
           <input type="text" class="number-input" data-value="bilateral_grid_lr_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', -1)">-</button>
@@ -520,37 +520,37 @@
     <div class="training-subsection" data-if="dep_igs">
       <div class="training-subsection-title">{{label_hdr_pruning_growing}}</div>
       <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.min_opacity">
           <span class="prop-label">{{label_min_opacity}}</span>
           <input type="text" class="number-input" data-value="min_opacity_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.grow_scale_3d">
           <span class="prop-label">{{label_grow_scale3d}}</span>
           <input type="text" class="number-input" data-value="grow_scale3d_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.grow_scale_2d">
           <span class="prop-label">{{label_grow_scale2d}}</span>
           <input type="text" class="number-input" data-value="grow_scale2d_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.prune_scale_3d">
           <span class="prop-label">{{label_prune_scale3d}}</span>
           <input type="text" class="number-input" data-value="prune_scale3d_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.prune_scale_2d">
           <span class="prop-label">{{label_prune_scale2d}}</span>
           <input type="text" class="number-input" data-value="prune_scale2d_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.pause_refine_after_reset">
           <span class="prop-label">{{label_pause_refine_after_reset}}</span>
           <input type="text" class="number-input" data-value="pause_refine_after_reset_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', -1)">-</button>
@@ -563,19 +563,19 @@
     <div class="training-subsection" data-if="dep_sparsity">
       <div class="training-subsection-title">{{label_hdr_sparsity}}</div>
       <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.sparsify_steps">
           <span class="prop-label">{{label_sparsify_steps}}</span>
           <input type="text" class="number-input" data-value="sparsify_steps_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.init_rho">
           <span class="prop-label">{{label_init_rho}}</span>
           <input type="text" class="number-input" data-value="init_rho_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('init_rho', -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="num_step('init_rho', 1)">+</button>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio">
           <span class="prop-label">{{label_prune_ratio}}</span>
           <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
           <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
@@ -591,17 +591,17 @@
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
         <div data-if="save_edit_mode">
-          <div class="setting-row">
+          <div class="setting-row" data-tooltip="training.tooltip.save_step_input">
             <input type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('new_step', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('new_step', 1)">+</button>
-            <button class="btn btn--secondary" data-event-click="action('add_step')">{{label_add}}</button>
+            <button class="btn btn--secondary" data-tooltip="training.tooltip.save_step_add" data-event-click="action('add_step')">{{label_add}}</button>
           </div>
           <div class="separator"></div>
           <div data-for="step : save_steps_list">
             <div class="setting-row">
               <span class="number-input">{{step}}</span>
-              <button class="btn btn--secondary" data-event-click="remove_step(it_index)">{{label_remove}}</button>
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.save_step_remove" data-event-click="remove_step(it_index)">{{label_remove}}</button>
             </div>
           </div>
           <span class="status-text status-muted" data-if="no_save_steps">{{label_no_save_steps}}</span>

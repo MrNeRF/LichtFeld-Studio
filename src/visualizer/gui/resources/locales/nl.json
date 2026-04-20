@@ -35,7 +35,6 @@
     "help.about": "Over LichtFeld Studio"
   },
   "window": {
-    "getting_started": "Aan de Slag",
     "about": "Over LichtFeld Studio",
     "input_settings": "Invoerinstellingen",
     "debug_info": "Debug Info",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "SNELSTARTGIDS",
+    "title": "Aan de Slag",
     "description": "Leer hoe je datasets voorbereidt en aan de slag gaat met LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training op 360 Equirectangulaire Afbeeldingen",
     "video_latest": "LichtFeld v0.3.0 Functie Overzicht",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
-    "video_masks": "Maskers Tutorial",
-    "loading": "Laden...",
-    "wiki_label": "Wiki:",
-    "watch_tooltip": "Bekijk: {title}"
+    "video_masks": "Maskers Tutorial"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "options.bg.color": "Kleur",
     "options.bg.modulation": "Modulatie",
     "options.bg.image": "Afbeelding",
-    "options.bg.random": "Willekeurig"
+    "options.bg.random": "Willekeurig",
+    "tooltip": {
+      "btn_switch_edit": "Schakel naar bewerkmodus voor de getrainde scène",
+      "ppisp_freeze_from_sidecar": "PPISP-gewichten laden uit een sidecar-bestand",
+      "ppisp_sidecar_path": "Pad naar het PPISP-sidecar-bestand",
+      "ppisp_sidecar_browse": "Bladeren naar een PPISP-sidecar-bestand",
+      "ppisp_sidecar_clear": "Geselecteerde PPISP-sidecar wissen",
+      "bg_color": "Effen achtergrondkleur gebruikt tijdens training",
+      "bg_image_path": "Pad naar de achtergrondafbeelding voor training",
+      "bg_image_browse": "Bladeren naar een achtergrondafbeelding",
+      "bg_image_clear": "Geselecteerde achtergrondafbeelding wissen",
+      "dataset_path": "Pad naar de geladen dataset",
+      "dataset_images": "Aantal afbeeldingen in de dataset",
+      "dataset_output": "Uitvoermap voor getrainde artefacten",
+      "opt_strategy_display": "Actieve verdichtingsstrategie",
+      "bilateral_grid_x": "X-resolutie van bilateraal raster",
+      "bilateral_grid_y": "Y-resolutie van bilateraal raster",
+      "bilateral_grid_w": "Kleur/intensiteit-bins van bilateraal raster",
+      "bilateral_grid_lr": "Leersnelheid van bilateraal raster",
+      "prune_opacity": "Verwijder Gaussians onder deze dekking",
+      "revised_opacity": "Gebruik de herziene dekking-formule",
+      "min_opacity": "Minimale dekking-drempel voor pruning",
+      "grow_scale_3d": "Verdichten wanneer 3D-schaal dit overschrijdt",
+      "grow_scale_2d": "Verdichten wanneer 2D-schermschaal dit overschrijdt",
+      "prune_scale_3d": "Verwijderen wanneer 3D-schaal dit overschrijdt",
+      "prune_scale_2d": "Verwijderen wanneer 2D-schermschaal dit overschrijdt",
+      "pause_refine_after_reset": "Iteraties om verfijning te pauzeren na dekking-reset",
+      "sparsify_steps": "Aantal sparsificatiestappen",
+      "init_rho": "Initiële sparsity-straf (rho)",
+      "prune_ratio": "Uiteindelijke fractie Gaussians te verwijderen aan het eind van sparsificatie",
+      "opt": {
+        "strategy": {
+          "mrnf": "Standaard 3DGS-strategie met MRNF-verfijning",
+          "igs_plus": "Verbeterde 3DGS+ met verfijnde groei/pruning",
+          "mcmc": "MCMC-strategie met sampling-gebaseerde verdichting"
+        },
+        "sh_degree": {
+          "0": "Alleen diffuus — snelste, geen blikrichting-afhankelijke kleur",
+          "1": "SH eerste orde — basale speculaire aanwijzingen",
+          "2": "SH tweede orde — betere blikrichting-afhankelijke kleur",
+          "3": "SH derde orde — beste kwaliteit, meeste VRAM"
+        },
+        "tile_mode": {
+          "full": "Rasterisatie op volledige resolutie",
+          "half": "Rasterisatie op halve resolutie (~4× sneller)",
+          "quarter": "Rasterisatie op kwartresolutie (~16× sneller)"
+        },
+        "mask_mode": {
+          "none": "Train op de hele afbeelding, geen masker",
+          "segment": "Gebruik segmentatiemasker voor voorgrond",
+          "ignore": "Negeer gemaskeerde pixels in de loss",
+          "alpha_consistent": "Alpha-consistentie met masker afdwingen"
+        },
+        "bg_mode": {
+          "color": "Gebruik een vaste achtergrondkleur",
+          "modulation": "Achtergrond moduleren met gereconstrueerde alpha",
+          "image": "Gebruik een achtergrondafbeelding",
+          "random": "Achtergrondkleur per stap willekeurig maken"
+        },
+        "resize_factor": {
+          "auto": "Automatisch herschaalfactor kiezen voor VRAM",
+          "1": "Trainen op originele afbeeldingsresolutie",
+          "2": "Trainen op halve afbeeldingsresolutie",
+          "4": "Trainen op kwart afbeeldingsresolutie",
+          "8": "Trainen op een achtste afbeeldingsresolutie"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "PLY Toevoegen...",
@@ -647,7 +711,72 @@
     "seq_dock": "Sequencer vastzetten",
     "seq_undock": "Sequencer losmaken",
     "seq_interval": "Rasterinterval",
-    "seq_preview_size": "PiP-voorbeeldschaal"
+    "seq_preview_size": "PiP-voorbeeldschaal",
+    "transform_position_axis": "Verschuif de selectie langs deze as",
+    "transform_rotation_axis": "Roteer de selectie rond deze as (graden)",
+    "transform_scale_axis": "Schaal de selectie langs deze as",
+    "transform_scale_uniform": "Uniforme schaal over alle assen",
+    "transform_reset": "Transformatie terugzetten naar identiteit",
+    "environment_mode": "Achtergrondbron: effen kleur of HDRI",
+    "environment_map_path": "Kies een HDRI-omgevingskaart",
+    "environment_exposure": "HDRI-belichting in EV-stops",
+    "environment_rotation": "Roteer HDRI rond de verticale as",
+    "voxel_size": "Voxel-celgrootte voor ruimtelijke queries",
+    "axes_size": "Lengte van de coördinaatas-lijnen",
+    "grid_plane": "Vlak waarop het raster wordt getekend",
+    "grid_opacity": "Dekking van rasterlijnen",
+    "camera_frustum_scale": "Visuele schaal van camerafrustums",
+    "camera_metrics_mode": "Beeldkwaliteitsstatistieken weergegeven op trainingscamera's",
+    "selection_color_committed": "Kleur voor bevestigde selecties",
+    "selection_color_preview": "Kleur voor selectievoorbeeld",
+    "selection_color_center_marker": "Kleur voor de selectie-middenmarkering",
+    "mesh_wireframe": "Mesh als draadframe weergeven",
+    "mesh_wireframe_color": "Kleur van draadframelijnen",
+    "mesh_wireframe_width": "Breedte van draadframelijnen",
+    "mesh_light_intensity": "Lichtintensiteit van mesh",
+    "mesh_ambient": "Bijdrage van omgevingslicht aan mesh",
+    "mesh_backface_culling": "Achterliggende driehoeken niet renderen",
+    "mesh_shadow_enabled": "Schaduwen werpen en ontvangen op mesh",
+    "mesh_shadow_resolution": "Resolutie van schaduwmap",
+    "ppisp_vignette_enabled": "Vignet toepassen als onderdeel van correctie",
+    "ppisp_vignette_strength": "Vignet verdonkering in de hoeken",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "Renderen met effen achtergrondkleur",
+        "equirect": "Renderen met 360° HDR-omgevingskaart"
+      },
+      "environment_map_preset": {
+        "kloofendal": "Ingebouwd: Kloofendal Pure Sky",
+        "alps": "Ingebouwd: Alps Field",
+        "custom": "Laatst geladen aangepaste HDRI"
+      },
+      "grid_plane": {
+        "yz": "Raster op YZ-vlak tonen (rechter aanzicht)",
+        "xz": "Raster op XZ-vlak tonen (bovenaanzicht)",
+        "xy": "Raster op XY-vlak tonen (vooraanzicht)"
+      },
+      "sh_degree": {
+        "0": "Alleen diffuus — geen blikrichting-afhankelijke verlichting",
+        "1": "SH eerste orde — basale blikrichting-afhankelijke verlichting",
+        "2": "SH tweede orde — meer richtingsdetail",
+        "3": "SH derde orde — volledige blikrichting-afhankelijke kwaliteit"
+      },
+      "camera_metrics": {
+        "off": "Kwaliteitsstatistieken verbergen",
+        "psnr": "Toon PSNR per trainingscamera",
+        "psnr_ssim": "Toon PSNR en SSIM per trainingscamera"
+      },
+      "shadow_resolution": {
+        "512": "512×512 schaduwmap (lage kwaliteit, snel)",
+        "1024": "1024×1024 schaduwmap (gebalanceerd)",
+        "2048": "2048×2048 schaduwmap (hoge kwaliteit)",
+        "4096": "4096×4096 schaduwmap (beste kwaliteit, traag)"
+      },
+      "ppisp_mode": {
+        "manual": "Handmatig: pas correctieschuifregelaars direct aan",
+        "auto": "Auto: gebruik de getrainde controller voor correctie"
+      }
+    }
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",

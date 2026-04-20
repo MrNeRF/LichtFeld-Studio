@@ -35,7 +35,6 @@
     "help.about": "À propos de LichtFeld Studio"
   },
   "window": {
-    "getting_started": "Démarrage",
     "about": "À propos de LichtFeld Studio",
     "input_settings": "Paramètres d'Entrée",
     "debug_info": "Infos de Débogage",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "GUIDE DE DÉMARRAGE RAPIDE",
+    "title": "Démarrage",
     "description": "Apprenez à préparer les datasets et à démarrer avec LichtFeld Studio :",
     "wiki_section": "WIKI & FAQ",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Entraînement sur Images Équirectangulaires 360",
     "video_latest": "LichtFeld v0.3.0 Aperçu des Fonctionnalités",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutoriel COLMAP",
     "video_lichtfeld": "Tutoriel LichtFeld",
-    "video_masks": "Tutoriel Masques",
-    "loading": "Chargement...",
-    "wiki_label": "Wiki :",
-    "watch_tooltip": "Regarder : {title}"
+    "video_masks": "Tutoriel Masques"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "options.bg.color": "Couleur",
     "options.bg.modulation": "Modulation",
     "options.bg.image": "Image",
-    "options.bg.random": "Aleatoire"
+    "options.bg.random": "Aleatoire",
+    "tooltip": {
+      "btn_switch_edit": "Passer en mode édition pour la scène entraînée",
+      "ppisp_freeze_from_sidecar": "Charger les poids PPISP depuis un fichier sidecar",
+      "ppisp_sidecar_path": "Chemin vers le fichier sidecar PPISP",
+      "ppisp_sidecar_browse": "Rechercher un fichier sidecar PPISP",
+      "ppisp_sidecar_clear": "Effacer le sidecar PPISP sélectionné",
+      "bg_color": "Couleur de fond unie utilisée pendant l'entraînement",
+      "bg_image_path": "Chemin vers l'image de fond pour l'entraînement",
+      "bg_image_browse": "Rechercher une image de fond",
+      "bg_image_clear": "Effacer l'image de fond sélectionnée",
+      "dataset_path": "Chemin vers le jeu de données chargé",
+      "dataset_images": "Nombre d'images dans le jeu de données",
+      "dataset_output": "Répertoire de sortie pour les artefacts entraînés",
+      "opt_strategy_display": "Stratégie de densification active",
+      "bilateral_grid_x": "Résolution X de la grille bilatérale",
+      "bilateral_grid_y": "Résolution Y de la grille bilatérale",
+      "bilateral_grid_w": "Bins de couleur/intensité de la grille bilatérale",
+      "bilateral_grid_lr": "Taux d'apprentissage de la grille bilatérale",
+      "prune_opacity": "Élaguer les gaussiennes en dessous de cette opacité",
+      "revised_opacity": "Utiliser la formulation d'opacité révisée",
+      "min_opacity": "Seuil d'opacité minimum pour l'élagage",
+      "grow_scale_3d": "Densifier quand l'échelle 3D dépasse cette valeur",
+      "grow_scale_2d": "Densifier quand l'échelle 2D à l'écran dépasse cette valeur",
+      "prune_scale_3d": "Élaguer quand l'échelle 3D dépasse cette valeur",
+      "prune_scale_2d": "Élaguer quand l'échelle 2D à l'écran dépasse cette valeur",
+      "pause_refine_after_reset": "Itérations de pause de raffinement après reset d'opacité",
+      "sparsify_steps": "Nombre d'étapes de sparsification",
+      "init_rho": "Pénalité initiale de sparsity (rho)",
+      "prune_ratio": "Fraction finale de gaussiennes à élaguer en fin de sparsification",
+      "opt": {
+        "strategy": {
+          "mrnf": "Stratégie 3DGS par défaut avec raffinement MRNF",
+          "igs_plus": "3DGS+ amélioré avec croissance/élagage raffinés",
+          "mcmc": "Stratégie MCMC avec densification par échantillonnage"
+        },
+        "sh_degree": {
+          "0": "Diffus uniquement — plus rapide, pas de couleur dépendante de la vue",
+          "1": "SH premier ordre — indices spéculaires basiques",
+          "2": "SH deuxième ordre — meilleure couleur dépendante de la vue",
+          "3": "SH troisième ordre — meilleure qualité, plus de VRAM"
+        },
+        "tile_mode": {
+          "full": "Rastérisation pleine résolution",
+          "half": "Rastérisation demi-résolution (~4× plus rapide)",
+          "quarter": "Rastérisation quart de résolution (~16× plus rapide)"
+        },
+        "mask_mode": {
+          "none": "Entraîner sur toute l'image, sans masque",
+          "segment": "Utiliser le masque de segmentation pour l'avant-plan",
+          "ignore": "Ignorer les pixels masqués dans la perte",
+          "alpha_consistent": "Forcer la cohérence alpha avec le masque"
+        },
+        "bg_mode": {
+          "color": "Utiliser une couleur de fond fixe",
+          "modulation": "Moduler le fond avec l'alpha reconstruit",
+          "image": "Utiliser une image de fond",
+          "random": "Randomiser la couleur de fond à chaque étape"
+        },
+        "resize_factor": {
+          "auto": "Choisir automatiquement le facteur de redimensionnement selon la VRAM",
+          "1": "Entraîner à la résolution originale d'image",
+          "2": "Entraîner à demi-résolution d'image",
+          "4": "Entraîner à un quart de résolution d'image",
+          "8": "Entraîner à un huitième de résolution d'image"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "Ajouter PLY...",
@@ -647,7 +711,72 @@
     "seq_dock": "Ancrer le sequenceur",
     "seq_undock": "Detacher le sequenceur",
     "seq_interval": "Intervalle de la grille",
-    "seq_preview_size": "Échelle de l'aperçu PiP"
+    "seq_preview_size": "Échelle de l'aperçu PiP",
+    "transform_position_axis": "Translater la sélection le long de cet axe",
+    "transform_rotation_axis": "Faire pivoter la sélection autour de cet axe (degrés)",
+    "transform_scale_axis": "Mettre à l'échelle la sélection le long de cet axe",
+    "transform_scale_uniform": "Échelle uniforme sur tous les axes",
+    "transform_reset": "Réinitialiser la transformation à l'identité",
+    "environment_mode": "Source de fond : couleur unie ou HDRI",
+    "environment_map_path": "Choisir une carte d'environnement HDRI",
+    "environment_exposure": "Exposition HDRI en stops EV",
+    "environment_rotation": "Faire pivoter le HDRI autour de l'axe vertical",
+    "voxel_size": "Taille de cellule de grille voxel pour requêtes spatiales",
+    "axes_size": "Longueur des lignes d'axes de coordonnées",
+    "grid_plane": "Plan sur lequel la grille est dessinée",
+    "grid_opacity": "Opacité des lignes de grille",
+    "camera_frustum_scale": "Échelle visuelle des frustums de caméra",
+    "camera_metrics_mode": "Métriques de qualité d'image affichées sur les caméras d'entraînement",
+    "selection_color_committed": "Couleur des sélections validées",
+    "selection_color_preview": "Couleur pour l'aperçu de sélection",
+    "selection_color_center_marker": "Couleur du marqueur central de la sélection",
+    "mesh_wireframe": "Afficher le maillage en filaire",
+    "mesh_wireframe_color": "Couleur des lignes filaires",
+    "mesh_wireframe_width": "Largeur des lignes filaires",
+    "mesh_light_intensity": "Intensité de la lumière sur le maillage",
+    "mesh_ambient": "Contribution de la lumière ambiante au maillage",
+    "mesh_backface_culling": "Ne pas rendre les triangles orientés vers l'arrière",
+    "mesh_shadow_enabled": "Projeter et recevoir les ombres sur le maillage",
+    "mesh_shadow_resolution": "Résolution de la shadow map",
+    "ppisp_vignette_enabled": "Appliquer le vignettage dans la correction",
+    "ppisp_vignette_strength": "Assombrissement du vignettage dans les coins",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "Rendre avec une couleur de fond unie",
+        "equirect": "Rendre avec une carte d'environnement HDR à 360°"
+      },
+      "environment_map_preset": {
+        "kloofendal": "Intégré : Kloofendal Pure Sky",
+        "alps": "Intégré : Alps Field",
+        "custom": "Dernier HDRI personnalisé chargé"
+      },
+      "grid_plane": {
+        "yz": "Afficher la grille sur le plan YZ (vue de droite)",
+        "xz": "Afficher la grille sur le plan XZ (vue de dessus)",
+        "xy": "Afficher la grille sur le plan XY (vue de face)"
+      },
+      "sh_degree": {
+        "0": "Diffus uniquement — pas d'éclairage dépendant de la vue",
+        "1": "SH premier ordre — éclairage basique dépendant de la vue",
+        "2": "SH deuxième ordre — plus de détail directionnel",
+        "3": "SH troisième ordre — qualité maximale dépendante de la vue"
+      },
+      "camera_metrics": {
+        "off": "Masquer les métriques de qualité",
+        "psnr": "Afficher le PSNR par caméra d'entraînement",
+        "psnr_ssim": "Afficher le PSNR et SSIM par caméra d'entraînement"
+      },
+      "shadow_resolution": {
+        "512": "Shadow map 512×512 (basse qualité, rapide)",
+        "1024": "Shadow map 1024×1024 (équilibré)",
+        "2048": "Shadow map 2048×2048 (haute qualité)",
+        "4096": "Shadow map 4096×4096 (meilleure qualité, lent)"
+      },
+      "ppisp_mode": {
+        "manual": "Manuel : ajuster directement les curseurs de correction",
+        "auto": "Auto : utiliser le contrôleur entraîné pour la correction"
+      }
+    }
   },
   "exit_popup": {
     "title": "Quitter l'Application ?",

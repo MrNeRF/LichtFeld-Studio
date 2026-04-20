@@ -272,6 +272,7 @@ namespace lfs::vis {
         int last_camview_ = -1;
         int hovered_camera_id_ = -1;
         int last_clicked_camera_id_ = -1;
+        bool press_selected_camera_frustum_ = false;
         std::chrono::steady_clock::time_point last_click_time_;
         glm::dvec2 last_click_pos_{0, 0};
 

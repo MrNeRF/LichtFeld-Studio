@@ -883,6 +883,16 @@ namespace lfs::vis::gui {
                 data = stbi_load(decoded_source.c_str(), &w, &h, &channels, 4);
             }
         }
+#ifndef _WIN32
+        if (!data && !attempted_source.empty() && attempted_source[0] != '/' &&
+            attempted_source.find("://") == std::string::npos) {
+            const std::string absolute_source = "/" + attempted_source;
+            if (std::filesystem::exists(lfs::core::utf8_to_path(absolute_source))) {
+                attempted_source = absolute_source;
+                data = stbi_load(absolute_source.c_str(), &w, &h, &channels, 4);
+            }
+        }
+#endif
         if (!data) {
             LOG_WARN("RmlUI LoadTexture failed: {}", attempted_source);
             return 0;

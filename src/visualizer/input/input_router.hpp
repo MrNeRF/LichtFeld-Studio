@@ -38,6 +38,7 @@ namespace lfs::vis::input {
         void beginMouseButton(int action, double x, double y);
         void endMouseButton(int action);
         void syncPressedMouseButtons(bool any_buttons_pressed);
+        void focusViewportKeyboard();
 
         [[nodiscard]] InputTarget hoverTarget(double x, double y) const;
         [[nodiscard]] InputTarget pointerTarget(double x, double y) const;

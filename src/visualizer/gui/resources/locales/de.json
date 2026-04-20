@@ -35,7 +35,6 @@
     "help.about": "Über LichtFeld Studio"
   },
   "window": {
-    "getting_started": "Erste Schritte",
     "about": "Über LichtFeld Studio",
     "input_settings": "Eingabeeinstellungen",
     "debug_info": "Debug-Info",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "SCHNELLSTARTANLEITUNG",
+    "title": "Erste Schritte",
     "description": "Erfahren Sie, wie Sie Datensätze vorbereiten und mit LichtFeld Studio beginnen:",
     "wiki_section": "WIKI & FAQ",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training mit 360° Equirectangular-Bildern",
     "video_latest": "LichtFeld v0.3.0 Funktionsübersicht",
     "video_reality_scan": "Reality Scan Datensatz",
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
-    "video_masks": "Masken Tutorial",
-    "loading": "Laden...",
-    "wiki_label": "Wiki:",
-    "watch_tooltip": "Ansehen: {title}"
+    "video_masks": "Masken Tutorial"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "options.bg.color": "Farbe",
     "options.bg.modulation": "Modulation",
     "options.bg.image": "Bild",
-    "options.bg.random": "Zufaellig"
+    "options.bg.random": "Zufaellig",
+    "tooltip": {
+      "btn_switch_edit": "In Bearbeitungsmodus für die trainierte Szene wechseln",
+      "ppisp_freeze_from_sidecar": "PPISP-Gewichte aus Sidecar-Datei laden",
+      "ppisp_sidecar_path": "Pfad zur PPISP-Sidecar-Datei",
+      "ppisp_sidecar_browse": "Nach PPISP-Sidecar-Datei suchen",
+      "ppisp_sidecar_clear": "Ausgewählte PPISP-Sidecar-Datei entfernen",
+      "bg_color": "Volltonfarben-Hintergrund für das Training",
+      "bg_image_path": "Pfad zum Hintergrundbild für das Training",
+      "bg_image_browse": "Nach Hintergrundbild suchen",
+      "bg_image_clear": "Ausgewähltes Hintergrundbild entfernen",
+      "dataset_path": "Pfad zum geladenen Datensatz",
+      "dataset_images": "Anzahl der Bilder im Datensatz",
+      "dataset_output": "Ausgabeverzeichnis für trainierte Artefakte",
+      "opt_strategy_display": "Aktive Verdichtungsstrategie",
+      "bilateral_grid_x": "Bilaterales Gitter: X-Auflösung",
+      "bilateral_grid_y": "Bilaterales Gitter: Y-Auflösung",
+      "bilateral_grid_w": "Bilaterales Gitter: Farb-/Intensitäts-Bins",
+      "bilateral_grid_lr": "Lernrate des bilateralen Gitters",
+      "prune_opacity": "Gauß-Splats unter dieser Deckkraft entfernen",
+      "revised_opacity": "Überarbeitete Deckkraftformulierung verwenden",
+      "min_opacity": "Mindestdeckkraft für Pruning",
+      "grow_scale_3d": "Verdichten, wenn 3D-Skalierung diesen Wert überschreitet",
+      "grow_scale_2d": "Verdichten, wenn 2D-Bildschirmskala diesen Wert überschreitet",
+      "prune_scale_3d": "Pruning, wenn 3D-Skalierung diesen Wert überschreitet",
+      "prune_scale_2d": "Pruning, wenn 2D-Bildschirmskala diesen Wert überschreitet",
+      "pause_refine_after_reset": "Iterationen, in denen Verfeinerung nach Deckkraft-Reset pausiert",
+      "sparsify_steps": "Anzahl der Sparsifizierungsschritte",
+      "init_rho": "Anfängliche Sparsity-Strafe (rho)",
+      "prune_ratio": "Endgültiger Anteil der Gauß-Splats, die am Ende der Sparsifizierung entfernt werden",
+      "opt": {
+        "strategy": {
+          "mrnf": "Standard-3DGS-Strategie mit MRNF-Verfeinerung",
+          "igs_plus": "Verbesserte 3DGS+-Strategie mit verfeinertem Wachsen/Pruning",
+          "mcmc": "MCMC-Strategie mit sampling-basierter Verdichtung"
+        },
+        "sh_degree": {
+          "0": "Nur diffus — am schnellsten, keine blickrichtungsabhängige Farbe",
+          "1": "SH erster Ordnung — einfache Spekularhinweise",
+          "2": "SH zweiter Ordnung — bessere blickrichtungsabhängige Farbe",
+          "3": "SH dritter Ordnung — beste Qualität, höchster VRAM-Verbrauch"
+        },
+        "tile_mode": {
+          "full": "Rasterung mit voller Auflösung",
+          "half": "Halbe Auflösung der Rasterung (~4× schneller)",
+          "quarter": "Viertel Auflösung der Rasterung (~16× schneller)"
+        },
+        "mask_mode": {
+          "none": "Auf dem gesamten Bild trainieren, keine Maskierung",
+          "segment": "Segmentierungsmaske für den Vordergrund verwenden",
+          "ignore": "Maskierte Pixel im Verlust ignorieren",
+          "alpha_consistent": "Alpha-Konsistenz mit der Maske erzwingen"
+        },
+        "bg_mode": {
+          "color": "Feste Hintergrundfarbe verwenden",
+          "modulation": "Hintergrund mit rekonstruiertem Alpha modulieren",
+          "image": "Hintergrundbild verwenden",
+          "random": "Hintergrundfarbe in jedem Schritt zufällig wählen"
+        },
+        "resize_factor": {
+          "auto": "Skalierungsfaktor automatisch für VRAM wählen",
+          "1": "Mit Originalbildauflösung trainieren",
+          "2": "Mit halber Bildauflösung trainieren",
+          "4": "Mit Viertel-Bildauflösung trainieren",
+          "8": "Mit einem Achtel der Bildauflösung trainieren"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "PLY hinzufügen...",
@@ -647,7 +711,72 @@
     "seq_dock": "Sequencer andocken",
     "seq_undock": "Sequencer abdocken",
     "seq_interval": "Rasterintervall",
-    "seq_preview_size": "PiP-Vorschauskalierung"
+    "seq_preview_size": "PiP-Vorschauskalierung",
+    "transform_position_axis": "Auswahl entlang dieser Achse verschieben",
+    "transform_rotation_axis": "Auswahl um diese Achse drehen (Grad)",
+    "transform_scale_axis": "Auswahl entlang dieser Achse skalieren",
+    "transform_scale_uniform": "Gleichmäßige Skalierung auf allen Achsen",
+    "transform_reset": "Transformation auf Standard zurücksetzen",
+    "environment_mode": "Hintergrundquelle: Volltonfarbe oder HDRI",
+    "environment_map_path": "HDRI-Umgebungsmap auswählen",
+    "environment_exposure": "HDRI-Belichtung in EV-Stufen",
+    "environment_rotation": "HDRI um die vertikale Achse drehen",
+    "voxel_size": "Voxelgittergröße für räumliche Abfragen",
+    "axes_size": "Länge der Koordinatenachsenlinien",
+    "grid_plane": "Ebene, auf der das Gitter gezeichnet wird",
+    "grid_opacity": "Deckkraft der Gitterlinien",
+    "camera_frustum_scale": "Visuelle Größe der Kamera-Frustums",
+    "camera_metrics_mode": "Bildqualitätsmetriken über Trainingskameras anzeigen",
+    "selection_color_committed": "Farbe für bestätigte Auswahlen",
+    "selection_color_preview": "Farbe für Auswahlvorschau",
+    "selection_color_center_marker": "Farbe für die Mittelpunktmarkierung der Auswahl",
+    "mesh_wireframe": "Mesh als Drahtgitter rendern",
+    "mesh_wireframe_color": "Farbe der Drahtgitterlinien",
+    "mesh_wireframe_width": "Breite der Drahtgitterlinien",
+    "mesh_light_intensity": "Lichtintensität für Mesh",
+    "mesh_ambient": "Anteil des Umgebungslichts auf dem Mesh",
+    "mesh_backface_culling": "Rückseitige Dreiecke nicht rendern",
+    "mesh_shadow_enabled": "Schatten auf dem Mesh werfen und empfangen",
+    "mesh_shadow_resolution": "Auflösung der Shadow Map",
+    "ppisp_vignette_enabled": "Vignette als Teil der Korrektur anwenden",
+    "ppisp_vignette_strength": "Vignettenstärke an den Ecken",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "Mit Volltonfarben-Hintergrund rendern",
+        "equirect": "Mit 360°-HDR-Umgebungsmap rendern"
+      },
+      "environment_map_preset": {
+        "kloofendal": "Integriert: Kloofendal Pure Sky",
+        "alps": "Integriert: Alps Field",
+        "custom": "Zuletzt geladenes benutzerdefiniertes HDRI"
+      },
+      "grid_plane": {
+        "yz": "Gitter in der YZ-Ebene anzeigen (Rechte Ansicht)",
+        "xz": "Gitter in der XZ-Ebene anzeigen (Draufsicht)",
+        "xy": "Gitter in der XY-Ebene anzeigen (Vorderansicht)"
+      },
+      "sh_degree": {
+        "0": "Nur diffus — keine blickrichtungsabhängige Beleuchtung",
+        "1": "SH erster Ordnung — einfache blickrichtungsabhängige Beleuchtung",
+        "2": "SH zweiter Ordnung — mehr Richtungsdetail",
+        "3": "SH dritter Ordnung — volle blickrichtungsabhängige Qualität"
+      },
+      "camera_metrics": {
+        "off": "Qualitätsmetriken ausblenden",
+        "psnr": "PSNR pro Trainingskamera anzeigen",
+        "psnr_ssim": "PSNR und SSIM pro Trainingskamera anzeigen"
+      },
+      "shadow_resolution": {
+        "512": "512×512-Shadow-Map (niedrige Qualität, schnell)",
+        "1024": "1024×1024-Shadow-Map (ausgewogen)",
+        "2048": "2048×2048-Shadow-Map (hohe Qualität)",
+        "4096": "4096×4096-Shadow-Map (beste Qualität, langsam)"
+      },
+      "ppisp_mode": {
+        "manual": "Manuell: Korrekturregler direkt anpassen",
+        "auto": "Auto: trainierten Controller für Korrektur verwenden"
+      }
+    }
   },
   "exit_popup": {
     "title": "Anwendung beenden?",

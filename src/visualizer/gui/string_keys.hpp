@@ -48,13 +48,11 @@ namespace lichtfeld::Strings {
 
         namespace Help {
             inline constexpr const char* MENU = "menu.help";
-            inline constexpr const char* GETTING_STARTED = "menu.help.getting_started";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
     } // namespace Menu
 
     namespace Window {
-        inline constexpr const char* GETTING_STARTED = "window.getting_started";
         inline constexpr const char* ABOUT = "window.about";
         inline constexpr const char* INPUT_SETTINGS = "window.input_settings";
         inline constexpr const char* DEBUG_INFO = "window.debug_info";
@@ -64,19 +62,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TRAINING = "window.training";
         inline constexpr const char* PREFERENCES = "window.preferences";
     } // namespace Window
-
-    namespace GettingStarted {
-        inline constexpr const char* TITLE = "getting_started.title";
-        inline constexpr const char* DESCRIPTION = "getting_started.description";
-        inline constexpr const char* WIKI_SECTION = "getting_started.wiki_section";
-        inline constexpr const char* VIDEO_INTRO = "getting_started.video_intro";
-        inline constexpr const char* VIDEO_LATEST = "getting_started.video_latest";
-        inline constexpr const char* VIDEO_REALITY_SCAN = "getting_started.video_reality_scan";
-        inline constexpr const char* VIDEO_COLMAP = "getting_started.video_colmap";
-        inline constexpr const char* VIDEO_LICHTFELD = "getting_started.video_lichtfeld";
-        inline constexpr const char* VIDEO_MASKS = "getting_started.video_masks";
-        inline constexpr const char* LOADING = "getting_started.loading";
-    } // namespace GettingStarted
 
     namespace About {
         inline constexpr const char* TITLE = "about.title";

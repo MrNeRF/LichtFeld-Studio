@@ -35,7 +35,6 @@
     "help.about": "关于LichtFeld Studio"
   },
   "window": {
-    "getting_started": "入门指南",
     "about": "关于LichtFeld Studio",
     "input_settings": "输入设置",
     "debug_info": "调试信息",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "快速入门指南",
+    "title": "入门指南",
     "description": "学习如何准备数据集并开始使用LichtFeld Studio：",
     "wiki_section": "维基 & 常见问题",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "360度等距柱状投影图像训练",
     "video_latest": "LichtFeld v0.3.0 功能概览",
     "video_reality_scan": "Reality Scan数据集",
     "video_colmap": "COLMAP教程",
     "video_lichtfeld": "LichtFeld教程",
-    "video_masks": "蒙版教程",
-    "loading": "加载中...",
-    "wiki_label": "Wiki:",
-    "watch_tooltip": "观看：{title}"
+    "video_masks": "蒙版教程"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "options.bg.color": "颜色",
     "options.bg.modulation": "调制",
     "options.bg.image": "图像",
-    "options.bg.random": "随机"
+    "options.bg.random": "随机",
+    "tooltip": {
+      "btn_switch_edit": "切换到已训练场景的编辑模式",
+      "ppisp_freeze_from_sidecar": "从 sidecar 文件加载 PPISP 权重",
+      "ppisp_sidecar_path": "PPISP sidecar 文件路径",
+      "ppisp_sidecar_browse": "浏览 PPISP sidecar 文件",
+      "ppisp_sidecar_clear": "清除已选 PPISP sidecar",
+      "bg_color": "训练期间使用的纯色背景",
+      "bg_image_path": "训练期间使用的背景图像路径",
+      "bg_image_browse": "浏览背景图像",
+      "bg_image_clear": "清除已选背景图像",
+      "dataset_path": "已加载数据集的路径",
+      "dataset_images": "数据集中的图像数量",
+      "dataset_output": "训练产物的输出目录",
+      "opt_strategy_display": "当前活动的稠密化策略",
+      "bilateral_grid_x": "双边网格 X 分辨率",
+      "bilateral_grid_y": "双边网格 Y 分辨率",
+      "bilateral_grid_w": "双边网格颜色/强度分箱",
+      "bilateral_grid_lr": "双边网格学习率",
+      "prune_opacity": "剪除低于此不透明度的高斯",
+      "revised_opacity": "使用修订后的不透明度公式",
+      "min_opacity": "剪枝的最小不透明度阈值",
+      "grow_scale_3d": "当 3D 尺度超过此值时进行稠密化",
+      "grow_scale_2d": "当 2D 屏幕空间尺度超过此值时进行稠密化",
+      "prune_scale_3d": "当 3D 尺度超过此值时剪枝",
+      "prune_scale_2d": "当 2D 屏幕空间尺度超过此值时剪枝",
+      "pause_refine_after_reset": "不透明度重置后暂停细化的迭代次数",
+      "sparsify_steps": "稀疏化步数",
+      "init_rho": "初始稀疏惩罚（rho）",
+      "prune_ratio": "稀疏化结束时要剪除的高斯最终比例",
+      "opt": {
+        "strategy": {
+          "mrnf": "带 MRNF 精细化的默认 3DGS 策略",
+          "igs_plus": "改进的 3DGS+，具备精细生长/剪枝",
+          "mcmc": "基于采样的稠密化 MCMC 策略"
+        },
+        "sh_degree": {
+          "0": "仅漫反射 — 最快，无视角相关颜色",
+          "1": "一阶 SH — 基础高光提示",
+          "2": "二阶 SH — 更好的视角相关颜色",
+          "3": "三阶 SH — 最佳质量，最多 VRAM"
+        },
+        "tile_mode": {
+          "full": "全分辨率光栅化",
+          "half": "半分辨率光栅化（约 4× 更快）",
+          "quarter": "四分之一分辨率光栅化（约 16× 更快）"
+        },
+        "mask_mode": {
+          "none": "在整张图像上训练，无掩码",
+          "segment": "使用分割掩码作为前景",
+          "ignore": "在损失中忽略被掩码的像素",
+          "alpha_consistent": "强制 alpha 与掩码一致"
+        },
+        "bg_mode": {
+          "color": "使用固定背景色",
+          "modulation": "使用重建的 alpha 调制背景",
+          "image": "使用背景图像",
+          "random": "每步随机化背景色"
+        },
+        "resize_factor": {
+          "auto": "根据 VRAM 自动选择缩放因子",
+          "1": "以原始图像分辨率训练",
+          "2": "以一半图像分辨率训练",
+          "4": "以四分之一图像分辨率训练",
+          "8": "以八分之一图像分辨率训练"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "添加PLY...",
@@ -647,7 +711,72 @@
     "seq_dock": "停靠序列器",
     "seq_undock": "取消停靠序列器",
     "seq_interval": "网格对齐间隔",
-    "seq_preview_size": "画中画预览缩放"
+    "seq_preview_size": "画中画预览缩放",
+    "transform_position_axis": "沿此轴平移所选对象",
+    "transform_rotation_axis": "围绕此轴旋转所选对象（度）",
+    "transform_scale_axis": "沿此轴缩放所选对象",
+    "transform_scale_uniform": "所有轴上的统一缩放",
+    "transform_reset": "重置变换为单位变换",
+    "environment_mode": "背景来源：纯色或 HDRI",
+    "environment_map_path": "选择 HDRI 环境贴图",
+    "environment_exposure": "HDRI 曝光（EV 档位）",
+    "environment_rotation": "围绕垂直轴旋转 HDRI",
+    "voxel_size": "用于空间查询的体素单元大小",
+    "axes_size": "坐标轴线长度",
+    "grid_plane": "绘制网格的平面",
+    "grid_opacity": "网格线不透明度",
+    "camera_frustum_scale": "相机视锥的显示大小",
+    "camera_metrics_mode": "在训练相机上显示图像质量指标",
+    "selection_color_committed": "已提交选择的颜色",
+    "selection_color_preview": "选择预览的颜色",
+    "selection_color_center_marker": "选择中心标记的颜色",
+    "mesh_wireframe": "以线框方式渲染网格",
+    "mesh_wireframe_color": "线框颜色",
+    "mesh_wireframe_width": "线框线宽",
+    "mesh_light_intensity": "网格光照强度",
+    "mesh_ambient": "网格环境光贡献",
+    "mesh_backface_culling": "不渲染背面三角形",
+    "mesh_shadow_enabled": "网格投射和接收阴影",
+    "mesh_shadow_resolution": "阴影贴图分辨率",
+    "ppisp_vignette_enabled": "在校正中应用暗角",
+    "ppisp_vignette_strength": "角落暗角强度",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "使用纯色背景渲染",
+        "equirect": "使用 360° HDR 环境贴图渲染"
+      },
+      "environment_map_preset": {
+        "kloofendal": "内置：Kloofendal Pure Sky",
+        "alps": "内置：Alps Field",
+        "custom": "最近加载的自定义 HDRI"
+      },
+      "grid_plane": {
+        "yz": "在 YZ 平面显示网格（右视图）",
+        "xz": "在 XZ 平面显示网格（顶视图）",
+        "xy": "在 XY 平面显示网格（前视图）"
+      },
+      "sh_degree": {
+        "0": "仅漫反射 — 无视角相关光照",
+        "1": "一阶 SH — 基础视角相关光照",
+        "2": "二阶 SH — 更多方向细节",
+        "3": "三阶 SH — 最佳视角相关质量"
+      },
+      "camera_metrics": {
+        "off": "隐藏质量指标",
+        "psnr": "显示每个训练相机的 PSNR",
+        "psnr_ssim": "显示每个训练相机的 PSNR 和 SSIM"
+      },
+      "shadow_resolution": {
+        "512": "512×512 阴影贴图（低质量，快）",
+        "1024": "1024×1024 阴影贴图（平衡）",
+        "2048": "2048×2048 阴影贴图（高质量）",
+        "4096": "4096×4096 阴影贴图（最佳质量，慢）"
+      },
+      "ppisp_mode": {
+        "manual": "手动：直接调整校正滑块",
+        "auto": "自动：使用训练好的控制器进行校正"
+      }
+    }
   },
   "exit_popup": {
     "title": "退出应用程序？",

@@ -35,7 +35,6 @@
     "help.about": "About LichtFeld Studio"
   },
   "window": {
-    "getting_started": "Getting Started",
     "about": "About LichtFeld Studio",
     "input_settings": "Input Settings",
     "debug_info": "Debug Info",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "QUICK START GUIDE",
+    "title": "Getting Started",
     "description": "Learn how to prepare datasets and get started with LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
-    "wiki_label": "Wiki:",
-    "watch_tooltip": "Watch: {title}",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training on 360 Equirectangular Images",
     "video_latest": "LichtFeld v0.3.0 Feature Overview",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
-    "video_masks": "Masks Tutorial",
-    "loading": "Loading..."
+    "video_masks": "Masks Tutorial"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "button.save_checkpoint": "Save Checkpoint",
     "button.switch_edit_mode": "Edit Mode",
     "button.add": "Add",
-    "button.remove": "Remove"
+    "button.remove": "Remove",
+    "tooltip": {
+      "btn_switch_edit": "Switch to edit mode for the trained scene",
+      "ppisp_freeze_from_sidecar": "Load PPISP weights from a sidecar file",
+      "ppisp_sidecar_path": "Path to the PPISP sidecar file",
+      "ppisp_sidecar_browse": "Browse for a PPISP sidecar file",
+      "ppisp_sidecar_clear": "Clear the selected PPISP sidecar",
+      "bg_color": "Solid background color used during training",
+      "bg_image_path": "Path to the background image used during training",
+      "bg_image_browse": "Browse for a background image",
+      "bg_image_clear": "Clear the selected background image",
+      "dataset_path": "Path to the loaded dataset",
+      "dataset_images": "Number of images in the dataset",
+      "dataset_output": "Output directory for trained artifacts",
+      "opt_strategy_display": "Active densification strategy",
+      "bilateral_grid_x": "Bilateral grid X resolution",
+      "bilateral_grid_y": "Bilateral grid Y resolution",
+      "bilateral_grid_w": "Bilateral grid color/intensity bins",
+      "bilateral_grid_lr": "Bilateral grid learning rate",
+      "prune_opacity": "Prune Gaussians below this opacity",
+      "revised_opacity": "Use the revised opacity formulation",
+      "min_opacity": "Minimum opacity threshold for pruning",
+      "grow_scale_3d": "Densify when 3D scale exceeds this",
+      "grow_scale_2d": "Densify when 2D screen-space scale exceeds this",
+      "prune_scale_3d": "Prune when 3D scale exceeds this",
+      "prune_scale_2d": "Prune when 2D screen-space scale exceeds this",
+      "pause_refine_after_reset": "Iterations to pause refinement after opacity reset",
+      "sparsify_steps": "Number of sparsification steps",
+      "init_rho": "Initial sparsity penalty (rho)",
+      "prune_ratio": "Final fraction of Gaussians to prune at the end of sparsification",
+      "opt": {
+        "strategy": {
+          "mrnf": "Default 3DGS strategy with MRNF refinement",
+          "igs_plus": "Improved 3DGS+ with refined growing/pruning",
+          "mcmc": "MCMC strategy with sampling-based densification"
+        },
+        "sh_degree": {
+          "0": "Diffuse only — fastest, no view-dependent color",
+          "1": "First-order SH — basic specular cues",
+          "2": "Second-order SH — better view-dependent color",
+          "3": "Third-order SH — best quality, most VRAM"
+        },
+        "tile_mode": {
+          "full": "Full resolution rasterization",
+          "half": "Half resolution rasterization (~4× faster)",
+          "quarter": "Quarter resolution rasterization (~16× faster)"
+        },
+        "mask_mode": {
+          "none": "Train on the entire image, no masking",
+          "segment": "Use the segmentation mask for foreground",
+          "ignore": "Ignore masked pixels in the loss",
+          "alpha_consistent": "Enforce alpha consistency with the mask"
+        },
+        "bg_mode": {
+          "color": "Use a fixed background color",
+          "modulation": "Modulate background with reconstructed alpha",
+          "image": "Use a background image",
+          "random": "Randomize background color each step"
+        },
+        "resize_factor": {
+          "auto": "Auto-pick resize factor for VRAM",
+          "1": "Train at original image resolution",
+          "2": "Train at half image resolution",
+          "4": "Train at quarter image resolution",
+          "8": "Train at one-eighth image resolution"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "Add PLY...",
@@ -659,7 +723,72 @@
     "simplify_opacity_prune": "Prune Gaussians below this opacity threshold before merging",
     "simplify_output": "Name of the new simplified splat node that will be added to the scene",
     "simplify_apply": "Create a new simplified splat node from the selected source",
-    "simplify_cancel": "Cancel the active splat simplify job"
+    "simplify_cancel": "Cancel the active splat simplify job",
+    "transform_position_axis": "Translate the selection along this axis",
+    "transform_rotation_axis": "Rotate the selection around this axis (degrees)",
+    "transform_scale_axis": "Scale the selection along this axis",
+    "transform_scale_uniform": "Uniform scale across all axes",
+    "transform_reset": "Reset the transform to identity",
+    "environment_mode": "Background source: solid color or HDRI",
+    "environment_map_path": "Choose an HDRI environment map",
+    "environment_exposure": "HDRI exposure in EV stops",
+    "environment_rotation": "Rotate HDRI around the vertical axis",
+    "voxel_size": "Voxel grid cell size for spatial queries",
+    "axes_size": "Length of the coordinate axis lines",
+    "grid_plane": "Plane on which the grid is drawn",
+    "grid_opacity": "Grid line opacity",
+    "camera_frustum_scale": "Visual scale of the camera frustums",
+    "camera_metrics_mode": "Image-quality metrics shown over training cameras",
+    "selection_color_committed": "Color used for committed selections",
+    "selection_color_preview": "Color used for selection preview",
+    "selection_color_center_marker": "Color used for the selection center marker",
+    "mesh_wireframe": "Render the mesh as wireframe",
+    "mesh_wireframe_color": "Wireframe line color",
+    "mesh_wireframe_width": "Wireframe line width",
+    "mesh_light_intensity": "Mesh light intensity",
+    "mesh_ambient": "Mesh ambient light contribution",
+    "mesh_backface_culling": "Skip rendering back-facing triangles",
+    "mesh_shadow_enabled": "Cast and receive shadows on mesh",
+    "mesh_shadow_resolution": "Shadow map resolution",
+    "ppisp_vignette_enabled": "Apply vignette as part of correction",
+    "ppisp_vignette_strength": "Vignette darkening at the corners",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "Render with a flat background color",
+        "equirect": "Render with a 360° HDR environment map"
+      },
+      "environment_map_preset": {
+        "kloofendal": "Built-in: Kloofendal Pure Sky",
+        "alps": "Built-in: Alps Field",
+        "custom": "Last loaded custom HDRI"
+      },
+      "grid_plane": {
+        "yz": "Show grid on the YZ plane (right view)",
+        "xz": "Show grid on the XZ plane (top view)",
+        "xy": "Show grid on the XY plane (front view)"
+      },
+      "sh_degree": {
+        "0": "Diffuse only — no view-dependent lighting",
+        "1": "First-order SH — basic view-dependent lighting",
+        "2": "Second-order SH — more directional detail",
+        "3": "Third-order SH — full view-dependent quality"
+      },
+      "camera_metrics": {
+        "off": "Hide quality metrics",
+        "psnr": "Show PSNR per training camera",
+        "psnr_ssim": "Show PSNR and SSIM per training camera"
+      },
+      "shadow_resolution": {
+        "512": "512×512 shadow map (low quality, fast)",
+        "1024": "1024×1024 shadow map (balanced)",
+        "2048": "2048×2048 shadow map (high quality)",
+        "4096": "4096×4096 shadow map (best quality, slow)"
+      },
+      "ppisp_mode": {
+        "manual": "Manual: adjust correction sliders directly",
+        "auto": "Auto: use the trained controller for correction"
+      }
+    }
   },
   "exit_popup": {
     "title": "Exit Application?",

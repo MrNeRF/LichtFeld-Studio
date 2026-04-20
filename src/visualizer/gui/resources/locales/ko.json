@@ -35,7 +35,6 @@
     "help.about": "LichtFeld Studio 정보"
   },
   "window": {
-    "getting_started": "시작하기",
     "about": "LichtFeld Studio 정보",
     "input_settings": "입력 설정",
     "debug_info": "디버그 정보",
@@ -47,18 +46,16 @@
     "histogram": "Histogram"
   },
   "getting_started": {
-    "title": "빠른 시작 가이드",
+    "title": "시작하기",
     "description": "데이터셋 준비 방법과 LichtFeld Studio 사용법을 배워보세요:",
     "wiki_section": "위키 & 자주 묻는 질문",
+    "video_automotive": "3dgs for automotive marketing",
     "video_intro": "360 정방형 이미지 트레이닝",
     "video_latest": "LichtFeld v0.3.0 기능 개요",
     "video_reality_scan": "Reality Scan 데이터셋",
     "video_colmap": "COLMAP 튜토리얼",
     "video_lichtfeld": "LichtFeld 튜토리얼",
-    "video_masks": "마스크 튜토리얼",
-    "loading": "로딩 중...",
-    "wiki_label": "위키:",
-    "watch_tooltip": "시청: {title}"
+    "video_masks": "마스크 튜토리얼"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -267,7 +264,74 @@
     "options.bg.color": "색상",
     "options.bg.modulation": "변조",
     "options.bg.image": "이미지",
-    "options.bg.random": "무작위"
+    "options.bg.random": "무작위",
+    "tooltip": {
+      "btn_switch_edit": "훈련된 장면의 편집 모드로 전환",
+      "ppisp_freeze_from_sidecar": "사이드카 파일에서 PPISP 가중치 로드",
+      "ppisp_sidecar_path": "PPISP 사이드카 파일 경로",
+      "ppisp_sidecar_browse": "PPISP 사이드카 파일 찾아보기",
+      "ppisp_sidecar_clear": "선택된 PPISP 사이드카 지우기",
+      "bg_color": "훈련 중 사용되는 단색 배경",
+      "bg_image_path": "훈련 중 사용되는 배경 이미지 경로",
+      "bg_image_browse": "배경 이미지 찾아보기",
+      "bg_image_clear": "선택된 배경 이미지 지우기",
+      "dataset_path": "로드된 데이터셋 경로",
+      "dataset_images": "데이터셋의 이미지 수",
+      "dataset_output": "훈련된 결과물의 출력 디렉토리",
+      "opt_strategy_display": "활성 밀도화 전략",
+      "bilateral_grid_x": "양방향 그리드 X 해상도",
+      "bilateral_grid_y": "양방향 그리드 Y 해상도",
+      "bilateral_grid_w": "양방향 그리드 색상/강도 빈",
+      "bilateral_grid_lr": "양방향 그리드 학습률",
+      "prune_opacity": "이 불투명도 미만의 가우시안 제거",
+      "revised_opacity": "개정된 불투명도 공식 사용",
+      "min_opacity": "가지치기용 최소 불투명도 임계값",
+      "grow_scale_3d": "3D 크기가 이 값을 초과하면 밀도화",
+      "grow_scale_2d": "2D 화면 공간 크기가 이 값을 초과하면 밀도화",
+      "prune_scale_3d": "3D 크기가 이 값을 초과하면 가지치기",
+      "prune_scale_2d": "2D 화면 공간 크기가 이 값을 초과하면 가지치기",
+      "pause_refine_after_reset": "불투명도 재설정 후 정제 일시중지 반복 횟수",
+      "sparsify_steps": "희소화 단계 수",
+      "init_rho": "초기 희소성 페널티 (rho)",
+      "prune_ratio": "희소화 종료 시 제거할 가우시안의 최종 비율",
+      "opt": {
+        "strategy": {
+          "mrnf": "MRNF 정제를 사용하는 기본 3DGS 전략",
+          "igs_plus": "개선된 성장/가지치기의 3DGS+",
+          "mcmc": "샘플링 기반 밀도화를 사용하는 MCMC 전략"
+        },
+        "sh_degree": {
+          "0": "확산만 — 가장 빠름, 시점 의존 색상 없음",
+          "1": "1차 SH — 기본 반사 단서",
+          "2": "2차 SH — 더 나은 시점 의존 색상",
+          "3": "3차 SH — 최고 품질, 가장 많은 VRAM"
+        },
+        "tile_mode": {
+          "full": "전체 해상도 래스터화",
+          "half": "절반 해상도 래스터화 (약 4× 빠름)",
+          "quarter": "4분의 1 해상도 래스터화 (약 16× 빠름)"
+        },
+        "mask_mode": {
+          "none": "전체 이미지로 훈련, 마스크 없음",
+          "segment": "전경에 세그먼테이션 마스크 사용",
+          "ignore": "손실에서 마스크된 픽셀 무시",
+          "alpha_consistent": "마스크와의 알파 일관성 적용"
+        },
+        "bg_mode": {
+          "color": "고정 배경색 사용",
+          "modulation": "재구성된 알파로 배경 변조",
+          "image": "배경 이미지 사용",
+          "random": "각 단계마다 배경색 무작위화"
+        },
+        "resize_factor": {
+          "auto": "VRAM에 맞춰 크기 조정 비율 자동 선택",
+          "1": "원본 이미지 해상도로 훈련",
+          "2": "절반 이미지 해상도로 훈련",
+          "4": "4분의 1 이미지 해상도로 훈련",
+          "8": "8분의 1 이미지 해상도로 훈련"
+        }
+      }
+    }
   },
   "scene": {
     "add_ply": "PLY 추가...",
@@ -647,7 +711,72 @@
     "seq_dock": "시퀀서 도킹",
     "seq_undock": "시퀀서 도킹 해제",
     "seq_interval": "그리드 스냅 간격",
-    "seq_preview_size": "PiP 미리보기 배율"
+    "seq_preview_size": "PiP 미리보기 배율",
+    "transform_position_axis": "이 축을 따라 선택 항목 이동",
+    "transform_rotation_axis": "이 축을 중심으로 선택 항목 회전 (도)",
+    "transform_scale_axis": "이 축을 따라 선택 항목 크기 조정",
+    "transform_scale_uniform": "모든 축에 균일한 크기 조정",
+    "transform_reset": "변환을 초기값으로 재설정",
+    "environment_mode": "배경 소스: 단색 또는 HDRI",
+    "environment_map_path": "HDRI 환경 맵 선택",
+    "environment_exposure": "HDRI 노출 (EV 스톱)",
+    "environment_rotation": "수직 축을 중심으로 HDRI 회전",
+    "voxel_size": "공간 쿼리용 복셀 셀 크기",
+    "axes_size": "좌표축 선의 길이",
+    "grid_plane": "그리드가 그려지는 평면",
+    "grid_opacity": "그리드 선 불투명도",
+    "camera_frustum_scale": "카메라 프러스텀 표시 크기",
+    "camera_metrics_mode": "훈련 카메라 위에 이미지 품질 지표 표시",
+    "selection_color_committed": "확정된 선택 색상",
+    "selection_color_preview": "선택 미리보기 색상",
+    "selection_color_center_marker": "선택 중심 마커 색상",
+    "mesh_wireframe": "메시를 와이어프레임으로 렌더링",
+    "mesh_wireframe_color": "와이어프레임 선 색상",
+    "mesh_wireframe_width": "와이어프레임 선 두께",
+    "mesh_light_intensity": "메시 조명 강도",
+    "mesh_ambient": "메시에 대한 주변광 기여도",
+    "mesh_backface_culling": "뒷면 삼각형 렌더링 생략",
+    "mesh_shadow_enabled": "메시에 그림자 투사 및 수신",
+    "mesh_shadow_resolution": "섀도우 맵 해상도",
+    "ppisp_vignette_enabled": "보정의 일부로 비네트 적용",
+    "ppisp_vignette_strength": "모서리 비네트 어둡기",
+    "opt": {
+      "environment_mode": {
+        "solid_color": "단색 배경으로 렌더링",
+        "equirect": "360° HDR 환경 맵으로 렌더링"
+      },
+      "environment_map_preset": {
+        "kloofendal": "내장: Kloofendal Pure Sky",
+        "alps": "내장: Alps Field",
+        "custom": "마지막으로 로드한 사용자 정의 HDRI"
+      },
+      "grid_plane": {
+        "yz": "YZ 평면에 그리드 표시 (오른쪽 뷰)",
+        "xz": "XZ 평면에 그리드 표시 (위쪽 뷰)",
+        "xy": "XY 평면에 그리드 표시 (앞쪽 뷰)"
+      },
+      "sh_degree": {
+        "0": "확산만 — 시점 의존 조명 없음",
+        "1": "1차 SH — 기본 시점 의존 조명",
+        "2": "2차 SH — 더 많은 방향 디테일",
+        "3": "3차 SH — 완전한 시점 의존 품질"
+      },
+      "camera_metrics": {
+        "off": "품질 지표 숨기기",
+        "psnr": "훈련 카메라별 PSNR 표시",
+        "psnr_ssim": "훈련 카메라별 PSNR 및 SSIM 표시"
+      },
+      "shadow_resolution": {
+        "512": "512×512 섀도우 맵 (저품질, 빠름)",
+        "1024": "1024×1024 섀도우 맵 (균형)",
+        "2048": "2048×2048 섀도우 맵 (고품질)",
+        "4096": "4096×4096 섀도우 맵 (최고 품질, 느림)"
+      },
+      "ppisp_mode": {
+        "manual": "수동: 보정 슬라이더 직접 조정",
+        "auto": "자동: 학습된 컨트롤러로 보정"
+      }
+    }
   },
   "exit_popup": {
     "title": "애플리케이션을 종료하시겠습니까?",
