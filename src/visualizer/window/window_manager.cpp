@@ -8,6 +8,7 @@
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include <SDL3/SDL.h>
+#include <cstdlib>
 #include <cstring>
 #include <glad/glad.h>
 #include <imgui_impl_sdl3.h>
@@ -75,6 +76,30 @@ namespace lfs::vis {
             return false;
         }
 
+        bool containsToken(const char* const haystack, const char* const needle) {
+            return haystack && needle && std::strstr(haystack, needle) != nullptr;
+        }
+
+        bool shouldPreferX11OnGnome() {
+#if defined(__linux__)
+            // GNOME on Wayland can present undecorated SDL toplevels when the
+            // compositor expects client-side decorations but libdecor is not
+            // available at runtime. Prefer X11/Xwayland in that case so the
+            // native min/max/close buttons remain available.
+            const char* const current_desktop = std::getenv("XDG_CURRENT_DESKTOP");
+            const char* const session_desktop = std::getenv("XDG_SESSION_DESKTOP");
+            const bool is_gnome = containsToken(current_desktop, "GNOME") ||
+                                  containsToken(session_desktop, "gnome") ||
+                                  containsToken(session_desktop, "GNOME");
+            const bool has_wayland = std::getenv("WAYLAND_DISPLAY") != nullptr;
+            const bool has_x11 = std::getenv("DISPLAY") != nullptr;
+            const bool explicit_driver = std::getenv("SDL_VIDEO_DRIVER") != nullptr;
+            return is_gnome && has_wayland && has_x11 && !explicit_driver;
+#else
+            return false;
+#endif
+        }
+
         void reportSdlVideoInitFailure() {
             std::cerr << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
 
@@ -121,9 +146,18 @@ namespace lfs::vis {
     }
 
     bool WindowManager::init() {
+        if (shouldPreferX11OnGnome()) {
+            SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "x11,wayland");
+            LOG_INFO("GNOME Wayland session detected; preferring X11/Xwayland for native window decorations");
+        }
+
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             reportSdlVideoInitFailure();
             return false;
+        }
+
+        if (const char* const video_driver = SDL_GetCurrentVideoDriver(); video_driver) {
+            LOG_INFO("SDL video driver: {}", video_driver);
         }
 
         SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
