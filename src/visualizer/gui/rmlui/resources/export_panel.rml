@@ -59,10 +59,17 @@
         </div>
       </div>
 
-      <!-- RAD LOD Settings - only shown for RAD format -->
-      <div data-if="show_rad_lod_settings">
+      <!-- RAD Settings - only shown for RAD format -->
+      <div data-if="show_rad_settings">
         <div class="separator"></div>
         <div class="ep-section">
+          <!-- Y-flip checkbox -->
+          <div class="setting-row setting-row--aligned">
+            <span class="setting-row__label-col">@tr:export_dialog.rad_flip_y</span>
+            <div class="setting-row__control-col">
+              <input type="checkbox" data-attrif-checked="rad_flip_y" data-event-change="toggle_rad_flip_y" />
+            </div>
+          </div>
           <div class="setting-row setting-row--aligned">
             <span class="setting-row__label-col">@tr:export_dialog.rad_customize_lod</span>
             <div class="setting-row__control-col">

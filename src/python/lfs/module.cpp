@@ -827,15 +827,16 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           const std::optional<std::vector<float>>& rad_lod_ratios) {
+           const std::optional<std::vector<float>>& rad_lod_ratios, bool rad_flip_y) {
             std::vector<float> lod_ratios;
             if (rad_lod_ratios.has_value()) {
                 lod_ratios = rad_lod_ratios.value();
             }
-            lfs::python::invoke_export(format, path, node_names, sh_degree, lod_ratios);
+            lfs::python::invoke_export(format, path, node_names, sh_degree, lod_ratios, rad_flip_y);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_lod_ratios") = nb::none(),
+        nb::arg("rad_flip_y") = false,
         "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD.");
 
     m.def(

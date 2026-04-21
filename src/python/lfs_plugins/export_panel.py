@@ -69,7 +69,8 @@ class ExportPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
-        # RAD LOD settings
+        # RAD export settings
+        self._rad_flip_y = False  # Y-flip checkbox (off by default)
         self._rad_customize_lod = False
         self._rad_lod_list: list[int] = [100]  # Default to 100%
         self._rad_new_lod_str = "100"
@@ -101,10 +102,10 @@ class ExportPanel(Panel):
         model.bind_func("progress_pct", self._get_progress_pct)
         model.bind_func("progress_stage", self._get_progress_stage)
 
-        # RAD LOD settings bindings
-        model.bind_func(
-            "show_rad_lod_settings", lambda: self._format == ExportFormat.RAD
-        )
+        # RAD export settings bindings
+        model.bind_func("show_rad_settings", lambda: self._format == ExportFormat.RAD)
+        model.bind_func("rad_flip_y", lambda: self._rad_flip_y)
+        model.bind_event("toggle_rad_flip_y", self._on_toggle_rad_flip_y)
         model.bind_func("rad_customize_lod", lambda: self._rad_customize_lod)
         model.bind_record_list("rad_lod_list")  # Record list for editable values
         model.bind(
@@ -147,6 +148,10 @@ class ExportPanel(Panel):
             self._handle.update_record_list(
                 "rad_lod_list", [{"value": str(lod)} for lod in self._rad_lod_list]
             )
+
+    def _on_toggle_rad_flip_y(self, _handle, _ev, _args):
+        self._rad_flip_y = not self._rad_flip_y
+        self._dirty_model("rad_flip_y")
 
     def _on_toggle_rad_customize_lod(self, _handle, _ev, _args):
         self._rad_customize_lod = not self._rad_customize_lod
@@ -487,8 +492,10 @@ class ExportPanel(Panel):
 
         self._format = new_format
         self._rebuild_format_records()
-        # Dirty RAD LOD settings visibility when format changes
-        self._dirty_model("show_rad_lod_settings", "rad_customize_lod", "no_rad_lod")
+        # Dirty RAD settings visibility when format changes
+        self._dirty_model(
+            "show_rad_settings", "rad_flip_y", "rad_customize_lod", "no_rad_lod"
+        )
 
     def _on_model_toggle(self, ev):
         checkbox, node_name = self._get_checkbox_from_event(ev)
@@ -594,6 +601,7 @@ class ExportPanel(Panel):
                 selected_nodes,
                 self._export_sh_degree,
                 rad_lod_ratios=rad_lod_ratios,
+                rad_flip_y=self._rad_flip_y,
             )
             self._exporting = True
             self._last_progress = -1.0

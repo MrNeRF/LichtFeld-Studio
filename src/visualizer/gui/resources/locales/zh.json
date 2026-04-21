@@ -816,7 +816,8 @@
     "export_merged": "导出合并的...",
     "rad_customize_lod": "自定义LOD",
     "rad_lod_levels": "LOD级别",
-    "no_lod_settings": "无LOD设置（使用默认值）"
+    "no_lod_settings": "无LOD设置（使用默认值）",
+    "rad_flip_y": "翻转Y轴"
   },
   "selection_group": {
     "lock": "锁定",

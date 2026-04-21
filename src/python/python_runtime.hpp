@@ -171,11 +171,13 @@ namespace lfs::python {
 
     using ExportCallback = void (*)(int format, const char* path, const char** node_names,
                                     int node_count, int sh_degree,
-                                    const float* rad_lod_ratios, int rad_lod_count);
+                                    const float* rad_lod_ratios, int rad_lod_count,
+                                    bool rad_flip_y);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
     LFS_PYTHON_RUNTIME_API void invoke_export(int format, const std::string& path,
                                               const std::vector<std::string>& node_names, int sh_degree,
-                                              const std::vector<float>& rad_lod_ratios = {});
+                                              const std::vector<float>& rad_lod_ratios = {},
+                                              bool rad_flip_y = false);
 
     using HasToolbarCallback = bool (*)();
 

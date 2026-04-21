@@ -816,7 +816,8 @@
     "export_merged": "Exporter Fusionné...",
     "rad_customize_lod": "Personnaliser LOD",
     "rad_lod_levels": "Niveaux LOD",
-    "no_lod_settings": "Pas de paramètres LOD (utilisation des valeurs par défaut)"
+    "no_lod_settings": "Pas de paramètres LOD (utilisation des valeurs par défaut)",
+    "rad_flip_y": "Inverser l'axe Y"
   },
   "selection_group": {
     "lock": "Verrouiller",

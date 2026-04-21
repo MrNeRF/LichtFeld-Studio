@@ -816,7 +816,8 @@
     "export_merged": "Eksportuj Połączony...",
     "rad_customize_lod": "Dostosuj LOD",
     "rad_lod_levels": "Poziomy LOD",
-    "no_lod_settings": "Brak ustawień LOD (używanie wartości domyślnych)"
+    "no_lod_settings": "Brak ustawień LOD (używanie wartości domyślnych)",
+    "rad_flip_y": "Odwróć oś Y"
   },
   "selection_group": {
     "lock": "Zablokuj",

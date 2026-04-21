@@ -816,7 +816,8 @@
     "export_merged": "병합하여보내기...",
     "rad_customize_lod": "LOD 사용자 정의",
     "rad_lod_levels": "LOD 레벨",
-    "no_lod_settings": "LOD 설정 없음 (기본값 사용)"
+    "no_lod_settings": "LOD 설정 없음 (기본값 사용)",
+    "rad_flip_y": "Y축 뒤집기"
   },
   "selection_group": {
     "lock": "잠금",

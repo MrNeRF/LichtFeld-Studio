@@ -816,7 +816,8 @@
     "export_merged": "Zusammengeführt exportieren...",
     "rad_customize_lod": "LOD anpassen",
     "rad_lod_levels": "LOD-Stufen",
-    "no_lod_settings": "Keine LOD-Einstellungen (Verwendung von Standardwerten)"
+    "no_lod_settings": "Keine LOD-Einstellungen (Verwendung von Standardwerten)",
+    "rad_flip_y": "Y-Achse spiegeln"
   },
   "selection_group": {
     "lock": "Sperren",

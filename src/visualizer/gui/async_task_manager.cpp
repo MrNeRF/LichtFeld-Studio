@@ -687,7 +687,8 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::performExport(ExportFormat format, const std::filesystem::path& path,
                                          const std::vector<std::string>& node_names, int sh_degree,
-                                         const std::vector<float>& rad_lod_ratios) {
+                                         const std::vector<float>& rad_lod_ratios,
+                                         bool rad_flip_y) {
         if (isExporting())
             return;
 
@@ -715,10 +716,11 @@ namespace lfs::vis::gui {
             truncateSHDegree(*merged, sh_degree);
         }
 
-        // Store RAD LOD ratios for use during export
+        // Store RAD LOD ratios and flip_y for use during export
         {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.rad_lod_ratios = rad_lod_ratios;
+            export_state_.rad_flip_y = rad_flip_y;
         }
 
         startAsyncExport(format, path, std::move(merged));
@@ -852,19 +854,21 @@ namespace lfs::vis::gui {
                         break;
                     }
                     case ExportFormat::RAD: {
-                        update_progress(0.1f, "Writing RAD");
                         std::vector<float> lod_ratios;
+                        bool flip_y = false;
                         {
                             const std::lock_guard lock(export_state_.mutex);
                             lod_ratios = export_state_.rad_lod_ratios;
+                            flip_y = export_state_.rad_flip_y;
                         }
                         const lfs::io::RadSaveOptions options{
                             .output_path = path,
                             .compression_level = 6,
-                            .lod_ratios = lod_ratios};
+                            .lod_ratios = lod_ratios,
+                            .flip_y = flip_y,
+                            .progress_callback = update_progress};
                         if (auto result = lfs::io::save_rad(*splat_data, options); result) {
                             success = true;
-                            update_progress(1.0f, "Complete");
                         } else {
                             error_msg = result.error().message;
                         }

@@ -1540,10 +1540,17 @@ namespace lfs::io {
         class RadEncoder {
         public:
             explicit RadEncoder(int compression_level = GZ_LEVEL,
-                                const std::vector<float>& lod_ratios = {})
-                : compression_level_(compression_level), lod_ratios_(lod_ratios) {}
+                                const std::vector<float>& lod_ratios = {},
+                                bool flip_y = false,
+                                ExportProgressCallback progress_callback = nullptr)
+                : compression_level_(compression_level), lod_ratios_(lod_ratios), flip_y_(flip_y), progress_callback_(std::move(progress_callback)) {}
 
             std::vector<uint8_t> encode(const SplatData& splat_data) {
+                // 0.0: Preparing data
+                if (!report_progress(0.0f, "Preparing data...")) {
+                    throw std::runtime_error("CANCELLED");
+                }
+
                 std::optional<SplatData> visible_splat_data;
                 const SplatData* export_source = &splat_data;
                 if (splat_data.has_deleted_mask() && splat_data.deleted().count_nonzero() > 0) {
@@ -1555,9 +1562,30 @@ namespace lfs::io {
                     }
                 }
 
-                PackedSplatData packed = pack_splat_data(*export_source);
+                // 0.1: Packing splat data
+                if (!report_progress(0.1f, "Packing splat data...")) {
+                    throw std::runtime_error("CANCELLED");
+                }
+
+                PackedSplatData packed = pack_splat_data(*export_source, flip_y_);
+
+                // 0.2: Data packed
+                if (!report_progress(0.2f, "Data packed")) {
+                    throw std::runtime_error("CANCELLED");
+                }
+
+                // 0.3: Building LOD (always report, even if using defaults)
+                if (!report_progress(0.3f, "Building LOD...")) {
+                    throw std::runtime_error("CANCELLED");
+                }
+
                 if (auto lod_packed = build_lod(*export_source, lod_ratios_)) {
                     packed = std::move(*lod_packed);
+                }
+
+                // 0.4: Preparing chunks
+                if (!report_progress(0.4f, "Preparing chunks...")) {
+                    throw std::runtime_error("CANCELLED");
                 }
 
                 if (packed.count > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
@@ -1588,8 +1616,18 @@ namespace lfs::io {
                 uint64_t current_chunk_offset = 0;
 
                 for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+                    // Report progress within chunk loop (0.5 to 0.9)
+                    float chunk_progress = 0.5f + (0.4f * static_cast<float>(chunk_idx) / static_cast<float>(num_chunks));
+                    if (!report_progress(chunk_progress, "Encoding chunks...")) {
+                        throw std::runtime_error("CANCELLED");
+                    }
+
                     const uint32_t base = chunk_idx * CHUNK_SIZE;
                     const uint32_t count = std::min(CHUNK_SIZE, num_splats - base);
+
+                    // Calculate chunk progress range within overall encoding (0.5 to 0.9)
+                    float chunk_base = 0.5f + (0.4f * static_cast<float>(chunk_idx) / static_cast<float>(num_chunks));
+                    float chunk_progress_range = 0.4f / static_cast<float>(num_chunks);
 
                     auto chunk_result = encode_chunk(
                         base, count, sh_degree, sh_coeffs,
@@ -1601,7 +1639,11 @@ namespace lfs::io {
                         packed.shN.empty() ? nullptr : packed.shN.data(),
                         lod_tree ? packed.child_count.data() : nullptr,
                         lod_tree ? packed.child_start.data() : nullptr,
-                        lod_tree);
+                        lod_tree,
+                        [&](float chunk_progress) -> bool {
+                            float overall_progress = chunk_base + chunk_progress_range * chunk_progress;
+                            return report_progress(overall_progress, "Encoding chunks...");
+                        });
 
                     // Build RadChunkRange for file metadata
                     RadChunkRange chunk_range;
@@ -1632,6 +1674,11 @@ namespace lfs::io {
                 encode_u32(&header[0], RAD_MAGIC);
                 encode_u32(&header[4], static_cast<uint32_t>(meta_size));
 
+                // 0.9: Writing file
+                if (!report_progress(0.9f, "Writing file...")) {
+                    throw std::runtime_error("CANCELLED");
+                }
+
                 // Combine all data
                 std::vector<uint8_t> result;
                 result.reserve(header.size() + meta_padded_size + meta.all_chunk_bytes);
@@ -1645,6 +1692,9 @@ namespace lfs::io {
                 for (const auto& payload : chunk_payloads) {
                     result.insert(result.end(), payload.begin(), payload.end());
                 }
+
+                // 1.0: Done
+                report_progress(1.0f, "Done");
 
                 return result;
             }
@@ -1865,7 +1915,7 @@ namespace lfs::io {
                 return order;
             }
 
-            static PackedSplatData pack_splat_data(const SplatData& splat_data) {
+            static PackedSplatData pack_splat_data(const SplatData& splat_data, bool flip_y = false) {
                 PackedSplatData packed;
                 packed.count = static_cast<size_t>(splat_data.size());
                 packed.sh_degree = std::clamp(splat_data.get_max_sh_degree(), 0, 3);
@@ -1884,6 +1934,14 @@ namespace lfs::io {
 
                 // Spark RAD stores render-space values, not optimizer-domain tensors.
                 packed.means = copy_f32(splat_data.get_means(), packed.count * 3);
+
+                // Apply Y-flip if requested (negate Y coordinate of positions)
+                if (flip_y) {
+                    for (size_t i = 0; i < packed.count; ++i) {
+                        packed.means[i * 3 + 1] = -packed.means[i * 3 + 1];
+                    }
+                }
+
                 packed.opacity = copy_f32(splat_data.get_opacity(), packed.count);
                 packed.sh0 = copy_f32(splat_data.sh0_raw(), packed.count * 3);
                 for (float& value : packed.sh0) {
@@ -2253,7 +2311,8 @@ namespace lfs::io {
                 const float* shN_ptr,
                 const uint16_t* child_count_ptr,
                 const uint32_t* child_start_ptr,
-                bool lod_tree) {
+                bool lod_tree,
+                const std::function<bool(float)>& progress_callback = nullptr) {
 
                 RadChunkMeta chunk_meta;
                 chunk_meta.version = 1;
@@ -2290,6 +2349,11 @@ namespace lfs::io {
                     encoded_props.push_back({std::move(compressed), encoded.encoding, "gz",
                                              encoded.min_val, encoded.max_val, encoded.base, encoded.scale});
                     chunk_meta.properties.push_back(prop);
+
+                    // Report progress after encoding center: 0.1f
+                    if (progress_callback && !progress_callback(0.1f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 // Encode alpha
@@ -2315,6 +2379,11 @@ namespace lfs::io {
                     encoded_props.push_back({std::move(compressed), encoded.encoding, "gz",
                                              encoded.min_val, encoded.max_val, encoded.base, encoded.scale});
                     chunk_meta.properties.push_back(prop);
+
+                    // Report progress after encoding alpha: 0.2f
+                    if (progress_callback && !progress_callback(0.2f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 // Encode RGB (sh0) - all 3 components together as single property
@@ -2347,6 +2416,11 @@ namespace lfs::io {
                     encoded_props.push_back({std::move(compressed), encoded.encoding, "gz",
                                              encoded.min_val, encoded.max_val, encoded.base, encoded.scale});
                     chunk_meta.properties.push_back(prop);
+
+                    // Report progress after encoding RGB: 0.4f
+                    if (progress_callback && !progress_callback(0.4f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 // Encode scales - all 3 components together as single property
@@ -2377,6 +2451,11 @@ namespace lfs::io {
                     encoded_props.push_back({std::move(compressed), encoded.encoding, "gz",
                                              encoded.min_val, encoded.max_val, encoded.base, encoded.scale});
                     chunk_meta.properties.push_back(prop);
+
+                    // Report progress after encoding scales: 0.6f
+                    if (progress_callback && !progress_callback(0.6f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 // Encode orientation
@@ -2402,6 +2481,11 @@ namespace lfs::io {
                     encoded_props.push_back({std::move(compressed), encoded.encoding, "gz",
                                              encoded.min_val, encoded.max_val, encoded.base, encoded.scale});
                     chunk_meta.properties.push_back(prop);
+
+                    // Report progress after encoding orientation: 0.8f
+                    if (progress_callback && !progress_callback(0.8f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 // Encode SH if present
@@ -2446,6 +2530,11 @@ namespace lfs::io {
                     encode_sh_band(PROP_SH1, 0, 3);
                     encode_sh_band(PROP_SH2, 3, 5);
                     encode_sh_band(PROP_SH3, 8, 7);
+
+                    // Report progress after encoding SH: 0.9f
+                    if (progress_callback && !progress_callback(0.9f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 if (lod_tree && child_count_ptr != nullptr && child_start_ptr != nullptr) {
@@ -2482,6 +2571,11 @@ namespace lfs::io {
                     encoded_props.push_back({std::move(child_start_compressed), "u32", "gz",
                                              std::nullopt, std::nullopt, std::nullopt, std::nullopt});
                     chunk_meta.properties.push_back(start_prop);
+
+                    // Report progress after encoding LOD data: 0.95f
+                    if (progress_callback && !progress_callback(0.95f)) {
+                        throw std::runtime_error("CANCELLED");
+                    }
                 }
 
                 std::vector<uint8_t> payload;
@@ -2531,6 +2625,15 @@ namespace lfs::io {
 
             int compression_level_;
             std::vector<float> lod_ratios_;
+            bool flip_y_;
+            ExportProgressCallback progress_callback_;
+
+            bool report_progress(float progress, const std::string& stage) const {
+                if (progress_callback_) {
+                    return progress_callback_(progress, stage);
+                }
+                return true;
+            }
         };
 
         // ============================================================================
@@ -2879,8 +2982,16 @@ namespace lfs::io {
         }
 
         // Encode
-        RadEncoder encoder(compression_level, options.lod_ratios);
-        std::vector<uint8_t> data = encoder.encode(splat_data);
+        RadEncoder encoder(compression_level, options.lod_ratios, options.flip_y, options.progress_callback);
+        std::vector<uint8_t> data;
+        try {
+            data = encoder.encode(splat_data);
+        } catch (const std::runtime_error& e) {
+            if (std::string(e.what()) == "CANCELLED") {
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
+            }
+            throw;
+        }
 
         // Write file
         std::ofstream out;

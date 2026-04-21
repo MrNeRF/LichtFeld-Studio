@@ -816,7 +816,8 @@
     "export_merged": "結合してエクスポート...",
     "rad_customize_lod": "LODをカスタマイズ",
     "rad_lod_levels": "LODレベル",
-    "no_lod_settings": "LOD設定なし（デフォルトを使用）"
+    "no_lod_settings": "LOD設定なし（デフォルトを使用）",
+    "rad_flip_y": "Y軸を反転"
   },
   "selection_group": {
     "lock": "ロック",

@@ -828,7 +828,8 @@
     "export_merged": "Export Merged...",
     "rad_customize_lod": "Customize LOD",
     "rad_lod_levels": "LOD Levels",
-    "no_lod_settings": "No LOD settings (using defaults)"
+    "no_lod_settings": "No LOD settings (using defaults)",
+    "rad_flip_y": "Flip Y axis"
   },
   "selection_group": {
     "lock": "Lock",
