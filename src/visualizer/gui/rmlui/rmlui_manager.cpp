@@ -128,8 +128,10 @@ namespace lfs::vis::gui {
             debugger_initialized_ = false;
         }
 
-        while (!contexts_.empty())
-            destroyContext(contexts_.begin()->first);
+        for (auto& [name, ctx] : contexts_) {
+            Rml::RemoveContext(name);
+        }
+        contexts_.clear();
 
         if (Rml::GetTextInputHandler() == text_input_handler_.get())
             Rml::SetTextInputHandler(nullptr);
@@ -192,9 +194,6 @@ namespace lfs::vis::gui {
     }
 
     void RmlUIManager::destroyContext(const std::string& name) {
-        if (!initialized_)
-            return;
-
         auto it = contexts_.find(name);
         if (it != contexts_.end()) {
             if (system_interface_)
