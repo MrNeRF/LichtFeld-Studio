@@ -206,6 +206,8 @@ set_target_properties(lfs_py PROPERTIES
 
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
+    $<$<CONFIG:Debug>:DEBUG_BUILD>
+    $<$<CONFIG:Release>:RELEASE_BUILD>
 )
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
