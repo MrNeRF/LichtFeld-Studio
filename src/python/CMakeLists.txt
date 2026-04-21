@@ -61,14 +61,6 @@ function(lfs_force_python_release_abi target_name)
     endif()
 endfunction()
 
-function(lfs_suppress_python_debug_abi target_name)
-    if(MSVC)
-        target_compile_options(${target_name} PRIVATE
-            "$<$<AND:$<PLATFORM_ID:Windows>,$<CONFIG:Debug>>:/U_DEBUG>"
-        )
-    endif()
-endfunction()
-
 # Apply to both Python::Python (for embedded Python) and Python::Module (for nanobind)
 lfs_force_python_release_abi(Python::Python)
 if(TARGET Python::Module)
@@ -215,7 +207,7 @@ set_target_properties(lfs_py PROPERTIES
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
 )
-lfs_suppress_python_debug_abi(lfs_py)
+
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
