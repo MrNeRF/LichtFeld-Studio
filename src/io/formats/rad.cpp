@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +28,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace lfs::io {
 
@@ -382,15 +387,18 @@ namespace lfs::io {
 
         // Encode interleaved [count, dims] floats into dimension-major f32 bytes.
         std::vector<uint8_t> encode_f32(const float* data, size_t dims, size_t count) {
-            std::vector<uint8_t> result;
-            result.reserve(count * dims * 4);
+            std::vector<uint8_t> result(count * dims * 4);
+            size_t out_idx = 0;
 
             for (size_t d = 0; d < dims; ++d) {
                 size_t index = d;
                 for (size_t i = 0; i < count; ++i) {
                     float v = data[index];
                     const auto* bytes = reinterpret_cast<const uint8_t*>(&v);
-                    result.insert(result.end(), bytes, bytes + 4);
+                    result[out_idx++] = bytes[0];
+                    result[out_idx++] = bytes[1];
+                    result[out_idx++] = bytes[2];
+                    result[out_idx++] = bytes[3];
                     index += dims;
                 }
             }
@@ -440,15 +448,15 @@ namespace lfs::io {
         }
 
         std::vector<uint8_t> encode_f16(const float* data, size_t dims, size_t count) {
-            std::vector<uint8_t> result;
-            result.reserve(count * dims * 2);
+            std::vector<uint8_t> result(count * dims * 2);
+            size_t out_idx = 0;
 
             for (size_t d = 0; d < dims; ++d) {
                 size_t index = d;
                 for (size_t i = 0; i < count; ++i) {
                     uint16_t v = float32_to_float16(data[index]);
-                    result.push_back(static_cast<uint8_t>(v & 0xFF));
-                    result.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+                    result[out_idx++] = static_cast<uint8_t>(v & 0xFF);
+                    result[out_idx++] = static_cast<uint8_t>((v >> 8) & 0xFF);
                     index += dims;
                 }
             }
@@ -521,13 +529,13 @@ namespace lfs::io {
                 range = 1e-7f;
             }
 
-            std::vector<uint8_t> result;
-            result.reserve(count * dims);
+            std::vector<uint8_t> result(count * dims);
+            size_t out_idx = 0;
             for (size_t d = 0; d < dims; ++d) {
                 size_t index = d;
                 for (size_t i = 0; i < count; ++i) {
                     float normalized = (data[index] - min_val) / range;
-                    result.push_back(static_cast<uint8_t>(std::clamp(std::round(normalized * 255.0f), 0.0f, 255.0f)));
+                    result[out_idx++] = static_cast<uint8_t>(std::clamp(std::round(normalized * 255.0f), 0.0f, 255.0f));
                     index += dims;
                 }
             }
@@ -605,13 +613,13 @@ namespace lfs::io {
                 max_val = std::max(max_val, 1e-6f);
             }
 
-            std::vector<int8_t> result;
-            result.reserve(count * dims);
+            std::vector<int8_t> result(count * dims);
+            size_t out_idx = 0;
             for (size_t d = 0; d < dims; ++d) {
                 size_t index = d;
                 for (size_t i = 0; i < count; ++i) {
                     float scaled = data[index] / max_val * 127.0f;
-                    result.push_back(static_cast<int8_t>(std::clamp(std::round(scaled), -127.0f, 127.0f)));
+                    result[out_idx++] = static_cast<int8_t>(std::clamp(std::round(scaled), -127.0f, 127.0f));
                     index += dims;
                 }
             }
@@ -1609,25 +1617,34 @@ namespace lfs::io {
                     meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
                 }
 
-                // Encode chunks
-                std::vector<std::vector<uint8_t>> chunk_payloads;
-                chunk_payloads.reserve(num_chunks);
+                // Encode chunks in parallel with dynamic scheduling
+                std::vector<std::vector<uint8_t>> chunk_payloads(num_chunks);
+                std::vector<RadChunkRange> chunk_ranges(num_chunks);
+                std::atomic<uint32_t> completed_chunks{0};
 
-                uint64_t current_chunk_offset = 0;
+                // Report initial progress
+                if (!report_progress(0.5f, "Encoding chunks...")) {
+                    throw std::runtime_error("CANCELLED");
+                }
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
                 for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
-                    // Report progress within chunk loop (0.5 to 0.9)
-                    float chunk_progress = 0.5f + (0.4f * static_cast<float>(chunk_idx) / static_cast<float>(num_chunks));
-                    if (!report_progress(chunk_progress, "Encoding chunks...")) {
-                        throw std::runtime_error("CANCELLED");
-                    }
-
                     const uint32_t base = chunk_idx * CHUNK_SIZE;
                     const uint32_t count = std::min(CHUNK_SIZE, num_splats - base);
 
-                    // Calculate chunk progress range within overall encoding (0.5 to 0.9)
-                    float chunk_base = 0.5f + (0.4f * static_cast<float>(chunk_idx) / static_cast<float>(num_chunks));
-                    float chunk_progress_range = 0.4f / static_cast<float>(num_chunks);
+                    // Thread-local progress callback (only report every 10% to reduce contention)
+                    auto chunk_progress_cb = [&](float /*progress*/) -> bool {
+                        // Check for cancellation periodically
+                        uint32_t completed = completed_chunks.load(std::memory_order_relaxed);
+                        if (completed % 16 == 0) {
+                            // Approximate overall progress
+                            float overall = 0.5f + (0.4f * static_cast<float>(completed) / static_cast<float>(num_chunks));
+                            return report_progress(overall, "Encoding chunks...");
+                        }
+                        return true;
+                    };
 
                     auto chunk_result = encode_chunk(
                         base, count, sh_degree, sh_coeffs,
@@ -1640,22 +1657,24 @@ namespace lfs::io {
                         lod_tree ? packed.child_count.data() : nullptr,
                         lod_tree ? packed.child_start.data() : nullptr,
                         lod_tree,
-                        [&](float chunk_progress) -> bool {
-                            float overall_progress = chunk_base + chunk_progress_range * chunk_progress;
-                            return report_progress(overall_progress, "Encoding chunks...");
-                        });
+                        chunk_progress_cb);
 
-                    // Build RadChunkRange for file metadata
-                    RadChunkRange chunk_range;
-                    chunk_range.offset = current_chunk_offset;
-                    chunk_range.bytes = chunk_result.second.size();
-                    chunk_range.base = base;
-                    chunk_range.count = count;
+                    // Store results (each thread writes to its own index)
+                    chunk_ranges[chunk_idx].base = base;
+                    chunk_ranges[chunk_idx].count = count;
+                    chunk_ranges[chunk_idx].bytes = chunk_result.second.size();
+                    chunk_payloads[chunk_idx] = std::move(chunk_result.second);
 
-                    meta.chunks.push_back(chunk_range);
-                    chunk_payloads.push_back(std::move(chunk_result.second));
+                    // Atomically increment completed count for progress tracking
+                    completed_chunks.fetch_add(1, std::memory_order_relaxed);
+                }
 
-                    current_chunk_offset += chunk_range.bytes;
+                // Build metadata in order (sequential - must preserve chunk order)
+                uint64_t current_chunk_offset = 0;
+                for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+                    chunk_ranges[chunk_idx].offset = current_chunk_offset;
+                    meta.chunks.push_back(chunk_ranges[chunk_idx]);
+                    current_chunk_offset += chunk_ranges[chunk_idx].bytes;
                 }
 
                 // Calculate total chunk bytes
@@ -2327,17 +2346,25 @@ namespace lfs::io {
                 std::vector<EncodedProperty> encoded_props;
                 encoded_props.reserve(lod_tree ? 12 : 10);
 
+                // Thread-local buffers for temporary data to avoid allocation contention
+                thread_local std::vector<float> tl_center_data;
+                thread_local std::vector<float> tl_alpha_data;
+                thread_local std::vector<float> tl_rgb_data;
+                thread_local std::vector<float> tl_scales_data;
+                thread_local std::vector<float> tl_quat_data;
+                thread_local std::vector<float> tl_sh_data;
+
                 // Encode center (3 components together as single property)
                 {
-                    std::vector<float> center_data(count * 3);
+                    tl_center_data.resize(count * 3);
                     for (uint32_t i = 0; i < count; ++i) {
-                        center_data[i * 3 + 0] = means_ptr[(base + i) * 3 + 0];
-                        center_data[i * 3 + 1] = means_ptr[(base + i) * 3 + 1];
-                        center_data[i * 3 + 2] = means_ptr[(base + i) * 3 + 2];
+                        tl_center_data[i * 3 + 0] = means_ptr[(base + i) * 3 + 0];
+                        tl_center_data[i * 3 + 1] = means_ptr[(base + i) * 3 + 1];
+                        tl_center_data[i * 3 + 2] = means_ptr[(base + i) * 3 + 2];
                     }
 
                     // Encode all 3 components together as "center" property
-                    auto encoded = PropertyEncoder::encode_center(center_data.data(), 3, count, RadCenterEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_center(tl_center_data.data(), 3, count, RadCenterEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2358,12 +2385,12 @@ namespace lfs::io {
 
                 // Encode alpha
                 {
-                    std::vector<float> alpha_data(count);
+                    tl_alpha_data.resize(count);
                     for (uint32_t i = 0; i < count; ++i) {
-                        alpha_data[i] = opacity_ptr[base + i];
+                        tl_alpha_data[i] = opacity_ptr[base + i];
                     }
 
-                    auto encoded = PropertyEncoder::encode_alpha(alpha_data.data(), count, RadAlphaEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_alpha(tl_alpha_data.data(), count, RadAlphaEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2388,15 +2415,15 @@ namespace lfs::io {
 
                 // Encode RGB (sh0) - all 3 components together as single property
                 {
-                    std::vector<float> rgb_data(count * 3);
+                    tl_rgb_data.resize(count * 3);
                     for (uint32_t i = 0; i < count; ++i) {
-                        rgb_data[i * 3 + 0] = sh0_ptr[(base + i) * 3 + 0];
-                        rgb_data[i * 3 + 1] = sh0_ptr[(base + i) * 3 + 1];
-                        rgb_data[i * 3 + 2] = sh0_ptr[(base + i) * 3 + 2];
+                        tl_rgb_data[i * 3 + 0] = sh0_ptr[(base + i) * 3 + 0];
+                        tl_rgb_data[i * 3 + 1] = sh0_ptr[(base + i) * 3 + 1];
+                        tl_rgb_data[i * 3 + 2] = sh0_ptr[(base + i) * 3 + 2];
                     }
 
                     // Encode all 3 components together as "rgb" property
-                    auto encoded = PropertyEncoder::encode_rgb(rgb_data.data(), 3, count, RadRgbEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_rgb(tl_rgb_data.data(), 3, count, RadRgbEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2425,15 +2452,15 @@ namespace lfs::io {
 
                 // Encode scales - all 3 components together as single property
                 {
-                    std::vector<float> scales_data(count * 3);
+                    tl_scales_data.resize(count * 3);
                     for (uint32_t i = 0; i < count; ++i) {
-                        scales_data[i * 3 + 0] = scales_ptr[(base + i) * 3 + 0];
-                        scales_data[i * 3 + 1] = scales_ptr[(base + i) * 3 + 1];
-                        scales_data[i * 3 + 2] = scales_ptr[(base + i) * 3 + 2];
+                        tl_scales_data[i * 3 + 0] = scales_ptr[(base + i) * 3 + 0];
+                        tl_scales_data[i * 3 + 1] = scales_ptr[(base + i) * 3 + 1];
+                        tl_scales_data[i * 3 + 2] = scales_ptr[(base + i) * 3 + 2];
                     }
 
                     // Encode all 3 components together as "scales" property
-                    auto encoded = PropertyEncoder::encode_scales(scales_data.data(), 3, count, RadScalesEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_scales(tl_scales_data.data(), 3, count, RadScalesEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2460,16 +2487,16 @@ namespace lfs::io {
 
                 // Encode orientation
                 {
-                    std::vector<float> quat_data(count * 4);
+                    tl_quat_data.resize(count * 4);
                     for (uint32_t i = 0; i < count; ++i) {
                         // SplatData stores as [w, x, y, z], we need [x, y, z, w] for encoding
-                        quat_data[i * 4 + 0] = rotation_ptr[(base + i) * 4 + 1]; // x
-                        quat_data[i * 4 + 1] = rotation_ptr[(base + i) * 4 + 2]; // y
-                        quat_data[i * 4 + 2] = rotation_ptr[(base + i) * 4 + 3]; // z
-                        quat_data[i * 4 + 3] = rotation_ptr[(base + i) * 4 + 0]; // w
+                        tl_quat_data[i * 4 + 0] = rotation_ptr[(base + i) * 4 + 1]; // x
+                        tl_quat_data[i * 4 + 1] = rotation_ptr[(base + i) * 4 + 2]; // y
+                        tl_quat_data[i * 4 + 2] = rotation_ptr[(base + i) * 4 + 3]; // z
+                        tl_quat_data[i * 4 + 3] = rotation_ptr[(base + i) * 4 + 0]; // w
                     }
 
-                    auto encoded = PropertyEncoder::encode_orientation(quat_data.data(), count, RadOrientationEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_orientation(tl_quat_data.data(), count, RadOrientationEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2495,17 +2522,17 @@ namespace lfs::io {
                             return;
                         }
                         const size_t dims = static_cast<size_t>(coeff_count) * 3;
-                        std::vector<float> sh_data(static_cast<size_t>(count) * dims);
+                        tl_sh_data.resize(static_cast<size_t>(count) * dims);
                         for (uint32_t i = 0; i < count; ++i) {
                             for (int c = 0; c < coeff_count; ++c) {
                                 for (int ch = 0; ch < 3; ++ch) {
-                                    sh_data[i * dims + c * 3 + ch] =
+                                    tl_sh_data[i * dims + c * 3 + ch] =
                                         shN_ptr[(base + i) * sh_coeffs * 3 + (coeff_start + c) * 3 + ch];
                                 }
                             }
                         }
 
-                        auto encoded = PropertyEncoder::encode_sh(sh_data.data(), dims, count, RadShEncoding::Auto);
+                        auto encoded = PropertyEncoder::encode_sh(tl_sh_data.data(), dims, count, RadShEncoding::Auto);
                         auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                         RadChunkProperty prop;
