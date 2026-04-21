@@ -763,7 +763,7 @@ namespace {
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint)\n"
-        "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html\n"
+        "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -782,6 +782,8 @@ namespace {
             return OutputFormat::USDA;
         if (str == "usdc" || str == ".usdc")
             return OutputFormat::USDC;
+        if (str == "rad" || str == ".rad")
+            return OutputFormat::RAD;
         return std::nullopt;
     }
 } // namespace
@@ -856,8 +858,9 @@ Commands:
     ::args::Positional<std::string> input(parser, "input", "Input file or directory");
     ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
     ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
-    ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc", {'f', "format"});
+    ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
     ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
+    ::args::ValueFlag<std::string> lod_levels(parser, "levels", "LOD levels for RAD format as comma-separated percentages (default: 100)", {"lod-levels"});
     ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
 
     std::vector<std::string> args_vec(argv + 1, argv + argc);
@@ -893,13 +896,39 @@ Commands:
         params.output_path = lfs::core::utf8_to_path(::args::get(output));
     if (sog_iter)
         params.sog_iterations = ::args::get(sog_iter);
+    if (lod_levels) {
+        const auto& levels_str = ::args::get(lod_levels);
+        params.rad_lod_levels.clear();
+        size_t start = 0;
+        while (start < levels_str.size()) {
+            size_t end = levels_str.find(',', start);
+            if (end == std::string::npos)
+                end = levels_str.size();
+            std::string token = levels_str.substr(start, end - start);
+            // Trim whitespace
+            size_t first = token.find_first_not_of(" \t");
+            size_t last = token.find_last_not_of(" \t");
+            if (first != std::string::npos && last != std::string::npos) {
+                token = token.substr(first, last - first + 1);
+            }
+            if (!token.empty()) {
+                try {
+                    float percentage = std::stof(token);
+                    params.rad_lod_levels.push_back(percentage / 100.0f);
+                } catch (...) {
+                    return std::unexpected(std::format("Invalid LOD level value: '{}'", token));
+                }
+            }
+            start = end + 1;
+        }
+    }
     params.overwrite = overwrite;
 
     if (format) {
         if (const auto fmt = parseFormat(::args::get(format))) {
             params.format = *fmt;
         } else {
-            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc", ::args::get(format)));
+            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", ::args::get(format)));
         }
     } else if (!params.output_path.empty()) {
         if (const auto fmt = parseFormat(params.output_path.extension().string())) {

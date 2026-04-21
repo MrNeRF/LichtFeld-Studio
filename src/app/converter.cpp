@@ -20,7 +20,7 @@ namespace lfs::app {
     namespace {
 
         constexpr size_t SH_CHANNELS = 3;
-        constexpr const char* VALID_EXTENSIONS[] = {".ply", ".sog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume"};
+        constexpr const char* VALID_EXTENSIONS[] = {".ply", ".sog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume", ".rad"};
 
         enum class OverwriteChoice { YES,
                                      NO,
@@ -90,6 +90,7 @@ namespace lfs::app {
             case param::OutputFormat::USD: return ".usd";
             case param::OutputFormat::USDA: return ".usda";
             case param::OutputFormat::USDC: return ".usdc";
+            case param::OutputFormat::RAD: return ".rad";
             }
             return ".ply";
         }
@@ -168,6 +169,9 @@ namespace lfs::app {
             case param::OutputFormat::USDC:
                 result = lfs::io::save_usd(*splat, {.output_path = output});
                 break;
+            case param::OutputFormat::RAD:
+                result = lfs::io::save_rad(*splat, {.output_path = output, .lod_ratios = params.rad_lod_levels});
+                break;
             }
 
             if (!result) {
@@ -186,7 +190,7 @@ namespace lfs::app {
         const auto files = getInputFiles(params.input_path);
         if (files.empty()) {
             LOG_ERROR("No convertible files in: {}", path_to_utf8(params.input_path));
-            std::println(stderr, "Error: No .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, or .resume files found");
+            std::println(stderr, "Error: No .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume, or .rad files found");
             return 1;
         }
 
