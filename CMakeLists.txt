@@ -32,6 +32,16 @@ endif()
 
 project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
 
+# On Windows, route all build outputs to build/<Config>/ so Debug and Release
+# binaries are separated. $<CONFIG> evaluates at build time for both
+# single-config (Ninja) and multi-config (MSVC) generators.
+# Linux: CMake default (flat binary dir) is used.
+if(WIN32)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+endif()
+
 # Disable C++20 module scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
@@ -756,6 +766,14 @@ endif()
 
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
+# Per-config output directory variants — used by MSVC (multi-config); no-op for single-config generators
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG        "${CMAKE_BINARY_DIR}/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE      "${CMAKE_BINARY_DIR}/Release"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL   "${CMAKE_BINARY_DIR}/MinSizeRel"
+)
+
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(${PROJECT_NAME} PRIVATE GL GLU)
@@ -809,14 +827,11 @@ if(UNIX)
     endif()
 
 elseif(WIN32)
-    # On Windows, DLLs in the same directory as the .exe are automatically found
-    # For multi-config generators (MSVC), set all configs to same directory
+    # On Windows, DLLs in the same directory as the .exe are automatically found.
+    # Use $<CONFIG> so both Ninja (single-config) and MSVC (multi-config) route
+    # binaries to build/Debug, build/Release, etc.
     set_target_properties(${PROJECT_NAME} PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/$<CONFIG>"
     )
     if(MSVC)
         target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
@@ -872,6 +887,12 @@ configure_build_type(lfs_visualizer)
 configure_build_type(lfs_io)
 configure_build_type(lfs_geometry)
 configure_build_type(${PROJECT_NAME})
+
+# Set the default startup project in Visual Studio to LichtFeld-Studio
+# (without this, VS defaults to ALL_BUILD when opening the solution)
+if(MSVC)
+    set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+endif()
 
 # =============================================================================
 # TESTING (Optional)
@@ -1020,8 +1041,9 @@ if(BUILD_PORTABLE)
             [[.*libstdc[+][+].*]] [[.*libgcc_s.*]]
             [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
 
-    # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
-    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
+    # Search directories for runtime dependencies.
+    # Portable builds are Windows Release-only; binaries are in build/Release/.
+    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/Release\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
 
     # Helper: bundle runtime dependencies for a target
     function(bundle_runtime_deps TARGET_FILE IS_LIBRARY)

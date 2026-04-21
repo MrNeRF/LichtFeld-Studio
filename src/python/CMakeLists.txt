@@ -102,11 +102,17 @@ set_target_properties(lfs_python_runtime PROPERTIES
     CXX_STANDARD_REQUIRED ON
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR}
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG        ${CMAKE_BINARY_DIR}/Debug
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE      ${CMAKE_BINARY_DIR}/Release
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/RelWithDebInfo
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL   ${CMAKE_BINARY_DIR}/MinSizeRel
 )
+if(WIN32)
+    set_target_properties(lfs_python_runtime PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY              ${CMAKE_BINARY_DIR}/$<CONFIG>
+        RUNTIME_OUTPUT_DIRECTORY              ${CMAKE_BINARY_DIR}/$<CONFIG>
+    )
+endif()
 
 # Static library for other Python utilities
 add_library(lfs_python_utils STATIC
@@ -475,7 +481,7 @@ endif()
 
 # Copy lfs_plugins Python module to build directory (recursively to include subdirectories)
 add_custom_target(lfs_plugins_copy ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins ${CMAKE_CURRENT_BINARY_DIR}/lfs_plugins
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins $<TARGET_FILE_DIR:lfs_py>/lfs_plugins
     COMMENT "Copying lfs_plugins Python module"
 )
 
@@ -483,7 +489,7 @@ add_custom_target(lfs_python_support_copy ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py
         ${CMAKE_CURRENT_SOURCE_DIR}/lfs_splat_lod_hierarchy.py
-        ${CMAKE_CURRENT_BINARY_DIR}
+        $<TARGET_FILE_DIR:lfs_py>
     COMMENT "Copying internal Python support modules"
 )
 
