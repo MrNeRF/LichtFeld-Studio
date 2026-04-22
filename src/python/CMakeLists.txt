@@ -296,7 +296,7 @@ if(WIN32)
 
     # Copy vcpkg runtime DLLs
     add_custom_command(TARGET lfs_py POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
             "${CMAKE_CURRENT_BINARY_DIR}"
         COMMENT "Copying vcpkg DLLs to Python module directory"
@@ -481,7 +481,7 @@ endif()
 
 # Copy lfs_plugins Python module to build directory (recursively to include subdirectories)
 add_custom_target(lfs_plugins_copy ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins $<TARGET_FILE_DIR:lfs_py>/lfs_plugins
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins $<TARGET_FILE_DIR:lfs_py>/lfs_plugins
     COMMENT "Copying lfs_plugins Python module"
 )
 
