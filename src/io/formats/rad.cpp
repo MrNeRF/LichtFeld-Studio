@@ -1551,7 +1551,10 @@ namespace lfs::io {
                                 const std::vector<float>& lod_ratios = {},
                                 bool flip_y = false,
                                 ExportProgressCallback progress_callback = nullptr)
-                : compression_level_(compression_level), lod_ratios_(lod_ratios), flip_y_(flip_y), progress_callback_(std::move(progress_callback)) {}
+                : compression_level_(compression_level),
+                  lod_ratios_(lod_ratios),
+                  flip_y_(flip_y),
+                  progress_callback_(std::move(progress_callback)) {}
 
             std::vector<uint8_t> encode(const SplatData& splat_data) {
                 // 0.0: Preparing data
@@ -1630,8 +1633,8 @@ namespace lfs::io {
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic, 1)
 #endif
-                for (uint32_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
-                    const uint32_t base = chunk_idx * CHUNK_SIZE;
+                for (int32_t chunk_idx = 0; chunk_idx < static_cast<int32_t>(num_chunks); ++chunk_idx) {
+                    const uint32_t base = static_cast<uint32_t>(chunk_idx) * CHUNK_SIZE;
                     const uint32_t count = std::min(CHUNK_SIZE, num_splats - base);
 
                     // Thread-local progress callback (only report every 10% to reduce contention)
