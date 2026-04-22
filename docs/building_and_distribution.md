@@ -34,7 +34,10 @@ Builds for your GPU only. Fastest compile time.
 ```bash
 cmake -B build
 cmake --build build -j 16
-./build/LichtFeld-Studio -d data/test
+./build/LichtFeld-Studio --help
+
+# Example training run
+./build/LichtFeld-Studio -d /path/to/data -o /path/to/output
 ```
 
 ### 2. Portable Build (Distribution)
@@ -46,7 +49,10 @@ cmake -B build -DBUILD_PORTABLE=ON
 cmake --build build -j 16
 cmake --install build --prefix ./dist
 
-./dist/bin/run_lichtfeld.sh -d data/test
+./dist/bin/run_lichtfeld.sh --help
+
+# Example training run
+./dist/bin/run_lichtfeld.sh -d /path/to/data -o /path/to/output
 ```
 
 ## What's the Difference?
