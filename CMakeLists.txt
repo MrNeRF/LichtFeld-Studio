@@ -999,13 +999,20 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DEST
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 # OpenUSD plugin resources (schema definitions + plugInfo.json files)
+# On Windows configure_usd_plugins() looks for <exe_dir>/usd → install next to the exe (bin/usd).
+# On Linux it looks for <exe_dir>/../lib/usd → install in lib/usd (unchanged).
+if(WIN32)
+    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_BINDIR}/usd")
+else()
+    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_LIBDIR}/usd")
+endif()
 if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    install(DIRECTORY "${_USD_PLUGIN_SOURCE_DIR}/" DESTINATION "${CMAKE_INSTALL_LIBDIR}/usd"
+    install(DIRECTORY "${_USD_PLUGIN_SOURCE_DIR}/" DESTINATION "${_USD_INSTALL_DEST}"
             PATTERN "__pycache__" EXCLUDE
             PATTERN "*.pyc" EXCLUDE)
 endif()
 if(EXISTS "${_USD_ROOT_INDEX}")
-    install(FILES "${_USD_ROOT_INDEX}" DESTINATION "${CMAKE_INSTALL_LIBDIR}/usd")
+    install(FILES "${_USD_ROOT_INDEX}" DESTINATION "${_USD_INSTALL_DEST}")
 endif()
 
 # Plugin development documentation
@@ -1054,7 +1061,13 @@ if(BUILD_PORTABLE)
     # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
     set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/Release\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
 
-    # Helper: bundle runtime dependencies for a target
+    # Helper: bundle runtime dependencies for a target.
+    # On Windows DLLs must live beside the exe (bin/); on Linux they go in lib/.
+    if(WIN32)
+        set(_BUNDLE_DEST "${CMAKE_INSTALL_BINDIR}")
+    else()
+        set(_BUNDLE_DEST "${CMAKE_INSTALL_LIBDIR}")
+    endif()
     function(bundle_runtime_deps TARGET_FILE IS_LIBRARY)
         if(IS_LIBRARY)
             set(_type "LIBRARIES")
@@ -1062,7 +1075,6 @@ if(BUILD_PORTABLE)
             set(_type "EXECUTABLES")
         endif()
         install(CODE "
-            set(_lib \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
             file(GET_RUNTIME_DEPENDENCIES
                 ${_type} \"${TARGET_FILE}\"
                 RESOLVED_DEPENDENCIES_VAR _deps
@@ -1070,7 +1082,7 @@ if(BUILD_PORTABLE)
                 PRE_EXCLUDE_REGEXES ${_PRE_EXCLUDE}
                 POST_EXCLUDE_REGEXES ${_POST_EXCLUDE})
             foreach(_d IN LISTS _deps)
-                file(INSTALL \"\${_d}\" DESTINATION \"\${_lib}\" FOLLOW_SYMLINK_CHAIN)
+                file(INSTALL \"\${_d}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${_BUNDLE_DEST}\" FOLLOW_SYMLINK_CHAIN)
             endforeach()
         " COMPONENT runtime)
     endfunction()
@@ -1087,13 +1099,7 @@ if(BUILD_PORTABLE)
                 @ONLY)
         install(PROGRAMS "${CMAKE_BINARY_DIR}/run_lichtfeld.sh" DESTINATION ${CMAKE_INSTALL_BINDIR})
     elseif(WIN32)
-        # Copy DLLs to bin/ for Windows search path
         install(CODE "
-            # Copy all DLLs from lib/ to bin/
-            file(GLOB _dlls \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/*.dll\")
-            foreach(_d IN LISTS _dlls)
-                file(INSTALL \"\${_d}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
-            endforeach()
             # Copy extensions/ from build to dist/extensions/
             # Handle both single-config (Ninja) and multi-config (VS) generators
             foreach(_cfg IN ITEMS \"\" \"Release\" \"Debug\" \"RelWithDebInfo\" \"MinSizeRel\")
