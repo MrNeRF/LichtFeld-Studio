@@ -11,6 +11,12 @@ if ("${CMAKE_TOOLCHAIN_FILE}" STREQUAL "")
     set(CMAKE_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
 endif()
 
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
+    # Keep the x264 workaround Linux-only so Windows continues to use the
+    # upstream vcpkg port unchanged.
+    list(APPEND VCPKG_OVERLAY_PORTS "${CMAKE_CURRENT_SOURCE_DIR}/.github/overlays/linux")
+endif()
+
 cmake_minimum_required(VERSION 3.30)
 
 option(LFS_ENFORCE_LINUX_GUI_BACKENDS "Fail configure when Linux SDL3 would lack X11 and Wayland support" ON)
