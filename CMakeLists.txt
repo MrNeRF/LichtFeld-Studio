@@ -721,13 +721,16 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 )
 
 # OpenUSD runtime resources (schema/file-format plugin metadata).
-# Copy them beside the app under ../lib/usd and register that path at startup.
+# On Windows: copy to <exe>/usd/ so that relative LibraryPaths resolve to the
+# DLL copies already loaded from the exe directory.
+# On Linux: copy to <exe>/../lib/usd/ (conventional layout).
 set(_USD_PLUGIN_SOURCE_DIR "")
 foreach(_candidate
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd"
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd"
     "${CMAKE_BINARY_DIR}/src/python/usd")
-    if(NOT _USD_PLUGIN_SOURCE_DIR AND EXISTS "${_candidate}")
+    # Require an actual plugin sub-directory (not just the root index).
+    if(NOT _USD_PLUGIN_SOURCE_DIR AND EXISTS "${_candidate}/ar/resources/plugInfo.json")
         set(_USD_PLUGIN_SOURCE_DIR "${_candidate}")
     endif()
 endforeach()
@@ -742,7 +745,11 @@ foreach(_candidate
     endif()
 endforeach()
 
-set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../lib/usd")
+if(WIN32)
+    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/usd")
+else()
+    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../lib/usd")
+endif()
 
 if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -766,16 +773,13 @@ endif()
 
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
-# Per-config output directory variants are Windows-only; Linux keeps the
-# default flat binary directory.
-if(WIN32)
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY_DEBUG        "${CMAKE_BINARY_DIR}/Debug"
-        RUNTIME_OUTPUT_DIRECTORY_RELEASE      "${CMAKE_BINARY_DIR}/Release"
-        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo"
-        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL   "${CMAKE_BINARY_DIR}/MinSizeRel"
-    )
-endif()
+# Per-config output directory variants — used by MSVC (multi-config); no-op for single-config generators
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG        "${CMAKE_BINARY_DIR}/Debug"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE      "${CMAKE_BINARY_DIR}/Release"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL   "${CMAKE_BINARY_DIR}/MinSizeRel"
+)
 
 # Platform-specific settings
 if(UNIX)
@@ -1044,8 +1048,7 @@ if(BUILD_PORTABLE)
             [[.*libstdc[+][+].*]] [[.*libgcc_s.*]]
             [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
 
-    # Search directories for runtime dependencies.
-    # Portable builds are Windows Release-only; binaries are in build/Release/.
+    # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
     set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/Release\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
 
     # Helper: bundle runtime dependencies for a target

@@ -27,7 +27,9 @@
 #endif
 
 namespace {
-    // Register OpenUSD plugin resources deployed at <exe_dir>/../lib/usd/.
+    // Register OpenUSD plugin resources deployed beside the executable.
+    // On Windows: <exe_dir>/usd/ — keeps relative LibraryPaths correct.
+    // On Linux:   <exe_dir>/../lib/usd/ — conventional layout.
     // Must be called before any USD API usage (stage creation, schema lookup).
     // The env-var approach (PXR_PLUGINPATH_NAME) does not work reliably on
     // Windows because USD DLLs may initialise before main() runs.
@@ -39,13 +41,26 @@ namespace {
             return;
         }
 
-        auto usd_dir = exe_dir / ".." / "lib" / "usd";
         std::error_code ec;
+
+        // On Windows, plugins sit next to the exe at <exe_dir>/usd/ so that
+        // relative LibraryPath entries (e.g. "../../usd_ar.dll") resolve to
+        // the DLL copies that are already loaded by Windows at startup.
+        // On Linux they follow the conventional <exe_dir>/../lib/usd/ layout.
+#ifdef _WIN32
+        auto usd_dir = exe_dir / "usd";
+#else
+        auto usd_dir = exe_dir / ".." / "lib" / "usd";
+#endif
         usd_dir = std::filesystem::canonical(usd_dir, ec);
-        if (ec || !std::filesystem::is_directory(usd_dir, ec))
+        if (ec || !std::filesystem::is_directory(usd_dir, ec)) {
+            std::println(stderr, "[USD] plugin directory not found ({})",
+                         ec ? ec.message() : "not a directory");
             return;
+        }
 
         const std::string path_utf8 = lfs::core::path_to_utf8(usd_dir);
+        std::println(stderr, "[USD] registering plugins from: {}", path_utf8);
 
         // Also set the env var for any code that reads it directly.
 #ifdef _WIN32
@@ -57,6 +72,8 @@ namespace {
         // Programmatically register plugins so the Plug system finds them
         // regardless of compiled-in search paths or env var timing.
         pxr::PlugRegistry::GetInstance().RegisterPlugins(path_utf8);
+        std::println(stderr, "[USD] plugin registration complete ({} plugins)",
+                     pxr::PlugRegistry::GetInstance().GetAllPlugins().size());
     }
 } // namespace
 
