@@ -10,46 +10,64 @@ find_package(nanobind CONFIG REQUIRED)
 
 # vcpkg extension modules use release ABI; debug libpython has Py_DEBUG which
 # changes _PyRuntimeState layout, causing ABI mismatch crashes.
-get_target_property(_py_debug_lib Python::Python IMPORTED_LOCATION_DEBUG)
-if(_py_debug_lib AND _py_debug_lib MATCHES "python3\\.([0-9]+)d\\.a$")
-    # Linux: libpython3.XXd.a -> libpython3.XX.a
-    string(REGEX REPLACE "debug/lib/libpython3\\.([0-9]+)d\\.a$"
-                         "lib/libpython3.\\1.a" _py_release_lib "${_py_debug_lib}")
-    if(EXISTS "${_py_release_lib}")
-        set_target_properties(Python::Python PROPERTIES
-            IMPORTED_LOCATION_DEBUG "${_py_release_lib}")
-        message(STATUS "Python: forced release ABI for debug build (Linux)")
+# Force release Python library for debug builds on both Python::Python and Python::Module
+# (nanobind uses Python::Module for extension modules)
+function(lfs_force_python_release_abi target_name)
+    # On Windows, check the import library (.lib); on Linux, check the library location
+    if(WIN32)
+        get_target_property(_py_debug_lib ${target_name} IMPORTED_IMPLIB_DEBUG)
+    else()
+        get_target_property(_py_debug_lib ${target_name} IMPORTED_LOCATION_DEBUG)
     endif()
-elseif(_py_debug_lib AND _py_debug_lib MATCHES "python3([0-9]+)_?d\\.lib$")
-    # Windows: python312_d.lib or python312d.lib -> python312.lib
-    string(REGEX REPLACE "python3([0-9]+)_?d\\.lib$"
-                         "python3\\1.lib" _py_release_lib "${_py_debug_lib}")
-    # Also check debug/ -> lib/ path variant
-    string(REPLACE "/debug/lib/" "/lib/" _py_release_lib_alt "${_py_release_lib}")
-    if(EXISTS "${_py_release_lib}")
-        set(_py_win_release "${_py_release_lib}")
-    elseif(EXISTS "${_py_release_lib_alt}")
-        set(_py_win_release "${_py_release_lib_alt}")
+    if(NOT _py_debug_lib)
+        return()
     endif()
-    if(_py_win_release)
-        set_target_properties(Python::Python PROPERTIES
-            IMPORTED_LOCATION_DEBUG "${_py_win_release}")
-        # Override import library for Windows linker
-        get_target_property(_py_debug_implib Python::Python IMPORTED_IMPLIB_DEBUG)
-        if(_py_debug_implib)
-            string(REGEX REPLACE "python3([0-9]+)_?d\\.lib$"
-                                 "python3\\1.lib" _py_release_implib "${_py_debug_implib}")
-            string(REPLACE "/debug/lib/" "/lib/" _py_release_implib_alt "${_py_release_implib}")
-            if(EXISTS "${_py_release_implib}")
-                set_target_properties(Python::Python PROPERTIES
-                    IMPORTED_IMPLIB_DEBUG "${_py_release_implib}")
-            elseif(EXISTS "${_py_release_implib_alt}")
-                set_target_properties(Python::Python PROPERTIES
-                    IMPORTED_IMPLIB_DEBUG "${_py_release_implib_alt}")
-            endif()
+
+    if(_py_debug_lib MATCHES "python3\\.([0-9]+)d\\.a$")
+        # Linux: libpython3.XXd.a -> libpython3.XX.a
+        string(REGEX REPLACE "debug/lib/libpython3\\.([0-9]+)d\\.a$"
+                             "lib/libpython3.\\1.a" _py_release_lib "${_py_debug_lib}")
+        if(EXISTS "${_py_release_lib}")
+            set_target_properties(${target_name} PROPERTIES
+                IMPORTED_LOCATION_DEBUG "${_py_release_lib}")
+            message(STATUS "Python: forced release ABI for ${target_name} (Linux)")
         endif()
-        message(STATUS "Python: forced release ABI for debug build (Windows)")
+    elseif(_py_debug_lib MATCHES "python3([0-9]+)_?d\\.lib$")
+        # Windows: python312_d.lib -> python312.lib (import library)
+        # We already have _py_debug_lib as the import library path
+        string(REGEX REPLACE "python3([0-9]+)_?d\\.lib$"
+                             "python3\\1.lib" _py_release_implib "${_py_debug_lib}")
+        string(REPLACE "/debug/lib/" "/lib/" _py_release_implib "${_py_release_implib}")
+        
+        if(EXISTS "${_py_release_implib}")
+            # Set the release import library for Debug config
+            set_target_properties(${target_name} PROPERTIES
+                IMPORTED_IMPLIB_DEBUG "${_py_release_implib}")
+            
+            # Also update the DLL location to use release python312.dll
+            get_target_property(_py_debug_dll ${target_name} IMPORTED_LOCATION_DEBUG)
+            if(_py_debug_dll)
+                string(REGEX REPLACE "python3([0-9]+)_?d\\.dll$"
+                                     "python3\\1.dll" _py_release_dll "${_py_debug_dll}")
+                string(REPLACE "/debug/bin/" "/bin/" _py_release_dll "${_py_release_dll}")
+                if(EXISTS "${_py_release_dll}")
+                    set_target_properties(${target_name} PROPERTIES
+                        IMPORTED_LOCATION_DEBUG "${_py_release_dll}")
+                endif()
+            endif()
+            
+            message(STATUS "Python: forced release ABI for ${target_name} (Windows) - using ${_py_release_implib}")
+        endif()
     endif()
+endfunction()
+
+# Apply to both Python::Python (for embedded Python) and Python::Module (for nanobind)
+lfs_force_python_release_abi(Python::Python)
+if(TARGET Python::Module)
+    lfs_force_python_release_abi(Python::Module)
+endif()
+if(TARGET Python::SABIModule)
+    lfs_force_python_release_abi(Python::SABIModule)
 endif()
 
 # Shared library for Python runtime state - must be shared to avoid duplicate statics
@@ -84,11 +102,17 @@ set_target_properties(lfs_python_runtime PROPERTIES
     CXX_STANDARD_REQUIRED ON
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}
-    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR}
 )
+if(WIN32)
+    set_target_properties(lfs_python_runtime PROPERTIES
+        LIBRARY_OUTPUT_DIRECTORY              ${CMAKE_BINARY_DIR}/$<CONFIG>
+        RUNTIME_OUTPUT_DIRECTORY              ${CMAKE_BINARY_DIR}/$<CONFIG>
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG        ${CMAKE_BINARY_DIR}/Debug
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE      ${CMAKE_BINARY_DIR}/Release
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}/RelWithDebInfo
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL   ${CMAKE_BINARY_DIR}/MinSizeRel
+    )
+endif()
 
 # Static library for other Python utilities
 add_library(lfs_python_utils STATIC
@@ -188,7 +212,10 @@ set_target_properties(lfs_py PROPERTIES
 
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
+    $<$<CONFIG:Debug>:DEBUG_BUILD>
+    $<$<CONFIG:Release>:RELEASE_BUILD>
 )
+
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
@@ -269,7 +296,7 @@ if(WIN32)
 
     # Copy vcpkg runtime DLLs
     add_custom_command(TARGET lfs_py POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin"
             "${CMAKE_CURRENT_BINARY_DIR}"
         COMMENT "Copying vcpkg DLLs to Python module directory"
@@ -288,10 +315,24 @@ endif()
 
 # Type stubs for IDE support (output to typings/ to avoid runtime conflicts)
 option(BUILD_PYTHON_STUBS "Generate Python type stubs (requires loading the module)" ON)
+
+# Skip stubgen for Debug builds on Windows: vcpkg provides a release Python
+# interpreter, while Debug extension loading still has ABI-sensitive edges.
+# Stubs are primarily useful for IDE support and can be generated from Release builds.
+get_property(LFS_GENERATOR_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(WIN32 AND NOT LFS_GENERATOR_IS_MULTI_CONFIG AND CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "Skipping Python stubs for Debug build (vcpkg Python is release-only)")
+    set(BUILD_PYTHON_STUBS OFF)
+endif()
+
 if(BUILD_PYTHON_STUBS)
     set(GENERATED_STUBS_DIR "${CMAKE_CURRENT_BINARY_DIR}/typings")
     set(COMMITTED_STUBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
     set(PYTHON_STUB_WORKFLOW_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/manage_stubs.py")
+    set(GENERATED_STUBS_MARKER "${GENERATED_STUBS_DIR}/lichtfeld/py.typed")
+    if(WIN32 AND LFS_GENERATOR_IS_MULTI_CONFIG)
+        set(GENERATED_STUBS_MARKER "${GENERATED_STUBS_DIR}/$<CONFIG>/lichtfeld/py.typed")
+    endif()
 
     if(WIN32)
         # On Windows, we need to set PATH for DLL loading before running stubgen
@@ -311,7 +352,13 @@ if(BUILD_PYTHON_STUBS)
             # Use file(GENERATE) to evaluate generator expressions at generation time
             set(STUBGEN_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/run_stubgen_$<CONFIG>.py")
             file(GENERATE OUTPUT "${STUBGEN_WRAPPER}" CONTENT "
-import os, sys
+import os, pathlib, sys
+
+stub_marker = pathlib.Path(r'${GENERATED_STUBS_MARKER}')
+if '$<CONFIG>' == 'Debug':
+    stub_marker.parent.mkdir(parents=True, exist_ok=True)
+    stub_marker.touch()
+    sys.exit(0)
 
 # Add DLL directories (Python 3.8+ requirement on Windows)
 dll_dirs = [
@@ -348,16 +395,19 @@ for pyi in glob.glob(r'${GENERATED_STUBS_DIR}/**/*.pyi', recursive=True):
         if count == 0:
             break
     p.write_bytes(content.encode('utf-8'))
+
+stub_marker.parent.mkdir(parents=True, exist_ok=True)
+stub_marker.touch()
 ")
 
             add_custom_command(
-                OUTPUT ${GENERATED_STUBS_DIR}/lichtfeld/py.typed
+                OUTPUT "${GENERATED_STUBS_MARKER}"
                 COMMAND "${Python_EXECUTABLE}" "${STUBGEN_WRAPPER}"
                 WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
                 DEPENDS lfs_py lfs_python_runtime "${NB_STUBGEN}"
                 COMMENT "Generating Python stubs for lichtfeld (Windows)"
             )
-            add_custom_target(lichtfeld_stub ALL DEPENDS ${GENERATED_STUBS_DIR}/lichtfeld/py.typed)
+            add_custom_target(lichtfeld_stub ALL DEPENDS "${GENERATED_STUBS_MARKER}")
         endif()
     else()
         nanobind_add_stub(lichtfeld_stub
@@ -382,25 +432,56 @@ for pyi in glob.glob(r'${GENERATED_STUBS_DIR}/**/*.pyi', recursive=True):
         VERBATIM
     )
 
+    set(PYTHON_STUB_CHECK_STAMP "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp")
+    set(PYTHON_STUB_CHECK_COMMAND
+        "${Python_EXECUTABLE}" "${PYTHON_STUB_WORKFLOW_SCRIPT}"
+        check
+        --generated "${GENERATED_STUBS_DIR}"
+        --committed "${COMMITTED_STUBS_DIR}"
+    )
+    if(WIN32 AND LFS_GENERATOR_IS_MULTI_CONFIG)
+        set(PYTHON_STUB_CHECK_STAMP "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check_$<CONFIG>.stamp")
+        set(PYTHON_STUB_CHECK_WRAPPER "${CMAKE_CURRENT_BINARY_DIR}/check_python_stubs_$<CONFIG>.py")
+        file(GENERATE OUTPUT "${PYTHON_STUB_CHECK_WRAPPER}" CONTENT "
+import pathlib, subprocess, sys
+
+stamp = pathlib.Path(r'${PYTHON_STUB_CHECK_STAMP}')
+if '$<CONFIG>' == 'Debug':
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.touch()
+    sys.exit(0)
+
+result = subprocess.run([
+    r'${Python_EXECUTABLE}',
+    r'${PYTHON_STUB_WORKFLOW_SCRIPT}',
+    'check',
+    '--generated', r'${GENERATED_STUBS_DIR}',
+    '--committed', r'${COMMITTED_STUBS_DIR}',
+])
+if result.returncode != 0:
+    sys.exit(result.returncode)
+stamp.parent.mkdir(parents=True, exist_ok=True)
+stamp.touch()
+")
+        set(PYTHON_STUB_CHECK_COMMAND "${Python_EXECUTABLE}" "${PYTHON_STUB_CHECK_WRAPPER}")
+    endif()
+
     add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
-        COMMAND "${Python_EXECUTABLE}" "${PYTHON_STUB_WORKFLOW_SCRIPT}"
-            check
-            --generated "${GENERATED_STUBS_DIR}"
-            --committed "${COMMITTED_STUBS_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E touch "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
+        OUTPUT "${PYTHON_STUB_CHECK_STAMP}"
+        COMMAND ${PYTHON_STUB_CHECK_COMMAND}
+        COMMAND ${CMAKE_COMMAND} -E touch "${PYTHON_STUB_CHECK_STAMP}"
         DEPENDS lichtfeld_stub "${PYTHON_STUB_WORKFLOW_SCRIPT}" ${COMMITTED_STUB_FILES}
         COMMENT "Checking committed Python stubs against generated stubs"
         VERBATIM
     )
     add_custom_target(check_python_stubs ALL
-        DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/python_stub_check.stamp"
+        DEPENDS "${PYTHON_STUB_CHECK_STAMP}"
     )
 endif()
 
 # Copy lfs_plugins Python module to build directory (recursively to include subdirectories)
 add_custom_target(lfs_plugins_copy ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins ${CMAKE_CURRENT_BINARY_DIR}/lfs_plugins
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different ${CMAKE_CURRENT_SOURCE_DIR}/lfs_plugins $<TARGET_FILE_DIR:lfs_py>/lfs_plugins
     COMMENT "Copying lfs_plugins Python module"
 )
 
@@ -408,7 +489,7 @@ add_custom_target(lfs_python_support_copy ALL
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${CMAKE_CURRENT_SOURCE_DIR}/_lfs_panel_contract.py
         ${CMAKE_CURRENT_SOURCE_DIR}/lfs_splat_lod_hierarchy.py
-        ${CMAKE_CURRENT_BINARY_DIR}
+        $<TARGET_FILE_DIR:lfs_py>
     COMMENT "Copying internal Python support modules"
 )
 

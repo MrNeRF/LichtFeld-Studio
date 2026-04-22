@@ -85,7 +85,10 @@ namespace lfs::vis::gui::rml_input {
         using RestoreCallback = std::function<void(Rml::Element&)>;
 
         ~TextInputEscapeRevertController() override {
-            clear();
+            if (Rml::GetSystemInterface())
+                clear();
+            else
+                bindings_.clear();
         }
 
         void bind(Rml::Element* element, RestoreCallback restore_callback = {}) {

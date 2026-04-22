@@ -30,6 +30,7 @@ namespace lfs::vis::gui {
 
         bool init(SDL_Window* window, float dp_ratio = 1.0f);
         void shutdown();
+        [[nodiscard]] bool isInitialized() const { return initialized_; }
 
         float getDpRatio() const { return dp_ratio_; }
         void setDpRatio(float ratio);

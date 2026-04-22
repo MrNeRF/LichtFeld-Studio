@@ -290,6 +290,16 @@
             <span class="prop-label">{{label_fs_cache}}</span>
             <input type="checkbox" data-checked="use_fs_cache" />
           </div>
+          <div class="setting-row" data-tooltip="training.tooltip.enable_eval">
+            <span class="prop-label">{{label_enable_eval}}</span>
+            <input type="checkbox" data-checked="enable_eval" />
+          </div>
+          <div class="setting-row" data-if="dep_eval" data-tooltip="training.tooltip.test_every">
+            <span class="prop-label">{{label_test_every}}</span>
+            <input type="text" class="number-input" data-value="test_every_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('test_every', 1)">+</button>
+          </div>
           <div class="setting-row" data-tooltip="training.tooltip.dataset_output">
             <span class="prop-label">{{label_dataset_output}}</span>
             <span class="text-disabled">{{dataset_output_display}}</span>
@@ -575,7 +585,7 @@
 
     <!-- Save Steps subsection -->
     <div class="training-subsection">
-      <div class="section-header text-accent" id="hdr-save-steps" data-event-click="toggle_section('save_steps')">
+      <div class="section-header text-accent" id="hdr-save-steps" data-event-click="toggle_section('save_steps')" data-tooltip="training.tooltip.save_steps">
         <span class="section-arrow text-accent" id="arrow-save-steps">&#x25B6;</span>
         <span class="text-accent">{{label_hdr_save_steps}}</span>
       </div>
@@ -624,6 +634,17 @@
           <span id="loss-tick-min" class="loss-tick">{{loss_tick_min}}</span>
         </div>
         <loss-graph id="loss-graph-el" />
+      </div>
+    </div>
+    <div id="psnr-graph-container" data-if="dep_eval">
+      <span id="psnr-label" class="status-text text-default training-status-line">{{psnr_label}}</span>
+      <div class="loss-graph-wrap">
+        <div class="loss-graph-ticks">
+          <span id="psnr-tick-max" class="loss-tick">{{psnr_tick_max}}</span>
+          <span id="psnr-tick-mid" class="loss-tick">{{psnr_tick_mid}}</span>
+          <span id="psnr-tick-min" class="loss-tick">{{psnr_tick_min}}</span>
+        </div>
+        <loss-graph id="psnr-graph-el" />
       </div>
     </div>
   </div>

@@ -392,6 +392,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* STEP = "status.step";
         inline constexpr const char* LOSS = "status.loss";
         inline constexpr const char* ETA = "status.eta";
+        inline constexpr const char* PSNR = "status.psnr";
+        inline constexpr const char* SSIM = "status.ssim";
         inline constexpr const char* UNKNOWN = "status.unknown";
         inline constexpr const char* DATASET_NO_TRAINER = "status.dataset_no_trainer";
         inline constexpr const char* DATASET_READY = "status.dataset_ready";

@@ -79,6 +79,8 @@ namespace lfs::vis::gui {
             std::string step_value;
             std::string loss_label;
             std::string loss_value;
+            bool show_eval_metrics = false;
+            std::string eval_metrics_value;
             std::string gaussians_label;
             std::string gaussians_value;
             std::string time_value;

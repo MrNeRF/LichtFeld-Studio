@@ -16,6 +16,8 @@
             <span class="separator">|</span>
             <span id="loss-label" class="dim">{{ loss_label }}</span>
             <span id="loss-value">{{ loss_value }}</span>
+            <span class="separator hidden" data-class-hidden="!show_eval_metrics">|</span>
+            <span id="eval-metrics-value" class="dim hidden" data-class-hidden="!show_eval_metrics">{{ eval_metrics_value }}</span>
             <span class="separator">|</span>
             <span id="gaussians-label" class="dim">{{ gaussians_label }}</span>
             <span id="gaussians-value">{{ gaussians_value }}</span>

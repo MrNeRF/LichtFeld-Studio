@@ -1685,6 +1685,12 @@ namespace lfs::training {
                 LOG_INFO("Created train/val split: {} train, {} val images",
                          train_dataset_->size(),
                          val_dataset_->size());
+                if (train_dataset_->size() == 0) {
+                    return std::unexpected("Evaluation split leaves no training images. Increase Test Every or disable evaluation.");
+                }
+                if (val_dataset_->size() == 0) {
+                    return std::unexpected("Evaluation is enabled but the validation split is empty. Decrease Test Every or disable evaluation.");
+                }
             } else {
                 // Use all images for training
                 train_dataset_ = std::make_shared<CameraDataset>(

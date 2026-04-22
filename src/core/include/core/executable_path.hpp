@@ -212,10 +212,14 @@ namespace lfs::core {
     // Discover the vcpkg triplet directory under vcpkg_installed/ at runtime.
     // Returns empty path if no matching triplet is found.
     inline std::filesystem::path findVcpkgPrefix(const std::filesystem::path& exe_dir) {
-        const auto vcpkg_root = exe_dir / "vcpkg_installed";
         std::error_code ec;
+        auto vcpkg_root = exe_dir / "vcpkg_installed";
         if (!std::filesystem::exists(vcpkg_root, ec)) {
-            return {};
+            // Per-config build (e.g. build/Release/): vcpkg_installed lives one level up
+            vcpkg_root = exe_dir.parent_path() / "vcpkg_installed";
+            if (!std::filesystem::exists(vcpkg_root, ec)) {
+                return {};
+            }
         }
 
         if (const auto prefix = preferredVcpkgPrefix(vcpkg_root); !prefix.empty()) {

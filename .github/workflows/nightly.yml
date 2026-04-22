@@ -2,11 +2,14 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Nightly Build
+name: Windows Package Publish
 
 on:
   schedule:
     - cron: '0 1 * * *'  # 2 AM CET (1 AM UTC)
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       force_build:
@@ -14,6 +17,18 @@ on:
         required: false
         type: boolean
         default: false
+      release_channel:
+        description: Publish channel
+        required: false
+        type: choice
+        default: nightly
+        options:
+          - nightly
+          - stable
+      release_version:
+        description: Stable version without leading v, for manual stable publishes
+        required: false
+        type: string
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -29,15 +44,49 @@ jobs:
       should_build: ${{ steps.decide.outputs.should_build }}
       reason: ${{ steps.decide.outputs.reason }}
       previous_sha: ${{ steps.decide.outputs.previous_sha }}
+      build_channel: ${{ steps.decide.outputs.build_channel }}
+      stable_version: ${{ steps.decide.outputs.stable_version }}
 
     steps:
-      - name: Decide whether nightly build is needed
+      - name: Decide whether package build is needed
         id: decide
         uses: actions/github-script@v7
         with:
           script: |
-            const forceBuild = context.payload.inputs?.force_build === 'true';
+            const inputs = context.payload.inputs || {};
+            const forceBuild = inputs.force_build === 'true';
+            const currentRef = context.ref;
+            const refName = currentRef.replace(/^refs\/(heads|tags)\//, '');
             const currentSha = context.sha;
+            const requestedChannel = inputs.release_channel || 'nightly';
+            const isTagRelease = context.eventName === 'push' && currentRef.startsWith('refs/tags/v');
+            const stableVersion = isTagRelease
+              ? refName.replace(/^v/, '')
+              : (inputs.release_version || '').trim().replace(/^v/, '');
+            const stableVersionPattern = /^[0-9]+(\.[0-9]+){1,2}$/;
+
+            if (isTagRelease || requestedChannel === 'stable') {
+              core.setOutput('build_channel', 'stable');
+              core.setOutput('previous_sha', '');
+              if (!stableVersionPattern.test(stableVersion)) {
+                core.setFailed(
+                  `Stable publishes require a version like 0.5.2; got '${stableVersion || '<empty>'}'.`
+                );
+                return;
+              }
+              core.setOutput('stable_version', stableVersion);
+              core.setOutput('should_build', 'true');
+              core.setOutput(
+                'reason',
+                isTagRelease
+                  ? `Tag ${refName} will be published as stable release ${stableVersion}.`
+                  : `Manual stable publish requested for ${stableVersion}.`
+              );
+              return;
+            }
+
+            core.setOutput('build_channel', 'nightly');
+            core.setOutput('stable_version', '');
 
             if (forceBuild) {
               core.setOutput('should_build', 'true');
@@ -102,14 +151,20 @@ jobs:
 
       - name: Publish precheck summary
         env:
+          BUILD_CHANNEL: ${{ steps.decide.outputs.build_channel }}
           PREVIOUS_SHA: ${{ steps.decide.outputs.previous_sha }}
           REASON: ${{ steps.decide.outputs.reason }}
           SHOULD_BUILD: ${{ steps.decide.outputs.should_build }}
+          STABLE_VERSION: ${{ steps.decide.outputs.stable_version }}
         run: |
           {
-            echo "### Nightly precheck"
+            echo "### Package precheck"
             echo
             echo "- Build required: \`${SHOULD_BUILD}\`"
+            echo "- Channel: \`${BUILD_CHANNEL}\`"
+            if [ -n "${STABLE_VERSION}" ]; then
+              echo "- Stable version: \`v${STABLE_VERSION}\`"
+            fi
             echo "- Current commit: \`${GITHUB_SHA}\`"
             if [ -n "${PREVIOUS_SHA}" ]; then
               echo "- Previous successful nightly commit: \`${PREVIOUS_SHA}\`"
@@ -123,13 +178,6 @@ jobs:
     needs: precheck
     if: github.repository == 'MrNeRF/LichtFeld-Studio' && needs.precheck.outputs.should_build == 'true'
     runs-on: windows-2022
-    outputs:
-      artifact_name: ${{ steps.package.outputs.artifact_name }}
-      nightly_version: ${{ steps.package.outputs.nightly_version }}
-      package_name: ${{ steps.package.outputs.package_name }}
-      short_sha: ${{ steps.package.outputs.short_sha }}
-      full_sha: ${{ steps.package.outputs.full_sha }}
-      built_at: ${{ steps.package.outputs.built_at }}
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
       VCPKG_BUILD_TYPE: release
@@ -255,13 +303,15 @@ jobs:
             }
           }
 
+      # Failure-only; small log payload with short retention stays well under the
+      # GitHub Actions artifact quota.
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: windows-nightly-diagnostics-${{ github.run_number }}
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 7
           path: |
             build/CMakeCache.txt
             build/CMakeFiles/CMakeConfigureLog.yaml
@@ -274,117 +324,166 @@ jobs:
       - name: Package
         id: package
         shell: pwsh
+        env:
+          BUILD_CHANNEL: ${{ needs.precheck.outputs.build_channel }}
+          STABLE_VERSION: ${{ needs.precheck.outputs.stable_version }}
         run: |
           $date = Get-Date -AsUTC -Format "yyyy-MM-dd"
           $dateStamp = Get-Date -AsUTC -Format "yyyyMMdd"
           $builtAt = Get-Date -AsUTC -Format "yyyy-MM-ddTHH:mm:ssZ"
           $shortSha = (git rev-parse --short HEAD).Trim()
           $fullSha = (git rev-parse HEAD).Trim()
-          $targetVersionFile = ".github/nightly-target-version.txt"
-          if (-not (Test-Path $targetVersionFile)) {
-            throw "Missing $targetVersionFile."
+          $buildChannel = $env:BUILD_CHANNEL
+          if ([string]::IsNullOrWhiteSpace($buildChannel)) {
+            $buildChannel = "nightly"
           }
-          $nightlyTargetVersion = Get-Content $targetVersionFile |
-            ForEach-Object { $_.Trim() } |
-            Where-Object { $_ -and -not $_.StartsWith("#") } |
-            Select-Object -First 1
-          if ([string]::IsNullOrWhiteSpace($nightlyTargetVersion) -or $nightlyTargetVersion -eq "SET_ME") {
-            throw "Set the target version in $targetVersionFile, for example 0.6 or 0.5.2."
+
+          if ($buildChannel -eq "stable") {
+            $packageVersion = $env:STABLE_VERSION
+            if ([string]::IsNullOrWhiteSpace($packageVersion) -or $packageVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
+              throw "Stable publishes require STABLE_VERSION like 0.5.2."
+            }
+          } elseif ($buildChannel -eq "nightly") {
+            $targetVersionFile = ".github/nightly-target-version.txt"
+            if (-not (Test-Path $targetVersionFile)) {
+              throw "Missing $targetVersionFile."
+            }
+            $nightlyTargetVersion = Get-Content $targetVersionFile |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { $_ -and -not $_.StartsWith("#") } |
+              Select-Object -First 1
+            if ([string]::IsNullOrWhiteSpace($nightlyTargetVersion) -or $nightlyTargetVersion -eq "SET_ME") {
+              throw "Set the target version in $targetVersionFile, for example 0.6 or 0.5.2."
+            }
+            if ($nightlyTargetVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
+              throw "Invalid nightly target version '$nightlyTargetVersion' in $targetVersionFile."
+            }
+            $packageVersion = "$nightlyTargetVersion.dev$dateStamp+$shortSha"
+          } else {
+            throw "Unsupported build channel '$buildChannel'."
           }
-          if ($nightlyTargetVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
-            throw "Invalid nightly target version '$nightlyTargetVersion' in $targetVersionFile."
-          }
-          $nightlyVersion = "$nightlyTargetVersion.dev$dateStamp+$shortSha"
-          $packageName = "LichtFeld-Studio-windows-v$nightlyVersion.zip"
-          $artifactName = "windows-portable-v$($nightlyVersion -replace '\+', '-')"
+
+          $packageName = "LichtFeld-Studio-windows-v$packageVersion.zip"
           cmake --install build --prefix dist
           Compress-Archive -Path dist\* -DestinationPath $packageName
-          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
-          "nightly_version=$nightlyVersion" >> $env:GITHUB_OUTPUT
+          "build_channel=$buildChannel" >> $env:GITHUB_OUTPUT
           "package_name=$packageName" >> $env:GITHUB_OUTPUT
+          "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
           "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
           "full_sha=$fullSha" >> $env:GITHUB_OUTPUT
           "built_at=$builtAt" >> $env:GITHUB_OUTPUT
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.artifact_name }}
-          path: ${{ steps.package.outputs.package_name }}
-          if-no-files-found: error
-
-  publish-r2:
-    needs:
-      - precheck
-      - build-windows
-    if: needs.precheck.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
-    environment: nightly-publish
-    permissions:
-      contents: read
-
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-windows.outputs.artifact_name }}
-
-      - name: Ensure AWS CLI is available
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      # Package binaries must not be uploaded as GitHub Actions artifacts.
+      # Keep the generated zip on the runner and publish it directly to R2.
+      # AWS CLI is preinstalled on windows-2022 hosted runners.
+      - name: Verify AWS CLI
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if ! command -v aws >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y awscli
-          fi
+          $ErrorActionPreference = 'Stop'
           aws --version
 
-      - name: Upload nightly to Cloudflare R2
+      - name: Upload package to Cloudflare R2
+        shell: pwsh
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          FILE_NAME: ${{ needs.build-windows.outputs.package_name }}
+          BUILD_CHANNEL: ${{ steps.package.outputs.build_channel }}
+          FILE_NAME: ${{ steps.package.outputs.package_name }}
           R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ vars.R2_BUCKET }}
         run: |
-          set -euo pipefail
-          : "${AWS_ACCESS_KEY_ID:?Missing R2_ACCESS_KEY_ID secret}"
-          : "${AWS_SECRET_ACCESS_KEY:?Missing R2_SECRET_ACCESS_KEY secret}"
-          : "${R2_ACCOUNT_ID:?Missing R2_ACCOUNT_ID environment variable}"
-          : "${R2_BUCKET:?Missing R2_BUCKET environment variable}"
-          : "${FILE_NAME:?Missing package name}"
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_BUCKET', 'BUILD_CHANNEL', 'FILE_NAME')) {
+            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
+              throw "Missing $name"
+            }
+          }
 
-          endpoint_url="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-          versioned_key="windows/nightly/${FILE_NAME}"
+          $endpointUrl = "https://$($env:R2_ACCOUNT_ID).r2.cloudflarestorage.com"
+          $versionedKey = "windows/$($env:BUILD_CHANNEL)/$($env:FILE_NAME)"
+          $checksumFile = "$($env:FILE_NAME).sha256"
+          $checksumKey = "$versionedKey.sha256"
+          $checksum = (Get-FileHash -Algorithm SHA256 -Path $env:FILE_NAME).Hash.ToLowerInvariant()
+          Set-Content -Path $checksumFile -Value "$checksum  $($env:FILE_NAME)" -Encoding ascii
 
-          aws s3 cp "$FILE_NAME" "s3://${R2_BUCKET}/${versioned_key}" \
-            --endpoint-url "$endpoint_url" \
-            --content-type application/zip \
-            --only-show-errors
+          aws s3 cp $checksumFile "s3://$($env:R2_BUCKET)/$checksumKey" `
+            --endpoint-url $endpointUrl `
+            --content-type text/plain `
+            --only-show-errors `
+            2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload private R2 checksum object."
+          }
+          aws s3 cp $env:FILE_NAME "s3://$($env:R2_BUCKET)/$versionedKey" `
+            --endpoint-url $endpointUrl `
+            --content-type application/zip `
+            --only-show-errors `
+            2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to upload private R2 package object."
+          }
+
+      # Confirms the zip landed intact before reporting success. Size mismatch
+      # is the most likely failure mode on flaky networks; a missing sidecar .sha256
+      # would silently break download verification.
+      - name: Verify R2 upload
+        shell: pwsh
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          BUILD_CHANNEL: ${{ steps.package.outputs.build_channel }}
+          FILE_NAME: ${{ steps.package.outputs.package_name }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+          R2_BUCKET: ${{ vars.R2_BUCKET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $endpointUrl = "https://$($env:R2_ACCOUNT_ID).r2.cloudflarestorage.com"
+          $versionedKey = "windows/$($env:BUILD_CHANNEL)/$($env:FILE_NAME)"
+          $checksumKey = "$versionedKey.sha256"
+          $localSize = (Get-Item $env:FILE_NAME).Length
+
+          $headOutput = aws s3api head-object `
+            --bucket $env:R2_BUCKET `
+            --key $versionedKey `
+            --endpoint-url $endpointUrl `
+            2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to verify private R2 package object."
+          }
+
+          $headJson = $headOutput | ConvertFrom-Json
+          if ($headJson.ContentLength -ne $localSize) {
+            throw "Private R2 package object size mismatch (local=$localSize, remote=$($headJson.ContentLength))"
+          }
+
+          $checksumOutput = aws s3api head-object `
+            --bucket $env:R2_BUCKET `
+            --key $checksumKey `
+            --endpoint-url $endpointUrl `
+            2>$null
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to verify private R2 checksum object."
+          }
+
+          Write-Host "Verified private R2 package upload and checksum sidecar."
 
       - name: Publish summary
+        shell: pwsh
         env:
-          FILE_NAME: ${{ needs.build-windows.outputs.package_name }}
-          NIGHTLY_VERSION: ${{ needs.build-windows.outputs.nightly_version }}
-          FULL_SHA: ${{ needs.build-windows.outputs.full_sha }}
-          BUILT_AT: ${{ needs.build-windows.outputs.built_at }}
-          R2_PUBLIC_BASE_URL: ${{ vars.R2_PUBLIC_BASE_URL }}
+          BUILD_CHANNEL: ${{ steps.package.outputs.build_channel }}
+          FULL_SHA: ${{ steps.package.outputs.full_sha }}
+          BUILT_AT: ${{ steps.package.outputs.built_at }}
         run: |
-          set -euo pipefail
-          {
-            echo "### Nightly R2 Upload"
-            echo
-            echo "- Uploaded \`${FILE_NAME}\` to Cloudflare R2."
-            echo "- Nightly version: \`v${NIGHTLY_VERSION}\`"
-            echo "- Commit: \`${FULL_SHA}\`"
-            echo "- Built at: \`${BUILT_AT}\`"
-            echo "- Object key: \`windows/nightly/${FILE_NAME}\`"
-            if [ -n "${R2_PUBLIC_BASE_URL:-}" ]; then
-              base_url="${R2_PUBLIC_BASE_URL%/}"
-              echo "- Versioned URL: ${base_url}/windows/nightly/${FILE_NAME}"
-            else
-              echo "- Set the \`R2_PUBLIC_BASE_URL\` environment variable to print public download URLs here."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          $ErrorActionPreference = 'Stop'
+          $summary = @(
+            '### Private Package Upload'
+            ''
+            '- Private R2 upload completed.'
+            "- Channel: ``$env:BUILD_CHANNEL``"
+            "- Commit: ``$env:FULL_SHA``"
+            "- Built at: ``$env:BUILT_AT``"
+            '- Public download URL: not published.'
+          )
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

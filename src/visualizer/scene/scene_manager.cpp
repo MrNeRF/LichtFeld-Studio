@@ -364,7 +364,10 @@ namespace lfs::vis {
 
         // Handle node selection from scene panel (both PLYs and Groups)
         ui::NodeSelected::when([this](const auto& event) {
-            if (services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
+            const bool camera_navigation_selection = event.type == "Camera";
+            if (!camera_navigation_selection &&
+                services().trainerOrNull() &&
+                services().trainerOrNull()->isRunning()) {
                 return;
             }
 

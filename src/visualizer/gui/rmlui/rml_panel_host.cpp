@@ -204,11 +204,10 @@ namespace lfs::vis::gui {
     RmlPanelHost::~RmlPanelHost() {
         std::erase_if(queued_foreground_composites_,
                       [this](const CompositeCommand& cmd) { return cmd.fbo == &fbo_; });
-        if (rml_context_ && manager_) {
+        if (manager_ && manager_->isInitialized())
             manager_->destroyContext(context_name_);
-            rml_context_ = nullptr;
-            document_ = nullptr;
-        }
+        rml_context_ = nullptr;
+        document_ = nullptr;
     }
 
     std::string RmlPanelHost::generateThemeRCSS(const lfs::vis::Theme& t) const {

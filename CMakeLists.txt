@@ -30,7 +30,17 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-project(LichtFeld-Studio LANGUAGES CUDA CXX C)
+project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
+
+# On Windows, route all build outputs to build/<Config>/ so Debug and Release
+# binaries are separated. $<CONFIG> evaluates at build time for both
+# single-config (Ninja) and multi-config (MSVC) generators.
+# Linux: CMake default (flat binary dir) is used.
+if(WIN32)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+endif()
 
 # Disable C++20 module scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
@@ -524,6 +534,61 @@ if(WIN32 AND CUDAToolkit_FOUND)
     message(STATUS "Post-build: CUDA DLLs will be copied from ${CUDAToolkit_BIN_DIR}")
 endif()
 
+# =============================================================================
+# VCPKG DLL COPYING - Ensure all vcpkg DLLs are available at runtime
+# =============================================================================
+# vcpkg's VCPKG_APPLOCAL_DEPS feature may not copy all needed DLLs.
+# This explicitly copies vcpkg DLLs to ensure they're available at runtime.
+# 
+# IMPORTANT: For Release builds, copy ONLY release DLLs to avoid loading debug CRT.
+# For Debug builds, copy both because some vcpkg packages (e.g., zlib) are release-only.
+if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(_vcpkg_debug_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
+    set(_vcpkg_release_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
+    file(GLOB _vcpkg_release_dlls CONFIGURE_DEPENDS "${_vcpkg_release_bin_dir}/*.dll")
+    file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
+    
+    # Always copy release DLLs - needed for both Release and Debug builds
+    if(_vcpkg_release_dlls)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_vcpkg_release_dlls}
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying vcpkg release DLLs"
+        )
+    endif()
+    
+    # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
+    # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
+    # For multi-config generators (VS, Xcode): use generator expression
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_is_multi_config)
+        # Multi-config: use generator expression to conditionally copy
+        if(_vcpkg_debug_dlls)
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E $<IF:$<CONFIG:Debug>,copy_if_different,true>
+                    ${_vcpkg_debug_dlls}
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                COMMENT "Copying vcpkg debug DLLs (Debug config only)"
+            )
+        endif()
+        message(STATUS "Post-build: vcpkg DLLs - release always, debug for Debug config only (multi-config)")
+    else()
+        # Single-config: check CMAKE_BUILD_TYPE at configure time
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug" AND _vcpkg_debug_dlls)
+            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    ${_vcpkg_debug_dlls}
+                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+                COMMENT "Copying vcpkg debug DLLs"
+            )
+            message(STATUS "Post-build: vcpkg DLLs - copying both release and debug (Debug build)")
+        else()
+            message(STATUS "Post-build: vcpkg DLLs - copying release only (${CMAKE_BUILD_TYPE} build)")
+        endif()
+    endif()
+endif()
+
 # Before extension post-build copying: remove stale 'extensions' file if present (prevent mkdir failure)
 set(_target_extensions_dir "${CMAKE_BINARY_DIR}/extensions")
 if(EXISTS "${_target_extensions_dir}" AND NOT IS_DIRECTORY "${_target_extensions_dir}")
@@ -701,6 +766,17 @@ endif()
 
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
+# Per-config output directory variants are Windows-only; Linux keeps the
+# default flat binary directory.
+if(WIN32)
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG        "${CMAKE_BINARY_DIR}/Debug"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE      "${CMAKE_BINARY_DIR}/Release"
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo"
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL   "${CMAKE_BINARY_DIR}/MinSizeRel"
+    )
+endif()
+
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(${PROJECT_NAME} PRIVATE GL GLU)
@@ -754,14 +830,11 @@ if(UNIX)
     endif()
 
 elseif(WIN32)
-    # On Windows, DLLs in the same directory as the .exe are automatically found
-    # For multi-config generators (MSVC), set all configs to same directory
+    # On Windows, DLLs in the same directory as the .exe are automatically found.
+    # Use $<CONFIG> so both Ninja (single-config) and MSVC (multi-config) route
+    # binaries to build/Debug, build/Release, etc.
     set_target_properties(${PROJECT_NAME} PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
-            RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/$<CONFIG>"
     )
     if(MSVC)
         target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
@@ -817,6 +890,12 @@ configure_build_type(lfs_visualizer)
 configure_build_type(lfs_io)
 configure_build_type(lfs_geometry)
 configure_build_type(${PROJECT_NAME})
+
+# Set the default startup project in Visual Studio to LichtFeld-Studio
+# (without this, VS defaults to ALL_BUILD when opening the solution)
+if(MSVC)
+    set_property(DIRECTORY ${CMAKE_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${PROJECT_NAME})
+endif()
 
 # =============================================================================
 # TESTING (Optional)
@@ -965,8 +1044,9 @@ if(BUILD_PORTABLE)
             [[.*libstdc[+][+].*]] [[.*libgcc_s.*]]
             [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
 
-    # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
-    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
+    # Search directories for runtime dependencies.
+    # Portable builds are Windows Release-only; binaries are in build/Release/.
+    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/Release\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
 
     # Helper: bundle runtime dependencies for a target
     function(bundle_runtime_deps TARGET_FILE IS_LIBRARY)

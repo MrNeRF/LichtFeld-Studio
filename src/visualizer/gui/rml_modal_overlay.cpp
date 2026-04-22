@@ -37,8 +37,9 @@ namespace lfs::vis::gui {
 
     RmlModalOverlay::~RmlModalOverlay() {
         fbo_.destroy();
-        text_input_revert_.clear();
-        if (rml_context_ && rml_manager_)
+        if (Rml::GetSystemInterface())
+            text_input_revert_.clear();
+        if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("modal_overlay");
     }
 
@@ -361,6 +362,11 @@ namespace lfs::vis::gui {
             for (uint32_t cp : input.text_codepoints)
                 rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
         }
+
+        // Re-check active_ since RmlUI event processing above may have triggered
+        // dismiss() or cancel() callbacks that reset it
+        if (!active_)
+            return;
 
         if (!composing && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
             (hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||

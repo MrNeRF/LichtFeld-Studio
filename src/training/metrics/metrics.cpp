@@ -6,6 +6,7 @@
 #include "../rasterization/fast_rasterizer.hpp"
 #include "../rasterization/gsplat_rasterizer.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -541,7 +542,20 @@ namespace lfs::training {
         }
         if (evaluated_images == 0) {
             LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
+            return result;
         }
+
+        result.valid = true;
+
+        // Emit evaluation completed event for GUI display and other subscribers.
+        lfs::core::events::state::EvaluationCompleted{
+            .iteration = result.iteration,
+            .psnr = result.psnr,
+            .ssim = result.ssim,
+            .lpips = 0.0f, // LPIPS not computed in this code path
+            .elapsed_time = result.elapsed_time,
+            .num_gaussians = result.num_gaussians}
+            .emit();
 
         // Add metrics to reporter
         _reporter->add_metrics(result);

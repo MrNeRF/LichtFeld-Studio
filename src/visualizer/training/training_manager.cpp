@@ -33,7 +33,11 @@ namespace lfs::vis {
         state_machine_.setStateChangeCallback([this](TrainingState, TrainingState new_state) {
             // Emit events on state changes
             if (new_state == TrainingState::Idle) {
-                loss_buffer_.clear();
+                {
+                    std::lock_guard<std::mutex> lock(loss_buffer_mutex_);
+                    loss_buffer_.clear();
+                }
+                clearEvaluationMetrics();
                 last_error_.clear();
             }
         });
@@ -187,6 +191,7 @@ namespace lfs::vis {
             return false;
         }
 
+        clearEvaluationMetrics();
         applyPendingParams();
 
         if (auto error = trainer_->getParams().validate(); !error.empty()) {
@@ -499,6 +504,46 @@ namespace lfs::vis {
         return loss_buffer_;
     }
 
+    void TrainerManager::updatePSNR(float psnr) {
+        std::lock_guard<std::mutex> lock(psnr_buffer_mutex_);
+        psnr_buffer_.push_back(psnr);
+        while (psnr_buffer_.size() > static_cast<size_t>(MAX_PSNR_POINTS)) {
+            psnr_buffer_.pop_front();
+        }
+    }
+
+    std::deque<float> TrainerManager::getPSNRBuffer() const {
+        std::lock_guard<std::mutex> lock(psnr_buffer_mutex_);
+        return psnr_buffer_;
+    }
+
+    void TrainerManager::updateEvaluationMetrics(int iteration, float psnr, float ssim) {
+        updatePSNR(psnr);
+        setLastPSNR(psnr);
+        std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
+        last_eval_metrics_ = EvaluationMetricsSnapshot{
+            .iteration = iteration,
+            .psnr = psnr,
+            .ssim = ssim};
+    }
+
+    std::optional<TrainerManager::EvaluationMetricsSnapshot> TrainerManager::getLastEvaluationMetrics() const {
+        std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
+        return last_eval_metrics_;
+    }
+
+    void TrainerManager::clearEvaluationMetrics() {
+        {
+            std::lock_guard<std::mutex> lock(psnr_buffer_mutex_);
+            psnr_buffer_.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
+            last_eval_metrics_.reset();
+        }
+        last_psnr_.store(0.0f);
+    }
+
     void TrainerManager::trainingThreadFunc(std::stop_token stop_token) {
         LOG_INFO("Training thread started");
         LOG_TIMER("Training execution");
@@ -604,6 +649,11 @@ namespace lfs::vis {
         // Listen for training progress events - update loss buffer
         state::TrainingProgress::when([this](const auto& event) {
             updateLoss(event.loss);
+        });
+
+        // Listen for evaluation completed events - update PSNR buffer
+        state::EvaluationCompleted::when([this](const auto& event) {
+            updateEvaluationMetrics(event.iteration, event.psnr, event.ssim);
         });
     }
 

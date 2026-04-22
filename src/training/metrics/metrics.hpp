@@ -51,8 +51,12 @@ namespace lfs::training {
         float elapsed_time = 0.0f;
         int num_gaussians = 0;
         int iteration = 0;
+        bool valid = false;
 
         [[nodiscard]] std::string to_string() const {
+            if (!valid) {
+                return "No valid evaluation images";
+            }
             std::stringstream ss;
             ss << std::fixed << std::setprecision(4);
             ss << "PSNR: " << psnr

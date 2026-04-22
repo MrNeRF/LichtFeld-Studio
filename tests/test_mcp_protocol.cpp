@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "config.h"
 #include "mcp/mcp_protocol.hpp"
 #include "mcp/mcp_server.hpp"
 #include "mcp/mcp_tools.hpp"
@@ -59,6 +60,21 @@ namespace lfs::mcp {
         EXPECT_TRUE(annotations["readOnlyHint"].get<bool>());
         EXPECT_TRUE(annotations["idempotentHint"].get<bool>());
         EXPECT_TRUE(annotations["x-lfs-long-running"].get<bool>());
+    }
+
+    TEST(McpProtocolTest, InitializeReportsBuildVersion) {
+        McpServer server;
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{1},
+            .method = "initialize",
+            .params = json::object()});
+
+        ASSERT_TRUE(response.result.has_value());
+        const auto& result = *response.result;
+        ASSERT_TRUE(result.contains("serverInfo"));
+        EXPECT_EQ(result["serverInfo"]["name"], "lichtfeld-mcp");
+        EXPECT_EQ(result["serverInfo"]["version"], GIT_TAGGED_VERSION);
+        EXPECT_NE(result["serverInfo"]["version"], "1.0.0");
     }
 
     TEST(McpProtocolTest, ToolCallReturnsStructuredContent) {

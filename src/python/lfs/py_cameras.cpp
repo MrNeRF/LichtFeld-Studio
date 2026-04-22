@@ -5,7 +5,7 @@
 #include "py_cameras.hpp"
 #include "rendering/coordinate_conventions.hpp"
 
-#include <Python.h>
+#include "python_compat.hpp"
 #include <cassert>
 #include <format>
 #include <numbers>

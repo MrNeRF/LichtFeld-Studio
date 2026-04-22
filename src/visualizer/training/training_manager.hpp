@@ -13,6 +13,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stop_token>
 #include <thread>
 
@@ -102,6 +103,21 @@ namespace lfs::vis {
         std::deque<float> getLossBuffer() const;
         void updateLoss(float loss);
 
+        // PSNR buffer management
+        struct EvaluationMetricsSnapshot {
+            int iteration = 0;
+            float psnr = 0.0f;
+            float ssim = 0.0f;
+        };
+
+        std::deque<float> getPSNRBuffer() const;
+        void updatePSNR(float psnr);
+        void setLastPSNR(float psnr) { last_psnr_.store(psnr); }
+        float getLastPSNR() const { return last_psnr_.load(); }
+        void updateEvaluationMetrics(int iteration, float psnr, float ssim);
+        std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
+        void clearEvaluationMetrics();
+
         // Access to trainer (for rendering, etc.)
         lfs::training::Trainer* getTrainer() { return trainer_.get(); }
         const lfs::training::Trainer* getTrainer() const { return trainer_.get(); }
@@ -162,6 +178,12 @@ namespace lfs::vis {
         static constexpr int MAX_LOSS_POINTS = 200;
         std::deque<float> loss_buffer_;
         mutable std::mutex loss_buffer_mutex_;
+        static constexpr int MAX_PSNR_POINTS = 200;
+        std::deque<float> psnr_buffer_;
+        mutable std::mutex psnr_buffer_mutex_;
+        std::atomic<float> last_psnr_{0.0f};
+        std::optional<EvaluationMetricsSnapshot> last_eval_metrics_;
+        mutable std::mutex eval_metrics_mutex_;
 
         // Training time tracking
         std::chrono::steady_clock::time_point training_start_time_;

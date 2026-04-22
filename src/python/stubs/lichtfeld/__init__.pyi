@@ -278,6 +278,12 @@ def loss_buffer() -> list[float]:
 def push_loss_to_element(arg0: ui.rml.RmlElement, arg1: Sequence[float], /) -> tuple:
     """Push loss data to a loss-graph element, returns (data_min, data_max)"""
 
+def psnr_buffer() -> list[float]:
+    """Get the recent PSNR history as a list of floats"""
+
+def push_psnr_to_element(arg0: ui.rml.RmlElement, arg1: Sequence[float], /) -> tuple:
+    """Push PSNR data to a psnr-graph element, returns (data_min, data_max)"""
+
 def trainer_elapsed_seconds() -> float:
     """Get elapsed training time in seconds"""
 
@@ -1620,6 +1626,13 @@ class OptimizationParams:
         """Whether running without visualization"""
 
     @property
+    def enable_eval(self) -> bool:
+        """Enable evaluation during training"""
+
+    @enable_eval.setter
+    def enable_eval(self, arg: bool, /) -> None: ...
+
+    @property
     def tile_mode(self) -> int:
         """Tile mode (1, 2, or 4)"""
 
@@ -1794,6 +1807,19 @@ class OptimizationParams:
     def clear_save_steps(self) -> None:
         """Clear all save steps"""
 
+    @property
+    def eval_steps(self) -> list[int]:
+        """List of iterations at which to run evaluation"""
+
+    def add_eval_step(self, step: int) -> None:
+        """Add an eval step (ignored if duplicate)"""
+
+    def remove_eval_step(self, step: int) -> None:
+        """Remove an eval step"""
+
+    def clear_eval_steps(self) -> None:
+        """Clear all eval steps"""
+
 def optimization_params() -> OptimizationParams:
     """Get the optimization parameters object"""
 
@@ -1840,6 +1866,9 @@ class DatasetParams:
     @property
     def test_every(self) -> int:
         """Use every Nth image for testing"""
+
+    @test_every.setter
+    def test_every(self, arg: int, /) -> None: ...
 
     @property
     def resize_factor(self) -> int:

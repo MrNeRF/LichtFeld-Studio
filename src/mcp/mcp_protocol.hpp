@@ -51,7 +51,7 @@ namespace lfs::mcp {
 
     struct McpServerInfo {
         std::string name = "lichtfeld-mcp";
-        std::string version = "1.0.0";
+        std::string version = "unknown";
     };
 
     struct McpInitializeResult {

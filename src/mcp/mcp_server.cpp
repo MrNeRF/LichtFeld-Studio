@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mcp_server.hpp"
+#include "config.h"
 #include "core/base64.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 
@@ -101,7 +102,7 @@ namespace lfs::mcp {
         McpInitializeResult result;
         result.capabilities = capabilities_;
         result.server_info.name = "lichtfeld-mcp";
-        result.server_info.version = "1.0.0";
+        result.server_info.version = GIT_TAGGED_VERSION;
 
         initialized_ = true;
 
