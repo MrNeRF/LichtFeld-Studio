@@ -54,13 +54,12 @@ namespace {
 #endif
         usd_dir = std::filesystem::canonical(usd_dir, ec);
         if (ec || !std::filesystem::is_directory(usd_dir, ec)) {
-            std::println(stderr, "[USD] plugin directory not found ({})",
-                         ec ? ec.message() : "not a directory");
+            LOG_ERROR("[USD] plugin directory not found ({})",
+                      ec ? ec.message() : "not a directory");
             return;
         }
 
         const std::string path_utf8 = lfs::core::path_to_utf8(usd_dir);
-        std::println(stderr, "[USD] registering plugins from: {}", path_utf8);
 
         // Also set the env var for any code that reads it directly.
 #ifdef _WIN32
@@ -72,8 +71,6 @@ namespace {
         // Programmatically register plugins so the Plug system finds them
         // regardless of compiled-in search paths or env var timing.
         pxr::PlugRegistry::GetInstance().RegisterPlugins(path_utf8);
-        std::println(stderr, "[USD] plugin registration complete ({} plugins)",
-                     pxr::PlugRegistry::GetInstance().GetAllPlugins().size());
     }
 } // namespace
 

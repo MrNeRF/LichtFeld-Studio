@@ -757,7 +757,6 @@ namespace lfs::io {
         // Pre-flight check: ArResolver requires USD plugins to be registered.
         // If none are registered, the USD plugin path may not be configured.
         const auto plugin_count = pxr::PlugRegistry::GetInstance().GetAllPlugins().size();
-        LOG_DEBUG("[USD] registered plugin count: {}", plugin_count);
         if (plugin_count == 0) {
             LOG_ERROR("[USD] No USD plugins registered — UsdStage::CreateNew will crash fatally");
             return make_error(ErrorCode::WRITE_FAILURE,
@@ -792,7 +791,6 @@ namespace lfs::io {
         // TfErrorMark captures OpenUSD diagnostic errors that don't throw.
         pxr::TfErrorMark error_mark;
 
-        LOG_DEBUG("[USD] creating stage");
         pxr::UsdStageRefPtr stage;
         try {
             stage = pxr::UsdStage::CreateNew(lfs::core::path_to_utf8(options.output_path));
@@ -814,7 +812,6 @@ namespace lfs::io {
                               options.output_path);
         }
 
-        LOG_DEBUG("[USD] stage created — defining prim");
         const pxr::SdfPath prim_path("/GaussianSplats");
         pxr::UsdVolParticleField3DGaussianSplat splat_prim;
         try {
@@ -830,7 +827,6 @@ namespace lfs::io {
                               options.output_path);
         }
 
-        LOG_DEBUG("[USD] prim defined — setting stage metadata");
         try {
             stage->SetDefaultPrim(splat_prim.GetPrim());
             pxr::UsdGeomSetStageUpAxis(stage, pxr::UsdGeomTokens->y);
@@ -841,7 +837,6 @@ namespace lfs::io {
                               options.output_path);
         }
 
-        LOG_DEBUG("[USD] metadata set — authoring {} gaussian attributes", num_gaussians);
         pxr::UsdGeomBoundable boundable(splat_prim.GetPrim());
 
         try {
@@ -865,7 +860,6 @@ namespace lfs::io {
                               options.output_path);
         }
 
-        LOG_DEBUG("[USD] attributes authored — saving layer");
         try {
             if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
@@ -878,7 +872,6 @@ namespace lfs::io {
                               options.output_path);
         }
 
-        LOG_DEBUG("[USD] export complete: {}", lfs::core::path_to_utf8(options.output_path));
         return {};
     }
 
