@@ -89,7 +89,6 @@ namespace lfs::vis::gui {
         bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h);
         bool forwardInput(float panel_x, float panel_y);
         bool syncThemeProperties();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         bool loadDocument();
         void cacheContentElements();
         float computeScrollHeightCap() const;

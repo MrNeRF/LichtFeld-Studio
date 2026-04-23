@@ -52,7 +52,6 @@ namespace lfs::vis::gui {
 
     private:
         bool updateTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void ensureBodyDataModelBound(Rml::Element* body);
         bool shouldRunDocumentHooks(bool force) const;
         void updateToolbarRoots();

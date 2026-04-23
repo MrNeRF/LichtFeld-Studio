@@ -1,0 +1,46 @@
+/* Theme-dependent menu bar styles. */
+
+body {
+    color: @{text};
+}
+
+#menu-items {
+    background-color: @{menu.background};
+}
+
+.menu-label:hover {
+    background-color: @{menu.hover};
+}
+
+.menu-label.active {
+    background-color: @{menu.active};
+}
+
+#bottom-border {
+    background-color: @{menu.bottom_border};
+}
+
+.dropdown-popup {
+    background-color: @{menu.popup_background};
+    border-color: @{menu.border};
+}
+
+.menu-item:hover {
+    background-color: @{menu.hover};
+}
+
+.menu-item.disabled {
+    color: @{text_dim};
+}
+
+.menu-item.disabled:hover {
+    background-color: transparent;
+}
+
+.menu-item .shortcut {
+    color: @{text_dim};
+}
+
+.menu-separator {
+    background-color: @{menu.border};
+}

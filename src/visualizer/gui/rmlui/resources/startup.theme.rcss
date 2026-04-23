@@ -1,0 +1,44 @@
+/* Theme-dependent startup overlay styles.
+ * Static brand/icon colors remain in startup.rcss so live edits are not hidden
+ * behind generated C++ rules. */
+
+#overlay-box {
+    background-color: @{startup.overlay_bg};
+    border: 1dp @{startup.overlay_border};
+    border-radius: 12dp;
+    @{startup.box_shadow}
+}
+
+.dim-text,
+.social-link span,
+#lang-label {
+    color: @{text_dim};
+}
+
+.hint-text {
+    color: @{alpha(text_dim,0.50)};
+}
+
+#link-discord .social-icon,
+#link-x .social-icon {
+    image-color: @{text_dim};
+}
+
+select {
+    color: @{text};
+    background-color: @{startup.select_bg};
+    border-color: @{border};
+}
+
+select:hover {
+    border-color: @{startup.primary};
+}
+
+selectbox option:hover {
+    background-color: @{startup.primary};
+}
+
+selectbox {
+    background-color: @{startup.selectbox_bg};
+    border-color: @{border};
+}

@@ -174,59 +174,6 @@ namespace lfs::vis::gui {
         updateTheme();
     }
 
-    std::string RmlRightPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
-        const auto& p = t.palette;
-
-        const auto tab_hover = colorToRmlAlpha(p.surface_bright, 0.5f);
-        const auto tab_active_bg = colorToRmlAlpha(p.surface_bright, 0.4f);
-        const auto tab_accent = colorToRml(p.primary);
-        const auto tab_text = colorToRml(p.text);
-        const auto tab_text_dim = colorToRml(p.text_dim);
-        const auto tab_nav_bg = colorToRmlAlpha(p.surface_bright, 0.2f);
-        const auto tab_nav_hover = colorToRmlAlpha(p.surface_bright, 0.55f);
-        const auto tab_nav_disabled = colorToRmlAlpha(p.text_dim, 0.35f);
-        const auto splitter_bg = colorToRmlAlpha(p.border, 0.4f);
-        const auto splitter_hover = colorToRmlAlpha(p.info, 0.6f);
-        const auto splitter_active = colorToRmlAlpha(p.info, 0.8f);
-        const auto border_color = colorToRmlAlpha(p.border, 0.6f);
-        const auto separator_color = colorToRmlAlpha(p.border, 0.4f);
-        const auto resize_hover = colorToRmlAlpha(p.info, 0.3f);
-        const auto resize_active = colorToRmlAlpha(p.info, 0.5f);
-
-        return std::format(
-            "#splitter {{ background-color: {}; }}\n"
-            "#splitter:hover {{ background-color: {}; }}\n"
-            "#splitter.dragging {{ background-color: {}; }}\n"
-            ".tab {{ background-color: transparent; color: {}; }}\n"
-            ".tab:hover {{ background-color: {}; }}\n"
-            ".tab:focus-visible {{ background-color: {}; color: {}; border-bottom-color: {}; }}\n"
-            ".tab.active {{ background-color: {}; color: {}; "
-            "border-bottom-color: {}; }}\n"
-            ".tab-nav {{ background-color: {}; color: {}; }}\n"
-            ".tab-nav:hover {{ background-color: {}; color: {}; }}\n"
-            ".tab-nav.disabled {{ background-color: transparent; color: {}; opacity: 0.55; }}\n"
-            ".tab-nav.disabled:hover {{ background-color: transparent; color: {}; opacity: 0.55; }}\n"
-            "#left-border {{ background-color: {}; }}\n"
-            "#tab-separator {{ background-color: {}; }}\n"
-            "#resize-handle:hover {{ background-color: {}; }}\n"
-            "#resize-handle.dragging {{ background-color: {}; }}\n",
-            splitter_bg, splitter_hover, splitter_active,
-            tab_text_dim,
-            tab_hover,
-            tab_hover, tab_text, tab_accent,
-            tab_active_bg, tab_text, tab_accent,
-            tab_nav_bg, tab_text_dim,
-            tab_nav_hover, tab_text,
-            tab_nav_disabled,
-            tab_nav_disabled,
-            border_color,
-            separator_color,
-            resize_hover,
-            resize_active);
-    }
-
     bool RmlRightPanel::updateTheme() {
         if (!document_)
             return false;
@@ -240,7 +187,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/right_panel.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/right_panel.theme.rcss"));
         return true;
     }
 

@@ -98,18 +98,6 @@ namespace lfs::vis::gui {
         updateTheme();
     }
 
-    std::string RmlShellFrame::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-
-        const auto shell_bg = colorToRml(t.menu_background());
-
-        return std::format(
-            "#menu-region {{ background-color: {}; }}\n"
-            "#right-panel-region {{ background-color: {}; }}\n"
-            "#status-region {{ background-color: {}; }}\n",
-            shell_bg, shell_bg, shell_bg);
-    }
-
     void RmlShellFrame::updateTheme() {
         if (!document_)
             return;
@@ -123,7 +111,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/shell.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/shell.theme.rcss"));
     }
 
     void RmlShellFrame::render(const ShellRegions& regions) {

@@ -1,0 +1,30 @@
+/* Theme-dependent sequencer overlay popups. */
+
+.overlay-panel,
+.edit-popup {
+    background-color: @{sequencer_overlay.surface};
+    border-color: @{sequencer_overlay.border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.overlay-text,
+.popup-title {
+    color: @{text};
+}
+
+.overlay-text-dim {
+    color: @{text_dim};
+}
+
+#pip-preview-window {
+    border-color: @{sequencer_overlay.primary_border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+#pip-preview-window.playing {
+    border-color: @{error};
+}
+
+.popup-sep {
+    background-color: @{alpha(border,0.5)};
+}

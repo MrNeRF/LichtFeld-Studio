@@ -1,0 +1,7 @@
+/* Theme-dependent shell frame colors. */
+
+#menu-region,
+#right-panel-region,
+#status-region {
+    background-color: @{menu.background};
+}

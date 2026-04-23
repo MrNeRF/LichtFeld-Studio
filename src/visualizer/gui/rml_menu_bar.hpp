@@ -101,7 +101,6 @@ namespace lfs::vis::gui {
         bool updateTheme();
         void rebuildLabels();
         void syncActiveLabelState();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();

@@ -114,58 +114,6 @@ namespace lfs::vis::gui {
         updateTheme();
     }
 
-    std::string RmlViewportOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
-
-        const auto toolbar_bg = colorToRml(t.toolbar_background());
-        const auto subtoolbar_bg = colorToRml(t.subtoolbar_background());
-        const auto icon_dim = colorToRmlAlpha(t.palette.text, 0.9f);
-        const auto selected_bg = colorToRml(t.palette.primary);
-        const auto selected_bg_hover = colorToRml(ImVec4(
-            std::min(1.0f, t.palette.primary.x + 0.1f),
-            std::min(1.0f, t.palette.primary.y + 0.1f),
-            std::min(1.0f, t.palette.primary.z + 0.1f),
-            t.palette.primary.w));
-        const auto selected_icon = colorToRml(t.palette.background);
-        const auto hover_bg = colorToRmlAlpha(t.palette.surface_bright, 0.3f);
-        const auto overlay_backdrop = colorToRmlAlpha(t.palette.background, 0.55f);
-        const auto overlay_panel_bg = colorToRmlAlpha(t.palette.surface, 0.97f);
-        const auto overlay_panel_border = colorToRmlAlpha(t.palette.border, 0.45f);
-        const auto overlay_text = colorToRml(t.palette.text);
-        const auto overlay_text_dim = colorToRml(t.palette.text_dim);
-        const auto metrics_bg = colorToRmlAlpha(t.palette.background, 0.92f);
-        const auto metrics_border = colorToRmlAlpha(t.palette.primary, 0.55f);
-        const auto metrics_label = colorToRml(t.palette.text_dim);
-        const auto metrics_value = colorToRml(t.palette.text);
-
-        return std::format(
-            ".toolbar-container {{ background-color: {}; border-radius: {:.0f}dp; }}\n"
-            ".subtoolbar-container {{ background-color: {}; border-radius: {:.0f}dp; }}\n"
-            ".icon-btn img {{ image-color: {}; }}\n"
-            ".icon-btn:hover {{ background-color: {}; }}\n"
-            ".icon-btn.selected {{ background-color: {}; }}\n"
-            ".icon-btn.selected:hover {{ background-color: {}; }}\n"
-            ".icon-btn.selected img {{ image-color: {}; }}\n"
-            ".viewport-metrics-card {{ background-color: {}; border-color: {}; }}\n"
-            ".viewport-metrics-label {{ color: {}; }}\n"
-            ".viewport-metrics-value {{ color: {}; }}\n"
-            ".viewport-status-backdrop {{ background-color: {}; }}\n"
-            ".viewport-status-panel {{ background-color: {}; border-color: {}; border-radius: {:.0f}dp; }}\n"
-            ".viewport-status-title {{ color: {}; }}\n"
-            ".viewport-status-path {{ color: {}; }}\n"
-            ".viewport-status-stage {{ color: {}; }}\n",
-            toolbar_bg, t.sizes.window_rounding,
-            subtoolbar_bg, t.sizes.window_rounding,
-            icon_dim,
-            hover_bg,
-            selected_bg, selected_bg_hover, selected_icon,
-            metrics_bg, metrics_border, metrics_label, metrics_value,
-            overlay_backdrop,
-            overlay_panel_bg, overlay_panel_border, t.sizes.window_rounding,
-            overlay_text, overlay_text_dim, overlay_text_dim);
-    }
-
     bool RmlViewportOverlay::updateTheme() {
         if (!document_)
             return false;
@@ -179,7 +127,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/viewport_overlay.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/viewport_overlay.theme.rcss"));
         return true;
     }
 

@@ -60,7 +60,6 @@ namespace lfs::vis::gui {
     private:
         void initContext();
         void syncTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void hide();
         void focusFirstItem();
 

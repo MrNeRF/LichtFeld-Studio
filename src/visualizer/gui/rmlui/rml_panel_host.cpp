@@ -150,9 +150,6 @@ namespace lfs::vis::gui {
         queued_foreground_composites_.clear();
     }
 
-    using rml_theme::colorToRml;
-    using rml_theme::colorToRmlAlpha;
-
     namespace {
         bool pointInRoundedRect(const float x, const float y, const float w, const float h,
                                 const Rml::CornerSizes& radii) {
@@ -210,144 +207,6 @@ namespace lfs::vis::gui {
         document_ = nullptr;
     }
 
-    std::string RmlPanelHost::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        const auto& p = t.palette;
-        const bool floating_window = document_ && document_->GetElementById("window-frame") != nullptr;
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const auto surface = colorToRml(p.surface);
-        const auto transparent_surface = colorToRmlAlpha(p.surface, 0.0f);
-        const auto body_bg = floating_window ? transparent_surface : surface;
-        const auto primary = colorToRml(p.primary);
-        const auto primary_dim = colorToRml(p.primary_dim);
-        const auto border = colorToRml(p.border);
-        const auto row_even = colorToRml(p.row_even);
-        const auto row_odd = colorToRml(p.row_odd);
-        const auto row_hover = colorToRmlAlpha(p.primary, 0.12f);
-        const auto row_hover_border = colorToRml(p.primary);
-        const auto row_hover_border_selected = colorToRml(p.primary_dim);
-        const auto row_selected = colorToRmlAlpha(p.primary, 0.28f);
-        const auto row_selected_hover = colorToRmlAlpha(p.primary, 0.38f);
-
-        const auto tab_inactive_bg = colorToRmlAlpha(p.surface_bright, 0.55f);
-        const auto tab_hover_bg = colorToRmlAlpha(p.primary, 0.09f);
-        const auto tab_hover_border = colorToRmlAlpha(p.primary, 0.43f);
-        const auto tab_active_bg = colorToRmlAlpha(p.primary, 0.11f);
-        const auto tab_active_border = colorToRmlAlpha(p.primary, 0.52f);
-        const auto tab_active_bottom = colorToRml(p.primary);
-        const auto chip_bg = colorToRml(p.surface_bright);
-        const auto chip_accent_bg = colorToRmlAlpha(p.primary, 0.28f);
-        const auto chip_accent_border = colorToRmlAlpha(p.primary, 0.59f);
-        const auto primary_bg_soft = colorToRmlAlpha(p.primary, 0.16f);
-        const auto warning = colorToRml(p.warning);
-        const auto blend_rgba = [](const ImVec4& base, const ImVec4& accent, float factor) {
-            return ImVec4{base.x + (accent.x - base.x) * factor,
-                          base.y + (accent.y - base.y) * factor,
-                          base.z + (accent.z - base.z) * factor,
-                          1.0f};
-        };
-        const auto histogram_surface = colorToRmlAlpha(p.surface, floating_window ? 0.96f : 0.94f);
-        const auto histogram_hero_decor =
-            std::format("decorator: vertical-gradient({} {}); background-color: transparent",
-                        colorToRml(blend_rgba(p.surface_bright, p.primary, t.isLightTheme() ? 0.04f : 0.10f)),
-                        colorToRml(blend_rgba(p.surface, p.primary_dim, t.isLightTheme() ? 0.02f : 0.05f)));
-        const auto histogram_chart_bg = colorToRmlAlpha(blend_rgba(p.background, p.surface, 0.22f),
-                                                        t.isLightTheme() ? 0.97f : 0.95f);
-        const auto histogram_grid = colorToRmlAlpha(p.border, t.isLightTheme() ? 0.16f : 0.34f);
-        const auto histogram_toolbar_item = colorToRmlAlpha(p.surface_bright, t.isLightTheme() ? 0.85f : 0.72f);
-        const auto histogram_toolbar_select =
-            colorToRmlAlpha(blend_rgba(p.surface, p.background, 0.28f), t.isLightTheme() ? 0.95f : 0.92f);
-        const auto histogram_toolbar_divider = colorToRmlAlpha(p.border, t.isLightTheme() ? 0.55f : 0.85f);
-        const auto histogram_footer_chip = colorToRmlAlpha(p.surface_bright, t.isLightTheme() ? 0.82f : 0.68f);
-        const auto histogram_fill_decor =
-            std::format("decorator: vertical-gradient({} {}); background-color: {}",
-                        colorToRml(blend_rgba(p.primary_dim, p.primary, 0.25f)),
-                        colorToRml(blend_rgba(p.primary, ImVec4(1, 1, 1, 1), t.isLightTheme() ? 0.04f : 0.10f)),
-                        primary);
-        const auto histogram_fill_selected_decor =
-            std::format("decorator: vertical-gradient({} {}); background-color: {}",
-                        colorToRml(blend_rgba(p.warning, p.primary, 0.18f)),
-                        colorToRml(blend_rgba(p.warning, ImVec4(1, 1, 1, 1), t.isLightTheme() ? 0.06f : 0.12f)),
-                        warning);
-        const auto histogram_selection_fill = colorToRmlAlpha(p.warning, t.isLightTheme() ? 0.14f : 0.18f);
-        const auto histogram_history_icon_disabled = colorToRmlAlpha(p.text_dim, 0.48f);
-        const auto background = colorToRml(p.background);
-        const auto primary_border_soft = colorToRmlAlpha(p.primary, 0.33f);
-        const auto primary_border_faint = colorToRmlAlpha(p.primary, 0.13f);
-        const auto primary_accent = colorToRmlAlpha(p.primary, 0.22f);
-
-        return std::format(
-            "body {{ color: {0}; background-color: {12}; }}\n"
-            "#search-container {{ background-color: {2}; border-color: {4}; }}\n"
-            "#search-icon {{ image-color: {1}; }}\n"
-            "#filter-input {{ color: {0}; }}\n"
-            "#filter-clear img {{ image-color: {1}; }}\n"
-            "#filter-clear:hover img {{ image-color: {0}; }}\n"
-            ".tree-row.even {{ background-color: {5}; }}\n"
-            ".tree-row.odd {{ background-color: {6}; }}\n"
-            ".tree-row:hover {{ background-color: {7}; border-left-color: {8}; }}\n"
-            ".tree-row.selected {{ background-color: {9}; }}\n"
-            ".tree-row.selected:hover {{ background-color: {10}; border-left-color: {11}; }}\n"
-            ".tree-row.drop-target {{ border-width: 1dp; border-color: {3}; }}\n"
-            ".expand-toggle {{ color: {1}; }}\n"
-            ".expand-toggle:hover {{ color: {0}; }}\n"
-            ".node-name {{ color: {0}; }}\n"
-            ".node-name.training-disabled {{ color: {1}; }}\n"
-            ".rename-input {{ color: {0}; background-color: {2}; border-width: 1dp; border-color: {3}; }}\n"
-            ".row-icon {{ image-color: {0}; }}\n"
-            ".row-icon.type-icon {{ image-color: {1}; }}\n"
-            ".section-arrow {{ color: {1}; }}\n"
-            ".scene-tab {{ color: {1}; background-color: {13}; border-color: {4}; }}\n"
-            ".scene-tab:hover, .scene-tab:focus-visible {{ color: {0}; border-color: {14}; background-color: {15}; }}\n"
-            ".scene-tab.active {{ color: {0}; background-color: {16}; border-color: {17}; border-bottom-color: {18}; }}\n"
-            ".scene-chip {{ color: {0}; background-color: {19}; border-color: {4}; }}\n"
-            ".scene-chip--accent {{ color: {0}; background-color: {20}; border-color: {21}; }}\n"
-            ".is-section-title {{ color: {3}; }}\n"
-            ".is-hint {{ color: {1}; }}\n"
-            ".is-label {{ color: {0}; }}\n"
-            ".is-binding-section {{ color: {3}; background-color: {22}; }}\n"
-            ".is-action-name {{ color: {0}; }}\n"
-            ".is-binding-desc {{ color: {0}; }}\n"
-            ".is-binding-desc.is-capturing {{ color: {23}; }}\n"
-            "#histogram-hero {{ {24}; border-color: {4}; }}\n"
-            ".stat-card, #histogram-card, #compare-card, .empty-card, #histogram-footer {{ background-color: {25}; border-color: {4}; }}\n"
-            "#histogram-chart, #compare-chart {{ background-color: {26}; border-color: {4}; }}\n"
-            ".histogram-grid-line {{ background-color: {27}; }}\n"
-            ".hero-eyebrow, .stat-label, .footer-label, .axis-metric, #histogram-bin-count, #compare-bin-count, .control-label {{ color: {1}; }}\n"
-            ".hero-title, .stat-value, #histogram-summary, #compare-summary, .axis-label, .footer-value, #histogram-floating-title {{ color: {0}; }}\n"
-            ".hero-description, .empty-message, .footer-hint {{ color: {1}; }}\n"
-            ".empty-title {{ color: {0}; }}\n"
-            "#histogram-docked-controls {{ border-left-color: {28}; }}\n"
-            "#histogram-docked-controls .histogram-toolbar-item {{ background-color: {29}; border-color: {28}; }}\n"
-            "#histogram-docked-controls .histogram-toolbar-item--action {{ background-color: transparent; border-width: 0; }}\n"
-            "#histogram-docked-controls .histogram-select {{ background-color: {30}; border-color: {28}; }}\n"
-            ".histogram-slider-value {{ color: {0}; }}\n"
-            ".histogram-bar-fill, .compare-cell-fill {{ {31}; }}\n"
-            ".histogram-bar.selected .histogram-bar-fill, .compare-cell.selected .compare-cell-fill {{ {32}; }}\n"
-            "#histogram-selection, #compare-selection {{ border-color: {23}; background-color: {33}; decorator: none; }}\n"
-            ".histogram-history-icon {{ image-color: {0}; }}\n"
-            ".histogram-history-btn:disabled .histogram-history-icon {{ image-color: {34}; }}\n"
-            ".footer-history-actions {{ background-color: {35}; border-color: {28}; }}\n"
-            ".training-panel-title {{ color: {0}; border-top-color: {36}; }}\n"
-            ".training-panel-title-icon {{ image-color: {3}; }}\n"
-            ".training-subsection-title {{ color: {1}; border-top-color: {37}; }}\n"
-            ".loss-graph-wrap {{ background-color: {38}; }}\n"
-            ".loss-tick {{ color: {1}; }}\n"
-            ".color-picker-popup {{ background-color: {2}; border-color: {4}; }}\n"
-            ".mask-settings-group {{ border-left-color: {39}; }}\n"
-            ".mask-settings-divider {{ background-color: {37}; }}\n",
-            text, text_dim, surface, primary, border, row_even, row_odd,
-            row_hover, row_hover_border, row_selected, row_selected_hover,
-            row_hover_border_selected, body_bg, tab_inactive_bg, tab_hover_border,
-            tab_hover_bg, tab_active_bg, tab_active_border, tab_active_bottom,
-            chip_bg, chip_accent_bg, chip_accent_border, primary_bg_soft, warning,
-            histogram_hero_decor, histogram_surface, histogram_chart_bg, histogram_grid,
-            histogram_toolbar_divider, histogram_toolbar_item, histogram_toolbar_select,
-            histogram_fill_decor, histogram_fill_selected_decor, histogram_selection_fill,
-            histogram_history_icon_disabled, histogram_footer_chip, primary_border_soft,
-            primary_border_faint, background, primary_accent);
-    }
-
     bool RmlPanelHost::syncThemeProperties() {
         if (!document_)
             return false;
@@ -379,7 +238,7 @@ namespace lfs::vis::gui {
             base_rcss_loaded_ = true;
         }
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss"));
         content_dirty_ = true;
         return true;
     }

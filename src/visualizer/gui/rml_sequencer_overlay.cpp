@@ -224,38 +224,6 @@ namespace lfs::vis::gui {
         el_focal_popup_->AddEventListener(Rml::EventId::Click, &listener_);
     }
 
-    std::string RmlSequencerOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
-        const auto& p = t.palette;
-
-        const auto surface = colorToRmlAlpha(p.surface, 0.95f);
-        const auto border = colorToRmlAlpha(p.border, 0.4f);
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const auto primary = colorToRml(p.primary);
-        const auto primary_border = colorToRmlAlpha(p.primary, 0.6f);
-        const auto error = colorToRml(p.error);
-        const auto sep_color = colorToRmlAlpha(p.border, 0.5f);
-        const int rounding = static_cast<int>(t.sizes.window_rounding);
-
-        return fmt::format(
-            ".overlay-panel {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
-            ".overlay-text {{ color: {}; }}\n"
-            ".overlay-text-dim {{ color: {}; }}\n"
-            "#pip-preview-window {{ border-color: {}; border-radius: {}dp; }}\n"
-            "#pip-preview-window.playing {{ border-color: {}; }}\n"
-            ".edit-popup {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
-            ".popup-title {{ color: {}; }}\n"
-            ".popup-sep {{ background-color: {}; }}\n",
-            surface, border, rounding,
-            text, text_dim,
-            primary_border, rounding,
-            error,
-            surface, border, rounding,
-            text, sep_color);
-    }
-
     void RmlSequencerOverlay::syncTheme() {
         if (!document_)
             return;
@@ -269,7 +237,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/sequencer_overlay.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/sequencer_overlay.theme.rcss"));
         syncLocalization();
     }
 

@@ -1,0 +1,267 @@
+/* Theme-dependent sequencer panel styles. */
+
+#panel {
+    background-color: @{surface};
+    border-width: 1dp;
+    border-color: @{alpha(border,0.4)};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+#panel.film-strip-attached {
+    border-radius: @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp 0dp 0dp;
+}
+
+.transport-icon {
+    image-color: @{text};
+}
+
+#track-bar {
+    background-color: @{background};
+    border-width: 1dp;
+    border-color: @{alpha(border,0.3)};
+}
+
+#hint {
+    color: @{alpha(text_dim,0.5)};
+}
+
+.ruler-tick.major {
+    background-color: @{text_dim};
+}
+
+.ruler-tick.minor {
+    background-color: @{alpha(text_dim,0.5)};
+}
+
+.ruler-label,
+#duration,
+.transport-info,
+.speed-text,
+.dropdown-arrow,
+.snap-check,
+.ctx-indicator {
+    color: @{text_dim};
+}
+
+#playhead-handle {
+    background-color: @{error};
+}
+
+#current-time,
+.transport-label,
+.speed-val {
+    color: @{text};
+}
+
+#easing-stripe {
+    background-color: @{surface};
+    border-top: 1dp @{alpha(border,0.3)};
+}
+
+#transport-row {
+    border-bottom: 1dp @{alpha(border,0.3)};
+}
+
+.transport-sep {
+    background-color: @{alpha(border,0.3)};
+}
+
+.transport-btn.toggle.active {
+    background-color: @{alpha(primary,0.20)};
+}
+
+.transport-btn.primary {
+    background-color: @{alpha(primary,0.15)};
+}
+
+.transport-btn.primary:hover {
+    background-color: @{alpha(primary,0.25)};
+}
+
+.transport-btn.error:hover {
+    background-color: @{alpha(error,0.30)};
+}
+
+#btn-camera-path.active {
+    background-color: @{alpha(primary,0.30)};
+    border-width: 1dp;
+    border-color: @{alpha(primary,0.50)};
+}
+
+#btn-add .transport-icon,
+#btn-clear .transport-icon {
+    image-color: @{error};
+}
+
+#btn-snap.active .snap-check {
+    background-color: @{primary};
+    border-color: @{primary};
+}
+
+.format-badge {
+    background-color: @{alpha(surface_bright,0.30)};
+}
+
+#btn-export {
+    border-width: 1dp;
+    border-color: @{alpha(primary,0.40)};
+}
+
+#btn-clear {
+    background-color: @{alpha(error,0.15)};
+    border-width: 1dp;
+    border-color: @{alpha(error,0.15)};
+}
+
+#film-strip-panel {
+    background-color: @{surface};
+    border-left: 1dp @{alpha(border,0.4)};
+    border-right: 1dp @{alpha(border,0.4)};
+    border-bottom: 1dp @{alpha(border,0.4)};
+    border-radius: 0dp 0dp @{num(size.window_rounding)}dp @{num(size.window_rounding)}dp;
+}
+
+#film-strip-groove {
+    background-color: @{background};
+}
+
+.film-strip-gap {
+    background-color: @{alpha(surface,0.30)};
+}
+
+.film-strip-gap-stripe {
+    background-color: @{alpha(border,0.18)};
+}
+
+.film-strip-divider {
+    background-color: @{alpha(text_dim,0.15)};
+}
+
+.film-strip-sprocket {
+    background-color: @{alpha(text_dim,0.30)};
+}
+
+.film-thumb-tint.hovered-keyframe {
+    background-color: @{alpha(secondary,0.14)};
+}
+
+.film-thumb-tint.selected {
+    background-color: @{alpha(primary,0.18)};
+}
+
+.film-thumb.contains-hovered-keyframe .film-thumb-edge {
+    background-color: @{alpha(secondary,0.70)};
+}
+
+.film-thumb.contains-selected .film-thumb-edge {
+    background-color: @{alpha(primary,0.90)};
+}
+
+.film-thumb.hovered .film-thumb-outline {
+    border-color: @{text};
+}
+
+.film-thumb.contains-hovered-keyframe .film-thumb-outline {
+    border-color: @{alpha(secondary,0.50)};
+}
+
+.film-thumb.contains-selected .film-thumb-outline {
+    border-color: @{alpha(primary,0.65)};
+}
+
+.film-thumb-midline.shadow {
+    background-color: rgba(0, 0, 0, 70);
+}
+
+.film-thumb-midline.main,
+.film-strip-marker-line.main,
+.film-strip-marker-cap {
+    background-color: @{alpha(text_dim,0.5)};
+}
+
+.film-thumb.contains-hovered-keyframe .film-thumb-midline.main,
+.film-strip-marker.hovered .film-strip-marker-line.main,
+.film-strip-marker.hovered .film-strip-marker-cap {
+    background-color: @{secondary};
+}
+
+.film-thumb.contains-selected .film-thumb-midline.main,
+.film-strip-marker.selected .film-strip-marker-line.main,
+.film-strip-marker.selected .film-strip-marker-cap {
+    background-color: @{primary};
+}
+
+.film-thumb.hovered .film-thumb-midline.main {
+    background-color: @{text};
+}
+
+.film-strip-marker-line.shadow {
+    background-color: rgba(0, 0, 0, 78);
+}
+
+.easing-segment.primary {
+    background-color: @{alpha(primary,0.25)};
+}
+
+.easing-segment.secondary {
+    background-color: @{alpha(secondary,0.25)};
+}
+
+.easing-curve-segment {
+    background-color: @{alpha(primary,0.50)};
+}
+
+.easing-dot.primary,
+.easing-indicator.primary.ease-in-out {
+    background-color: @{primary};
+}
+
+.easing-dot.secondary,
+.easing-indicator.secondary.ease-in-out {
+    background-color: @{secondary};
+}
+
+.easing-indicator.primary.ease-in {
+    border-bottom-color: @{primary};
+}
+
+.easing-indicator.secondary.ease-in {
+    border-bottom-color: @{secondary};
+}
+
+.easing-indicator.primary.ease-out {
+    border-top-color: @{primary};
+}
+
+.easing-indicator.secondary.ease-out {
+    border-top-color: @{secondary};
+}
+
+.timeline-guide.hovered {
+    background-color: @{alpha(secondary,0.75)};
+}
+
+.timeline-guide.selected {
+    background-color: @{alpha(primary,0.85)};
+}
+
+.timeline-guide.playhead {
+    background-color: @{error};
+}
+
+.timeline-guide.strip-hover {
+    background-color: @{alpha(text_dim,0.55)};
+}
+
+#timeline-tooltip {
+    background-color: @{alpha(surface,0.96)};
+    border-color: @{alpha(border,0.75)};
+}
+
+.timeline-tooltip-line.title {
+    color: @{text};
+}
+
+.timeline-tooltip-line {
+    color: @{alpha(text_dim,0.95)};
+}

@@ -281,31 +281,6 @@ namespace lfs::vis::gui {
         updateTheme();
     }
 
-    std::string RmlStatusBar::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        const auto& p = t.palette;
-
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const auto surface_bright = colorToRml(p.surface_bright);
-        const auto primary = colorToRml(p.primary);
-        const auto success = colorToRml(p.success);
-        const auto warning = colorToRml(p.warning);
-        const auto error = colorToRml(p.error);
-        const auto info = colorToRml(p.info);
-
-        auto surface_bright_half = colorToRmlAlpha(p.surface_bright, 0.5f);
-
-        return std::format(
-            "body {{ color: {0}; }}\n"
-            ".dim {{ color: {1}; }}\n"
-            ".separator {{ color: {1}; }}\n"
-            "#progress-container {{ background-color: {2}; }}\n"
-            "#progress-fill {{ background-color: {3}; }}\n"
-            "#progress-text {{ color: {0}; }}\n"
-            "#gpu-icon {{ image-color: {1}; }}\n",
-            text, text_dim, surface_bright_half, primary);
-    }
-
     bool RmlStatusBar::updateTheme() {
         if (!document_)
             return false;
@@ -319,7 +294,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/statusbar.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/statusbar.theme.rcss"));
         model_dirty_ = true;
         return true;
     }

@@ -1,0 +1,67 @@
+/* Theme-dependent right panel chrome. */
+
+#splitter {
+    background-color: @{right_panel.splitter_bg};
+}
+
+#splitter:hover {
+    background-color: @{right_panel.splitter_hover};
+}
+
+#splitter.dragging {
+    background-color: @{right_panel.splitter_active};
+}
+
+.tab {
+    background-color: transparent;
+    color: @{text_dim};
+}
+
+.tab:hover {
+    background-color: @{right_panel.tab_hover};
+}
+
+.tab:focus-visible {
+    background-color: @{right_panel.tab_hover};
+    color: @{text};
+    border-bottom-color: @{primary};
+}
+
+.tab.active {
+    background-color: @{right_panel.tab_active_bg};
+    color: @{text};
+    border-bottom-color: @{primary};
+}
+
+.tab-nav {
+    background-color: @{right_panel.tab_nav_bg};
+    color: @{text_dim};
+}
+
+.tab-nav:hover {
+    background-color: @{right_panel.tab_nav_hover};
+    color: @{text};
+}
+
+.tab-nav.disabled,
+.tab-nav.disabled:hover {
+    background-color: transparent;
+    color: @{right_panel.tab_nav_disabled};
+    opacity: 0.55;
+}
+
+#left-border {
+    background-color: @{right_panel.border};
+}
+
+#tab-separator {
+    background-color: @{right_panel.separator};
+}
+
+#resize-handle:hover {
+    background-color: @{right_panel.resize_hover};
+}
+
+#resize-handle.dragging {
+    background-color: @{right_panel.resize_active};
+}

@@ -104,7 +104,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool ensureContextReady();
         void syncTheme();
         void syncLocalization();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void cacheElements();
         std::string buildContextMenuHTML(std::optional<size_t> keyframe,
                                          SequencerViewportEditMode edit_mode) const;
