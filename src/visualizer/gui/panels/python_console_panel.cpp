@@ -171,15 +171,13 @@ namespace {
         const auto symbols = editor != nullptr ? editor->syntaxSymbols()
                                                : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
         const bool has_symbols = !symbols.empty();
-        const std::string scope = editor != nullptr ? editor->currentSyntaxScope() : std::string{};
-        const char* preview = scope.empty() ? "Outline" : scope.c_str();
 
         if (!has_symbols) {
             ImGui::BeginDisabled();
         }
 
         ImGui::SetNextItemWidth(180.0f);
-        if (ImGui::BeginCombo(id, preview)) {
+        if (ImGui::BeginCombo(id, "Outline")) {
             for (std::size_t i = 0; i < symbols.size(); ++i) {
                 const auto& symbol = symbols[i];
                 if (ImGui::Selectable(symbol.label.c_str(), false)) {
@@ -202,6 +200,78 @@ namespace {
             } else {
                 ImGui::SetTooltip("Jump to Python symbol");
             }
+        }
+    }
+
+    void draw_syntax_breadcrumb_control(lfs::vis::gui::panels::PythonConsoleState& state,
+                                        const lfs::vis::Theme&,
+                                        const char* id) {
+        auto* editor = state.getEditor();
+        const auto breadcrumbs = editor != nullptr
+                                     ? editor->syntaxBreadcrumbs()
+                                     : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
+        const std::string scope = editor != nullptr ? editor->currentSyntaxScope() : std::string{};
+        const bool has_breadcrumbs = !breadcrumbs.empty();
+
+        if (!has_breadcrumbs) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::BeginCombo(id, scope.empty() ? "Scope" : scope.c_str())) {
+            for (std::size_t i = 0; i < breadcrumbs.size(); ++i) {
+                const auto& breadcrumb = breadcrumbs[i];
+                if (ImGui::Selectable(breadcrumb.label.c_str(), i + 1 == breadcrumbs.size())) {
+                    editor->jumpToSyntaxBreadcrumb(i);
+                }
+                if (ImGui::IsItemHovered() && !breadcrumb.detail.empty()) {
+                    ImGui::SetTooltip("%s", breadcrumb.detail.c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (!has_breadcrumbs) {
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Jump within current Python scope");
+        }
+    }
+
+    void draw_syntax_fold_control(lfs::vis::gui::panels::PythonConsoleState& state,
+                                  const lfs::vis::Theme&,
+                                  const char* id) {
+        auto* editor = state.getEditor();
+        const auto folds = editor != nullptr ? editor->syntaxFolds()
+                                             : std::vector<lfs::vis::editor::PythonEditorFold>{};
+        const bool has_folds = !folds.empty();
+
+        if (!has_folds) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::BeginCombo(id, "Blocks")) {
+            for (std::size_t i = 0; i < folds.size(); ++i) {
+                const auto& fold = folds[i];
+                if (ImGui::Selectable(fold.label.c_str(), false)) {
+                    editor->jumpToSyntaxFold(i);
+                }
+                if (ImGui::IsItemHovered() && !fold.detail.empty()) {
+                    ImGui::SetTooltip("%s", fold.detail.c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (!has_folds) {
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Jump to foldable Python block");
         }
     }
 
@@ -803,6 +873,10 @@ namespace lfs::vis::gui::panels {
             draw_syntax_status(state, t);
             ImGui::SameLine();
             draw_syntax_outline_control(state, t, "##python_outline");
+            ImGui::SameLine();
+            draw_syntax_breadcrumb_control(state, t, "##python_breadcrumb");
+            ImGui::SameLine();
+            draw_syntax_fold_control(state, t, "##python_blocks");
 
             ImGui::PopStyleVar(2);
         }
@@ -1215,6 +1289,10 @@ namespace lfs::vis::gui::panels {
         draw_syntax_status(state, t);
         ImGui::SameLine();
         draw_syntax_outline_control(state, t, "##docked_python_outline");
+        ImGui::SameLine();
+        draw_syntax_breadcrumb_control(state, t, "##docked_python_breadcrumb");
+        ImGui::SameLine();
+        draw_syntax_fold_control(state, t, "##docked_python_blocks");
 
         ImGui::PopStyleVar(2);
 

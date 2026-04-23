@@ -23,6 +23,14 @@ namespace lfs::vis::editor {
         int depth = 0;
     };
 
+    struct PythonEditorFold {
+        std::string label;
+        std::string detail;
+        std::size_t byte_offset = 0;
+        std::size_t line = 0;
+        std::size_t end_line = 0;
+    };
+
     class PythonEditor {
     public:
         PythonEditor();
@@ -46,12 +54,20 @@ namespace lfs::vis::editor {
         [[nodiscard]] std::string syntaxSummary() const;
         [[nodiscard]] std::string syntaxStructureSummary() const;
         [[nodiscard]] std::vector<PythonEditorSymbol> syntaxSymbols() const;
+        [[nodiscard]] std::vector<PythonEditorSymbol> syntaxBreadcrumbs() const;
+        [[nodiscard]] std::vector<PythonEditorFold> syntaxFolds() const;
         [[nodiscard]] bool syntaxStructureCurrent() const;
         [[nodiscard]] std::size_t syntaxFoldCount() const;
         [[nodiscard]] std::string currentSyntaxScope() const;
         void refreshSyntaxDiagnostics();
         bool selectEnclosingSyntaxBlock();
+        bool expandSyntaxSelection();
+        bool selectCurrentSyntaxFold();
+        bool jumpToParentSyntaxBlock();
+        bool jumpToChildSyntaxBlock();
         bool jumpToSyntaxSymbol(std::size_t index);
+        bool jumpToSyntaxBreadcrumb(std::size_t index);
+        bool jumpToSyntaxFold(std::size_t index);
 
         void updateTheme(const Theme& theme);
 

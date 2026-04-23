@@ -549,11 +549,19 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
     EXPECT_EQ(variables, 1);
     EXPECT_TRUE(document.structureCurrent());
     EXPECT_FALSE(document.foldRanges().empty());
+    EXPECT_FALSE(document.highlights().empty());
     EXPECT_EQ(document.scopeAt(code.find("pass")), "Tool.run");
 
     const auto block = document.enclosingBlockRange(code.find("pass"));
     ASSERT_TRUE(block.has_value());
     EXPECT_NE(code.substr(block->start_byte, block->end_byte - block->start_byte).find("def run"),
+              std::string_view::npos);
+
+    const auto ranges = document.enclosingBlockRanges(code.find("pass"));
+    ASSERT_GE(ranges.size(), 2);
+    EXPECT_NE(code.substr(ranges[0].start_byte, ranges[0].end_byte - ranges[0].start_byte).find("def run"),
+              std::string_view::npos);
+    EXPECT_NE(code.substr(ranges[1].start_byte, ranges[1].end_byte - ranges[1].start_byte).find("class Tool"),
               std::string_view::npos);
 }
 
@@ -584,6 +592,35 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentAppliesIncrementalEdits) {
     ASSERT_TRUE(document.applyEditsAndReparse(updated, edits));
     EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
     ASSERT_FALSE(document.analysis().issues.empty());
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsFallbackHighlightCaptures) {
+    constexpr std::string_view code =
+        "@decorator\n"
+        "def run():\n"
+        "    return 42\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(code));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+
+    bool has_keyword = false;
+    bool has_decorator = false;
+    bool has_function = false;
+    bool has_number = false;
+    for (const auto& highlight : document.highlights()) {
+        has_keyword |= highlight.kind == lfs::python::PythonHighlightKind::Keyword;
+        has_decorator |= highlight.kind == lfs::python::PythonHighlightKind::Decorator;
+        has_function |= highlight.kind == lfs::python::PythonHighlightKind::Function;
+        has_number |= highlight.kind == lfs::python::PythonHighlightKind::Number;
+        EXPECT_LT(highlight.start_byte, highlight.end_byte);
+        EXPECT_LE(highlight.end_byte, code.size());
+    }
+
+    EXPECT_TRUE(has_keyword);
+    EXPECT_TRUE(has_decorator);
+    EXPECT_TRUE(has_function);
+    EXPECT_TRUE(has_number);
 }
 
 TEST_F(PythonIntegrationTest, PythonSyntaxDocumentKeepsStructureDuringSyntaxError) {

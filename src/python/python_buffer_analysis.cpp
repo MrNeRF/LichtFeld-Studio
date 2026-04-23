@@ -38,6 +38,62 @@ namespace lfs::python {
     (assignment
       left: (identifier) @name) @variable))
 )QUERY";
+        constexpr std::string_view HIGHLIGHT_QUERY = R"QUERY(
+[
+  "and"
+  "as"
+  "assert"
+  "await"
+  "break"
+  "case"
+  "class"
+  "continue"
+  "def"
+  "del"
+  "elif"
+  "else"
+  "except"
+  "finally"
+  "for"
+  "from"
+  "global"
+  "if"
+  "import"
+  "in"
+  "is"
+  "lambda"
+  "match"
+  "nonlocal"
+  "not"
+  "or"
+  "pass"
+  "raise"
+  "return"
+  "try"
+  "while"
+  "with"
+  "yield"
+] @keyword
+(comment) @comment
+(string) @string
+(integer) @number
+(float) @number
+(true) @constant
+(false) @constant
+(none) @constant
+(decorator) @decorator
+(function_definition
+  name: (identifier) @function)
+(class_definition
+  name: (identifier) @type)
+(call
+  function: (identifier) @function)
+(call
+  function: (attribute
+    attribute: (identifier) @function))
+(attribute
+  attribute: (identifier) @property)
+)QUERY";
 
         struct ParserDeleter {
             void operator()(TSParser* parser) const {
@@ -83,6 +139,19 @@ namespace lfs::python {
                 return QueryPtr(ts_query_new(tree_sitter_python(),
                                              SYMBOL_QUERY.data(),
                                              static_cast<std::uint32_t>(SYMBOL_QUERY.size()),
+                                             &query_error_offset,
+                                             &query_error));
+            }();
+            return query.get();
+        }
+
+        [[nodiscard]] TSQuery* highlight_query() {
+            static const QueryPtr query = [] {
+                std::uint32_t query_error_offset = 0;
+                TSQueryError query_error = TSQueryErrorNone;
+                return QueryPtr(ts_query_new(tree_sitter_python(),
+                                             HIGHLIGHT_QUERY.data(),
+                                             static_cast<std::uint32_t>(HIGHLIGHT_QUERY.size()),
                                              &query_error_offset,
                                              &query_error));
             }();
@@ -422,6 +491,103 @@ namespace lfs::python {
             return ranges;
         }
 
+        [[nodiscard]] std::optional<PythonHighlightKind> highlight_kind_for_capture(std::string_view capture) {
+            if (capture == "keyword") {
+                return PythonHighlightKind::Keyword;
+            }
+            if (capture == "comment") {
+                return PythonHighlightKind::Comment;
+            }
+            if (capture == "string") {
+                return PythonHighlightKind::String;
+            }
+            if (capture == "number") {
+                return PythonHighlightKind::Number;
+            }
+            if (capture == "constant") {
+                return PythonHighlightKind::Constant;
+            }
+            if (capture == "decorator") {
+                return PythonHighlightKind::Decorator;
+            }
+            if (capture == "function") {
+                return PythonHighlightKind::Function;
+            }
+            if (capture == "type") {
+                return PythonHighlightKind::Type;
+            }
+            if (capture == "property") {
+                return PythonHighlightKind::Property;
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::vector<PythonSyntaxHighlight> extract_highlights(TSTree* tree, std::string_view code) {
+            if (tree == nullptr || code.empty()) {
+                return {};
+            }
+
+            TSQuery* query = highlight_query();
+            if (query == nullptr) {
+                return {};
+            }
+
+            QueryCursorPtr cursor(ts_query_cursor_new());
+            if (!cursor) {
+                return {};
+            }
+
+            std::vector<PythonSyntaxHighlight> highlights;
+            ts_query_cursor_set_byte_range(cursor.get(), 0, static_cast<std::uint32_t>(code.size()));
+            ts_query_cursor_exec(cursor.get(), query, ts_tree_root_node(tree));
+
+            TSQueryMatch match;
+            while (ts_query_cursor_next_match(cursor.get(), &match)) {
+                for (std::uint32_t i = 0; i < match.capture_count; ++i) {
+                    const TSQueryCapture capture = match.captures[i];
+                    std::uint32_t capture_name_length = 0;
+                    const char* capture_name =
+                        ts_query_capture_name_for_id(query, capture.index, &capture_name_length);
+                    const std::string_view name(capture_name, capture_name_length);
+                    const auto kind = highlight_kind_for_capture(name);
+                    if (!kind.has_value()) {
+                        continue;
+                    }
+
+                    const std::size_t start_byte = ts_node_start_byte(capture.node);
+                    const std::size_t end_byte = ts_node_end_byte(capture.node);
+                    if (start_byte >= end_byte || end_byte > code.size()) {
+                        continue;
+                    }
+                    highlights.push_back(PythonSyntaxHighlight{
+                        .kind = *kind,
+                        .start_byte = start_byte,
+                        .end_byte = end_byte,
+                    });
+                }
+            }
+
+            std::ranges::sort(highlights, [](const PythonSyntaxHighlight& lhs, const PythonSyntaxHighlight& rhs) {
+                if (lhs.start_byte != rhs.start_byte) {
+                    return lhs.start_byte < rhs.start_byte;
+                }
+                if (lhs.end_byte != rhs.end_byte) {
+                    return lhs.end_byte < rhs.end_byte;
+                }
+                return static_cast<int>(lhs.kind) < static_cast<int>(rhs.kind);
+            });
+            highlights.erase(std::unique(highlights.begin(),
+                                         highlights.end(),
+                                         [](const PythonSyntaxHighlight& lhs,
+                                            const PythonSyntaxHighlight& rhs) {
+                                             return lhs.kind == rhs.kind &&
+                                                    lhs.start_byte == rhs.start_byte &&
+                                                    lhs.end_byte == rhs.end_byte;
+                                         }),
+                             highlights.end());
+            return highlights;
+        }
+
         [[nodiscard]] PythonBufferAnalysis analyze_tree(std::string_view code, TSTree* tree) {
             PythonBufferAnalysis analysis;
 
@@ -496,6 +662,7 @@ namespace lfs::python {
         std::vector<PythonSymbol> last_good_symbols;
         std::vector<PythonFoldRange> current_fold_ranges;
         std::vector<PythonFoldRange> last_good_fold_ranges;
+        std::vector<PythonSyntaxHighlight> current_highlights;
         std::size_t code_size = 0;
         bool current_structure_current = false;
 
@@ -529,6 +696,7 @@ namespace lfs::python {
 
             std::vector<PythonSymbol> parsed_symbols = extract_symbols(tree.get(), code);
             std::vector<PythonFoldRange> parsed_fold_ranges = extract_fold_ranges(tree.get(), code);
+            current_highlights = extract_highlights(tree.get(), code);
 
             if (current_analysis.clean()) {
                 current_symbols = std::move(parsed_symbols);
@@ -555,6 +723,7 @@ namespace lfs::python {
             tree.reset();
             current_symbols.clear();
             current_fold_ranges.clear();
+            current_highlights.clear();
             current_structure_current = false;
             code_size = code.size();
 
@@ -667,6 +836,10 @@ namespace lfs::python {
         return impl_->current_fold_ranges;
     }
 
+    const std::vector<PythonSyntaxHighlight>& PythonSyntaxDocument::highlights() const {
+        return impl_->current_highlights;
+    }
+
     std::string PythonSyntaxDocument::scopeAt(const std::size_t byte_offset) const {
         std::vector<std::string> scope_parts;
         for (const auto& symbol : impl_->current_symbols) {
@@ -681,10 +854,20 @@ namespace lfs::python {
 
     std::optional<PythonByteRange> PythonSyntaxDocument::enclosingBlockRange(
         const std::size_t byte_offset) const {
-        if (impl_->tree == nullptr || impl_->code_size == 0) {
+        const auto ranges = enclosingBlockRanges(byte_offset);
+        if (ranges.empty()) {
             return std::nullopt;
         }
+        return ranges.front();
+    }
 
+    std::vector<PythonByteRange> PythonSyntaxDocument::enclosingBlockRanges(
+        const std::size_t byte_offset) const {
+        if (impl_->tree == nullptr || impl_->code_size == 0) {
+            return {};
+        }
+
+        std::vector<PythonByteRange> ranges;
         const std::size_t query_byte = std::min(byte_offset, impl_->code_size - 1);
         TSNode node = ts_node_descendant_for_byte_range(
             ts_tree_root_node(impl_->tree.get()),
@@ -706,11 +889,16 @@ namespace lfs::python {
             const std::size_t start = ts_node_start_byte(selected);
             const std::size_t end = ts_node_end_byte(selected);
             if (start < end) {
-                return PythonByteRange{.start_byte = start, .end_byte = end};
+                const auto duplicate = std::ranges::any_of(ranges, [&](const PythonByteRange& range) {
+                    return range.start_byte == start && range.end_byte == end;
+                });
+                if (!duplicate) {
+                    ranges.push_back(PythonByteRange{.start_byte = start, .end_byte = end});
+                }
             }
         }
 
-        return std::nullopt;
+        return ranges;
     }
 
     bool PythonSyntaxDocument::hasTree() const {

@@ -91,6 +91,24 @@ namespace lfs::python {
         std::string kind;
     };
 
+    enum class PythonHighlightKind {
+        Keyword,
+        Comment,
+        String,
+        Number,
+        Constant,
+        Decorator,
+        Function,
+        Type,
+        Property,
+    };
+
+    struct PythonSyntaxHighlight {
+        PythonHighlightKind kind = PythonHighlightKind::Keyword;
+        std::size_t start_byte = 0;
+        std::size_t end_byte = 0;
+    };
+
     class PythonSyntaxDocument {
     public:
         PythonSyntaxDocument();
@@ -107,8 +125,10 @@ namespace lfs::python {
         [[nodiscard]] const PythonBufferAnalysis& analysis() const;
         [[nodiscard]] const std::vector<PythonSymbol>& symbols() const;
         [[nodiscard]] const std::vector<PythonFoldRange>& foldRanges() const;
+        [[nodiscard]] const std::vector<PythonSyntaxHighlight>& highlights() const;
         [[nodiscard]] std::string scopeAt(std::size_t byte_offset) const;
         [[nodiscard]] std::optional<PythonByteRange> enclosingBlockRange(std::size_t byte_offset) const;
+        [[nodiscard]] std::vector<PythonByteRange> enclosingBlockRanges(std::size_t byte_offset) const;
         [[nodiscard]] bool hasTree() const;
         [[nodiscard]] bool structureCurrent() const;
 
