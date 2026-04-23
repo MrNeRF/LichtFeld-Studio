@@ -32,14 +32,23 @@ endif()
 
 project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
 
-# On Windows, route all build outputs to build/<Config>/ so Debug and Release
-# binaries are separated. $<CONFIG> evaluates at build time for both
-# single-config (Ninja) and multi-config (MSVC) generators.
-# Linux: CMake default (flat binary dir) is used.
-if(WIN32)
+# On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
+# route all build outputs to build/<Config>/ so Debug and Release binaries are
+# separated. Single-config generators (Ninja, NMake) use a flat binary dir —
+# the selected CMAKE_BUILD_TYPE is baked in at configure time, so no subdirectory
+# is needed; each target's per-target RUNTIME_OUTPUT_DIRECTORY (set to
+# ${CMAKE_BINARY_DIR}) ensures a flat layout under build/.
+# Linux: same per-target convention applies; no override needed here.
+# The else() branch explicitly sets to "" to override any stale cached value.
+get_property(_IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(WIN32 AND _IS_MULTI_CONFIG)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
     set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>")
+else()
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "")
 endif()
 
 # Disable C++20 module scanning
@@ -766,9 +775,10 @@ endif()
 
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
-# Per-config output directory variants are Windows-only; Linux keeps the
-# default flat binary directory.
-if(WIN32)
+# Per-config output directory variants for the exe: multi-config only.
+# Single-config Ninja on Windows uses the flat binary dir (build/).
+get_property(_exe_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(WIN32 AND _exe_is_multi_config)
     set_target_properties(${PROJECT_NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY_DEBUG        "${CMAKE_BINARY_DIR}/Debug"
         RUNTIME_OUTPUT_DIRECTORY_RELEASE      "${CMAKE_BINARY_DIR}/Release"
@@ -831,11 +841,13 @@ if(UNIX)
 
 elseif(WIN32)
     # On Windows, DLLs in the same directory as the .exe are automatically found.
-    # Use $<CONFIG> so both Ninja (single-config) and MSVC (multi-config) route
-    # binaries to build/Debug, build/Release, etc.
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/$<CONFIG>"
-    )
+    # Multi-config generators use $<CONFIG> subdir; single-config (Ninja) uses
+    # the flat binary dir (build/) set via the global CMAKE_RUNTIME_OUTPUT_DIRECTORY.
+    if(_exe_is_multi_config)
+        set_target_properties(${PROJECT_NAME} PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY              "${CMAKE_BINARY_DIR}/$<CONFIG>"
+        )
+    endif()
     if(MSVC)
         target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
     endif()
