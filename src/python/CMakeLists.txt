@@ -221,8 +221,14 @@ set_target_properties(lfs_py PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
     LINKER_LANGUAGE CXX
     POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
     OUTPUT_NAME lichtfeld
 )
+
+if(UNIX AND NOT APPLE)
+    target_link_options(lfs_py PRIVATE "LINKER:--exclude-libs,ALL")
+endif()
 
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
