@@ -1,7 +1,7 @@
 <rml>
 <head>
   <link type="text/template" href="floating_window.rml"/>
-  <link type="text/rcss" href="resume_checkpoint_panel.rcss"/>
+  <link type="text/rcss" href="import_dialog.rcss"/>
 </head>
 <body template="floating-window" data-model="resume_checkpoint">
 

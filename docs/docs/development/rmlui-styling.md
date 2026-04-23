@@ -52,13 +52,16 @@ Supported token forms include palette names such as `@{text}`, `@{surface}`, `@{
 
 ## Theme Catalog
 
-Theme presets are registered once in C++ and are described by the JSON file under `src/visualizer/gui/assets/themes/`. Keep these top-level fields in every shipped theme:
+Theme presets are listed in `src/visualizer/gui/assets/themes/manifest.json`. The manifest owns catalog metadata:
 
 - `id`: stable preset id used by preferences and `lf.ui.set_theme(id)`
-- `name`: human-readable display name
+- `file`: theme value file under the same directory
+- `fallback`: built-in base theme used for missing values
 - `label_key`: translation key used by UI menus
 - `mode`: `dark` or `light`
 - `order`: menu order
+
+Individual theme JSON files own values only: `name`, `palette`, `sizes`, `fonts`, and other theme sections. Do not duplicate catalog fields such as `id`, `label_key`, `mode`, or `order` inside the theme value file.
 
 Python UI code must read `lf.ui.themes()` instead of hardcoding the theme list. `lf.ui.get_theme()` returns the stable id of the active preset.
 
@@ -83,6 +86,7 @@ Allowed `SetProperty` examples:
 - `display` for runtime visibility
 - progress width or model-driven chart geometry
 - data-driven colors, for example per-keyframe color chips
+- explicit user/API sizing, for example an immediate-mode `button(size=...)`
 - RmlUI behavior properties such as `drag`, `nav-left`, and `nav-right`
 
 Avoid `SetProperty` for static styling:
@@ -92,5 +96,7 @@ Avoid `SetProperty` for static styling:
 - default backgrounds and borders
 - icon colors
 - fixed padding, margins, radius, and shadows
+
+The Python immediate-mode bridge follows the same rule. Generated elements should receive semantic classes such as `.im-control--fill` or `.im-label--centered`; only data colors, caller-supplied sizes, tooltip coordinates, and runtime state should remain inline.
 
 When in doubt, create a class in `.rml` or C++, put static layout in `.rcss`, and put palette-dependent values in `.theme.rcss`.

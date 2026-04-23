@@ -360,8 +360,7 @@ namespace lfs::python {
         if (!slot.element) {
             auto el = doc_->CreateElement("p");
             el->SetClass("im-label", true);
-            el->SetProperty("text-align", "center");
-            el->SetProperty("width", "100%");
+            el->SetClass("im-label--centered", true);
             el->SetInnerRML(Rml::String(display));
             slot.element = line->AppendChild(std::move(el));
         } else {
@@ -431,8 +430,7 @@ namespace lfs::python {
         if (!slot.element) {
             auto el = doc_->CreateElement("p");
             el->SetClass("im-label", true);
-            el->SetProperty("text-align", "center");
-            el->SetProperty("width", "100%");
+            el->SetClass("im-label--centered", true);
             if (!css_color.empty())
                 el->SetProperty("color", Rml::String(css_color));
             el->SetInnerRML(Rml::String(display));
@@ -1020,7 +1018,7 @@ namespace lfs::python {
             auto input = doc_->CreateElement("input");
             input->SetAttribute("type", "text");
             input->SetAttribute("value", Rml::String(value));
-            input->SetProperty("flex", "1");
+            input->SetClass("im-control--fill", true);
 
             slot.events.string_value = value;
             input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
@@ -1078,7 +1076,7 @@ namespace lfs::python {
             input->SetAttribute("type", "text");
             input->SetAttribute("value", Rml::String(std::format("{:.3f}", value)));
             input->SetClass("number-input", true);
-            input->SetProperty("flex", "1");
+            input->SetClass("im-control--fill", true);
 
             slot.events.float_value = value;
             slot.events.string_value = std::format("{:.3f}", value);
@@ -1129,7 +1127,7 @@ namespace lfs::python {
             input->SetAttribute("type", "text");
             input->SetAttribute("value", Rml::String(std::to_string(value)));
             input->SetClass("number-input", true);
-            input->SetProperty("flex", "1");
+            input->SetClass("im-control--fill", true);
 
             slot.events.string_value = std::to_string(value);
             input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
@@ -1287,7 +1285,7 @@ namespace lfs::python {
             lbl->SetInnerRML(Rml::String(strip_imgui_id(label)));
 
             auto select = doc_->CreateElement("select");
-            select->SetProperty("flex", "1");
+            select->SetClass("im-control--fill", true);
             for (int i = 0; i < static_cast<int>(items.size()); ++i) {
                 auto option = doc_->CreateElement("option");
                 option->SetAttribute("value", Rml::String(std::to_string(i)));
@@ -1387,7 +1385,7 @@ namespace lfs::python {
 
         if (!slot.element) {
             auto el = doc_->CreateElement("div");
-            el->SetProperty("height", "8dp");
+            el->SetClass("im-spacing", true);
             slot.element = level.parent->AppendChild(std::move(el));
         } else if (slot.element->GetParentNode() != level.parent) {
             level.parent->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
@@ -1548,7 +1546,7 @@ namespace lfs::python {
             if (w > 0.0f)
                 cell->SetProperty("width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
             else
-                cell->SetProperty("flex", "1");
+                cell->SetClass("im-table-cell--fill", true);
         }
 
         table_->current_cell = table_->current_row->AppendChild(std::move(cell));

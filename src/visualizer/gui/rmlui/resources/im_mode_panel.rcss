@@ -52,6 +52,11 @@
     padding: 0 0 0 2dp;
 }
 
+.im-label--centered {
+    text-align: center;
+    width: 100%;
+}
+
 .im-text-wrapped {
     font-size: 10dp;
     padding: 0 2dp;
@@ -61,6 +66,15 @@
 .im-bullet {
     font-size: 10dp;
     padding: 0 0 0 8dp;
+}
+
+.im-spacing {
+    height: 8dp;
+}
+
+.im-control--fill {
+    flex: 1;
+    min-width: 0;
 }
 
 /* Radio button */
@@ -104,6 +118,10 @@
     display: flex;
     align-items: center;
     overflow: hidden;
+}
+
+.im-table-cell--fill {
+    flex: 1;
 }
 
 /* Color widgets */

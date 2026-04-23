@@ -1,0 +1,10 @@
+/* Theme-dependent script panel styles. */
+
+.sp-script {
+    border-color: @{alpha(border,0.35)};
+}
+
+.sp-meta-label,
+.sp-filename {
+    color: @{text};
+}
