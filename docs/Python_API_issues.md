@@ -25,16 +25,6 @@ PyTensor PyTensor::linspace(float start, float end, int64_t steps,
 
 ---
 
-### 2. Theme-switch API is limited to dark/light only
-
-**Location:** `src/python/lfs/py_ui.cpp:4348-4363`
-
-`lf.ui.set_theme(name)` currently only handles `"dark"` and `"light"`.
-
-**Impact:** additional theme assets are not selectable through the Python API.
-
----
-
 ## Implementation Gaps
 
 ### Package Management
@@ -71,12 +61,11 @@ The push/pop style stack APIs are available (`push_style_var`, `push_style_var_v
 
 1. Apply `dtype` in `PyTensor::linspace()` or remove the argument from the public signature.
 ### Medium Priority
-2. Extend `lf.ui.set_theme()` to support all shipped themes (or document that only dark/light are runtime-switchable).
-3. Add async uninstall API for package parity with `install_async()`.
+2. Add async uninstall API for package parity with `install_async()`.
 
 ### Low Priority
 
-4. Add direct style getters/setters if runtime theme customization from Python is needed beyond push/pop stacks.
+3. Add direct style getters/setters if runtime theme customization from Python is needed beyond push/pop stacks.
 
 ---
 

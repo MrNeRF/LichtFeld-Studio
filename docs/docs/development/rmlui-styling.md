@@ -50,6 +50,18 @@ Theme files are templates. Use `@{...}` tokens instead of hardcoded palette valu
 
 Supported token forms include palette names such as `@{text}`, `@{surface}`, `@{primary}`, `@{warning}`, `@{error}`, numeric values such as `@{num(size.frame_rounding)}`, and color helpers such as `@{alpha(border,0.4)}` or `@{blend(surface,primary,0.18)}`.
 
+## Theme Catalog
+
+Theme presets are registered once in C++ and are described by the JSON file under `src/visualizer/gui/assets/themes/`. Keep these top-level fields in every shipped theme:
+
+- `id`: stable preset id used by preferences and `lf.ui.set_theme(id)`
+- `name`: human-readable display name
+- `label_key`: translation key used by UI menus
+- `mode`: `dark` or `light`
+- `order`: menu order
+
+Python UI code must read `lf.ui.themes()` instead of hardcoding the theme list. `lf.ui.get_theme()` returns the stable id of the active preset.
+
 ## Hot Reload
 
 RmlUI hot reload watches `.rml`, `.rcss`, and `.theme.rcss`. Editing a resource should change the live UI without requiring a C++ rebuild.

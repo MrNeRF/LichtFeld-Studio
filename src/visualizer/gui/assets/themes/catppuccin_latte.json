@@ -1,5 +1,9 @@
 {
+  "id": "catppuccin_latte",
   "name": "Catppuccin Latte",
+  "label_key": "menu.view.theme.catppuccin_latte",
+  "mode": "light",
+  "order": 50,
   "_description": "Catppuccin Latte-inspired light theme for LichtFeld Studio",
 
   "palette": {

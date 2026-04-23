@@ -1,5 +1,9 @@
 {
+  "id": "nord",
   "name": "Nord",
+  "label_key": "menu.view.theme.nord",
+  "mode": "dark",
+  "order": 60,
   "_description": "Nord-inspired professional dark theme for LichtFeld Studio",
 
   "palette": {

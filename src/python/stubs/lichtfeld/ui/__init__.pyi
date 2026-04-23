@@ -2438,14 +2438,13 @@ def get_invert_masks() -> bool:
     """Get whether masks are inverted"""
 
 def set_theme(name: str) -> None:
-    """
-    Set theme ('dark', 'light', 'gruvbox', 'catppuccin_mocha', 'catppuccin_latte', or 'nord')
-    """
+    """Set theme by stable theme id"""
 
 def get_theme() -> str:
-    """
-    Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')
-    """
+    """Get current stable theme id"""
+
+def themes() -> list:
+    """Get available theme presets with stable ids and UI metadata"""
 
 def set_ui_scale(scale: float) -> None:
     """Set UI scale (0.0 = auto from OS, or 1.0-4.0)"""

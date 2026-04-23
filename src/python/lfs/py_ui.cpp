@@ -4902,12 +4902,29 @@ namespace lfs::python {
                     vis::saveThemePreferenceName(name);
                 }
             },
-            nb::arg("name"), "Set theme ('dark', 'light', 'gruvbox', 'catppuccin_mocha', 'catppuccin_latte', or 'nord')");
+            nb::arg("name"), "Set theme by stable theme id");
 
         m.def(
             "get_theme",
-            []() -> std::string { return vis::theme().name; },
-            "Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')");
+            []() -> std::string { return vis::currentThemeId(); },
+            "Get current stable theme id");
+
+        m.def(
+            "themes",
+            []() {
+                nb::list themes;
+                vis::visitThemePresetInfos([&themes](const vis::ThemePresetInfo& info) {
+                    nb::dict item;
+                    item["id"] = info.id;
+                    item["name"] = info.name;
+                    item["label_key"] = info.label_key;
+                    item["mode"] = info.mode;
+                    item["order"] = info.order;
+                    themes.append(item);
+                });
+                return themes;
+            },
+            "Get available theme presets with stable ids and UI metadata");
 
         m.def(
             "set_ui_scale",

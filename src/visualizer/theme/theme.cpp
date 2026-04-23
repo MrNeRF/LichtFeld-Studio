@@ -35,29 +35,9 @@ namespace lfs::vis {
         // Theme state
         Theme g_current_theme;
         std::string g_current_theme_id = "dark";
-        Theme g_dark_theme;
-        Theme g_light_theme;
-        Theme g_gruvbox_theme;
-        Theme g_catppuccin_mocha_theme;
-        Theme g_catppuccin_latte_theme;
-        Theme g_nord_theme;
         float g_dpi_scale = 1.0f;
         bool g_initialized = false;
         bool g_themes_loaded = false;
-
-        // Hot-reload state
-        std::filesystem::path g_dark_path;
-        std::filesystem::path g_light_path;
-        std::filesystem::path g_gruvbox_path;
-        std::filesystem::path g_catppuccin_mocha_path;
-        std::filesystem::path g_catppuccin_latte_path;
-        std::filesystem::path g_nord_path;
-        std::filesystem::file_time_type g_dark_mtime;
-        std::filesystem::file_time_type g_light_mtime;
-        std::filesystem::file_time_type g_gruvbox_mtime;
-        std::filesystem::file_time_type g_catppuccin_mocha_mtime;
-        std::filesystem::file_time_type g_catppuccin_latte_mtime;
-        std::filesystem::file_time_type g_nord_mtime;
 
         void ensureThemesLoaded();
         void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
@@ -654,27 +634,39 @@ namespace lfs::vis {
         };
 
         struct ThemePresetRecord {
+            ThemePresetRecord(
+                const char* preset_id,
+                const char* preset_asset_name,
+                const Theme* preset_defaults,
+                const int preset_order)
+                : id(preset_id),
+                  asset_name(preset_asset_name),
+                  defaults(preset_defaults),
+                  order(preset_order) {}
+
             const char* id;
             const char* asset_name;
-            Theme* theme;
             const Theme* defaults;
-            std::filesystem::path* path;
-            std::filesystem::file_time_type* mtime;
+            int order;
+            Theme theme;
+            ThemePresetInfo info;
+            std::filesystem::path path;
+            std::filesystem::file_time_type mtime{};
         };
 
         ThemePresetRecord THEME_PRESETS[] = {
-            {"dark", "themes/dark.json", &g_dark_theme, &DEFAULT_DARK, &g_dark_path, &g_dark_mtime},
-            {"light", "themes/light.json", &g_light_theme, &DEFAULT_LIGHT, &g_light_path, &g_light_mtime},
-            {"gruvbox", "themes/gruvbox.json", &g_gruvbox_theme, &DEFAULT_GRUVBOX, &g_gruvbox_path, &g_gruvbox_mtime},
-            {"catppuccin_mocha", "themes/catppuccin_mocha.json", &g_catppuccin_mocha_theme, &DEFAULT_CATPPUCCIN_MOCHA, &g_catppuccin_mocha_path, &g_catppuccin_mocha_mtime},
-            {"catppuccin_latte", "themes/catppuccin_latte.json", &g_catppuccin_latte_theme, &DEFAULT_CATPPUCCIN_LATTE, &g_catppuccin_latte_path, &g_catppuccin_latte_mtime},
-            {"nord", "themes/nord.json", &g_nord_theme, &DEFAULT_NORD, &g_nord_path, &g_nord_mtime},
+            {"dark", "themes/dark.json", &DEFAULT_DARK, 10},
+            {"light", "themes/light.json", &DEFAULT_LIGHT, 20},
+            {"gruvbox", "themes/gruvbox.json", &DEFAULT_GRUVBOX, 30},
+            {"catppuccin_mocha", "themes/catppuccin_mocha.json", &DEFAULT_CATPPUCCIN_MOCHA, 40},
+            {"catppuccin_latte", "themes/catppuccin_latte.json", &DEFAULT_CATPPUCCIN_LATTE, 50},
+            {"nord", "themes/nord.json", &DEFAULT_NORD, 60},
         };
 
         ThemePresetRecord* findThemePreset(std::string_view theme_id) {
             const auto normalized = normalizeThemeIdImpl(std::string(theme_id));
             for (auto& preset : THEME_PRESETS) {
-                if (preset.id == normalized)
+                if (normalized == preset.id)
                     return &preset;
             }
             return nullptr;
@@ -684,36 +676,79 @@ namespace lfs::vis {
             return findThemePreset(theme_id) != nullptr;
         }
 
-        void loadThemePreset(ThemePresetRecord& preset) {
-            *preset.theme = *preset.defaults;
-            preset.path->clear();
+        void resetThemePresetInfo(ThemePresetRecord& preset) {
+            preset.info.id = preset.id;
+            preset.info.name = preset.theme.name.empty() ? preset.defaults->name : preset.theme.name;
+            preset.info.label_key = "menu.view.theme." + std::string(preset.id);
+            preset.info.mode = preset.defaults->isLightTheme() ? "light" : "dark";
+            preset.info.order = preset.order;
+        }
+
+        void loadThemePresetInfo(ThemePresetRecord& preset) {
+            if (preset.path.empty())
+                return;
 
             try {
-                *preset.path = getAssetPath(preset.asset_name);
-                if (!loadTheme(*preset.theme, lfs::core::path_to_utf8(*preset.path)))
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(preset.path, file))
                     return;
 
-                *preset.mtime = std::filesystem::last_write_time(*preset.path);
-                LOG_INFO("Loaded {} theme from {}", preset.id, lfs::core::path_to_utf8(*preset.path));
+                json j;
+                file >> j;
+
+                const std::string json_id = normalizeThemeIdImpl(j.value("id", std::string(preset.id)));
+                if (json_id != preset.id) {
+                    LOG_WARN(
+                        "Ignoring theme id '{}' in {}; registry id is '{}'",
+                        json_id,
+                        lfs::core::path_to_utf8(preset.path),
+                        preset.id);
+                }
+
+                preset.info.name = j.value("name", preset.info.name);
+                preset.info.label_key = j.value("label_key", preset.info.label_key);
+                preset.info.mode = j.value("mode", preset.info.mode);
+                preset.info.order = j.value("order", preset.info.order);
             } catch (...) {
-                preset.path->clear();
+                LOG_WARN("Failed to load theme metadata from {}", lfs::core::path_to_utf8(preset.path));
+            }
+        }
+
+        void loadThemePreset(ThemePresetRecord& preset) {
+            preset.theme = *preset.defaults;
+            preset.path.clear();
+            resetThemePresetInfo(preset);
+
+            try {
+                preset.path = getAssetPath(preset.asset_name);
+                if (!loadTheme(preset.theme, lfs::core::path_to_utf8(preset.path)))
+                    return;
+
+                resetThemePresetInfo(preset);
+                loadThemePresetInfo(preset);
+                preset.mtime = std::filesystem::last_write_time(preset.path);
+                LOG_INFO("Loaded {} theme from {}", preset.id, lfs::core::path_to_utf8(preset.path));
+            } catch (...) {
+                preset.path.clear();
             }
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (preset.path->empty() || !std::filesystem::exists(*preset.path))
+            if (preset.path.empty() || !std::filesystem::exists(preset.path))
                 return false;
 
-            const auto mtime = std::filesystem::last_write_time(*preset.path);
-            if (mtime == *preset.mtime)
+            const auto mtime = std::filesystem::last_write_time(preset.path);
+            if (mtime == preset.mtime)
                 return false;
 
             Theme reloaded = *preset.defaults;
-            if (!loadTheme(reloaded, lfs::core::path_to_utf8(*preset.path)))
+            if (!loadTheme(reloaded, lfs::core::path_to_utf8(preset.path)))
                 return false;
 
-            *preset.theme = std::move(reloaded);
-            *preset.mtime = mtime;
+            preset.theme = std::move(reloaded);
+            resetThemePresetInfo(preset);
+            loadThemePresetInfo(preset);
+            preset.mtime = mtime;
             LOG_INFO("Hot-reloaded {} theme", preset.id);
             return true;
         }
@@ -734,40 +769,49 @@ namespace lfs::vis {
 
     } // namespace
 
+    namespace {
+        const Theme& themePreset(std::string_view theme_id) {
+            ensureThemesLoaded();
+            const auto* preset = findThemePreset(theme_id);
+            return preset ? preset->theme : THEME_PRESETS[0].theme;
+        }
+    } // namespace
+
     const Theme& darkTheme() {
-        ensureThemesLoaded();
-        return g_dark_theme;
+        return themePreset("dark");
     }
 
     const Theme& lightTheme() {
-        ensureThemesLoaded();
-        return g_light_theme;
+        return themePreset("light");
     }
 
     const Theme& gruvboxTheme() {
-        ensureThemesLoaded();
-        return g_gruvbox_theme;
+        return themePreset("gruvbox");
     }
 
     const Theme& catppuccinMochaTheme() {
-        ensureThemesLoaded();
-        return g_catppuccin_mocha_theme;
+        return themePreset("catppuccin_mocha");
     }
 
     const Theme& catppuccinLatteTheme() {
-        ensureThemesLoaded();
-        return g_catppuccin_latte_theme;
+        return themePreset("catppuccin_latte");
     }
 
     const Theme& nordTheme() {
-        ensureThemesLoaded();
-        return g_nord_theme;
+        return themePreset("nord");
     }
 
     void visitThemePresets(const ThemePresetVisitor& visitor) {
         ensureThemesLoaded();
         for (const auto& preset : THEME_PRESETS) {
-            visitor(preset.id, *preset.theme);
+            visitor(preset.id, preset.theme);
+        }
+    }
+
+    void visitThemePresetInfos(const ThemePresetInfoVisitor& visitor) {
+        ensureThemesLoaded();
+        for (const auto& preset : THEME_PRESETS) {
+            visitor(preset.info);
         }
     }
 
@@ -788,7 +832,7 @@ namespace lfs::vis {
             if (!preset)
                 return false;
 
-            applyCurrentTheme(*preset->theme, preset->id);
+            applyCurrentTheme(preset->theme, preset->id);
             return true;
         }
     } // namespace
