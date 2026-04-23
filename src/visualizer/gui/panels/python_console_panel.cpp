@@ -76,6 +76,29 @@ namespace {
         editor->focus();
     }
 
+    void clean_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
+        auto* editor = state.getEditor();
+        if (!editor) {
+            return;
+        }
+
+        const std::string original = editor->getText();
+        const auto result = lfs::python::clean_python_code(original);
+        if (!result.success) {
+            if (!result.error.empty()) {
+                state.addError("[Cleanup] " + result.error);
+            }
+            return;
+        }
+
+        if (result.code != original) {
+            editor->setText(result.code);
+            state.setModified(true);
+        }
+
+        editor->focus();
+    }
+
     void draw_vim_mode_button(lfs::vis::gui::panels::PythonConsoleState& state,
                               const lfs::vis::Theme& t) {
         auto* editor = state.getEditor();
@@ -574,6 +597,9 @@ namespace lfs::vis::gui::panels {
                 if (ImGui::MenuItem("Format Script", "Ctrl+Shift+F")) {
                     format_editor_script(state);
                 }
+                if (ImGui::MenuItem("Clean Pasted Code", "Ctrl+Shift+I")) {
+                    clean_editor_script(state);
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Copy Selection")) {
                     if (auto* output = state.getOutputTerminal()) {
@@ -901,6 +927,9 @@ namespace lfs::vis::gui::panels {
             if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
                 format_editor_script(state);
             }
+            if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_I, false)) {
+                clean_editor_script(state);
+            }
         }
 
         ImGui::End();
@@ -1004,6 +1033,14 @@ namespace lfs::vis::gui::panels {
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Format code (Ctrl+Shift+F)");
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Clean")) {
+            clean_editor_script(state);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Clean pasted code (Ctrl+Shift+I)");
 
         ImGui::SameLine();
         draw_vim_mode_button(state, t);
@@ -1285,6 +1322,9 @@ namespace lfs::vis::gui::panels {
             }
             if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
                 format_editor_script(state);
+            }
+            if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_I, false)) {
+                clean_editor_script(state);
             }
             // Font scaling: Ctrl++ / Ctrl+= to increase, Ctrl+- to decrease, Ctrl+0 to reset
             if (ImGui::IsKeyPressed(ImGuiKey_Equal, false) ||

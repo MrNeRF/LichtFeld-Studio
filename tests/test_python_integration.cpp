@@ -14,6 +14,7 @@
 #include "core/splat_data.hpp"
 #include "io/loader.hpp"
 #include "python/gil.hpp"
+#include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -479,30 +480,28 @@ TEST_F(PythonIntegrationTest, FormatPythonCodePreservesValidBlockIndentation) {
     EXPECT_EQ(result.code, "if True:\n    print(\"x\")\n");
 }
 
-TEST_F(PythonIntegrationTest, FormatPythonCodeDedentsIndentedSnippet) {
-    const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
-
-    if (formatterUnavailable(result)) {
-        GTEST_SKIP() << result.error;
-    }
-    ASSERT_TRUE(result.success) << result.error;
-    EXPECT_EQ(result.code, "if True:\n    print(\"x\")\n");
+TEST_F(PythonIntegrationTest, PythonBufferAnalysisReportsCleanCode) {
+    const auto analysis = lfs::python::analyze_python_buffer("if True:\n    print('x')\n");
+    EXPECT_TRUE(analysis.clean()) << analysis.summary;
+    EXPECT_EQ(analysis.status, lfs::python::PythonBufferStatus::Clean);
 }
 
-TEST_F(PythonIntegrationTest, FormatPythonCodeRepairsUnexpectedTopLevelIndent) {
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {
+    const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
+
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsUnexpectedTopLevelIndentBeforeBlack) {
     const auto result = lfs::python::format_python_code(
         "import lichtfeld as lf\n    scene = lf.get_scene()\nprint('hello world')\n");
 
-    if (formatterUnavailable(result)) {
-        GTEST_SKIP() << result.error;
-    }
-    ASSERT_TRUE(result.success) << result.error;
-    EXPECT_EQ(result.code.find("\n    scene = lf.get_scene()"), std::string::npos);
-    EXPECT_NE(result.code.find("scene = lf.get_scene()"), std::string::npos);
-    EXPECT_NE(result.code.find("print(\"hello world\")"), std::string::npos);
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
 }
 
-TEST_F(PythonIntegrationTest, FormatPythonCodeCommentsLeadingPreambleBullets) {
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsLeadingPreambleBulletsBeforeBlack) {
     const auto result = lfs::python::format_python_code(
         "1. SOURCE_NAME if set\n"
         "2. currently selected node\n"
@@ -511,14 +510,29 @@ TEST_F(PythonIntegrationTest, FormatPythonCodeCommentsLeadingPreambleBullets) {
         "from pathlib import Path\n"
         "import lichtfeld as lf\n");
 
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
+
+TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
+    const auto result = lfs::python::clean_python_code(
+        "def _safe_path_component(text):\n"
+        "stripped = str(text or \"\").strip()\n"
+        "if not stripped:\n"
+        "    return \"splat\"\n"
+        "safe = \"\".join(ch if ch.isalnum() or ch in (\"-\", \"_\", \".\") else \"_\" for ch in stripped)\n"
+        "safe = safe.strip(\"_\")\n"
+        "return safe or \"splat\"\n");
+
     if (formatterUnavailable(result)) {
         GTEST_SKIP() << result.error;
     }
     ASSERT_TRUE(result.success) << result.error;
-    EXPECT_NE(result.code.find("# 1. SOURCE_NAME if set"), std::string::npos);
-    EXPECT_NE(result.code.find("# 2. currently selected node"), std::string::npos);
-    EXPECT_NE(result.code.find("from pathlib import Path"), std::string::npos);
-    EXPECT_NE(result.code.find("import lichtfeld as lf"), std::string::npos);
+    EXPECT_NE(result.code.find("def _safe_path_component(text):"), std::string::npos);
+    EXPECT_NE(result.code.find("    stripped = str(text or \"\").strip()"), std::string::npos);
+    EXPECT_NE(result.code.find("    if not stripped:"), std::string::npos);
+    EXPECT_NE(result.code.find("        return \"splat\""), std::string::npos);
+    EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
 }
 
 TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {
