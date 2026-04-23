@@ -46,5 +46,8 @@ tasks/
 
 # USD generated files
 lib/
+!external/tree-sitter/lib/
+!external/tree-sitter/lib/src/
+!external/tree-sitter/lib/src/query.c
 generatedSchema.usda
 plugInfo.json

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <optional>
 #include <set>
@@ -394,6 +395,13 @@ namespace lfs::vis::editor {
             size_t end = 0;
         };
 
+        struct PendingSyntaxPreEdit {
+            size_t start_byte = 0;
+            size_t end_byte = 0;
+            lfs::python::PythonBufferPoint start_point;
+            lfs::python::PythonBufferPoint end_point;
+        };
+
     } // namespace
 
     struct PythonEditor::Impl {
@@ -472,11 +480,20 @@ namespace lfs::vis::editor {
                 }
 
                 switch (buffer_message->type) {
+                case Zep::BufferMessageType::PreBufferChange:
+                    owner_.recordSyntaxPreEdit(
+                        static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
+                        static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    break;
                 case Zep::BufferMessageType::TextAdded:
                 case Zep::BufferMessageType::TextChanged:
                 case Zep::BufferMessageType::TextDeleted:
                     owner_.text_changed = true;
                     owner_.noteSemanticDirtyRange(
+                        static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
+                        static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    owner_.recordSyntaxPostEdit(
+                        buffer_message->type,
                         static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
                         static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
                     owner_.scheduleSyntaxAnalysis();
@@ -666,6 +683,9 @@ namespace lfs::vis::editor {
             }
             clearCompletionState();
             clearSyntaxDiagnosticMarkers();
+            pending_syntax_pre_edit.reset();
+            pending_syntax_edits.clear();
+            syntax_full_reparse_required = true;
             clearSemanticHighlighting();
             semantic_dirty_range.clear();
             semantic_full_refresh_required = true;
@@ -918,6 +938,64 @@ namespace lfs::vis::editor {
             next_syntax_analysis_at = Clock::now() + delay;
         }
 
+        void recordSyntaxPreEdit(const size_t start, const size_t end) {
+            const std::string text = getText();
+            const size_t clamped_start = std::min(start, text.size());
+            const size_t clamped_end = std::min(std::max(start, end), text.size());
+            pending_syntax_pre_edit = PendingSyntaxPreEdit{
+                .start_byte = clamped_start,
+                .end_byte = clamped_end,
+                .start_point = lfs::python::python_buffer_point_at_byte(text, clamped_start),
+                .end_point = lfs::python::python_buffer_point_at_byte(text, clamped_end),
+            };
+        }
+
+        void recordSyntaxPostEdit(const Zep::BufferMessageType type, const size_t start, const size_t end) {
+            const std::string text = getText();
+            if (!pending_syntax_pre_edit.has_value()) {
+                syntax_full_reparse_required = true;
+                return;
+            }
+
+            lfs::python::PythonBufferEdit edit;
+            edit.start_byte = pending_syntax_pre_edit->start_byte;
+            edit.start_point = pending_syntax_pre_edit->start_point;
+
+            switch (type) {
+            case Zep::BufferMessageType::TextAdded: {
+                const size_t new_end = std::min(std::max(start, end), text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->start_byte;
+                edit.old_end_point = pending_syntax_pre_edit->start_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            case Zep::BufferMessageType::TextDeleted: {
+                const size_t new_end = std::min(start, text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->end_byte;
+                edit.old_end_point = pending_syntax_pre_edit->end_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            case Zep::BufferMessageType::TextChanged: {
+                const size_t new_end = std::min(std::max(start, end), text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->end_byte;
+                edit.old_end_point = pending_syntax_pre_edit->end_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            default:
+                syntax_full_reparse_required = true;
+                pending_syntax_pre_edit.reset();
+                return;
+            }
+
+            pending_syntax_edits.push_back(edit);
+            pending_syntax_pre_edit.reset();
+        }
+
         void clearSyntaxDiagnosticMarkers() {
             if (buffer != nullptr && !syntax_markers.empty()) {
                 buffer->ClearRangeMarkers(syntax_markers);
@@ -965,11 +1043,11 @@ namespace lfs::vis::editor {
         void applySyntaxDiagnostics(const std::string& text) {
             clearSyntaxDiagnosticMarkers();
             if (buffer == nullptr || editor == nullptr ||
-                syntax_analysis.status != lfs::python::PythonBufferStatus::SyntaxError) {
+                syntax_document.analysis().status != lfs::python::PythonBufferStatus::SyntaxError) {
                 return;
             }
 
-            for (const auto& issue : syntax_analysis.issues) {
+            for (const auto& issue : syntax_document.analysis().issues) {
                 const auto range = diagnosticRangeForIssue(issue, text);
                 if (!range.has_value()) {
                     continue;
@@ -996,13 +1074,22 @@ namespace lfs::vis::editor {
             editor->RequestRefresh();
         }
 
-        void updateSyntaxDiagnostics(const std::string& text) {
+        void updateSyntaxDiagnostics(const std::string& text, const CursorLocation& cursor) {
+            current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
             if (!syntax_analysis_pending || Clock::now() < next_syntax_analysis_at) {
                 return;
             }
 
             syntax_analysis_pending = false;
-            syntax_analysis = lfs::python::analyze_python_buffer(text);
+            if (syntax_full_reparse_required || !syntax_document.hasTree()) {
+                syntax_document.reset(text);
+            } else {
+                syntax_document.applyEditsAndReparse(text, pending_syntax_edits);
+            }
+            pending_syntax_edits.clear();
+            pending_syntax_pre_edit.reset();
+            syntax_full_reparse_required = false;
+            current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
             applySyntaxDiagnostics(text);
         }
 
@@ -1991,6 +2078,54 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
+        bool selectEnclosingSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            auto* window = editor->GetActiveWindow();
+            if (window == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (syntax_analysis_pending || !syntax_document.hasTree()) {
+                if (!syntax_full_reparse_required && syntax_document.hasTree()) {
+                    syntax_document.applyEditsAndReparse(text, pending_syntax_edits);
+                } else {
+                    syntax_document.reset(text);
+                }
+                pending_syntax_edits.clear();
+                pending_syntax_pre_edit.reset();
+                syntax_full_reparse_required = false;
+                syntax_analysis_pending = false;
+                current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
+                applySyntaxDiagnostics(text);
+            }
+
+            const auto range = syntax_document.enclosingBlockRange(cursor.byte_index);
+            if (!range.has_value() || range->start_byte >= range->end_byte ||
+                range->end_byte > text.size()) {
+                return false;
+            }
+
+            const auto begin = Zep::GlyphIterator(buffer, static_cast<long>(range->start_byte));
+            const auto end = Zep::GlyphIterator(buffer, static_cast<long>(range->end_byte));
+            if (!begin.Valid() || !end.Valid() || !(begin < end)) {
+                return false;
+            }
+
+            buffer->SetSelection(Zep::GlyphRange(begin, end));
+            window->SetBufferCursor(end);
+            if (auto* mode = buffer->GetMode()) {
+                mode->SwitchMode(Zep::EditorMode::Visual);
+            }
+            editor->RequestRefresh();
+            focusEditor();
+            return true;
+        }
+
         void undo() {
             if (buffer == nullptr) {
                 return;
@@ -2019,8 +2154,11 @@ namespace lfs::vis::editor {
         std::unique_ptr<PythonLspClient> lsp;
         CompletionPopupState completion;
         SemanticHighlightState semantic_highlights;
-        lfs::python::PythonBufferAnalysis syntax_analysis;
+        lfs::python::PythonSyntaxDocument syntax_document;
         std::set<std::shared_ptr<Zep::RangeMarker>> syntax_markers;
+        std::optional<PendingSyntaxPreEdit> pending_syntax_pre_edit;
+        std::vector<lfs::python::PythonBufferEdit> pending_syntax_edits;
+        std::string current_syntax_scope;
 
         bool request_focus = false;
         bool is_focused = false;
@@ -2031,6 +2169,7 @@ namespace lfs::vis::editor {
         bool completion_request_pending = false;
         bool manual_completion_requested = false;
         bool syntax_analysis_pending = true;
+        bool syntax_full_reparse_required = true;
         bool semantic_tokens_request_pending = false;
         std::optional<PythonLspClient::SemanticTokenList> pending_semantic_tokens;
         SemanticDirtyRange semantic_dirty_range;
@@ -2133,7 +2272,7 @@ namespace lfs::vis::editor {
             const std::string updated_text = impl_->getText();
             const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
             impl_->updateLanguageServerState(updated_text, updated_cursor);
-            impl_->updateSyntaxDiagnostics(updated_text);
+            impl_->updateSyntaxDiagnostics(updated_text, updated_cursor);
             impl_->renderCompletionPopup(updated_text, updated_cursor);
 
             if (impl_->completion.visible || impl_->completion.hovered) {
@@ -2175,6 +2314,9 @@ namespace lfs::vis::editor {
                 if (ImGui::MenuItem("Select All", "Ctrl+A")) {
                     impl_->selectAll();
                 }
+                if (ImGui::MenuItem("Select Enclosing Block")) {
+                    impl_->selectEnclosingSyntaxBlock();
+                }
                 ImGui::EndPopup();
             }
 
@@ -2211,18 +2353,49 @@ namespace lfs::vis::editor {
     }
 
     bool PythonEditor::hasSyntaxErrors() const {
-        return impl_->syntax_analysis.status == lfs::python::PythonBufferStatus::SyntaxError;
+        return impl_->syntax_document.analysis().status == lfs::python::PythonBufferStatus::SyntaxError;
     }
 
     bool PythonEditor::syntaxDiagnosticsAvailable() const {
-        return impl_->syntax_analysis.status != lfs::python::PythonBufferStatus::ParserUnavailable;
+        return impl_->syntax_document.analysis().status != lfs::python::PythonBufferStatus::ParserUnavailable;
     }
 
     std::string PythonEditor::syntaxSummary() const {
-        if (!impl_->syntax_analysis.summary.empty()) {
-            return impl_->syntax_analysis.summary;
+        if (!impl_->syntax_document.analysis().summary.empty()) {
+            return impl_->syntax_document.analysis().summary;
         }
         return "Python syntax analysis pending";
+    }
+
+    std::string PythonEditor::syntaxStructureSummary() const {
+        int class_count = 0;
+        int function_count = 0;
+        int import_count = 0;
+        for (const auto& symbol : impl_->syntax_document.symbols()) {
+            switch (symbol.kind) {
+            case lfs::python::PythonSymbolKind::Class:
+                ++class_count;
+                break;
+            case lfs::python::PythonSymbolKind::Function:
+                ++function_count;
+                break;
+            case lfs::python::PythonSymbolKind::Import:
+                ++import_count;
+                break;
+            }
+        }
+
+        return std::format("{} import{}, {} class{}, {} function{}",
+                           import_count,
+                           import_count == 1 ? "" : "s",
+                           class_count,
+                           class_count == 1 ? "" : "es",
+                           function_count,
+                           function_count == 1 ? "" : "s");
+    }
+
+    std::string PythonEditor::currentSyntaxScope() const {
+        return impl_->current_syntax_scope;
     }
 
     void PythonEditor::refreshSyntaxDiagnostics() {
@@ -2230,6 +2403,10 @@ namespace lfs::vis::editor {
         if (impl_->editor != nullptr) {
             impl_->editor->RequestRefresh();
         }
+    }
+
+    bool PythonEditor::selectEnclosingSyntaxBlock() {
+        return impl_->selectEnclosingSyntaxBlock();
     }
 
     void PythonEditor::updateTheme(const Theme& theme) {

@@ -35,7 +35,10 @@ namespace lfs::vis::editor {
         [[nodiscard]] bool hasSyntaxErrors() const;
         [[nodiscard]] bool syntaxDiagnosticsAvailable() const;
         [[nodiscard]] std::string syntaxSummary() const;
+        [[nodiscard]] std::string syntaxStructureSummary() const;
+        [[nodiscard]] std::string currentSyntaxScope() const;
         void refreshSyntaxDiagnostics();
+        bool selectEnclosingSyntaxBlock();
 
         void updateTheme(const Theme& theme);
 

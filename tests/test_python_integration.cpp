@@ -22,6 +22,7 @@
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -497,6 +498,78 @@ TEST_F(PythonIntegrationTest, PythonBufferAnalysisReportsDiagnosticByteRange) {
     EXPECT_LE(issue.start_byte, issue.end_byte);
     EXPECT_LE(issue.end_byte, code.size());
     EXPECT_FALSE(issue.message.empty());
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
+    constexpr std::string_view code =
+        "import os\n"
+        "from pathlib import Path\n"
+        "\n"
+        "class Tool:\n"
+        "    def run(self):\n"
+        "        pass\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(code));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+
+    int imports = 0;
+    int classes = 0;
+    int functions = 0;
+    for (const auto& symbol : document.symbols()) {
+        switch (symbol.kind) {
+        case lfs::python::PythonSymbolKind::Import:
+            ++imports;
+            break;
+        case lfs::python::PythonSymbolKind::Class:
+            ++classes;
+            EXPECT_EQ(symbol.name, "Tool");
+            break;
+        case lfs::python::PythonSymbolKind::Function:
+            ++functions;
+            EXPECT_EQ(symbol.name, "run");
+            break;
+        }
+    }
+
+    EXPECT_EQ(imports, 2);
+    EXPECT_EQ(classes, 1);
+    EXPECT_EQ(functions, 1);
+    EXPECT_EQ(document.scopeAt(code.find("pass")), "Tool.run");
+
+    const auto block = document.enclosingBlockRange(code.find("pass"));
+    ASSERT_TRUE(block.has_value());
+    EXPECT_NE(code.substr(block->start_byte, block->end_byte - block->start_byte).find("def run"),
+              std::string_view::npos);
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentAppliesIncrementalEdits) {
+    constexpr std::string_view original =
+        "def run():\n"
+        "    pass\n";
+    std::string updated(original);
+    const size_t replace_start = updated.find("pass");
+    ASSERT_NE(replace_start, std::string::npos);
+    constexpr std::string_view replacement = "if True pass";
+    updated.replace(replace_start, std::string_view("pass").size(), replacement);
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(original));
+
+    const lfs::python::PythonBufferEdit edit{
+        .start_byte = replace_start,
+        .old_end_byte = replace_start + std::string_view("pass").size(),
+        .new_end_byte = replace_start + replacement.size(),
+        .start_point = lfs::python::python_buffer_point_at_byte(original, replace_start),
+        .old_end_point =
+            lfs::python::python_buffer_point_at_byte(original, replace_start + std::string_view("pass").size()),
+        .new_end_point = lfs::python::python_buffer_point_at_byte(updated, replace_start + replacement.size()),
+    };
+    const std::array edits{edit};
+
+    ASSERT_TRUE(document.applyEditsAndReparse(updated, edits));
+    EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
+    ASSERT_FALSE(document.analysis().issues.empty());
 }
 
 TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {

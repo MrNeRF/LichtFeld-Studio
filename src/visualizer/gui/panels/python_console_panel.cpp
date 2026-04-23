@@ -150,8 +150,17 @@ namespace {
             ImGui::TextColored(t.palette.text_dim, "Syntax");
         }
 
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", summary.c_str());
+        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+            ImGui::TextUnformatted(summary.c_str());
+            const std::string structure = editor->syntaxStructureSummary();
+            if (!structure.empty()) {
+                ImGui::TextColored(t.palette.text_dim, "%s", structure.c_str());
+            }
+            const std::string scope = editor->currentSyntaxScope();
+            if (!scope.empty()) {
+                ImGui::TextColored(t.palette.text_dim, "Scope: %s", scope.c_str());
+            }
+            ImGui::EndTooltip();
         }
     }
 
