@@ -20,8 +20,9 @@ Every RmlUI document receives shared component styles first:
 
 1. `components.rcss`
 2. `components.theme.rcss`
-3. the document's base `.rcss`
-4. the document's sibling `.theme.rcss`
+3. linked `text/rcss` files from the document, in document order
+4. the document's sibling `.rcss` if it was not already linked
+5. the document's sibling `.theme.rcss`
 
 Documents hosted by `RmlPanelHost` also receive `panel_host.theme.rcss` before the sibling theme file. The host file is intentionally small and should stay generic; panel-specific selectors belong beside the panel.
 

@@ -37,6 +37,7 @@
 #include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
 #include <string_view>
+#include <unordered_set>
 
 namespace lfs::vis::gui {
 
@@ -187,6 +188,40 @@ namespace lfs::vis::gui {
             return std::max({radii[0], radii[1], radii[2], radii[3]});
         }
 
+        std::filesystem::path resolveDocumentPath(const std::string& rml_path) {
+            const auto requested_path = std::filesystem::path(rml_path);
+            return requested_path.is_absolute() ? requested_path : lfs::vis::getAssetPath(rml_path);
+        }
+
+        bool isThemeProvidedStaticStylesheet(const std::filesystem::path& rcss_path) {
+            const auto filename = rcss_path.filename().string();
+            return filename == "components.rcss" || filename == "font_fallback.rcss";
+        }
+
+        void appendBaseRCSS(std::string& out,
+                            std::unordered_set<std::string>& loaded_paths,
+                            const std::filesystem::path& rcss_path) {
+            if (isThemeProvidedStaticStylesheet(rcss_path))
+                return;
+
+            const auto normalized_path = rcss_path.lexically_normal();
+            std::error_code ec;
+            if (!std::filesystem::exists(normalized_path, ec))
+                return;
+
+            const std::string key = normalized_path.generic_string();
+            if (!loaded_paths.insert(key).second)
+                return;
+
+            const std::string rcss = rml_theme::loadBaseRCSS(normalized_path.string());
+            if (rcss.empty())
+                return;
+
+            if (!out.empty())
+                out += "\n";
+            out += rcss;
+        }
+
     } // namespace
 
     RmlPanelHost::RmlPanelHost(RmlUIManager* manager, std::string context_name,
@@ -219,16 +254,19 @@ namespace lfs::vis::gui {
         has_theme_signature_ = true;
 
         if (!base_rcss_loaded_) {
-            auto rcss_name = std::filesystem::path(rml_path_).replace_extension(".rcss").string();
             try {
-                const auto requested_path = std::filesystem::path(rcss_name);
-                const auto resolved_path = requested_path.is_absolute()
-                                               ? requested_path
-                                               : lfs::vis::getAssetPath(rcss_name);
-                if (std::filesystem::exists(resolved_path))
-                    base_rcss_ = rml_theme::loadBaseRCSS(resolved_path.string());
+                const auto document_path = resolveDocumentPath(rml_path_);
+                std::unordered_set<std::string> loaded_rcss;
+                for (const auto& linked_rcss :
+                     rml_documents::loadLinkedStylesheetPaths(document_path)) {
+                    appendBaseRCSS(base_rcss_, loaded_rcss, linked_rcss);
+                }
+
+                auto sibling_rcss = document_path;
+                sibling_rcss.replace_extension(".rcss");
+                appendBaseRCSS(base_rcss_, loaded_rcss, sibling_rcss);
             } catch (const std::exception& e) {
-                LOG_INFO("RCSS load failed for '{}': {}", rcss_name, e.what());
+                LOG_INFO("RCSS load failed for '{}': {}", rml_path_, e.what());
             }
             if (!inline_rcss_.empty()) {
                 if (!base_rcss_.empty())

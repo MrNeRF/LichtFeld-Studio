@@ -247,10 +247,10 @@ class PluginWatcher:
             lf.register_class(panel_class)
 
     def _refresh_builtin_module(self, module_name: str, module, lf, panel_states: dict[str, bool]):
+        after_reload = getattr(module, "__lfs_after_reload__", None)
         panel_classes = list(getattr(module, "__lfs_panel_classes__", []))
         if panel_classes:
             self._register_panel_classes(module, lf, panel_classes)
-            after_reload = getattr(module, "__lfs_after_reload__", None)
             if after_reload is not None:
                 after_reload(lf)
             self._restore_panel_states(lf, panel_states)
@@ -260,6 +260,8 @@ class PluginWatcher:
             module.register()
 
         self._refresh_builtin_menus(module, lf)
+        if after_reload is not None:
+            after_reload(lf)
 
     def _unregister_menu_classes_for_module(self, module_name: str):
         try:
