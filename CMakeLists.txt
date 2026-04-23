@@ -712,13 +712,15 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Copying application assets"
 )
 
-# Copy locale files
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+# Copy locale files (named target so it can be run without rebuilding the exe)
+add_custom_target(copy_locale_files
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/locales"
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales"
         "${RESOURCE_DIR}/locales"
-    COMMENT "Copying locale files"
+    COMMENT "Syncing locale files"
 )
+add_dependencies(${PROJECT_NAME} copy_locale_files)
 
 # OpenUSD runtime resources (schema/file-format plugin metadata).
 # On Windows: copy to <exe>/usd/ so that relative LibraryPaths resolve to the

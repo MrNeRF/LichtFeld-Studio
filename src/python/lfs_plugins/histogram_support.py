@@ -117,7 +117,14 @@ METRICS = (
         "histogram.metric.distance.label",
         "Distance",
         "histogram.metric.distance.description",
-        "Distance from the current scene center.",
+        "Distance from the current splat center.",
+    ),
+    HistogramMetric(
+        "world_distance",
+        "histogram.metric.world_distance.label",
+        "World Distance",
+        "histogram.metric.world_distance.description",
+        "Distance from the world origin.",
     ),
 )
 
