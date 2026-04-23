@@ -257,11 +257,18 @@ namespace {
             for (std::size_t i = 0; i < folds.size(); ++i) {
                 const auto& fold = folds[i];
                 if (ImGui::Selectable(fold.label.c_str(), false)) {
-                    editor->jumpToSyntaxFold(i);
+                    editor->toggleSyntaxFold(i);
                 }
                 if (ImGui::IsItemHovered() && !fold.detail.empty()) {
                     ImGui::SetTooltip("%s", fold.detail.c_str());
                 }
+            }
+            ImGui::Separator();
+            if (ImGui::Selectable("Fold all")) {
+                editor->foldAllSyntaxBlocks();
+            }
+            if (ImGui::Selectable("Unfold all")) {
+                editor->unfoldAllSyntaxBlocks();
             }
             ImGui::EndCombo();
         }
@@ -271,7 +278,7 @@ namespace {
         }
 
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Jump to foldable Python block");
+            ImGui::SetTooltip("Fold or unfold Python blocks");
         }
     }
 

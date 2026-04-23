@@ -29,6 +29,7 @@ namespace lfs::vis::editor {
         std::size_t byte_offset = 0;
         std::size_t line = 0;
         std::size_t end_line = 0;
+        bool collapsed = false;
     };
 
     class PythonEditor {
@@ -63,11 +64,15 @@ namespace lfs::vis::editor {
         bool selectEnclosingSyntaxBlock();
         bool expandSyntaxSelection();
         bool selectCurrentSyntaxFold();
+        bool toggleCurrentSyntaxFold();
+        bool foldAllSyntaxBlocks();
+        bool unfoldAllSyntaxBlocks();
         bool jumpToParentSyntaxBlock();
         bool jumpToChildSyntaxBlock();
         bool jumpToSyntaxSymbol(std::size_t index);
         bool jumpToSyntaxBreadcrumb(std::size_t index);
         bool jumpToSyntaxFold(std::size_t index);
+        bool toggleSyntaxFold(std::size_t index);
 
         void updateTheme(const Theme& theme);
 
