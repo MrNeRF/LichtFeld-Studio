@@ -63,6 +63,41 @@ namespace lfs::vis::gui {
         status_region_ = nullptr;
     }
 
+    void RmlShellFrame::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        menu_region_ = nullptr;
+        right_panel_region_ = nullptr;
+        status_region_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/shell.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlShellFrame: failed to reload shell.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlShellFrame: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        menu_region_ = document_->GetElementById("menu-region");
+        right_panel_region_ = document_->GetElementById("right-panel-region");
+        status_region_ = document_->GetElementById("status-region");
+        updateTheme();
+    }
+
     std::string RmlShellFrame::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
 

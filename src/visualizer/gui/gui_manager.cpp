@@ -56,6 +56,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdlib>
 #include <format>
 #include <fstream>
@@ -64,6 +65,7 @@
 #include <imgui_internal.h>
 #include <iterator>
 #include <string_view>
+#include <unordered_set>
 #include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
@@ -71,12 +73,35 @@ namespace lfs::vis::gui {
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
 
+        enum class DevResourceKind {
+            None,
+            Rml,
+            Locale
+        };
+
+        [[nodiscard]] DevResourceKind devResourceKindForPath(const std::filesystem::path& path) {
+            std::string ext = lfs::core::path_to_utf8(path.extension());
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+
+            if (ext == ".json")
+                return DevResourceKind::Locale;
+            if (ext == ".rml" || ext == ".rcss")
+                return DevResourceKind::Rml;
+            return DevResourceKind::None;
+        }
+
 #ifndef LFS_BUILD_PORTABLE
-        [[nodiscard]] bool envFlagEnabled(const char* name) {
+        [[nodiscard]] bool envFlagEnabled(const char* name, const bool default_value) {
             const char* value = std::getenv(name);
             if (!value || !*value)
-                return false;
+                return default_value;
             return std::string_view(value) != "0";
+        }
+
+        [[nodiscard]] bool envFlagEnabled(const char* name) {
+            return envFlagEnabled(name, false);
         }
 #endif
 
@@ -755,7 +780,19 @@ namespace lfs::vis::gui {
 
         // Initialize localization system
         auto& loc = lfs::event::LocalizationManager::getInstance();
-        const std::string locale_path = lfs::core::path_to_utf8(lfs::core::getLocalesDir());
+        std::filesystem::path locale_dir = lfs::core::getLocalesDir();
+#ifdef LFS_DEV_LOCALE_SOURCE_DIR
+        {
+            const auto source_locale_dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
+            if (std::filesystem::exists(source_locale_dir) &&
+                std::filesystem::is_directory(source_locale_dir)) {
+                locale_dir = source_locale_dir;
+                LOG_INFO("Localization dev source enabled: {}",
+                         lfs::core::path_to_utf8(locale_dir));
+            }
+        }
+#endif
+        const std::string locale_path = lfs::core::path_to_utf8(locale_dir);
         if (!loc.initialize(locale_path)) {
             LOG_WARN("Failed to initialize localization system, using default strings");
         } else {
@@ -811,6 +848,7 @@ namespace lfs::vis::gui {
             }
         });
         lfs::python::set_rml_manager(&rmlui_manager_);
+        initDevResourceHotReload();
 
         startup_overlay_.init(&rmlui_manager_);
 #ifdef LFS_BUILD_PORTABLE
@@ -958,6 +996,215 @@ namespace lfs::vis::gui {
         lfs::python::set_rml_panel_host_ops(ops);
 
         registerNativePanels();
+    }
+
+    void GuiManager::initDevResourceHotReload() {
+        dev_resource_watch_ = {};
+
+#if !defined(LFS_BUILD_PORTABLE) && (defined(LFS_DEV_RMLUI_SOURCE_DIR) || defined(LFS_DEV_LOCALE_SOURCE_DIR))
+        if (!envFlagEnabled("LFS_RESOURCE_HOT_RELOAD", true))
+            return;
+
+#ifdef LFS_DEV_RMLUI_SOURCE_DIR
+        {
+            const auto dir = lfs::core::utf8_to_path(LFS_DEV_RMLUI_SOURCE_DIR);
+            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+                dev_resource_watch_.rml_dir = dir;
+        }
+#endif
+#ifdef LFS_DEV_LOCALE_SOURCE_DIR
+        {
+            const auto dir = lfs::core::utf8_to_path(LFS_DEV_LOCALE_SOURCE_DIR);
+            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir))
+                dev_resource_watch_.locale_dir = dir;
+        }
+#endif
+
+        dev_resource_watch_.enabled =
+            !dev_resource_watch_.rml_dir.empty() || !dev_resource_watch_.locale_dir.empty();
+        if (!dev_resource_watch_.enabled)
+            return;
+
+        scanDevResourceFiles(false);
+        dev_resource_watch_.next_scan = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        LOG_INFO("Resource hot reload enabled (RmlUI: '{}', locales: '{}')",
+                 dev_resource_watch_.rml_dir.empty() ? std::string("<disabled>")
+                                                     : lfs::core::path_to_utf8(dev_resource_watch_.rml_dir),
+                 dev_resource_watch_.locale_dir.empty() ? std::string("<disabled>")
+                                                        : lfs::core::path_to_utf8(dev_resource_watch_.locale_dir));
+#endif
+    }
+
+    std::pair<bool, bool> GuiManager::scanDevResourceFiles(const bool detect_changes) {
+        std::unordered_map<std::string, std::filesystem::file_time_type> next_times;
+        bool rml_changed = false;
+        bool locale_changed = false;
+
+        const auto scan_dir =
+            [&](const std::filesystem::path& dir, const bool locale_dir) {
+                if (dir.empty())
+                    return;
+
+                std::error_code ec;
+                if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec))
+                    return;
+
+                std::filesystem::recursive_directory_iterator it(
+                    dir, std::filesystem::directory_options::skip_permission_denied, ec);
+                const std::filesystem::recursive_directory_iterator end;
+                for (; !ec && it != end; it.increment(ec)) {
+                    std::error_code entry_ec;
+                    if (!it->is_regular_file(entry_ec) || entry_ec)
+                        continue;
+
+                    const auto kind = devResourceKindForPath(it->path());
+                    const bool watched = locale_dir
+                                             ? kind == DevResourceKind::Locale
+                                             : kind == DevResourceKind::Rml;
+                    if (!watched)
+                        continue;
+
+                    const auto mtime = std::filesystem::last_write_time(it->path(), entry_ec);
+                    if (entry_ec)
+                        continue;
+
+                    const std::string key = lfs::core::path_to_utf8(it->path().lexically_normal());
+                    next_times[key] = mtime;
+
+                    if (!detect_changes)
+                        continue;
+
+                    const auto old = dev_resource_watch_.file_times.find(key);
+                    if (old == dev_resource_watch_.file_times.end() || old->second != mtime) {
+                        if (locale_dir)
+                            locale_changed = true;
+                        else
+                            rml_changed = true;
+                    }
+                }
+            };
+
+        scan_dir(dev_resource_watch_.rml_dir, false);
+        scan_dir(dev_resource_watch_.locale_dir, true);
+
+        if (detect_changes) {
+            for (const auto& [key, unused] : dev_resource_watch_.file_times) {
+                (void)unused;
+                if (next_times.contains(key))
+                    continue;
+
+                const auto kind = devResourceKindForPath(lfs::core::utf8_to_path(key));
+                if (kind == DevResourceKind::Locale)
+                    locale_changed = true;
+                else if (kind == DevResourceKind::Rml)
+                    rml_changed = true;
+            }
+        }
+
+        dev_resource_watch_.file_times = std::move(next_times);
+        return {rml_changed, locale_changed};
+    }
+
+    bool GuiManager::reloadLocalizationResources() {
+        if (dev_resource_watch_.locale_dir.empty())
+            return false;
+
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        const std::string current_language = loc.getCurrentLanguage();
+        const std::string locale_path = lfs::core::path_to_utf8(dev_resource_watch_.locale_dir);
+        if (!loc.initialize(locale_path)) {
+            LOG_WARN("Failed to reload localization resources from {}", locale_path);
+            return false;
+        }
+
+        if (!current_language.empty() && current_language != loc.getCurrentLanguage()) {
+            const auto available = loc.getAvailableLanguages();
+            if (std::find(available.begin(), available.end(), current_language) != available.end())
+                loc.setLanguage(current_language);
+        }
+
+        return true;
+    }
+
+    void GuiManager::reloadRmlResources() {
+        rml_theme::invalidateBaseRcssCache();
+        rml_theme::invalidateThemeMediaCache();
+
+        startup_overlay_.reloadResources();
+        rml_shell_frame_.reloadResources();
+        rml_right_panel_.reloadResources();
+        rml_viewport_overlay_.reloadResources();
+        rml_menu_bar_.reloadResources();
+        rml_status_bar_.reloadResources();
+        sequencer_ui_.reloadRmlResources();
+        PanelRegistry::instance().reload_rml_resources();
+
+        if (rml_modal_overlay_)
+            rml_modal_overlay_->reloadResources();
+        if (global_context_menu_)
+            global_context_menu_->reloadResources();
+
+        if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr)
+            rendering->markDirty(DirtyFlag::OVERLAY);
+    }
+
+    bool GuiManager::shouldDeferDevResourceHotReload() const {
+        if (ImGui::GetCurrentContext()) {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (io.WantTextInput || ImGui::IsAnyItemActive() ||
+                ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+                return true;
+            }
+        }
+
+        if (!ui_hidden_ && rml_menu_bar_.isOpen())
+            return true;
+        if (global_context_menu_ && global_context_menu_->isOpen())
+            return true;
+        if (rml_modal_overlay_ && rml_modal_overlay_->isOpen())
+            return true;
+
+        return false;
+    }
+
+    void GuiManager::pollDevResourceHotReload() {
+        if (!dev_resource_watch_.enabled)
+            return;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (dev_resource_watch_.next_scan != std::chrono::steady_clock::time_point{} &&
+            now < dev_resource_watch_.next_scan) {
+            return;
+        }
+        dev_resource_watch_.next_scan = now + std::chrono::seconds(1);
+
+        const auto [rml_changed, locale_changed] = scanDevResourceFiles(true);
+        dev_resource_watch_.pending_rml_reload |= rml_changed;
+        dev_resource_watch_.pending_locale_reload |= locale_changed;
+
+        if (!dev_resource_watch_.pending_rml_reload &&
+            !dev_resource_watch_.pending_locale_reload) {
+            return;
+        }
+
+        if (shouldDeferDevResourceHotReload())
+            return;
+
+        const bool reload_rml = dev_resource_watch_.pending_rml_reload;
+        const bool reload_locale = dev_resource_watch_.pending_locale_reload;
+        dev_resource_watch_.pending_rml_reload = false;
+        dev_resource_watch_.pending_locale_reload = false;
+
+        if (reload_locale)
+            reloadLocalizationResources();
+        if (reload_rml || reload_locale)
+            reloadRmlResources();
+
+        LOG_INFO("Hot-reloaded dev resources{}{}",
+                 reload_rml ? " (RmlUI)" : "",
+                 reload_locale ? " (locales)" : "");
     }
 
     void GuiManager::shutdown() {
@@ -1137,6 +1384,10 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = ImGui::GetIO().WantCaptureKeyboard;
             focus.want_text_input = ImGui::GetIO().WantTextInput;
         }
+
+        // Run queued Python/UI mutations before panel registries take draw snapshots.
+        python::flush_gl_callbacks();
+
         rmlui_manager_.beginFrameCursorTracking();
         const bool modal_overlay_open = rml_modal_overlay_->isOpen();
         const bool context_menu_open = global_context_menu_ && global_context_menu_->isOpen();
@@ -1163,6 +1414,8 @@ namespace lfs::vis::gui {
 
         // Poll UV package manager for async operations
         python::PackageManager::instance().poll();
+
+        pollDevResourceHotReload();
 
         // Hot-reload themes (check once per second)
         {

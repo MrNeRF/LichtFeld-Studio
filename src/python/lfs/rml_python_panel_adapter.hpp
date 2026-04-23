@@ -45,6 +45,7 @@ namespace lfs::vis::gui {
         bool wantsKeyboard() const override;
         bool needsAnimationFrame() const override;
         bool wantsExternalFloatingShadow() const override { return !foreground_; }
+        void reloadRmlResources() override;
         void setForeground(bool fg);
 
     private:

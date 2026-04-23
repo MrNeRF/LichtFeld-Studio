@@ -10,6 +10,9 @@ import lichtfeld as lf
 from .http import urlopen
 from .types import Panel
 
+__lfs_panel_classes__ = ["GettingStartedPanel"]
+__lfs_panel_ids__ = ["lfs.getting_started"]
+
 _CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "lichtfeld-studio", "thumbnails")
 _RML_PATH_SAFE_CHARS = "/:._-~"
 

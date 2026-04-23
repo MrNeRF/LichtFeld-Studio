@@ -14,6 +14,9 @@ from .rml_keys import KI_ESCAPE, KI_RETURN
 _dataset_import_panel = None
 _resume_checkpoint_panel = None
 
+__lfs_panel_classes__ = ["DatasetImportPanel", "ResumeCheckpointPanel"]
+__lfs_panel_ids__ = ["lfs.dataset_import", "lfs.resume_checkpoint"]
+
 
 def open_dataset_import_panel(dataset_path: str) -> bool:
     """Open the retained dataset import dialog for the given dataset path."""

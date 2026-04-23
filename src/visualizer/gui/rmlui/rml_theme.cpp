@@ -66,9 +66,25 @@ namespace lfs::vis::gui::rml_theme {
         return {};
     }
 
+    namespace {
+        std::string components_rcss_cache;
+        bool components_rcss_valid = false;
+        std::mutex components_rcss_mutex;
+    } // namespace
+
     const std::string& getComponentsRCSS() {
-        static std::string cached = loadBaseRCSS("rmlui/components.rcss");
-        return cached;
+        std::lock_guard lock(components_rcss_mutex);
+        if (!components_rcss_valid) {
+            components_rcss_cache = loadBaseRCSS("rmlui/components.rcss");
+            components_rcss_valid = true;
+        }
+        return components_rcss_cache;
+    }
+
+    void invalidateBaseRcssCache() {
+        std::lock_guard lock(components_rcss_mutex);
+        components_rcss_cache.clear();
+        components_rcss_valid = false;
     }
 
     namespace {

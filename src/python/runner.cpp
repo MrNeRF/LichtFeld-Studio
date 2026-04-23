@@ -196,6 +196,93 @@ _add_dll_dirs()
             return default_value;
         }
 
+        bool prepend_sys_path_once(PyObject* const sys_path,
+                                   const std::filesystem::path& path,
+                                   const char* label) {
+            if (!sys_path || path.empty()) {
+                return false;
+            }
+
+            const auto path_utf8 = lfs::core::path_to_utf8(path);
+            PyObject* const py_path = PyUnicode_FromString(path_utf8.c_str());
+            if (!py_path) {
+                LOG_WARN("Failed to create Python path string for {}: {}", label, path_utf8);
+                PyErr_Clear();
+                return false;
+            }
+
+            const int contains = PySequence_Contains(sys_path, py_path);
+            if (contains < 0) {
+                LOG_WARN("Failed to inspect sys.path while adding {}: {}", label, path_utf8);
+                PyErr_Clear();
+                Py_DECREF(py_path);
+                return false;
+            }
+
+            if (contains == 0) {
+                if (PyList_Insert(sys_path, 0, py_path) != 0) {
+                    LOG_WARN("Failed to prepend {} to sys.path: {}", label, path_utf8);
+                    PyErr_Clear();
+                    Py_DECREF(py_path);
+                    return false;
+                }
+                LOG_INFO("Added {} to Python path: {}", label, path_utf8);
+            }
+
+            Py_DECREF(py_path);
+            return true;
+        }
+
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+        void prepend_dev_python_source_path(PyObject* const sys_path) {
+            const auto source_dir = lfs::core::utf8_to_path(LFS_DEV_PYTHON_SOURCE_DIR);
+            std::error_code ec;
+            if (!std::filesystem::exists(source_dir / "lfs_plugins", ec)) {
+                LOG_WARN("Python dev source path is unavailable: {}",
+                         lfs::core::path_to_utf8(source_dir));
+                return;
+            }
+
+            prepend_sys_path_once(sys_path, source_dir, "dev source Python dir");
+        }
+
+        void start_dev_python_watcher(PyObject* const lfs_plugins) {
+            if (!env_flag_enabled("LFS_PYTHON_HOT_RELOAD", true)) {
+                LOG_INFO("Python dev hot reload disabled by LFS_PYTHON_HOT_RELOAD");
+                return;
+            }
+            if (!lfs_plugins) {
+                return;
+            }
+
+            PyObject* const manager_cls = PyObject_GetAttrString(lfs_plugins, "PluginManager");
+            if (!manager_cls) {
+                PyErr_Print();
+                LOG_WARN("Python dev hot reload: lfs_plugins.PluginManager not found");
+                return;
+            }
+
+            PyObject* const manager = PyObject_CallMethod(manager_cls, "instance", nullptr);
+            Py_DECREF(manager_cls);
+            if (!manager) {
+                PyErr_Print();
+                LOG_WARN("Python dev hot reload: failed to get PluginManager instance");
+                return;
+            }
+
+            PyObject* const result = PyObject_CallMethod(manager, "start_watcher", nullptr);
+            Py_DECREF(manager);
+            if (!result) {
+                PyErr_Print();
+                LOG_WARN("Python dev hot reload: failed to start watcher");
+                return;
+            }
+
+            Py_DECREF(result);
+            LOG_INFO("Python dev hot reload watcher started");
+        }
+#endif
+
         std::string consume_python_error_detailed() {
             PyObject* type = nullptr;
             PyObject* value = nullptr;
@@ -306,20 +393,40 @@ _add_dll_dirs()
             }
             LOG_INFO("lichtfeld module imported successfully");
 
-            PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
-            if (lfs_plugins) {
-                PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
-                if (register_fn) {
-                    PyObject* result = PyObject_CallNoArgs(register_fn);
-                    if (!result) {
-                        PyErr_Print();
-                        LOG_ERROR("Failed to register builtin panels");
-                    } else {
-                        Py_DECREF(result);
+            if (lfs::python::get_rml_manager()) {
+                PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
+                if (!lfs_plugins) {
+                    PyErr_Print();
+                } else {
+                    bool builtin_panels_registered = false;
+                    PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
+                    if (register_fn) {
+                        PyObject* result = PyObject_CallNoArgs(register_fn);
+                        if (!result) {
+                            PyErr_Print();
+                            LOG_ERROR("Failed to register builtin panels");
+                        } else {
+                            const int registered = PyObject_IsTrue(result);
+                            if (registered < 0) {
+                                PyErr_Print();
+                            } else {
+                                builtin_panels_registered = registered != 0;
+                            }
+                            Py_DECREF(result);
+                        }
+                        Py_DECREF(register_fn);
                     }
-                    Py_DECREF(register_fn);
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+                    if (builtin_panels_registered) {
+                        start_dev_python_watcher(lfs_plugins);
+                    } else {
+                        LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
+                    }
+#endif
+                    Py_DECREF(lfs_plugins);
                 }
-                Py_DECREF(lfs_plugins);
+            } else {
+                LOG_INFO("Builtin Python plugins skipped because the retained UI runtime is unavailable");
             }
 
             // Initialize signal bridge after lfs_plugins.ui.state is available
@@ -543,24 +650,20 @@ _add_dll_dirs()
 
             PyObject* sys_path = PySys_GetObject("path");
             if (sys_path) {
-                const auto user_packages_utf8 = lfs::core::path_to_utf8(user_packages);
-                PyObject* py_path = PyUnicode_FromString(user_packages_utf8.c_str());
-                PyList_Insert(sys_path, 0, py_path);
-                Py_DECREF(py_path);
-                LOG_INFO("Added user packages dir to Python path: {}", user_packages_utf8);
+                prepend_sys_path_once(sys_path, user_packages, "user packages dir");
 
                 const auto python_module_dir = lfs::core::getPythonModuleDir();
                 if (!python_module_dir.empty()) {
-                    const auto python_module_dir_utf8 = lfs::core::path_to_utf8(python_module_dir);
-                    PyObject* const py_mod_path = PyUnicode_FromString(python_module_dir_utf8.c_str());
-                    PyList_Insert(sys_path, 0, py_mod_path);
-                    Py_DECREF(py_mod_path);
-                    LOG_INFO("Added Python module dir to path: {}", python_module_dir_utf8);
+                    prepend_sys_path_once(sys_path, python_module_dir, "Python module dir");
                 } else {
                     const auto exe_dir_utf8 = lfs::core::path_to_utf8(lfs::core::getExecutableDir());
                     LOG_WARN("Python module 'lichtfeld' not found. Expected a lichtfeld*.so/.pyd in: {}/src/python, {}",
                              exe_dir_utf8, exe_dir_utf8);
                 }
+
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+                prepend_dev_python_source_path(sys_path);
+#endif
             }
 
             {

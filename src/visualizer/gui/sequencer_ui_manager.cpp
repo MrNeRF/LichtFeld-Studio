@@ -69,6 +69,14 @@ namespace lfs::vis::gui {
         film_strip_.destroyGLResources();
     }
 
+    void SequencerUIManager::reloadRmlResources() {
+        if (panel_)
+            panel_->reloadResources();
+        if (overlay_)
+            overlay_->reloadResources();
+        pip_needs_update_ = true;
+    }
+
     void SequencerUIManager::setSequencerEnabled(const bool enabled) {
         if (enabled)
             return;

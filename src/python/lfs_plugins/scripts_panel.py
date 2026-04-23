@@ -7,6 +7,9 @@ from pathlib import Path
 import lichtfeld as lf
 from .types import Panel
 
+__lfs_panel_classes__ = ["ScriptsPanel"]
+__lfs_panel_ids__ = ["lfs.scripts"]
+
 
 class ScriptsPanel(Panel):
     """Floating window for managing loaded Python scripts."""

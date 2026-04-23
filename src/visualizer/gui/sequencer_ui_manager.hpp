@@ -41,6 +41,7 @@ namespace lfs::vis {
                         const PanelInputState& panel_input);
             void compositeOverlays(int screen_w, int screen_h);
             void setSequencerEnabled(bool enabled);
+            void reloadRmlResources();
 
             void destroyGLResources();
 

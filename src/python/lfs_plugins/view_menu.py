@@ -5,6 +5,8 @@
 import lichtfeld as lf
 from .layouts.menus import register_menu, menu_submenu, menu_toggle
 
+__lfs_menu_classes__ = ["ViewMenu"]
+
 
 @register_menu
 class ViewMenu:

@@ -246,6 +246,41 @@ namespace lfs::vis::gui {
         document_ = nullptr;
     }
 
+    void RmlStatusBar::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        model_dirty_ = true;
+        animation_active_ = true;
+        last_render_w_ = 0;
+        last_render_h_ = 0;
+        last_document_h_ = 0;
+        next_refresh_at_ = {};
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/statusbar.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlStatusBar: failed to reload statusbar.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlStatusBar: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        updateTheme();
+    }
+
     std::string RmlStatusBar::generateThemeRCSS(const lfs::vis::Theme& t) const {
         const auto& p = t.palette;
 

@@ -14,6 +14,9 @@ from .rml_keys import KI_A, KI_DELETE, KI_I
 from .types import Panel
 from .ui.state import AppState
 
+__lfs_panel_classes__ = ["HistogramPanel"]
+__lfs_panel_ids__ = ["lfs.histogram"]
+
 
 DEFAULT_HISTOGRAM_BIN_COUNT = 56
 MIN_HISTOGRAM_BIN_COUNT = 16

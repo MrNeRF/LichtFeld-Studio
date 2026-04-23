@@ -89,6 +89,7 @@ namespace lfs::vis::gui {
         void draw(int screen_w, int screen_h);
         void updateLabels(const std::vector<std::string>& labels,
                           const std::vector<std::string>& idnames);
+        void reloadResources();
         void processInput(const PanelInputState& input);
         void suspend();
         bool wantsInput() const { return wants_input_; }

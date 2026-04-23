@@ -76,6 +76,48 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlModalOverlay::reloadResources() {
+        if (!rml_context_ || active_.has_value())
+            return;
+
+        text_input_revert_.clear();
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        el_backdrop_ = nullptr;
+        el_dialog_ = nullptr;
+        el_title_ = nullptr;
+        el_form_ = nullptr;
+        el_content_ = nullptr;
+        el_input_row_ = nullptr;
+        el_input_ = nullptr;
+        el_button_row_ = nullptr;
+        elements_cached_ = false;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        width_ = 0;
+        height_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/modal_overlay.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlModalOverlay: failed to reload modal_overlay.rml");
+                return;
+            }
+            document_->Show();
+            cacheElements();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlModalOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        syncTheme();
+    }
+
     void RmlModalOverlay::cacheElements() {
         assert(document_);
         el_backdrop_ = document_->GetElementById("modal-backdrop");

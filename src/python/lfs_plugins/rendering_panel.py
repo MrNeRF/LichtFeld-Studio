@@ -12,6 +12,9 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .transform_controls import TransformControlsController
 from .types import Panel
 
+__lfs_panel_classes__ = ["RenderingPanel"]
+__lfs_panel_ids__ = ["lfs.rendering"]
+
 
 def tr(key):
     result = lf.ui.tr(key)

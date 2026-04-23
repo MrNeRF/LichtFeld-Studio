@@ -83,6 +83,7 @@ namespace lfs::vis::gui {
         void render(int screen_w, int screen_h);
         void compositeToScreen(int screen_w, int screen_h) const;
         void destroyGLResources();
+        void reloadResources();
 
         [[nodiscard]] bool isContextMenuOpen() const { return context_menu_open_; }
         [[nodiscard]] bool isPopupOpen() const { return time_edit_active_ || focal_edit_active_; }

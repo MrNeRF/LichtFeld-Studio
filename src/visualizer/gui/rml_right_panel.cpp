@@ -116,6 +116,64 @@ namespace lfs::vis::gui {
         can_scroll_tabs_right_ = false;
     }
 
+    void RmlRightPanel::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        resize_handle_el_ = nullptr;
+        left_border_el_ = nullptr;
+        splitter_el_ = nullptr;
+        tab_bar_el_ = nullptr;
+        tab_strip_viewport_el_ = nullptr;
+        tab_separator_el_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        wants_input_ = false;
+        wants_keyboard_ = false;
+        splitter_dragging_ = false;
+        resize_dragging_ = false;
+        render_needed_ = true;
+        input_dirty_ = true;
+        last_fbo_w_ = 0;
+        last_fbo_h_ = 0;
+        last_scene_h_ = -1.0f;
+        last_splitter_h_ = -1.0f;
+        last_over_interactive_ = false;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlRightPanel: failed to reload right_panel.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlRightPanel: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        resize_handle_el_ = document_->GetElementById("resize-handle");
+        left_border_el_ = document_->GetElementById("left-border");
+        splitter_el_ = document_->GetElementById("splitter");
+        tab_bar_el_ = document_->GetElementById("tab-bar");
+        tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
+        tab_separator_el_ = document_->GetElementById("tab-separator");
+
+        tab_model_.DirtyVariable("tabs");
+        tab_model_.DirtyVariable("active_tab");
+        tab_model_.DirtyVariable("tabs_overflow");
+        tab_model_.DirtyVariable("can_scroll_tabs_left");
+        tab_model_.DirtyVariable("can_scroll_tabs_right");
+        updateTheme();
+    }
+
     std::string RmlRightPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
         using rml_theme::colorToRmlAlpha;

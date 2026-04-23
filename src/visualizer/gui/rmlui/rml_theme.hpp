@@ -52,6 +52,7 @@ namespace lfs::vis::gui::rml_theme {
     LFS_VIS_API std::string pathToRmlImageSource(const std::filesystem::path& path);
     LFS_VIS_API std::string loadBaseRCSS(const std::string& asset_name);
     LFS_VIS_API const std::string& getComponentsRCSS();
+    LFS_VIS_API void invalidateBaseRcssCache();
     LFS_VIS_API std::string generateComponentsThemeRCSS(const Theme& t);
     LFS_VIS_API std::string generateSpriteSheetRCSS();
     LFS_VIS_API std::size_t currentThemeSignature();

@@ -12,6 +12,9 @@ from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 
+__lfs_panel_classes__ = ["Mesh2SplatPanel"]
+__lfs_panel_ids__ = ["native.mesh2splat"]
+
 
 SCRUB_FIELD_DEFS = {
     "gaussian_scale": ScrubFieldSpec(0.1, 2.0, 0.01, "%.2f"),

@@ -43,6 +43,7 @@ namespace lfs::vis::gui {
                               float secondary_x = 0.0f,
                               float secondary_width = 0.0f);
         void setGTMetricsOverlay(GTMetricsOverlayState state);
+        void reloadResources();
         void render();
         void compositeToScreen(int screen_w, int screen_h) const;
         void processInput(const PanelInputState& input);

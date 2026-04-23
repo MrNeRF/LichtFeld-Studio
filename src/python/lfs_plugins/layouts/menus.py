@@ -36,6 +36,14 @@ def register_menu(menu_class: type) -> type:
     return menu_class
 
 
+def unregister_module(module_name: str) -> None:
+    """Remove all menu classes registered by a module."""
+    _MENU_CLASSES[:] = [
+        cls for cls in _MENU_CLASSES
+        if getattr(cls, "__module__", "") != module_name
+    ]
+
+
 def menu_separator() -> dict[str, Any]:
     """Create a separator entry for a declarative menu schema."""
     return {"type": "separator"}

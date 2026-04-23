@@ -281,6 +281,111 @@ namespace lfs::vis {
         pending_composite_height_ = 0.0f;
     }
 
+    void RmlSequencerPanel::clearElementCache() {
+        elements_cached_ = false;
+        el_panel_ = nullptr;
+        el_floating_header_ = nullptr;
+        el_ruler_ = nullptr;
+        el_track_bar_ = nullptr;
+        el_keyframes_ = nullptr;
+        el_playhead_ = nullptr;
+        el_hint_ = nullptr;
+        el_current_time_ = nullptr;
+        el_duration_ = nullptr;
+        el_play_icon_ = nullptr;
+        el_btn_loop_ = nullptr;
+        el_timeline_ = nullptr;
+        el_header_ = nullptr;
+        el_easing_stripe_ = nullptr;
+        el_easing_segments_ = nullptr;
+        el_easing_curves_ = nullptr;
+        el_easing_indicators_ = nullptr;
+        el_film_strip_panel_ = nullptr;
+        el_film_strip_groove_ = nullptr;
+        el_film_strip_gaps_ = nullptr;
+        el_film_strip_thumbs_ = nullptr;
+        el_film_strip_markers_ = nullptr;
+        el_film_strip_dividers_ = nullptr;
+        el_film_strip_sprockets_top_ = nullptr;
+        el_film_strip_sprockets_bottom_ = nullptr;
+        el_panel_guides_ = nullptr;
+        el_guide_playhead_ = nullptr;
+        el_guide_selected_ = nullptr;
+        el_guide_hovered_ = nullptr;
+        el_guide_strip_hover_ = nullptr;
+        el_timeline_tooltip_ = nullptr;
+        el_btn_camera_path_ = nullptr;
+        el_btn_snap_ = nullptr;
+        el_btn_follow_ = nullptr;
+        el_btn_film_strip_ = nullptr;
+        el_btn_preview_ = nullptr;
+        el_speed_label_ = nullptr;
+        el_format_label_ = nullptr;
+        el_resolution_info_ = nullptr;
+        el_quality_scrub_ = nullptr;
+        el_quality_fill_ = nullptr;
+        el_quality_display_ = nullptr;
+        el_quality_input_ = nullptr;
+        el_btn_equirect_ = nullptr;
+        el_btn_save_ = nullptr;
+        el_btn_load_ = nullptr;
+        el_btn_export_ = nullptr;
+        el_btn_clear_ = nullptr;
+        el_transport_dock_sep_ = nullptr;
+        el_btn_dock_toggle_ = nullptr;
+        el_dock_toggle_label_ = nullptr;
+        el_btn_close_panel_ = nullptr;
+        el_close_panel_label_ = nullptr;
+        keyframe_elements_.clear();
+        film_thumb_elements_.clear();
+    }
+
+    void RmlSequencerPanel::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        clearPendingComposite();
+        unregisterFilmStripSources();
+        clearFilmThumbPool();
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        base_rcss_.clear();
+        std::fill(last_synced_text_, last_synced_text_ + 4, 0.0f);
+        clearElementCache();
+        last_keyframe_count_ = static_cast<size_t>(-1);
+        last_zoom_level_ = -1.0f;
+        last_pan_offset_ = -1.0f;
+        last_kf_width_ = -1.0f;
+        last_ruler_zoom_ = -1.0f;
+        last_ruler_pan_ = -1.0f;
+        last_ruler_width_ = -1.0f;
+        last_ruler_display_end_ = -1.0f;
+        last_timeline_revision_ = 0;
+        last_selection_revision_ = 0;
+        last_selected_keyframes_signature_ = 0;
+        quality_scrub_active_ = false;
+        quality_scrub_dragging_ = false;
+        quality_scrub_editing_ = false;
+        last_language_.clear();
+
+        try {
+            const auto full_path = lfs::vis::getAssetPath("rmlui/sequencer.rml");
+            document_ = lfs::vis::gui::rml_documents::loadDocument(rml_context_, full_path);
+            if (!document_) {
+                LOG_ERROR("RmlUI: failed to reload sequencer.rml");
+                return;
+            }
+            document_->Show();
+            cacheElements();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlUI: sequencer resource not found during reload: {}", e.what());
+        }
+    }
+
     void RmlSequencerPanel::compositeToScreen(const int screen_w, const int screen_h) {
         if (!pending_foreground_composite_ || !fbo_.valid() || screen_w <= 0 || screen_h <= 0) {
             clearPendingComposite();
@@ -340,6 +445,7 @@ namespace lfs::vis {
 
     void RmlSequencerPanel::cacheElements() {
         assert(document_);
+        clearElementCache();
         el_panel_ = document_->GetElementById("panel");
         el_floating_header_ = document_->GetElementById("floating-header");
         el_ruler_ = document_->GetElementById("ruler");

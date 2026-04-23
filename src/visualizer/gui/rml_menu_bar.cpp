@@ -273,6 +273,53 @@ namespace lfs::vis::gui {
             closeDropdown();
     }
 
+    void RmlMenuBar::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (open_menu_index_ >= 0)
+            closeDropdown();
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        menu_items_ = nullptr;
+        dropdown_container_ = nullptr;
+        dropdown_overlay_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        wants_input_ = false;
+        render_needed_ = true;
+        mouse_pos_valid_ = false;
+        last_ctx_w_ = 0;
+        last_ctx_h_ = 0;
+        last_document_h_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlMenuBar: failed to reload menubar.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlMenuBar: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        menu_items_ = document_->GetElementById("menu-items");
+        dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
+        dropdown_container_ = document_->GetElementById("dropdown-container");
+
+        rebuildLabels();
+        menu_model_.DirtyVariable("dropdown_items");
+        updateTheme();
+    }
+
     void RmlMenuBar::updateLabels(const std::vector<std::string>& labels,
                                   const std::vector<std::string>& idnames) {
         assert(labels.size() == idnames.size());

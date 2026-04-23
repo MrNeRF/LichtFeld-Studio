@@ -7,6 +7,12 @@ import lichtfeld as lf
 from .types import Panel
 
 SELECTION_GROUPS_MODEL = "selection_groups"
+__lfs_panel_classes__ = ["SelectionGroupsPanel"]
+__lfs_panel_ids__ = ["lfs.selection_groups"]
+
+
+def __lfs_after_reload__(runtime):
+    runtime.ui.set_panel_parent("lfs.selection_groups", "lfs.rendering")
 
 
 class SelectionGroupsPanel(Panel):

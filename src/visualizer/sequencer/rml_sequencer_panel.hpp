@@ -159,6 +159,7 @@ namespace lfs::vis {
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
         void destroyGLResources();
+        void reloadResources();
 
     private:
         void initContext(int width, int height);
@@ -166,6 +167,7 @@ namespace lfs::vis {
         void syncTheme();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
+        void clearElementCache();
         void cacheElements();
         void updateButtonStates();
         void updatePlayhead();

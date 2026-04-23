@@ -240,6 +240,23 @@ namespace lfs::vis::gui {
         }
     }
 
+    void PanelRegistry::reload_rml_resources() {
+        std::vector<std::shared_ptr<IPanel>> panels;
+        {
+            std::lock_guard lock(mutex_);
+            panels.reserve(panels_.size());
+            for (const auto& panel : panels_) {
+                if (panel.panel)
+                    panels.push_back(panel.panel);
+            }
+        }
+
+        for (const auto& panel : panels)
+            panel->reloadRmlResources();
+
+        invalidate_poll_cache();
+    }
+
     bool PanelRegistry::check_poll(const PanelSnapshot& snap, const PanelDrawContext& ctx) {
         assert(snap.panel);
         if (snap.is_native)

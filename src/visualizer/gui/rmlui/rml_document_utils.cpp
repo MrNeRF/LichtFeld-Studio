@@ -4,6 +4,7 @@
 
 #include "gui/rmlui/rml_document_utils.hpp"
 
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -62,7 +63,23 @@ namespace lfs::vis::gui::rml_documents {
                 (document_path.parent_path() / lfs::core::utf8_to_path(std::string(source)))
                     .lexically_normal();
             if (!std::filesystem::exists(resolved_path))
+            {
+                std::string asset_source(source);
+                while (asset_source.rfind("../", 0) == 0)
+                    asset_source.erase(0, 3);
+                if (!asset_source.empty()) {
+                    try {
+                        const auto asset_path = lfs::vis::getAssetPath(asset_source);
+                        if (std::filesystem::exists(asset_path))
+                            return rml_theme::pathToRmlImageSource(asset_path);
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("RmlUI image source fallback could not resolve asset '{}': {}",
+                                  asset_source,
+                                  e.what());
+                    }
+                }
                 return std::nullopt;
+            }
 
             return rml_theme::pathToRmlImageSource(resolved_path);
         }

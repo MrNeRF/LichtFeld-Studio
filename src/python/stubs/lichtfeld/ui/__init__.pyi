@@ -1008,6 +1008,9 @@ def request_redraw() -> None:
 def consume_redraw_request() -> bool:
     """Consume and return pending redraw request flag"""
 
+def schedule_on_ui_thread(callback: Callable) -> None:
+    """Schedule a Python callable on the UI thread"""
+
 class Event:
     def __init__(self) -> None:
         """Create a default Event"""

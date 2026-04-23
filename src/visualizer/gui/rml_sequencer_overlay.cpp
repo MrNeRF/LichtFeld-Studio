@@ -106,6 +106,68 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlSequencerOverlay::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        hideContextMenu();
+        hideEditOverlay();
+        hidePreviewWindow();
+        time_edit_active_ = false;
+        focal_edit_active_ = false;
+        wants_input_ = false;
+        has_text_focus_ = false;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        el_menu_backdrop_ = nullptr;
+        el_context_menu_ = nullptr;
+        el_popup_backdrop_ = nullptr;
+        el_time_popup_ = nullptr;
+        el_focal_popup_ = nullptr;
+        el_time_input_ = nullptr;
+        el_focal_input_ = nullptr;
+        el_edit_overlay_ = nullptr;
+        el_edit_label_ = nullptr;
+        el_edit_delta_ = nullptr;
+        el_edit_apply_ = nullptr;
+        el_edit_revert_ = nullptr;
+        el_preview_window_ = nullptr;
+        el_preview_title_ = nullptr;
+        el_preview_image_ = nullptr;
+        el_time_popup_title_ = nullptr;
+        el_focal_popup_title_ = nullptr;
+        el_time_ok_ = nullptr;
+        el_time_cancel_ = nullptr;
+        el_focal_ok_ = nullptr;
+        el_focal_cancel_ = nullptr;
+        elements_cached_ = false;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        width_ = 0;
+        height_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/sequencer_overlay.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlSequencerOverlay: failed to reload sequencer_overlay.rml");
+                return;
+            }
+            document_->Show();
+            cacheElements();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlSequencerOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        syncTheme();
+    }
+
     void RmlSequencerOverlay::cacheElements() {
         assert(document_);
         el_menu_backdrop_ = document_->GetElementById("menu-backdrop");

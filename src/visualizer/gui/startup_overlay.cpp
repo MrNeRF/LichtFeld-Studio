@@ -139,6 +139,53 @@ namespace lfs::vis::gui {
         lang_listener_ = nullptr;
     }
 
+    void StartupOverlay::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        has_theme_signature_ = false;
+        shown_frames_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/startup.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("StartupOverlay: failed to reload startup.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("StartupOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        populateLanguages();
+        updateLocalizedText();
+
+        if (!link_listener_)
+            link_listener_ = new LinkClickListener();
+        for (const char* id : {"link-discord", "link-x", "link-donate", "link-core11",
+                               "link-volinga"}) {
+            auto* el = document_->GetElementById(id);
+            if (el)
+                el->AddEventListener(Rml::EventId::Click, link_listener_);
+        }
+
+        if (!lang_listener_)
+            lang_listener_ = new LangChangeListener();
+        auto* lang_select = document_->GetElementById("lang-select");
+        if (lang_select)
+            lang_select->AddEventListener(Rml::EventId::Change, lang_listener_);
+
+        updateTheme();
+    }
+
     void StartupOverlay::populateLanguages() {
         auto* select_el = document_->GetElementById("lang-select");
         if (!select_el)

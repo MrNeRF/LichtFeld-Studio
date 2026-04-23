@@ -8,6 +8,10 @@ message(STATUS "Configuring Python components (runner + nanobind module)")
 find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
 find_package(nanobind CONFIG REQUIRED)
 
+option(LFS_DEV_IMPORT_SOURCE_PYTHON
+    "Import built-in Python packages from src/python in non-portable builds"
+    ON)
+
 # vcpkg extension modules use release ABI; debug libpython has Py_DEBUG which
 # changes _PyRuntimeState layout, causing ABI mismatch crashes.
 # Force release Python library for debug builds on both Python::Python and Python::Module
@@ -136,9 +140,19 @@ target_link_libraries(lfs_python_utils
         lfs_python_runtime
 )
 
+set(LFS_PYTHON_UTILS_DEFINITIONS
+    LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
+)
+if(LFS_DEV_IMPORT_SOURCE_PYTHON AND NOT BUILD_PORTABLE)
+    list(APPEND LFS_PYTHON_UTILS_DEFINITIONS
+        LFS_DEV_PYTHON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    message(STATUS "Python dev mode: built-in Python imports from ${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+
 target_compile_definitions(lfs_python_utils
     PUBLIC
-        LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
+        ${LFS_PYTHON_UTILS_DEFINITIONS}
 )
 
 set_target_properties(lfs_python_utils PROPERTIES

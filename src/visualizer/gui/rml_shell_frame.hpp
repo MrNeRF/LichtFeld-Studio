@@ -39,6 +39,7 @@ namespace lfs::vis::gui {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
+        void reloadResources();
         void render(const ShellRegions& regions);
 
     private:

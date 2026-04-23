@@ -16,6 +16,14 @@ from .rml_keys import (
     KI_SUBTRACT, KI_T, KI_UP,
 )
 
+__lfs_panel_classes__ = ["ImagePreviewPanel"]
+__lfs_panel_ids__ = ["lfs.image_preview"]
+
+
+def __lfs_after_reload__(runtime):
+    runtime.ui.on_open_camera_preview(open_camera_preview_by_uid)
+
+
 ZOOM_MIN = 0.1
 ZOOM_MAX = 10.0
 PRECISE_SCROLL_STEP = 32.0

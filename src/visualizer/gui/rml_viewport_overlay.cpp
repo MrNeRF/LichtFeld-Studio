@@ -72,6 +72,48 @@ namespace lfs::vis::gui {
         document_ = nullptr;
     }
 
+    void RmlViewportOverlay::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (doc_registered_)
+            lfs::python::unregister_rml_document("viewport_overlay");
+        doc_registered_ = false;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        wants_input_ = false;
+        render_needed_ = true;
+        animation_active_ = true;
+        mouse_pos_valid_ = false;
+        last_render_w_ = 0;
+        last_render_h_ = 0;
+        last_document_hook_run_ = {};
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/viewport_overlay.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
+                return;
+            }
+            document_->Show();
+            applyGTMetricsOverlay();
+            updateToolbarRoots();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlViewportOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        updateTheme();
+    }
+
     std::string RmlViewportOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
         using rml_theme::colorToRmlAlpha;

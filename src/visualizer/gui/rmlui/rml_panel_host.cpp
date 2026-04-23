@@ -410,6 +410,8 @@ namespace lfs::vis::gui {
         content_wrap_el_ = nullptr;
         content_el_ = nullptr;
         scroll_el_ = nullptr;
+        base_rcss_.clear();
+        base_rcss_loaded_ = false;
         has_text_focus_ = false;
         wants_keyboard_ = false;
         has_theme_signature_ = false;

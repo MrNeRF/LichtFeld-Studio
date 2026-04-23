@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
         void shutdown();
 
         void processInput(const RightPanelLayout& layout, const PanelInputState& input);
+        void reloadResources();
         void render(const RightPanelLayout& layout,
                     const std::vector<TabSnapshot>& tabs,
                     const std::string& active_tab,

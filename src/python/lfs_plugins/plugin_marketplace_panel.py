@@ -21,6 +21,9 @@ from .marketplace import (
 from .plugin import PluginInfo, PluginState
 from .types import Panel
 
+__lfs_panel_classes__ = ["PluginMarketplacePanel"]
+__lfs_panel_ids__ = ["lfs.plugin_marketplace"]
+
 MAX_OUTPUT_LINES = 100
 SUCCESS_DISMISS_SEC = 3.0
 ERROR_DISMISS_SEC = 5.0

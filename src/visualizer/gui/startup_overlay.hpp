@@ -28,6 +28,7 @@ namespace lfs::vis::gui {
         void init(RmlUIManager* mgr);
         void shutdown();
         void setInput(const PanelInputState* input) { input_ = input; }
+        void reloadResources();
         void render(const ViewportLayout& viewport, bool drag_hovering);
         void dismiss() { visible_ = false; }
         [[nodiscard]] bool isVisible() const { return visible_; }

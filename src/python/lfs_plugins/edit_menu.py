@@ -5,6 +5,8 @@
 import lichtfeld as lf
 from .layouts.menus import register_menu, menu_action, menu_separator
 
+__lfs_menu_classes__ = ["EditMenu"]
+
 
 @register_menu
 class EditMenu:
