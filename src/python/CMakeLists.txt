@@ -226,10 +226,9 @@ set_target_properties(lfs_py PROPERTIES
     OUTPUT_NAME lichtfeld
 )
 
-if(UNIX AND NOT APPLE)
-    target_link_options(lfs_py PRIVATE "LINKER:--exclude-libs,ALL")
-endif()
-
+# Do not add --exclude-libs,ALL here while lfs_visualizer is static on Linux.
+# The embedded app and the lichtfeld extension currently share GUI registries
+# and hook bridges through ELF symbol interposition.
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
     $<$<CONFIG:Debug>:DEBUG_BUILD>

@@ -103,6 +103,8 @@ namespace lfs::vis::gui {
 
         const std::string& getActiveTab() const { return active_tab_id_; }
         void setActiveTab(const std::string& id) { active_tab_id_ = id; }
+        bool syncActiveTab(const std::vector<PanelSummary>& main_tabs,
+                           std::string& focus_panel_name);
 
         static constexpr float SPLITTER_H = 6.0f;
         static constexpr float TAB_BAR_H = 28.0f;

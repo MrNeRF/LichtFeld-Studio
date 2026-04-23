@@ -179,6 +179,10 @@ class PluginWatcher:
 
             import lichtfeld as lf
             old_module = sys.modules[module_name]
+            has_panel_registration = bool(
+                getattr(old_module, "__lfs_panel_ids__", [])
+                or getattr(old_module, "__lfs_panel_classes__", [])
+            )
             panel_states = self._capture_panel_states(module_name, lf)
 
             if hasattr(old_module, "unregister"):
@@ -187,7 +191,7 @@ class PluginWatcher:
                 except Exception:
                     _log.warning("Builtin unregister failed before reload: %s", module_name, exc_info=True)
 
-            if hasattr(lf.ui, "unregister_panels_for_module"):
+            if has_panel_registration and hasattr(lf.ui, "unregister_panels_for_module"):
                 try:
                     lf.ui.unregister_panels_for_module(module_name)
                 except Exception:

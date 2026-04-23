@@ -1639,6 +1639,7 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_keyboard = true;
 
             const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
+            panel_layout_.syncActiveTab(main_tabs, focus_panel_name_);
             std::vector<TabSnapshot> tab_snaps;
             tab_snaps.reserve(main_tabs.size());
             for (size_t i = 0; i < main_tabs.size(); ++i) {

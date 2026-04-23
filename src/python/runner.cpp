@@ -43,6 +43,8 @@ namespace lfs::python {
     static std::mutex g_output_mutex;
     static std::mutex g_plugin_init_mutex;
     static std::atomic<bool> g_python_bridge_ready{false};
+    static std::atomic<bool> g_builtin_ui_ready{false};
+    static std::atomic<bool> g_builtin_ui_deferred_logged{false};
     static std::atomic<bool> g_python_bridge_failed{false};
     static std::mutex g_python_bridge_failure_mutex;
     static std::string g_python_bridge_failure_detail;
@@ -379,8 +381,65 @@ _add_dll_dirs()
             return lf;
         }
 
+        bool ensure_builtin_ui_ready_locked() {
+            if (g_builtin_ui_ready.load(std::memory_order_acquire)) {
+                return true;
+            }
+
+            if (!lfs::python::get_rml_manager()) {
+                bool expected = false;
+                if (g_builtin_ui_deferred_logged.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                    LOG_INFO("Builtin Python UI registration deferred until retained UI runtime is available");
+                }
+                return false;
+            }
+
+            PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
+            if (!lfs_plugins) {
+                PyErr_Print();
+                return false;
+            }
+
+            bool builtin_panels_registered = false;
+            PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
+            if (register_fn) {
+                PyObject* result = PyObject_CallNoArgs(register_fn);
+                if (!result) {
+                    PyErr_Print();
+                    LOG_ERROR("Failed to register builtin panels");
+                } else {
+                    const int registered = PyObject_IsTrue(result);
+                    if (registered < 0) {
+                        PyErr_Print();
+                    } else {
+                        builtin_panels_registered = registered != 0;
+                    }
+                    Py_DECREF(result);
+                }
+                Py_DECREF(register_fn);
+            } else {
+                PyErr_Clear();
+                LOG_ERROR("lfs_plugins.register_builtin_panels not found");
+            }
+
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+            if (builtin_panels_registered) {
+                start_dev_python_watcher(lfs_plugins);
+            } else {
+                LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
+            }
+#endif
+            Py_DECREF(lfs_plugins);
+
+            if (builtin_panels_registered) {
+                g_builtin_ui_ready.store(true, std::memory_order_release);
+            }
+            return builtin_panels_registered;
+        }
+
         bool ensure_python_bridge_ready_locked() {
             if (g_python_bridge_ready.load(std::memory_order_acquire)) {
+                ensure_builtin_ui_ready_locked();
                 return true;
             }
 
@@ -393,41 +452,7 @@ _add_dll_dirs()
             }
             LOG_INFO("lichtfeld module imported successfully");
 
-            if (lfs::python::get_rml_manager()) {
-                PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
-                if (!lfs_plugins) {
-                    PyErr_Print();
-                } else {
-                    bool builtin_panels_registered = false;
-                    PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
-                    if (register_fn) {
-                        PyObject* result = PyObject_CallNoArgs(register_fn);
-                        if (!result) {
-                            PyErr_Print();
-                            LOG_ERROR("Failed to register builtin panels");
-                        } else {
-                            const int registered = PyObject_IsTrue(result);
-                            if (registered < 0) {
-                                PyErr_Print();
-                            } else {
-                                builtin_panels_registered = registered != 0;
-                            }
-                            Py_DECREF(result);
-                        }
-                        Py_DECREF(register_fn);
-                    }
-#ifdef LFS_DEV_PYTHON_SOURCE_DIR
-                    if (builtin_panels_registered) {
-                        start_dev_python_watcher(lfs_plugins);
-                    } else {
-                        LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
-                    }
-#endif
-                    Py_DECREF(lfs_plugins);
-                }
-            } else {
-                LOG_INFO("Builtin Python plugins skipped because the retained UI runtime is unavailable");
-            }
+            ensure_builtin_ui_ready_locked();
 
             // Initialize signal bridge after lfs_plugins.ui.state is available
             // Note: signals is registered as lichtfeld.ui.signals
@@ -675,6 +700,21 @@ _add_dll_dirs()
             set_gil_state_ready(true);
             LOG_DEBUG("GIL released, external_init={}", !g_we_initialized_python);
         });
+    }
+
+    void ensure_builtin_ui_registered() {
+        ensure_initialized();
+        if (!can_acquire_gil()) {
+            LOG_WARN("Python GIL state not ready, skipping builtin UI registration");
+            return;
+        }
+
+        const GilAcquire gil;
+        std::lock_guard lock(g_plugin_init_mutex);
+        if (!ensure_python_bridge_ready_locked()) {
+            return;
+        }
+        ensure_builtin_ui_ready_locked();
     }
 
     void ensure_plugins_loaded() {

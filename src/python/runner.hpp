@@ -38,6 +38,11 @@ namespace lfs::python {
     void ensure_initialized();
 
     /**
+     * @brief Register built-in Python UI once the retained GUI runtime is available.
+     */
+    void ensure_builtin_ui_registered();
+
+    /**
      * @brief Load user plugins configured for startup.
      *        This requires a ready Python runtime.
      */

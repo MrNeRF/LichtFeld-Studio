@@ -35,6 +35,37 @@ namespace lfs::vis::gui {
         state.save();
     }
 
+    bool PanelLayoutManager::syncActiveTab(const std::vector<PanelSummary>& main_tabs,
+                                           std::string& focus_panel_name) {
+        const std::string prev_tab = active_tab_id_;
+
+        if (!focus_panel_name.empty()) {
+            const auto focused_tab = std::find_if(
+                main_tabs.begin(), main_tabs.end(), [&](const PanelSummary& tab) {
+                    return focus_panel_name == tab.label || focus_panel_name == tab.id;
+                });
+            if (focused_tab != main_tabs.end()) {
+                active_tab_id_ = focused_tab->id;
+                focus_panel_name.clear();
+            }
+        }
+
+        const bool active_valid = std::any_of(
+            main_tabs.begin(), main_tabs.end(), [&](const PanelSummary& tab) {
+                return tab.id == active_tab_id_;
+            });
+        if (!active_valid)
+            active_tab_id_ = main_tabs.empty() ? std::string{} : main_tabs.front().id;
+
+        if (active_tab_id_ == prev_tab)
+            return false;
+
+        tab_scroll_offset_ = 0.0f;
+        tab_scrollbar_dragging_ = false;
+        background_preload_index_ = 0;
+        return true;
+    }
+
     void PanelLayoutManager::renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
                                               bool show_main_panel, bool ui_hidden,
                                               std::unordered_map<std::string, bool>& window_states,
@@ -119,27 +150,17 @@ namespace lfs::vis::gui {
                                content_w, scene_h, draw_ctx, &masked_panel_input);
 
         const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
-
-        const std::string prev_tab = active_tab_id_;
-
-        if (!focus_panel_name.empty()) {
-            for (const auto& tab : main_tabs) {
-                if (focus_panel_name == tab.label || focus_panel_name == tab.id) {
-                    active_tab_id_ = tab.id;
-                    focus_panel_name.clear();
-                    break;
-                }
-            }
-        }
-
-        if (active_tab_id_.empty() && !main_tabs.empty())
-            active_tab_id_ = main_tabs[0].id;
-
-        if (active_tab_id_ != prev_tab)
-            tab_scroll_offset_ = 0.0f;
+        syncActiveTab(main_tabs, focus_panel_name);
 
         const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
+
+        if (active_tab_id_.empty()) {
+            tab_content_total_h_ = 0.0f;
+            tab_scroll_offset_ = 0.0f;
+            tab_scrollbar_dragging_ = false;
+            return;
+        }
 
         const float clip_y_min = tab_content_y;
         const float clip_y_max = tab_content_y + tab_content_h;
