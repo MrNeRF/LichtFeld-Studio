@@ -3,9 +3,16 @@
 """View menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_submenu, menu_toggle
+from .layouts.menus import menu_action, menu_separator, register_menu, menu_submenu, menu_toggle
 
 __lfs_menu_classes__ = ["ViewMenu"]
+
+
+def _tr_fallback(key: str, fallback: str) -> str:
+    result = lf.ui.tr(key)
+    if result and result != key:
+        return result
+    return fallback
 
 
 @register_menu
@@ -56,6 +63,9 @@ class ViewMenu:
         return [
             menu_submenu(tr("menu.view.theme"), theme_items),
             menu_submenu(tr("menu.view.ui_scale"), scale_items),
+            menu_separator(),
+            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
+            menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
         ]
 
 

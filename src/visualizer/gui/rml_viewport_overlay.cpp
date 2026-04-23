@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to load viewport_overlay.rml");
                 return;
             }
+            cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
         } catch (const std::exception& e) {
@@ -70,6 +71,7 @@ namespace lfs::vis::gui {
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
         document_ = nullptr;
+        body_template_rml_.clear();
     }
 
     void RmlViewportOverlay::reloadResources() {
@@ -103,6 +105,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
                 return;
             }
+            cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
             updateToolbarRoots();
@@ -112,6 +115,15 @@ namespace lfs::vis::gui {
         }
 
         updateTheme();
+    }
+
+    void RmlViewportOverlay::cacheBodyTemplate() {
+        body_template_rml_.clear();
+        if (!document_)
+            return;
+
+        if (auto* const body = document_->GetElementById("overlay-body"))
+            body_template_rml_ = body->GetInnerRML();
     }
 
     bool RmlViewportOverlay::updateTheme() {
@@ -336,14 +348,14 @@ namespace lfs::vis::gui {
                 return;
 
             // Wrapper exists but binding is stale (data model was rebuilt).
-            // Tear it down so we can recreate with a fresh binding.
-            std::vector<Rml::Element*> children;
-            children.reserve(existing->GetNumChildren());
-            for (int i = 0; i < existing->GetNumChildren(); ++i)
-                children.push_back(existing->GetChild(i));
-            for (auto* child : children)
-                body->AppendChild(existing->RemoveChild(child));
-            body->RemoveChild(existing);
+            // Restore the original unbound body markup instead of recycling
+            // the live subtree, which may already contain expanded data-for views.
+            if (!body_template_rml_.empty()) {
+                body->SetInnerRML(Rml::String(body_template_rml_));
+            } else {
+                LOG_WARN("RmlViewportOverlay: missing body template for stale data-model rebind");
+                body->RemoveChild(existing);
+            }
         }
 
         // RmlUI does not rebind data-model when the attribute is set after
@@ -352,6 +364,9 @@ namespace lfs::vis::gui {
         auto wrapper_ptr = document_->CreateElement("div");
         wrapper_ptr->SetId("dm-root");
         wrapper_ptr->SetAttribute("data-model", data_model);
+        wrapper_ptr->SetProperty("position", "relative");
+        wrapper_ptr->SetProperty("width", "100%");
+        wrapper_ptr->SetProperty("height", "100%");
         auto* wrapper = body->AppendChild(std::move(wrapper_ptr));
 
         std::vector<Rml::Element*> children_to_move;
@@ -363,6 +378,8 @@ namespace lfs::vis::gui {
         }
         for (auto* child : children_to_move)
             wrapper->AppendChild(body->RemoveChild(child));
+
+        applyGTMetricsOverlay();
     }
 
     void RmlViewportOverlay::render() {

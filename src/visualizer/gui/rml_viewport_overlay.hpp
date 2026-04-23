@@ -52,6 +52,7 @@ namespace lfs::vis::gui {
 
     private:
         bool updateTheme();
+        void cacheBodyTemplate();
         void ensureBodyDataModelBound(Rml::Element* body);
         bool shouldRunDocumentHooks(bool force) const;
         void updateToolbarRoots();
@@ -74,6 +75,7 @@ namespace lfs::vis::gui {
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
         std::string base_rcss_;
+        std::string body_template_rml_;
         bool wants_input_ = false;
         bool doc_registered_ = false;
         bool render_needed_ = true;
