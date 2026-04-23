@@ -1,9 +1,5 @@
 {
-  "id": "gruvbox",
   "name": "Gruvbox",
-  "label_key": "menu.view.theme.gruvbox",
-  "mode": "dark",
-  "order": 30,
   "_description": "Gruvbox-inspired dark theme for LichtFeld Studio",
 
   "palette": {

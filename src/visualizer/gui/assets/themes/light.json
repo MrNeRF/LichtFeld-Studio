@@ -1,9 +1,5 @@
 {
-  "id": "light",
   "name": "Light",
-  "label_key": "menu.view.theme.light",
-  "mode": "light",
-  "order": 20,
   "_description": "Light theme for LichtFeld Studio",
 
   "palette": {

@@ -1,9 +1,5 @@
 {
-  "id": "catppuccin_mocha",
   "name": "Catppuccin Mocha",
-  "label_key": "menu.view.theme.catppuccin_mocha",
-  "mode": "dark",
-  "order": 40,
   "_description": "Catppuccin Mocha-inspired dark theme for LichtFeld Studio",
 
   "palette": {

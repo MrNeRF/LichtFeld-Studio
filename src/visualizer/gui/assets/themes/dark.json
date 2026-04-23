@@ -1,9 +1,5 @@
 {
-  "id": "dark",
   "name": "Dark",
-  "label_key": "menu.view.theme.dark",
-  "mode": "dark",
-  "order": 10,
   "_description": "Default dark theme for LichtFeld Studio",
 
   "palette": {
