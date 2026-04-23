@@ -124,7 +124,44 @@ def histogram_panel_module():
 def test_histogram_metrics_include_positions_volume_anisotropy_and_erank(histogram_panel_module):
     metric_ids = {metric.id for metric in histogram_panel_module.METRICS}
 
-    assert {"position_x", "position_y", "position_z", "volume", "anisotropy", "erank"} <= metric_ids
+    assert {"position_x", "position_y", "position_z", "volume", "anisotropy", "erank", "world_distance"} <= metric_ids
+
+
+def test_histogram_world_distance_metric_measures_from_origin(histogram_panel_module, lf, numpy):
+    panel = histogram_panel_module.HistogramPanel()
+    # Two Gaussians at local positions (1,0,0) and (0,3,4).
+    # With a translation of (2,0,0) applied the world positions become (3,0,0) and (2,3,4).
+    # Expected distances from origin: 3.0 and sqrt(4+9+16)=sqrt(29).
+    model = _ModelStub(
+        lf,
+        numpy.array([[1.0, 0.0, 0.0], [0.0, 3.0, 4.0]], dtype=numpy.float32),
+        numpy.array([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]], dtype=numpy.float32),
+    )
+
+    splat_type = getattr(getattr(lf, "NodeType", None), "SPLAT", None)
+    if splat_type is None:
+        splat_type = lf.scene.NodeType.SPLAT
+
+    scene = SimpleNamespace(
+        get_nodes=lambda: [
+            SimpleNamespace(
+                id=1,
+                parent_id=-1,
+                visible=True,
+                type=splat_type,
+                gaussian_count=2,
+                world_transform=_translation_matrix(2.0, 0.0, 0.0),
+            )
+        ]
+    )
+
+    panel._metric_id = "world_distance"
+    result = panel._extract_metric_values(scene, model).cpu().numpy()
+    numpy.testing.assert_allclose(
+        result,
+        numpy.array([3.0, numpy.sqrt(29.0)], dtype=numpy.float32),
+        rtol=1e-5,
+    )
 
 
 def test_histogram_position_metrics_use_world_space_means(histogram_panel_module, lf, numpy):

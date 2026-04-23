@@ -124,7 +124,7 @@ METRICS = (
         "histogram.metric.world_distance.label",
         "World Distance",
         "histogram.metric.world_distance.description",
-        "Distance from the current world center.",
+        "Distance from the world origin.",
     ),
 )
 
