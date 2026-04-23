@@ -19,6 +19,8 @@ namespace lfs::python {
     };
 
     struct PythonBufferIssue {
+        std::size_t start_byte = 0;
+        std::size_t end_byte = 0;
         std::size_t line = 0;
         std::size_t column = 0;
         std::size_t end_line = 0;

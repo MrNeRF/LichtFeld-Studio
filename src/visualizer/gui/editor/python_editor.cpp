@@ -6,6 +6,7 @@
 #include "python_lsp_client.hpp"
 
 #include "gui/gui_focus_state.hpp"
+#include "python/python_buffer_analysis.hpp"
 #include "theme/theme.hpp"
 
 #include <SDL3/SDL_clipboard.h>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -42,6 +44,7 @@ namespace lfs::vis::editor {
         using Clock = std::chrono::steady_clock;
         constexpr auto AUTO_COMPLETION_DEBOUNCE = std::chrono::milliseconds(8);
         constexpr auto ACTIVE_COMPLETION_DEBOUNCE = std::chrono::milliseconds(0);
+        constexpr auto SYNTAX_ANALYSIS_DEBOUNCE = std::chrono::milliseconds(80);
         constexpr auto SEMANTIC_TOKENS_WORD_DELAY = std::chrono::milliseconds(800);
         constexpr auto SEMANTIC_TOKENS_BOUNDARY_DELAY = std::chrono::milliseconds(90);
         constexpr int COMPLETION_POPUP_MAX_ITEMS = 8;
@@ -386,6 +389,11 @@ namespace lfs::vis::editor {
             size_t end_byte = 0;
         };
 
+        struct DiagnosticByteRange {
+            size_t start = 0;
+            size_t end = 0;
+        };
+
     } // namespace
 
     struct PythonEditor::Impl {
@@ -471,6 +479,7 @@ namespace lfs::vis::editor {
                     owner_.noteSemanticDirtyRange(
                         static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
                         static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    owner_.scheduleSyntaxAnalysis();
                     break;
                 default:
                     break;
@@ -497,7 +506,7 @@ namespace lfs::vis::editor {
 
             auto& config = editor->GetConfig();
             config.showLineNumbers = true;
-            config.showIndicatorRegion = false;
+            config.showIndicatorRegion = true;
             config.autoHideCommandRegion = true;
             config.cursorLineSolid = true;
             config.showNormalModeKeyStrokes = false;
@@ -656,6 +665,7 @@ namespace lfs::vis::editor {
                 document_version = lsp->updateDocument(text);
             }
             clearCompletionState();
+            clearSyntaxDiagnosticMarkers();
             clearSemanticHighlighting();
             semantic_dirty_range.clear();
             semantic_full_refresh_required = true;
@@ -665,6 +675,7 @@ namespace lfs::vis::editor {
             next_semantic_tokens_request_at = last_text_change_at + semantic_tokens_idle_delay;
             last_semantic_tokens_requested_version = -1;
             pending_semantic_tokens.reset();
+            scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
 
             if (auto* window = editor->GetActiveWindow()) {
                 const size_t target = cursor_byte_index.value_or(0);
@@ -899,6 +910,100 @@ namespace lfs::vis::editor {
             if (auto* syntax = dynamic_cast<Zep::ZepSyntax_Python*>(buffer->GetSyntax())) {
                 syntax->ClearSemanticHighlighting();
             }
+        }
+
+        void scheduleSyntaxAnalysis(
+            const std::chrono::milliseconds delay = SYNTAX_ANALYSIS_DEBOUNCE) {
+            syntax_analysis_pending = true;
+            next_syntax_analysis_at = Clock::now() + delay;
+        }
+
+        void clearSyntaxDiagnosticMarkers() {
+            if (buffer != nullptr && !syntax_markers.empty()) {
+                buffer->ClearRangeMarkers(syntax_markers);
+            }
+            syntax_markers.clear();
+        }
+
+        [[nodiscard]] std::optional<DiagnosticByteRange> diagnosticRangeForIssue(
+            const lfs::python::PythonBufferIssue& issue,
+            std::string_view text) const {
+            size_t start = std::min(issue.start_byte, text.size());
+            size_t end = std::min(issue.end_byte, text.size());
+            if (end < start) {
+                std::swap(start, end);
+            }
+
+            if (start < end) {
+                return DiagnosticByteRange{.start = start, .end = end};
+            }
+
+            if (text.empty()) {
+                return std::nullopt;
+            }
+
+            const size_t line_start = line_start_offset(text, static_cast<int>(issue.line));
+            const size_t newline = text.find('\n', line_start);
+            const size_t line_end = newline == std::string_view::npos ? text.size() : newline;
+
+            if (line_start < line_end) {
+                start = std::clamp(start, line_start, line_end - 1);
+                end = start;
+                decode_utf8(text, end);
+                end = std::clamp(end, start + 1, line_end);
+            } else {
+                start = std::min(start, text.size() - 1);
+                end = start + 1;
+            }
+
+            if (start >= end) {
+                return std::nullopt;
+            }
+            return DiagnosticByteRange{.start = start, .end = end};
+        }
+
+        void applySyntaxDiagnostics(const std::string& text) {
+            clearSyntaxDiagnosticMarkers();
+            if (buffer == nullptr || editor == nullptr ||
+                syntax_analysis.status != lfs::python::PythonBufferStatus::SyntaxError) {
+                return;
+            }
+
+            for (const auto& issue : syntax_analysis.issues) {
+                const auto range = diagnosticRangeForIssue(issue, text);
+                if (!range.has_value()) {
+                    continue;
+                }
+
+                auto marker = std::make_shared<Zep::RangeMarker>(*buffer);
+                marker->markerType = Zep::RangeMarkerType::Mark;
+                marker->displayType = Zep::RangeMarkerDisplayType::Underline |
+                                      Zep::RangeMarkerDisplayType::Tooltip |
+                                      Zep::RangeMarkerDisplayType::TooltipAtLine |
+                                      Zep::RangeMarkerDisplayType::CursorTip |
+                                      Zep::RangeMarkerDisplayType::CursorTipAtLine |
+                                      Zep::RangeMarkerDisplayType::Indicator;
+                marker->tipPos = Zep::ToolTipPos::RightLine;
+                marker->SetName("Python syntax");
+                marker->SetDescription(issue.message);
+                marker->SetColors(Zep::ThemeColor::Background, Zep::ThemeColor::Text, Zep::ThemeColor::Error);
+                marker->SetAlpha(0.95f);
+                marker->SetRange(Zep::ByteRange(static_cast<Zep::ByteIndex>(range->start),
+                                                static_cast<Zep::ByteIndex>(range->end)));
+                syntax_markers.insert(std::move(marker));
+            }
+
+            editor->RequestRefresh();
+        }
+
+        void updateSyntaxDiagnostics(const std::string& text) {
+            if (!syntax_analysis_pending || Clock::now() < next_syntax_analysis_at) {
+                return;
+            }
+
+            syntax_analysis_pending = false;
+            syntax_analysis = lfs::python::analyze_python_buffer(text);
+            applySyntaxDiagnostics(text);
         }
 
         std::optional<Zep::ZepSemanticHighlight> mapSemanticToken(
@@ -1914,6 +2019,8 @@ namespace lfs::vis::editor {
         std::unique_ptr<PythonLspClient> lsp;
         CompletionPopupState completion;
         SemanticHighlightState semantic_highlights;
+        lfs::python::PythonBufferAnalysis syntax_analysis;
+        std::set<std::shared_ptr<Zep::RangeMarker>> syntax_markers;
 
         bool request_focus = false;
         bool is_focused = false;
@@ -1923,6 +2030,7 @@ namespace lfs::vis::editor {
         bool suppress_buffer_events = false;
         bool completion_request_pending = false;
         bool manual_completion_requested = false;
+        bool syntax_analysis_pending = true;
         bool semantic_tokens_request_pending = false;
         std::optional<PythonLspClient::SemanticTokenList> pending_semantic_tokens;
         SemanticDirtyRange semantic_dirty_range;
@@ -1936,6 +2044,7 @@ namespace lfs::vis::editor {
         int last_cursor_character = -1;
         size_t last_cursor_byte_index = std::string::npos;
         Clock::time_point next_completion_request_at = Clock::now();
+        Clock::time_point next_syntax_analysis_at = Clock::now();
         Clock::time_point next_semantic_tokens_request_at = Clock::now();
         Clock::time_point last_text_change_at = Clock::now();
         std::chrono::milliseconds semantic_tokens_idle_delay = SEMANTIC_TOKENS_WORD_DELAY;
@@ -2024,6 +2133,7 @@ namespace lfs::vis::editor {
             const std::string updated_text = impl_->getText();
             const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
             impl_->updateLanguageServerState(updated_text, updated_cursor);
+            impl_->updateSyntaxDiagnostics(updated_text);
             impl_->renderCompletionPopup(updated_text, updated_cursor);
 
             if (impl_->completion.visible || impl_->completion.hovered) {
@@ -2098,6 +2208,28 @@ namespace lfs::vis::editor {
         const bool changed = impl_->text_changed;
         impl_->text_changed = false;
         return changed;
+    }
+
+    bool PythonEditor::hasSyntaxErrors() const {
+        return impl_->syntax_analysis.status == lfs::python::PythonBufferStatus::SyntaxError;
+    }
+
+    bool PythonEditor::syntaxDiagnosticsAvailable() const {
+        return impl_->syntax_analysis.status != lfs::python::PythonBufferStatus::ParserUnavailable;
+    }
+
+    std::string PythonEditor::syntaxSummary() const {
+        if (!impl_->syntax_analysis.summary.empty()) {
+            return impl_->syntax_analysis.summary;
+        }
+        return "Python syntax analysis pending";
+    }
+
+    void PythonEditor::refreshSyntaxDiagnostics() {
+        impl_->scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
+        if (impl_->editor != nullptr) {
+            impl_->editor->RequestRefresh();
+        }
     }
 
     void PythonEditor::updateTheme(const Theme& theme) {

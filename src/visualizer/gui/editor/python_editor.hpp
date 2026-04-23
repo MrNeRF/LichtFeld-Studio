@@ -32,6 +32,10 @@ namespace lfs::vis::editor {
 
         bool shouldExecute() const { return execute_requested_; }
         bool consumeTextChanged();
+        [[nodiscard]] bool hasSyntaxErrors() const;
+        [[nodiscard]] bool syntaxDiagnosticsAvailable() const;
+        [[nodiscard]] std::string syntaxSummary() const;
+        void refreshSyntaxDiagnostics();
 
         void updateTheme(const Theme& theme);
 

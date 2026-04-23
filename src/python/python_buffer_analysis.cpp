@@ -62,6 +62,8 @@ namespace lfs::python {
             const TSPoint end = ts_node_end_point(node);
 
             PythonBufferIssue issue;
+            issue.start_byte = ts_node_start_byte(node);
+            issue.end_byte = ts_node_end_byte(node);
             issue.line = start.row;
             issue.column = start.column;
             issue.end_line = end.row;

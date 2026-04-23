@@ -62,6 +62,7 @@ namespace {
         const std::string original = editor->getText();
         const auto result = lfs::python::format_python_code(original);
         if (!result.success) {
+            editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
                 state.addError("[Format] " + result.error);
             }
@@ -85,6 +86,7 @@ namespace {
         const std::string original = editor->getText();
         const auto result = lfs::python::clean_python_code(original);
         if (!result.success) {
+            editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
                 state.addError("[Cleanup] " + result.error);
             }
@@ -128,6 +130,28 @@ namespace {
 
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             ImGui::SetTooltip(enabled ? "Disable Vim mode" : "Enable Vim mode");
+        }
+    }
+
+    void draw_syntax_status(lfs::vis::gui::panels::PythonConsoleState& state,
+                            const lfs::vis::Theme& t) {
+        auto* editor = state.getEditor();
+        if (editor == nullptr) {
+            ImGui::TextColored(t.palette.text_dim, "Syntax");
+            return;
+        }
+
+        const std::string summary = editor->syntaxSummary();
+        if (editor->hasSyntaxErrors()) {
+            ImGui::TextColored(t.palette.error, "Syntax error");
+        } else if (editor->syntaxDiagnosticsAvailable()) {
+            ImGui::TextColored(t.palette.success, "Syntax OK");
+        } else {
+            ImGui::TextColored(t.palette.text_dim, "Syntax");
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", summary.c_str());
         }
     }
 
@@ -723,6 +747,11 @@ namespace lfs::vis::gui::panels {
                 ImGui::TextColored(t.palette.text_dim, "Python");
             }
 
+            ImGui::SameLine();
+            ImGui::TextColored(t.palette.text_dim, "|");
+            ImGui::SameLine();
+            draw_syntax_status(state, t);
+
             ImGui::PopStyleVar(2);
         }
 
@@ -1127,6 +1156,11 @@ namespace lfs::vis::gui::panels {
         } else {
             ImGui::TextColored(t.palette.text_dim, "Python");
         }
+
+        ImGui::SameLine();
+        ImGui::TextColored(t.palette.text_dim, "|");
+        ImGui::SameLine();
+        draw_syntax_status(state, t);
 
         ImGui::PopStyleVar(2);
 

@@ -34,6 +34,7 @@
 #include <mutex>
 #include <numbers>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -484,6 +485,18 @@ TEST_F(PythonIntegrationTest, PythonBufferAnalysisReportsCleanCode) {
     const auto analysis = lfs::python::analyze_python_buffer("if True:\n    print('x')\n");
     EXPECT_TRUE(analysis.clean()) << analysis.summary;
     EXPECT_EQ(analysis.status, lfs::python::PythonBufferStatus::Clean);
+}
+
+TEST_F(PythonIntegrationTest, PythonBufferAnalysisReportsDiagnosticByteRange) {
+    constexpr std::string_view code = "import os\nif True print('x')\n";
+    const auto analysis = lfs::python::analyze_python_buffer(code);
+
+    ASSERT_EQ(analysis.status, lfs::python::PythonBufferStatus::SyntaxError);
+    ASSERT_FALSE(analysis.issues.empty());
+    const auto& issue = analysis.issues.front();
+    EXPECT_LE(issue.start_byte, issue.end_byte);
+    EXPECT_LE(issue.end_byte, code.size());
+    EXPECT_FALSE(issue.message.empty());
 }
 
 TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {
