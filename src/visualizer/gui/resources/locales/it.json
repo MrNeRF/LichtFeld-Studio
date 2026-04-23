@@ -1408,7 +1408,11 @@
       },
       "distance": {
         "label": "Distance",
-        "description": "Distance from the current scene center."
+        "description": "Distance from the current splat center."
+      },
+      "world_distance": {
+        "label": "World Distance",
+        "description": "Distance from the world origin."
       }
     },
     "undo": "Undo",

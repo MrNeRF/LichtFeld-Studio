@@ -710,6 +710,10 @@ class HistogramPanel(Panel):
             if metric_id == "opacity":
                 return self._float_tensor(model.get_opacity()).reshape([-1])
 
+            if metric_id == "world_distance":
+                world_means = self._extract_world_space_means(scene, model)
+                return self._distance_from_world_center(world_means)
+
             if metric_id in {"position_x", "position_y", "position_z", "distance"}:
                 world_means = self._extract_world_space_means(scene, model)
                 if metric_id == "position_x":
@@ -786,6 +790,15 @@ class HistogramPanel(Panel):
         distances = self._nan_tensor(int(positions.shape[0]), self._device_string(positions))
         centered = positions[finite_rows] - center.unsqueeze(0)
         distances[finite_rows] = centered.square().sum(1).sqrt().reshape([-1])
+        return distances
+
+    def _distance_from_world_center(self, positions: lf.Tensor) -> lf.Tensor:
+        finite_rows = positions.isfinite().all(1).reshape([-1])
+        if not self._any_true(finite_rows):
+            return self._nan_tensor(int(positions.shape[0]), self._device_string(positions))
+
+        distances = self._nan_tensor(int(positions.shape[0]), self._device_string(positions))
+        distances[finite_rows] = positions[finite_rows].square().sum(1).sqrt().reshape([-1])
         return distances
 
     def _visible_splat_nodes(self, scene) -> list:
