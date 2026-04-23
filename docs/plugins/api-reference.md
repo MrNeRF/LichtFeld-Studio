@@ -129,7 +129,7 @@ Built-in template aliases:
 | Full custom retained UI | `template` | Use an absolute path for plugin-local `.rml` |
 | Hybrid panel | `template` plus `draw(ui)` | Render immediate content into `<div id="im-root"></div>` |
 
-When a plugin-local template file such as `main_panel.rml` is present, LichtFeld automatically loads a sibling `main_panel.rcss` stylesheet if it exists.
+When a plugin-local template file such as `main_panel.rml` is present, LichtFeld automatically loads a sibling `main_panel.rcss` stylesheet if it exists. A sibling `main_panel.theme.rcss` file is also loaded for palette-dependent overrides.
 
 ---
 

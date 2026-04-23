@@ -70,7 +70,6 @@
     bottom: 1dp;
     left: 3dp;
     font-size: 7dp;
-    color: rgba(255, 255, 255, 102);
 }
 
 /* -- Image Area -- */
@@ -117,7 +116,6 @@
     position: absolute;
     display: none;
     decorator: none;
-    image-color: rgba(255, 50, 50, 128);
 }
 
 #mask-overlay.visible {
@@ -152,7 +150,6 @@
     width: 32dp;
     height: 32dp;
     border-radius: 16dp;
-    background-color: rgba(255, 255, 255, 13);
     border-width: 1dp;
     font-size: 14dp;
     text-align: center;
@@ -338,11 +335,8 @@
     height: 20dp;
     padding: 0;
     border-width: 1dp;
-    border-color: rgba(88, 91, 112, 110);
     border-radius: 3dp;
-    background-color: rgba(255, 255, 255, 13);
     cursor: pointer;
-    color: rgba(205, 214, 244, 220);
     font-size: 11dp;
     text-align: center;
     line-height: 18dp;
@@ -359,22 +353,6 @@
 .view-btn--icon img {
     width: 14dp;
     height: 14dp;
-}
-
-.view-btn:hover {
-    background-color: rgba(255, 255, 255, 26);
-    border-color: rgba(137, 180, 250, 110);
-    color: rgba(245, 247, 255, 255);
-}
-
-.view-btn:active {
-    background-color: rgba(255, 255, 255, 38);
-    border-color: rgba(137, 180, 250, 150);
-}
-
-.view-btn:focus-visible {
-    border-color: rgba(137, 180, 250, 160);
-    box-shadow: 0 0 0 1dp rgba(137, 180, 250, 100);
 }
 
 .view-btn:disabled {

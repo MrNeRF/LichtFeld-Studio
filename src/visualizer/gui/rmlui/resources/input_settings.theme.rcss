@@ -1,0 +1,24 @@
+/* Input settings theme overrides. */
+
+.is-section-title {
+    color: @{primary};
+}
+
+.is-hint {
+    color: @{text_dim};
+}
+
+.is-label,
+.is-action-name,
+.is-binding-desc {
+    color: @{text};
+}
+
+.is-binding-section {
+    color: @{primary};
+    background-color: @{panel.primary_bg_soft};
+}
+
+.is-binding-desc.is-capturing {
+    color: @{warning};
+}

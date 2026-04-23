@@ -352,9 +352,6 @@ namespace lfs::vis::gui {
         auto wrapper_ptr = document_->CreateElement("div");
         wrapper_ptr->SetId("dm-root");
         wrapper_ptr->SetAttribute("data-model", data_model);
-        wrapper_ptr->SetProperty("position", "relative");
-        wrapper_ptr->SetProperty("width", "100%");
-        wrapper_ptr->SetProperty("height", "100%");
         auto* wrapper = body->AppendChild(std::move(wrapper_ptr));
 
         std::vector<Rml::Element*> children_to_move;

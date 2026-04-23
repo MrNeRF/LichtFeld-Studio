@@ -160,6 +160,7 @@ Retained template rules:
 - plugin-local `template` values should be absolute paths
 - `style` is RCSS text, not a filename
 - a sibling `.rcss` file is loaded automatically for a plugin-local `.rml`
+- a sibling `.theme.rcss` file is loaded automatically for palette-dependent overrides
 - include `<div id="im-root"></div>` in the template when you want embedded `draw(ui)` content
 
 ## Dependency isolation

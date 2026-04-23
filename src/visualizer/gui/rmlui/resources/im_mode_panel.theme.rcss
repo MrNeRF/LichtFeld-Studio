@@ -1,0 +1,46 @@
+/* Immediate-mode bridge theme overrides. */
+
+.im-radio:hover {
+    background-color: @{alpha(border,0.30)};
+}
+
+.im-radio-label,
+.im-label,
+.im-text-wrapped,
+.im-bullet {
+    color: @{text};
+}
+
+.im-radio-dot {
+    color: @{primary};
+}
+
+.im-color-swatch,
+.im-color-btn {
+    border-color: @{alpha(text,0.20)};
+}
+
+.im-tooltip {
+    color: @{text};
+    background-color: @{alpha(surface,0.94)};
+    border-color: @{alpha(border,0.50)};
+}
+
+.im-child-bordered {
+    border-color: @{alpha(border,0.30)};
+}
+
+.im-popup-backdrop {
+    background-color: @{alpha(background,0.40)};
+}
+
+.im-popup-dialog {
+    color: @{text};
+    background-color: @{alpha(surface,0.96)};
+    border-color: @{alpha(border,0.50)};
+}
+
+.im-popup-title {
+    color: @{text};
+    border-bottom-color: @{alpha(border,0.30)};
+}

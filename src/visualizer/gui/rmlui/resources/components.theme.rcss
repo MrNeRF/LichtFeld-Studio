@@ -346,8 +346,17 @@ progress fill {
     color: @{error};
 }
 
+.status-warning {
+    color: @{warning};
+}
+
 .status-info {
     color: @{info};
+}
+
+.color-picker-popup {
+    background-color: @{surface};
+    border-color: @{border};
 }
 
 .interactive-row:hover,

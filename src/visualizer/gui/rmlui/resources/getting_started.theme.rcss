@@ -1,0 +1,19 @@
+/* Getting started panel theme overrides. */
+
+.card-body {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.video-card:hover .card-body {
+    border-color: @{primary};
+    background-color: @{components.title_surface};
+}
+
+.play-icon {
+    color: @{primary};
+}
+
+.card-title {
+    color: @{text_dim};
+}

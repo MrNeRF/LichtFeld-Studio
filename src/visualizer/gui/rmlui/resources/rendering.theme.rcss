@@ -1,0 +1,40 @@
+/* Rendering panel theme overrides. */
+
+.rendering-panel-title {
+    color: @{text};
+    border-top-color: @{panel.primary_border_soft};
+}
+
+.rendering-panel-title-icon {
+    image-color: @{primary};
+}
+
+.rendering-transform-meta__primary,
+.rendering-transform-axis-label,
+.rendering-simplify-stat__value {
+    color: @{text};
+}
+
+.rendering-transform-meta__secondary,
+.rendering-transform-group-label,
+.rendering-subsection-title,
+.rendering-simplify-stat__label {
+    color: @{text_dim};
+}
+
+.rendering-transform-scale-separator {
+    border-color: @{alpha(border,0.30)};
+}
+
+.rendering-subsection-title {
+    border-top-color: @{panel.primary_border_faint};
+}
+
+.rendering-simplify-stat {
+    background-color: @{alpha(background,0.74)};
+    border-color: @{alpha(text_dim,0.14)};
+}
+
+.rendering-simplify-error {
+    color: @{error};
+}

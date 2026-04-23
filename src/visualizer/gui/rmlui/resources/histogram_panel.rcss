@@ -461,6 +461,22 @@
     pointer-events: none;
 }
 
+.histogram-grid-line--top-16 {
+    top: 16%;
+}
+
+.histogram-grid-line--top-36 {
+    top: 36%;
+}
+
+.histogram-grid-line--top-56 {
+    top: 56%;
+}
+
+.histogram-grid-line--top-76 {
+    top: 76%;
+}
+
 #histogram-bars {
     position: absolute;
     left: 14dp;
@@ -597,6 +613,10 @@
 
 .compare-cell {
     position: absolute;
+    left: 0%;
+    top: 0%;
+    width: 0%;
+    height: 0%;
     padding: 1dp;
     box-sizing: border-box;
 }

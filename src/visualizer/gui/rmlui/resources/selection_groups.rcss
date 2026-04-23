@@ -11,14 +11,6 @@ body {
     transition: background-color 0.1s quadratic-out;
 }
 
-.group-row:hover {
-    background-color: rgba(88, 91, 112, 77);
-}
-
-.group-row.active {
-    background-color: rgba(88, 91, 112, 128);
-}
-
 .group-row .lock-btn {
     width: 20dp;
     height: 20dp;
@@ -53,9 +45,7 @@ body {
     position: absolute;
     z-index: 100;
     padding: 4dp;
-    background-color: rgba(30, 30, 46, 230);
     border-width: 1dp;
-    border-color: #585b70;
 }
 
 .color-picker-popup.visible {

@@ -397,18 +397,11 @@ namespace lfs::vis::gui {
 
         auto content = doc->CreateElement("div");
         content->SetClass("scene-graph-content", true);
-        content->SetProperty("position", "relative");
-        content->SetProperty("width", "100%");
-        content->SetProperty("height", "0dp");
         content_el_ = AppendChild(std::move(content));
 
         auto header = doc->CreateElement("div");
         header->SetClass("section-header", true);
-        header->SetProperty("position", "absolute");
-        header->SetProperty("left", "0px");
-        header->SetProperty("right", "0px");
-        header->SetProperty("top", "0px");
-        header->SetProperty("height", std::format("{}dp", kHeaderHeightDp));
+        header->SetClass("scene-graph-models-header", true);
         header->SetAttribute("data-role", "models-header");
         header_el_ = content_el_->AppendChild(std::move(header));
 
@@ -432,9 +425,6 @@ namespace lfs::vis::gui {
             RowSlot slot;
             auto row = doc->CreateElement("div");
             row->SetClass("tree-row", true);
-            row->SetProperty("position", "absolute");
-            row->SetProperty("left", "0px");
-            row->SetProperty("right", "0px");
             row->SetProperty("display", "none");
             slot.root = content_el_->AppendChild(std::move(row));
 

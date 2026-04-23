@@ -242,7 +242,7 @@ namespace lfs::vis::gui {
                     is_next ? " is-next" : "");
 
                 html += std::format(
-                    R"(<button type="button" class="{}" style="display:block; width:100%;" data-kind="{}" data-steps="{}"><span class="history-row__line history-row__line--primary text-default">&#9679; {}</span><br /><span class="history-row__line history-row__line--stack text-muted">{}</span><br /><span class="history-row__line history-row__line--secondary text-muted">{}</span></button>)",
+                    R"(<button type="button" class="{}" data-kind="{}" data-steps="{}"><span class="history-row__line history-row__line--primary text-default">&#9679; {}</span><br /><span class="history-row__line history-row__line--stack text-muted">{}</span><br /><span class="history-row__line history-row__line--secondary text-muted">{}</span></button>)",
                     row_classes,
                     kind,
                     index + 1,

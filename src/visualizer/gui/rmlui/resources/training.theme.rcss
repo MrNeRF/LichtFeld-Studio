@@ -1,0 +1,31 @@
+/* Training panel theme overrides. */
+
+.training-panel-title {
+    color: @{text};
+    border-top-color: @{panel.primary_border_soft};
+}
+
+.training-panel-title-icon {
+    image-color: @{primary};
+}
+
+.training-subsection-title {
+    color: @{text_dim};
+    border-top-color: @{panel.primary_border_faint};
+}
+
+.loss-graph-wrap {
+    background-color: @{background};
+}
+
+.loss-tick {
+    color: @{text_dim};
+}
+
+.mask-settings-group {
+    border-left-color: @{panel.primary_accent};
+}
+
+.mask-settings-divider {
+    background-color: @{panel.primary_border_faint};
+}

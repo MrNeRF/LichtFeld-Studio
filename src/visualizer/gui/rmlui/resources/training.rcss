@@ -28,8 +28,6 @@ body {
     margin-top: 2dp;
     padding: 6dp 0 0;
     border-top-width: 1dp;
-    border-top-color: rgba(137, 180, 250, 84);
-    color: #f5f7ff;
     font-size: 11dp;
     font-weight: bold;
 }
@@ -41,7 +39,6 @@ body {
 .training-panel-title-icon {
     width: 14dp;
     height: 14dp;
-    image-color: #89b4fa;
     flex-shrink: 0;
 }
 
@@ -56,9 +53,7 @@ body {
 .training-subsection-title {
     padding-top: 6dp;
     border-top-width: 1dp;
-    border-top-color: rgba(137, 180, 250, 32);
     margin-bottom: 4dp;
-    color: #a6adc8;
     font-size: 10dp;
     font-weight: bold;
 }
@@ -86,7 +81,6 @@ body {
     height: 78dp;
     min-width: 0;
     overflow: hidden;
-    background-color: rgba(25, 25, 25, 255);
 }
 
 .loss-graph-ticks {
@@ -101,7 +95,6 @@ body {
 .loss-tick {
     font-family: "JetBrains Mono";
     font-size: 10dp;
-    color: #a6adc8;
     text-align: right;
     white-space: nowrap;
 }
@@ -116,6 +109,10 @@ loss-graph {
 #loss-graph-container {
     margin-top: 4dp;
     min-width: 0;
+}
+
+.training-progress-wrap {
+    position: relative;
 }
 
 #loss-label {
@@ -135,9 +132,7 @@ loss-graph {
     position: absolute;
     z-index: 100;
     padding: 4dp;
-    background-color: rgba(30, 30, 46, 230);
     border-width: 1dp;
-    border-color: #585b70;
 }
 
 .color-picker-popup.visible {
@@ -148,11 +143,9 @@ loss-graph {
     margin: 3dp 0 6dp 8dp;
     padding: 2dp 0 2dp 8dp;
     border-left-width: 1dp;
-    border-left-color: rgba(137, 180, 250, 56);
 }
 
 .mask-settings-divider {
     height: 1dp;
     margin: 4dp 0 2dp;
-    background-color: rgba(137, 180, 250, 32);
 }

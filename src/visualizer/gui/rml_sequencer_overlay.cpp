@@ -274,7 +274,7 @@ namespace lfs::vis::gui {
 
         using namespace lichtfeld::Strings;
         html += fmt::format(
-            R"(<div class="context-menu-item" id="ctx-add">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">K</span></div>)",
+            R"(<div class="context-menu-item" id="ctx-add">{}<span class="context-menu-label context-menu-shortcut">K</span></div>)",
             LOC(Sequencer::ADD_KEYFRAME_HERE));
 
         if (keyframe.has_value() && *keyframe < timeline.size()) {
@@ -287,7 +287,7 @@ namespace lfs::vis::gui {
 
             html += R"(<div class="context-menu-separator"></div>)";
             html += fmt::format(
-                R"(<div class="context-menu-item" id="ctx-update">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">U</span></div>)",
+                R"(<div class="context-menu-item" id="ctx-update">{}<span class="context-menu-label context-menu-shortcut">U</span></div>)",
                 LOC(Sequencer::UPDATE_TO_CURRENT_VIEW));
             html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-goto">{}</div>)",
@@ -332,7 +332,7 @@ namespace lfs::vis::gui {
                     LOC(Sequencer::DELETE_KEYFRAME));
             else
                 html += fmt::format(
-                    R"(<div class="context-menu-item" id="ctx-delete">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">Del</span></div>)",
+                    R"(<div class="context-menu-item" id="ctx-delete">{}<span class="context-menu-label context-menu-shortcut">Del</span></div>)",
                     LOC(Sequencer::DELETE_KEYFRAME));
         }
 

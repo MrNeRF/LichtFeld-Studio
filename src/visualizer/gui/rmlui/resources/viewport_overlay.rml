@@ -74,7 +74,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter" style="top: 5dp;">
+        <div class="toolbar-hcenter toolbar-layer-primary">
             <div id="primary-gizmo-toolbar" class="toolbar-container"
                  data-class-hidden="!show_gizmo_toolbar">
                 <div class="icon-btn"
@@ -90,7 +90,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter" style="top: 49dp;">
+        <div class="toolbar-hcenter toolbar-layer-submode">
             <div id="primary-submode-toolbar" class="subtoolbar-container hidden"
                  data-class-hidden="!show_submode_toolbar">
                 <div class="icon-btn"
@@ -106,7 +106,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter" style="top: 83dp;">
+        <div class="toolbar-hcenter toolbar-layer-pivot">
             <div id="primary-pivot-toolbar" class="subtoolbar-container hidden"
                  data-class-hidden="!show_pivot_toolbar">
                 <div class="icon-btn"
@@ -188,7 +188,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter" style="top: 5dp;">
+        <div class="toolbar-hcenter toolbar-layer-primary">
             <div id="secondary-gizmo-toolbar" class="toolbar-container"
                  data-class-hidden="!show_gizmo_toolbar">
                 <div class="icon-btn"
@@ -203,7 +203,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter" style="top: 49dp;">
+        <div class="toolbar-hcenter toolbar-layer-submode">
             <div id="secondary-submode-toolbar" class="subtoolbar-container hidden"
                  data-class-hidden="!show_submode_toolbar">
                 <div class="icon-btn"
@@ -218,7 +218,7 @@
             </div>
         </div>
 
-        <div class="toolbar-hcenter" style="top: 83dp;">
+        <div class="toolbar-hcenter toolbar-layer-pivot">
             <div id="secondary-pivot-toolbar" class="subtoolbar-container hidden"
                  data-class-hidden="!show_pivot_toolbar">
                 <div class="icon-btn"

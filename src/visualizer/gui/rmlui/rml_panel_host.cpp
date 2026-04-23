@@ -238,7 +238,23 @@ namespace lfs::vis::gui {
             base_rcss_loaded_ = true;
         }
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss"));
+        std::string panel_theme = rml_theme::loadBaseRCSS("rmlui/panel_host.theme.rcss");
+        auto theme_name = std::filesystem::path(rml_path_).replace_extension(".theme.rcss").string();
+        try {
+            const auto requested_path = std::filesystem::path(theme_name);
+            const auto resolved_path = requested_path.is_absolute()
+                                           ? requested_path
+                                           : lfs::vis::getAssetPath(theme_name);
+            if (std::filesystem::exists(resolved_path)) {
+                if (!panel_theme.empty())
+                    panel_theme += "\n";
+                panel_theme += rml_theme::loadBaseRCSS(resolved_path.string());
+            }
+        } catch (const std::exception& e) {
+            LOG_INFO("Theme RCSS load failed for '{}': {}", theme_name, e.what());
+        }
+
+        rml_theme::applyTheme(document_, base_rcss_, panel_theme);
         content_dirty_ = true;
         return true;
     }

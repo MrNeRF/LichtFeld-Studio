@@ -1,0 +1,19 @@
+/* About panel theme overrides. */
+
+.info-key,
+.footer-text {
+    color: @{text_dim};
+}
+
+.info-val,
+.link-label {
+    color: @{text};
+}
+
+.link-url {
+    color: @{primary};
+}
+
+.footer-sep {
+    color: @{border};
+}

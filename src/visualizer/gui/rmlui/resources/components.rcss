@@ -722,6 +722,12 @@ progress fill {
     font-size: 12dp;
 }
 
+.context-menu-shortcut {
+    float: right;
+    display: inline;
+    padding: 0;
+}
+
 .context-menu-separator {
     display: block;
     height: 1dp;
@@ -1026,6 +1032,10 @@ crf-curve {
 
 .status-error {
     color: #f38ba8;
+}
+
+.status-warning {
+    color: #f9e2af;
 }
 
 .status-muted {

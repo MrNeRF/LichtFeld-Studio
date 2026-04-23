@@ -265,7 +265,7 @@ from pathlib import Path
 template = str(Path(__file__).resolve().with_name("main_panel.rml"))
 ```
 
-When a template file exists at `main_panel.rml`, LichtFeld automatically looks for a sibling `main_panel.rcss` file and loads it as the base stylesheet for that document.
+When a template file exists at `main_panel.rml`, LichtFeld automatically looks for a sibling `main_panel.rcss` file and loads it as the base stylesheet for that document. A sibling `main_panel.theme.rcss` file is also loaded for palette-dependent overrides.
 
 ### Which styling path should you use?
 

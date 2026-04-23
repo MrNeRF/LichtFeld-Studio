@@ -65,7 +65,7 @@
             <span id="history-undo-title" class="history-section__title text-accent">Undo Stack</span>
             <div class="history-list">
                 <span id="history-empty-undo" class="history-empty text-muted">Nothing recorded yet</span>
-                <div id="history-undo-list" class="history-stack-item" style="display:block; width:100%;"></div>
+                <div id="history-undo-list" class="history-stack-item"></div>
             </div>
         </div>
 
@@ -75,7 +75,7 @@
             <span id="history-redo-title" class="history-section__title text-accent">Redo Stack</span>
             <div class="history-list">
                 <span id="history-empty-redo" class="history-empty text-muted">Nothing recorded yet</span>
-                <div id="history-redo-list" class="history-stack-item" style="display:block; width:100%;"></div>
+                <div id="history-redo-list" class="history-stack-item"></div>
             </div>
         </div>
     </div>

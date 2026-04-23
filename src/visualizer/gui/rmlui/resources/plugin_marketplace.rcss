@@ -1,10 +1,7 @@
-/* Plugin Marketplace panel styles
- * No hardcoded colors — all colors inherit from theme pipeline. */
+/* Plugin Marketplace panel styles. Theme-dependent colors live in plugin_marketplace.theme.rcss. */
 
-/* Warning text — hardcoded fallback; no theme-generated .status-warning exists. */
 .mp-warning-text {
     display: block;
-    color: #f9e2af;
     font-size: 12dp;
     margin-bottom: 4dp;
 }
@@ -82,17 +79,6 @@
     text-align: center;
 }
 
-.mp-view-btn.selected {
-    background-color: rgba(88, 91, 112, 180);
-    border-color: rgba(137, 180, 250, 140);
-    color: #cdd6f4;
-}
-
-.mp-view-btn.selected:hover {
-    background-color: rgba(108, 112, 134, 180);
-    border-color: rgba(137, 180, 250, 180);
-}
-
 .mp-icon-grid {
     display: inline-flex;
     flex-wrap: wrap;
@@ -106,7 +92,6 @@
     display: block;
     width: 5dp;
     height: 5dp;
-    background-color: #cdd6f4;
 }
 
 .mp-icon-list {
@@ -123,7 +108,6 @@
     display: block;
     width: 11dp;
     height: 1.5dp;
-    background-color: #cdd6f4;
 }
 
 /* ── Manual URL install ───────────────────────────────── */
@@ -171,7 +155,6 @@
 
 .card-grid.card-grid--list {
     border-width: 1dp;
-    border-color: rgba(88, 91, 112, 140);
 }
 
 .card-row {
@@ -199,7 +182,6 @@
     display: flex;
     flex-direction: column;
     transition: background-color 0.18s quadratic-out;
-    background-color: transparent;
 }
 
 .plugin-card--placeholder {
@@ -221,14 +203,6 @@
     margin-right: 16dp;
     letter-spacing: 0.5dp;
 }
-
-.plugin-card:hover {
-    background-color: rgba(137, 180, 250, 24);
-}
-
-.plugin-card.card--in-progress { border-color: #89b4fa; }
-.plugin-card.card--success     { border-color: #a6e3a1; }
-.plugin-card.card--error       { border-color: #f38ba8; }
 
 /* ── Card info area ───────────────────────────────────── */
 
@@ -341,7 +315,6 @@
     display: block;
     min-width: 0;
     border-top-width: 1dp;
-    border-top-color: rgba(88, 91, 112, 128);
     border-left-width: 2dp;
     border-left-color: transparent;
     transition: background-color 0.18s quadratic-out, border-left-color 0.18s quadratic-out;
@@ -350,14 +323,6 @@
 .plugin-list-row:first-child {
     border-top-width: 0;
 }
-
-.plugin-list-row:hover {
-    background-color: rgba(137, 180, 250, 20);
-}
-
-.plugin-list-row.card--in-progress { border-left-color: #89b4fa; }
-.plugin-list-row.card--success     { border-left-color: #a6e3a1; }
-.plugin-list-row.card--error       { border-left-color: #f38ba8; }
 
 .plugin-list-summary {
     display: flex;
@@ -374,16 +339,9 @@
     padding: 0;
     border-width: 0;
     background-color: transparent;
-    color: #a6adc8;
     text-align: center;
     line-height: 14dp;
     flex-shrink: 0;
-}
-
-.plugin-list-disclosure:hover,
-.plugin-list-name-btn:hover,
-.plugin-list-link:hover {
-    background-color: rgba(88, 91, 112, 77);
 }
 
 .plugin-list-name-btn {
@@ -396,7 +354,6 @@
     border-width: 0;
     background-color: transparent;
     text-align: left;
-    color: #cdd6f4;
 }
 
 .plugin-list-name {
@@ -431,14 +388,6 @@
     text-align: center;
 }
 
-.plugin-list-marker--remote {
-    color: #cdd6f4;
-}
-
-.plugin-list-marker--local {
-    color: #a6adc8;
-}
-
 .plugin-list-details {
     display: flex;
     flex-direction: column;
@@ -465,7 +414,6 @@
     padding: 0 4dp;
     border-width: 0;
     background-color: transparent;
-    color: #a6adc8;
     font-size: 11dp;
 }
 
@@ -523,7 +471,6 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0, 0, 0, 120);
     backdrop-filter: blur(3dp);
     display: flex;
     justify-content: center;

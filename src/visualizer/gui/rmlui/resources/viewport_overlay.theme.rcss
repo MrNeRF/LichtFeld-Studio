@@ -10,6 +10,10 @@
     border-radius: @{num(size.window_rounding)}dp;
 }
 
+.toolbar-separator {
+    background-color: @{alpha(border,0.39)};
+}
+
 .icon-btn img {
     image-color: @{viewport.icon_dim};
 }

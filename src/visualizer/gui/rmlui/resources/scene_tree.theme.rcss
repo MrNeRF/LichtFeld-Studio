@@ -1,0 +1,227 @@
+/* Scene tree, history, and logging theme overrides. */
+
+#search-container {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+#search-icon,
+#filter-clear img {
+    image-color: @{text_dim};
+}
+
+#filter-input {
+    color: @{text};
+}
+
+#filter-clear:hover img,
+#filter-clear:focus-visible img {
+    image-color: @{text};
+}
+
+.tree-row.even {
+    background-color: @{row_even};
+}
+
+.tree-row.odd {
+    background-color: @{row_odd};
+}
+
+.tree-row:hover {
+    background-color: @{panel.row_hover};
+    border-left-color: @{primary};
+}
+
+.tree-row.selected {
+    background-color: @{panel.row_selected};
+}
+
+.tree-row.selected:hover {
+    background-color: @{panel.row_selected_hover};
+    border-left-color: @{primary_dim};
+}
+
+.tree-row.drop-target {
+    border-color: @{primary};
+}
+
+.expand-toggle,
+.node-name.training-disabled,
+.section-arrow {
+    color: @{text_dim};
+}
+
+.expand-toggle:hover,
+.node-name {
+    color: @{text};
+}
+
+.row-icon {
+    image-color: @{text};
+}
+
+.row-icon.type-icon.splat        { image-color: @{alpha(info,0.90)}; }
+.row-icon.type-icon.group        { image-color: @{alpha(text_dim,0.80)}; }
+.row-icon.type-icon.dataset      { image-color: @{alpha(primary,0.90)}; }
+.row-icon.type-icon.camera       { image-color: @{alpha(text_dim,0.78)}; }
+.row-icon.type-icon.camera_group { image-color: @{alpha(primary_dim,0.80)}; }
+.row-icon.type-icon.cropbox      { image-color: @{alpha(warning,0.90)}; }
+.row-icon.type-icon.ellipsoid    { image-color: @{alpha(info,0.90)}; }
+.row-icon.type-icon.pointcloud   { image-color: @{alpha(secondary,0.80)}; }
+.row-icon.type-icon.mesh         { image-color: @{alpha(success,0.90)}; }
+
+.tree-row.selected .row-icon.trash-icon {
+    image-color: @{error};
+}
+
+.rename-input {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{primary};
+}
+
+.scene-tab {
+    color: @{text_dim};
+    background-color: @{panel.tab_inactive_bg};
+    border-color: @{border};
+}
+
+.scene-tab:hover,
+.scene-tab:focus-visible {
+    color: @{text};
+    border-color: @{panel.tab_hover_border};
+    background-color: @{panel.tab_hover_bg};
+}
+
+.scene-tab.active {
+    color: @{text};
+    background-color: @{panel.tab_active_bg};
+    border-color: @{panel.tab_active_border};
+    border-bottom-color: @{primary};
+}
+
+.scene-chip {
+    color: @{text};
+    background-color: @{surface_bright};
+    border-color: @{border};
+}
+
+.scene-chip--accent {
+    color: @{text};
+    background-color: @{panel.chip_accent_bg};
+    border-color: @{panel.chip_accent_border};
+}
+
+.logging-field-label,
+.log-entry__meta,
+.history-summary__label,
+.history-empty {
+    color: @{text_dim};
+}
+
+.log-entry {
+    background-color: @{alpha(surface_bright,0.70)};
+    border-color: @{alpha(border,0.33)} @{alpha(border,0.33)} @{alpha(border,0.33)}
+        @{alpha(border,0.68)};
+}
+
+.log-entry__level {
+    color: @{background};
+    background-color: @{text};
+}
+
+.log-entry--trace {
+    border-color: @{alpha(text_dim,0.31)} @{alpha(text_dim,0.31)} @{alpha(text_dim,0.31)}
+        @{alpha(text_dim,0.65)};
+}
+
+.log-entry--trace .log-entry__level {
+    background-color: @{text_dim};
+}
+
+.log-entry--debug,
+.log-entry--perf {
+    border-color: @{alpha(info,0.34)} @{alpha(info,0.34)} @{alpha(info,0.34)}
+        @{alpha(info,0.70)};
+}
+
+.log-entry--debug .log-entry__level,
+.log-entry--perf .log-entry__level {
+    background-color: @{info};
+}
+
+.log-entry--info {
+    border-color: @{alpha(success,0.32)} @{alpha(success,0.32)} @{alpha(success,0.32)}
+        @{alpha(success,0.68)};
+}
+
+.log-entry--info .log-entry__level {
+    background-color: @{success};
+}
+
+.log-entry--warn {
+    border-color: @{alpha(warning,0.36)} @{alpha(warning,0.36)} @{alpha(warning,0.36)}
+        @{alpha(warning,0.78)};
+}
+
+.log-entry--warn .log-entry__level {
+    background-color: @{warning};
+}
+
+.log-entry--error,
+.log-entry--critical {
+    border-color: @{alpha(error,0.38)} @{alpha(error,0.38)} @{alpha(error,0.38)}
+        @{alpha(error,0.82)};
+}
+
+.log-entry--error .log-entry__level,
+.log-entry--critical .log-entry__level {
+    background-color: @{error};
+}
+
+.log-entry--critical {
+    background-color: @{alpha(error,0.16)};
+}
+
+.log-entry--off {
+    border-color: @{alpha(text_dim,0.29)} @{alpha(text_dim,0.29)} @{alpha(text_dim,0.29)}
+        @{alpha(text_dim,0.59)};
+}
+
+.log-entry--off .log-entry__level {
+    background-color: @{text_dim};
+}
+
+.btn.history-row {
+    background-color: @{surface_bright};
+    border-color: @{alpha(warning,0.33)} @{alpha(warning,0.33)} @{alpha(warning,0.33)}
+        @{alpha(warning,0.67)};
+}
+
+.history-row:hover {
+    background-color: @{blend(surface_bright,warning,0.08)};
+    border-color: @{alpha(warning,0.59)} @{alpha(warning,0.59)} @{alpha(warning,0.59)}
+        @{alpha(warning,0.86)};
+}
+
+.history-row.is-next {
+    background-color: @{alpha(warning,0.20)};
+    border-color: @{alpha(warning,0.86)} @{alpha(warning,0.86)} @{alpha(warning,0.86)}
+        @{warning};
+}
+
+.history-row--redo {
+    border-color: @{alpha(success,0.35)} @{alpha(success,0.35)} @{alpha(success,0.35)}
+        @{alpha(success,0.69)};
+}
+
+.history-row--redo:hover {
+    border-color: @{alpha(success,0.59)} @{alpha(success,0.59)} @{alpha(success,0.59)}
+        @{alpha(success,0.86)};
+}
+
+.history-row--redo.is-next {
+    background-color: @{alpha(success,0.18)};
+    border-color: @{alpha(success,0.86)} @{alpha(success,0.86)} @{alpha(success,0.86)}
+        @{success};
+}

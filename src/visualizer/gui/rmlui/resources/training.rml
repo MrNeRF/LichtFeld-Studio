@@ -620,7 +620,7 @@
     <span class="status-text text-default training-status-line">{{status_iteration}}</span>
     <span class="status-text text-default training-status-line">{{status_gaussians}}</span>
     <div data-if="show_progress">
-      <div style="position: relative;">
+      <div class="training-progress-wrap">
         <progress id="training-progress" max="1" data-attr-value="progress_value" />
         <span class="progress__text">{{progress_text}}</span>
       </div>
