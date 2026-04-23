@@ -368,7 +368,7 @@ namespace lfs::vis::gui {
         if (!active_)
             return;
 
-        if (!composing && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
+        if (!composing && active_.has_value() && !active_->has_input && rml_context_->GetFocusElement() == nullptr &&
             (hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
              hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER))) {
             if (dismissFirstEnabledButton())
