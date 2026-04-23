@@ -9,7 +9,7 @@ from pathlib import Path
 def test_histogram_locale_bundles_define_all_new_metric_keys():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
-    required_metrics = {"position_x", "position_y", "position_z", "volume", "anisotropy", "erank"}
+    required_metrics = {"position_x", "position_y", "position_z", "volume", "anisotropy", "erank", "world_distance"}
 
     for locale_path in sorted(locale_dir.glob("*.json")):
         data = json.loads(locale_path.read_text())
