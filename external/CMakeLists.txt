@@ -31,6 +31,7 @@ set(LFS_TREE_SITTER_SOURCES
     "${LFS_TREE_SITTER_ROOT}/lib/src/node.c"
     "${LFS_TREE_SITTER_ROOT}/lib/src/parser.c"
     "${LFS_TREE_SITTER_ROOT}/lib/src/point.c"
+    "${LFS_TREE_SITTER_ROOT}/lib/src/query.c"
     "${LFS_TREE_SITTER_ROOT}/lib/src/stack.c"
     "${LFS_TREE_SITTER_ROOT}/lib/src/subtree.c"
     "${LFS_TREE_SITTER_ROOT}/lib/src/tree.c"

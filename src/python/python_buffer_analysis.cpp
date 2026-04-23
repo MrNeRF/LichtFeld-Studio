@@ -21,12 +21,22 @@ namespace lfs::python {
     namespace {
         constexpr std::size_t MAX_ISSUES = 8;
         constexpr std::string_view SYMBOL_QUERY = R"QUERY(
+(decorated_definition
+  definition: (function_definition
+    name: (identifier) @name)) @function
+(decorated_definition
+  definition: (class_definition
+    name: (identifier) @name)) @class
 (function_definition
   name: (identifier) @name) @function
 (class_definition
   name: (identifier) @name) @class
 (import_statement) @import
 (import_from_statement) @import
+(module
+  (expression_statement
+    (assignment
+      left: (identifier) @name) @variable))
 )QUERY";
 
         struct ParserDeleter {
@@ -65,6 +75,19 @@ namespace lfs::python {
         using TreePtr = std::unique_ptr<TSTree, TreeDeleter>;
         using QueryPtr = std::unique_ptr<TSQuery, QueryDeleter>;
         using QueryCursorPtr = std::unique_ptr<TSQueryCursor, QueryCursorDeleter>;
+
+        [[nodiscard]] TSQuery* symbol_query() {
+            static const QueryPtr query = [] {
+                std::uint32_t query_error_offset = 0;
+                TSQueryError query_error = TSQueryErrorNone;
+                return QueryPtr(ts_query_new(tree_sitter_python(),
+                                             SYMBOL_QUERY.data(),
+                                             static_cast<std::uint32_t>(SYMBOL_QUERY.size()),
+                                             &query_error_offset,
+                                             &query_error));
+            }();
+            return query.get();
+        }
 
         [[nodiscard]] bool fits_tree_sitter_u32(const std::size_t value) {
             return value <= std::numeric_limits<std::uint32_t>::max();
@@ -180,6 +203,16 @@ namespace lfs::python {
             return type == "function_definition" || type == "class_definition";
         }
 
+        [[nodiscard]] TSNode expanded_symbol_node(TSNode node) {
+            if (is_symbol_container_type(node_type(node))) {
+                const TSNode parent = ts_node_parent(node);
+                if (!ts_node_is_null(parent) && node_type(parent) == "decorated_definition") {
+                    return parent;
+                }
+            }
+            return node;
+        }
+
         [[nodiscard]] bool is_block_type(std::string_view type) {
             static constexpr std::array BLOCK_TYPES{
                 "decorated_definition",
@@ -200,6 +233,31 @@ namespace lfs::python {
             return std::ranges::find(BLOCK_TYPES, type) != BLOCK_TYPES.end();
         }
 
+        [[nodiscard]] std::string fold_kind_for_type(std::string_view type) {
+            if (type == "decorated_definition") {
+                return "definition";
+            }
+            if (type == "function_definition") {
+                return "function";
+            }
+            if (type == "class_definition") {
+                return "class";
+            }
+            if (type == "for_statement" || type == "while_statement") {
+                return "loop";
+            }
+            if (type == "if_statement" || type == "elif_clause" || type == "else_clause") {
+                return "conditional";
+            }
+            if (type == "try_statement" || type == "except_clause" || type == "finally_clause") {
+                return "exception";
+            }
+            if (type == "match_statement" || type == "case_clause") {
+                return "match";
+            }
+            return "block";
+        }
+
         [[nodiscard]] int structural_depth(TSNode node) {
             int depth = 0;
             for (TSNode parent = ts_node_parent(node); !ts_node_is_null(parent);
@@ -216,6 +274,7 @@ namespace lfs::python {
             TSNode symbol_node,
             const std::optional<TSNode> name_node,
             std::string_view code) {
+            symbol_node = expanded_symbol_node(symbol_node);
             const TSPoint start = ts_node_start_point(symbol_node);
             const TSPoint end = ts_node_end_point(symbol_node);
 
@@ -243,14 +302,8 @@ namespace lfs::python {
                 return {};
             }
 
-            std::uint32_t query_error_offset = 0;
-            TSQueryError query_error = TSQueryErrorNone;
-            QueryPtr query(ts_query_new(tree_sitter_python(),
-                                        SYMBOL_QUERY.data(),
-                                        static_cast<std::uint32_t>(SYMBOL_QUERY.size()),
-                                        &query_error_offset,
-                                        &query_error));
-            if (!query) {
+            TSQuery* query = symbol_query();
+            if (query == nullptr) {
                 return {};
             }
 
@@ -260,8 +313,8 @@ namespace lfs::python {
             }
 
             std::vector<PythonSymbol> symbols;
-            ts_query_cursor_exec(cursor.get(), query.get(), ts_tree_root_node(tree));
             ts_query_cursor_set_byte_range(cursor.get(), 0, static_cast<std::uint32_t>(code.size()));
+            ts_query_cursor_exec(cursor.get(), query, ts_tree_root_node(tree));
 
             TSQueryMatch match;
             while (ts_query_cursor_next_match(cursor.get(), &match)) {
@@ -273,7 +326,7 @@ namespace lfs::python {
                     const TSQueryCapture capture = match.captures[i];
                     std::uint32_t capture_name_length = 0;
                     const char* capture_name =
-                        ts_query_capture_name_for_id(query.get(), capture.index, &capture_name_length);
+                        ts_query_capture_name_for_id(query, capture.index, &capture_name_length);
                     const std::string_view name(capture_name, capture_name_length);
 
                     if (name == "function") {
@@ -285,6 +338,9 @@ namespace lfs::python {
                     } else if (name == "import") {
                         symbol_node = capture.node;
                         kind = PythonSymbolKind::Import;
+                    } else if (name == "variable") {
+                        symbol_node = capture.node;
+                        kind = PythonSymbolKind::Variable;
                     } else if (name == "name") {
                         name_node = capture.node;
                     }
@@ -301,7 +357,69 @@ namespace lfs::python {
                 }
                 return lhs.start_byte < rhs.start_byte;
             });
+            symbols.erase(std::unique(symbols.begin(),
+                                      symbols.end(),
+                                      [](const PythonSymbol& lhs, const PythonSymbol& rhs) {
+                                          return lhs.kind == rhs.kind && lhs.name == rhs.name &&
+                                                 lhs.start_byte == rhs.start_byte &&
+                                                 lhs.end_byte == rhs.end_byte;
+                                      }),
+                          symbols.end());
             return symbols;
+        }
+
+        void collect_fold_ranges(TSNode node, std::vector<PythonFoldRange>& ranges) {
+            const std::string_view type = node_type(node);
+            bool collect_node = is_block_type(type);
+            if (collect_node && is_symbol_container_type(type)) {
+                const TSNode parent = ts_node_parent(node);
+                collect_node = ts_node_is_null(parent) || node_type(parent) != "decorated_definition";
+            }
+
+            if (collect_node) {
+                const TSPoint start = ts_node_start_point(node);
+                const TSPoint end = ts_node_end_point(node);
+                const std::size_t start_byte = ts_node_start_byte(node);
+                const std::size_t end_byte = ts_node_end_byte(node);
+                if (end.row > start.row && start_byte < end_byte) {
+                    ranges.push_back(PythonFoldRange{
+                        .start_byte = start_byte,
+                        .end_byte = end_byte,
+                        .line = start.row,
+                        .end_line = end.row,
+                        .kind = fold_kind_for_type(type),
+                    });
+                }
+            }
+
+            const std::uint32_t child_count = ts_node_child_count(node);
+            for (std::uint32_t i = 0; i < child_count; ++i) {
+                collect_fold_ranges(ts_node_child(node, i), ranges);
+            }
+        }
+
+        [[nodiscard]] std::vector<PythonFoldRange> extract_fold_ranges(TSTree* tree, std::string_view code) {
+            if (tree == nullptr || code.empty()) {
+                return {};
+            }
+
+            std::vector<PythonFoldRange> ranges;
+            collect_fold_ranges(ts_tree_root_node(tree), ranges);
+            std::ranges::sort(ranges, [](const PythonFoldRange& lhs, const PythonFoldRange& rhs) {
+                if (lhs.start_byte == rhs.start_byte) {
+                    return lhs.end_byte > rhs.end_byte;
+                }
+                return lhs.start_byte < rhs.start_byte;
+            });
+            ranges.erase(std::unique(ranges.begin(),
+                                     ranges.end(),
+                                     [](const PythonFoldRange& lhs, const PythonFoldRange& rhs) {
+                                         return lhs.start_byte == rhs.start_byte &&
+                                                lhs.end_byte == rhs.end_byte &&
+                                                lhs.kind == rhs.kind;
+                                     }),
+                         ranges.end());
+            return ranges;
         }
 
         [[nodiscard]] PythonBufferAnalysis analyze_tree(std::string_view code, TSTree* tree) {
@@ -375,7 +493,11 @@ namespace lfs::python {
         TreePtr tree;
         PythonBufferAnalysis current_analysis;
         std::vector<PythonSymbol> current_symbols;
+        std::vector<PythonSymbol> last_good_symbols;
+        std::vector<PythonFoldRange> current_fold_ranges;
+        std::vector<PythonFoldRange> last_good_fold_ranges;
         std::size_t code_size = 0;
+        bool current_structure_current = false;
 
         [[nodiscard]] bool ensure_parser() {
             if (parser != nullptr) {
@@ -386,12 +508,14 @@ namespace lfs::python {
             if (!parser) {
                 current_analysis = {};
                 current_analysis.summary = "Failed to create Python syntax parser";
+                current_structure_current = false;
                 return false;
             }
 
             if (!ts_parser_set_language(parser.get(), tree_sitter_python())) {
                 current_analysis = {};
                 current_analysis.summary = "Failed to initialize Python syntax parser";
+                current_structure_current = false;
                 parser.reset();
                 return false;
             }
@@ -402,17 +526,43 @@ namespace lfs::python {
         void refresh_analysis(std::string_view code) {
             code_size = code.size();
             current_analysis = analyze_tree(code, tree.get());
-            current_symbols = current_analysis.clean() ? extract_symbols(tree.get(), code)
-                                                       : std::vector<PythonSymbol>{};
+
+            std::vector<PythonSymbol> parsed_symbols = extract_symbols(tree.get(), code);
+            std::vector<PythonFoldRange> parsed_fold_ranges = extract_fold_ranges(tree.get(), code);
+
+            if (current_analysis.clean()) {
+                current_symbols = std::move(parsed_symbols);
+                current_fold_ranges = std::move(parsed_fold_ranges);
+                last_good_symbols = current_symbols;
+                last_good_fold_ranges = current_fold_ranges;
+                current_structure_current = true;
+                return;
+            }
+
+            if (!parsed_symbols.empty() || !parsed_fold_ranges.empty()) {
+                current_symbols = std::move(parsed_symbols);
+                current_fold_ranges = std::move(parsed_fold_ranges);
+                current_structure_current = false;
+                return;
+            }
+
+            current_symbols = last_good_symbols;
+            current_fold_ranges = last_good_fold_ranges;
+            current_structure_current = false;
         }
 
         [[nodiscard]] bool reset(std::string_view code) {
             tree.reset();
             current_symbols.clear();
+            current_fold_ranges.clear();
+            current_structure_current = false;
             code_size = code.size();
 
             if (code.empty() || is_blank(code)) {
                 current_analysis = analyze_tree(code, nullptr);
+                last_good_symbols.clear();
+                last_good_fold_ranges.clear();
+                current_structure_current = true;
                 return true;
             }
 
@@ -423,6 +573,7 @@ namespace lfs::python {
             if (!fits_tree_sitter_u32(code.size())) {
                 current_analysis = {};
                 current_analysis.summary = "Python buffer is too large to parse";
+                current_structure_current = false;
                 return false;
             }
 
@@ -431,6 +582,7 @@ namespace lfs::python {
             if (!tree) {
                 current_analysis = {};
                 current_analysis.summary = "Failed to parse Python buffer";
+                current_structure_current = false;
                 return false;
             }
 
@@ -452,6 +604,7 @@ namespace lfs::python {
             if (!fits_tree_sitter_u32(code.size())) {
                 current_analysis = {};
                 current_analysis.summary = "Python buffer is too large to parse";
+                current_structure_current = false;
                 return false;
             }
 
@@ -510,11 +663,15 @@ namespace lfs::python {
         return impl_->current_symbols;
     }
 
+    const std::vector<PythonFoldRange>& PythonSyntaxDocument::foldRanges() const {
+        return impl_->current_fold_ranges;
+    }
+
     std::string PythonSyntaxDocument::scopeAt(const std::size_t byte_offset) const {
         std::vector<std::string> scope_parts;
         for (const auto& symbol : impl_->current_symbols) {
-            if (symbol.kind == PythonSymbolKind::Import || symbol.start_byte > byte_offset ||
-                byte_offset > symbol.end_byte) {
+            if (symbol.kind == PythonSymbolKind::Import || symbol.kind == PythonSymbolKind::Variable ||
+                symbol.start_byte > byte_offset || byte_offset > symbol.end_byte) {
                 continue;
             }
             scope_parts.push_back(symbol.name);
@@ -558,6 +715,10 @@ namespace lfs::python {
 
     bool PythonSyntaxDocument::hasTree() const {
         return impl_->tree != nullptr;
+    }
+
+    bool PythonSyntaxDocument::structureCurrent() const {
+        return impl_->current_structure_current;
     }
 
     PythonBufferAnalysis analyze_python_buffer(std::string_view code) {

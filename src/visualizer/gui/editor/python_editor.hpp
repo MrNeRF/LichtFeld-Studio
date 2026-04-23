@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,6 +14,14 @@ namespace lfs::vis {
 }
 
 namespace lfs::vis::editor {
+
+    struct PythonEditorSymbol {
+        std::string label;
+        std::string detail;
+        std::size_t byte_offset = 0;
+        std::size_t line = 0;
+        int depth = 0;
+    };
 
     class PythonEditor {
     public:
@@ -36,9 +45,13 @@ namespace lfs::vis::editor {
         [[nodiscard]] bool syntaxDiagnosticsAvailable() const;
         [[nodiscard]] std::string syntaxSummary() const;
         [[nodiscard]] std::string syntaxStructureSummary() const;
+        [[nodiscard]] std::vector<PythonEditorSymbol> syntaxSymbols() const;
+        [[nodiscard]] bool syntaxStructureCurrent() const;
+        [[nodiscard]] std::size_t syntaxFoldCount() const;
         [[nodiscard]] std::string currentSyntaxScope() const;
         void refreshSyntaxDiagnostics();
         bool selectEnclosingSyntaxBlock();
+        bool jumpToSyntaxSymbol(std::size_t index);
 
         void updateTheme(const Theme& theme);
 

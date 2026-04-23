@@ -164,6 +164,47 @@ namespace {
         }
     }
 
+    void draw_syntax_outline_control(lfs::vis::gui::panels::PythonConsoleState& state,
+                                     const lfs::vis::Theme&,
+                                     const char* id) {
+        auto* editor = state.getEditor();
+        const auto symbols = editor != nullptr ? editor->syntaxSymbols()
+                                               : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
+        const bool has_symbols = !symbols.empty();
+        const std::string scope = editor != nullptr ? editor->currentSyntaxScope() : std::string{};
+        const char* preview = scope.empty() ? "Outline" : scope.c_str();
+
+        if (!has_symbols) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo(id, preview)) {
+            for (std::size_t i = 0; i < symbols.size(); ++i) {
+                const auto& symbol = symbols[i];
+                if (ImGui::Selectable(symbol.label.c_str(), false)) {
+                    editor->jumpToSyntaxSymbol(i);
+                }
+                if (ImGui::IsItemHovered() && !symbol.detail.empty()) {
+                    ImGui::SetTooltip("%s", symbol.detail.c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (!has_symbols) {
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (editor != nullptr && !editor->syntaxStructureCurrent()) {
+                ImGui::SetTooltip("Jump to Python symbol (partial syntax structure)");
+            } else {
+                ImGui::SetTooltip("Jump to Python symbol");
+            }
+        }
+    }
+
     void setup_sys_path() {
         std::call_once(g_syspath_init_once, [] {
             const lfs::python::GilAcquire gil;
@@ -760,6 +801,8 @@ namespace lfs::vis::gui::panels {
             ImGui::TextColored(t.palette.text_dim, "|");
             ImGui::SameLine();
             draw_syntax_status(state, t);
+            ImGui::SameLine();
+            draw_syntax_outline_control(state, t, "##python_outline");
 
             ImGui::PopStyleVar(2);
         }
@@ -1170,6 +1213,8 @@ namespace lfs::vis::gui::panels {
         ImGui::TextColored(t.palette.text_dim, "|");
         ImGui::SameLine();
         draw_syntax_status(state, t);
+        ImGui::SameLine();
+        draw_syntax_outline_control(state, t, "##docked_python_outline");
 
         ImGui::PopStyleVar(2);
 

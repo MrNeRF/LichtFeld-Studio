@@ -504,10 +504,16 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
     constexpr std::string_view code =
         "import os\n"
         "from pathlib import Path\n"
+        "CONFIG = Path('x')\n"
         "\n"
+        "@decorator\n"
         "class Tool:\n"
         "    def run(self):\n"
-        "        pass\n";
+        "        pass\n"
+        "\n"
+        "@decorator\n"
+        "def helper():\n"
+        "    return CONFIG\n";
 
     lfs::python::PythonSyntaxDocument document;
     ASSERT_TRUE(document.reset(code));
@@ -516,6 +522,7 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
     int imports = 0;
     int classes = 0;
     int functions = 0;
+    int variables = 0;
     for (const auto& symbol : document.symbols()) {
         switch (symbol.kind) {
         case lfs::python::PythonSymbolKind::Import:
@@ -527,14 +534,21 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
             break;
         case lfs::python::PythonSymbolKind::Function:
             ++functions;
-            EXPECT_EQ(symbol.name, "run");
+            EXPECT_TRUE(symbol.name == "run" || symbol.name == "helper");
+            break;
+        case lfs::python::PythonSymbolKind::Variable:
+            ++variables;
+            EXPECT_EQ(symbol.name, "CONFIG");
             break;
         }
     }
 
     EXPECT_EQ(imports, 2);
     EXPECT_EQ(classes, 1);
-    EXPECT_EQ(functions, 1);
+    EXPECT_EQ(functions, 2);
+    EXPECT_EQ(variables, 1);
+    EXPECT_TRUE(document.structureCurrent());
+    EXPECT_FALSE(document.foldRanges().empty());
     EXPECT_EQ(document.scopeAt(code.find("pass")), "Tool.run");
 
     const auto block = document.enclosingBlockRange(code.find("pass"));
@@ -570,6 +584,36 @@ TEST_F(PythonIntegrationTest, PythonSyntaxDocumentAppliesIncrementalEdits) {
     ASSERT_TRUE(document.applyEditsAndReparse(updated, edits));
     EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
     ASSERT_FALSE(document.analysis().issues.empty());
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentKeepsStructureDuringSyntaxError) {
+    constexpr std::string_view valid =
+        "class Tool:\n"
+        "    def run(self):\n"
+        "        pass\n";
+    constexpr std::string_view invalid = "if True print('x')\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(valid));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+    ASSERT_TRUE(document.structureCurrent());
+    ASSERT_FALSE(document.symbols().empty());
+    ASSERT_FALSE(document.foldRanges().empty());
+
+    ASSERT_TRUE(document.reset(invalid));
+    EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
+    EXPECT_FALSE(document.structureCurrent());
+    ASSERT_FALSE(document.symbols().empty());
+    ASSERT_FALSE(document.foldRanges().empty());
+
+    bool retained_class = false;
+    bool retained_function = false;
+    for (const auto& symbol : document.symbols()) {
+        retained_class |= symbol.kind == lfs::python::PythonSymbolKind::Class && symbol.name == "Tool";
+        retained_function |= symbol.kind == lfs::python::PythonSymbolKind::Function && symbol.name == "run";
+    }
+    EXPECT_TRUE(retained_class);
+    EXPECT_TRUE(retained_function);
 }
 
 TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {

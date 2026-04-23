@@ -62,6 +62,7 @@ namespace lfs::python {
         Function,
         Class,
         Import,
+        Variable,
     };
 
     struct PythonSymbol {
@@ -82,6 +83,14 @@ namespace lfs::python {
         std::size_t end_byte = 0;
     };
 
+    struct PythonFoldRange {
+        std::size_t start_byte = 0;
+        std::size_t end_byte = 0;
+        std::size_t line = 0;
+        std::size_t end_line = 0;
+        std::string kind;
+    };
+
     class PythonSyntaxDocument {
     public:
         PythonSyntaxDocument();
@@ -97,9 +106,11 @@ namespace lfs::python {
 
         [[nodiscard]] const PythonBufferAnalysis& analysis() const;
         [[nodiscard]] const std::vector<PythonSymbol>& symbols() const;
+        [[nodiscard]] const std::vector<PythonFoldRange>& foldRanges() const;
         [[nodiscard]] std::string scopeAt(std::size_t byte_offset) const;
         [[nodiscard]] std::optional<PythonByteRange> enclosingBlockRange(std::size_t byte_offset) const;
         [[nodiscard]] bool hasTree() const;
+        [[nodiscard]] bool structureCurrent() const;
 
     private:
         struct Impl;

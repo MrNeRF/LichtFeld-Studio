@@ -342,6 +342,20 @@ namespace lfs::vis::editor {
             }
         }
 
+        const char* syntax_symbol_prefix(const lfs::python::PythonSymbolKind kind) {
+            switch (kind) {
+            case lfs::python::PythonSymbolKind::Function:
+                return "def";
+            case lfs::python::PythonSymbolKind::Class:
+                return "class";
+            case lfs::python::PythonSymbolKind::Import:
+                return "import";
+            case lfs::python::PythonSymbolKind::Variable:
+                return "var";
+            }
+            return "sym";
+        }
+
         struct CursorLocation {
             size_t byte_index = 0;
             size_t line_start = 0;
@@ -2126,6 +2140,35 @@ namespace lfs::vis::editor {
             return true;
         }
 
+        bool jumpToSyntaxSymbol(const size_t index) {
+            if (buffer == nullptr || editor == nullptr || index >= syntax_document.symbols().size()) {
+                return false;
+            }
+
+            auto* window = editor->GetActiveWindow();
+            if (window == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const auto& symbol = syntax_document.symbols()[index];
+            const size_t target = std::min(symbol.start_byte, text.size());
+            const auto cursor = Zep::GlyphIterator(buffer, static_cast<long>(target));
+            if (!cursor.Valid()) {
+                return false;
+            }
+
+            buffer->ClearSelection();
+            if (auto* mode = buffer->GetMode()) {
+                mode->SwitchMode(mode->DefaultMode());
+            }
+            window->SetBufferCursor(cursor);
+            current_syntax_scope = syntax_document.scopeAt(target);
+            editor->RequestRefresh();
+            focusEditor();
+            return true;
+        }
+
         void undo() {
             if (buffer == nullptr) {
                 return;
@@ -2371,6 +2414,7 @@ namespace lfs::vis::editor {
         int class_count = 0;
         int function_count = 0;
         int import_count = 0;
+        int variable_count = 0;
         for (const auto& symbol : impl_->syntax_document.symbols()) {
             switch (symbol.kind) {
             case lfs::python::PythonSymbolKind::Class:
@@ -2382,16 +2426,62 @@ namespace lfs::vis::editor {
             case lfs::python::PythonSymbolKind::Import:
                 ++import_count;
                 break;
+            case lfs::python::PythonSymbolKind::Variable:
+                ++variable_count;
+                break;
             }
         }
 
-        return std::format("{} import{}, {} class{}, {} function{}",
-                           import_count,
-                           import_count == 1 ? "" : "s",
-                           class_count,
-                           class_count == 1 ? "" : "es",
-                           function_count,
-                           function_count == 1 ? "" : "s");
+        std::string summary = std::format("{} import{}, {} class{}, {} function{}, {} variable{}, {} fold{}",
+                                          import_count,
+                                          import_count == 1 ? "" : "s",
+                                          class_count,
+                                          class_count == 1 ? "" : "es",
+                                          function_count,
+                                          function_count == 1 ? "" : "s",
+                                          variable_count,
+                                          variable_count == 1 ? "" : "s",
+                                          impl_->syntax_document.foldRanges().size(),
+                                          impl_->syntax_document.foldRanges().size() == 1 ? "" : "s");
+        if (!impl_->syntax_document.structureCurrent()) {
+            summary += " (partial)";
+        }
+        return summary;
+    }
+
+    std::vector<PythonEditorSymbol> PythonEditor::syntaxSymbols() const {
+        std::vector<PythonEditorSymbol> symbols;
+        symbols.reserve(impl_->syntax_document.symbols().size());
+
+        for (const auto& symbol : impl_->syntax_document.symbols()) {
+            std::string name = symbol.name.empty() ? symbol.detail : symbol.name;
+            if (name.empty()) {
+                name = "symbol";
+            }
+
+            const std::string indent(static_cast<size_t>(std::max(symbol.depth, 0)) * 2, ' ');
+            symbols.push_back(PythonEditorSymbol{
+                .label = std::format("{}{} {}  L{}",
+                                     indent,
+                                     syntax_symbol_prefix(symbol.kind),
+                                     name,
+                                     symbol.line + 1),
+                .detail = symbol.detail,
+                .byte_offset = symbol.start_byte,
+                .line = symbol.line,
+                .depth = symbol.depth,
+            });
+        }
+
+        return symbols;
+    }
+
+    bool PythonEditor::syntaxStructureCurrent() const {
+        return impl_->syntax_document.structureCurrent();
+    }
+
+    std::size_t PythonEditor::syntaxFoldCount() const {
+        return impl_->syntax_document.foldRanges().size();
     }
 
     std::string PythonEditor::currentSyntaxScope() const {
@@ -2407,6 +2497,10 @@ namespace lfs::vis::editor {
 
     bool PythonEditor::selectEnclosingSyntaxBlock() {
         return impl_->selectEnclosingSyntaxBlock();
+    }
+
+    bool PythonEditor::jumpToSyntaxSymbol(const std::size_t index) {
+        return impl_->jumpToSyntaxSymbol(index);
     }
 
     void PythonEditor::updateTheme(const Theme& theme) {
