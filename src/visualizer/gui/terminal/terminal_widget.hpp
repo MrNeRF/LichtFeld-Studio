@@ -18,10 +18,6 @@
 #include <vector>
 #include <vterm.h>
 
-struct ImDrawList;
-struct ImFont;
-struct ImVec2;
-
 namespace lfs::vis::terminal {
 
     enum class TerminalKey {
@@ -94,12 +90,6 @@ namespace lfs::vis::terminal {
         // Create PTY pair without forking. Returns fds for the Python-side I/O.
         EmbeddedFds spawnEmbedded();
 
-        // Render terminal in available space. Returns true if content changed.
-        bool render(ImFont* mono_font = nullptr);
-
-        // Handle keyboard input (call when terminal is focused)
-        void processInput();
-
         // Backend-neutral update/render surface for RmlUi and tests.
         void update();
         void resize(int cols, int rows);
@@ -158,7 +148,6 @@ namespace lfs::vis::terminal {
         void pump();
         void initVterm();
         void destroyVterm();
-        void drawCell(ImDrawList* dl, int row, int col, const ImVec2& origin);
         void handleResize(int new_cols, int new_rows);
 
         // libvterm callbacks
@@ -178,8 +167,6 @@ namespace lfs::vis::terminal {
 
         int cols_;
         int rows_;
-        float char_width_ = 0.0f;
-        float char_height_ = 0.0f;
 
         // Cursor
         VTermPos cursor_pos_ = {0, 0};

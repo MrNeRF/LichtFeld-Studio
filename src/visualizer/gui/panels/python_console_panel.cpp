@@ -8,6 +8,7 @@
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -120,6 +121,13 @@ namespace {
         lfs::vis::gui::RmlUIManager* manager = nullptr;
     };
 
+    struct RmlEditorPane {
+        std::unique_ptr<lfs::vis::gui::RmlPanelHost> host;
+        lfs::vis::gui::PythonEditorElement* view = nullptr;
+        lfs::vis::gui::RmlUIManager* manager = nullptr;
+    };
+
+    RmlEditorPane g_editor_pane;
     RmlTerminalPane g_output_terminal_pane;
     RmlTerminalPane g_repl_terminal_pane;
 
@@ -168,6 +176,12 @@ namespace {
         pane.manager = nullptr;
     }
 
+    void reset_rml_editor_pane(RmlEditorPane& pane) {
+        pane.view = nullptr;
+        pane.host.reset();
+        pane.manager = nullptr;
+    }
+
     void reset_rml_packages_pane(RmlPackagesPane& pane) {
         pane.refresh_button = nullptr;
         pane.search_input = nullptr;
@@ -184,6 +198,7 @@ namespace {
     }
 
     void reset_rml_terminal_panes() {
+        reset_rml_editor_pane(g_editor_pane);
         reset_rml_terminal_pane(g_output_terminal_pane);
         reset_rml_terminal_pane(g_repl_terminal_pane);
         reset_rml_packages_pane(g_packages_pane);
@@ -248,6 +263,71 @@ namespace {
         default:
             return std::nullopt;
         }
+    }
+
+    lfs::vis::gui::PythonEditorElement* ensure_rml_editor_view(
+        RmlEditorPane& pane,
+        lfs::vis::gui::RmlUIManager* manager) {
+        if (!manager || !manager->isInitialized())
+            return nullptr;
+
+        if (pane.manager != manager) {
+            reset_rml_editor_pane(pane);
+            pane.manager = manager;
+        }
+
+        if (!pane.host) {
+            pane.host = std::make_unique<lfs::vis::gui::RmlPanelHost>(
+                manager, "python_console_editor", "rmlui/python_editor_pane.rml");
+        }
+
+        if (!pane.host->ensureDocumentLoaded())
+            return nullptr;
+
+        if (!pane.view) {
+            auto* doc = pane.host->getDocument();
+            pane.view = doc
+                            ? dynamic_cast<lfs::vis::gui::PythonEditorElement*>(
+                                  doc->GetElementById("python-editor-view"))
+                            : nullptr;
+        }
+        return pane.view;
+    }
+
+    bool draw_rml_editor_pane(RmlEditorPane& pane,
+                              lfs::vis::gui::RmlUIManager* manager,
+                              lfs::vis::editor::PythonEditor& editor,
+                              const lfs::vis::gui::PanelInputState* input,
+                              ImFont* mono_font) {
+        const ImVec2 size = ImGui::GetContentRegionAvail();
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return false;
+
+        auto* view = ensure_rml_editor_view(pane, manager);
+        if (!view) {
+            ImGui::TextDisabled("Editor view unavailable");
+            return false;
+        }
+
+        const float font_size = mono_font ? mono_font->LegacySize : ImGui::GetTextLineHeight();
+        view->setEditor(&editor);
+        view->setFontSizePx(font_size);
+        view->SetProperty("font-size", std::format("{:.0f}px", font_size));
+
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        pane.host->markContentDirty();
+        pane.host->setInput(input);
+        if (input) {
+            pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        } else {
+            lfs::vis::gui::PanelDrawContext draw_ctx;
+            pane.host->draw(draw_ctx, size.x, size.y, pos.x, pos.y);
+        }
+        pane.host->setInput(nullptr);
+        if (input) {
+            ImGui::Dummy(size);
+        }
+        return editor.consumeExecuteRequested();
     }
 
     lfs::vis::gui::TerminalElement* ensure_rml_terminal_view(RmlTerminalPane& pane,
@@ -379,7 +459,7 @@ namespace {
             return;
 
         if (!manager) {
-            terminal.render(mono_font);
+            ImGui::TextDisabled("Terminal view unavailable");
             return;
         }
 
@@ -396,7 +476,7 @@ namespace {
 
         auto* view = ensure_rml_terminal_view(pane, manager, context_name);
         if (!view) {
-            terminal.render(mono_font);
+            ImGui::TextDisabled("Terminal view unavailable");
             return;
         }
 
@@ -412,9 +492,16 @@ namespace {
         terminal.markRendered();
 
         pane.host->setInput(input);
-        pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        if (input) {
+            pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        } else {
+            lfs::vis::gui::PanelDrawContext draw_ctx;
+            pane.host->draw(draw_ctx, size.x, size.y, pos.x, pos.y);
+        }
         pane.host->setInput(nullptr);
-        ImGui::Dummy(size);
+        if (input) {
+            ImGui::Dummy(size);
+        }
     }
 
     void request_packages_refresh(RmlPackagesPane& pane) {
@@ -608,9 +695,16 @@ namespace {
 
         const ImVec2 pos = ImGui::GetCursorScreenPos();
         pane.host->setInput(input);
-        pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        if (input) {
+            pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        } else {
+            lfs::vis::gui::PanelDrawContext draw_ctx;
+            pane.host->draw(draw_ctx, size.x, size.y, pos.x, pos.y);
+        }
         pane.host->setInput(nullptr);
-        ImGui::Dummy(size);
+        if (input) {
+            ImGui::Dummy(size);
+        }
     }
 
     void draw_vim_mode_button(lfs::vis::gui::panels::PythonConsoleState& state,
@@ -1194,9 +1288,6 @@ namespace lfs::vis::gui::panels {
         constexpr float MIN_PANE_HEIGHT = 100.0f;
         constexpr float SPLITTER_THICKNESS = 6.0f;
 
-        constexpr float PKG_NAME_COL_WIDTH = 120.0f;
-        constexpr float PKG_VERSION_COL_WIDTH = 60.0f;
-        constexpr float PKG_SEARCH_WIDTH = 150.0f;
     } // namespace
 
     void ShutdownPythonConsoleRml() {
@@ -1435,7 +1526,9 @@ namespace lfs::vis::gui::panels {
             if (auto* editor = state.getEditor()) {
                 editor->setReadOnly(should_block_editor_input(editor, state));
 
-                if (editor->render(editor_size.x, editor_size.y)) {
+                (void)editor_size;
+                if (draw_rml_editor_pane(g_editor_pane, ctx.rml_manager, *editor, nullptr,
+                                         ctx.fonts.monospace)) {
                     // Ctrl+Enter was pressed - execute
                     execute_python_code(editor->getTextStripped(), state);
                 }
@@ -1492,7 +1585,9 @@ namespace lfs::vis::gui::panels {
 
                     if (auto* output = state.getOutputTerminal()) {
                         output->setReadOnly(true);
-                        output->render(ctx.fonts.monospace);
+                        draw_rml_terminal_pane(g_output_terminal_pane, ctx.rml_manager,
+                                               "python_console_output_terminal_floating",
+                                               *output, nullptr, ctx.fonts.monospace);
                     }
 
                     ImGui::EndTabItem();
@@ -1508,7 +1603,9 @@ namespace lfs::vis::gui::panels {
                             if (fds.valid())
                                 lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
                         }
-                        terminal->render(ctx.fonts.monospace);
+                        draw_rml_terminal_pane(g_repl_terminal_pane, ctx.rml_manager,
+                                               "python_console_repl_terminal_floating",
+                                               *terminal, nullptr, ctx.fonts.monospace);
                     }
 
                     ImGui::EndTabItem();
@@ -1517,62 +1614,7 @@ namespace lfs::vis::gui::panels {
                 // Packages tab - shows installed packages
                 if (ImGui::BeginTabItem("Packages")) {
                     state.setActiveTab(2);
-
-                    static std::vector<python::PackageInfo> cached_packages;
-                    static std::future<std::vector<python::PackageInfo>> pending_refresh;
-                    static bool loading = false;
-                    static char search_filter[128] = "";
-
-                    if (!loading && ImGui::Button("Refresh")) {
-                        loading = true;
-                        pending_refresh = std::async(std::launch::async, []() {
-                            return python::PackageManager::instance().list_installed();
-                        });
-                    }
-
-                    if (loading && pending_refresh.valid() &&
-                        pending_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        cached_packages = pending_refresh.get();
-                        loading = false;
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(PKG_SEARCH_WIDTH);
-                    lfs::vis::gui::widgets::InputTextWithHint("##search", "Search...", search_filter, sizeof(search_filter));
-
-                    ImGui::SameLine();
-                    if (loading) {
-                        ImGui::TextColored(t.palette.text_dim, "Loading...");
-                    } else {
-                        ImGui::TextColored(t.palette.text_dim, "(%zu)", cached_packages.size());
-                    }
-
-                    if (cached_packages.empty() && !loading) {
-                        ImGui::TextColored(t.palette.text_dim, "No packages installed");
-                    } else {
-                        constexpr auto TABLE_FLAGS =
-                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable;
-                        if (ImGui::BeginTable("##pkg_table", 3, TABLE_FLAGS, ImGui::GetContentRegionAvail())) {
-                            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, PKG_NAME_COL_WIDTH);
-                            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, PKG_VERSION_COL_WIDTH);
-                            ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableHeadersRow();
-                            for (const auto& pkg : cached_packages) {
-                                if (search_filter[0] != '\0' &&
-                                    pkg.name.find(search_filter) == std::string::npos)
-                                    continue;
-                                ImGui::TableNextRow();
-                                ImGui::TableNextColumn();
-                                ImGui::Text("%s", pkg.name.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.version.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.path.c_str());
-                            }
-                            ImGui::EndTable();
-                        }
-                    }
-
+                    draw_rml_packages_pane(g_packages_pane, ctx.rml_manager, nullptr);
                     ImGui::EndTabItem();
                 }
 
@@ -1849,7 +1891,9 @@ namespace lfs::vis::gui::panels {
             if (auto* editor = state.getEditor()) {
                 editor->setReadOnly(should_block_editor_input(editor, state));
 
-                if (editor->render(editor_size.x, editor_size.y)) {
+                (void)editor_size;
+                if (draw_rml_editor_pane(g_editor_pane, ctx.rml_manager, *editor, input,
+                                         scaled_mono)) {
                     execute_python_code(editor->getTextStripped(), state);
                 }
                 editor_has_active_completion = editor->hasActiveCompletion();

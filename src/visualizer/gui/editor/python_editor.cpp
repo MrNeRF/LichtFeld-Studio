@@ -5,10 +5,17 @@
 
 #include "python_lsp_client.hpp"
 
+#include "gui/editor/zep_rml_display.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "python/python_buffer_analysis.hpp"
 #include "theme/theme.hpp"
 
+#include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Event.h>
+#include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/StringUtilities.h>
 #include <SDL3/SDL_clipboard.h>
 
 #include <algorithm>
@@ -24,12 +31,9 @@
 #include <string_view>
 #include <vector>
 
-#include <imgui.h>
-
 #include <zep/buffer.h>
 #include <zep/commands.h>
-#include <zep/imgui/display_imgui.h>
-#include <zep/imgui/editor_imgui.h>
+#include <zep/editor.h>
 #include <zep/mode.h>
 #include <zep/mode_standard.h>
 #include <zep/mode_vim.h>
@@ -63,7 +67,7 @@ namespace lfs::vis::editor {
             };
         }
 
-        ImVec4 mix_imgui(const ImVec4& a, const ImVec4& b, float t) {
+        ImVec4 mix_color(const ImVec4& a, const ImVec4& b, float t) {
             return {
                 a.x + (b.x - a.x) * t,
                 a.y + (b.y - a.y) * t,
@@ -74,6 +78,140 @@ namespace lfs::vis::editor {
 
         ImVec4 with_alpha(const ImVec4& color, float alpha) {
             return {color.x, color.y, color.z, alpha};
+        }
+
+        uint64_t color_to_u32(const ImVec4& color) {
+            const auto to_byte = [](float value) {
+                return static_cast<uint64_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+            };
+            return to_byte(color.x) |
+                   (to_byte(color.y) << 8u) |
+                   (to_byte(color.z) << 16u) |
+                   (to_byte(color.w) << 24u);
+        }
+
+        uint32_t zep_modifiers_from_rml(const Rml::Event& event) {
+            uint32_t modifiers = 0;
+            if (event.GetParameter<int>("ctrl_key", 0) != 0)
+                modifiers |= Zep::ModifierKey::Ctrl;
+            if (event.GetParameter<int>("shift_key", 0) != 0)
+                modifiers |= Zep::ModifierKey::Shift;
+            if (event.GetParameter<int>("alt_key", 0) != 0)
+                modifiers |= Zep::ModifierKey::Alt;
+            return modifiers;
+        }
+
+        std::optional<uint32_t> zep_key_from_rml(const Rml::Input::KeyIdentifier key,
+                                                 const uint32_t modifiers) {
+            switch (key) {
+            case Rml::Input::KI_RETURN:
+            case Rml::Input::KI_NUMPADENTER:
+                return Zep::ExtKeys::RETURN;
+            case Rml::Input::KI_BACK:
+                return Zep::ExtKeys::BACKSPACE;
+            case Rml::Input::KI_TAB:
+                return Zep::ExtKeys::TAB;
+            case Rml::Input::KI_ESCAPE:
+                return Zep::ExtKeys::ESCAPE;
+            case Rml::Input::KI_DELETE:
+                return Zep::ExtKeys::DEL;
+            case Rml::Input::KI_HOME:
+                return Zep::ExtKeys::HOME;
+            case Rml::Input::KI_END:
+                return Zep::ExtKeys::END;
+            case Rml::Input::KI_RIGHT:
+                return Zep::ExtKeys::RIGHT;
+            case Rml::Input::KI_LEFT:
+                return Zep::ExtKeys::LEFT;
+            case Rml::Input::KI_UP:
+                return Zep::ExtKeys::UP;
+            case Rml::Input::KI_DOWN:
+                return Zep::ExtKeys::DOWN;
+            case Rml::Input::KI_NEXT:
+                return Zep::ExtKeys::PAGEDOWN;
+            case Rml::Input::KI_PRIOR:
+                return Zep::ExtKeys::PAGEUP;
+            case Rml::Input::KI_INSERT:
+                return std::nullopt;
+            case Rml::Input::KI_F1:
+            case Rml::Input::KI_F2:
+            case Rml::Input::KI_F3:
+            case Rml::Input::KI_F4:
+            case Rml::Input::KI_F5:
+            case Rml::Input::KI_F6:
+            case Rml::Input::KI_F7:
+            case Rml::Input::KI_F8:
+            case Rml::Input::KI_F9:
+            case Rml::Input::KI_F10:
+            case Rml::Input::KI_F11:
+            case Rml::Input::KI_F12:
+                return Zep::ExtKeys::F1 + (static_cast<int>(key) - static_cast<int>(Rml::Input::KI_F1));
+            default:
+                break;
+            }
+
+            if ((modifiers & Zep::ModifierKey::Ctrl) == 0)
+                return std::nullopt;
+
+            if (key >= Rml::Input::KI_A && key <= Rml::Input::KI_Z)
+                return static_cast<uint32_t>('a' + (static_cast<int>(key) - static_cast<int>(Rml::Input::KI_A)));
+            if (key >= Rml::Input::KI_0 && key <= Rml::Input::KI_9)
+                return static_cast<uint32_t>('0' + (static_cast<int>(key) - static_cast<int>(Rml::Input::KI_0)));
+
+            switch (key) {
+            case Rml::Input::KI_SPACE:
+                return static_cast<uint32_t>(' ');
+            case Rml::Input::KI_OEM_1:
+                return static_cast<uint32_t>(';');
+            case Rml::Input::KI_OEM_PLUS:
+                return static_cast<uint32_t>('=');
+            case Rml::Input::KI_OEM_COMMA:
+                return static_cast<uint32_t>(',');
+            case Rml::Input::KI_OEM_MINUS:
+                return static_cast<uint32_t>('-');
+            case Rml::Input::KI_OEM_PERIOD:
+                return static_cast<uint32_t>('.');
+            case Rml::Input::KI_OEM_2:
+                return static_cast<uint32_t>('/');
+            case Rml::Input::KI_OEM_3:
+                return static_cast<uint32_t>('`');
+            case Rml::Input::KI_OEM_4:
+                return static_cast<uint32_t>('[');
+            case Rml::Input::KI_OEM_5:
+                return static_cast<uint32_t>('\\');
+            case Rml::Input::KI_OEM_6:
+                return static_cast<uint32_t>(']');
+            case Rml::Input::KI_OEM_7:
+                return static_cast<uint32_t>('\'');
+            default:
+                return std::nullopt;
+            }
+        }
+
+        Zep::ZepMouseButton zep_mouse_button_from_rml(const int button) {
+            switch (button) {
+            case 0:
+                return Zep::ZepMouseButton::Left;
+            case 1:
+                return Zep::ZepMouseButton::Right;
+            case 2:
+                return Zep::ZepMouseButton::Middle;
+            default:
+                return Zep::ZepMouseButton::Unknown;
+            }
+        }
+
+        bool point_in_rect(const Zep::NRectf& rect, const float x, const float y) {
+            return x >= rect.topLeftPx.x && x < rect.bottomRightPx.x &&
+                   y >= rect.topLeftPx.y && y < rect.bottomRightPx.y;
+        }
+
+        float zep_text_width(Zep::ZepFont& font, const std::string& text) {
+            if (text.empty()) {
+                return 0.0f;
+            }
+            const auto* begin = reinterpret_cast<const uint8_t*>(text.data());
+            return font.GetTextSize(begin, begin + text.size()).x;
         }
 
         std::string get_system_clipboard_text() {
@@ -539,9 +677,9 @@ namespace lfs::vis::editor {
         };
 
         Impl()
-            : editor(std::make_unique<Zep::ZepEditor_ImGui>(
+            : editor(std::make_unique<Zep::ZepEditor>(
+                  new ZepDisplay_Rml(),
                   std::filesystem::path(PROJECT_ROOT_PATH) / "external" / "zep",
-                  Zep::NVec2f(1.0f),
                   Zep::ZepEditorFlags::DisableThreads)),
               host(*this) {
             editor->RegisterCallback(&host);
@@ -634,33 +772,18 @@ namespace lfs::vis::editor {
             editor->RequestRefresh();
         }
 
-        void syncFontsToImGui() {
-            ImFont* const font = ImGui::GetFont();
-            const float font_size = ImGui::GetFontSize();
-            if (font == nullptr) {
+        ZepDisplay_Rml& rmlDisplay() {
+            return static_cast<ZepDisplay_Rml&>(editor->GetDisplay());
+        }
+
+        void syncFontsToRml(const float font_size_px) {
+            const float font_size = font_size_px > 0.0f ? font_size_px : 14.0f;
+            if (std::abs(font_size - bound_font_size) < 0.5f) {
                 return;
             }
 
-            if (font == bound_font && std::abs(font_size - bound_font_size) < 0.5f) {
-                return;
-            }
-
-            auto& display = static_cast<Zep::ZepDisplay_ImGui&>(editor->GetDisplay());
-            auto make_font = [&](float scale) {
-                return std::make_shared<Zep::ZepFont_ImGui>(
-                    display,
-                    font,
-                    std::max(1, static_cast<int>(std::lround(font_size * scale))));
-            };
-
-            display.SetFont(Zep::ZepTextType::UI, make_font(0.95f));
-            display.SetFont(Zep::ZepTextType::Text, make_font(1.0f));
-            display.SetFont(Zep::ZepTextType::Heading1, make_font(1.35f));
-            display.SetFont(Zep::ZepTextType::Heading2, make_font(1.2f));
-            display.SetFont(Zep::ZepTextType::Heading3, make_font(1.1f));
-
-            bound_font = font;
             bound_font_size = font_size;
+            rmlDisplay().setBaseFontSize(font_size);
             editor->RequestRefresh();
         }
 
@@ -925,7 +1048,7 @@ namespace lfs::vis::editor {
         uint64_t semanticPaletteSignature() const {
             const auto& palette = theme().palette;
             const auto mix_u32 = [](const ImVec4& color) {
-                return static_cast<uint64_t>(ImGui::ColorConvertFloat4ToU32(color));
+                return color_to_u32(color);
             };
 
             uint64_t signature = 1469598103934665603ull;
@@ -1178,15 +1301,15 @@ namespace lfs::vis::editor {
                 token.type == "typeParameter") {
                 color = palette.info;
             } else if (token.type == "function" || token.type == "method") {
-                color = mix_imgui(palette.primary, palette.info, 0.35f);
+                color = mix_color(palette.primary, palette.info, 0.35f);
             } else if (token.type == "decorator") {
-                color = mix_imgui(palette.primary, palette.secondary, 0.25f);
+                color = mix_color(palette.primary, palette.secondary, 0.25f);
             } else if (token.type == "namespace" || token.type == "module") {
                 color = palette.secondary;
             } else if (token.type == "property" || token.type == "enumMember") {
-                color = mix_imgui(palette.secondary, palette.text, 0.35f);
+                color = mix_color(palette.secondary, palette.text, 0.35f);
             } else if (token.type == "parameter") {
-                color = mix_imgui(palette.warning, palette.text, 0.25f);
+                color = mix_color(palette.warning, palette.text, 0.25f);
             } else if (token.type == "keyword") {
                 color = palette.primary;
             } else if (token.type == "comment") {
@@ -1227,13 +1350,13 @@ namespace lfs::vis::editor {
             case lfs::python::PythonHighlightKind::Constant:
                 return to_zep(palette.warning);
             case lfs::python::PythonHighlightKind::Decorator:
-                return to_zep(mix_imgui(palette.primary, palette.secondary, 0.25f));
+                return to_zep(mix_color(palette.primary, palette.secondary, 0.25f));
             case lfs::python::PythonHighlightKind::Function:
-                return to_zep(mix_imgui(palette.primary, palette.info, 0.35f));
+                return to_zep(mix_color(palette.primary, palette.info, 0.35f));
             case lfs::python::PythonHighlightKind::Type:
                 return to_zep(palette.info);
             case lfs::python::PythonHighlightKind::Property:
-                return to_zep(mix_imgui(palette.secondary, palette.text, 0.35f));
+                return to_zep(mix_color(palette.secondary, palette.text, 0.35f));
             }
             return to_zep(palette.text);
         }
@@ -1670,73 +1793,66 @@ namespace lfs::vis::editor {
             return true;
         }
 
-        bool handleCompletionKeys(const std::string& text, const CursorLocation& cursor) {
-            if (!is_focused || read_only) {
-                if (!completion.visible) {
-                    return false;
-                }
-            }
-
+        bool handleCompletionKey(const Rml::Input::KeyIdentifier key,
+                                 const uint32_t modifiers,
+                                 const std::string& text,
+                                 const CursorLocation& cursor) {
             if (read_only) {
                 return false;
             }
 
-            bool consumed = false;
-            if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+            if ((modifiers & Zep::ModifierKey::Ctrl) != 0 && key == Rml::Input::KI_SPACE) {
                 manual_completion_requested = true;
-                consumed = true;
-            }
-
-            if (!completion.visible || completion.items.empty()) {
-                return consumed;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-                completion.clear();
                 return true;
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) {
+            if (!completion.visible || completion.items.empty()) {
+                return false;
+            }
+
+            switch (key) {
+            case Rml::Input::KI_ESCAPE:
+                completion.clear();
+                return true;
+            case Rml::Input::KI_DOWN:
                 completion.selected_index =
                     (completion.selected_index + 1) % static_cast<int>(completion.items.size());
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) {
+            case Rml::Input::KI_UP:
                 completion.selected_index =
                     (completion.selected_index + static_cast<int>(completion.items.size()) - 1) %
                     static_cast<int>(completion.items.size());
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_PageDown, false)) {
+            case Rml::Input::KI_NEXT:
                 completion.selected_index = std::min(
                     completion.selected_index + COMPLETION_POPUP_MAX_ITEMS,
                     static_cast<int>(completion.items.size()) - 1);
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_PageUp, false)) {
+            case Rml::Input::KI_PRIOR:
                 completion.selected_index =
                     std::max(completion.selected_index - COMPLETION_POPUP_MAX_ITEMS, 0);
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) ||
-                (!ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+            case Rml::Input::KI_TAB:
                 applyCompletion(text, cursor, completion.items[completion.selected_index].item);
                 return true;
+            case Rml::Input::KI_RETURN:
+            case Rml::Input::KI_NUMPADENTER:
+                if ((modifiers & Zep::ModifierKey::Ctrl) == 0) {
+                    applyCompletion(text, cursor, completion.items[completion.selected_index].item);
+                    return true;
+                }
+                return false;
+            default:
+                return false;
             }
-
-            return consumed;
         }
 
         float completionAnchorX(const std::string& text,
@@ -1782,8 +1898,42 @@ namespace lfs::vis::editor {
             return preview;
         }
 
-        void renderCompletionPopup(const std::string& text, const CursorLocation& cursor) {
+        bool handleCompletionMouseDown(const std::string& text,
+                                       const CursorLocation& cursor,
+                                       const float x,
+                                       const float y,
+                                       const int button) {
+            if (!completion.visible || completion.items.empty() ||
+                !point_in_rect(completion_popup_rect, x, y)) {
+                return false;
+            }
+
+            completion.hovered = true;
+            completion.keyboard_navigation_active = false;
+            if (button != 0) {
+                return true;
+            }
+
+            const int row = static_cast<int>(
+                std::floor((y - completion_popup_rect.topLeftPx.y - 6.0f) /
+                           std::max(completion_popup_row_height, 1.0f)));
+            const int index = completion_popup_first_index + row;
+            if (index >= 0 && index < static_cast<int>(completion.items.size())) {
+                completion.selected_index = index;
+                completion.scroll_to_selected = false;
+                applyCompletion(text, cursor, completion.items[index].item);
+            }
+            return true;
+        }
+
+        void renderCompletionPopup(const std::string& text,
+                                   const CursorLocation& cursor,
+                                   const float editor_width,
+                                   const float editor_height) {
             completion.hovered = false;
+            completion_popup_rect = {};
+            completion_popup_first_index = 0;
+            completion_popup_row_height = 0.0f;
             if (!completion.visible || completion.items.empty()) {
                 return;
             }
@@ -1794,171 +1944,135 @@ namespace lfs::vis::editor {
                 return;
             }
 
-            const auto cursor_rect = window->GetCursorRect();
-            const float row_height = ImGui::GetTextLineHeightWithSpacing() + 2.0f;
-            const ImVec2 editor_window_pos = ImGui::GetWindowPos();
-            const ImVec2 editor_window_size = ImGui::GetWindowSize();
-            const float popup_width =
-                std::max(180.0f, std::min(440.0f, editor_window_size.x - 12.0f));
-            const float popup_height = std::min(
-                std::min<int>(static_cast<int>(completion.items.size()), COMPLETION_POPUP_MAX_ITEMS) *
-                        row_height +
-                    12.0f,
-                std::max(row_height + 12.0f, editor_window_size.y - 12.0f));
-
-            ImGuiViewport* const viewport = ImGui::GetWindowViewport();
-            ImVec2 popup_pos(completionAnchorX(text, cursor, cursor_rect),
-                             cursor_rect.bottomRightPx.y + 4.0f);
-            if (popup_pos.y + popup_height > editor_window_pos.y + editor_window_size.y - 6.0f) {
-                popup_pos.y =
-                    std::max(editor_window_pos.y + 6.0f,
-                             cursor_rect.topLeftPx.y - popup_height - 4.0f);
-            }
-            popup_pos.x = std::clamp(
-                popup_pos.x,
-                editor_window_pos.x + 6.0f,
-                editor_window_pos.x + editor_window_size.x - popup_width - 6.0f);
-            popup_pos.y = std::clamp(
-                popup_pos.y,
-                editor_window_pos.y + 6.0f,
-                editor_window_pos.y + editor_window_size.y - popup_height - 6.0f);
-
+            auto& display = rmlDisplay();
+            auto& ui_font = display.GetFont(Zep::ZepTextType::UI);
+            auto& text_font = display.GetFont(Zep::ZepTextType::Text);
             const auto& palette = theme().palette;
 
-            ImGui::SetNextWindowViewport(viewport->ID);
-            ImGui::SetNextWindowPos(popup_pos);
-            ImGui::SetNextWindowSize(ImVec2(popup_width, popup_height));
-            ImGui::SetNextWindowBgAlpha(1.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 6.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
-            ImVec4 header = palette.primary;
-            header.w *= 0.25f;
-            ImVec4 header_hovered = palette.primary;
-            header_hovered.w *= 0.5f;
-            ImVec4 header_active = palette.primary;
-            header_active.w *= 0.7f;
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, palette.background);
-            ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
-            ImGui::PushStyleColor(ImGuiCol_Header, header);
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, header_hovered);
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, header_active);
+            const auto cursor_rect = window->GetCursorRect();
+            const float row_height = std::max(18.0f, static_cast<float>(ui_font.GetPixelHeight()) + 6.0f);
+            const int visible_count =
+                std::min<int>(static_cast<int>(completion.items.size()), COMPLETION_POPUP_MAX_ITEMS);
+            const float popup_width = std::max(
+                160.0f,
+                std::min(440.0f, std::max(160.0f, editor_width - 12.0f)));
+            const float popup_height = std::min(
+                visible_count * row_height + 12.0f,
+                std::max(row_height + 12.0f, editor_height - 12.0f));
 
-            constexpr ImGuiWindowFlags POPUP_FLAGS =
-                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
-                ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_Tooltip;
+            float popup_x = completionAnchorX(text, cursor, cursor_rect);
+            float popup_y = cursor_rect.bottomRightPx.y + 4.0f;
+            if (popup_y + popup_height > editor_height - 6.0f) {
+                popup_y = std::max(6.0f, cursor_rect.topLeftPx.y - popup_height - 4.0f);
+            }
+            popup_x = std::clamp(popup_x, 6.0f, std::max(6.0f, editor_width - popup_width - 6.0f));
+            popup_y = std::clamp(popup_y, 6.0f, std::max(6.0f, editor_height - popup_height - 6.0f));
 
-            if (ImGui::Begin("##python_completion_popup", nullptr, POPUP_FLAGS)) {
-                completion.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
-                if (completion.hovered) {
-                    gui::guiFocusState().want_capture_mouse = true;
+            completion_popup_rect = Zep::NRectf(popup_x, popup_y, popup_width, popup_height);
+            completion_popup_row_height = row_height;
+            completion.hovered = mouse_pos_valid &&
+                                 point_in_rect(completion_popup_rect, mouse_x, mouse_y);
+            if (completion.hovered) {
+                gui::guiFocusState().want_capture_mouse = true;
+            }
+
+            const int item_count = static_cast<int>(completion.items.size());
+            int first_index = std::clamp(
+                completion.selected_index - visible_count / 2,
+                0,
+                std::max(0, item_count - visible_count));
+            if (!completion.scroll_to_selected) {
+                first_index = std::clamp(
+                    completion_popup_first_index,
+                    0,
+                    std::max(0, item_count - visible_count));
+            }
+            completion_popup_first_index = first_index;
+            completion.scroll_to_selected = false;
+
+            display.DrawRectFilled(completion_popup_rect, to_zep(palette.background));
+            const auto border = to_zep(palette.border);
+            display.DrawRectFilled(Zep::NRectf(popup_x, popup_y, popup_width, 1.0f), border);
+            display.DrawRectFilled(Zep::NRectf(popup_x, popup_y + popup_height - 1.0f, popup_width, 1.0f), border);
+            display.DrawRectFilled(Zep::NRectf(popup_x, popup_y, 1.0f, popup_height), border);
+            display.DrawRectFilled(Zep::NRectf(popup_x + popup_width - 1.0f, popup_y, 1.0f, popup_height), border);
+
+            auto draw_text = [&](Zep::ZepFont& font,
+                                 const float x,
+                                 const float y,
+                                 const Zep::NVec4f& color,
+                                 std::string_view value) {
+                if (value.empty()) {
+                    return;
+                }
+                const auto* begin = reinterpret_cast<const uint8_t*>(value.data());
+                display.DrawChars(font, {x, y}, color, begin, begin + value.size());
+            };
+
+            const float row_left = popup_x + 1.0f;
+            const float row_right = popup_x + popup_width - 1.0f;
+            for (int visible = 0; visible < visible_count; ++visible) {
+                const int index = first_index + visible;
+                const auto& entry = completion.items[index];
+                const auto& item = entry.item;
+                const bool active_row = index == completion.selected_index;
+                const float row_y = popup_y + 6.0f + visible * row_height;
+                const Zep::NRectf row_rect(row_left, row_y, row_right - row_left, row_height);
+                const bool hovered_row = mouse_pos_valid && point_in_rect(row_rect, mouse_x, mouse_y);
+
+                if (hovered_row && !completion.keyboard_navigation_active) {
+                    completion.selected_index = index;
                 }
 
-                if (std::abs(ImGui::GetIO().MouseDelta.x) > 0.0f ||
-                    std::abs(ImGui::GetIO().MouseDelta.y) > 0.0f ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                    completion.keyboard_navigation_active = false;
+                if (active_row || hovered_row) {
+                    ImVec4 fill = palette.primary;
+                    fill.w = active_row ? 0.32f : 0.18f;
+                    display.DrawRectFilled(row_rect, to_zep(fill));
                 }
 
-                ImDrawList* const draw_list = ImGui::GetWindowDrawList();
-                const float row_left =
-                    ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x;
-                const float row_right =
-                    ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-                ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(completion.items.size()), row_height);
-                while (clipper.Step()) {
-                    for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-                        const auto& entry = completion.items[index];
-                        const auto& item = entry.item;
-                        const bool selected = index == completion.selected_index;
+                const Zep::NVec4f badge_color =
+                    to_zep(active_row ? palette.primary : palette.text_dim);
+                const Zep::NVec4f text_color =
+                    to_zep(item.deprecated ? palette.text_dim : palette.text);
+                const Zep::NVec4f highlight_color = to_zep(palette.primary);
+                const Zep::NVec4f detail_color =
+                    to_zep(active_row ? palette.primary : palette.text_dim);
+                const float text_y = row_y + 3.0f;
 
-                        ImGui::PushID(index);
-                        const float row_width = std::max(1.0f, row_right - row_left);
-                        if (ImGui::Selectable("##completion_item", selected,
-                                              ImGuiSelectableFlags_AllowOverlap,
-                                              ImVec2(row_width, row_height))) {
-                            completion.selected_index = index;
-                            completion.scroll_to_selected = false;
-                            completion.keyboard_navigation_active = false;
-                            applyCompletion(text, cursor, item);
-                        }
+                draw_text(ui_font, row_left + 9.0f, text_y, badge_color,
+                          completion_kind_badge(item.kind));
 
-                        const bool hovered = ImGui::IsItemHovered();
-                        if (hovered && !completion.keyboard_navigation_active) {
-                            completion.selected_index = index;
-                            completion.scroll_to_selected = false;
-                        }
+                const float label_x = row_left + 30.0f;
+                const size_t label_highlight =
+                    common_prefix_length_ci(item.label, completion.typed_prefix);
+                if (label_highlight > 0 && label_highlight < item.label.size()) {
+                    const std::string highlight_text = item.label.substr(0, label_highlight);
+                    draw_text(text_font, label_x, text_y, highlight_color, highlight_text);
+                    draw_text(text_font,
+                              label_x + zep_text_width(text_font, highlight_text),
+                              text_y,
+                              text_color,
+                              std::string_view(item.label).substr(label_highlight));
+                } else {
+                    draw_text(text_font, label_x, text_y,
+                              label_highlight > 0 ? highlight_color : text_color,
+                              item.label);
+                }
 
-                        if (selected && completion.scroll_to_selected) {
-                            ImGui::SetScrollHereY(0.35f);
-                            completion.scroll_to_selected = false;
-                        }
+                std::string detail = item.detail.empty() ? item.description : item.detail;
+                const std::string insert_preview = completionInsertPreviewText(item);
+                if (active_row && !insert_preview.empty() && insert_preview != item.label) {
+                    detail = "-> " + insert_preview;
+                }
 
-                        const ImVec2 min = ImGui::GetItemRectMin();
-                        const ImVec2 max = ImGui::GetItemRectMax();
-                        const bool active_row = index == completion.selected_index;
-                        if (active_row || hovered) {
-                            draw_list->AddRectFilled(
-                                ImVec2(row_left, min.y),
-                                ImVec2(row_right, max.y),
-                                active_row ? theme().selection_fill_u32()
-                                           : ImGui::GetColorU32(ImGuiCol_HeaderHovered));
-                        }
-
-                        const ImU32 badge_color = ImGui::ColorConvertFloat4ToU32(
-                            active_row ? palette.primary : palette.text_dim);
-                        const ImU32 text_color = ImGui::ColorConvertFloat4ToU32(
-                            item.deprecated ? palette.text_dim : palette.text);
-                        const ImU32 highlight_color =
-                            ImGui::ColorConvertFloat4ToU32(palette.primary);
-                        const ImU32 detail_color =
-                            ImGui::ColorConvertFloat4ToU32(palette.text_dim);
-
-                        draw_list->AddText(ImVec2(min.x + 10.0f, min.y + 3.0f), badge_color,
-                                           completion_kind_badge(item.kind));
-                        const ImVec2 label_pos(min.x + 30.0f, min.y + 3.0f);
-                        const size_t label_highlight =
-                            common_prefix_length_ci(item.label, completion.typed_prefix);
-                        if (label_highlight > 0) {
-                            const std::string highlight_text =
-                                item.label.substr(0, label_highlight);
-                            draw_list->AddText(label_pos, highlight_color, highlight_text.c_str());
-
-                            const ImVec2 highlight_size =
-                                ImGui::CalcTextSize(highlight_text.c_str());
-                            draw_list->AddText(ImVec2(label_pos.x + highlight_size.x, label_pos.y),
-                                               text_color,
-                                               item.label.c_str() + static_cast<ptrdiff_t>(label_highlight));
-                        } else {
-                            draw_list->AddText(label_pos, text_color, item.label.c_str());
-                        }
-
-                        std::string detail = item.detail.empty() ? item.description : item.detail;
-                        const std::string insert_preview = completionInsertPreviewText(item);
-                        if (active_row && !insert_preview.empty() && insert_preview != item.label) {
-                            detail = "-> " + insert_preview;
-                        }
-
-                        if (!detail.empty()) {
-                            const ImVec2 detail_size = ImGui::CalcTextSize(detail.c_str());
-                            draw_list->AddText(
-                                ImVec2(std::max(min.x + 150.0f, max.x - detail_size.x - 10.0f),
-                                       min.y + 3.0f),
-                                active_row ? highlight_color : detail_color,
-                                detail.c_str());
-                        }
-
-                        ImGui::PopID();
+                if (!detail.empty()) {
+                    const float detail_width = zep_text_width(ui_font, detail);
+                    const float detail_x = row_right - detail_width - 10.0f;
+                    if (detail_x > label_x + 150.0f) {
+                        draw_text(ui_font, detail_x, text_y, detail_color, detail);
                     }
                 }
             }
-            ImGui::End();
-
-            ImGui::PopStyleColor(5);
-            ImGui::PopStyleVar(2);
         }
 
         void handlePostKey(uint32_t key, uint32_t modifier) {
@@ -2600,7 +2714,7 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
-        std::unique_ptr<Zep::ZepEditor_ImGui> editor;
+        std::unique_ptr<Zep::ZepEditor> editor;
         Zep::ZepBuffer* buffer = nullptr;
         Host host;
         std::unique_ptr<PythonLspClient> lsp;
@@ -2626,6 +2740,12 @@ namespace lfs::vis::editor {
         bool semantic_highlighting_from_tree_sitter = false;
         std::optional<PythonLspClient::SemanticTokenList> pending_semantic_tokens;
         SemanticDirtyRange semantic_dirty_range;
+        Zep::NRectf completion_popup_rect;
+        int completion_popup_first_index = 0;
+        float completion_popup_row_height = 0.0f;
+        float mouse_x = 0.0f;
+        float mouse_y = 0.0f;
+        bool mouse_pos_valid = false;
         bool semantic_full_refresh_required = true;
         int document_version = 1;
         int last_requested_version = -1;
@@ -2641,7 +2761,6 @@ namespace lfs::vis::editor {
         Clock::time_point last_text_change_at = Clock::now();
         std::chrono::milliseconds semantic_tokens_idle_delay = SEMANTIC_TOKENS_WORD_DELAY;
         uint64_t semantic_highlight_palette_signature = 0;
-        ImFont* bound_font = nullptr;
         float bound_font_size = 0.0f;
         bool vim_mode_enabled = false;
     };
@@ -2652,8 +2771,10 @@ namespace lfs::vis::editor {
 
     PythonEditor::~PythonEditor() = default;
 
-    bool PythonEditor::render(const float width, const float height) {
-        execute_requested_ = false;
+    bool PythonEditor::renderRml(Rml::Element& element,
+                                 const float width,
+                                 const float height,
+                                 const float font_size_px) {
         impl_->ensureLspStarted();
         impl_->applyTheme(theme());
         if (impl_->semantic_highlighting_from_tree_sitter &&
@@ -2664,147 +2785,198 @@ namespace lfs::vis::editor {
             impl_->applySemanticHighlighting(impl_->getText());
         }
 
-        ImGuiIO& io = ImGui::GetIO();
+        if (impl_->request_focus) {
+            element.Focus();
+            impl_->force_unfocused = false;
+        }
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        constexpr ImGuiWindowFlags CHILD_FLAGS =
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-        const ImVec2 size(std::max(width, 1.0f), std::max(height, 1.0f));
-
-        if (ImGui::BeginChild("##python_input", size, true, CHILD_FLAGS)) {
-            if (impl_->request_focus) {
-                ImGui::SetWindowFocus();
-                impl_->force_unfocused = false;
+        bool element_focused = false;
+        if (auto* document = element.GetOwnerDocument()) {
+            if (auto* context = document->GetContext()) {
+                element_focused = context->GetFocusElement() == &element;
             }
+        }
+        impl_->is_focused =
+            !impl_->force_unfocused && (element_focused || impl_->request_focus);
 
-            impl_->syncFontsToImGui();
+        impl_->syncFontsToRml(font_size_px);
 
-            const ImVec2 min = ImGui::GetCursorScreenPos();
-            const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const ImVec2 max(min.x + std::max(avail.x, 1.0f), min.y + std::max(avail.y, 1.0f));
+        const float editor_width = std::max(width, 1.0f);
+        const float editor_height = std::max(height, 1.0f);
+        impl_->rmlDisplay().beginFrame(element);
+        impl_->editor->SetDisplayRegion({0.0f, 0.0f}, {editor_width, editor_height});
+        impl_->editor->Display();
 
-            impl_->editor->SetDisplayRegion(Zep::NVec2f(min.x, min.y), Zep::NVec2f(max.x, max.y));
-            impl_->editor->Display();
+        const std::string updated_text = impl_->getText();
+        const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
+        impl_->updateLanguageServerState(updated_text, updated_cursor);
+        impl_->updateSyntaxDiagnostics(updated_text, updated_cursor);
+        impl_->renderCompletionPopup(updated_text, updated_cursor, editor_width, editor_height);
+        impl_->rmlDisplay().endFrame();
 
-            const bool child_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
-            const bool child_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            const bool activated_by_click =
-                child_hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                  ImGui::IsMouseClicked(ImGuiMouseButton_Right));
-            const bool mouse_interaction =
-                child_hovered && (activated_by_click || io.MouseReleased[0] || io.MouseReleased[1] ||
-                                  io.MouseWheel != 0.0f || io.MouseDelta.x != 0.0f ||
-                                  io.MouseDelta.y != 0.0f);
-
-            if (activated_by_click) {
-                impl_->force_unfocused = false;
+        const bool editor_has_keyboard_focus =
+            impl_->is_focused || impl_->request_focus || impl_->completion.visible;
+        if (editor_has_keyboard_focus) {
+            gui::guiFocusState().want_capture_keyboard = true;
+            gui::guiFocusState().any_item_active = true;
+            if (!impl_->read_only) {
+                gui::guiFocusState().want_text_input = true;
             }
+        }
+        if (impl_->completion.visible || impl_->completion.hovered) {
+            gui::guiFocusState().want_capture_keyboard = true;
+            gui::guiFocusState().want_text_input = !impl_->read_only;
+        }
 
-            impl_->is_focused =
-                !impl_->force_unfocused && (child_focused || impl_->request_focus || activated_by_click);
+        impl_->request_focus = false;
+
+        return execute_requested_;
+    }
+
+    void PythonEditor::processRmlEvent(Rml::Element& element, Rml::Event& event) {
+        if (!impl_ || !impl_->editor) {
+            return;
+        }
+
+        const std::string type = event.GetType();
+        const auto local_mouse = [&]() {
+            const auto offset = element.GetAbsoluteOffset(Rml::BoxArea::Content);
+            return Zep::NVec2f{
+                event.GetParameter("mouse_x", 0.0f) - offset.x,
+                event.GetParameter("mouse_y", 0.0f) - offset.y,
+            };
+        };
+
+        if (type == "focus") {
+            impl_->is_focused = true;
+            impl_->force_unfocused = false;
+            return;
+        }
+        if (type == "blur") {
+            impl_->is_focused = false;
+            impl_->mouse_pos_valid = false;
+            impl_->completion.clear();
+            return;
+        }
+
+        if (type == "mousemove" || type == "drag") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            impl_->editor->OnMouseMove(mouse);
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "mousedown") {
+            element.Focus();
+            impl_->is_focused = true;
+            impl_->force_unfocused = false;
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
 
             const std::string text = impl_->getText();
             const CursorLocation cursor = impl_->getCursorLocation(text);
-            const bool completion_key_consumed = impl_->handleCompletionKeys(text, cursor);
-
-            const bool editor_has_keyboard_focus =
-                impl_->is_focused || impl_->request_focus || impl_->completion.visible;
-            if (editor_has_keyboard_focus) {
-                execute_requested_ = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-                ImGui::GetIO().WantCaptureKeyboard = true;
-                gui::guiFocusState().want_capture_keyboard = true;
-                gui::guiFocusState().any_item_active = true;
-                if (!impl_->read_only) {
-                    ImGui::GetIO().WantTextInput = true;
-                    gui::guiFocusState().want_text_input = true;
-                }
+            const int button = event.GetParameter("button", 0);
+            if (impl_->handleCompletionMouseDown(text, cursor, mouse.x, mouse.y, button)) {
+                event.StopPropagation();
+                return;
             }
 
-            const bool should_handle_input =
-                !impl_->read_only && ((impl_->is_focused || impl_->request_focus) || mouse_interaction);
-            if (should_handle_input && !execute_requested_ && !completion_key_consumed) {
-                impl_->editor->HandleInput();
-            }
-
-            const std::string updated_text = impl_->getText();
-            const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
-            impl_->updateLanguageServerState(updated_text, updated_cursor);
-            impl_->updateSyntaxDiagnostics(updated_text, updated_cursor);
-            impl_->renderCompletionPopup(updated_text, updated_cursor);
-
-            if (impl_->completion.visible || impl_->completion.hovered) {
-                gui::guiFocusState().want_capture_keyboard = true;
-                gui::guiFocusState().want_text_input = true;
-            }
-
-            if (impl_->completion.hovered || (impl_->completion.visible && child_hovered)) {
-                gui::guiFocusState().want_capture_mouse = true;
-            }
-
-            if (impl_->completion.visible && !impl_->completion.hovered &&
-                !child_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                impl_->completion.clear();
-            }
-
-            if (ImGui::BeginPopupContextWindow("##python_editor_context",
-                                               ImGuiPopupFlags_MouseButtonRight)) {
-                const bool has_selection = impl_->hasEditableSelection();
-                const bool can_modify = !impl_->read_only;
-
-                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, can_modify)) {
-                    impl_->undo();
-                }
-                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, can_modify)) {
-                    impl_->redo();
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, can_modify && has_selection)) {
-                    impl_->cutSelectionToClipboard();
-                }
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, has_selection)) {
-                    impl_->copySelectionToClipboard();
-                }
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, can_modify)) {
-                    impl_->pasteFromClipboard();
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Select All", "Ctrl+A")) {
-                    impl_->selectAll();
-                }
-                if (ImGui::MenuItem("Select Enclosing Block")) {
-                    impl_->selectEnclosingSyntaxBlock();
-                }
-                if (ImGui::MenuItem("Expand Syntax Selection")) {
-                    impl_->expandSyntaxSelection();
-                }
-                if (ImGui::MenuItem("Select Current Fold")) {
-                    impl_->selectCurrentSyntaxFold();
-                }
-                if (ImGui::MenuItem("Toggle Current Fold")) {
-                    impl_->toggleCurrentSyntaxFold();
-                }
-                if (ImGui::MenuItem("Fold All Blocks")) {
-                    impl_->foldAllSyntaxBlocks();
-                }
-                if (ImGui::MenuItem("Unfold All Blocks")) {
-                    impl_->unfoldAllSyntaxBlocks();
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Jump Parent Block")) {
-                    impl_->jumpToParentSyntaxBlock();
-                }
-                if (ImGui::MenuItem("Jump Child Block")) {
-                    impl_->jumpToChildSyntaxBlock();
-                }
-                ImGui::EndPopup();
-            }
-
-            impl_->request_focus = false;
+            impl_->editor->OnMouseDown(mouse, zep_mouse_button_from_rml(button));
+            event.StopPropagation();
+            return;
         }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
 
-        return execute_requested_;
+        if (type == "mouseup") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            impl_->editor->OnMouseUp(mouse, zep_mouse_button_from_rml(event.GetParameter("button", 0)));
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "mousewheel") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            const float wheel = event.GetParameter("wheel_delta_y",
+                                event.GetParameter("wheel_delta", 0.0f));
+            impl_->editor->OnMouseWheel(mouse, -wheel);
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "keydown") {
+            if (!impl_->is_focused && !impl_->completion.visible) {
+                return;
+            }
+
+            const auto key = static_cast<Rml::Input::KeyIdentifier>(
+                event.GetParameter("key_identifier", static_cast<int>(Rml::Input::KI_UNKNOWN)));
+            const uint32_t modifiers = zep_modifiers_from_rml(event);
+            const std::string text = impl_->getText();
+            const CursorLocation cursor = impl_->getCursorLocation(text);
+
+            if ((modifiers & Zep::ModifierKey::Ctrl) != 0 &&
+                (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER)) {
+                execute_requested_ = true;
+                event.StopPropagation();
+                return;
+            }
+            if (key == Rml::Input::KI_F5) {
+                execute_requested_ = true;
+                event.StopPropagation();
+                return;
+            }
+
+            if (impl_->handleCompletionKey(key, modifiers, text, cursor)) {
+                event.StopPropagation();
+                return;
+            }
+
+            if (!impl_->read_only) {
+                if (auto mapped = zep_key_from_rml(key, modifiers)) {
+                    if (auto* buffer = impl_->buffer) {
+                        if (auto* mode = buffer->GetMode()) {
+                            mode->AddKeyPress(*mapped, modifiers);
+                            event.StopPropagation();
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if (type == "textinput") {
+            if (impl_->read_only || !impl_->is_focused || impl_->buffer == nullptr) {
+                return;
+            }
+            auto* mode = impl_->buffer->GetMode();
+            if (!mode) {
+                return;
+            }
+
+            Rml::String input = event.GetParameter<Rml::String>("text", "");
+            if (input.empty()) {
+                input = event.GetParameter<Rml::String>("character", "");
+            }
+
+            size_t index = 0;
+            while (index < input.size()) {
+                const uint32_t codepoint = decode_utf8(input, index);
+                if (codepoint != '\r' && codepoint != 0) {
+                    mode->AddKeyPress(codepoint, 0);
+                }
+            }
+            event.StopPropagation();
+        }
     }
 
     std::string PythonEditor::getText() const {
@@ -2823,6 +2995,12 @@ namespace lfs::vis::editor {
         impl_->setTextSilently("", std::nullopt);
         history_index_ = -1;
         current_input_.clear();
+    }
+
+    bool PythonEditor::consumeExecuteRequested() {
+        const bool requested = execute_requested_;
+        execute_requested_ = false;
+        return requested;
     }
 
     bool PythonEditor::consumeTextChanged() {

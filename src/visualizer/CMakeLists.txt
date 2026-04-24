@@ -94,6 +94,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/python_scripts_panel.cpp
         gui/editor/python_lsp_client.cpp
         gui/editor/python_editor.cpp
+        gui/editor/zep_rml_display.cpp
         gui/editor/stdio_process.cpp
 
         # Terminal emulator
@@ -182,6 +183,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
+        gui/rmlui/elements/python_editor_element.cpp
         gui/rmlui/elements/scene_graph_element.cpp
         gui/rmlui/elements/terminal_element.cpp
 )
