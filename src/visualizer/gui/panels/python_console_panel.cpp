@@ -159,6 +159,11 @@ namespace {
         std::string error;
     };
 
+    struct PendingConsoleAction {
+        std::string action;
+        int data_index = -1;
+    };
+
     struct RmlPythonConsolePane {
         RmlPythonConsolePane() { listener.owner = this; }
 
@@ -204,6 +209,7 @@ namespace {
         bool listeners_attached = false;
         bool splitter_dragging = false;
         ConsolePopover active_popover = ConsolePopover::None;
+        std::vector<PendingConsoleAction> pending_actions;
         float panel_x = 0.0f;
         float panel_y = 0.0f;
         float panel_w = 0.0f;
@@ -270,6 +276,7 @@ namespace {
         pane.listeners_attached = false;
         pane.splitter_dragging = false;
         pane.active_popover = ConsolePopover::None;
+        pane.pending_actions.clear();
         pane.last_editor_h = -1.0f;
         pane.last_bottom_h = -1.0f;
         pane.last_font_size = -1.0f;
@@ -480,6 +487,18 @@ namespace {
         return el ? el->GetAttribute<int>("data-index", -1) : -1;
     }
 
+    void attach_action_listeners(RmlPythonConsolePane& pane, Rml::Element* root) {
+        if (!root)
+            return;
+
+        if (!root->GetAttribute<Rml::String>("data-action", "").empty())
+            root->AddEventListener(Rml::EventId::Click, &pane.listener);
+
+        const int child_count = root->GetNumChildren();
+        for (int i = 0; i < child_count; ++i)
+            attach_action_listeners(pane, root->GetChild(i));
+    }
+
     void request_packages_refresh(RmlPythonConsolePane& pane) {
         if (pane.packages_loading)
             return;
@@ -582,6 +601,7 @@ namespace {
 
         if (!pane.listeners_attached) {
             pane.document->AddEventListener(Rml::EventId::Click, &pane.listener);
+            attach_action_listeners(pane, pane.document);
             if (pane.packages_search_input) {
                 pane.packages_search_input->AddEventListener("input", &pane.listener);
                 pane.packages_search_input->AddEventListener("change", &pane.listener);
@@ -594,11 +614,11 @@ namespace {
 
     void handle_console_action(RmlPythonConsolePane& pane,
                                lfs::vis::gui::panels::PythonConsoleState& state,
-                               Rml::Element* action_el) {
-        if (!action_el || action_el->HasAttribute("disabled"))
+                               const PendingConsoleAction& pending) {
+        const std::string& action = pending.action;
+        if (action.empty())
             return;
 
-        const std::string action = action_el->GetAttribute<Rml::String>("data-action", "");
         auto* editor = state.getEditor();
         const auto close_popover = [&] {
             pane.active_popover = ConsolePopover::None;
@@ -664,21 +684,21 @@ namespace {
                                       : ConsolePopover::Folds;
         } else if (action == "jump-symbol") {
             if (editor) {
-                const int index = data_index(action_el);
+                const int index = pending.data_index;
                 if (index >= 0)
                     editor->jumpToSyntaxSymbol(static_cast<std::size_t>(index));
             }
             close_popover();
         } else if (action == "jump-breadcrumb") {
             if (editor) {
-                const int index = data_index(action_el);
+                const int index = pending.data_index;
                 if (index >= 0)
                     editor->jumpToSyntaxBreadcrumb(static_cast<std::size_t>(index));
             }
             close_popover();
         } else if (action == "toggle-fold") {
             if (editor) {
-                const int index = data_index(action_el);
+                const int index = pending.data_index;
                 if (index >= 0)
                     editor->toggleSyntaxFold(static_cast<std::size_t>(index));
             }
@@ -698,6 +718,17 @@ namespace {
         mark_dirty(pane);
     }
 
+    void process_pending_console_actions(RmlPythonConsolePane& pane,
+                                         lfs::vis::gui::panels::PythonConsoleState& state) {
+        if (pane.pending_actions.empty())
+            return;
+
+        auto actions = std::move(pane.pending_actions);
+        pane.pending_actions.clear();
+        for (const auto& action : actions)
+            handle_console_action(pane, state, action);
+    }
+
     void handle_console_event(RmlPythonConsolePane& pane, Rml::Event& event) {
         const std::string type = event.GetType();
         if ((type == "input" || type == "change") && event.GetCurrentElement() == pane.packages_search_input) {
@@ -711,9 +742,14 @@ namespace {
         if (type != "click")
             return;
 
-        auto& state = lfs::vis::gui::panels::PythonConsoleState::getInstance();
         if (auto* action_el = find_action_target(event.GetTargetElement())) {
-            handle_console_action(pane, state, action_el);
+            if (!action_el->HasAttribute("disabled")) {
+                pane.pending_actions.push_back({
+                    .action = action_el->GetAttribute<Rml::String>("data-action", ""),
+                    .data_index = data_index(action_el),
+                });
+                mark_dirty(pane);
+            }
             event.StopPropagation();
             return;
         }
@@ -1628,6 +1664,8 @@ namespace lfs::vis::gui::panels {
         else
             pane.host->prepareDirect(w, h);
         pane.host->setInput(nullptr);
+
+        process_pending_console_actions(pane, state);
 
         if (auto* editor = state.getEditor()) {
             if (editor->consumeExecuteRequested())
