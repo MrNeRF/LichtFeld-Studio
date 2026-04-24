@@ -341,29 +341,68 @@ namespace {
                input.keys_pressed.end();
     }
 
-    void set_disabled(Rml::Element* el, const bool disabled) {
-        if (!el)
-            return;
-        el->SetClass("disabled", disabled);
-        if (disabled)
-            el->SetAttribute("disabled", "disabled");
-        else
-            el->RemoveAttribute("disabled");
-    }
-
-    void set_display(Rml::Element* el, const bool visible, const char* display = "block") {
-        if (el)
-            el->SetProperty("display", visible ? display : "none");
-    }
-
-    void set_text(Rml::Element* el, const std::string& text) {
-        if (el)
-            el->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
-    }
-
     void mark_dirty(RmlPythonConsolePane& pane) {
         if (pane.host)
             pane.host->markContentDirty();
+    }
+
+    void set_class(RmlPythonConsolePane& pane,
+                   Rml::Element* el,
+                   const char* class_name,
+                   const bool enabled) {
+        if (!el || el->IsClassSet(class_name) == enabled)
+            return;
+        el->SetClass(class_name, enabled);
+        mark_dirty(pane);
+    }
+
+    void set_disabled(RmlPythonConsolePane& pane, Rml::Element* el, const bool disabled) {
+        if (!el)
+            return;
+
+        bool changed = false;
+        if (el->IsClassSet("disabled") != disabled) {
+            el->SetClass("disabled", disabled);
+            changed = true;
+        }
+
+        if (el->HasAttribute("disabled") != disabled) {
+            if (disabled)
+                el->SetAttribute("disabled", "disabled");
+            else
+                el->RemoveAttribute("disabled");
+            changed = true;
+        }
+
+        if (changed)
+            mark_dirty(pane);
+    }
+
+    void set_cached_property(RmlPythonConsolePane& pane,
+                             Rml::Element* el,
+                             const char* property,
+                             const std::string& value,
+                             const char* cache_attr) {
+        if (!el || el->GetAttribute<Rml::String>(cache_attr, "") == value)
+            return;
+        el->SetProperty(property, value);
+        el->SetAttribute(cache_attr, value);
+        mark_dirty(pane);
+    }
+
+    void set_display(RmlPythonConsolePane& pane,
+                     Rml::Element* el,
+                     const bool visible,
+                     const char* display = "block") {
+        set_cached_property(pane, el, "display", visible ? display : "none", "data-lfs-display");
+    }
+
+    void set_text(RmlPythonConsolePane& pane, Rml::Element* el, const std::string& text) {
+        if (!el || el->GetAttribute<Rml::String>("data-lfs-text", "") == text)
+            return;
+        el->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
+        el->SetAttribute("data-lfs-text", text);
+        mark_dirty(pane);
     }
 
     std::string get_clipboard_text() {
@@ -775,8 +814,10 @@ namespace {
             process_rml_terminal_input(terminal, input, bounds, char_w, char_h);
 
         const bool dirty = terminal.needsRedraw();
-        view->SetProperty("font-size", std::format("{:.0f}px", font_size));
-        view->SetProperty("line-height", std::format("{:.0f}px", char_h));
+        set_cached_property(pane, view, "font-size", std::format("{:.0f}px", font_size),
+                            "data-lfs-font-size");
+        set_cached_property(pane, view, "line-height", std::format("{:.0f}px", char_h),
+                            "data-lfs-line-height");
         view->setSnapshot(terminal.snapshot());
         if (dirty)
             mark_dirty(pane);
@@ -855,12 +896,12 @@ namespace {
             mark_dirty(pane);
         }
 
-        set_disabled(pane.outline_button_el, symbols.empty());
-        set_disabled(pane.breadcrumb_button_el, breadcrumbs.empty());
-        set_disabled(pane.fold_button_el, folds.empty());
-        set_display(pane.outline_menu_el, pane.active_popover == ConsolePopover::Outline);
-        set_display(pane.breadcrumb_menu_el, pane.active_popover == ConsolePopover::Breadcrumbs);
-        set_display(pane.fold_menu_el, pane.active_popover == ConsolePopover::Folds);
+        set_disabled(pane, pane.outline_button_el, symbols.empty());
+        set_disabled(pane, pane.breadcrumb_button_el, breadcrumbs.empty());
+        set_disabled(pane, pane.fold_button_el, folds.empty());
+        set_display(pane, pane.outline_menu_el, pane.active_popover == ConsolePopover::Outline);
+        set_display(pane, pane.breadcrumb_menu_el, pane.active_popover == ConsolePopover::Breadcrumbs);
+        set_display(pane, pane.fold_menu_el, pane.active_popover == ConsolePopover::Folds);
     }
 
     void sync_packages(RmlPythonConsolePane& pane) {
@@ -901,11 +942,11 @@ namespace {
             status = std::format("({})", pane.packages.size());
         else
             status = std::format("({} / {})", visible_count, pane.packages.size());
-        set_text(pane.packages_status_label, status);
+        set_text(pane, pane.packages_status_label, status);
 
         const bool empty_visible = !pane.packages_loading && visible_count == 0;
-        set_display(pane.packages_empty_el, empty_visible);
-        set_display(pane.packages_table_el, !empty_visible);
+        set_display(pane, pane.packages_empty_el, empty_visible);
+        set_display(pane, pane.packages_table_el, !empty_visible);
     }
 
     void sync_console_dom(RmlPythonConsolePane& pane,
@@ -921,52 +962,46 @@ namespace {
             script_label = lfs::core::path_to_utf8(state.getScriptPath().filename());
         if (state.isModified())
             script_label += " *";
-        set_text(pane.script_label_el, script_label);
+        set_text(pane, pane.script_label_el, script_label);
 
-        set_disabled(pane.reload_button_el, !has_script);
-        set_disabled(pane.stop_button_el, !can_stop);
-        set_text(pane.run_status_el, can_stop ? "Running..." : "Python");
-        if (pane.run_status_el)
-            pane.run_status_el->SetClass("running", can_stop);
+        set_disabled(pane, pane.reload_button_el, !has_script);
+        set_disabled(pane, pane.stop_button_el, !can_stop);
+        set_text(pane, pane.run_status_el, can_stop ? "Running..." : "Python");
+        set_class(pane, pane.run_status_el, "running", can_stop);
 
         const bool vim_enabled = editor && editor->isVimModeEnabled();
-        if (pane.vim_button_el)
-            pane.vim_button_el->SetClass("active", vim_enabled);
+        set_class(pane, pane.vim_button_el, "active", vim_enabled);
 
         if (editor == nullptr) {
-            set_text(pane.syntax_status_el, "Syntax");
+            set_text(pane, pane.syntax_status_el, "Syntax");
         } else if (editor->hasSyntaxErrors()) {
-            set_text(pane.syntax_status_el, "Syntax error");
+            set_text(pane, pane.syntax_status_el, "Syntax error");
         } else if (editor->syntaxDiagnosticsAvailable()) {
-            set_text(pane.syntax_status_el, "Syntax OK");
+            set_text(pane, pane.syntax_status_el, "Syntax OK");
         } else {
-            set_text(pane.syntax_status_el, "Syntax");
+            set_text(pane, pane.syntax_status_el, "Syntax");
         }
-        if (pane.syntax_status_el) {
-            pane.syntax_status_el->SetClass("status-error", editor && editor->hasSyntaxErrors());
-            pane.syntax_status_el->SetClass("status-ok", editor && !editor->hasSyntaxErrors() &&
-                                                          editor->syntaxDiagnosticsAvailable());
-        }
+        set_class(pane, pane.syntax_status_el, "status-error", editor && editor->hasSyntaxErrors());
+        set_class(pane, pane.syntax_status_el, "status-ok", editor && !editor->hasSyntaxErrors() &&
+                                                        editor->syntaxDiagnosticsAvailable());
 
         const std::string scope = editor ? editor->currentSyntaxScope() : "";
-        set_text(pane.breadcrumb_button_el, scope.empty() ? "Scope" : scope);
-        set_text(pane.fold_button_el, editor ? std::format("Blocks ({})", editor->syntaxFoldCount()) : "Blocks");
-        set_text(pane.font_status_el, std::format("{}%", static_cast<int>(std::round(state.getFontScale() * 100.0f))));
+        set_text(pane, pane.breadcrumb_button_el, scope.empty() ? "Scope" : scope);
+        set_text(pane, pane.fold_button_el, editor ? std::format("Blocks ({})", editor->syntaxFoldCount()) : "Blocks");
+        set_text(pane, pane.font_status_el, std::format("{}%", static_cast<int>(std::round(state.getFontScale() * 100.0f))));
 
-        set_display(pane.output_panel_el, active_tab == 0);
-        set_display(pane.repl_panel_el, active_tab == 1);
-        set_display(pane.packages_panel_el, active_tab == 2);
-        if (pane.output_tab_el)
-            pane.output_tab_el->SetClass("active", active_tab == 0);
-        if (pane.repl_tab_el)
-            pane.repl_tab_el->SetClass("active", active_tab == 1);
-        if (pane.packages_tab_el)
-            pane.packages_tab_el->SetClass("active", active_tab == 2);
+        set_display(pane, pane.output_panel_el, active_tab == 0);
+        set_display(pane, pane.repl_panel_el, active_tab == 1);
+        set_display(pane, pane.packages_panel_el, active_tab == 2);
+        set_class(pane, pane.output_tab_el, "active", active_tab == 0);
+        set_class(pane, pane.repl_tab_el, "active", active_tab == 1);
+        set_class(pane, pane.packages_tab_el, "active", active_tab == 2);
 
         if (active_tab == 2 && !pane.packages_loaded_once)
             request_packages_refresh(pane);
         sync_syntax_menus(pane, state);
-        sync_packages(pane);
+        if (active_tab == 2 || pane.packages_loading)
+            sync_packages(pane);
 
         const float toolbar_h = pane.toolbar_el
                                     ? std::max(34.0f, pane.toolbar_el->GetBox().GetSize(Rml::BoxArea::Border).y)
@@ -979,14 +1014,14 @@ namespace {
                                    : 0.0f;
         const float editor_h = std::max(0.0f, available_h - bottom_h);
         if (std::abs(editor_h - pane.last_editor_h) > 0.5f && pane.editor_panel_el) {
-            pane.editor_panel_el->SetProperty("height", std::format("{:.0f}px", editor_h));
+            set_cached_property(pane, pane.editor_panel_el, "height", std::format("{:.0f}px", editor_h),
+                                "data-lfs-height");
             pane.last_editor_h = editor_h;
-            mark_dirty(pane);
         }
         if (std::abs(bottom_h - pane.last_bottom_h) > 0.5f && pane.bottom_panel_el) {
-            pane.bottom_panel_el->SetProperty("height", std::format("{:.0f}px", bottom_h));
+            set_cached_property(pane, pane.bottom_panel_el, "height", std::format("{:.0f}px", bottom_h),
+                                "data-lfs-height");
             pane.last_bottom_h = bottom_h;
-            mark_dirty(pane);
         }
     }
 
@@ -1469,12 +1504,6 @@ namespace lfs::vis::gui::panels {
         reset_rml_python_console_pane(g_console_pane);
     }
 
-    void DrawPythonConsole(const UIContext& ctx, bool* open) {
-        (void)ctx;
-        if (open)
-            *open = false;
-    }
-
     void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
                                  const PanelInputState* input) {
         lfs::python::ensure_initialized();
@@ -1497,7 +1526,9 @@ namespace lfs::vis::gui::panels {
             editor->setReadOnly(should_block_editor_input(editor, state));
             pane.editor_view->setEditor(editor);
             pane.editor_view->setFontSizePx(font_size);
-            pane.editor_view->SetProperty("font-size", std::format("{:.0f}px", font_size));
+            set_cached_property(pane, pane.editor_view, "font-size",
+                                std::format("{:.0f}px", font_size),
+                                "data-lfs-font-size");
         }
 
         sync_console_dom(pane, state, h);
@@ -1506,24 +1537,32 @@ namespace lfs::vis::gui::panels {
         sync_console_dom(pane, state, h);
         pane.host->syncDirectLayout(w, h);
 
+        const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
         if (auto* output = state.getOutputTerminal()) {
             output->setReadOnly(true);
-            sync_terminal_view(pane, *output, pane.output_view, pane.output_view, input,
-                               font_size, state.getActiveTab() == 0);
+            if (active_tab == 0) {
+                sync_terminal_view(pane, *output, pane.output_view, pane.output_view, input,
+                                   font_size, true);
+            } else {
+                output->update();
+            }
         }
 
         if (auto* terminal = state.getTerminal()) {
             terminal->setReadOnly(false);
-            if (state.getActiveTab() == 1 && !terminal->is_running()) {
-                const auto fds = terminal->spawnEmbedded();
-                if (fds.valid())
-                    lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
+            if (active_tab == 1) {
+                if (!terminal->is_running()) {
+                    const auto fds = terminal->spawnEmbedded();
+                    if (fds.valid())
+                        lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
+                }
+                sync_terminal_view(pane, *terminal, pane.repl_view, pane.repl_view, input,
+                                   font_size, true);
             } else {
                 terminal->update();
+                terminal->setFocused(false);
             }
-            sync_terminal_view(pane, *terminal, pane.repl_view, pane.repl_view, input,
-                               font_size, state.getActiveTab() == 1);
-            state.setTerminalFocused(terminal->isFocused());
+            state.setTerminalFocused(active_tab == 1 && terminal->isFocused());
         }
 
         process_console_shortcuts(state, input);

@@ -4,9 +4,14 @@ body {
 }
 
 #window-frame,
+#python-editor-view,
 #python-output-terminal,
 #python-repl-terminal {
     background-color: @{background};
+}
+
+#python-editor-view {
+    color: @{text};
 }
 
 #python-console-toolbar,

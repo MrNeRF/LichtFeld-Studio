@@ -2065,13 +2065,16 @@ namespace lfs::vis::editor {
                     display.DrawRectFilled(row_rect, to_zep(fill));
                 }
 
+                const auto active_foreground = palette.text;
                 const Zep::NVec4f badge_color =
-                    to_zep(active_row ? palette.primary : palette.text_dim);
+                    to_zep(active_row ? active_foreground : palette.text_dim);
                 const Zep::NVec4f text_color =
-                    to_zep(item.deprecated ? palette.text_dim : palette.text);
-                const Zep::NVec4f highlight_color = to_zep(palette.primary);
+                    to_zep(active_row ? active_foreground
+                                      : (item.deprecated ? palette.text_dim : palette.text));
+                const Zep::NVec4f highlight_color =
+                    to_zep(active_row ? active_foreground : palette.primary);
                 const Zep::NVec4f detail_color =
-                    to_zep(active_row ? palette.primary : palette.text_dim);
+                    to_zep(active_row ? active_foreground : palette.text_dim);
                 const float text_y = row_y + 3.0f;
 
                 draw_text(ui_font, row_left + 9.0f, text_y, badge_color,
@@ -2999,16 +3002,24 @@ namespace lfs::vis::editor {
             }
 
             Rml::String input = event.GetParameter<Rml::String>("text", "");
-            if (input.empty()) {
-                input = event.GetParameter<Rml::String>("character", "");
-            }
+            if (input.empty())
+                input = event.GetParameter<Rml::String>("data", "");
+
+            const auto add_codepoint = [&](const uint32_t codepoint) {
+                if (codepoint != '\r' && codepoint != 0)
+                    mode->AddKeyPress(codepoint, 0);
+            };
 
             size_t index = 0;
             while (index < input.size()) {
-                const uint32_t codepoint = decode_utf8(input, index);
-                if (codepoint != '\r' && codepoint != 0) {
-                    mode->AddKeyPress(codepoint, 0);
-                }
+                add_codepoint(decode_utf8(input, index));
+            }
+
+            if (input.empty()) {
+                uint32_t codepoint = static_cast<uint32_t>(event.GetParameter("character", 0));
+                if (codepoint == 0)
+                    codepoint = static_cast<uint32_t>(event.GetParameter("codepoint", 0));
+                add_codepoint(codepoint);
             }
             event.StopPropagation();
         }

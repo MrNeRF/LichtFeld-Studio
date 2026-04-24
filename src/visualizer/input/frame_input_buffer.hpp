@@ -22,6 +22,7 @@ namespace lfs::vis {
         bool mouse_released[3] = {};
         float mouse_wheel = 0;
         std::vector<SDL_Scancode> keys_pressed;
+        std::vector<SDL_Scancode> keys_repeated;
         std::vector<SDL_Scancode> keys_released;
         std::vector<uint32_t> text_codepoints;
         std::vector<std::string> text_inputs;
@@ -38,6 +39,7 @@ namespace lfs::vis {
             mouse_released[0] = mouse_released[1] = mouse_released[2] = false;
             mouse_wheel = 0;
             keys_pressed.clear();
+            keys_repeated.clear();
             keys_released.clear();
             text_codepoints.clear();
             text_inputs.clear();
@@ -67,7 +69,9 @@ namespace lfs::vis {
                 mouse_wheel += event.wheel.y;
                 break;
             case SDL_EVENT_KEY_DOWN:
-                if (!event.key.repeat)
+                if (event.key.repeat)
+                    keys_repeated.push_back(event.key.scancode);
+                else
                     keys_pressed.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_KEY_UP:

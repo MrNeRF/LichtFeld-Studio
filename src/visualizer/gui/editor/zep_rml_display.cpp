@@ -27,11 +27,12 @@ namespace lfs::vis::editor {
             const auto to_byte = [](float value) {
                 return static_cast<Rml::byte>(std::clamp(value, 0.0f, 1.0f) * 255.0f);
             };
+            const float alpha = std::clamp(color.w, 0.0f, 1.0f);
             return {
-                to_byte(color.x),
-                to_byte(color.y),
-                to_byte(color.z),
-                to_byte(color.w),
+                to_byte(color.x * alpha),
+                to_byte(color.y * alpha),
+                to_byte(color.z * alpha),
+                to_byte(alpha),
             };
         }
 
@@ -65,7 +66,9 @@ namespace lfs::vis::editor {
         void SetPixelHeight(const int pixel_height) override {
             InvalidateCharCache();
             m_pixelHeight = std::max(1, pixel_height);
-            resolveFontHandles();
+            face_handle_ = {};
+            effects_handle_ = {};
+            ensureFontHandles();
         }
 
         Zep::NVec2f GetTextSize(const uint8_t* begin, const uint8_t* end = nullptr) const override {
@@ -77,6 +80,7 @@ namespace lfs::vis::editor {
                 return {};
 
             const auto byte_count = static_cast<int>(end - begin);
+            ensureFontHandles();
             if (!face_handle_) {
                 return {std::max(1.0f, byte_count * m_pixelHeight * 0.58f),
                         static_cast<float>(m_pixelHeight)};
@@ -95,11 +99,20 @@ namespace lfs::vis::editor {
             return {static_cast<float>(std::max(width, 1)), static_cast<float>(m_pixelHeight)};
         }
 
-        Rml::FontFaceHandle faceHandle() const { return face_handle_; }
-        Rml::FontEffectsHandle effectsHandle() const { return effects_handle_; }
+        Rml::FontFaceHandle faceHandle() const {
+            ensureFontHandles();
+            return face_handle_;
+        }
+        Rml::FontEffectsHandle effectsHandle() const {
+            ensureFontHandles();
+            return effects_handle_;
+        }
 
     private:
-        void resolveFontHandles() {
+        void ensureFontHandles() const {
+            if (face_handle_)
+                return;
+
             face_handle_ = {};
             effects_handle_ = {};
 
@@ -125,8 +138,8 @@ namespace lfs::vis::editor {
             }
         }
 
-        Rml::FontFaceHandle face_handle_ = {};
-        Rml::FontEffectsHandle effects_handle_ = {};
+        mutable Rml::FontFaceHandle face_handle_ = {};
+        mutable Rml::FontEffectsHandle effects_handle_ = {};
     };
 
     ZepDisplay_Rml::ZepDisplay_Rml() : Zep::ZepDisplay() {
@@ -278,19 +291,28 @@ namespace lfs::vis::editor {
             return;
 
         auto* rml_font = dynamic_cast<Font*>(&font);
-        if (!rml_font || !rml_font->faceHandle())
+        Rml::FontFaceHandle face_handle = rml_font ? rml_font->faceHandle() : Rml::FontFaceHandle{};
+        Rml::FontEffectsHandle effects_handle = rml_font ? rml_font->effectsHandle() : Rml::FontEffectsHandle{};
+        if (!face_handle && element_) {
+            face_handle = element_->GetFontFaceHandle();
+            if (face_handle) {
+                const Rml::FontEffectList effects;
+                effects_handle = font_engine->PrepareFontEffects(face_handle, effects);
+            }
+        }
+        if (!face_handle)
             return;
 
         Rml::TexturedMeshList meshes;
         Rml::TextShapingContext shaping{emptyLanguage()};
         font_engine->GenerateString(
             *render_manager,
-            rml_font->faceHandle(),
-            rml_font->effectsHandle(),
+            face_handle,
+            effects_handle,
             Rml::StringView(reinterpret_cast<const char*>(text_begin), reinterpret_cast<const char*>(text_end)),
             {pos.x, pos.y + static_cast<float>(font.GetPixelHeight())},
             toRmlColor(color),
-            std::clamp(color.w, 0.0f, 1.0f),
+            1.0f,
             shaping,
             meshes);
 

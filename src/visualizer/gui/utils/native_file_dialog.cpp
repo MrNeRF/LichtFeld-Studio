@@ -167,6 +167,17 @@ namespace lfs::vis::gui {
             return {};
         }
 
+        [[nodiscard]] bool isPortalAbruptDismissal(const char* error) {
+            if (error == nullptr) {
+                return false;
+            }
+
+            const std::string_view message(error);
+            return message.find("D-Bus file dialog interaction was ended abruptly") !=
+                       std::string_view::npos &&
+                   message.find("response code 2") != std::string_view::npos;
+        }
+
         class FilterListStorage {
         public:
             explicit FilterListStorage(const std::vector<DialogFilter>& filters) {
@@ -276,6 +287,7 @@ namespace lfs::vis::gui {
             const nfdwindowhandle_t parentWindow = currentParentWindowHandle();
             nfdresult_t dialogResult = NFD_ERROR;
             nfdu8char_t* selectedPath = nullptr;
+            NFD_ClearError();
 
             if (request.kind == DialogKind::OpenFile) {
                 const nfdopendialogu8args_t args{
@@ -307,13 +319,21 @@ namespace lfs::vis::gui {
             }
 
             if (dialogResult == NFD_CANCEL) {
+                NFD_ClearError();
                 return false;
             }
 
             if (dialogResult != NFD_OKAY) {
                 const char* error = NFD_GetError();
+                if (isPortalAbruptDismissal(error)) {
+                    LOG_DEBUG("Native file dialog dismissed by portal: {}", error);
+                    NFD_ClearError();
+                    return false;
+                }
+
                 LOG_ERROR("Native file dialog failed: {}",
                           error ? error : "unknown error");
+                NFD_ClearError();
                 return false;
             }
 

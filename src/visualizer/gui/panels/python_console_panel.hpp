@@ -112,9 +112,6 @@ namespace lfs::vis::gui::panels {
         std::thread script_thread_;
     };
 
-    // Draw the Python console window (floating)
-    void DrawPythonConsole(const UIContext& ctx, bool* open);
-
     // Draw the Python console as a docked panel (fixed position/size)
     void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
                                  const PanelInputState* input = nullptr);

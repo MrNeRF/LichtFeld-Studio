@@ -132,6 +132,7 @@ namespace lfs::vis::gui {
             input.key_super = false;
             input.viewport_keyboard_focus = false;
             input.keys_pressed.clear();
+            input.keys_repeated.clear();
             input.keys_released.clear();
             input.text_codepoints.clear();
             input.text_inputs.clear();
