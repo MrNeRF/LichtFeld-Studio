@@ -741,8 +741,6 @@ namespace lfs::vis::gui {
                     node_bounds_min_ = fresh_min;
                     node_bounds_max_ = fresh_max;
                     node_bounds_orig_visualizer_world_transform_ = scene_coords::nodeVisualizerWorldTransform(scene, first_node->id);
-                    node_bounds_orig_scale_ = extractScale(first_node->local_transform.get());
-                    node_bounds_orig_rotation_ = extractRotation(first_node->local_transform.get());
                     node_bounds_world_scale_ = world_scale;
                     node_bounds_scale_active_ = true;
                 }
@@ -778,10 +776,6 @@ namespace lfs::vis::gui {
 
             node_transforms_before_drag_.clear();
             node_original_visualizer_world_transforms_.clear();
-            node_original_world_positions_.clear();
-            node_parent_world_inverses_.clear();
-            node_original_rotations_.clear();
-            node_original_scales_.clear();
 
             for (const auto& name : node_gizmo_node_names_) {
                 const auto* node = scene.getNode(name);
@@ -792,11 +786,6 @@ namespace lfs::vis::gui {
                 const glm::mat4 local_t = node->local_transform.get();
                 node_transforms_before_drag_.push_back(local_t);
                 node_original_visualizer_world_transforms_.push_back(world_t);
-                node_original_rotations_.push_back(extractRotation(local_t));
-                node_original_scales_.push_back(extractScale(local_t));
-
-                node_original_world_positions_.emplace_back(world_t[3]);
-                node_parent_world_inverses_.push_back(gizmo_ops::visualizerParentWorldInverse(scene, node->parent_id));
             }
         }
 
@@ -1000,9 +989,7 @@ namespace lfs::vis::gui {
         const bool use_world_space = (transform_space_ == TransformSpace::World);
         const GizmoOperation gizmo_op = current_operation_;
 
-        const glm::vec3 local_pivot = gizmo_ops::computeLocalPivot(
-            scene_manager->getScene(), cropbox_id,
-            pivot_mode_, GizmoTargetType::CropBox);
+        const glm::vec3 local_pivot = (cropbox_min + cropbox_max) * 0.5f;
         const glm::vec3 pivot_world = translation + rotation * (local_pivot * world_scale);
 
         const bool gizmo_local_aligned = (gizmo_op == GizmoOperation::Scale) || !use_world_space;

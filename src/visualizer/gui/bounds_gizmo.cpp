@@ -15,6 +15,9 @@ namespace lfs::vis::gui {
         constexpr float SMALL_ANCHOR_RADIUS_PX = 6.0f;
         constexpr float FACE_HIT_RADIUS_PX = 13.0f;
         constexpr float CORNER_HIT_RADIUS_PX = 11.0f;
+        constexpr float DASH_PERIOD_PX = 12.0f;
+        constexpr float DASH_DUTY = 0.55f;
+        constexpr int MAX_DASHES_PER_EDGE = 160;
         constexpr float DELTA_EPSILON = 0.000001f;
         constexpr ImU32 BOUNDS_LINE_COLOR = IM_COL32(0xAA, 0xAA, 0xAA, 255);
         constexpr ImU32 BOUNDS_LINE_SHADOW = IM_COL32(0, 0, 0, 130);
@@ -45,8 +48,6 @@ namespace lfs::vis::gui {
             glm::vec3 start_half_extents_world{0.5f};
             glm::vec3 min_half_extents_world{0.0005f};
             glm::mat3 orientation_world{1.0f};
-            glm::mat4 view{1.0f};
-            glm::mat4 projection{1.0f};
             glm::vec2 start_mouse{0.0f};
             glm::vec2 screen_axis{1.0f, 0.0f};
             float pixels_per_world = 64.0f;
@@ -61,6 +62,13 @@ namespace lfs::vis::gui {
             int normal_axis = 0;
             int axis_a = 1;
             int axis_b = 2;
+        };
+
+        struct ProjectedRect {
+            PlaneRect rect;
+            std::array<glm::ivec3, 4> signs{};
+            std::array<glm::vec2, 4> screen{};
+            bool valid = false;
         };
 
         [[nodiscard]] float lengthSquared(const glm::vec2& v) {
@@ -132,7 +140,11 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] glm::vec3 cameraPosition(const glm::mat4& view) {
-            return glm::vec3(glm::inverse(view)[3]);
+            const glm::vec3 right(view[0][0], view[1][0], view[2][0]);
+            const glm::vec3 up(view[0][1], view[1][1], view[2][1]);
+            const glm::vec3 back(view[0][2], view[1][2], view[2][2]);
+            const glm::vec3 translation(view[3]);
+            return -(right * translation.x + up * translation.y + back * translation.z);
         }
 
         [[nodiscard]] glm::vec3 cornerVector(const std::array<AxisVisual, 3>& axes,
@@ -207,9 +219,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool projectRect(const BoundsGizmoConfig& config,
                                        const glm::mat4& view_projection,
                                        const std::array<AxisVisual, 3>& axes,
-                                       const PlaneRect& rect,
+                                       const std::array<glm::ivec3, 4>& signs,
                                        std::array<glm::vec2, 4>& screen) {
-            const auto signs = rectCornerSigns(rect);
             for (size_t i = 0; i < signs.size(); ++i) {
                 if (!projectPoint(view_projection, config.viewport_pos, config.viewport_size,
                                   rectAnchorWorld(config, axes, signs[i]), screen[i])) {
@@ -219,12 +230,28 @@ namespace lfs::vis::gui {
             return true;
         }
 
+        [[nodiscard]] std::array<ProjectedRect, 3> projectRects(
+            const BoundsGizmoConfig& config,
+            const glm::mat4& view_projection,
+            const std::array<AxisVisual, 3>& axes,
+            const std::array<PlaneRect, 3>& rects,
+            const int rect_count) {
+            std::array<ProjectedRect, 3> projected{};
+            for (int rect_index = 0; rect_index < rect_count; ++rect_index) {
+                auto& dst = projected[static_cast<size_t>(rect_index)];
+                dst.rect = rects[static_cast<size_t>(rect_index)];
+                dst.signs = rectCornerSigns(dst.rect);
+                dst.valid = projectRect(config, view_projection, axes, dst.signs, dst.screen);
+            }
+            return projected;
+        }
+
         void drawDashedLine(ImDrawList& draw_list, const glm::vec2& a, const glm::vec2& b) {
             const float distance = glm::length(b - a);
-            const int step_count = std::clamp(static_cast<int>(distance / 10.0f), 1, 1000);
+            const int step_count = std::clamp(static_cast<int>(distance / DASH_PERIOD_PX), 1, MAX_DASHES_PER_EDGE);
             for (int step = 0; step < step_count; ++step) {
                 const float t0 = static_cast<float>(step) / static_cast<float>(step_count);
-                const float t1 = t0 + 0.5f / static_cast<float>(step_count);
+                const float t1 = t0 + DASH_DUTY / static_cast<float>(step_count);
                 const glm::vec2 p0 = glm::mix(a, b, t0);
                 const glm::vec2 p1 = glm::mix(a, b, t1);
                 draw_list.AddLine(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), BOUNDS_LINE_SHADOW, 3.4f);
@@ -233,19 +260,16 @@ namespace lfs::vis::gui {
         }
 
         void drawBoundsRects(ImDrawList& draw_list,
-                             const BoundsGizmoConfig& config,
-                             const glm::mat4& view_projection,
-                             const std::array<AxisVisual, 3>& axes,
-                             const std::array<PlaneRect, 3>& rects,
+                             const std::array<ProjectedRect, 3>& rects,
                              const int rect_count) {
             for (int rect_index = 0; rect_index < rect_count; ++rect_index) {
-                std::array<glm::vec2, 4> screen{};
-                if (!projectRect(config, view_projection, axes, rects[static_cast<size_t>(rect_index)], screen)) {
+                const auto& rect = rects[static_cast<size_t>(rect_index)];
+                if (!rect.valid) {
                     continue;
                 }
                 for (int i = 0; i < 4; ++i) {
-                    drawDashedLine(draw_list, screen[static_cast<size_t>(i)],
-                                   screen[static_cast<size_t>((i + 1) % 4)]);
+                    drawDashedLine(draw_list, rect.screen[static_cast<size_t>(i)],
+                                   rect.screen[static_cast<size_t>((i + 1) % 4)]);
                 }
             }
         }
@@ -296,33 +320,29 @@ namespace lfs::vis::gui {
         }
 
         void drawBoundsAnchors(ImDrawList& draw_list,
-                               const BoundsGizmoConfig& config,
-                               const glm::mat4& view_projection,
-                               const std::array<AxisVisual, 3>& axes,
-                               const std::array<PlaneRect, 3>& rects,
+                               const std::array<ProjectedRect, 3>& rects,
                                const int rect_count,
                                const HandleHit& highlighted) {
             std::array<bool, 6> drawn_face_handles{};
             for (int rect_index = 0; rect_index < rect_count; ++rect_index) {
-                const auto signs = rectCornerSigns(rects[static_cast<size_t>(rect_index)]);
-                std::array<glm::vec2, 4> screen{};
-                if (!projectRect(config, view_projection, axes, rects[static_cast<size_t>(rect_index)], screen)) {
+                const auto& rect = rects[static_cast<size_t>(rect_index)];
+                if (!rect.valid) {
                     continue;
                 }
 
                 for (int i = 0; i < 4; ++i) {
                     const bool hot = highlighted.handle == BoundsGizmoHandle::Corner &&
-                                     sameSigns(highlighted.corner_signs, signs[static_cast<size_t>(i)]);
-                    drawAnchor(draw_list, screen[static_cast<size_t>(i)], BIG_ANCHOR_RADIUS_PX, hot);
+                                     sameSigns(highlighted.corner_signs, rect.signs[static_cast<size_t>(i)]);
+                    drawAnchor(draw_list, rect.screen[static_cast<size_t>(i)], BIG_ANCHOR_RADIUS_PX, hot);
                 }
 
                 for (int i = 0; i < 4; ++i) {
                     const int next = (i + 1) % 4;
                     const glm::vec2 mid_screen =
-                        (screen[static_cast<size_t>(i)] + screen[static_cast<size_t>(next)]) * 0.5f;
-                    const HandleHit edge = edgeHandle(signs[static_cast<size_t>(i)],
-                                                      signs[static_cast<size_t>(next)],
-                                                      rects[static_cast<size_t>(rect_index)].normal_axis);
+                        (rect.screen[static_cast<size_t>(i)] + rect.screen[static_cast<size_t>(next)]) * 0.5f;
+                    const HandleHit edge = edgeHandle(rect.signs[static_cast<size_t>(i)],
+                                                      rect.signs[static_cast<size_t>(next)],
+                                                      rect.rect.normal_axis);
                     const int handle_index = faceHandleIndex(edge.handle);
                     if (handle_index < 0 || drawn_face_handles[static_cast<size_t>(handle_index)]) {
                         continue;
@@ -334,51 +354,49 @@ namespace lfs::vis::gui {
             }
         }
 
-        [[nodiscard]] HandleHit nearestHandle(const BoundsGizmoConfig& config,
-                                              const glm::mat4& view_projection,
-                                              const std::array<AxisVisual, 3>& axes,
-                                              const std::array<PlaneRect, 3>& rects,
+        [[nodiscard]] HandleHit nearestHandle(const std::array<ProjectedRect, 3>& rects,
                                               const int rect_count,
                                               const glm::vec2& mouse) {
-            float best_distance = std::numeric_limits<float>::max();
+            constexpr float face_hit_radius2 = FACE_HIT_RADIUS_PX * FACE_HIT_RADIUS_PX;
+            constexpr float corner_hit_radius2 = CORNER_HIT_RADIUS_PX * CORNER_HIT_RADIUS_PX;
+            float best_distance2 = std::numeric_limits<float>::max();
             HandleHit best;
             std::array<bool, 6> tested_face_handles{};
 
             for (int rect_index = 0; rect_index < rect_count; ++rect_index) {
-                const auto signs = rectCornerSigns(rects[static_cast<size_t>(rect_index)]);
-                std::array<glm::vec2, 4> screen{};
-                if (!projectRect(config, view_projection, axes, rects[static_cast<size_t>(rect_index)], screen)) {
+                const auto& rect = rects[static_cast<size_t>(rect_index)];
+                if (!rect.valid) {
                     continue;
                 }
 
                 for (int i = 0; i < 4; ++i) {
                     const int next = (i + 1) % 4;
                     const glm::vec2 mid_screen =
-                        (screen[static_cast<size_t>(i)] + screen[static_cast<size_t>(next)]) * 0.5f;
-                    const float distance = glm::length(mouse - mid_screen);
-                    if (distance < best_distance && distance <= FACE_HIT_RADIUS_PX) {
-                        const HandleHit edge = edgeHandle(signs[static_cast<size_t>(i)],
-                                                          signs[static_cast<size_t>(next)],
-                                                          rects[static_cast<size_t>(rect_index)].normal_axis);
+                        (rect.screen[static_cast<size_t>(i)] + rect.screen[static_cast<size_t>(next)]) * 0.5f;
+                    const float distance2 = lengthSquared(mouse - mid_screen);
+                    if (distance2 < best_distance2 && distance2 <= face_hit_radius2) {
+                        const HandleHit edge = edgeHandle(rect.signs[static_cast<size_t>(i)],
+                                                          rect.signs[static_cast<size_t>(next)],
+                                                          rect.rect.normal_axis);
                         const int handle_index = faceHandleIndex(edge.handle);
                         if (handle_index < 0 || tested_face_handles[static_cast<size_t>(handle_index)]) {
                             continue;
                         }
                         tested_face_handles[static_cast<size_t>(handle_index)] = true;
-                        best_distance = distance;
+                        best_distance2 = distance2;
                         best = edge;
                     }
                 }
 
                 for (int i = 0; i < 4; ++i) {
-                    const float distance = glm::length(mouse - screen[static_cast<size_t>(i)]);
-                    if (distance < best_distance && distance <= CORNER_HIT_RADIUS_PX) {
-                        best_distance = distance;
+                    const float distance2 = lengthSquared(mouse - rect.screen[static_cast<size_t>(i)]);
+                    if (distance2 < best_distance2 && distance2 <= corner_hit_radius2) {
+                        best_distance2 = distance2;
                         best = {BoundsGizmoHandle::Corner,
                                 -1,
                                 1.0f,
-                                rects[static_cast<size_t>(rect_index)].normal_axis,
-                                signs[static_cast<size_t>(i)]};
+                                rect.rect.normal_axis,
+                                rect.signs[static_cast<size_t>(i)]};
                     }
                 }
             }
@@ -478,8 +496,6 @@ namespace lfs::vis::gui {
             g_active.start_half_extents_world = glm::max(config.half_extents_world, config.min_half_extents_world);
             g_active.min_half_extents_world = glm::max(config.min_half_extents_world, glm::vec3(0.000001f));
             g_active.orientation_world = config.orientation_world;
-            g_active.view = config.view;
-            g_active.projection = config.projection;
             g_active.start_mouse = mouse;
             g_active.applied_center_world = g_active.start_center_world;
             g_active.applied_half_extents_world = g_active.start_half_extents_world;
@@ -543,12 +559,13 @@ namespace lfs::vis::gui {
             rects[0] = {axis, (axis + 1) % 3, (axis + 2) % 3};
             rect_count = 1;
         }
+        const auto projected_rects = projectRects(draw_config, view_projection, axes, rects, rect_count);
 
         const ImGuiIO& io = ImGui::GetIO();
         const glm::vec2 mouse(io.MousePos.x, io.MousePos.y);
         HandleHit hovered_hit;
         if (isInViewport(draw_config, mouse) && (!g_active.active || g_active.id == config.id)) {
-            hovered_hit = nearestHandle(draw_config, view_projection, axes, rects, rect_count, mouse);
+            hovered_hit = nearestHandle(projected_rects, rect_count, mouse);
         }
 
         if (g_active.active && g_active.id == config.id) {
@@ -586,8 +603,8 @@ namespace lfs::vis::gui {
             ImVec2(draw_config.viewport_pos.x + draw_config.viewport_size.x,
                    draw_config.viewport_pos.y + draw_config.viewport_size.y),
             true);
-        drawBoundsRects(*draw_config.draw_list, draw_config, view_projection, axes, rects, rect_count);
-        drawBoundsAnchors(*draw_config.draw_list, draw_config, view_projection, axes, rects, rect_count, highlighted);
+        drawBoundsRects(*draw_config.draw_list, projected_rects, rect_count);
+        drawBoundsAnchors(*draw_config.draw_list, projected_rects, rect_count, highlighted);
         draw_config.draw_list->PopClipRect();
 
         return result;

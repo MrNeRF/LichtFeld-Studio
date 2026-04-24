@@ -36,14 +36,25 @@ namespace lfs::vis::gui {
             ImU32 color = IM_COL32_WHITE;
         };
 
+        struct ProjectedPlane {
+            PlaneVisual plane;
+            std::array<glm::vec2, 4> quad{};
+            bool valid = false;
+        };
+
+        struct ProjectedAxis {
+            AxisVisual axis;
+            glm::vec2 start{0.0f};
+            glm::vec2 end{0.0f};
+            bool valid = false;
+        };
+
         struct ActiveState {
             bool active = false;
             int id = 0;
             ScaleGizmoHandle handle = ScaleGizmoHandle::None;
             glm::vec3 pivot_world{0.0f};
             glm::mat3 orientation_world{1.0f};
-            glm::mat4 view{1.0f};
-            glm::mat4 projection{1.0f};
             glm::vec2 start_mouse{0.0f};
             glm::vec2 screen_axis{1.0f, 0.0f};
             glm::ivec3 scale_axes{1};
@@ -87,13 +98,15 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] glm::vec3 cameraRight(const glm::mat4& view) {
-            const glm::mat4 inv_view = glm::inverse(view);
-            return safeNormalize(glm::vec3(inv_view[0]), glm::vec3(1.0f, 0.0f, 0.0f));
+            return safeNormalize(
+                glm::vec3(view[0][0], view[1][0], view[2][0]),
+                glm::vec3(1.0f, 0.0f, 0.0f));
         }
 
         [[nodiscard]] glm::vec3 cameraUp(const glm::mat4& view) {
-            const glm::mat4 inv_view = glm::inverse(view);
-            return safeNormalize(glm::vec3(inv_view[1]), glm::vec3(0.0f, 1.0f, 0.0f));
+            return safeNormalize(
+                glm::vec3(view[0][1], view[1][1], view[2][1]),
+                glm::vec3(0.0f, 1.0f, 0.0f));
         }
 
         [[nodiscard]] ImU32 withAlpha(const ImU32 color, const float alpha) {
@@ -131,14 +144,14 @@ namespace lfs::vis::gui {
                    p.y <= config.viewport_pos.y + config.viewport_size.y;
         }
 
-        [[nodiscard]] float distanceToSegment(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b) {
+        [[nodiscard]] float distanceToSegmentSquared(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b) {
             const glm::vec2 ab = b - a;
             const float denom = lengthSquared(ab);
             if (denom <= std::numeric_limits<float>::epsilon()) {
-                return glm::length(p - a);
+                return lengthSquared(p - a);
             }
             const float t = std::clamp(glm::dot(p - a, ab) / denom, 0.0f, 1.0f);
-            return glm::length(p - (a + ab * t));
+            return lengthSquared(p - (a + ab * t));
         }
 
         [[nodiscard]] bool pointInConvexQuad(const glm::vec2& p, const std::array<glm::vec2, 4>& quad) {
@@ -227,6 +240,21 @@ namespace lfs::vis::gui {
             return screen;
         }
 
+        [[nodiscard]] std::array<ProjectedPlane, 3> projectPlanes(
+            const ScaleGizmoConfig& config,
+            const glm::mat4& view_projection,
+            const std::array<AxisVisual, 3>& axes,
+            const std::array<PlaneVisual, 3>& planes,
+            const float world_per_pixel) {
+            std::array<ProjectedPlane, 3> projected{};
+            for (size_t i = 0; i < planes.size(); ++i) {
+                projected[i].plane = planes[i];
+                projected[i].quad = planeQuad(config, view_projection, axes, planes[i], world_per_pixel,
+                                              projected[i].valid);
+            }
+            return projected;
+        }
+
         [[nodiscard]] bool axisSegment(const ScaleGizmoConfig& config,
                                        const glm::mat4& view_projection,
                                        const AxisVisual& axis,
@@ -239,63 +267,70 @@ namespace lfs::vis::gui {
                    projectPoint(view_projection, config.viewport_pos, config.viewport_size, end_world, end);
         }
 
+        [[nodiscard]] std::array<ProjectedAxis, 3> projectAxes(
+            const ScaleGizmoConfig& config,
+            const glm::mat4& view_projection,
+            const std::array<AxisVisual, 3>& axes,
+            const float world_per_pixel) {
+            std::array<ProjectedAxis, 3> projected{};
+            for (size_t i = 0; i < axes.size(); ++i) {
+                projected[i].axis = axes[i];
+                projected[i].valid = axisSegment(config, view_projection, axes[i], world_per_pixel,
+                                                 projected[i].start, projected[i].end);
+            }
+            return projected;
+        }
+
         void drawPlaneHandle(ImDrawList& draw_list,
-                             const ScaleGizmoConfig& config,
-                             const glm::mat4& view_projection,
-                             const std::array<AxisVisual, 3>& axes,
-                             const PlaneVisual& plane,
-                             const float world_per_pixel,
+                             const ProjectedPlane& projected,
                              const bool emphasized,
                              const bool active) {
-            bool valid = false;
-            const auto quad = planeQuad(config, view_projection, axes, plane, world_per_pixel, valid);
-            if (!valid) {
+            if (!projected.valid) {
                 return;
             }
 
             const ImVec2 points[4] = {
-                ImVec2(quad[0].x, quad[0].y),
-                ImVec2(quad[1].x, quad[1].y),
-                ImVec2(quad[2].x, quad[2].y),
-                ImVec2(quad[3].x, quad[3].y),
+                ImVec2(projected.quad[0].x, projected.quad[0].y),
+                ImVec2(projected.quad[1].x, projected.quad[1].y),
+                ImVec2(projected.quad[2].x, projected.quad[2].y),
+                ImVec2(projected.quad[3].x, projected.quad[3].y),
             };
-            draw_list.AddConvexPolyFilled(points, 4, withAlpha(plane.color, active ? 0.36f : (emphasized ? 0.25f : 0.12f)));
+            draw_list.AddConvexPolyFilled(points, 4,
+                                           withAlpha(projected.plane.color, active ? 0.36f : (emphasized ? 0.25f : 0.12f)));
             draw_list.AddPolyline(points, 4, IM_COL32(0, 0, 0, active ? 165 : 95), ImDrawFlags_Closed, active ? 2.6f : 2.0f);
-            draw_list.AddPolyline(points, 4, withAlpha(plane.color, active ? 0.95f : 0.68f), ImDrawFlags_Closed, active ? 1.8f : 1.2f);
+            draw_list.AddPolyline(points, 4, withAlpha(projected.plane.color, active ? 0.95f : 0.68f),
+                                  ImDrawFlags_Closed, active ? 1.8f : 1.2f);
         }
 
         void drawAxisHandle(ImDrawList& draw_list,
-                            const ScaleGizmoConfig& config,
-                            const glm::mat4& view_projection,
-                            const AxisVisual& axis,
-                            const float world_per_pixel,
+                            const ProjectedAxis& projected,
                             const bool emphasized,
                             const bool active) {
-            glm::vec2 start;
-            glm::vec2 end;
-            if (!axisSegment(config, view_projection, axis, world_per_pixel, start, end)) {
+            if (!projected.valid) {
                 return;
             }
 
-            const glm::vec2 dir = safeNormalize(end - start, glm::vec2(1.0f, 0.0f));
+            const glm::vec2 dir = safeNormalize(projected.end - projected.start, glm::vec2(1.0f, 0.0f));
             const glm::vec2 normal(-dir.y, dir.x);
             const float line_width = active ? 4.0f : (emphasized ? 3.2f : 2.2f);
             const float alpha = active || emphasized ? 1.0f : 0.78f;
-            draw_list.AddLine(ImVec2(start.x, start.y), ImVec2(end.x, end.y), IM_COL32(0, 0, 0, active ? 185 : 115), line_width + 3.0f);
-            draw_list.AddLine(ImVec2(start.x, start.y), ImVec2(end.x, end.y), withAlpha(axis.color, alpha), line_width);
+            draw_list.AddLine(ImVec2(projected.start.x, projected.start.y), ImVec2(projected.end.x, projected.end.y),
+                              IM_COL32(0, 0, 0, active ? 185 : 115), line_width + 3.0f);
+            draw_list.AddLine(ImVec2(projected.start.x, projected.start.y), ImVec2(projected.end.x, projected.end.y),
+                              withAlpha(projected.axis.color, alpha), line_width);
 
             const float half = active ? AXIS_BOX_HALF_PX + 1.4f : (emphasized ? AXIS_BOX_HALF_PX + 0.8f : AXIS_BOX_HALF_PX);
             const std::array<glm::vec2, 4> shadow = {
-                end + dir * (half + 1.8f) + normal * (half + 1.8f),
-                end - dir * (half + 1.8f) + normal * (half + 1.8f),
-                end - dir * (half + 1.8f) - normal * (half + 1.8f),
-                end + dir * (half + 1.8f) - normal * (half + 1.8f),
+                projected.end + dir * (half + 1.8f) + normal * (half + 1.8f),
+                projected.end - dir * (half + 1.8f) + normal * (half + 1.8f),
+                projected.end - dir * (half + 1.8f) - normal * (half + 1.8f),
+                projected.end + dir * (half + 1.8f) - normal * (half + 1.8f),
             };
             const std::array<glm::vec2, 4> box = {
-                end + dir * half + normal * half,
-                end - dir * half + normal * half,
-                end - dir * half - normal * half,
-                end + dir * half - normal * half,
+                projected.end + dir * half + normal * half,
+                projected.end - dir * half + normal * half,
+                projected.end - dir * half - normal * half,
+                projected.end + dir * half - normal * half,
             };
             const ImVec2 shadow_points[4] = {
                 ImVec2(shadow[0].x, shadow[0].y),
@@ -310,7 +345,7 @@ namespace lfs::vis::gui {
                 ImVec2(box[3].x, box[3].y),
             };
             draw_list.AddConvexPolyFilled(shadow_points, 4, IM_COL32(0, 0, 0, active ? 185 : 125));
-            draw_list.AddConvexPolyFilled(box_points, 4, withAlpha(axis.color, alpha));
+            draw_list.AddConvexPolyFilled(box_points, 4, withAlpha(projected.axis.color, alpha));
         }
 
         void drawCenterHandle(ImDrawList& draw_list,
@@ -331,44 +366,40 @@ namespace lfs::vis::gui {
                                     2.0f);
         }
 
-        [[nodiscard]] ScaleGizmoHandle nearestHandle(const ScaleGizmoConfig& config,
-                                                     const glm::mat4& view_projection,
-                                                     const std::array<AxisVisual, 3>& axes,
-                                                     const std::array<PlaneVisual, 3>& planes,
+        [[nodiscard]] ScaleGizmoHandle nearestHandle(const std::array<ProjectedAxis, 3>& axes,
+                                                     const std::array<ProjectedPlane, 3>& planes,
                                                      const glm::vec2& mouse,
-                                                     const glm::vec2& pivot_screen,
-                                                     const float world_per_pixel) {
-            if (glm::length(mouse - pivot_screen) <= CENTER_HIT_RADIUS_PX) {
+                                                     const glm::vec2& pivot_screen) {
+            constexpr float center_hit_radius2 = CENTER_HIT_RADIUS_PX * CENTER_HIT_RADIUS_PX;
+            constexpr float axis_hit_threshold2 = AXIS_HIT_THRESHOLD_PX * AXIS_HIT_THRESHOLD_PX;
+            constexpr float axis_box_hit_radius2 = AXIS_BOX_HIT_RADIUS_PX * AXIS_BOX_HIT_RADIUS_PX;
+            if (lengthSquared(mouse - pivot_screen) <= center_hit_radius2) {
                 return ScaleGizmoHandle::Uniform;
             }
 
             for (const auto& plane : planes) {
-                bool valid = false;
-                const auto quad = planeQuad(config, view_projection, axes, plane, world_per_pixel, valid);
-                if (valid && pointInConvexQuad(mouse, quad)) {
-                    return plane.handle;
+                if (plane.valid && pointInConvexQuad(mouse, plane.quad)) {
+                    return plane.plane.handle;
                 }
             }
 
-            float best_distance = std::numeric_limits<float>::max();
+            float best_distance2 = std::numeric_limits<float>::max();
             ScaleGizmoHandle best_handle = ScaleGizmoHandle::None;
             for (const auto& axis : axes) {
-                glm::vec2 start;
-                glm::vec2 end;
-                if (!axisSegment(config, view_projection, axis, world_per_pixel, start, end)) {
+                if (!axis.valid) {
                     continue;
                 }
-                const float box_distance = glm::length(mouse - end);
-                const float line_distance = distanceToSegment(mouse, start, end);
-                const float distance = std::min(box_distance, line_distance);
-                if (distance < best_distance) {
-                    best_distance = distance;
-                    best_handle = axis.handle;
+                const float box_distance2 = lengthSquared(mouse - axis.end);
+                const float line_distance2 = distanceToSegmentSquared(mouse, axis.start, axis.end);
+                const float distance2 = std::min(box_distance2, line_distance2);
+                if (distance2 < best_distance2) {
+                    best_distance2 = distance2;
+                    best_handle = axis.axis.handle;
                 }
             }
 
-            return best_distance <= AXIS_BOX_HIT_RADIUS_PX ||
-                           best_distance <= AXIS_HIT_THRESHOLD_PX
+            return best_distance2 <= axis_box_hit_radius2 ||
+                           best_distance2 <= axis_hit_threshold2
                        ? best_handle
                        : ScaleGizmoHandle::None;
         }
@@ -436,8 +467,6 @@ namespace lfs::vis::gui {
             g_active.handle = handle;
             g_active.pivot_world = config.pivot_world;
             g_active.orientation_world = config.orientation_world;
-            g_active.view = config.view;
-            g_active.projection = config.projection;
             g_active.start_mouse = mouse;
             g_active.scale_axes = scaleAxesForHandle(handle);
             g_active.screen_axis = projectedAxisForHandle(config, view_projection, axes, handle, mouse,
@@ -484,13 +513,14 @@ namespace lfs::vis::gui {
             PlaneVisual{ScaleGizmoHandle::YZ, 1, 2, IM_COL32(78, 222, 210, 255)},
             PlaneVisual{ScaleGizmoHandle::ZX, 2, 0, IM_COL32(205, 132, 255, 255)},
         };
+        const auto projected_planes = projectPlanes(draw_config, view_projection, axes, planes, world_per_pixel);
+        const auto projected_axes = projectAxes(draw_config, view_projection, axes, world_per_pixel);
 
         const ImGuiIO& io = ImGui::GetIO();
         const glm::vec2 mouse(io.MousePos.x, io.MousePos.y);
         ScaleGizmoHandle hovered_handle = ScaleGizmoHandle::None;
         if (isInViewport(draw_config, mouse) && (!g_active.active || g_active.id == config.id)) {
-            hovered_handle = nearestHandle(draw_config, view_projection, axes, planes, mouse, pivot_screen,
-                                           world_per_pixel);
+            hovered_handle = nearestHandle(projected_axes, projected_planes, mouse, pivot_screen);
         }
 
         if (g_active.active && g_active.id == config.id) {
@@ -508,13 +538,7 @@ namespace lfs::vis::gui {
         }
 
         if (g_active.active && g_active.id == config.id) {
-            ScaleGizmoConfig drag_config = config;
-            drag_config.pivot_world = g_active.pivot_world;
-            drag_config.orientation_world = g_active.orientation_world;
-            drag_config.view = g_active.view;
-            drag_config.projection = g_active.projection;
-
-            const glm::vec3 target_scale = targetScaleForMouse(drag_config, mouse);
+            const glm::vec3 target_scale = targetScaleForMouse(config, mouse);
             const glm::vec3 delta_scale = target_scale / glm::max(g_active.applied_scale, glm::vec3(MIN_SCALE_FACTOR));
             if (lengthSquared(delta_scale - glm::vec3(1.0f)) > DELTA_EPSILON * DELTA_EPSILON) {
                 result.changed = true;
@@ -532,15 +556,15 @@ namespace lfs::vis::gui {
         g_hovered = result.hovered || result.active;
 
         const ScaleGizmoHandle emphasized = result.active ? g_active.handle : hovered_handle;
-        for (const auto& plane : planes) {
-            drawPlaneHandle(*draw_config.draw_list, draw_config, view_projection, axes, plane, world_per_pixel,
-                            emphasized == plane.handle && !result.active,
-                            emphasized == plane.handle && result.active);
+        for (const auto& plane : projected_planes) {
+            drawPlaneHandle(*draw_config.draw_list, plane,
+                            emphasized == plane.plane.handle && !result.active,
+                            emphasized == plane.plane.handle && result.active);
         }
-        for (const auto& axis : axes) {
-            drawAxisHandle(*draw_config.draw_list, draw_config, view_projection, axis, world_per_pixel,
-                           emphasized == axis.handle && !result.active,
-                           emphasized == axis.handle && result.active);
+        for (const auto& axis : projected_axes) {
+            drawAxisHandle(*draw_config.draw_list, axis,
+                           emphasized == axis.axis.handle && !result.active,
+                           emphasized == axis.axis.handle && result.active);
         }
 
         drawCenterHandle(*draw_config.draw_list, pivot_screen,

@@ -28,6 +28,13 @@ namespace lfs::vis::gui {
             ImU32 color = IM_COL32_WHITE;
         };
 
+        struct RingCache {
+            AxisVisual axis;
+            std::array<glm::vec2, RING_SEGMENTS + 1> points{};
+            std::array<glm::vec3, RING_SEGMENTS + 1> radials{};
+            std::array<bool, RING_SEGMENTS + 1> valid{};
+        };
+
         struct ActiveState {
             bool active = false;
             int id = 0;
@@ -37,10 +44,8 @@ namespace lfs::vis::gui {
             glm::mat3 orientation_world{1.0f};
             glm::vec3 start_vector_world{1.0f, 0.0f, 0.0f};
             glm::vec2 start_mouse{0.0f};
-            glm::vec2 last_mouse{0.0f};
             glm::vec2 screen_tangent{0.0f, 1.0f};
             float screen_pixels_per_radian = 64.0f;
-            float accumulated_angle = 0.0f;
             float applied_angle = 0.0f;
             float angle_offset = 0.0f;
             float previous_raw_angle = 0.0f;
@@ -98,18 +103,21 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] glm::vec3 cameraForward(const glm::mat4& view) {
-            const glm::mat4 inv_view = glm::inverse(view);
-            return safeNormalize(-glm::vec3(inv_view[2]), glm::vec3(0.0f, 0.0f, -1.0f));
+            return safeNormalize(
+                -glm::vec3(view[0][2], view[1][2], view[2][2]),
+                glm::vec3(0.0f, 0.0f, -1.0f));
         }
 
         [[nodiscard]] glm::vec3 cameraRight(const glm::mat4& view) {
-            const glm::mat4 inv_view = glm::inverse(view);
-            return safeNormalize(glm::vec3(inv_view[0]), glm::vec3(1.0f, 0.0f, 0.0f));
+            return safeNormalize(
+                glm::vec3(view[0][0], view[1][0], view[2][0]),
+                glm::vec3(1.0f, 0.0f, 0.0f));
         }
 
         [[nodiscard]] glm::vec3 cameraUp(const glm::mat4& view) {
-            const glm::mat4 inv_view = glm::inverse(view);
-            return safeNormalize(glm::vec3(inv_view[1]), glm::vec3(0.0f, 1.0f, 0.0f));
+            return safeNormalize(
+                glm::vec3(view[0][1], view[1][1], view[2][1]),
+                glm::vec3(0.0f, 1.0f, 0.0f));
         }
 
         [[nodiscard]] bool projectPoint(const glm::mat4& view_projection,
@@ -139,21 +147,21 @@ namespace lfs::vis::gui {
                    p.y <= config.viewport_pos.y + config.viewport_size.y;
         }
 
-        [[nodiscard]] float distanceToSegment(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b) {
+        [[nodiscard]] float distanceToSegmentSquared(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b) {
             const glm::vec2 ab = b - a;
             const float denom = lengthSquared(ab);
             if (denom <= std::numeric_limits<float>::epsilon()) {
-                return glm::length(p - a);
+                return lengthSquared(p - a);
             }
 
             const float t = std::clamp(glm::dot(p - a, ab) / denom, 0.0f, 1.0f);
-            return glm::length(p - (a + ab * t));
+            return lengthSquared(p - (a + ab * t));
         }
 
         [[nodiscard]] float colorAlpha(const glm::vec3& radial_world,
                                        const glm::vec3& camera_forward,
                                        const bool emphasized) {
-            const float front = glm::dot(safeNormalize(radial_world, camera_forward), camera_forward);
+            const float front = glm::dot(radial_world, camera_forward);
             const float alpha = front > 0.0f ? 0.38f : 0.82f;
             return emphasized ? 1.0f : alpha;
         }
@@ -197,71 +205,65 @@ namespace lfs::vis::gui {
             return target_radius_px / pixels_per_world;
         }
 
-        [[nodiscard]] std::array<glm::vec2, RING_SEGMENTS + 1> buildRingPoints(
+        [[nodiscard]] RingCache buildRingCache(
             const RotationGizmoConfig& config,
             const glm::mat4& view_projection,
-            const glm::vec3& axis,
+            const AxisVisual& axis,
             const float radius_world) {
-            std::array<glm::vec2, RING_SEGMENTS + 1> points{};
-            glm::vec3 u;
-            glm::vec3 v;
-            planeBasis(axis, u, v);
-
-            glm::vec2 previous = config.viewport_pos + config.viewport_size * 0.5f;
-            for (int i = 0; i <= RING_SEGMENTS; ++i) {
-                const float t = static_cast<float>(i) / static_cast<float>(RING_SEGMENTS);
-                const float angle = t * glm::two_pi<float>();
-                const glm::vec3 radial = u * std::cos(angle) + v * std::sin(angle);
-                glm::vec2 projected;
-                if (projectPoint(view_projection, config.viewport_pos, config.viewport_size,
-                                 config.pivot_world + radial * radius_world, projected)) {
-                    points[static_cast<size_t>(i)] = projected;
-                    previous = projected;
-                } else {
-                    points[static_cast<size_t>(i)] = previous;
-                }
-            }
-            return points;
-        }
-
-        [[nodiscard]] float distanceToPolyline(const glm::vec2& p,
-                                               const std::array<glm::vec2, RING_SEGMENTS + 1>& points) {
-            float best = std::numeric_limits<float>::max();
-            for (int i = 0; i < RING_SEGMENTS; ++i) {
-                best = std::min(best, distanceToSegment(
-                                          p,
-                                          points[static_cast<size_t>(i)],
-                                          points[static_cast<size_t>(i + 1)]));
-            }
-            return best;
-        }
-
-        void drawRing(ImDrawList& draw_list,
-                      const RotationGizmoConfig& config,
-                      const glm::mat4& view_projection,
-                      const AxisVisual& axis,
-                      const float radius_world,
-                      const bool hovered,
-                      const bool active) {
+            RingCache cache;
+            cache.axis = axis;
             glm::vec3 u;
             glm::vec3 v;
             planeBasis(axis.direction, u, v);
-            const glm::vec3 forward = cameraForward(config.view);
-            const float line_width = active ? 4.2f : (hovered ? 3.4f : 2.2f);
 
-            glm::vec2 prev_screen;
-            bool prev_valid = false;
-            glm::vec3 prev_radial{0.0f};
             for (int i = 0; i <= RING_SEGMENTS; ++i) {
                 const float t = static_cast<float>(i) / static_cast<float>(RING_SEGMENTS);
                 const float angle = t * glm::two_pi<float>();
                 const glm::vec3 radial = u * std::cos(angle) + v * std::sin(angle);
-                glm::vec2 screen;
-                const bool valid = projectPoint(view_projection, config.viewport_pos, config.viewport_size,
-                                                config.pivot_world + radial * radius_world, screen);
+                const size_t index = static_cast<size_t>(i);
+                cache.radials[index] = radial;
+                cache.valid[index] = projectPoint(view_projection, config.viewport_pos, config.viewport_size,
+                                                  config.pivot_world + radial * radius_world,
+                                                  cache.points[index]);
+            }
+            return cache;
+        }
 
-                if (valid && prev_valid) {
-                    const float alpha = colorAlpha((prev_radial + radial) * 0.5f, forward, hovered || active);
+        [[nodiscard]] float distanceToPolylineSquared(const glm::vec2& p, const RingCache& ring) {
+            float best_distance2 = std::numeric_limits<float>::max();
+            for (int i = 0; i < RING_SEGMENTS; ++i) {
+                const size_t a = static_cast<size_t>(i);
+                const size_t b = static_cast<size_t>(i + 1);
+                if (!ring.valid[a] || !ring.valid[b]) {
+                    continue;
+                }
+                best_distance2 = std::min(best_distance2, distanceToSegmentSquared(
+                                                              p,
+                                                              ring.points[a],
+                                                              ring.points[b]));
+            }
+            return best_distance2;
+        }
+
+        [[nodiscard]] float distanceToPolyline(const glm::vec2& p, const RingCache& ring) {
+            return std::sqrt(distanceToPolylineSquared(p, ring));
+        }
+
+        void drawRing(ImDrawList& draw_list,
+                      const RingCache& ring,
+                      const glm::vec3& camera_forward,
+                      const bool hovered,
+                      const bool active) {
+            const float line_width = active ? 4.2f : (hovered ? 3.4f : 2.2f);
+
+            for (int i = 0; i < RING_SEGMENTS; ++i) {
+                const size_t a = static_cast<size_t>(i);
+                const size_t b = static_cast<size_t>(i + 1);
+                if (ring.valid[a] && ring.valid[b]) {
+                    const auto& prev_screen = ring.points[a];
+                    const auto& screen = ring.points[b];
+                    const float alpha = colorAlpha((ring.radials[a] + ring.radials[b]) * 0.5f,
+                                                   camera_forward, hovered || active);
                     draw_list.AddLine(
                         ImVec2(prev_screen.x, prev_screen.y),
                         ImVec2(screen.x, screen.y),
@@ -270,13 +272,9 @@ namespace lfs::vis::gui {
                     draw_list.AddLine(
                         ImVec2(prev_screen.x, prev_screen.y),
                         ImVec2(screen.x, screen.y),
-                        withAlpha(axis.color, alpha),
+                        withAlpha(ring.axis.color, alpha),
                         line_width);
                 }
-
-                prev_screen = screen;
-                prev_valid = valid;
-                prev_radial = radial;
             }
         }
 
@@ -383,19 +381,24 @@ namespace lfs::vis::gui {
                                              const float radius_world,
                                              const glm::vec2& mouse) {
             float best_angle = 0.0f;
-            float best_distance = std::numeric_limits<float>::max();
+            float best_distance2 = std::numeric_limits<float>::max();
             constexpr int SEARCH_SEGMENTS = 192;
+            glm::vec3 u;
+            glm::vec3 v;
+            planeBasis(axis, u, v);
 
             for (int i = 0; i < SEARCH_SEGMENTS; ++i) {
                 const float angle = static_cast<float>(i) * glm::two_pi<float>() /
                                     static_cast<float>(SEARCH_SEGMENTS);
+                const glm::vec3 radial = u * std::cos(angle) + v * std::sin(angle);
                 glm::vec2 projected;
-                if (!projectRingAngle(config, view_projection, axis, radius_world, angle, projected)) {
+                if (!projectPoint(view_projection, config.viewport_pos, config.viewport_size,
+                                  config.pivot_world + radial * radius_world, projected)) {
                     continue;
                 }
-                const float distance = lengthSquared(projected - mouse);
-                if (distance < best_distance) {
-                    best_distance = distance;
+                const float distance2 = lengthSquared(projected - mouse);
+                if (distance2 < best_distance2) {
+                    best_distance2 = distance2;
                     best_angle = angle;
                 }
             }
@@ -484,47 +487,46 @@ namespace lfs::vis::gui {
             return std::round(angle / snap_radians) * snap_radians;
         }
 
-        [[nodiscard]] RotationGizmoAxis nearestAxis(const RotationGizmoConfig& config,
-                                                    const glm::mat4& view_projection,
-                                                    const glm::vec2& mouse,
+        [[nodiscard]] RotationGizmoAxis nearestAxis(const glm::vec2& mouse,
                                                     const glm::vec2& pivot_screen,
-                                                    const float ring_radius_world,
                                                     const float ring_radius_px,
-                                                    const std::array<AxisVisual, 3>& axes) {
-            float best_distance = std::numeric_limits<float>::max();
+                                                    const std::array<RingCache, 3>& rings) {
+            constexpr float hit_threshold2 = HIT_THRESHOLD_PX * HIT_THRESHOLD_PX;
+            float best_distance2 = std::numeric_limits<float>::max();
             RotationGizmoAxis best_axis = RotationGizmoAxis::None;
-            for (const auto& axis : axes) {
-                const auto points = buildRingPoints(config, view_projection, axis.direction, ring_radius_world);
-                const float distance = distanceToPolyline(mouse, points);
-                if (distance < best_distance) {
-                    best_distance = distance;
-                    best_axis = axis.axis;
+            for (const auto& ring : rings) {
+                const float distance2 = distanceToPolylineSquared(mouse, ring);
+                if (distance2 < best_distance2) {
+                    best_distance2 = distance2;
+                    best_axis = ring.axis.axis;
                 }
             }
 
             const float view_ring_distance = std::abs(glm::length(mouse - pivot_screen) -
                                                       (ring_radius_px + VIEW_RING_OFFSET_PX));
-            if (view_ring_distance < best_distance) {
-                best_distance = view_ring_distance;
+            const float view_ring_distance2 = view_ring_distance * view_ring_distance;
+            if (view_ring_distance2 < best_distance2) {
+                best_distance2 = view_ring_distance2;
                 best_axis = RotationGizmoAxis::View;
             }
 
-            return best_distance <= HIT_THRESHOLD_PX ? best_axis : RotationGizmoAxis::None;
+            return best_distance2 <= hit_threshold2 ? best_axis : RotationGizmoAxis::None;
         }
 
-        [[nodiscard]] float activeRingDistance(const RotationGizmoConfig& config,
-                                               const glm::mat4& view_projection,
-                                               const glm::vec2& mouse,
+        [[nodiscard]] float activeRingDistance(const glm::vec2& mouse,
                                                const glm::vec2& pivot_screen,
-                                               const float ring_radius_world,
-                                               const float ring_radius_px) {
+                                               const float ring_radius_px,
+                                               const std::array<RingCache, 3>& rings) {
             if (g_active.axis == RotationGizmoAxis::View) {
                 return std::abs(glm::length(mouse - pivot_screen) -
                                 (ring_radius_px + VIEW_RING_OFFSET_PX));
             }
 
-            const auto points = buildRingPoints(config, view_projection, g_active.axis_world, ring_radius_world);
-            return distanceToPolyline(mouse, points);
+            const int axis_index = static_cast<int>(g_active.axis);
+            if (axis_index < 0 || axis_index >= static_cast<int>(rings.size())) {
+                return std::numeric_limits<float>::max();
+            }
+            return distanceToPolyline(mouse, rings[static_cast<size_t>(axis_index)]);
         }
 
         [[nodiscard]] float activeRingInfluence(const float distance_to_ring, const float ring_radius_px) {
@@ -587,14 +589,18 @@ namespace lfs::vis::gui {
                        IM_COL32(80, 151, 255, 255)},
         };
         const glm::vec3 view_axis = cameraForward(drag_config.view);
+        const std::array<RingCache, 3> rings = {
+            buildRingCache(drag_config, view_projection, axes[0], ring_radius_world),
+            buildRingCache(drag_config, view_projection, axes[1], ring_radius_world),
+            buildRingCache(drag_config, view_projection, axes[2], ring_radius_world),
+        };
 
         const ImGuiIO& io = ImGui::GetIO();
         const glm::vec2 mouse(io.MousePos.x, io.MousePos.y);
         const bool mouse_in_viewport = isInViewport(drag_config, mouse);
         RotationGizmoAxis hovered_axis = RotationGizmoAxis::None;
         if (mouse_in_viewport && (!g_active.active || g_active.id == config.id)) {
-            hovered_axis = nearestAxis(drag_config, view_projection, mouse, pivot_screen,
-                                       ring_radius_world, ring_radius_px, axes);
+            hovered_axis = nearestAxis(mouse, pivot_screen, ring_radius_px, rings);
         }
 
         if (g_active.active && g_active.id == config.id) {
@@ -614,7 +620,6 @@ namespace lfs::vis::gui {
             g_active.pivot_world = drag_config.pivot_world;
             g_active.orientation_world = drag_config.orientation_world;
             g_active.start_mouse = mouse;
-            g_active.last_mouse = mouse;
             g_active.use_plane_drag = hovered_axis != RotationGizmoAxis::View &&
                                       planeDragVector(drag_config, mouse, g_active.axis_world,
                                                       g_active.start_vector_world);
@@ -628,7 +633,6 @@ namespace lfs::vis::gui {
                     g_active.screen_pixels_per_radian = std::max(16.0f, ring_radius_px);
                 }
             }
-            g_active.accumulated_angle = 0.0f;
             g_active.applied_angle = 0.0f;
             g_active.angle_offset = 0.0f;
             g_active.previous_raw_angle = 0.0f;
@@ -641,15 +645,13 @@ namespace lfs::vis::gui {
             result.active_axis = g_active.axis;
             float absolute_angle = 0.0f;
             if (rotationAngle(drag_config, pivot_screen, mouse, absolute_angle)) {
-                const float distance_to_ring = activeRingDistance(drag_config, view_projection, mouse, pivot_screen,
-                                                                  ring_radius_world, ring_radius_px);
+                const float distance_to_ring = activeRingDistance(mouse, pivot_screen, ring_radius_px, rings);
                 const float ring_influence = activeRingInfluence(distance_to_ring, ring_radius_px);
                 const float requested_angle = config.snap
                                                   ? snapAngle(absolute_angle, config.snap_degrees)
                                                   : absolute_angle;
                 if (ring_influence <= 0.0001f) {
                     g_active.angle_offset += g_active.applied_angle - absolute_angle;
-                    g_active.accumulated_angle = g_active.applied_angle;
                 } else {
                     const float applied_delta = (requested_angle - g_active.applied_angle) * ring_influence;
                     if (std::abs(applied_delta) > ANGLE_EPSILON) {
@@ -657,13 +659,11 @@ namespace lfs::vis::gui {
                         result.delta_rotation = rotationMatrix(g_active.axis_world, applied_delta);
                         g_active.applied_angle += applied_delta;
                     }
-                    g_active.accumulated_angle = g_active.applied_angle;
                     if (ring_influence < 0.999f) {
                         g_active.angle_offset += g_active.applied_angle - requested_angle;
                     }
                 }
             }
-            g_active.last_mouse = mouse;
             ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         }
 
@@ -672,9 +672,9 @@ namespace lfs::vis::gui {
         g_hovered = result.hovered || result.active;
 
         const RotationGizmoAxis emphasized_axis = result.active ? g_active.axis : hovered_axis;
-        for (const auto& axis : axes) {
-            const bool emphasized = emphasized_axis == axis.axis;
-            drawRing(*drag_config.draw_list, drag_config, view_projection, axis, ring_radius_world,
+        for (const auto& ring : rings) {
+            const bool emphasized = emphasized_axis == ring.axis.axis;
+            drawRing(*drag_config.draw_list, ring, view_axis,
                      emphasized && !result.active, emphasized && result.active);
         }
 
