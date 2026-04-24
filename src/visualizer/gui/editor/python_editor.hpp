@@ -90,6 +90,7 @@ namespace lfs::vis::editor {
         void unfocus();
         bool isFocused() const;
         bool hasActiveCompletion() const;
+        bool needsRmlFrame() const;
         void setVimModeEnabled(bool enabled);
         bool isVimModeEnabled() const;
 

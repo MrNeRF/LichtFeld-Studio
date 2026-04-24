@@ -1,4 +1,0 @@
-body,
-#window-frame {
-    background-color: @{background};
-}

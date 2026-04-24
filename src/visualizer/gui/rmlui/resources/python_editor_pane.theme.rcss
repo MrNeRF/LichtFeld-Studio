@@ -1,6 +1,0 @@
-body,
-#window-frame,
-#python-editor-view {
-    background-color: @{surface};
-    color: @{text};
-}

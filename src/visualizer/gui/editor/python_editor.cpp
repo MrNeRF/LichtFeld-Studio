@@ -1988,7 +1988,18 @@ namespace lfs::vis::editor {
             const float row_height = std::max(18.0f, static_cast<float>(ui_font.GetPixelHeight()) + 6.0f);
             const int visible_count =
                 std::min<int>(static_cast<int>(completion.items.size()), COMPLETION_POPUP_MAX_ITEMS);
-            const float popup_width = std::max(
+            float desired_width = 160.0f;
+            for (int i = 0; i < visible_count; ++i) {
+                const auto& item = completion.items[static_cast<size_t>(i)].item;
+                const std::string detail = item.detail.empty() ? item.description : item.detail;
+                const float label_width = zep_text_width(text_font, item.label);
+                const float detail_width = detail.empty() ? 0.0f : zep_text_width(ui_font, detail);
+                desired_width = std::max(desired_width,
+                                         48.0f + label_width +
+                                             (detail_width > 0.0f ? detail_width + 36.0f : 18.0f));
+            }
+            const float popup_width = std::clamp(
+                desired_width,
                 160.0f,
                 std::min(440.0f, std::max(160.0f, editor_width - 12.0f)));
             const float popup_height = std::min(
@@ -2752,6 +2763,18 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
+        [[nodiscard]] bool needsRmlFrame() const {
+            return request_focus ||
+                   is_focused ||
+                   completion.visible ||
+                   completion.hovered ||
+                   manual_completion_requested ||
+                   completion_request_pending ||
+                   semantic_tokens_request_pending ||
+                   pending_semantic_tokens.has_value() ||
+                   syntax_analysis_pending;
+        }
+
         std::unique_ptr<Zep::ZepEditor> editor;
         Zep::ZepBuffer* buffer = nullptr;
         Host host;
@@ -3301,6 +3324,10 @@ namespace lfs::vis::editor {
 
     bool PythonEditor::hasActiveCompletion() const {
         return impl_->completion.visible && !impl_->completion.items.empty();
+    }
+
+    bool PythonEditor::needsRmlFrame() const {
+        return impl_ && impl_->needsRmlFrame();
     }
 
     void PythonEditor::setVimModeEnabled(const bool enabled) {

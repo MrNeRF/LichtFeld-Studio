@@ -9,6 +9,7 @@
 #undef small // Windows rpcndr.h defines 'small' as 'char'; conflicts with libvterm
 #endif
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -109,10 +110,11 @@ namespace lfs::vis::terminal {
 
         // State
         [[nodiscard]] bool is_running() const { return pty_.is_running(); }
-        [[nodiscard]] bool has_output() const { return has_new_output_; }
-        [[nodiscard]] bool isFocused() const { return is_focused_; }
-        [[nodiscard]] bool needsRedraw() const { return needs_redraw_ || has_new_output_; }
-        void markRendered();
+        [[nodiscard]] bool has_output() const { return has_new_output_.load(); }
+        [[nodiscard]] bool isFocused() const { return is_focused_.load(); }
+        [[nodiscard]] bool needsRedraw() const { return rendered_generation_.load() != redraw_generation_.load(); }
+        [[nodiscard]] uint64_t redrawGeneration() const { return redraw_generation_.load(); }
+        void markRendered(uint64_t generation);
 
         // Scrollback
         void scrollUp(int lines = 1);
@@ -135,8 +137,8 @@ namespace lfs::vis::terminal {
         void reset();
 
         // Read-only mode (disables keyboard input, for output-only terminals)
-        void setReadOnly(bool readonly) { read_only_ = readonly; }
-        [[nodiscard]] bool isReadOnly() const { return read_only_; }
+        void setReadOnly(bool readonly) { read_only_.store(readonly); }
+        [[nodiscard]] bool isReadOnly() const { return read_only_.load(); }
 
         // Send text to PTY (for executing code programmatically)
         void sendToPty(const std::string& text);
@@ -149,6 +151,7 @@ namespace lfs::vis::terminal {
         void initVterm();
         void destroyVterm();
         void handleResize(int new_cols, int new_rows);
+        void markDirty();
 
         // libvterm callbacks
         static int onDamage(VTermRect rect, void* user);
@@ -160,6 +163,10 @@ namespace lfs::vis::terminal {
 
         [[nodiscard]] TerminalColor vtermColorToPackedColor(VTermColor color) const;
         [[nodiscard]] bool isCellSelected(int row, int col) const;
+        [[nodiscard]] bool getVisibleCell(int visible_row,
+                                          int col,
+                                          int effective_scroll_offset,
+                                          VTermScreenCell& cell) const;
 
         PtyProcess pty_;
         VTerm* vt_ = nullptr;
@@ -187,10 +194,11 @@ namespace lfs::vis::terminal {
         static constexpr int MAX_SCROLLBACK = 10000;
 
         // State
-        bool has_new_output_ = false;
-        bool needs_redraw_ = true;
-        bool is_focused_ = false;
-        bool read_only_ = false;
+        std::atomic<bool> has_new_output_{false};
+        std::atomic<bool> is_focused_{false};
+        std::atomic<bool> read_only_{false};
+        std::atomic<uint64_t> redraw_generation_{1};
+        std::atomic<uint64_t> rendered_generation_{0};
         mutable std::mutex mutex_;
 
         // Read buffer

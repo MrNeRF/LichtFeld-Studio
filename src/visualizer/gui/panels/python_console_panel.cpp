@@ -23,10 +23,13 @@
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_scancode.h>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <exception>
 #include <fstream>
-#include <future>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -149,6 +152,13 @@ namespace {
         float height = 0.0f;
     };
 
+    struct PackageRefreshState {
+        std::atomic<bool> ready{false};
+        std::mutex mutex;
+        std::vector<lfs::python::PackageInfo> packages;
+        std::string error;
+    };
+
     struct RmlPythonConsolePane {
         RmlPythonConsolePane() { listener.owner = this; }
 
@@ -203,10 +213,14 @@ namespace {
         float last_font_size = -1.0f;
 
         std::vector<lfs::python::PackageInfo> packages;
-        std::future<std::vector<lfs::python::PackageInfo>> pending_packages_refresh;
+        std::shared_ptr<PackageRefreshState> pending_packages_refresh;
         bool packages_loading = false;
         bool packages_loaded_once = false;
+        bool packages_view_dirty = true;
+        std::size_t packages_visible_count = 0;
         std::string packages_search_filter;
+        std::string rendered_packages_filter;
+        std::string packages_error;
         std::string last_packages_body_rml;
         std::string last_outline_rml;
         std::string last_breadcrumb_rml;
@@ -259,6 +273,9 @@ namespace {
         pane.last_editor_h = -1.0f;
         pane.last_bottom_h = -1.0f;
         pane.last_font_size = -1.0f;
+        pane.packages_view_dirty = true;
+        pane.packages_visible_count = 0;
+        pane.rendered_packages_filter.clear();
         pane.last_packages_body_rml.clear();
         pane.last_outline_rml.clear();
         pane.last_breadcrumb_rml.clear();
@@ -378,16 +395,17 @@ namespace {
             mark_dirty(pane);
     }
 
-    void set_cached_property(RmlPythonConsolePane& pane,
+    bool set_cached_property(RmlPythonConsolePane& pane,
                              Rml::Element* el,
                              const char* property,
                              const std::string& value,
                              const char* cache_attr) {
         if (!el || el->GetAttribute<Rml::String>(cache_attr, "") == value)
-            return;
+            return false;
         el->SetProperty(property, value);
         el->SetAttribute(cache_attr, value);
         mark_dirty(pane);
+        return true;
     }
 
     void set_display(RmlPythonConsolePane& pane,
@@ -465,11 +483,29 @@ namespace {
     void request_packages_refresh(RmlPythonConsolePane& pane) {
         if (pane.packages_loading)
             return;
+        auto refresh = std::make_shared<PackageRefreshState>();
         pane.packages_loading = true;
         pane.packages_loaded_once = true;
-        pane.pending_packages_refresh = std::async(std::launch::async, [] {
-            return lfs::python::PackageManager::instance().list_installed();
-        });
+        pane.packages_error.clear();
+        pane.pending_packages_refresh = refresh;
+        std::thread([refresh] {
+            std::vector<lfs::python::PackageInfo> packages;
+            std::string error;
+            try {
+                packages = lfs::python::PackageManager::instance().list_installed();
+            } catch (const std::exception& e) {
+                error = e.what();
+            } catch (...) {
+                error = "Unknown package refresh error";
+            }
+
+            {
+                std::lock_guard lock(refresh->mutex);
+                refresh->packages = std::move(packages);
+                refresh->error = std::move(error);
+            }
+            refresh->ready.store(true);
+        }).detach();
         mark_dirty(pane);
     }
 
@@ -765,22 +801,29 @@ namespace {
             return;
         }
 
-        for (int sc : input->keys_pressed) {
+        const auto process_terminal_key = [&](const int sc, const bool repeated) {
             if (input->key_ctrl && sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_Z) {
                 const char letter = static_cast<char>('A' + (sc - SDL_SCANCODE_A));
                 if (letter == 'C' && terminal.hasSelection()) {
-                    const std::string selection = terminal.getSelection();
-                    if (!selection.empty())
-                        set_clipboard_text(selection);
+                    if (!repeated) {
+                        const std::string selection = terminal.getSelection();
+                        if (!selection.empty())
+                            set_clipboard_text(selection);
+                    }
                 } else {
                     terminal.sendControl(letter);
                 }
-                continue;
+                return;
             }
 
             if (const auto key = terminal_key_from_scancode(sc))
                 terminal.sendKey(*key);
-        }
+        };
+
+        for (int sc : input->keys_pressed)
+            process_terminal_key(sc, false);
+        for (int sc : input->keys_repeated)
+            process_terminal_key(sc, true);
 
         if (!input->key_ctrl) {
             for (const uint32_t cp : input->text_codepoints)
@@ -814,14 +857,16 @@ namespace {
             process_rml_terminal_input(terminal, input, bounds, char_w, char_h);
 
         const bool dirty = terminal.needsRedraw();
+        const uint64_t redraw_generation = terminal.redrawGeneration();
         set_cached_property(pane, view, "font-size", std::format("{:.0f}px", font_size),
                             "data-lfs-font-size");
         set_cached_property(pane, view, "line-height", std::format("{:.0f}px", char_h),
                             "data-lfs-line-height");
-        view->setSnapshot(terminal.snapshot());
-        if (dirty)
+        if (dirty) {
+            view->setSnapshot(terminal.snapshot());
             mark_dirty(pane);
-        terminal.markRendered();
+            terminal.markRendered(redraw_generation);
+        }
     }
 
     std::string menu_item_rml(const std::string& action,
@@ -905,46 +950,72 @@ namespace {
     }
 
     void sync_packages(RmlPythonConsolePane& pane) {
-        if (pane.packages_loading && pane.pending_packages_refresh.valid() &&
-            pane.pending_packages_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-            pane.packages = pane.pending_packages_refresh.get();
+        if (pane.packages_loading && pane.pending_packages_refresh &&
+            pane.pending_packages_refresh->ready.load()) {
+            {
+                std::lock_guard lock(pane.pending_packages_refresh->mutex);
+                pane.packages = std::move(pane.pending_packages_refresh->packages);
+                pane.packages_error = std::move(pane.pending_packages_refresh->error);
+            }
+            pane.pending_packages_refresh.reset();
             pane.packages_loading = false;
+            pane.packages_view_dirty = true;
             mark_dirty(pane);
         }
 
-        if (pane.packages_search_input)
-            pane.packages_search_filter = pane.packages_search_input->GetValue();
-
-        std::string rows;
-        rows.reserve(pane.packages.size() * 192);
-        std::size_t visible_count = 0;
-        for (const auto& pkg : pane.packages) {
-            if (!package_matches_filter(pkg, pane.packages_search_filter))
-                continue;
-            ++visible_count;
-            rows += std::format(
-                R"(<div class="pkg-row"><span class="pkg-name">{}</span><span class="pkg-version">{}</span><span class="pkg-path">{}</span></div>)",
-                Rml::StringUtilities::EncodeRml(pkg.name),
-                Rml::StringUtilities::EncodeRml(pkg.version),
-                Rml::StringUtilities::EncodeRml(pkg.path));
+        if (pane.packages_search_input) {
+            const std::string next_filter = pane.packages_search_input->GetValue();
+            if (next_filter != pane.packages_search_filter) {
+                pane.packages_search_filter = next_filter;
+                pane.packages_view_dirty = true;
+            }
         }
 
-        if (pane.packages_body_el && rows != pane.last_packages_body_rml) {
-            pane.packages_body_el->SetInnerRML(rows);
-            pane.last_packages_body_rml = std::move(rows);
-            mark_dirty(pane);
+        if (pane.packages_view_dirty ||
+            pane.rendered_packages_filter != pane.packages_search_filter) {
+            std::string rows;
+            rows.reserve(pane.packages.size() * 192);
+            std::size_t visible_count = 0;
+            if (pane.packages_error.empty()) {
+                for (const auto& pkg : pane.packages) {
+                    if (!package_matches_filter(pkg, pane.packages_search_filter))
+                        continue;
+                    ++visible_count;
+                    rows += std::format(
+                        R"(<div class="pkg-row"><span class="pkg-name">{}</span><span class="pkg-version">{}</span><span class="pkg-path">{}</span></div>)",
+                        Rml::StringUtilities::EncodeRml(pkg.name),
+                        Rml::StringUtilities::EncodeRml(pkg.version),
+                        Rml::StringUtilities::EncodeRml(pkg.path));
+                }
+            }
+
+            pane.packages_visible_count = visible_count;
+            pane.rendered_packages_filter = pane.packages_search_filter;
+            pane.packages_view_dirty = false;
+            if (pane.packages_body_el && rows != pane.last_packages_body_rml) {
+                pane.packages_body_el->SetInnerRML(rows);
+                pane.last_packages_body_rml = std::move(rows);
+                mark_dirty(pane);
+            }
         }
 
         std::string status;
         if (pane.packages_loading)
             status = "Loading...";
+        else if (!pane.packages_error.empty())
+            status = "Error";
         else if (pane.packages_search_filter.empty())
             status = std::format("({})", pane.packages.size());
         else
-            status = std::format("({} / {})", visible_count, pane.packages.size());
+            status = std::format("({} / {})", pane.packages_visible_count, pane.packages.size());
         set_text(pane, pane.packages_status_label, status);
 
-        const bool empty_visible = !pane.packages_loading && visible_count == 0;
+        set_text(pane,
+                 pane.packages_empty_el,
+                 pane.packages_error.empty() ? "No packages installed" : pane.packages_error);
+
+        const bool empty_visible = !pane.packages_loading &&
+                                   (!pane.packages_error.empty() || pane.packages_visible_count == 0);
         set_display(pane, pane.packages_empty_el, empty_visible);
         set_display(pane, pane.packages_table_el, !empty_visible);
     }
@@ -957,13 +1028,6 @@ namespace {
         const bool can_stop = can_stop_python_work(state);
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
 
-        std::string script_label = "Untitled";
-        if (has_script)
-            script_label = lfs::core::path_to_utf8(state.getScriptPath().filename());
-        if (state.isModified())
-            script_label += " *";
-        set_text(pane, pane.script_label_el, script_label);
-
         set_disabled(pane, pane.reload_button_el, !has_script);
         set_disabled(pane, pane.stop_button_el, !can_stop);
         set_text(pane, pane.run_status_el, can_stop ? "Running..." : "Python");
@@ -971,24 +1035,6 @@ namespace {
 
         const bool vim_enabled = editor && editor->isVimModeEnabled();
         set_class(pane, pane.vim_button_el, "active", vim_enabled);
-
-        if (editor == nullptr) {
-            set_text(pane, pane.syntax_status_el, "Syntax");
-        } else if (editor->hasSyntaxErrors()) {
-            set_text(pane, pane.syntax_status_el, "Syntax error");
-        } else if (editor->syntaxDiagnosticsAvailable()) {
-            set_text(pane, pane.syntax_status_el, "Syntax OK");
-        } else {
-            set_text(pane, pane.syntax_status_el, "Syntax");
-        }
-        set_class(pane, pane.syntax_status_el, "status-error", editor && editor->hasSyntaxErrors());
-        set_class(pane, pane.syntax_status_el, "status-ok", editor && !editor->hasSyntaxErrors() &&
-                                                        editor->syntaxDiagnosticsAvailable());
-
-        const std::string scope = editor ? editor->currentSyntaxScope() : "";
-        set_text(pane, pane.breadcrumb_button_el, scope.empty() ? "Scope" : scope);
-        set_text(pane, pane.fold_button_el, editor ? std::format("Blocks ({})", editor->syntaxFoldCount()) : "Blocks");
-        set_text(pane, pane.font_status_el, std::format("{}%", static_cast<int>(std::round(state.getFontScale() * 100.0f))));
 
         set_display(pane, pane.output_panel_el, active_tab == 0);
         set_display(pane, pane.repl_panel_el, active_tab == 1);
@@ -999,7 +1045,8 @@ namespace {
 
         if (active_tab == 2 && !pane.packages_loaded_once)
             request_packages_refresh(pane);
-        sync_syntax_menus(pane, state);
+        if (pane.active_popover != ConsolePopover::None)
+            sync_syntax_menus(pane, state);
         if (active_tab == 2 || pane.packages_loading)
             sync_packages(pane);
 
@@ -1025,14 +1072,14 @@ namespace {
         }
     }
 
-    void process_splitter(RmlPythonConsolePane& pane,
+    bool process_splitter(RmlPythonConsolePane& pane,
                           const lfs::vis::gui::PanelInputState* input) {
         if (!input || !pane.splitter_el)
-            return;
+            return false;
 
         ElementBounds bounds;
         if (!measure_element_screen_bounds(pane, pane.splitter_el, bounds))
-            return;
+            return false;
 
         const bool hovered =
             input->mouse_x >= bounds.x && input->mouse_x < bounds.x + bounds.width &&
@@ -1043,7 +1090,7 @@ namespace {
             pane.splitter_dragging = false;
 
         if (!pane.splitter_dragging)
-            return;
+            return false;
 
         const float toolbar_h = pane.toolbar_el
                                     ? std::max(34.0f, pane.toolbar_el->GetBox().GetSize(Rml::BoxArea::Border).y)
@@ -1051,8 +1098,12 @@ namespace {
         const float available_h = std::max(1.0f, pane.panel_h - toolbar_h - SPLITTER_THICKNESS);
         const float local_y = std::clamp(input->mouse_y - pane.panel_y - toolbar_h,
                                          0.0f, available_h);
-        g_splitter_ratio = std::clamp(local_y / available_h, 0.2f, 0.8f);
+        const float next_ratio = std::clamp(local_y / available_h, 0.2f, 0.8f);
+        if (std::abs(next_ratio - g_splitter_ratio) < 0.001f)
+            return false;
+        g_splitter_ratio = next_ratio;
         mark_dirty(pane);
+        return true;
     }
 
     void process_console_shortcuts(lfs::vis::gui::panels::PythonConsoleState& state,
@@ -1533,9 +1584,10 @@ namespace lfs::vis::gui::panels {
 
         sync_console_dom(pane, state, h);
         pane.host->syncDirectLayout(w, h);
-        process_splitter(pane, input);
-        sync_console_dom(pane, state, h);
-        pane.host->syncDirectLayout(w, h);
+        if (process_splitter(pane, input)) {
+            sync_console_dom(pane, state, h);
+            pane.host->syncDirectLayout(w, h);
+        }
 
         const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
         if (auto* output = state.getOutputTerminal()) {
@@ -1567,7 +1619,9 @@ namespace lfs::vis::gui::panels {
 
         process_console_shortcuts(state, input);
 
-        pane.host->markContentDirty();
+        if (auto* editor = state.getEditor(); editor && editor->needsRmlFrame())
+            mark_dirty(pane);
+
         pane.host->setInput(input);
         if (input)
             pane.host->drawDirect(x, y, w, h);

@@ -398,6 +398,8 @@ foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
 endforeach ()
 add_custom_target(copy_rmlui_resources ALL
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${RMLUI_RESOURCE_FILES}
         "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"

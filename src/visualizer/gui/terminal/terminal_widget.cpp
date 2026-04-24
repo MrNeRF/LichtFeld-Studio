@@ -156,7 +156,7 @@ namespace lfs::vis::terminal {
         initVterm();
         scrollback_.clear();
         scroll_offset_ = 0;
-        needs_redraw_ = true;
+        markDirty();
 
         if (!pty_.spawn(shell, cols_, rows_)) {
             LOG_ERROR("Failed to spawn: {}", shell.empty() ? "default shell" : shell);
@@ -169,7 +169,7 @@ namespace lfs::vis::terminal {
         initVterm();
         scrollback_.clear();
         scroll_offset_ = 0;
-        needs_redraw_ = true;
+        markDirty();
 
 #ifdef _WIN32
         // stdin pair: Python reads from stdin_read, terminal writes to stdin_write
@@ -243,8 +243,8 @@ namespace lfs::vis::terminal {
         while ((n = pty_.read(read_buffer_, sizeof(read_buffer_))) > 0) {
             std::lock_guard lock(mutex_);
             vterm_input_write(vt_, read_buffer_, static_cast<size_t>(n));
-            has_new_output_ = true;
-            needs_redraw_ = true;
+            has_new_output_.store(true);
+            markDirty();
         }
     }
 
@@ -265,12 +265,36 @@ namespace lfs::vis::terminal {
         result.cursor_col = cursor_pos_.col;
         result.cursor_row = cursor_pos_.row;
         result.cursor_visible = cursor_visible_;
-        result.focused = is_focused_;
+        result.focused = is_focused_.load();
         result.scroll_offset = std::min(scroll_offset_, static_cast<int>(scrollback_.size()));
         result.visible_rows.resize(static_cast<size_t>(rows_));
 
         const int scrollback_size = static_cast<int>(scrollback_.size());
         const int eff_offset = std::min(scroll_offset_, scrollback_size);
+        const auto fill_cell = [&](TerminalCellSnapshot& out,
+                                   const VTermScreenCell& cell,
+                                   const bool selected) {
+            out.text = cellText(cell);
+            out.selected = selected;
+            out.reverse = cell.attrs.reverse != 0;
+            out.bold = cell.attrs.bold != 0;
+            out.underline = cell.attrs.underline != 0;
+
+            out.background = vtermColorToPackedColor(cell.bg);
+            if (out.reverse)
+                out.background = vtermColorToPackedColor(cell.fg);
+            if (out.selected)
+                out.background = SELECTION_COLOR;
+
+            out.foreground = vtermColorToPackedColor(cell.fg);
+            if (out.reverse) {
+                out.foreground = vtermColorToPackedColor(cell.bg);
+                if (out.foreground == TRANSPARENT)
+                    out.foreground = BG_COLOR;
+            }
+            if (out.foreground == TRANSPARENT)
+                out.foreground = DEFAULT_FG;
+        };
 
         for (int row = 0; row < rows_; ++row) {
             auto& snapshot_row = result.visible_rows[static_cast<size_t>(row)];
@@ -279,17 +303,12 @@ namespace lfs::vis::terminal {
             if (row < eff_offset) {
                 const int idx = eff_offset - 1 - row;
                 const auto& line = scrollback_[static_cast<size_t>(idx)];
-                for (int col = 0; col < cols_ && col < static_cast<int>(line.cells.size()); ++col) {
-                    const auto& cell = line.cells[static_cast<size_t>(col)];
+                for (int col = 0; col < cols_; ++col) {
+                    VTermScreenCell cell{};
+                    if (col < static_cast<int>(line.cells.size()))
+                        cell = line.cells[static_cast<size_t>(col)];
                     auto& out = snapshot_row.cells[static_cast<size_t>(col)];
-                    out.text = cellText(cell);
-                    out.foreground = vtermColorToPackedColor(cell.fg);
-                    if (out.foreground == TRANSPARENT)
-                        out.foreground = DEFAULT_FG;
-                    out.background = vtermColorToPackedColor(cell.bg);
-                    out.reverse = cell.attrs.reverse != 0;
-                    out.bold = cell.attrs.bold != 0;
-                    out.underline = cell.attrs.underline != 0;
+                    fill_cell(out, cell, isCellSelected(row, col));
                 }
                 continue;
             }
@@ -303,26 +322,7 @@ namespace lfs::vis::terminal {
                 vterm_screen_get_cell(screen_, {screen_row, col}, &cell);
 
                 auto& out = snapshot_row.cells[static_cast<size_t>(col)];
-                out.text = cellText(cell);
-                out.selected = isCellSelected(screen_row, col);
-                out.reverse = cell.attrs.reverse != 0;
-                out.bold = cell.attrs.bold != 0;
-                out.underline = cell.attrs.underline != 0;
-
-                out.background = vtermColorToPackedColor(cell.bg);
-                if (out.reverse)
-                    out.background = vtermColorToPackedColor(cell.fg);
-                if (out.selected)
-                    out.background = SELECTION_COLOR;
-
-                out.foreground = vtermColorToPackedColor(cell.fg);
-                if (out.reverse) {
-                    out.foreground = vtermColorToPackedColor(cell.bg);
-                    if (out.foreground == TRANSPARENT)
-                        out.foreground = BG_COLOR;
-                }
-                if (out.foreground == TRANSPARENT)
-                    out.foreground = DEFAULT_FG;
+                fill_cell(out, cell, isCellSelected(row, col));
             }
         }
 
@@ -330,14 +330,14 @@ namespace lfs::vis::terminal {
     }
 
     void TerminalWidget::setFocused(bool focused) {
-        is_focused_ = focused;
+        is_focused_.store(focused);
         if (focused)
             cursor_blink_time_ = 0.0f;
-        needs_redraw_ = true;
+        markDirty();
     }
 
     void TerminalWidget::sendText(std::string_view text) {
-        if (read_only_ || text.empty() || !pty_.is_running())
+        if (read_only_.load() || text.empty() || !pty_.is_running())
             return;
         if (pty_.write(text.data(), text.size()) < 0) {
             LOG_ERROR("PTY write failed");
@@ -361,7 +361,7 @@ namespace lfs::vis::terminal {
     }
 
     void TerminalWidget::sendControl(char letter) {
-        if (read_only_ || !pty_.is_running())
+        if (read_only_.load() || !pty_.is_running())
             return;
 
         char upper = letter;
@@ -385,7 +385,7 @@ namespace lfs::vis::terminal {
         selection_start_ = {row, col};
         selection_end_ = selection_start_;
         is_selecting_ = true;
-        needs_redraw_ = true;
+        markDirty();
     }
 
     void TerminalWidget::updateSelection(int row, int col) {
@@ -393,13 +393,13 @@ namespace lfs::vis::terminal {
         row = std::clamp(row, 0, std::max(0, rows_ - 1));
         col = std::clamp(col, 0, std::max(0, cols_ - 1));
         selection_end_ = {row, col};
-        needs_redraw_ = true;
+        markDirty();
     }
 
     void TerminalWidget::endSelection() {
         std::lock_guard lock(mutex_);
         is_selecting_ = false;
-        needs_redraw_ = true;
+        markDirty();
     }
 
     bool TerminalWidget::hasSelection() const {
@@ -407,25 +407,29 @@ namespace lfs::vis::terminal {
         return selection_start_.row != selection_end_.row || selection_start_.col != selection_end_.col;
     }
 
-    void TerminalWidget::markRendered() {
-        needs_redraw_ = false;
-        has_new_output_ = false;
+    void TerminalWidget::markRendered(const uint64_t generation) {
+        rendered_generation_.store(generation);
+        if (redraw_generation_.load() == generation)
+            has_new_output_.store(false);
     }
 
     void TerminalWidget::handleResize(int new_cols, int new_rows) {
-        if (new_cols == cols_ && new_rows == rows_)
-            return;
-
-        cols_ = new_cols;
-        rows_ = new_rows;
-
         {
             std::lock_guard lock(mutex_);
+            if (new_cols == cols_ && new_rows == rows_)
+                return;
+
+            cols_ = new_cols;
+            rows_ = new_rows;
             vterm_set_size(vt_, rows_, cols_);
         }
 
-        pty_.resize(cols_, rows_);
-        needs_redraw_ = true;
+        pty_.resize(new_cols, new_rows);
+        markDirty();
+    }
+
+    void TerminalWidget::markDirty() {
+        redraw_generation_.fetch_add(1);
     }
 
     TerminalColor TerminalWidget::vtermColorToPackedColor(VTermColor color) const {
@@ -455,19 +459,52 @@ namespace lfs::vis::terminal {
                (row < end.row || (row == end.row && col <= end.col));
     }
 
+    bool TerminalWidget::getVisibleCell(int visible_row,
+                                        int col,
+                                        int effective_scroll_offset,
+                                        VTermScreenCell& cell) const {
+        if (visible_row < 0 || visible_row >= rows_ || col < 0 || col >= cols_) {
+            return false;
+        }
+
+        std::memset(&cell, 0, sizeof(VTermScreenCell));
+        if (visible_row < effective_scroll_offset) {
+            const int idx = effective_scroll_offset - 1 - visible_row;
+            if (idx < 0 || idx >= static_cast<int>(scrollback_.size())) {
+                return false;
+            }
+            const auto& line = scrollback_[static_cast<size_t>(idx)];
+            if (col >= static_cast<int>(line.cells.size())) {
+                return true;
+            }
+            cell = line.cells[static_cast<size_t>(col)];
+            return true;
+        }
+
+        const int screen_row = visible_row - effective_scroll_offset;
+        if (screen_row < 0 || screen_row >= rows_) {
+            return false;
+        }
+        vterm_screen_get_cell(screen_, {screen_row, col}, &cell);
+        return true;
+    }
+
     void TerminalWidget::scrollUp(int lines) {
+        std::lock_guard lock(mutex_);
         scroll_offset_ = std::min(scroll_offset_ + lines, static_cast<int>(scrollback_.size()));
-        needs_redraw_ = true;
+        markDirty();
     }
 
     void TerminalWidget::scrollDown(int lines) {
+        std::lock_guard lock(mutex_);
         scroll_offset_ = std::max(0, scroll_offset_ - lines);
-        needs_redraw_ = true;
+        markDirty();
     }
 
     void TerminalWidget::scrollToBottom() {
+        std::lock_guard lock(mutex_);
         scroll_offset_ = 0;
-        needs_redraw_ = true;
+        markDirty();
     }
 
     std::string TerminalWidget::getSelection() const {
@@ -483,21 +520,23 @@ namespace lfs::vis::terminal {
         }
 
         std::string result;
+        const int scrollback_size = static_cast<int>(scrollback_.size());
+        const int eff_offset = std::min(scroll_offset_, scrollback_size);
         for (int row = start.row; row <= end.row; ++row) {
             const int col_start = (row == start.row) ? start.col : 0;
             const int col_end = (row == end.row) ? end.col : cols_ - 1;
 
             for (int col = col_start; col <= col_end; ++col) {
-                VTermScreenCell cell;
-                vterm_screen_get_cell(screen_, {row, col}, &cell);
-                if (cell.chars[0]) {
-                    char utf8[4];
-                    const size_t len = encodeUtf8(cell.chars[0], utf8);
-                    if (len > 0)
-                        result.append(utf8, len);
-                } else {
+                VTermScreenCell cell{};
+                if (!getVisibleCell(row, col, eff_offset, cell)) {
                     result += ' ';
+                    continue;
                 }
+                const std::string text = cellText(cell);
+                if (text.empty())
+                    result += ' ';
+                else
+                    result += text;
             }
             if (row < end.row)
                 result += '\n';
@@ -581,7 +620,7 @@ namespace lfs::vis::terminal {
     void TerminalWidget::write(const char* data, size_t len) {
         std::lock_guard lock(mutex_);
 
-        if (read_only_) {
+        if (read_only_.load()) {
             const char* p = data;
             const char* const end = data + len;
             while (p < end) {
@@ -599,8 +638,8 @@ namespace lfs::vis::terminal {
             vterm_input_write(vt_, data, len);
         }
 
-        has_new_output_ = true;
-        needs_redraw_ = true;
+        has_new_output_.store(true);
+        markDirty();
     }
 
     void TerminalWidget::reset() {
@@ -609,7 +648,7 @@ namespace lfs::vis::terminal {
         scrollback_.clear();
         scroll_offset_ = 0;
         cursor_pos_ = {0, 0};
-        needs_redraw_ = true;
+        markDirty();
     }
 
     void TerminalWidget::sendToPty(const std::string& text) {
@@ -630,7 +669,7 @@ namespace lfs::vis::terminal {
     }
 
     int TerminalWidget::onDamage(VTermRect, void* user) {
-        static_cast<TerminalWidget*>(user)->needs_redraw_ = true;
+        static_cast<TerminalWidget*>(user)->markDirty();
         return 0;
     }
 
@@ -638,7 +677,7 @@ namespace lfs::vis::terminal {
         auto* self = static_cast<TerminalWidget*>(user);
         self->cursor_pos_ = pos;
         self->cursor_visible_ = visible != 0;
-        self->needs_redraw_ = true;
+        self->markDirty();
         return 0;
     }
 
@@ -650,7 +689,7 @@ namespace lfs::vis::terminal {
         auto* self = static_cast<TerminalWidget*>(user);
         self->rows_ = rows;
         self->cols_ = cols;
-        self->needs_redraw_ = true;
+        self->markDirty();
         return 0;
     }
 
