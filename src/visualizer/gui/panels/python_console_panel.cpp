@@ -62,8 +62,33 @@ namespace {
         const std::string original = editor->getText();
         const auto result = lfs::python::format_python_code(original);
         if (!result.success) {
+            editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
                 state.addError("[Format] " + result.error);
+            }
+            return;
+        }
+
+        if (result.code != original) {
+            editor->setText(result.code);
+            state.setModified(true);
+        }
+
+        editor->focus();
+    }
+
+    void clean_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
+        auto* editor = state.getEditor();
+        if (!editor) {
+            return;
+        }
+
+        const std::string original = editor->getText();
+        const auto result = lfs::python::clean_python_code(original);
+        if (!result.success) {
+            editor->refreshSyntaxDiagnostics();
+            if (!result.error.empty()) {
+                state.addError("[Cleanup] " + result.error);
             }
             return;
         }
@@ -105,6 +130,155 @@ namespace {
 
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             ImGui::SetTooltip(enabled ? "Disable Vim mode" : "Enable Vim mode");
+        }
+    }
+
+    void draw_syntax_status(lfs::vis::gui::panels::PythonConsoleState& state,
+                            const lfs::vis::Theme& t) {
+        auto* editor = state.getEditor();
+        if (editor == nullptr) {
+            ImGui::TextColored(t.palette.text_dim, "Syntax");
+            return;
+        }
+
+        const std::string summary = editor->syntaxSummary();
+        if (editor->hasSyntaxErrors()) {
+            ImGui::TextColored(t.palette.error, "Syntax error");
+        } else if (editor->syntaxDiagnosticsAvailable()) {
+            ImGui::TextColored(t.palette.success, "Syntax OK");
+        } else {
+            ImGui::TextColored(t.palette.text_dim, "Syntax");
+        }
+
+        if (ImGui::IsItemHovered() && ImGui::BeginTooltip()) {
+            ImGui::TextUnformatted(summary.c_str());
+            const std::string structure = editor->syntaxStructureSummary();
+            if (!structure.empty()) {
+                ImGui::TextColored(t.palette.text_dim, "%s", structure.c_str());
+            }
+            const std::string scope = editor->currentSyntaxScope();
+            if (!scope.empty()) {
+                ImGui::TextColored(t.palette.text_dim, "Scope: %s", scope.c_str());
+            }
+            ImGui::EndTooltip();
+        }
+    }
+
+    void draw_syntax_outline_control(lfs::vis::gui::panels::PythonConsoleState& state,
+                                     const lfs::vis::Theme&,
+                                     const char* id) {
+        auto* editor = state.getEditor();
+        const auto symbols = editor != nullptr ? editor->syntaxSymbols()
+                                               : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
+        const bool has_symbols = !symbols.empty();
+
+        if (!has_symbols) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo(id, "Outline")) {
+            for (std::size_t i = 0; i < symbols.size(); ++i) {
+                const auto& symbol = symbols[i];
+                if (ImGui::Selectable(symbol.label.c_str(), false)) {
+                    editor->jumpToSyntaxSymbol(i);
+                }
+                if (ImGui::IsItemHovered() && !symbol.detail.empty()) {
+                    ImGui::SetTooltip("%s", symbol.detail.c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (!has_symbols) {
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            if (editor != nullptr && !editor->syntaxStructureCurrent()) {
+                ImGui::SetTooltip("Jump to Python symbol (partial syntax structure)");
+            } else {
+                ImGui::SetTooltip("Jump to Python symbol");
+            }
+        }
+    }
+
+    void draw_syntax_breadcrumb_control(lfs::vis::gui::panels::PythonConsoleState& state,
+                                        const lfs::vis::Theme&,
+                                        const char* id) {
+        auto* editor = state.getEditor();
+        const auto breadcrumbs = editor != nullptr
+                                     ? editor->syntaxBreadcrumbs()
+                                     : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
+        const std::string scope = editor != nullptr ? editor->currentSyntaxScope() : std::string{};
+        const bool has_breadcrumbs = !breadcrumbs.empty();
+
+        if (!has_breadcrumbs) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::BeginCombo(id, scope.empty() ? "Scope" : scope.c_str())) {
+            for (std::size_t i = 0; i < breadcrumbs.size(); ++i) {
+                const auto& breadcrumb = breadcrumbs[i];
+                if (ImGui::Selectable(breadcrumb.label.c_str(), i + 1 == breadcrumbs.size())) {
+                    editor->jumpToSyntaxBreadcrumb(i);
+                }
+                if (ImGui::IsItemHovered() && !breadcrumb.detail.empty()) {
+                    ImGui::SetTooltip("%s", breadcrumb.detail.c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+
+        if (!has_breadcrumbs) {
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Jump within current Python scope");
+        }
+    }
+
+    void draw_syntax_fold_control(lfs::vis::gui::panels::PythonConsoleState& state,
+                                  const lfs::vis::Theme&,
+                                  const char* id) {
+        auto* editor = state.getEditor();
+        const auto folds = editor != nullptr ? editor->syntaxFolds()
+                                             : std::vector<lfs::vis::editor::PythonEditorFold>{};
+        const bool has_folds = !folds.empty();
+
+        if (!has_folds) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::SetNextItemWidth(120.0f);
+        if (ImGui::BeginCombo(id, "Blocks")) {
+            for (std::size_t i = 0; i < folds.size(); ++i) {
+                const auto& fold = folds[i];
+                if (ImGui::Selectable(fold.label.c_str(), false)) {
+                    editor->toggleSyntaxFold(i);
+                }
+                if (ImGui::IsItemHovered() && !fold.detail.empty()) {
+                    ImGui::SetTooltip("%s", fold.detail.c_str());
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::Selectable("Fold all")) {
+                editor->foldAllSyntaxBlocks();
+            }
+            if (ImGui::Selectable("Unfold all")) {
+                editor->unfoldAllSyntaxBlocks();
+            }
+            ImGui::EndCombo();
+        }
+
+        if (!has_folds) {
+            ImGui::EndDisabled();
+        }
+
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Fold or unfold Python blocks");
         }
     }
 
@@ -574,6 +748,9 @@ namespace lfs::vis::gui::panels {
                 if (ImGui::MenuItem("Format Script", "Ctrl+Shift+F")) {
                     format_editor_script(state);
                 }
+                if (ImGui::MenuItem("Clean Pasted Code", "Ctrl+Shift+I")) {
+                    clean_editor_script(state);
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Copy Selection")) {
                     if (auto* output = state.getOutputTerminal()) {
@@ -696,6 +873,17 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::TextColored(t.palette.text_dim, "Python");
             }
+
+            ImGui::SameLine();
+            ImGui::TextColored(t.palette.text_dim, "|");
+            ImGui::SameLine();
+            draw_syntax_status(state, t);
+            ImGui::SameLine();
+            draw_syntax_outline_control(state, t, "##python_outline");
+            ImGui::SameLine();
+            draw_syntax_breadcrumb_control(state, t, "##python_breadcrumb");
+            ImGui::SameLine();
+            draw_syntax_fold_control(state, t, "##python_blocks");
 
             ImGui::PopStyleVar(2);
         }
@@ -901,6 +1089,9 @@ namespace lfs::vis::gui::panels {
             if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
                 format_editor_script(state);
             }
+            if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_I, false)) {
+                clean_editor_script(state);
+            }
         }
 
         ImGui::End();
@@ -1006,6 +1197,14 @@ namespace lfs::vis::gui::panels {
             ImGui::SetTooltip("Format code (Ctrl+Shift+F)");
 
         ImGui::SameLine();
+
+        if (ImGui::Button("Clean")) {
+            clean_editor_script(state);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Clean pasted code (Ctrl+Shift+I)");
+
+        ImGui::SameLine();
         draw_vim_mode_button(state, t);
 
         ImGui::SameLine();
@@ -1090,6 +1289,17 @@ namespace lfs::vis::gui::panels {
         } else {
             ImGui::TextColored(t.palette.text_dim, "Python");
         }
+
+        ImGui::SameLine();
+        ImGui::TextColored(t.palette.text_dim, "|");
+        ImGui::SameLine();
+        draw_syntax_status(state, t);
+        ImGui::SameLine();
+        draw_syntax_outline_control(state, t, "##docked_python_outline");
+        ImGui::SameLine();
+        draw_syntax_breadcrumb_control(state, t, "##docked_python_breadcrumb");
+        ImGui::SameLine();
+        draw_syntax_fold_control(state, t, "##docked_python_blocks");
 
         ImGui::PopStyleVar(2);
 
@@ -1285,6 +1495,9 @@ namespace lfs::vis::gui::panels {
             }
             if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
                 format_editor_script(state);
+            }
+            if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_I, false)) {
+                clean_editor_script(state);
             }
             // Font scaling: Ctrl++ / Ctrl+= to increase, Ctrl+- to decrease, Ctrl+0 to reset
             if (ImGui::IsKeyPressed(ImGuiKey_Equal, false) ||

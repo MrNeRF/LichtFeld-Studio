@@ -4,6 +4,7 @@
 
 #include "gui/rmlui/rml_document_utils.hpp"
 
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -61,10 +62,52 @@ namespace lfs::vis::gui::rml_documents {
             const auto resolved_path =
                 (document_path.parent_path() / lfs::core::utf8_to_path(std::string(source)))
                     .lexically_normal();
-            if (!std::filesystem::exists(resolved_path))
+            if (!std::filesystem::exists(resolved_path)) {
+                std::string asset_source(source);
+                while (asset_source.rfind("../", 0) == 0)
+                    asset_source.erase(0, 3);
+                if (!asset_source.empty()) {
+                    try {
+                        const auto asset_path = lfs::vis::getAssetPath(asset_source);
+                        if (std::filesystem::exists(asset_path))
+                            return rml_theme::pathToRmlImageSource(asset_path);
+                    } catch (const std::exception& e) {
+                        LOG_DEBUG("RmlUI image source fallback could not resolve asset '{}': {}",
+                                  asset_source,
+                                  e.what());
+                    }
+                }
                 return std::nullopt;
+            }
 
             return rml_theme::pathToRmlImageSource(resolved_path);
+        }
+
+        std::optional<std::filesystem::path> resolveStylesheetHref(
+            const std::string_view href,
+            const std::filesystem::path& document_path) {
+            if (href.empty())
+                return std::nullopt;
+
+            std::string reference(href);
+            if (const auto suffix_pos = reference.find_first_of("?#");
+                suffix_pos != std::string::npos) {
+                reference.erase(suffix_pos);
+            }
+            if (reference.empty())
+                return std::nullopt;
+
+            if (const auto filesystem_path =
+                    rml_paths::pathReferenceToFilesystemPath(reference)) {
+                return filesystem_path->lexically_normal();
+            }
+
+            if (rml_paths::hasUriScheme(reference))
+                return std::nullopt;
+
+            return (document_path.parent_path() /
+                    lfs::core::utf8_to_path(rml_paths::percentDecode(reference)))
+                .lexically_normal();
         }
     } // namespace
 
@@ -102,6 +145,48 @@ namespace lfs::vis::gui::rml_documents {
 
         rewritten.append(document_rml, last_pos, std::string::npos);
         return rewritten;
+    }
+
+    std::vector<std::filesystem::path> linkedStylesheetPaths(
+        const std::string& document_rml,
+        const std::filesystem::path& document_path) {
+        static const std::regex kLinkTagPattern(R"(<\s*link\b[^>]*>)",
+                                                std::regex_constants::icase);
+        static const std::regex kRcssTypePattern(R"(\btype\s*=\s*(["'])text/rcss\1)",
+                                                 std::regex_constants::icase);
+        static const std::regex kHrefPattern(R"(\bhref\s*=\s*(["'])([^"']*)\1)",
+                                             std::regex_constants::icase);
+
+        std::vector<std::filesystem::path> paths;
+        for (std::sregex_iterator it(document_rml.begin(), document_rml.end(), kLinkTagPattern),
+             end;
+             it != end; ++it) {
+            const std::string tag = it->str();
+            if (!std::regex_search(tag, kRcssTypePattern))
+                continue;
+
+            std::smatch href_match;
+            if (!std::regex_search(tag, href_match, kHrefPattern))
+                continue;
+
+            if (const auto resolved_path =
+                    resolveStylesheetHref(href_match[2].str(), document_path)) {
+                paths.push_back(*resolved_path);
+            }
+        }
+
+        return paths;
+    }
+
+    std::vector<std::filesystem::path> loadLinkedStylesheetPaths(
+        const std::filesystem::path& document_path) {
+        std::ifstream input(document_path, std::ios::binary);
+        if (!input)
+            return {};
+
+        std::string document_rml{std::istreambuf_iterator<char>(input),
+                                 std::istreambuf_iterator<char>()};
+        return linkedStylesheetPaths(document_rml, document_path);
     }
 
     namespace {

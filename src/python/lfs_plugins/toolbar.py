@@ -15,6 +15,14 @@ _RML_PATH_SAFE_CHARS = "/:._-~"
 _toolbar_controller = None
 
 
+def __lfs_after_reload__(runtime):
+    from . import overlays
+
+    if overlays._document_controller is not None:
+        overlays._document_controller.reset()
+    runtime.ui.request_redraw()
+
+
 def _icon_src(icon_name):
     """Build icon src path relative to the RML document in assets/rmlui/."""
     if "." in icon_name:

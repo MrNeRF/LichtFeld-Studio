@@ -7,6 +7,8 @@ from .types import Operator
 from .layouts.menus import register_menu, menu_operator, menu_separator
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
 
+__lfs_menu_classes__ = ["FileMenu"]
+
 
 class NewProjectOperator(Operator):
     label = "menu.file.new_project"

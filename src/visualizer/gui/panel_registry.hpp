@@ -109,6 +109,7 @@ namespace lfs::vis::gui {
         virtual bool needsAnimationFrame() const { return false; }
         virtual bool wantsExternalFloatingShadow() const { return true; }
         virtual void setPanelSpace(PanelSpace space) { (void)space; }
+        virtual void reloadRmlResources() {}
     };
 
     struct PanelInfo {
@@ -261,6 +262,7 @@ namespace lfs::vis::gui {
         bool set_panel_space(const std::string& id, PanelSpace new_space);
         bool set_panel_parent(const std::string& id, const std::string& parent_id);
         void invalidate_poll_cache(PollDependency changed = PollDependency::ALL);
+        void reload_rml_resources();
 
     private:
         PanelRegistry() = default;

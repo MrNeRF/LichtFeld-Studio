@@ -10,31 +10,22 @@
     cursor: pointer;
 }
 
-.video-card:hover .card-body {
-    border-color: #89b4fa;
-    background-color: #313244;
-}
-
 .card-body {
     display: flex;
     justify-content: center;
     align-items: center;
     height: 90dp;
-    background-color: #1e1e2e;
     border-width: 1dp;
-    border-color: #45475a;
     transition: background-color border-color 0.12s quadratic-out;
 }
 
 .play-icon {
     font-size: 22dp;
-    color: #89b4fa;
 }
 
 .card-title {
     display: block;
     font-size: 10dp;
-    color: #a6adc8;
     margin-top: 4dp;
     text-align: center;
 }

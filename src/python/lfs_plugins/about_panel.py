@@ -5,6 +5,9 @@
 import lichtfeld as lf
 from .types import Panel
 
+__lfs_panel_classes__ = ["AboutPanel"]
+__lfs_panel_ids__ = ["lfs.about"]
+
 
 class AboutPanel(Panel):
     """Floating panel displaying application information."""

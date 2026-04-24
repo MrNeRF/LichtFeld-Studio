@@ -38,6 +38,11 @@ namespace lfs::python {
     void ensure_initialized();
 
     /**
+     * @brief Register built-in Python UI once the retained GUI runtime is available.
+     */
+    void ensure_builtin_ui_registered();
+
+    /**
      * @brief Load user plugins configured for startup.
      *        This requires a ready Python runtime.
      */
@@ -90,11 +95,18 @@ namespace lfs::python {
     };
 
     /**
-     * @brief Format Python code using black.
+     * @brief Validate and format Python code using black.
      * @param code The Python code to format.
      * @return FormatResult with formatted code or error message.
      */
     FormatResult format_python_code(const std::string& code);
+
+    /**
+     * @brief Best-effort cleanup for pasted Python snippets, then format using black.
+     * @param code The Python code to clean and format.
+     * @return FormatResult with cleaned code or error message.
+     */
+    FormatResult clean_python_code(const std::string& code);
 
     /**
      * @brief Set a callback to be called each frame. Used for animations.

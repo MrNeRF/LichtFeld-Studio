@@ -10,12 +10,10 @@
 
 .info-key {
     width: 120dp;
-    color: #a6adc8;
     font-size: 10dp;
 }
 
 .info-val {
-    color: #cdd6f4;
     font-size: 10dp;
 }
 
@@ -26,13 +24,11 @@
 }
 
 .link-label {
-    color: #cdd6f4;
     margin-right: 6dp;
     font-size: 10dp;
 }
 
 .link-url {
-    color: #89b4fa;
     cursor: pointer;
     font-size: 10dp;
     background-color: transparent;
@@ -52,11 +48,9 @@
 }
 
 .footer-text {
-    color: #a6adc8;
     font-size: 11dp;
 }
 
 .footer-sep {
-    color: #585b70;
     font-size: 11dp;
 }

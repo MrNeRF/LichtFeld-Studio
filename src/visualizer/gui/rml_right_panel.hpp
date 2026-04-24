@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
         void shutdown();
 
         void processInput(const RightPanelLayout& layout, const PanelInputState& input);
+        void reloadResources();
         void render(const RightPanelLayout& layout,
                     const std::vector<TabSnapshot>& tabs,
                     const std::string& active_tab,
@@ -69,7 +70,6 @@ namespace lfs::vis::gui {
 
     private:
         bool updateTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         bool syncTabData(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
         bool syncTabScrollState();
         void syncTabNavigation();

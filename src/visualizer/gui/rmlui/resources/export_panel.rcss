@@ -16,7 +16,6 @@
 .ep-section-title {
     font-size: 10dp;
     font-weight: bold;
-    color: #89b4fa;
     margin-bottom: 4dp;
 }
 
@@ -34,32 +33,17 @@
     transition: background-color 0.1s quadratic-out;
 }
 
-.ep-format-option:hover {
-    background-color: rgba(137, 180, 250, 40);
-}
-
-.ep-format-option.selected {
-    background-color: rgba(137, 180, 250, 64);
-}
-
 .ep-format-dot {
     width: 8dp;
     height: 8dp;
     border-width: 1dp;
-    border-color: #585b70;
     border-radius: 4dp;
     margin-right: 8dp;
     flex-shrink: 0;
 }
 
-.ep-format-option.selected .ep-format-dot {
-    background-color: #89b4fa;
-    border-color: #89b4fa;
-}
-
 .ep-format-name {
     font-size: 10dp;
-    color: #cdd6f4;
 }
 
 /* ── Model list ──────────────────────────────────────── */
@@ -93,19 +77,16 @@
 
 .ep-model-name {
     font-size: 10dp;
-    color: #cdd6f4;
 }
 
 .ep-model-count {
     font-size: 10dp;
-    color: #a6adc8;
     margin-left: 6dp;
     flex-shrink: 0;
 }
 
 .ep-no-models {
     font-size: 10dp;
-    color: #a6adc8;
     padding: 4dp 0;
 }
 
@@ -114,7 +95,6 @@
 .ep-error {
     display: block;
     font-size: 10dp;
-    color: #f38ba8;
     margin-bottom: 4dp;
 }
 
@@ -148,6 +128,5 @@
 .ep-stage-text {
     display: block;
     font-size: 10dp;
-    color: #a6adc8;
     margin-bottom: 6dp;
 }

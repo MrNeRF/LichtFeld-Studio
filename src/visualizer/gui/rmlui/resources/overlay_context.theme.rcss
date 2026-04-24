@@ -1,0 +1,20 @@
+/* Theme-dependent generic overlay context styles. */
+
+.overlay-panel {
+    background-color: @{overlay.surface};
+    border-width: 1dp;
+    border-color: @{overlay.border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.overlay-text {
+    color: @{text};
+}
+
+.overlay-text-dim {
+    color: @{text_dim};
+}
+
+.overlay-primary {
+    color: @{primary};
+}

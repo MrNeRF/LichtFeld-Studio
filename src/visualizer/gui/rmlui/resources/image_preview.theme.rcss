@@ -1,0 +1,88 @@
+/* Image preview panel theme overrides. */
+
+#filmstrip {
+    border-right-color: @{border};
+}
+
+.thumb-item.selected {
+    border-color: @{primary};
+}
+
+.thumb-index {
+    color: @{alpha(white,0.40)};
+}
+
+#mask-overlay {
+    image-color: @{alpha(error,0.50)};
+}
+
+#no-image-text,
+.sidebar-header-label-ip,
+.section-label-ip,
+.meta-key,
+.meta-val-secondary,
+.hk-label,
+.status-item,
+.status-counter {
+    color: @{text_dim};
+}
+
+#sidebar {
+    border-left-color: @{border};
+}
+
+.sidebar-header-ip,
+.sidebar-section-ip {
+    border-bottom-color: @{border};
+}
+
+#sidebar-filename,
+.meta-val,
+#sidebar-mask-name {
+    color: @{text};
+}
+
+.meta-val-accent {
+    color: @{primary};
+}
+
+.btn-copy-icon {
+    image-color: @{text_dim};
+}
+
+.btn-copy:hover .btn-copy-icon {
+    image-color: @{text};
+}
+
+#status-bar {
+    border-top-color: @{border};
+}
+
+.nav-arrow,
+.view-btn {
+    color: @{alpha(text,0.86)};
+    background-color: @{alpha(white,0.05)};
+    border-color: @{alpha(border,0.43)};
+}
+
+.nav-arrow:hover,
+.view-btn:hover {
+    color: @{text};
+    background-color: @{alpha(white,0.10)};
+    border-color: @{alpha(primary,0.43)};
+}
+
+.view-btn:active {
+    background-color: @{alpha(white,0.15)};
+    border-color: @{alpha(primary,0.59)};
+}
+
+.view-btn:focus-visible {
+    border-color: @{alpha(primary,0.63)};
+    box-shadow: 0 0 0 1dp @{alpha(primary,0.39)};
+}
+
+.hk-key {
+    color: @{text};
+    background-color: @{surface_bright};
+}

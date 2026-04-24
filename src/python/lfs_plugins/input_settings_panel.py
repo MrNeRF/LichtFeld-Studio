@@ -5,6 +5,9 @@
 import lichtfeld as lf
 from .types import Panel
 
+__lfs_panel_classes__ = ["InputSettingsPanel"]
+__lfs_panel_ids__ = ["lfs.input_settings"]
+
 
 class InputSettingsPanel(Panel):
     id = "lfs.input_settings"

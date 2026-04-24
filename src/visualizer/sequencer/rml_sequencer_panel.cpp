@@ -281,6 +281,112 @@ namespace lfs::vis {
         pending_composite_height_ = 0.0f;
     }
 
+    void RmlSequencerPanel::clearElementCache() {
+        elements_cached_ = false;
+        el_panel_ = nullptr;
+        el_floating_header_ = nullptr;
+        el_ruler_ = nullptr;
+        el_track_bar_ = nullptr;
+        el_keyframes_ = nullptr;
+        el_playhead_ = nullptr;
+        el_hint_ = nullptr;
+        el_current_time_ = nullptr;
+        el_duration_ = nullptr;
+        el_play_icon_ = nullptr;
+        el_btn_loop_ = nullptr;
+        el_timeline_ = nullptr;
+        el_header_ = nullptr;
+        el_easing_stripe_ = nullptr;
+        el_easing_segments_ = nullptr;
+        el_easing_curves_ = nullptr;
+        el_easing_indicators_ = nullptr;
+        el_film_strip_panel_ = nullptr;
+        el_film_strip_groove_ = nullptr;
+        el_film_strip_gaps_ = nullptr;
+        el_film_strip_thumbs_ = nullptr;
+        el_film_strip_markers_ = nullptr;
+        el_film_strip_dividers_ = nullptr;
+        el_film_strip_sprockets_top_ = nullptr;
+        el_film_strip_sprockets_bottom_ = nullptr;
+        el_panel_guides_ = nullptr;
+        el_guide_playhead_ = nullptr;
+        el_guide_selected_ = nullptr;
+        el_guide_hovered_ = nullptr;
+        el_guide_strip_hover_ = nullptr;
+        el_timeline_tooltip_ = nullptr;
+        el_btn_camera_path_ = nullptr;
+        el_btn_snap_ = nullptr;
+        el_btn_follow_ = nullptr;
+        el_btn_film_strip_ = nullptr;
+        el_btn_preview_ = nullptr;
+        el_speed_label_ = nullptr;
+        el_format_label_ = nullptr;
+        el_resolution_info_ = nullptr;
+        el_quality_scrub_ = nullptr;
+        el_quality_fill_ = nullptr;
+        el_quality_display_ = nullptr;
+        el_quality_input_ = nullptr;
+        el_btn_equirect_ = nullptr;
+        el_btn_save_ = nullptr;
+        el_btn_load_ = nullptr;
+        el_btn_export_ = nullptr;
+        el_btn_clear_ = nullptr;
+        el_transport_dock_sep_ = nullptr;
+        el_btn_dock_toggle_ = nullptr;
+        el_dock_toggle_label_ = nullptr;
+        el_btn_close_panel_ = nullptr;
+        el_close_panel_label_ = nullptr;
+        keyframe_elements_.clear();
+        film_thumb_elements_.clear();
+    }
+
+    void RmlSequencerPanel::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        clearPendingComposite();
+        unregisterFilmStripSources();
+        clearFilmThumbPool();
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        last_theme_signature_ = 0;
+        clearElementCache();
+        last_keyframe_count_ = static_cast<size_t>(-1);
+        last_zoom_level_ = -1.0f;
+        last_pan_offset_ = -1.0f;
+        last_kf_width_ = -1.0f;
+        last_ruler_zoom_ = -1.0f;
+        last_ruler_pan_ = -1.0f;
+        last_ruler_width_ = -1.0f;
+        last_ruler_display_end_ = -1.0f;
+        last_timeline_revision_ = 0;
+        last_selection_revision_ = 0;
+        last_selected_keyframes_signature_ = 0;
+        quality_scrub_active_ = false;
+        quality_scrub_dragging_ = false;
+        quality_scrub_editing_ = false;
+        last_language_.clear();
+
+        try {
+            const auto full_path = lfs::vis::getAssetPath("rmlui/sequencer.rml");
+            document_ = lfs::vis::gui::rml_documents::loadDocument(rml_context_, full_path);
+            if (!document_) {
+                LOG_ERROR("RmlUI: failed to reload sequencer.rml");
+                return;
+            }
+            document_->Show();
+            cacheElements();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlUI: sequencer resource not found during reload: {}", e.what());
+        }
+    }
+
     void RmlSequencerPanel::compositeToScreen(const int screen_w, const int screen_h) {
         if (!pending_foreground_composite_ || !fbo_.valid() || screen_w <= 0 || screen_h <= 0) {
             clearPendingComposite();
@@ -340,6 +446,7 @@ namespace lfs::vis {
 
     void RmlSequencerPanel::cacheElements() {
         assert(document_);
+        clearElementCache();
         el_panel_ = document_->GetElementById("panel");
         el_floating_header_ = document_->GetElementById("floating-header");
         el_ruler_ = document_->GetElementById("ruler");
@@ -438,221 +545,24 @@ namespace lfs::vis {
         }
     }
 
-    std::string RmlSequencerPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        const auto& p = t.palette;
-
-        const auto surface_alpha = colorToRml(p.surface);
-        const auto border = colorToRmlAlpha(p.border, 0.4f);
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const auto text_dim_half = colorToRmlAlpha(p.text_dim, 0.5f);
-        const auto bg_alpha = colorToRml(p.background);
-        const auto border_dim = colorToRmlAlpha(p.border, 0.3f);
-        const auto error = colorToRml(p.error);
-        const auto primary_active = colorToRmlAlpha(p.primary, 0.20f);
-        const auto primary_btn = colorToRmlAlpha(p.primary, 0.15f);
-        const auto primary_btn_hover = colorToRmlAlpha(p.primary, 0.25f);
-        const auto error_btn = colorToRmlAlpha(p.error, 0.15f);
-        const auto error_btn_hover = colorToRmlAlpha(p.error, 0.30f);
-        const auto primary_cam_bg = colorToRmlAlpha(p.primary, 0.30f);
-        const auto primary_cam_border = colorToRmlAlpha(p.primary, 0.50f);
-        const auto primary_export_border = colorToRmlAlpha(p.primary, 0.40f);
-        const auto surface_bright_alpha = colorToRmlAlpha(p.surface_bright, 0.30f);
-        const auto primary_color = colorToRml(p.primary);
-        const auto primary_tint = colorToRmlAlpha(p.primary, 0.18f);
-        const auto primary_fill = colorToRmlAlpha(p.primary, 0.25f);
-        const auto primary_edge = colorToRmlAlpha(p.primary, 0.90f);
-        const auto primary_outline = colorToRmlAlpha(p.primary, 0.65f);
-        const auto secondary_color = colorToRml(p.secondary);
-        const auto secondary_tint = colorToRmlAlpha(p.secondary, 0.14f);
-        const auto secondary_fill = colorToRmlAlpha(p.secondary, 0.25f);
-        const auto secondary_edge = colorToRmlAlpha(p.secondary, 0.70f);
-        const auto secondary_outline = colorToRmlAlpha(p.secondary, 0.50f);
-        const auto guide_hover = colorToRmlAlpha(p.secondary, 0.75f);
-        const auto guide_strip_hover = colorToRmlAlpha(p.text_dim, 0.55f);
-        const auto guide_selected = colorToRmlAlpha(p.primary, 0.85f);
-        const auto guide_playhead = colorToRml(p.error);
-        const auto film_strip_groove = colorToRml(p.background);
-        const auto film_strip_gap = colorToRmlAlpha(p.surface, 0.30f);
-        const auto film_strip_gap_stripe = colorToRmlAlpha(p.border, 0.18f);
-        const auto film_thumb_midline_shadow = "rgba(0, 0, 0, 70)";
-        const auto film_marker_shadow = "rgba(0, 0, 0, 78)";
-        const auto divider_color = colorToRmlAlpha(p.text_dim, 0.15f);
-        const auto sprocket_color = colorToRmlAlpha(p.text_dim, 0.30f);
-        const auto tooltip_surface = colorToRmlAlpha(p.surface, 0.96f);
-        const auto tooltip_border = colorToRmlAlpha(p.border, 0.75f);
-        const auto tooltip_text_dim = colorToRmlAlpha(p.text_dim, 0.95f);
-        const int rounding = static_cast<int>(t.sizes.window_rounding);
-
-        const std::string radius_str = film_strip_attached_
-                                           ? fmt::format("{}dp {}dp 0dp 0dp", rounding, rounding)
-                                           : fmt::format("{}dp", rounding);
-
-        std::string css = fmt::format(
-            "#panel {{ background-color: {}; border-width: 1dp; border-color: {}; "
-            "border-radius: {}; }}\n"
-            ".transport-icon {{ image-color: {}; }}\n"
-            "#track-bar {{ background-color: {}; border-width: 1dp; border-color: {}; }}\n"
-            "#hint {{ color: {}; }}\n"
-            ".ruler-tick.major {{ background-color: {}; }}\n"
-            ".ruler-tick.minor {{ background-color: {}; }}\n"
-            ".ruler-label {{ color: {}; }}\n"
-            "#playhead-handle {{ background-color: {}; }}\n"
-            "#current-time {{ color: {}; }}\n"
-            "#duration {{ color: {}; }}\n"
-            "#easing-stripe {{ background-color: {}; border-top: 1dp {}; }}\n"
-            "#transport-row {{ border-bottom: 1dp {}; }}\n"
-            ".transport-sep {{ background-color: {}; }}\n"
-            ".transport-label {{ color: {}; }}\n"
-            ".transport-info {{ color: {}; }}\n"
-            ".transport-btn.toggle.active {{ background-color: {}; }}\n"
-            ".transport-btn.primary {{ background-color: {}; }}\n"
-            ".transport-btn.primary:hover {{ background-color: {}; }}\n"
-            ".transport-btn.error:hover {{ background-color: {}; }}\n"
-            "#btn-camera-path.active {{ background-color: {}; border-width: 1dp; border-color: {}; }}\n"
-            "#btn-add .transport-icon {{ image-color: {}; }}\n"
-            ".speed-val {{ color: {}; }}\n"
-            ".speed-text {{ color: {}; }}\n"
-            ".dropdown-arrow {{ color: {}; }}\n"
-            ".snap-check {{ border-color: {}; }}\n"
-            "#btn-snap.active .snap-check {{ background-color: {}; border-color: {}; }}\n"
-            ".format-badge {{ background-color: {}; }}\n"
-            "#btn-export {{ border-width: 1dp; border-color: {}; }}\n"
-            "#btn-clear {{ background-color: {}; border-width: 1dp; border-color: {}; }}\n"
-            "#btn-clear .transport-icon {{ image-color: {}; }}\n"
-            ".ctx-indicator {{ color: {}; }}\n",
-            surface_alpha, border, radius_str,
-            text,
-            bg_alpha, border_dim,
-            text_dim_half,
-            text_dim,
-            text_dim_half,
-            text_dim,
-            error,
-            text,
-            text_dim,
-            surface_alpha, border_dim,
-            border_dim,
-            border_dim,
-            text,
-            text_dim,
-            primary_active,
-            primary_btn,
-            primary_btn_hover,
-            error_btn_hover,
-            primary_cam_bg, primary_cam_border,
-            error,
-            text,
-            text_dim,
-            text_dim,
-            text_dim,
-            primary_color, primary_color,
-            surface_bright_alpha,
-            primary_export_border,
-            error_btn, error_btn,
-            error,
-            text_dim_half);
-
-        css += fmt::format(
-            "#film-strip-panel {{ background-color: {}; border-left: 1dp {}; border-right: 1dp {}; border-bottom: 1dp {}; border-radius: 0dp 0dp {}dp {}dp; }}\n"
-            "#film-strip-groove {{ background-color: {}; }}\n"
-            ".film-strip-gap {{ background-color: {}; }}\n"
-            ".film-strip-gap-stripe {{ background-color: {}; }}\n"
-            ".film-strip-divider {{ background-color: {}; }}\n"
-            ".film-strip-sprocket {{ background-color: {}; }}\n"
-            ".film-thumb-tint.hovered-keyframe {{ background-color: {}; }}\n"
-            ".film-thumb-tint.selected {{ background-color: {}; }}\n"
-            ".film-thumb.contains-hovered-keyframe .film-thumb-edge {{ background-color: {}; }}\n"
-            ".film-thumb.contains-selected .film-thumb-edge {{ background-color: {}; }}\n"
-            ".film-thumb.hovered .film-thumb-outline {{ border-color: {}; }}\n"
-            ".film-thumb.contains-hovered-keyframe .film-thumb-outline {{ border-color: {}; }}\n"
-            ".film-thumb.contains-selected .film-thumb-outline {{ border-color: {}; }}\n"
-            ".film-thumb-midline.shadow {{ background-color: {}; }}\n"
-            ".film-thumb-midline.main {{ background-color: {}; }}\n"
-            ".film-thumb.contains-hovered-keyframe .film-thumb-midline.main {{ background-color: {}; }}\n"
-            ".film-thumb.contains-selected .film-thumb-midline.main {{ background-color: {}; }}\n"
-            ".film-thumb.hovered .film-thumb-midline.main {{ background-color: {}; }}\n"
-            ".film-strip-marker-line.shadow {{ background-color: {}; }}\n"
-            ".film-strip-marker-line.main {{ background-color: {}; }}\n"
-            ".film-strip-marker.hovered .film-strip-marker-line.main, .film-strip-marker.hovered .film-strip-marker-cap {{ background-color: {}; }}\n"
-            ".film-strip-marker.selected .film-strip-marker-line.main, .film-strip-marker.selected .film-strip-marker-cap {{ background-color: {}; }}\n"
-            ".film-strip-marker-cap {{ background-color: {}; }}\n"
-            ".easing-segment.primary {{ background-color: {}; }}\n"
-            ".easing-segment.secondary {{ background-color: {}; }}\n"
-            ".easing-curve-segment {{ background-color: {}; }}\n"
-            ".easing-dot.primary, .easing-indicator.primary.ease-in-out {{ background-color: {}; }}\n"
-            ".easing-dot.secondary, .easing-indicator.secondary.ease-in-out {{ background-color: {}; }}\n"
-            ".easing-indicator.primary.ease-in {{ border-bottom-color: {}; }}\n"
-            ".easing-indicator.secondary.ease-in {{ border-bottom-color: {}; }}\n"
-            ".easing-indicator.primary.ease-out {{ border-top-color: {}; }}\n"
-            ".easing-indicator.secondary.ease-out {{ border-top-color: {}; }}\n"
-            ".timeline-guide.hovered {{ background-color: {}; }}\n"
-            ".timeline-guide.selected {{ background-color: {}; }}\n"
-            ".timeline-guide.playhead {{ background-color: {}; }}\n"
-            ".timeline-guide.strip-hover {{ background-color: {}; }}\n"
-            "#timeline-tooltip {{ background-color: {}; border-color: {}; }}\n"
-            ".timeline-tooltip-line.title {{ color: {}; }}\n"
-            ".timeline-tooltip-line {{ color: {}; }}\n",
-            surface_alpha, border, border, border, rounding, rounding,
-            film_strip_groove,
-            film_strip_gap,
-            film_strip_gap_stripe,
-            divider_color,
-            sprocket_color,
-            secondary_tint,
-            primary_tint,
-            secondary_edge,
-            primary_edge,
-            text,
-            secondary_outline,
-            primary_outline,
-            film_thumb_midline_shadow,
-            text_dim_half,
-            secondary_color,
-            primary_color,
-            text,
-            film_marker_shadow,
-            text_dim_half,
-            secondary_color,
-            primary_color,
-            text_dim_half,
-            primary_fill,
-            secondary_fill,
-            colorToRmlAlpha(p.primary, 0.50f),
-            primary_color,
-            secondary_color,
-            primary_color,
-            secondary_color,
-            primary_color,
-            secondary_color,
-            guide_hover,
-            guide_selected,
-            guide_playhead,
-            guide_strip_hover,
-            tooltip_surface, tooltip_border,
-            text,
-            tooltip_text_dim);
-
-        return css;
-    }
-
     void RmlSequencerPanel::syncTheme() {
         if (!document_)
             return;
 
-        const auto& p = lfs::vis::theme().palette;
+        const std::size_t theme_signature = gui::rml_theme::currentThemeSignature();
         const bool layout_changed = film_strip_attached_ != last_film_strip_attached_ ||
                                     floating_ != last_floating_;
-        if (!layout_changed && std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
+        if (!layout_changed && has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
         last_film_strip_attached_ = film_strip_attached_;
         last_floating_ = floating_;
 
         if (base_rcss_.empty())
             base_rcss_ = gui::rml_theme::loadBaseRCSS("rmlui/sequencer.rcss");
 
-        gui::rml_theme::applyTheme(document_, base_rcss_, gui::rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        gui::rml_theme::applyTheme(document_, base_rcss_, gui::rml_theme::loadBaseRCSS("rmlui/sequencer.theme.rcss"));
     }
 
     void RmlSequencerPanel::updateButtonStates() {

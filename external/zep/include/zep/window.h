@@ -32,6 +32,9 @@ namespace Zep {
         int spanLineIndex = 0;                    // The index of this line in spans; might be more than buffer index
         NVec2f padding = NVec2f(1.0f, 1.0f);      // Padding above and below the line
         bool isSplitContinuation = false;
+        bool hasFoldPlaceholder = false;
+        ByteRange foldedByteRange;
+        long foldedLineCount = 0;
         NVec2f lineWidgetHeights;
         ZepFont* pFont = nullptr;
 
@@ -94,7 +97,9 @@ namespace Zep {
     // Clients should return the marker information if appropriate
     struct ToolTipMessage : public ZepMessage {
         ToolTipMessage(ZepBuffer* pBuff, const NVec2f& pos, const GlyphIterator& loc = GlyphIterator())
-            : ZepMessage(Msg::ToolTip, pos), pBuffer(pBuff), location(loc) {
+            : ZepMessage(Msg::ToolTip, pos),
+              pBuffer(pBuff),
+              location(loc) {
         }
 
         ZepBuffer* pBuffer;

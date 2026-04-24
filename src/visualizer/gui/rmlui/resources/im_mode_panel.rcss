@@ -52,6 +52,11 @@
     padding: 0 0 0 2dp;
 }
 
+.im-label--centered {
+    text-align: center;
+    width: 100%;
+}
+
 .im-text-wrapped {
     font-size: 10dp;
     padding: 0 2dp;
@@ -63,6 +68,15 @@
     padding: 0 0 0 8dp;
 }
 
+.im-spacing {
+    height: 8dp;
+}
+
+.im-control--fill {
+    flex: 1;
+    min-width: 0;
+}
+
 /* Radio button */
 
 .im-radio {
@@ -72,10 +86,6 @@
     padding: 1dp 4dp;
     gap: 4dp;
     transition: background-color 0.12s quadratic-out;
-}
-
-.im-radio:hover {
-    background-color: rgba(88, 91, 112, 77);
 }
 
 .im-radio-dot {
@@ -110,6 +120,10 @@
     overflow: hidden;
 }
 
+.im-table-cell--fill {
+    flex: 1;
+}
+
 /* Color widgets */
 
 .im-color-swatch {
@@ -117,7 +131,6 @@
     height: 24dp;
     border-radius: 3dp;
     border-width: 1dp;
-    border-color: rgba(255, 255, 255, 51);
 }
 
 .im-color-btn {
@@ -125,7 +138,6 @@
     min-height: 24dp;
     border-radius: 3dp;
     border-width: 1dp;
-    border-color: rgba(255, 255, 255, 51);
     padding: 0;
 }
 
@@ -135,9 +147,7 @@
     display: none;
     position: absolute;
     z-index: 100;
-    background-color: rgba(30, 30, 46, 240);
     border-width: 1dp;
-    border-color: rgba(88, 91, 112, 128);
     border-radius: 3dp;
     padding: 4dp 8dp;
     font-size: 11dp;
@@ -175,7 +185,6 @@
 
 .im-child-bordered {
     border-width: 1dp;
-    border-color: rgba(88, 91, 112, 77);
     border-radius: 3dp;
     padding: 4dp;
 }
@@ -189,7 +198,6 @@
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 100);
     z-index: 90;
 }
 
@@ -202,9 +210,7 @@
     position: fixed;
     z-index: 100;
     min-width: 300dp;
-    background-color: rgba(30, 30, 46, 245);
     border-width: 1dp;
-    border-color: rgba(88, 91, 112, 128);
     border-radius: 6dp;
     padding: 12dp;
 }
@@ -219,6 +225,5 @@
     font-weight: bold;
     padding-bottom: 8dp;
     border-bottom-width: 1dp;
-    border-bottom-color: rgba(88, 91, 112, 77);
     margin-bottom: 8dp;
 }

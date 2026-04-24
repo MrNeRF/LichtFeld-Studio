@@ -11,14 +11,12 @@
 .is-section-title {
     font-size: 10dp;
     font-weight: bold;
-    color: #89b4fa;
     margin-bottom: 2dp;
 }
 
 .is-hint {
     display: block;
     font-size: 11dp;
-    color: #a6adc8;
     margin-bottom: 4dp;
 }
 
@@ -32,7 +30,6 @@
 .is-label {
     min-width: 100dp;
     font-size: 10dp;
-    color: #cdd6f4;
 }
 
 .is-select {
@@ -51,9 +48,7 @@
     display: block;
     font-size: 11dp;
     font-weight: bold;
-    color: #89b4fa;
     padding: 3dp 4dp;
-    background-color: rgba(137, 180, 250, 40);
     margin-top: 4dp;
 }
 
@@ -67,19 +62,13 @@
 .is-action-name {
     width: 160dp;
     font-size: 10dp;
-    color: #cdd6f4;
     flex-shrink: 0;
 }
 
 .is-binding-desc {
     flex: 1;
     font-size: 10dp;
-    color: #cdd6f4;
     min-width: 0;
-}
-
-.is-binding-desc.is-capturing {
-    color: #f9e2af;
 }
 
 .is-rebind-btn {

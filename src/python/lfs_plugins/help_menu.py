@@ -6,6 +6,8 @@ import lichtfeld as lf
 from .types import Operator
 from .layouts.menus import register_menu, menu_operator, menu_separator
 
+__lfs_menu_classes__ = ["HelpMenu"]
+
 
 class GettingStartedOperator(Operator):
     label = "menu.help.getting_started"

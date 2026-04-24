@@ -55,11 +55,11 @@ namespace lfs::vis::gui {
         void processInput(const PanelInputState& input);
         void render(int screen_w, int screen_h, float screen_x, float screen_y);
         void destroyGLResources();
+        void reloadResources();
 
     private:
         void initContext();
         void syncTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void hide();
         void focusFirstItem();
 

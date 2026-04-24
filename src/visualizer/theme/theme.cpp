@@ -10,6 +10,10 @@
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
+#include <set>
+#include <utility>
+#include <vector>
 
 namespace lfs::vis {
 
@@ -35,29 +39,9 @@ namespace lfs::vis {
         // Theme state
         Theme g_current_theme;
         std::string g_current_theme_id = "dark";
-        Theme g_dark_theme;
-        Theme g_light_theme;
-        Theme g_gruvbox_theme;
-        Theme g_catppuccin_mocha_theme;
-        Theme g_catppuccin_latte_theme;
-        Theme g_nord_theme;
         float g_dpi_scale = 1.0f;
         bool g_initialized = false;
         bool g_themes_loaded = false;
-
-        // Hot-reload state
-        std::filesystem::path g_dark_path;
-        std::filesystem::path g_light_path;
-        std::filesystem::path g_gruvbox_path;
-        std::filesystem::path g_catppuccin_mocha_path;
-        std::filesystem::path g_catppuccin_latte_path;
-        std::filesystem::path g_nord_path;
-        std::filesystem::file_time_type g_dark_mtime;
-        std::filesystem::file_time_type g_light_mtime;
-        std::filesystem::file_time_type g_gruvbox_mtime;
-        std::filesystem::file_time_type g_catppuccin_mocha_mtime;
-        std::filesystem::file_time_type g_catppuccin_latte_mtime;
-        std::filesystem::file_time_type g_nord_mtime;
 
         void ensureThemesLoaded();
         void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
@@ -653,73 +637,247 @@ namespace lfs::vis {
             },
         };
 
-        struct ThemePresetRecord {
-            const char* id;
-            const char* asset_name;
-            Theme* theme;
-            const Theme* defaults;
-            std::filesystem::path* path;
-            std::filesystem::file_time_type* mtime;
+        constexpr std::string_view THEMES_MANIFEST_ASSET_NAME = "themes/manifest.json";
+        constexpr std::string_view THEMES_ASSET_PREFIX = "themes/";
+
+        struct ThemeDefaultRecord {
+            std::string_view id;
+            const Theme* theme;
         };
 
-        ThemePresetRecord THEME_PRESETS[] = {
-            {"dark", "themes/dark.json", &g_dark_theme, &DEFAULT_DARK, &g_dark_path, &g_dark_mtime},
-            {"light", "themes/light.json", &g_light_theme, &DEFAULT_LIGHT, &g_light_path, &g_light_mtime},
-            {"gruvbox", "themes/gruvbox.json", &g_gruvbox_theme, &DEFAULT_GRUVBOX, &g_gruvbox_path, &g_gruvbox_mtime},
-            {"catppuccin_mocha", "themes/catppuccin_mocha.json", &g_catppuccin_mocha_theme, &DEFAULT_CATPPUCCIN_MOCHA, &g_catppuccin_mocha_path, &g_catppuccin_mocha_mtime},
-            {"catppuccin_latte", "themes/catppuccin_latte.json", &g_catppuccin_latte_theme, &DEFAULT_CATPPUCCIN_LATTE, &g_catppuccin_latte_path, &g_catppuccin_latte_mtime},
-            {"nord", "themes/nord.json", &g_nord_theme, &DEFAULT_NORD, &g_nord_path, &g_nord_mtime},
+        const ThemeDefaultRecord THEME_DEFAULTS[] = {
+            {"dark", &DEFAULT_DARK},
+            {"light", &DEFAULT_LIGHT},
+            {"gruvbox", &DEFAULT_GRUVBOX},
+            {"catppuccin_mocha", &DEFAULT_CATPPUCCIN_MOCHA},
+            {"catppuccin_latte", &DEFAULT_CATPPUCCIN_LATTE},
+            {"nord", &DEFAULT_NORD},
         };
+
+        struct ThemePresetRecord {
+            ThemePresetRecord(
+                std::string preset_id,
+                std::string preset_asset_name,
+                const Theme* preset_defaults,
+                ThemePresetInfo preset_info)
+                : id(std::move(preset_id)),
+                  asset_name(std::move(preset_asset_name)),
+                  defaults(preset_defaults),
+                  theme(*preset_defaults),
+                  info(std::move(preset_info)) {}
+
+            std::string id;
+            std::string asset_name;
+            const Theme* defaults;
+            Theme theme;
+            ThemePresetInfo info;
+            std::filesystem::path path;
+            std::filesystem::file_time_type mtime{};
+        };
+
+        std::vector<ThemePresetRecord> g_theme_presets;
+        std::filesystem::path g_theme_manifest_path;
+        std::filesystem::file_time_type g_theme_manifest_mtime{};
 
         ThemePresetRecord* findThemePreset(std::string_view theme_id) {
             const auto normalized = normalizeThemeIdImpl(std::string(theme_id));
-            for (auto& preset : THEME_PRESETS) {
-                if (preset.id == normalized)
+            for (auto& preset : g_theme_presets) {
+                if (normalized == preset.id)
                     return &preset;
             }
             return nullptr;
         }
 
+        const Theme* findThemeDefaults(std::string_view theme_id) {
+            const auto normalized = normalizeThemeIdImpl(std::string(theme_id));
+            for (const auto& defaults : THEME_DEFAULTS) {
+                if (normalized == defaults.id)
+                    return defaults.theme;
+            }
+            return nullptr;
+        }
+
         bool isKnownThemePresetId(std::string_view theme_id) {
+            ensureThemesLoaded();
             return findThemePreset(theme_id) != nullptr;
         }
 
-        void loadThemePreset(ThemePresetRecord& preset) {
-            *preset.theme = *preset.defaults;
-            preset.path->clear();
+        void syncThemePresetName(ThemePresetRecord& preset) {
+            preset.info.name = preset.theme.name.empty() ? preset.defaults->name : preset.theme.name;
+        }
+
+        bool isSafeThemeRelativeFile(const std::string& file_name) {
+            if (file_name.empty())
+                return false;
+            if (file_name.find(':') != std::string::npos)
+                return false;
+
+            const std::filesystem::path relative_path = lfs::core::utf8_to_path(file_name);
+            if (relative_path.is_absolute() || relative_path.has_root_name() || relative_path.has_root_directory())
+                return false;
+
+            for (const auto& part : relative_path) {
+                if (part == "..")
+                    return false;
+            }
+            return true;
+        }
+
+        ThemePresetRecord makeFallbackDarkPreset() {
+            ThemePresetInfo info{
+                .id = "dark",
+                .name = DEFAULT_DARK.name,
+                .label_key = "menu.view.theme.dark",
+                .mode = "dark",
+                .order = 10,
+            };
+            return ThemePresetRecord("dark", "themes/dark.json", &DEFAULT_DARK, std::move(info));
+        }
+
+        std::optional<ThemePresetRecord> parseThemeManifestEntry(
+            const json& entry,
+            const std::size_t entry_index,
+            std::set<std::string>& ids) {
+            if (!entry.is_object()) {
+                LOG_WARN("Ignoring theme manifest entry {}: expected object", entry_index);
+                return std::nullopt;
+            }
+
+            const std::string raw_id = entry.value("id", "");
+            const std::string id = normalizeThemeIdImpl(raw_id);
+            if (raw_id.empty() || id != raw_id) {
+                LOG_WARN("Ignoring theme manifest entry {}: invalid id '{}'", entry_index, raw_id);
+                return std::nullopt;
+            }
+
+            if (!ids.insert(id).second) {
+                LOG_WARN("Ignoring duplicate theme id '{}' in manifest", id);
+                return std::nullopt;
+            }
+
+            const std::string file = entry.value("file", "");
+            if (!isSafeThemeRelativeFile(file)) {
+                LOG_WARN("Ignoring theme '{}' in manifest: unsafe or empty file '{}'", id, file);
+                return std::nullopt;
+            }
+
+            std::string fallback_id = normalizeThemeIdImpl(entry.value("fallback", id));
+            const Theme* defaults = findThemeDefaults(fallback_id);
+            if (!defaults) {
+                LOG_WARN("Theme '{}' references unknown fallback '{}'; using dark", id, fallback_id);
+                fallback_id = "dark";
+                defaults = &DEFAULT_DARK;
+            }
+
+            ThemePresetInfo info{
+                .id = id,
+                .name = defaults->name,
+                .label_key = entry.value("label_key", "menu.view.theme." + id),
+                .mode = entry.value(
+                    "mode",
+                    std::string(defaults->isLightTheme() ? "light" : "dark")),
+                .order = entry.value("order", static_cast<int>((entry_index + 1) * 10)),
+            };
+
+            if (info.mode != "dark" && info.mode != "light") {
+                LOG_WARN("Theme '{}' has invalid mode '{}'; deriving mode from fallback", id, info.mode);
+                info.mode = defaults->isLightTheme() ? "light" : "dark";
+            }
+
+            return ThemePresetRecord(
+                id,
+                std::string(THEMES_ASSET_PREFIX) + file,
+                defaults,
+                std::move(info));
+        }
+
+        std::vector<ThemePresetRecord> loadThemeCatalogFromManifest() {
+            std::vector<ThemePresetRecord> presets;
 
             try {
-                *preset.path = getAssetPath(preset.asset_name);
-                if (!loadTheme(*preset.theme, lfs::core::path_to_utf8(*preset.path)))
+                g_theme_manifest_path = getAssetPath(std::string(THEMES_MANIFEST_ASSET_NAME));
+                g_theme_manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(g_theme_manifest_path, file))
+                    throw std::runtime_error("could not open manifest");
+
+                json manifest;
+                file >> manifest;
+
+                const int schema_version = manifest.value("schema_version", 0);
+                if (schema_version != 1)
+                    throw std::runtime_error("unsupported schema_version " + std::to_string(schema_version));
+
+                const auto themes_it = manifest.find("themes");
+                if (themes_it == manifest.end() || !themes_it->is_array())
+                    throw std::runtime_error("themes must be an array");
+
+                std::set<std::string> ids;
+                for (std::size_t i = 0; i < themes_it->size(); ++i) {
+                    if (auto preset = parseThemeManifestEntry((*themes_it)[i], i, ids)) {
+                        presets.push_back(std::move(*preset));
+                    }
+                }
+
+                std::stable_sort(
+                    presets.begin(),
+                    presets.end(),
+                    [](const ThemePresetRecord& a, const ThemePresetRecord& b) {
+                        return a.info.order < b.info.order;
+                    });
+
+                if (presets.empty())
+                    throw std::runtime_error("manifest did not define any valid themes");
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to load theme manifest: {}; falling back to built-in dark theme", e.what());
+                presets.push_back(makeFallbackDarkPreset());
+            }
+
+            return presets;
+        }
+
+        void loadThemePreset(ThemePresetRecord& preset) {
+            preset.theme = *preset.defaults;
+            preset.path.clear();
+            syncThemePresetName(preset);
+
+            try {
+                preset.path = getAssetPath(preset.asset_name);
+                if (!loadTheme(preset.theme, lfs::core::path_to_utf8(preset.path)))
                     return;
 
-                *preset.mtime = std::filesystem::last_write_time(*preset.path);
-                LOG_INFO("Loaded {} theme from {}", preset.id, lfs::core::path_to_utf8(*preset.path));
+                syncThemePresetName(preset);
+                preset.mtime = std::filesystem::last_write_time(preset.path);
+                LOG_INFO("Loaded {} theme from {}", preset.id, lfs::core::path_to_utf8(preset.path));
             } catch (...) {
-                preset.path->clear();
+                preset.path.clear();
             }
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (preset.path->empty() || !std::filesystem::exists(*preset.path))
+            if (preset.path.empty() || !std::filesystem::exists(preset.path))
                 return false;
 
-            const auto mtime = std::filesystem::last_write_time(*preset.path);
-            if (mtime == *preset.mtime)
+            const auto mtime = std::filesystem::last_write_time(preset.path);
+            if (mtime == preset.mtime)
                 return false;
 
             Theme reloaded = *preset.defaults;
-            if (!loadTheme(reloaded, lfs::core::path_to_utf8(*preset.path)))
+            if (!loadTheme(reloaded, lfs::core::path_to_utf8(preset.path)))
                 return false;
 
-            *preset.theme = std::move(reloaded);
-            *preset.mtime = mtime;
+            preset.theme = std::move(reloaded);
+            syncThemePresetName(preset);
+            preset.mtime = mtime;
             LOG_INFO("Hot-reloaded {} theme", preset.id);
             return true;
         }
 
         void loadThemesFromFiles() {
-            for (auto& preset : THEME_PRESETS) {
+            g_theme_presets = loadThemeCatalogFromManifest();
+
+            for (auto& preset : g_theme_presets) {
                 loadThemePreset(preset);
             }
 
@@ -734,40 +892,49 @@ namespace lfs::vis {
 
     } // namespace
 
+    namespace {
+        const Theme& themePreset(std::string_view theme_id) {
+            ensureThemesLoaded();
+            const auto* preset = findThemePreset(theme_id);
+            return preset ? preset->theme : g_theme_presets.front().theme;
+        }
+    } // namespace
+
     const Theme& darkTheme() {
-        ensureThemesLoaded();
-        return g_dark_theme;
+        return themePreset("dark");
     }
 
     const Theme& lightTheme() {
-        ensureThemesLoaded();
-        return g_light_theme;
+        return themePreset("light");
     }
 
     const Theme& gruvboxTheme() {
-        ensureThemesLoaded();
-        return g_gruvbox_theme;
+        return themePreset("gruvbox");
     }
 
     const Theme& catppuccinMochaTheme() {
-        ensureThemesLoaded();
-        return g_catppuccin_mocha_theme;
+        return themePreset("catppuccin_mocha");
     }
 
     const Theme& catppuccinLatteTheme() {
-        ensureThemesLoaded();
-        return g_catppuccin_latte_theme;
+        return themePreset("catppuccin_latte");
     }
 
     const Theme& nordTheme() {
-        ensureThemesLoaded();
-        return g_nord_theme;
+        return themePreset("nord");
     }
 
     void visitThemePresets(const ThemePresetVisitor& visitor) {
         ensureThemesLoaded();
-        for (const auto& preset : THEME_PRESETS) {
-            visitor(preset.id, *preset.theme);
+        for (const auto& preset : g_theme_presets) {
+            visitor(preset.id, preset.theme);
+        }
+    }
+
+    void visitThemePresetInfos(const ThemePresetInfoVisitor& visitor) {
+        ensureThemesLoaded();
+        for (const auto& preset : g_theme_presets) {
+            visitor(preset.info);
         }
     }
 
@@ -788,7 +955,7 @@ namespace lfs::vis {
             if (!preset)
                 return false;
 
-            applyCurrentTheme(*preset->theme, preset->id);
+            applyCurrentTheme(preset->theme, preset->id);
             return true;
         }
     } // namespace
@@ -805,7 +972,22 @@ namespace lfs::vis {
         bool any_reloaded = false;
         bool active_theme_reloaded = false;
 
-        for (auto& preset : THEME_PRESETS) {
+        try {
+            if (!g_theme_manifest_path.empty() && std::filesystem::exists(g_theme_manifest_path)) {
+                const auto manifest_mtime = std::filesystem::last_write_time(g_theme_manifest_path);
+                if (manifest_mtime != g_theme_manifest_mtime) {
+                    LOG_INFO("Hot-reloading theme manifest");
+                    loadThemesFromFiles();
+                    if (!activateThemePreset(active_theme_id))
+                        activateThemePreset("dark");
+                    return true;
+                }
+            }
+        } catch (...) {
+            LOG_WARN("Failed to check theme manifest for hot reload");
+        }
+
+        for (auto& preset : g_theme_presets) {
             if (!hotReloadThemePreset(preset))
                 continue;
 

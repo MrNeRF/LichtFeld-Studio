@@ -7,6 +7,7 @@
 #include "gui/sequencer_ui_state.hpp"
 #include "sequencer_controller.hpp"
 #include <RmlUi/Core/EventListener.h>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <set>
@@ -159,13 +160,14 @@ namespace lfs::vis {
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
         void destroyGLResources();
+        void reloadResources();
 
     private:
         void initContext(int width, int height);
 
         void syncTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
+        void clearElementCache();
         void cacheElements();
         void updateButtonStates();
         void updatePlayhead();
@@ -234,7 +236,8 @@ namespace lfs::vis {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         std::string base_rcss_;
-        float last_synced_text_[4] = {};
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
 
         // Cached DOM elements
         bool elements_cached_ = false;

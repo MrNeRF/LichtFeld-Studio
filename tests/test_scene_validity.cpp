@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <gtest/gtest.h>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -13,6 +14,27 @@
 #include "visualizer/scene/scene_manager.hpp"
 
 namespace lfs::python {
+
+    namespace {
+        std::unique_ptr<core::SplatData> make_test_splat(size_t count) {
+            std::vector<float> means(count * 3, 0.0f);
+            std::vector<float> rotations(count * 4, 0.0f);
+            for (size_t i = 0; i < count; ++i) {
+                means[i * 3] = static_cast<float>(i);
+                rotations[i * 4] = 1.0f;
+            }
+
+            return std::make_unique<core::SplatData>(
+                0,
+                core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
+                core::Tensor::zeros({count, size_t{1}, size_t{3}}, core::Device::CPU, core::DataType::Float32),
+                core::Tensor::zeros({count, size_t{0}, size_t{3}}, core::Device::CPU, core::DataType::Float32),
+                core::Tensor::zeros({count, size_t{3}}, core::Device::CPU, core::DataType::Float32),
+                core::Tensor::from_vector(rotations, {count, size_t{4}}, core::Device::CPU),
+                core::Tensor::zeros({count, size_t{1}}, core::Device::CPU, core::DataType::Float32),
+                1.0f);
+        }
+    } // namespace
 
     class SceneValidityTest : public ::testing::Test {
     protected:
@@ -139,6 +161,22 @@ namespace lfs::python {
         EXPECT_TRUE(dummy_scene_.getTrainingModelNodeName().empty());
         EXPECT_TRUE(dummy_scene_.getAllCameras().empty());
         EXPECT_EQ(dummy_scene_.getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, TrainingModelActiveCountUsesSyncedTopologyCount) {
+        dummy_scene_.addNode("Model", make_test_splat(2));
+        dummy_scene_.setTrainingModelNode("Model");
+
+        const auto model_id = dummy_scene_.getNodeIdByName("Model");
+        ASSERT_NE(model_id, core::NULL_NODE);
+
+        dummy_scene_.syncTrainingModelTopology(6);
+
+        const auto counts = dummy_scene_.getActiveGaussianCountsByNode();
+        const auto count_it = counts.find(model_id);
+        ASSERT_NE(count_it, counts.end());
+        EXPECT_EQ(count_it->second, 6u);
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), 6u);
     }
 
     TEST_F(SceneValidityTest, SceneManagerEmptyStateKeepsApplicationSceneContext) {

@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
         void setInput(const PanelInputState* input) override;
         void setForcedHeight(float h) override;
         bool needsAnimationFrame() const override;
+        void reloadRmlResources() override;
 
     private:
         void ensureHost();

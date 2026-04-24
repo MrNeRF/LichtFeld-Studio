@@ -1,0 +1,67 @@
+/* Theme-dependent viewport overlay controls. */
+
+.toolbar-container {
+    background-color: @{toolbar.background};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.subtoolbar-container {
+    background-color: @{toolbar.sub_background};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.toolbar-separator {
+    background-color: @{alpha(border,0.39)};
+}
+
+.icon-btn img {
+    image-color: @{viewport.icon_dim};
+}
+
+.icon-btn:hover {
+    background-color: @{viewport.hover_bg};
+}
+
+.icon-btn.selected {
+    background-color: @{primary};
+}
+
+.icon-btn.selected:hover {
+    background-color: @{viewport.selected_hover};
+}
+
+.icon-btn.selected img {
+    image-color: @{background};
+}
+
+.viewport-metrics-card {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{viewport.metrics_border};
+}
+
+.viewport-metrics-label {
+    color: @{text_dim};
+}
+
+.viewport-metrics-value {
+    color: @{text};
+}
+
+.viewport-status-backdrop {
+    background-color: @{viewport.status_backdrop};
+}
+
+.viewport-status-panel {
+    background-color: @{viewport.panel_bg};
+    border-color: @{viewport.panel_border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.viewport-status-title {
+    color: @{text};
+}
+
+.viewport-status-path,
+.viewport-status-stage {
+    color: @{text_dim};
+}

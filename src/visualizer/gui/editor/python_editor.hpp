@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <vector>
@@ -13,6 +14,23 @@ namespace lfs::vis {
 }
 
 namespace lfs::vis::editor {
+
+    struct PythonEditorSymbol {
+        std::string label;
+        std::string detail;
+        std::size_t byte_offset = 0;
+        std::size_t line = 0;
+        int depth = 0;
+    };
+
+    struct PythonEditorFold {
+        std::string label;
+        std::string detail;
+        std::size_t byte_offset = 0;
+        std::size_t line = 0;
+        std::size_t end_line = 0;
+        bool collapsed = false;
+    };
 
     class PythonEditor {
     public:
@@ -32,6 +50,29 @@ namespace lfs::vis::editor {
 
         bool shouldExecute() const { return execute_requested_; }
         bool consumeTextChanged();
+        [[nodiscard]] bool hasSyntaxErrors() const;
+        [[nodiscard]] bool syntaxDiagnosticsAvailable() const;
+        [[nodiscard]] std::string syntaxSummary() const;
+        [[nodiscard]] std::string syntaxStructureSummary() const;
+        [[nodiscard]] std::vector<PythonEditorSymbol> syntaxSymbols() const;
+        [[nodiscard]] std::vector<PythonEditorSymbol> syntaxBreadcrumbs() const;
+        [[nodiscard]] std::vector<PythonEditorFold> syntaxFolds() const;
+        [[nodiscard]] bool syntaxStructureCurrent() const;
+        [[nodiscard]] std::size_t syntaxFoldCount() const;
+        [[nodiscard]] std::string currentSyntaxScope() const;
+        void refreshSyntaxDiagnostics();
+        bool selectEnclosingSyntaxBlock();
+        bool expandSyntaxSelection();
+        bool selectCurrentSyntaxFold();
+        bool toggleCurrentSyntaxFold();
+        bool foldAllSyntaxBlocks();
+        bool unfoldAllSyntaxBlocks();
+        bool jumpToParentSyntaxBlock();
+        bool jumpToChildSyntaxBlock();
+        bool jumpToSyntaxSymbol(std::size_t index);
+        bool jumpToSyntaxBreadcrumb(std::size_t index);
+        bool jumpToSyntaxFold(std::size_t index);
+        bool toggleSyntaxFold(std::size_t index);
 
         void updateTheme(const Theme& theme);
 

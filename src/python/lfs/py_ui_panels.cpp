@@ -485,6 +485,11 @@ namespace lfs::python {
     void PyPanelRegistry::unregister_for_module(const std::string& prefix) {
         std::lock_guard lock(mutex_);
 
+        if (prefix.empty() || prefix == "lfs_plugins") {
+            LOG_WARN("Refusing to unregister panels for broad module prefix '{}'", prefix);
+            return;
+        }
+
         std::vector<std::string> to_remove;
         for (const auto& [panel_id, entry] : panels_) {
             if (entry.module_prefix == prefix || entry.module_prefix.starts_with(prefix + ".")) {

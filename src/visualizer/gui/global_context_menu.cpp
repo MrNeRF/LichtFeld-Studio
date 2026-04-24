@@ -92,25 +92,55 @@ namespace lfs::vis::gui {
         }
     }
 
-    std::string GlobalContextMenu::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
-        const auto& p = t.palette;
+    void GlobalContextMenu::reloadResources() {
+        if (!ctx_)
+            return;
 
-        const auto surface = colorToRmlAlpha(p.surface, 0.95f);
-        const auto border = colorToRmlAlpha(p.border, 0.4f);
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const int rounding = static_cast<int>(t.sizes.window_rounding);
+        hide();
+        open_ = false;
+        pending_open_ = false;
+        focus_first_item_ = false;
+        callback_ = {};
 
-        return std::format(
-            ".context-menu {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
-            ".context-menu-item {{ color: {}; }}\n"
-            ".context-menu-label {{ color: {}; }}\n"
-            ".context-menu-separator {{ background-color: {}; }}\n",
-            surface, border, rounding,
-            text, text_dim,
-            colorToRmlAlpha(p.border, 0.5f));
+        if (doc_) {
+            ctx_->UnloadDocument(doc_);
+            ctx_->Update();
+        }
+
+        doc_ = nullptr;
+        el_backdrop_ = nullptr;
+        el_ctx_menu_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        width_ = 0;
+        height_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/global_context_menu.rml");
+            doc_ = rml_documents::loadDocument(ctx_, rml_path);
+            if (!doc_) {
+                LOG_ERROR("GlobalContextMenu: failed to reload global_context_menu.rml");
+                return;
+            }
+            doc_->Show();
+
+            el_backdrop_ = doc_->GetElementById("backdrop");
+            el_ctx_menu_ = doc_->GetElementById("ctx-menu");
+
+            if (!el_backdrop_ || !el_ctx_menu_) {
+                LOG_ERROR("GlobalContextMenu: missing DOM elements after reload");
+                return;
+            }
+
+            el_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
+            el_ctx_menu_->AddEventListener(Rml::EventId::Click, &listener_);
+        } catch (const std::exception& e) {
+            LOG_ERROR("GlobalContextMenu: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        menu_model_.DirtyVariable("items");
+        syncTheme();
     }
 
     void GlobalContextMenu::syncTheme() {
@@ -126,7 +156,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/global_context_menu.rcss");
 
-        rml_theme::applyTheme(doc_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(doc_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/global_context_menu.theme.rcss"));
     }
 
     void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x, float screen_y,

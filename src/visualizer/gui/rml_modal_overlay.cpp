@@ -76,6 +76,48 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlModalOverlay::reloadResources() {
+        if (!rml_context_ || active_.has_value())
+            return;
+
+        text_input_revert_.clear();
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        el_backdrop_ = nullptr;
+        el_dialog_ = nullptr;
+        el_title_ = nullptr;
+        el_form_ = nullptr;
+        el_content_ = nullptr;
+        el_input_row_ = nullptr;
+        el_input_ = nullptr;
+        el_button_row_ = nullptr;
+        elements_cached_ = false;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        width_ = 0;
+        height_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/modal_overlay.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlModalOverlay: failed to reload modal_overlay.rml");
+                return;
+            }
+            document_->Show();
+            cacheElements();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlModalOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        syncTheme();
+    }
+
     void RmlModalOverlay::cacheElements() {
         assert(document_);
         el_backdrop_ = document_->GetElementById("modal-backdrop");
@@ -101,44 +143,6 @@ namespace lfs::vis::gui {
         el_button_row_->AddEventListener(Rml::EventId::Click, &listener_);
     }
 
-    std::string RmlModalOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
-        const auto& p = t.palette;
-
-        const auto surface = colorToRmlAlpha(p.surface, 0.98f);
-        const auto border = colorToRmlAlpha(p.border, 0.4f);
-        const auto backdrop = colorToRmlAlpha(
-            t.isLightTheme() ? ImVec4{0.12f, 0.14f, 0.18f, 1.0f} : p.background,
-            t.isLightTheme() ? 0.18f : 0.44f);
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const auto sep_color = colorToRmlAlpha(p.border, 0.5f);
-        const auto info_border = colorToRml(p.success);
-        const auto warn_border = colorToRml(p.warning);
-        const auto err_border = colorToRml(p.error);
-        const auto error_col = colorToRml(p.error);
-        const auto warning_col = colorToRml(p.warning);
-        const int rounding = static_cast<int>(t.sizes.window_rounding);
-
-        return std::format(
-            ".modal-backdrop {{ background-color: {}; }}\n"
-            ".modal-dialog {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
-            ".modal-title {{ color: {}; }}\n"
-            ".modal-sep {{ background-color: {}; }}\n"
-            ".modal-content {{ color: {}; }}\n"
-            ".dim-text {{ color: {}; }}\n"
-            ".error-text {{ color: {}; }}\n"
-            ".warning-text {{ color: {}; }}\n"
-            ".modal-dialog.style-info {{ border-color: {}; }}\n"
-            ".modal-dialog.style-warning {{ border-color: {}; }}\n"
-            ".modal-dialog.style-error {{ border-color: {}; }}\n",
-            backdrop, surface, border, rounding,
-            text, sep_color, text, text_dim,
-            error_col, warning_col,
-            info_border, warn_border, err_border);
-    }
-
     void RmlModalOverlay::syncTheme() {
         if (!document_)
             return;
@@ -152,7 +156,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/modal_overlay.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/modal_overlay.theme.rcss"));
     }
 
     void RmlModalOverlay::showNext() {

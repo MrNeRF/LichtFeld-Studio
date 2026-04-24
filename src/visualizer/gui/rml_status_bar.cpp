@@ -246,29 +246,39 @@ namespace lfs::vis::gui {
         document_ = nullptr;
     }
 
-    std::string RmlStatusBar::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        const auto& p = t.palette;
+    void RmlStatusBar::reloadResources() {
+        if (!rml_context_)
+            return;
 
-        const auto text = colorToRml(p.text);
-        const auto text_dim = colorToRml(p.text_dim);
-        const auto surface_bright = colorToRml(p.surface_bright);
-        const auto primary = colorToRml(p.primary);
-        const auto success = colorToRml(p.success);
-        const auto warning = colorToRml(p.warning);
-        const auto error = colorToRml(p.error);
-        const auto info = colorToRml(p.info);
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
 
-        auto surface_bright_half = colorToRmlAlpha(p.surface_bright, 0.5f);
+        document_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        model_dirty_ = true;
+        animation_active_ = true;
+        last_render_w_ = 0;
+        last_render_h_ = 0;
+        last_document_h_ = 0;
+        next_refresh_at_ = {};
 
-        return std::format(
-            "body {{ color: {0}; }}\n"
-            ".dim {{ color: {1}; }}\n"
-            ".separator {{ color: {1}; }}\n"
-            "#progress-container {{ background-color: {2}; }}\n"
-            "#progress-fill {{ background-color: {3}; }}\n"
-            "#progress-text {{ color: {0}; }}\n"
-            "#gpu-icon {{ image-color: {1}; }}\n",
-            text, text_dim, surface_bright_half, primary);
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/statusbar.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlStatusBar: failed to reload statusbar.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlStatusBar: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        updateTheme();
     }
 
     bool RmlStatusBar::updateTheme() {
@@ -284,7 +294,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/statusbar.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/statusbar.theme.rcss"));
         model_dirty_ = true;
         return true;
     }

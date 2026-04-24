@@ -1,0 +1,23 @@
+/* Theme-dependent status bar styles. */
+
+body,
+#progress-text {
+    color: @{text};
+}
+
+.dim,
+.separator {
+    color: @{text_dim};
+}
+
+#progress-container {
+    background-color: @{statusbar.progress_bg};
+}
+
+#progress-fill {
+    background-color: @{primary};
+}
+
+#gpu-icon {
+    image-color: @{text_dim};
+}

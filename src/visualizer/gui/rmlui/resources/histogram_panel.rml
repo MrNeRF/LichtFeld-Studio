@@ -176,10 +176,10 @@
         </div>
 
         <div id="histogram-chart">
-          <div class="histogram-grid-line" style="top: 16%;"></div>
-          <div class="histogram-grid-line" style="top: 36%;"></div>
-          <div class="histogram-grid-line" style="top: 56%;"></div>
-          <div class="histogram-grid-line" style="top: 76%;"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-16"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-36"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-56"></div>
+          <div class="histogram-grid-line histogram-grid-line--top-76"></div>
 
           <div id="histogram-bars" tab-index="0" data-style-gap="histogram_bar_gap_style">
             <div id="histogram-selection"
@@ -236,7 +236,6 @@
                        data-style-width="compare_selection_width_style"
                        data-style-height="compare_selection_height_style"></div>
                   <div class="compare-cell"
-                       style="left: 0%; top: 0%; width: 0%; height: 0%;"
                        data-for="bin : compare_bins"
                        data-class-selected="bin.selected"
                        data-attr-style="bin.style_attr"

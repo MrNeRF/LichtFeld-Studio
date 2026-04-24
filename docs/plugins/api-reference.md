@@ -129,7 +129,7 @@ Built-in template aliases:
 | Full custom retained UI | `template` | Use an absolute path for plugin-local `.rml` |
 | Hybrid panel | `template` plus `draw(ui)` | Render immediate content into `<div id="im-root"></div>` |
 
-When a plugin-local template file such as `main_panel.rml` is present, LichtFeld automatically loads a sibling `main_panel.rcss` stylesheet if it exists.
+When a plugin-local template file such as `main_panel.rml` is present, LichtFeld automatically loads a sibling `main_panel.rcss` stylesheet if it exists. A sibling `main_panel.theme.rcss` file is also loaded for palette-dependent overrides.
 
 ---
 
@@ -1359,8 +1359,9 @@ lf.undo.stack() -> dict
 | `lf.ui.set_language(lang_code)`             | `None`           | Set UI language            |
 | `lf.ui.get_current_language()`              | `str`            | Active language code       |
 | `lf.ui.get_languages()`                     | `list[tuple[str, str]]` | Available languages  |
-| `lf.ui.set_theme(name)`                     | `None`           | Theme switch (`dark`/`light`) |
-| `lf.ui.get_theme()`                         | `str`            | Active theme name          |
+| `lf.ui.set_theme(name)`                     | `None`           | Theme switch by stable theme id |
+| `lf.ui.get_theme()`                         | `str`            | Active stable theme id     |
+| `lf.ui.themes()`                            | `list[dict]`     | Available theme presets    |
 | `lf.ui.set_panel_enabled(panel_id, enabled)`  | `None`           | Toggle panel by id         |
 | `lf.ui.is_panel_enabled(panel_id)`            | `bool`           | Panel enabled state        |
 | `lf.ui.get_panel_names(space=lf.ui.PanelSpace.FLOATING)` | `list[str]` | Panel ids for a space |

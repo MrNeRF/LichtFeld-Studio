@@ -8,6 +8,10 @@ message(STATUS "Configuring Python components (runner + nanobind module)")
 find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
 find_package(nanobind CONFIG REQUIRED)
 
+option(LFS_DEV_IMPORT_SOURCE_PYTHON
+    "Import built-in Python packages from src/python in non-portable builds"
+    ON)
+
 # vcpkg extension modules use release ABI; debug libpython has Py_DEBUG which
 # changes _PyRuntimeState layout, causing ABI mismatch crashes.
 # Force release Python library for debug builds on both Python::Python and Python::Module
@@ -118,6 +122,7 @@ endif()
 # Static library for other Python utilities
 add_library(lfs_python_utils STATIC
     runner.cpp
+    python_buffer_analysis.cpp
     package_manager.cpp
     plugin_runner.cpp
     subprocess.cpp
@@ -135,11 +140,23 @@ target_link_libraries(lfs_python_utils
         Python::Python
         lfs_core
         lfs_python_runtime
+        lfs::tree_sitter
+        lfs::tree_sitter_python
 )
+
+set(LFS_PYTHON_UTILS_DEFINITIONS
+    LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
+)
+if(LFS_DEV_IMPORT_SOURCE_PYTHON AND NOT BUILD_PORTABLE)
+    list(APPEND LFS_PYTHON_UTILS_DEFINITIONS
+        LFS_DEV_PYTHON_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    message(STATUS "Python dev mode: built-in Python imports from ${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
 
 target_compile_definitions(lfs_python_utils
     PUBLIC
-        LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
+        ${LFS_PYTHON_UTILS_DEFINITIONS}
 )
 
 set_target_properties(lfs_python_utils PROPERTIES
@@ -208,9 +225,14 @@ set_target_properties(lfs_py PROPERTIES
     CUDA_SEPARABLE_COMPILATION OFF
     LINKER_LANGUAGE CXX
     POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
     OUTPUT_NAME lichtfeld
 )
 
+# Do not add --exclude-libs,ALL here while lfs_visualizer is static on Linux.
+# The embedded app and the lichtfeld extension currently share GUI registries
+# and hook bridges through ELF symbol interposition.
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
     $<$<CONFIG:Debug>:DEBUG_BUILD>

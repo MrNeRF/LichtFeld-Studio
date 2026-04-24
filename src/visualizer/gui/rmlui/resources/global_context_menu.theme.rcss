@@ -1,0 +1,19 @@
+/* Theme-dependent global context menu styles. */
+
+.context-menu {
+    background-color: @{overlay.surface};
+    border-color: @{overlay.border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.context-menu-item {
+    color: @{text};
+}
+
+.context-menu-label {
+    color: @{text_dim};
+}
+
+.context-menu-separator {
+    background-color: @{alpha(border,0.5)};
+}

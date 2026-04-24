@@ -11,6 +11,9 @@ from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 
+__lfs_panel_classes__ = ["ExportPanel"]
+__lfs_panel_ids__ = ["lfs.export"]
+
 
 class ExportFormat(IntEnum):
     PLY = 0

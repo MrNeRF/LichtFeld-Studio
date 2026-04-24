@@ -1,0 +1,7 @@
+/* Shared theme styles for documents hosted by RmlPanelHost.
+ * Panel-specific selectors belong in the panel's sibling *.theme.rcss file. */
+
+body {
+    color: @{text};
+    background-color: @{surface};
+}

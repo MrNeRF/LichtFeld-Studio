@@ -1,0 +1,441 @@
+/* Theme-dependent shared component styles.
+ * Selectors live in RCSS; C++ only expands theme tokens from the active theme
+ * presets and wraps this file in RmlUi theme media blocks. */
+
+#window-frame {
+    background-color: @{window.surface};
+    border-color: @{alpha(border,0.4)};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+#title-bar {
+    @{window.title_decor};
+    border-top-left-radius: @{window.rounding}dp;
+    border-top-right-radius: @{window.rounding}dp;
+    border-bottom-color: @{border};
+}
+
+#title-text,
+.description,
+.info-val,
+.link-label {
+    color: @{text};
+}
+
+#close-btn,
+.info-key,
+.card-title,
+.footer-text {
+    color: @{text_dim};
+}
+
+#close-btn:hover {
+    color: @{error};
+}
+
+.panel-title,
+.link-url,
+.play-icon {
+    color: @{primary};
+}
+
+.link-url:hover {
+    text-decoration: underline;
+}
+
+.footer-sep {
+    color: @{border};
+}
+
+.card-body {
+    background-color: @{window.surface};
+    border-color: @{border};
+}
+
+.video-card:hover .card-body {
+    border-color: @{primary};
+    background-color: @{components.title_surface};
+}
+
+input[type="checkbox"] {
+    border-color: @{border};
+}
+
+input[type="checkbox"]:checked {
+    background-color: @{primary};
+    border-color: @{primary};
+    decorator: image(@{asset.icon.check});
+}
+
+input[type="range"] slidertrack {
+    background-color: @{border};
+    border-width: 0;
+}
+
+input[type="range"] sliderprogress,
+input[type="range"] sliderbar {
+    background-color: @{primary};
+}
+
+input[type="text"] {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+    padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+}
+
+input[type="text"]:focus {
+    border-color: @{primary};
+}
+
+select {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+    padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+}
+
+select:hover {
+    border-color: @{primary};
+}
+
+selectarrow {
+    decorator: image(@{asset.icon.dropdown_arrow});
+    image-color: @{text_dim};
+}
+
+selectbox {
+    background-color: @{surface};
+    border-color: @{border};
+    box-shadow: @{layered_shadow.1};
+}
+
+selectbox option:hover {
+    background-color: @{primary};
+}
+
+.scrub-field {
+    @{components.scrub_bg_decor};
+    border-color: @{border};
+}
+
+.scrub-field:hover,
+.scrub-field.is-dragging,
+.scrub-field.is-editing {
+    border-color: @{primary};
+}
+
+.scrub-field-fill {
+    @{components.scrub_fill_decor};
+}
+
+.scrub-field-display,
+.scrub-field-input,
+.progress__text,
+.setting-label,
+.prop-label,
+.setting-row__label-col,
+.text-default {
+    color: @{text};
+}
+
+progress {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+progress fill {
+    @{components.progress_fill_decor};
+}
+
+.slider-value,
+.section-arrow,
+.text-disabled,
+.text-muted,
+.section-label,
+.empty-message,
+.color-comp,
+.context-menu-label,
+.status-muted {
+    color: @{text_dim};
+}
+
+.section-header {
+    color: @{text};
+    border-color: @{menu.background};
+    padding: @{num(size.frame_padding_y)}dp @{num(size.frame_padding_x)}dp;
+}
+
+.section-header:hover,
+.section-header.is-expanded,
+.section-gap,
+.section-content {
+    border-color: @{menu.background};
+}
+
+.section-header.text-accent,
+.section-header.text-accent:hover,
+.section-header.text-accent.is-expanded,
+.section-header .section-arrow.text-accent,
+.section-header:hover .section-arrow.text-accent,
+.section-header.is-expanded .section-arrow.text-accent,
+.text-accent {
+    color: @{primary};
+}
+
+.section-header:hover .section-arrow,
+.section-header.is-expanded .section-arrow {
+    color: @{text};
+}
+
+.separator,
+.context-menu-separator {
+    background-color: @{border};
+}
+
+.color-swatch {
+    border-color: @{border};
+}
+
+.color-comp,
+.color-hex {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.color-hex {
+    color: @{text};
+}
+
+.color-hex:focus {
+    border-color: @{primary};
+}
+
+.context-menu {
+    background-color: @{surface};
+    border-color: @{border};
+    box-shadow: @{layered_shadow.3};
+}
+
+.context-menu-item {
+    color: @{text};
+}
+
+.context-menu-item:hover {
+    background-color: @{primary};
+}
+
+.btn {
+    color: @{text};
+    background-color: @{surface_bright};
+    border-color: @{border};
+    border-radius: @{num(size.frame_rounding)}dp;
+}
+
+.btn:hover {
+    background-color: @{border};
+}
+
+.btn:active {
+    background-color: @{surface};
+}
+
+.btn--secondary {
+    background-color: transparent;
+    border-color: @{border};
+    color: @{text};
+}
+
+.btn--secondary:hover {
+    background-color: @{surface};
+}
+
+.btn--primary {
+    background-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{blend(surface,primary,button.tint_normal)};
+    color: @{text};
+}
+
+.btn--primary:hover {
+    background-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{blend(surface,primary,button.tint_hover)};
+}
+
+.btn--primary:active {
+    background-color: @{blend(surface,primary,button.tint_active)};
+    border-color: @{blend(surface,primary,button.tint_active)};
+}
+
+.btn--success {
+    background-color: @{blend(surface,success,button.tint_normal)};
+    border-color: @{blend(surface,success,button.tint_normal)};
+    color: @{text};
+}
+
+.btn--success:hover {
+    background-color: @{blend(surface,success,button.tint_hover)};
+    border-color: @{blend(surface,success,button.tint_hover)};
+}
+
+.btn--success:active {
+    background-color: @{blend(surface,success,button.tint_active)};
+    border-color: @{blend(surface,success,button.tint_active)};
+}
+
+.btn--warning {
+    background-color: @{blend(surface,warning,button.tint_normal)};
+    border-color: @{blend(surface,warning,button.tint_normal)};
+    color: @{text};
+}
+
+.btn--warning:hover {
+    background-color: @{blend(surface,warning,button.tint_hover)};
+    border-color: @{blend(surface,warning,button.tint_hover)};
+}
+
+.btn--warning:active {
+    background-color: @{blend(surface,warning,button.tint_active)};
+    border-color: @{blend(surface,warning,button.tint_active)};
+}
+
+.btn--error {
+    background-color: @{blend(surface,error,button.tint_normal)};
+    border-color: @{blend(surface,error,button.tint_normal)};
+    color: @{text};
+}
+
+.btn--error:hover {
+    background-color: @{blend(surface,error,button.tint_hover)};
+    border-color: @{blend(surface,error,button.tint_hover)};
+}
+
+.btn--error:active {
+    background-color: @{blend(surface,error,button.tint_active)};
+    border-color: @{blend(surface,error,button.tint_active)};
+}
+
+.border-error {
+    border-color: @{error};
+}
+
+.icon-btn:hover {
+    background-color: @{components.border_soft};
+}
+
+.icon-btn:active {
+    background-color: @{components.border_med};
+}
+
+.icon-btn.selected {
+    background-color: @{primary};
+}
+
+.icon-btn img {
+    image-color: @{components.text_hi};
+}
+
+.icon-btn.selected img {
+    image-color: @{background};
+}
+
+.status-success {
+    color: @{success};
+}
+
+.status-error {
+    color: @{error};
+}
+
+.status-warning {
+    color: @{warning};
+}
+
+.status-info {
+    color: @{info};
+}
+
+.color-picker-popup {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.interactive-row:hover,
+.select-chip:hover {
+    background-color: @{alpha(primary,0.18)};
+}
+
+.interactive-row.selected {
+    background-color: @{alpha(primary,0.28)};
+}
+
+.select-chip {
+    color: @{text};
+    background-color: @{alpha(surface_bright,0.55)};
+}
+
+.select-chip.selected {
+    color: @{text};
+    background-color: @{primary};
+}
+
+.setting-row {
+    padding: @{num(size.item_spacing_y_half)}dp 0;
+}
+
+.indent {
+    margin-left: @{num(size.indent_spacing)}dp;
+}
+
+.prop-label,
+.setting-row__label-col {
+    margin-right: @{num(size.item_inner_spacing_x)}dp;
+}
+
+.num-step-btn {
+    color: @{text_dim};
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.num-step-btn:hover {
+    background-color: @{surface_bright};
+    border-color: @{primary};
+}
+
+scrollbarvertical {
+    width: @{num(size.scrollbar_size)}dp;
+}
+
+scrollbarvertical slidertrack {
+    background-color: @{components.scroll_track};
+    border-radius: @{components.scrollbar_rounding}dp;
+}
+
+scrollbarvertical sliderbar {
+    background-color: @{components.scroll_thumb};
+    min-height: @{num(size.grab_min_size)}dp;
+    border-radius: @{components.scrollbar_rounding}dp;
+}
+
+scrollbarvertical sliderbar:hover {
+    background-color: @{components.scroll_hover};
+}
+
+scrollbarhorizontal {
+    height: @{num(size.scrollbar_size)}dp;
+}
+
+scrollbarhorizontal slidertrack {
+    background-color: @{components.scroll_track};
+    border-radius: @{components.scrollbar_rounding}dp;
+}
+
+scrollbarhorizontal sliderbar {
+    background-color: @{components.scroll_thumb};
+    min-width: @{num(size.grab_min_size)}dp;
+    border-radius: @{components.scrollbar_rounding}dp;
+}
+
+scrollbarhorizontal sliderbar:hover {
+    background-color: @{components.scroll_hover};
+}

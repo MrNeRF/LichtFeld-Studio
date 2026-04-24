@@ -1,0 +1,9 @@
+/* Selection groups panel theme overrides. */
+
+.group-row:hover {
+    background-color: @{alpha(border,0.30)};
+}
+
+.group-row.active {
+    background-color: @{alpha(border,0.50)};
+}

@@ -1,4 +1,4 @@
-/* Shared styles for the retained dataset import dialog. */
+/* Shared static layout for retained import/resume dialogs. */
 
 #content-wrap {
     overflow-y: auto;

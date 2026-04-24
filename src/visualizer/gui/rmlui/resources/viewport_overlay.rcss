@@ -8,6 +8,12 @@ body {
     position: relative;
 }
 
+#dm-root {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
 .panel-toolbar-root {
     position: absolute;
     top: 0;
@@ -53,10 +59,21 @@ body {
     pointer-events: auto;
 }
 
+.toolbar-layer-primary {
+    top: 5dp;
+}
+
+.toolbar-layer-submode {
+    top: 49dp;
+}
+
+.toolbar-layer-pivot {
+    top: 83dp;
+}
+
 .toolbar-separator {
     width: 1dp;
     margin: 2dp 0;
-    background-color: rgba(88, 91, 112, 100);
 }
 
 .toolbar-vertical .toolbar-separator {

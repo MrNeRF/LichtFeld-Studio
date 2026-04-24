@@ -30,6 +30,7 @@
 #include "py_tensor.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
+#include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/cuda_gl_interop.hpp"
@@ -59,6 +60,7 @@
 #include <cstring>
 #include <future>
 #include <implot.h>
+#include <memory>
 #include <mutex>
 #include <stack>
 #include <string_view>
@@ -241,9 +243,6 @@ namespace lfs::python {
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
         nb::object g_open_camera_preview_callback;
-
-        // Redraw request flag for hot-reload notification
-        std::atomic<bool> g_redraw_requested{false};
 
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
@@ -3304,13 +3303,51 @@ namespace lfs::python {
 
         // Hot-reload redraw request functions
         m.def(
-            "request_redraw", []() { g_redraw_requested = true; }, "Request a UI redraw on next frame");
+            "request_redraw", []() { lfs::python::request_redraw(); }, "Request a UI redraw on next frame");
         m.def(
             "consume_redraw_request", []() {
-                bool val = g_redraw_requested.exchange(false);
-                return val;
+                return lfs::python::consume_redraw_request();
             },
             "Consume and return pending redraw request flag");
+        const auto schedule_on_ui_thread = [](nb::callable callback) {
+            if (!callback.is_valid())
+                throw nb::type_error("schedule_on_ui_thread requires a callable");
+
+            PyObject* const callable = callback.ptr();
+            Py_INCREF(callable);
+            const auto callable_ref = std::shared_ptr<PyObject>(callable, [](PyObject* obj) {
+                if (!obj || !lfs::python::can_acquire_gil())
+                    return;
+                const lfs::python::GilAcquire gil;
+                Py_DECREF(obj);
+            });
+
+            lfs::python::schedule_gl_callback([callable_ref]() {
+                if (!lfs::python::can_acquire_gil()) {
+                    LOG_ERROR("Unable to run scheduled Python UI callback: Python GIL is unavailable");
+                    return;
+                }
+
+                const lfs::python::GilAcquire gil;
+                PyObject* const result = PyObject_CallNoArgs(callable_ref.get());
+                if (result) {
+                    Py_DECREF(result);
+                } else {
+                    LOG_ERROR("Scheduled Python UI callback failed: {}", lfs::python::extract_python_error());
+                }
+            });
+            lfs::python::request_redraw();
+        };
+        m.def(
+            "schedule_on_ui_thread",
+            schedule_on_ui_thread,
+            nb::arg("callback"),
+            "Schedule a Python callable on the UI thread");
+        m.def(
+            "_run_on_ui_thread",
+            schedule_on_ui_thread,
+            nb::arg("callback"),
+            "Schedule a Python callable on the UI thread");
 
         nb::class_<PyEvent>(m, "Event")
             .def(nb::init<>(), "Create a default Event")
@@ -4865,12 +4902,29 @@ namespace lfs::python {
                     vis::saveThemePreferenceName(name);
                 }
             },
-            nb::arg("name"), "Set theme ('dark', 'light', 'gruvbox', 'catppuccin_mocha', 'catppuccin_latte', or 'nord')");
+            nb::arg("name"), "Set theme by stable theme id");
 
         m.def(
             "get_theme",
-            []() -> std::string { return vis::theme().name; },
-            "Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')");
+            []() -> std::string { return vis::currentThemeId(); },
+            "Get current stable theme id");
+
+        m.def(
+            "themes",
+            []() {
+                nb::list themes;
+                vis::visitThemePresetInfos([&themes](const vis::ThemePresetInfo& info) {
+                    nb::dict item;
+                    item["id"] = info.id;
+                    item["name"] = info.name;
+                    item["label_key"] = info.label_key;
+                    item["mode"] = info.mode;
+                    item["order"] = info.order;
+                    themes.append(item);
+                });
+                return themes;
+            },
+            "Get available theme presets with stable ids and UI metadata");
 
         m.def(
             "set_ui_scale",
@@ -4963,8 +5017,6 @@ namespace lfs::python {
             void* const plot_ctx = get_implot_context();
             if (plot_ctx)
                 ImPlot::SetCurrentContext(static_cast<ImPlotContext*>(plot_ctx));
-
-            lfs::python::flush_gl_callbacks();
         };
         bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
         bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };

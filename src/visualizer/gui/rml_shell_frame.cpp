@@ -63,16 +63,39 @@ namespace lfs::vis::gui {
         status_region_ = nullptr;
     }
 
-    std::string RmlShellFrame::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
+    void RmlShellFrame::reloadResources() {
+        if (!rml_context_)
+            return;
 
-        const auto shell_bg = colorToRml(t.menu_background());
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
 
-        return std::format(
-            "#menu-region {{ background-color: {}; }}\n"
-            "#right-panel-region {{ background-color: {}; }}\n"
-            "#status-region {{ background-color: {}; }}\n",
-            shell_bg, shell_bg, shell_bg);
+        document_ = nullptr;
+        menu_region_ = nullptr;
+        right_panel_region_ = nullptr;
+        status_region_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/shell.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlShellFrame: failed to reload shell.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlShellFrame: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        menu_region_ = document_->GetElementById("menu-region");
+        right_panel_region_ = document_->GetElementById("right-panel-region");
+        status_region_ = document_->GetElementById("status-region");
+        updateTheme();
     }
 
     void RmlShellFrame::updateTheme() {
@@ -88,7 +111,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/shell.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/shell.theme.rcss"));
     }
 
     void RmlShellFrame::render(const ShellRegions& regions) {

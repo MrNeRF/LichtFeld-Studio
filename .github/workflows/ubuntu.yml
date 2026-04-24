@@ -125,6 +125,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_PYTHON_STUBS=OFF \
+            -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
+            -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF \
             -DCUDA_DEVICE_DEBUG=OFF
 
       - name: Clean vcpkg buildtrees

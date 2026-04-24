@@ -28,12 +28,14 @@
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <imgui.h>
 
 struct SDL_Cursor;
@@ -140,6 +142,12 @@ namespace lfs::vis {
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
+            void initDevResourceHotReload();
+            void pollDevResourceHotReload();
+            std::pair<bool, bool> scanDevResourceFiles(bool detect_changes);
+            bool shouldDeferDevResourceHotReload() const;
+            bool reloadLocalizationResources();
+            void reloadRmlResources();
 
             // Core dependencies
             VisualizerImpl* viewer_;
@@ -223,6 +231,18 @@ namespace lfs::vis {
             bool last_ui_layout_python_console_visible_ = false;
             bool last_ui_layout_bottom_dock_visible_ = false;
             std::string last_ui_layout_active_tab_;
+
+            struct DevResourceWatchState {
+                bool enabled = false;
+                std::filesystem::path rml_dir;
+                std::filesystem::path locale_dir;
+                std::unordered_map<std::string, std::filesystem::file_time_type> file_times;
+                std::chrono::steady_clock::time_point next_scan{};
+                bool pending_rml_reload = false;
+                bool pending_locale_reload = false;
+            };
+
+            DevResourceWatchState dev_resource_watch_;
         };
     } // namespace gui
 } // namespace lfs::vis

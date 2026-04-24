@@ -1,7 +1,7 @@
 <rml>
 <head>
   <link type="text/template" href="floating_window.rml"/>
-  <link type="text/rcss" href="dataset_import_panel.rcss"/>
+  <link type="text/rcss" href="import_dialog.rcss"/>
 </head>
 <body template="floating-window" data-model="dataset_import">
 

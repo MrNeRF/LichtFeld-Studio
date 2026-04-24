@@ -41,9 +41,6 @@
 
 namespace lfs::vis::gui {
 
-    using rml_theme::colorToRml;
-    using rml_theme::colorToRmlAlpha;
-
     class LinkClickListener final : public Rml::EventListener {
     public:
         void ProcessEvent(Rml::Event& event) override {
@@ -139,6 +136,53 @@ namespace lfs::vis::gui {
         lang_listener_ = nullptr;
     }
 
+    void StartupOverlay::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        has_theme_signature_ = false;
+        shown_frames_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/startup.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("StartupOverlay: failed to reload startup.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("StartupOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        populateLanguages();
+        updateLocalizedText();
+
+        if (!link_listener_)
+            link_listener_ = new LinkClickListener();
+        for (const char* id : {"link-discord", "link-x", "link-donate", "link-core11",
+                               "link-volinga"}) {
+            auto* el = document_->GetElementById(id);
+            if (el)
+                el->AddEventListener(Rml::EventId::Click, link_listener_);
+        }
+
+        if (!lang_listener_)
+            lang_listener_ = new LangChangeListener();
+        auto* lang_select = document_->GetElementById("lang-select");
+        if (lang_select)
+            lang_select->AddEventListener(Rml::EventId::Change, lang_listener_);
+
+        updateTheme();
+    }
+
     void StartupOverlay::populateLanguages() {
         auto* select_el = document_->GetElementById("lang-select");
         if (!select_el)
@@ -172,55 +216,6 @@ namespace lfs::vis::gui {
         set_text("supported-text", lichtfeld::Strings::Startup::SUPPORTED_BY);
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
         set_text("click-hint", lichtfeld::Strings::Startup::CLICK_TO_CONTINUE);
-    }
-
-    std::string StartupOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        const auto& p = t.palette;
-        const bool is_light = t.isLightTheme();
-
-        auto blend = [](const ImVec4& a, const ImVec4& b, float t_val) -> ImVec4 {
-            return {a.x + (b.x - a.x) * t_val,
-                    a.y + (b.y - a.y) * t_val,
-                    a.z + (b.z - a.z) * t_val,
-                    1.0f};
-        };
-
-        const auto border = colorToRmlAlpha(p.border, is_light ? 0.75f : 0.62f);
-        const auto text = colorToRml(p.text);
-        const auto text_dim_85 = colorToRmlAlpha(p.text_dim, 0.85f);
-        const auto text_dim_50 = colorToRmlAlpha(p.text_dim, 0.50f);
-        const auto primary = colorToRmlAlpha(p.primary, is_light ? 0.78f : 0.62f);
-        const auto select_bg = colorToRmlAlpha(p.background, is_light ? 0.90f : 0.78f);
-        const auto selectbox_bg = colorToRmlAlpha(p.surface, is_light ? 0.95f : 0.90f);
-
-        const ImVec4 base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);
-        const ImVec4 border_color = blend(p.border, p.text, is_light ? 0.28f : 0.38f);
-        const float base_alpha = is_light ? 0.82f : 0.86f;
-        const float bdr_alpha = is_light ? 0.40f : 0.50f;
-        const float inset_alpha = is_light ? 0.08f : 0.05f;
-
-        std::string box_shadow;
-        if (t.shadows.enabled)
-            box_shadow = std::format("box-shadow: {}, {} 0dp 0dp 0dp 1dp inset;",
-                                     rml_theme::layeredShadow(t, 4),
-                                     colorToRmlAlpha(RmlColor{1, 1, 1, 1}, inset_alpha));
-
-        return std::format(
-            "#overlay-box {{ background-color: {7}; border: 1dp {8}; border-radius: 12dp; {9} }}\n"
-            ".dim-text {{ color: {2}; }}\n"
-            ".hint-text {{ color: {3}; }}\n"
-            ".social-link span {{ color: {2}; }}\n"
-            ".social-icon {{ image-color: {2}; }}\n"
-            ".heart-icon {{ image-color: rgb(220, 50, 50); }}\n"
-            "select {{ color: {1}; background-color: {5}; border-color: {0}; }}\n"
-            "select:hover {{ border-color: {4}; }}\n"
-            "selectbox {{ background-color: {6}; border-color: {0}; }}\n"
-            "selectbox option:hover {{ background-color: {4}; }}\n"
-            "#lang-label {{ color: {2}; }}\n",
-            border, text, text_dim_85, text_dim_50, primary, select_bg, selectbox_bg,
-            colorToRmlAlpha(base_color, base_alpha),
-            colorToRmlAlpha(border_color, bdr_alpha),
-            box_shadow);
     }
 
     void StartupOverlay::updateTheme() {
@@ -274,7 +269,7 @@ namespace lfs::vis::gui {
         }
 
         auto base_rcss = rml_theme::loadBaseRCSS("rmlui/startup.rcss");
-        rml_theme::applyTheme(document_, base_rcss, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss, rml_theme::loadBaseRCSS("rmlui/startup.theme.rcss"));
     }
 
     bool StartupOverlay::forwardInput(const PanelInputState& input, float overlay_x,

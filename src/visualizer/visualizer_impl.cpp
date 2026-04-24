@@ -900,6 +900,7 @@ namespace lfs::vis {
             scene_manager_->initSelectionService();
 
         python::ensure_initialized();
+        python::ensure_builtin_ui_registered();
         python::preload_user_plugins_async();
 
         window_manager_->showWindow();

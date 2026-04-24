@@ -116,57 +116,62 @@ namespace lfs::vis::gui {
         can_scroll_tabs_right_ = false;
     }
 
-    std::string RmlRightPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
-        const auto& p = t.palette;
+    void RmlRightPanel::reloadResources() {
+        if (!rml_context_)
+            return;
 
-        const auto tab_hover = colorToRmlAlpha(p.surface_bright, 0.5f);
-        const auto tab_active_bg = colorToRmlAlpha(p.surface_bright, 0.4f);
-        const auto tab_accent = colorToRml(p.primary);
-        const auto tab_text = colorToRml(p.text);
-        const auto tab_text_dim = colorToRml(p.text_dim);
-        const auto tab_nav_bg = colorToRmlAlpha(p.surface_bright, 0.2f);
-        const auto tab_nav_hover = colorToRmlAlpha(p.surface_bright, 0.55f);
-        const auto tab_nav_disabled = colorToRmlAlpha(p.text_dim, 0.35f);
-        const auto splitter_bg = colorToRmlAlpha(p.border, 0.4f);
-        const auto splitter_hover = colorToRmlAlpha(p.info, 0.6f);
-        const auto splitter_active = colorToRmlAlpha(p.info, 0.8f);
-        const auto border_color = colorToRmlAlpha(p.border, 0.6f);
-        const auto separator_color = colorToRmlAlpha(p.border, 0.4f);
-        const auto resize_hover = colorToRmlAlpha(p.info, 0.3f);
-        const auto resize_active = colorToRmlAlpha(p.info, 0.5f);
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
 
-        return std::format(
-            "#splitter {{ background-color: {}; }}\n"
-            "#splitter:hover {{ background-color: {}; }}\n"
-            "#splitter.dragging {{ background-color: {}; }}\n"
-            ".tab {{ background-color: transparent; color: {}; }}\n"
-            ".tab:hover {{ background-color: {}; }}\n"
-            ".tab:focus-visible {{ background-color: {}; color: {}; border-bottom-color: {}; }}\n"
-            ".tab.active {{ background-color: {}; color: {}; "
-            "border-bottom-color: {}; }}\n"
-            ".tab-nav {{ background-color: {}; color: {}; }}\n"
-            ".tab-nav:hover {{ background-color: {}; color: {}; }}\n"
-            ".tab-nav.disabled {{ background-color: transparent; color: {}; opacity: 0.55; }}\n"
-            ".tab-nav.disabled:hover {{ background-color: transparent; color: {}; opacity: 0.55; }}\n"
-            "#left-border {{ background-color: {}; }}\n"
-            "#tab-separator {{ background-color: {}; }}\n"
-            "#resize-handle:hover {{ background-color: {}; }}\n"
-            "#resize-handle.dragging {{ background-color: {}; }}\n",
-            splitter_bg, splitter_hover, splitter_active,
-            tab_text_dim,
-            tab_hover,
-            tab_hover, tab_text, tab_accent,
-            tab_active_bg, tab_text, tab_accent,
-            tab_nav_bg, tab_text_dim,
-            tab_nav_hover, tab_text,
-            tab_nav_disabled,
-            tab_nav_disabled,
-            border_color,
-            separator_color,
-            resize_hover,
-            resize_active);
+        document_ = nullptr;
+        resize_handle_el_ = nullptr;
+        left_border_el_ = nullptr;
+        splitter_el_ = nullptr;
+        tab_bar_el_ = nullptr;
+        tab_strip_viewport_el_ = nullptr;
+        tab_separator_el_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        wants_input_ = false;
+        wants_keyboard_ = false;
+        splitter_dragging_ = false;
+        resize_dragging_ = false;
+        render_needed_ = true;
+        input_dirty_ = true;
+        last_fbo_w_ = 0;
+        last_fbo_h_ = 0;
+        last_scene_h_ = -1.0f;
+        last_splitter_h_ = -1.0f;
+        last_over_interactive_ = false;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlRightPanel: failed to reload right_panel.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlRightPanel: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        resize_handle_el_ = document_->GetElementById("resize-handle");
+        left_border_el_ = document_->GetElementById("left-border");
+        splitter_el_ = document_->GetElementById("splitter");
+        tab_bar_el_ = document_->GetElementById("tab-bar");
+        tab_strip_viewport_el_ = document_->GetElementById("tab-strip-viewport");
+        tab_separator_el_ = document_->GetElementById("tab-separator");
+
+        tab_model_.DirtyVariable("tabs");
+        tab_model_.DirtyVariable("active_tab");
+        tab_model_.DirtyVariable("tabs_overflow");
+        tab_model_.DirtyVariable("can_scroll_tabs_left");
+        tab_model_.DirtyVariable("can_scroll_tabs_right");
+        updateTheme();
     }
 
     bool RmlRightPanel::updateTheme() {
@@ -182,7 +187,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/right_panel.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/right_panel.theme.rcss"));
         return true;
     }
 

@@ -1,0 +1,37 @@
+/* Export panel theme overrides. */
+
+.ep-section-title {
+    color: @{primary};
+}
+
+.ep-format-option:hover {
+    background-color: @{alpha(primary,0.16)};
+}
+
+.ep-format-option.selected {
+    background-color: @{alpha(primary,0.25)};
+}
+
+.ep-format-dot {
+    border-color: @{border};
+}
+
+.ep-format-option.selected .ep-format-dot {
+    background-color: @{primary};
+    border-color: @{primary};
+}
+
+.ep-format-name,
+.ep-model-name {
+    color: @{text};
+}
+
+.ep-model-count,
+.ep-no-models,
+.ep-stage-text {
+    color: @{text_dim};
+}
+
+.ep-error {
+    color: @{error};
+}

@@ -206,6 +206,52 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlPythonPanelAdapter::reloadRmlResources() {
+        if (!host_)
+            return;
+
+        const std::string current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        const std::string language = current_language.empty() ? last_language_ : current_language;
+        if (!language.empty() && reloadDocumentForLanguage(language)) {
+            layout_.release_elements();
+            content_dirty_ = true;
+            last_prepare_frame_ = 0;
+            next_update_at_ = {};
+            return;
+        }
+
+        if (!lfs::python::can_acquire_gil())
+            return;
+
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!ops.reload_document || !ops.get_document)
+            return;
+
+        const lfs::python::GilAcquire gil;
+        auto* current_doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        callOnUnload(current_doc);
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+        resetLifecycle();
+        layout_.release_elements();
+
+        if (!ops.reload_document(host_)) {
+            LOG_ERROR("Panel reload_document failed for '{}'", context_name_);
+            resetLifecycle();
+            return;
+        }
+
+        bindModelIfNeeded();
+        auto* new_doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        if (new_doc)
+            callOnLoad(new_doc);
+
+        last_language_ = language;
+        content_dirty_ = true;
+        last_prepare_frame_ = 0;
+        next_update_at_ = {};
+    }
+
     void RmlPythonPanelAdapter::syncDirectLayout(float w, float h) {
         if (!ensureDocumentInitialized())
             return;

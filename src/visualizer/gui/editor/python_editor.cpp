@@ -6,6 +6,7 @@
 #include "python_lsp_client.hpp"
 
 #include "gui/gui_focus_state.hpp"
+#include "python/python_buffer_analysis.hpp"
 #include "theme/theme.hpp"
 
 #include <SDL3/SDL_clipboard.h>
@@ -16,8 +17,10 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <vector>
 
@@ -42,6 +45,7 @@ namespace lfs::vis::editor {
         using Clock = std::chrono::steady_clock;
         constexpr auto AUTO_COMPLETION_DEBOUNCE = std::chrono::milliseconds(8);
         constexpr auto ACTIVE_COMPLETION_DEBOUNCE = std::chrono::milliseconds(0);
+        constexpr auto SYNTAX_ANALYSIS_DEBOUNCE = std::chrono::milliseconds(160);
         constexpr auto SEMANTIC_TOKENS_WORD_DELAY = std::chrono::milliseconds(800);
         constexpr auto SEMANTIC_TOKENS_BOUNDARY_DELAY = std::chrono::milliseconds(90);
         constexpr int COMPLETION_POPUP_MAX_ITEMS = 8;
@@ -338,6 +342,33 @@ namespace lfs::vis::editor {
             }
         }
 
+        const char* syntax_symbol_prefix(const lfs::python::PythonSymbolKind kind) {
+            switch (kind) {
+            case lfs::python::PythonSymbolKind::Function:
+                return "def";
+            case lfs::python::PythonSymbolKind::Class:
+                return "class";
+            case lfs::python::PythonSymbolKind::Import:
+                return "import";
+            case lfs::python::PythonSymbolKind::Variable:
+                return "var";
+            }
+            return "sym";
+        }
+
+        std::string range_preview(std::string_view text, const size_t start, const size_t end) {
+            if (start >= end || start >= text.size()) {
+                return {};
+            }
+
+            const size_t clamped_end = std::min(end, text.size());
+            std::string preview(text.substr(start, clamped_end - start));
+            if (const auto newline = preview.find('\n'); newline != std::string::npos) {
+                preview.erase(newline);
+            }
+            return std::string(trim_right(preview));
+        }
+
         struct CursorLocation {
             size_t byte_index = 0;
             size_t line_start = 0;
@@ -384,6 +415,18 @@ namespace lfs::vis::editor {
             int end_line = 0;
             size_t start_byte = 0;
             size_t end_byte = 0;
+        };
+
+        struct DiagnosticByteRange {
+            size_t start = 0;
+            size_t end = 0;
+        };
+
+        struct PendingSyntaxPreEdit {
+            size_t start_byte = 0;
+            size_t end_byte = 0;
+            lfs::python::PythonBufferPoint start_point;
+            lfs::python::PythonBufferPoint end_point;
         };
 
     } // namespace
@@ -464,6 +507,11 @@ namespace lfs::vis::editor {
                 }
 
                 switch (buffer_message->type) {
+                case Zep::BufferMessageType::PreBufferChange:
+                    owner_.recordSyntaxPreEdit(
+                        static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
+                        static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    break;
                 case Zep::BufferMessageType::TextAdded:
                 case Zep::BufferMessageType::TextChanged:
                 case Zep::BufferMessageType::TextDeleted:
@@ -471,6 +519,11 @@ namespace lfs::vis::editor {
                     owner_.noteSemanticDirtyRange(
                         static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
                         static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    owner_.recordSyntaxPostEdit(
+                        buffer_message->type,
+                        static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
+                        static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    owner_.scheduleSyntaxAnalysis();
                     break;
                 default:
                     break;
@@ -497,7 +550,7 @@ namespace lfs::vis::editor {
 
             auto& config = editor->GetConfig();
             config.showLineNumbers = true;
-            config.showIndicatorRegion = false;
+            config.showIndicatorRegion = true;
             config.autoHideCommandRegion = true;
             config.cursorLineSolid = true;
             config.showNormalModeKeyStrokes = false;
@@ -656,6 +709,11 @@ namespace lfs::vis::editor {
                 document_version = lsp->updateDocument(text);
             }
             clearCompletionState();
+            clearSyntaxDiagnosticMarkers();
+            buffer->ClearFoldRanges();
+            pending_syntax_pre_edit.reset();
+            pending_syntax_edits.clear();
+            syntax_full_reparse_required = true;
             clearSemanticHighlighting();
             semantic_dirty_range.clear();
             semantic_full_refresh_required = true;
@@ -665,6 +723,7 @@ namespace lfs::vis::editor {
             next_semantic_tokens_request_at = last_text_change_at + semantic_tokens_idle_delay;
             last_semantic_tokens_requested_version = -1;
             pending_semantic_tokens.reset();
+            scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
 
             if (auto* window = editor->GetActiveWindow()) {
                 const size_t target = cursor_byte_index.value_or(0);
@@ -889,6 +948,7 @@ namespace lfs::vis::editor {
         void clearSemanticHighlighting() {
             semantic_highlights.clear();
             semantic_highlight_palette_signature = semanticPaletteSignature();
+            semantic_highlighting_from_tree_sitter = false;
             semantic_full_refresh_required = true;
             semantic_dirty_range.clear();
 
@@ -898,6 +958,199 @@ namespace lfs::vis::editor {
 
             if (auto* syntax = dynamic_cast<Zep::ZepSyntax_Python*>(buffer->GetSyntax())) {
                 syntax->ClearSemanticHighlighting();
+            }
+        }
+
+        void scheduleSyntaxAnalysis(
+            const std::chrono::milliseconds delay = SYNTAX_ANALYSIS_DEBOUNCE) {
+            syntax_analysis_pending = true;
+            next_syntax_analysis_at = Clock::now() + delay;
+        }
+
+        void recordSyntaxPreEdit(const size_t start, const size_t end) {
+            const std::string text = getText();
+            const size_t clamped_start = std::min(start, text.size());
+            const size_t clamped_end = std::min(std::max(start, end), text.size());
+            pending_syntax_pre_edit = PendingSyntaxPreEdit{
+                .start_byte = clamped_start,
+                .end_byte = clamped_end,
+                .start_point = lfs::python::python_buffer_point_at_byte(text, clamped_start),
+                .end_point = lfs::python::python_buffer_point_at_byte(text, clamped_end),
+            };
+        }
+
+        void recordSyntaxPostEdit(const Zep::BufferMessageType type, const size_t start, const size_t end) {
+            const std::string text = getText();
+            if (!pending_syntax_pre_edit.has_value()) {
+                syntax_full_reparse_required = true;
+                return;
+            }
+
+            lfs::python::PythonBufferEdit edit;
+            edit.start_byte = pending_syntax_pre_edit->start_byte;
+            edit.start_point = pending_syntax_pre_edit->start_point;
+
+            switch (type) {
+            case Zep::BufferMessageType::TextAdded: {
+                const size_t new_end = std::min(std::max(start, end), text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->start_byte;
+                edit.old_end_point = pending_syntax_pre_edit->start_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            case Zep::BufferMessageType::TextDeleted: {
+                const size_t new_end = std::min(start, text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->end_byte;
+                edit.old_end_point = pending_syntax_pre_edit->end_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            case Zep::BufferMessageType::TextChanged: {
+                const size_t new_end = std::min(std::max(start, end), text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->end_byte;
+                edit.old_end_point = pending_syntax_pre_edit->end_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            default:
+                syntax_full_reparse_required = true;
+                pending_syntax_pre_edit.reset();
+                return;
+            }
+
+            pending_syntax_edits.push_back(edit);
+            pending_syntax_pre_edit.reset();
+        }
+
+        void clearSyntaxDiagnosticMarkers() {
+            if (buffer != nullptr && !syntax_markers.empty()) {
+                buffer->ClearRangeMarkers(syntax_markers);
+            }
+            syntax_markers.clear();
+        }
+
+        [[nodiscard]] std::optional<DiagnosticByteRange> diagnosticRangeForIssue(
+            const lfs::python::PythonBufferIssue& issue,
+            std::string_view text) const {
+            size_t start = std::min(issue.start_byte, text.size());
+            size_t end = std::min(issue.end_byte, text.size());
+            if (end < start) {
+                std::swap(start, end);
+            }
+
+            if (start < end) {
+                return DiagnosticByteRange{.start = start, .end = end};
+            }
+
+            if (text.empty()) {
+                return std::nullopt;
+            }
+
+            const size_t line_start = line_start_offset(text, static_cast<int>(issue.line));
+            const size_t newline = text.find('\n', line_start);
+            const size_t line_end = newline == std::string_view::npos ? text.size() : newline;
+
+            if (line_start < line_end) {
+                start = std::clamp(start, line_start, line_end - 1);
+                end = start;
+                decode_utf8(text, end);
+                end = std::clamp(end, start + 1, line_end);
+            } else {
+                start = std::min(start, text.size() - 1);
+                end = start + 1;
+            }
+
+            if (start >= end) {
+                return std::nullopt;
+            }
+            return DiagnosticByteRange{.start = start, .end = end};
+        }
+
+        void applySyntaxDiagnostics(const std::string& text) {
+            clearSyntaxDiagnosticMarkers();
+            if (buffer == nullptr || editor == nullptr ||
+                syntax_document.analysis().status != lfs::python::PythonBufferStatus::SyntaxError) {
+                return;
+            }
+
+            for (const auto& issue : syntax_document.analysis().issues) {
+                const auto range = diagnosticRangeForIssue(issue, text);
+                if (!range.has_value()) {
+                    continue;
+                }
+
+                auto marker = std::make_shared<Zep::RangeMarker>(*buffer);
+                marker->markerType = Zep::RangeMarkerType::Mark;
+                marker->displayType = Zep::RangeMarkerDisplayType::Underline |
+                                      Zep::RangeMarkerDisplayType::Tooltip |
+                                      Zep::RangeMarkerDisplayType::Indicator;
+                marker->tipPos = Zep::ToolTipPos::RightLine;
+                marker->SetName("Python syntax");
+                marker->SetDescription(issue.message);
+                marker->SetColors(Zep::ThemeColor::Background, Zep::ThemeColor::Text, Zep::ThemeColor::Error);
+                marker->SetAlpha(0.95f);
+                marker->SetRange(Zep::ByteRange(static_cast<Zep::ByteIndex>(range->start),
+                                                static_cast<Zep::ByteIndex>(range->end)));
+                syntax_markers.insert(std::move(marker));
+            }
+
+            editor->RequestRefresh();
+        }
+
+        void syncSyntaxFolds(const std::string& text) {
+            if (buffer == nullptr) {
+                return;
+            }
+
+            if (text.empty() || !syntax_document.hasTree()) {
+                buffer->ClearFoldRanges();
+                return;
+            }
+
+            std::vector<Zep::FoldRange> folds;
+            folds.reserve(syntax_document.foldRanges().size());
+            for (const auto& fold : syntax_document.foldRanges()) {
+                if (fold.end_byte > text.size() || fold.start_byte >= fold.end_byte ||
+                    fold.end_line <= fold.line) {
+                    continue;
+                }
+
+                folds.push_back(Zep::FoldRange{
+                    .range = Zep::ByteRange(static_cast<Zep::ByteIndex>(fold.start_byte),
+                                            static_cast<Zep::ByteIndex>(fold.end_byte)),
+                    .startLine = static_cast<long>(fold.line),
+                    .endLine = static_cast<long>(fold.end_line),
+                    .kind = fold.kind,
+                    .collapsed = false,
+                });
+            }
+
+            buffer->SetFoldRanges(std::move(folds));
+        }
+
+        void updateSyntaxDiagnostics(const std::string& text, const CursorLocation& cursor) {
+            current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
+            if (!syntax_analysis_pending || Clock::now() < next_syntax_analysis_at) {
+                return;
+            }
+
+            syntax_analysis_pending = false;
+            if (syntax_full_reparse_required || !syntax_document.hasTree()) {
+                syntax_document.reset(text);
+            } else {
+                syntax_document.applyEditsAndReparse(text, pending_syntax_edits);
+            }
+            pending_syntax_edits.clear();
+            pending_syntax_pre_edit.reset();
+            syntax_full_reparse_required = false;
+            current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
+            applySyntaxDiagnostics(text);
+            syncSyntaxFolds(text);
+            if (shouldUseTreeSitterHighlightingFallback()) {
+                applyTreeSitterHighlightingFallback(text);
             }
         }
 
@@ -956,6 +1209,68 @@ namespace lfs::vis::editor {
             };
         }
 
+        [[nodiscard]] bool shouldUseTreeSitterHighlightingFallback() const {
+            return lsp == nullptr || !lsp->isAvailable();
+        }
+
+        [[nodiscard]] Zep::NVec4f treeSitterHighlightColor(
+            const lfs::python::PythonHighlightKind kind) const {
+            const auto& palette = theme().palette;
+            switch (kind) {
+            case lfs::python::PythonHighlightKind::Keyword:
+                return to_zep(palette.primary);
+            case lfs::python::PythonHighlightKind::Comment:
+                return to_zep(palette.text_dim);
+            case lfs::python::PythonHighlightKind::String:
+                return to_zep(palette.success);
+            case lfs::python::PythonHighlightKind::Number:
+            case lfs::python::PythonHighlightKind::Constant:
+                return to_zep(palette.warning);
+            case lfs::python::PythonHighlightKind::Decorator:
+                return to_zep(mix_imgui(palette.primary, palette.secondary, 0.25f));
+            case lfs::python::PythonHighlightKind::Function:
+                return to_zep(mix_imgui(palette.primary, palette.info, 0.35f));
+            case lfs::python::PythonHighlightKind::Type:
+                return to_zep(palette.info);
+            case lfs::python::PythonHighlightKind::Property:
+                return to_zep(mix_imgui(palette.secondary, palette.text, 0.35f));
+            }
+            return to_zep(palette.text);
+        }
+
+        void applyTreeSitterHighlightingFallback(const std::string& text) {
+            if (buffer == nullptr) {
+                return;
+            }
+
+            auto* syntax = dynamic_cast<Zep::ZepSyntax_Python*>(buffer->GetSyntax());
+            if (syntax == nullptr) {
+                return;
+            }
+
+            std::vector<Zep::ZepSemanticHighlight> highlights;
+            highlights.reserve(syntax_document.highlights().size());
+            for (const auto& highlight : syntax_document.highlights()) {
+                if (highlight.start_byte >= highlight.end_byte || highlight.end_byte > text.size()) {
+                    continue;
+                }
+
+                highlights.push_back(Zep::ZepSemanticHighlight{
+                    .start = static_cast<long>(highlight.start_byte),
+                    .end = static_cast<long>(highlight.end_byte),
+                    .foreground = Zep::ThemeColor::Custom,
+                    .custom_foreground = true,
+                    .custom_foreground_color = treeSitterHighlightColor(highlight.kind),
+                    .underline = false,
+                });
+            }
+
+            syntax->SetSemanticHighlighting(highlights);
+            semantic_highlighting_from_tree_sitter = true;
+            semantic_highlight_palette_signature = semanticPaletteSignature();
+            semantic_full_refresh_required = false;
+        }
+
         void applySemanticHighlighting(const std::string& text) {
             if (buffer == nullptr) {
                 return;
@@ -975,6 +1290,7 @@ namespace lfs::vis::editor {
             }
 
             syntax->SetSemanticHighlighting(highlights);
+            semantic_highlighting_from_tree_sitter = false;
             semantic_highlight_palette_signature = semanticPaletteSignature();
             semantic_full_refresh_required = false;
         }
@@ -1002,6 +1318,7 @@ namespace lfs::vis::editor {
 
             syntax->ReplaceSemanticHighlighting(static_cast<long>(range.start_byte),
                                                 static_cast<long>(range.end_byte), highlights);
+            semantic_highlighting_from_tree_sitter = false;
             semantic_highlight_palette_signature = semanticPaletteSignature();
             semantic_full_refresh_required = false;
         }
@@ -1076,6 +1393,7 @@ namespace lfs::vis::editor {
 
         void issueSemanticTokensRequest() {
             if (!lsp || !lsp->isAvailable()) {
+                semantic_tokens_request_pending = false;
                 return;
             }
 
@@ -1108,6 +1426,7 @@ namespace lfs::vis::editor {
                                     const CursorLocation& cursor,
                                     const bool manual) {
             if (!lsp || !lsp->isAvailable() || !isInsertMode()) {
+                completion_request_pending = false;
                 return;
             }
 
@@ -1210,6 +1529,13 @@ namespace lfs::vis::editor {
                     applySemanticHighlightingRange(text, semanticDirtyLineRange(text));
                 }
                 semantic_dirty_range.clear();
+            }
+
+            if (shouldUseTreeSitterHighlightingFallback() &&
+                !syntax_analysis_pending &&
+                (!semantic_highlighting_from_tree_sitter || text_changed ||
+                 semantic_highlight_palette_signature != semanticPaletteSignature())) {
+                applyTreeSitterHighlightingFallback(text);
             }
 
             last_cursor_byte_index = cursor.byte_index;
@@ -1787,6 +2113,107 @@ namespace lfs::vis::editor {
             }
         }
 
+        [[nodiscard]] std::optional<lfs::python::PythonByteRange> currentSelectionByteRange() const {
+            const auto selection = currentSelectionRange();
+            if (!selection.has_value()) {
+                return std::nullopt;
+            }
+
+            const auto end = selectionEndExclusive(*selection);
+            if (!selection->first.Valid() || !end.Valid() || !(selection->first < end)) {
+                return std::nullopt;
+            }
+
+            return lfs::python::PythonByteRange{
+                .start_byte = static_cast<size_t>(std::max(0l, selection->first.Index())),
+                .end_byte = static_cast<size_t>(std::max(0l, end.Index())),
+            };
+        }
+
+        bool ensureSyntaxDocumentCurrent(const std::string& text, const size_t cursor_byte) {
+            if (!syntax_analysis_pending && syntax_document.hasTree()) {
+                current_syntax_scope = syntax_document.scopeAt(cursor_byte);
+                return true;
+            }
+
+            if (!syntax_full_reparse_required && syntax_document.hasTree()) {
+                syntax_document.applyEditsAndReparse(text, pending_syntax_edits);
+            } else {
+                syntax_document.reset(text);
+            }
+            pending_syntax_edits.clear();
+            pending_syntax_pre_edit.reset();
+            syntax_full_reparse_required = false;
+            syntax_analysis_pending = false;
+            current_syntax_scope = syntax_document.scopeAt(cursor_byte);
+            applySyntaxDiagnostics(text);
+            syncSyntaxFolds(text);
+            if (shouldUseTreeSitterHighlightingFallback()) {
+                applyTreeSitterHighlightingFallback(text);
+            }
+            return syntax_document.hasTree();
+        }
+
+        bool moveCursorToByte(const size_t byte_offset) {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            auto* window = editor->GetActiveWindow();
+            if (window == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const auto cursor =
+                Zep::GlyphIterator(buffer, static_cast<long>(std::min(byte_offset, text.size())));
+            if (!cursor.Valid()) {
+                return false;
+            }
+
+            buffer->ClearSelection();
+            if (auto* mode = buffer->GetMode()) {
+                mode->SwitchMode(mode->DefaultMode());
+            }
+            window->SetBufferCursor(cursor);
+            current_syntax_scope = syntax_document.scopeAt(std::min(byte_offset, text.size()));
+            editor->RequestRefresh();
+            focusEditor();
+            return true;
+        }
+
+        bool selectSyntaxByteRange(const lfs::python::PythonByteRange& range) {
+            if (buffer == nullptr || editor == nullptr || range.start_byte >= range.end_byte) {
+                return false;
+            }
+
+            auto* window = editor->GetActiveWindow();
+            if (window == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            if (range.end_byte > text.size()) {
+                return false;
+            }
+
+            const auto begin = Zep::GlyphIterator(buffer, static_cast<long>(range.start_byte));
+            const auto end = Zep::GlyphIterator(buffer, static_cast<long>(range.end_byte));
+            if (!begin.Valid() || !end.Valid() || !(begin < end)) {
+                return false;
+            }
+
+            buffer->SetSelection(Zep::GlyphRange(begin, end));
+            window->SetBufferCursor(end);
+            if (auto* mode = buffer->GetMode()) {
+                mode->SwitchMode(Zep::EditorMode::Visual);
+            }
+            current_syntax_scope = syntax_document.scopeAt(range.start_byte);
+            editor->RequestRefresh();
+            focusEditor();
+            return true;
+        }
+
         void cutSelectionToClipboard() {
             if (read_only || buffer == nullptr || editor == nullptr) {
                 return;
@@ -1886,6 +2313,271 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
+        bool selectEnclosingSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto range = syntax_document.enclosingBlockRange(cursor.byte_index);
+            if (!range.has_value()) {
+                return false;
+            }
+
+            return selectSyntaxByteRange(*range);
+        }
+
+        [[nodiscard]] std::optional<lfs::python::PythonByteRange> innermostFoldRangeAt(
+            const size_t byte_offset) const {
+            std::optional<lfs::python::PythonByteRange> best;
+            for (const auto& fold : syntax_document.foldRanges()) {
+                if (fold.start_byte > byte_offset || byte_offset > fold.end_byte) {
+                    continue;
+                }
+                if (!best.has_value() ||
+                    (fold.end_byte - fold.start_byte) < (best->end_byte - best->start_byte)) {
+                    best = lfs::python::PythonByteRange{
+                        .start_byte = fold.start_byte,
+                        .end_byte = fold.end_byte,
+                    };
+                }
+            }
+            return best;
+        }
+
+        bool expandSyntaxSelection() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto selection = currentSelectionByteRange();
+            if (!selection.has_value()) {
+                return selectEnclosingSyntaxBlock();
+            }
+
+            const auto ranges = syntax_document.enclosingBlockRanges(selection->start_byte);
+            for (const auto& range : ranges) {
+                if (range.start_byte <= selection->start_byte && range.end_byte >= selection->end_byte &&
+                    (range.start_byte < selection->start_byte || range.end_byte > selection->end_byte)) {
+                    return selectSyntaxByteRange(range);
+                }
+            }
+
+            return false;
+        }
+
+        bool selectCurrentSyntaxFold() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto range = innermostFoldRangeAt(cursor.byte_index);
+            if (!range.has_value()) {
+                return false;
+            }
+
+            return selectSyntaxByteRange(*range);
+        }
+
+        bool toggleCurrentSyntaxFold() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto range = innermostFoldRangeAt(cursor.byte_index);
+            if (!range.has_value()) {
+                return false;
+            }
+
+            const bool changed =
+                buffer->ToggleFoldAtByte(static_cast<Zep::ByteIndex>(range->start_byte));
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
+        bool foldAllSyntaxBlocks() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const bool changed = buffer->SetAllFoldsCollapsed(true);
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
+        bool unfoldAllSyntaxBlocks() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const bool changed = buffer->SetAllFoldsCollapsed(false);
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
+        bool jumpToParentSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto ranges = syntax_document.enclosingBlockRanges(cursor.byte_index);
+            if (ranges.empty()) {
+                return false;
+            }
+
+            const auto& target = ranges.front().start_byte == cursor.byte_index && ranges.size() > 1
+                                     ? ranges[1]
+                                     : ranges.front();
+            return moveCursorToByte(target.start_byte);
+        }
+
+        bool jumpToChildSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto parent = syntax_document.enclosingBlockRange(cursor.byte_index).value_or(lfs::python::PythonByteRange{.start_byte = 0, .end_byte = text.size()});
+            std::optional<lfs::python::PythonByteRange> first_child;
+            std::optional<lfs::python::PythonByteRange> next_child;
+
+            for (const auto& fold : syntax_document.foldRanges()) {
+                if (fold.start_byte <= parent.start_byte || fold.end_byte > parent.end_byte) {
+                    continue;
+                }
+
+                const lfs::python::PythonByteRange range{
+                    .start_byte = fold.start_byte,
+                    .end_byte = fold.end_byte,
+                };
+                if (!first_child.has_value() || range.start_byte < first_child->start_byte) {
+                    first_child = range;
+                }
+                if (range.start_byte > cursor.byte_index &&
+                    (!next_child.has_value() || range.start_byte < next_child->start_byte)) {
+                    next_child = range;
+                }
+            }
+
+            if (next_child.has_value()) {
+                return moveCursorToByte(next_child->start_byte);
+            }
+            if (first_child.has_value()) {
+                return moveCursorToByte(first_child->start_byte);
+            }
+            return false;
+        }
+
+        bool jumpToSyntaxSymbol(const size_t index) {
+            if (buffer == nullptr || editor == nullptr || index >= syntax_document.symbols().size()) {
+                return false;
+            }
+
+            const auto& symbol = syntax_document.symbols()[index];
+            return moveCursorToByte(symbol.start_byte);
+        }
+
+        [[nodiscard]] std::vector<PythonEditorSymbol> syntaxBreadcrumbs() const {
+            std::vector<PythonEditorSymbol> breadcrumbs;
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+
+            for (const auto& symbol : syntax_document.symbols()) {
+                if ((symbol.kind != lfs::python::PythonSymbolKind::Class &&
+                     symbol.kind != lfs::python::PythonSymbolKind::Function) ||
+                    symbol.start_byte > cursor.byte_index || cursor.byte_index > symbol.end_byte) {
+                    continue;
+                }
+
+                breadcrumbs.push_back(PythonEditorSymbol{
+                    .label = symbol.name.empty() ? symbol.detail : symbol.name,
+                    .detail = symbol.detail,
+                    .byte_offset = symbol.start_byte,
+                    .line = symbol.line,
+                    .depth = symbol.depth,
+                });
+            }
+
+            return breadcrumbs;
+        }
+
+        bool jumpToSyntaxBreadcrumb(const size_t index) {
+            const auto breadcrumbs = syntaxBreadcrumbs();
+            if (index >= breadcrumbs.size()) {
+                return false;
+            }
+            return moveCursorToByte(breadcrumbs[index].byte_offset);
+        }
+
+        bool jumpToSyntaxFold(const size_t index) {
+            if (buffer == nullptr || index >= buffer->GetFoldRanges().size()) {
+                return false;
+            }
+            return moveCursorToByte(static_cast<size_t>(buffer->GetFoldRanges()[index].range.first));
+        }
+
+        bool toggleSyntaxFold(const size_t index) {
+            if (buffer == nullptr || editor == nullptr || index >= buffer->GetFoldRanges().size()) {
+                return false;
+            }
+
+            const bool changed = buffer->ToggleFoldAtByte(buffer->GetFoldRanges()[index].range.first);
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
         void undo() {
             if (buffer == nullptr) {
                 return;
@@ -1914,6 +2606,11 @@ namespace lfs::vis::editor {
         std::unique_ptr<PythonLspClient> lsp;
         CompletionPopupState completion;
         SemanticHighlightState semantic_highlights;
+        lfs::python::PythonSyntaxDocument syntax_document;
+        std::set<std::shared_ptr<Zep::RangeMarker>> syntax_markers;
+        std::optional<PendingSyntaxPreEdit> pending_syntax_pre_edit;
+        std::vector<lfs::python::PythonBufferEdit> pending_syntax_edits;
+        std::string current_syntax_scope;
 
         bool request_focus = false;
         bool is_focused = false;
@@ -1923,7 +2620,10 @@ namespace lfs::vis::editor {
         bool suppress_buffer_events = false;
         bool completion_request_pending = false;
         bool manual_completion_requested = false;
+        bool syntax_analysis_pending = true;
+        bool syntax_full_reparse_required = true;
         bool semantic_tokens_request_pending = false;
+        bool semantic_highlighting_from_tree_sitter = false;
         std::optional<PythonLspClient::SemanticTokenList> pending_semantic_tokens;
         SemanticDirtyRange semantic_dirty_range;
         bool semantic_full_refresh_required = true;
@@ -1936,6 +2636,7 @@ namespace lfs::vis::editor {
         int last_cursor_character = -1;
         size_t last_cursor_byte_index = std::string::npos;
         Clock::time_point next_completion_request_at = Clock::now();
+        Clock::time_point next_syntax_analysis_at = Clock::now();
         Clock::time_point next_semantic_tokens_request_at = Clock::now();
         Clock::time_point last_text_change_at = Clock::now();
         std::chrono::milliseconds semantic_tokens_idle_delay = SEMANTIC_TOKENS_WORD_DELAY;
@@ -1955,8 +2656,11 @@ namespace lfs::vis::editor {
         execute_requested_ = false;
         impl_->ensureLspStarted();
         impl_->applyTheme(theme());
-        if (!impl_->semantic_highlights.tokens.empty() &&
+        if (impl_->semantic_highlighting_from_tree_sitter &&
             impl_->semantic_highlight_palette_signature != impl_->semanticPaletteSignature()) {
+            impl_->applyTreeSitterHighlightingFallback(impl_->getText());
+        } else if (!impl_->semantic_highlights.tokens.empty() &&
+                   impl_->semantic_highlight_palette_signature != impl_->semanticPaletteSignature()) {
             impl_->applySemanticHighlighting(impl_->getText());
         }
 
@@ -2024,6 +2728,7 @@ namespace lfs::vis::editor {
             const std::string updated_text = impl_->getText();
             const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
             impl_->updateLanguageServerState(updated_text, updated_cursor);
+            impl_->updateSyntaxDiagnostics(updated_text, updated_cursor);
             impl_->renderCompletionPopup(updated_text, updated_cursor);
 
             if (impl_->completion.visible || impl_->completion.hovered) {
@@ -2065,6 +2770,31 @@ namespace lfs::vis::editor {
                 if (ImGui::MenuItem("Select All", "Ctrl+A")) {
                     impl_->selectAll();
                 }
+                if (ImGui::MenuItem("Select Enclosing Block")) {
+                    impl_->selectEnclosingSyntaxBlock();
+                }
+                if (ImGui::MenuItem("Expand Syntax Selection")) {
+                    impl_->expandSyntaxSelection();
+                }
+                if (ImGui::MenuItem("Select Current Fold")) {
+                    impl_->selectCurrentSyntaxFold();
+                }
+                if (ImGui::MenuItem("Toggle Current Fold")) {
+                    impl_->toggleCurrentSyntaxFold();
+                }
+                if (ImGui::MenuItem("Fold All Blocks")) {
+                    impl_->foldAllSyntaxBlocks();
+                }
+                if (ImGui::MenuItem("Unfold All Blocks")) {
+                    impl_->unfoldAllSyntaxBlocks();
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Jump Parent Block")) {
+                    impl_->jumpToParentSyntaxBlock();
+                }
+                if (ImGui::MenuItem("Jump Child Block")) {
+                    impl_->jumpToChildSyntaxBlock();
+                }
                 ImGui::EndPopup();
             }
 
@@ -2098,6 +2828,187 @@ namespace lfs::vis::editor {
         const bool changed = impl_->text_changed;
         impl_->text_changed = false;
         return changed;
+    }
+
+    bool PythonEditor::hasSyntaxErrors() const {
+        return impl_->syntax_document.analysis().status == lfs::python::PythonBufferStatus::SyntaxError;
+    }
+
+    bool PythonEditor::syntaxDiagnosticsAvailable() const {
+        return impl_->syntax_document.analysis().status != lfs::python::PythonBufferStatus::ParserUnavailable;
+    }
+
+    std::string PythonEditor::syntaxSummary() const {
+        if (!impl_->syntax_document.analysis().summary.empty()) {
+            return impl_->syntax_document.analysis().summary;
+        }
+        return "Python syntax analysis pending";
+    }
+
+    std::string PythonEditor::syntaxStructureSummary() const {
+        int class_count = 0;
+        int function_count = 0;
+        int import_count = 0;
+        int variable_count = 0;
+        for (const auto& symbol : impl_->syntax_document.symbols()) {
+            switch (symbol.kind) {
+            case lfs::python::PythonSymbolKind::Class:
+                ++class_count;
+                break;
+            case lfs::python::PythonSymbolKind::Function:
+                ++function_count;
+                break;
+            case lfs::python::PythonSymbolKind::Import:
+                ++import_count;
+                break;
+            case lfs::python::PythonSymbolKind::Variable:
+                ++variable_count;
+                break;
+            }
+        }
+
+        std::string summary = std::format("{} import{}, {} class{}, {} function{}, {} variable{}, {} fold{}",
+                                          import_count,
+                                          import_count == 1 ? "" : "s",
+                                          class_count,
+                                          class_count == 1 ? "" : "es",
+                                          function_count,
+                                          function_count == 1 ? "" : "s",
+                                          variable_count,
+                                          variable_count == 1 ? "" : "s",
+                                          impl_->syntax_document.foldRanges().size(),
+                                          impl_->syntax_document.foldRanges().size() == 1 ? "" : "s");
+        if (!impl_->syntax_document.structureCurrent()) {
+            summary += " (partial)";
+        }
+        return summary;
+    }
+
+    std::vector<PythonEditorSymbol> PythonEditor::syntaxSymbols() const {
+        std::vector<PythonEditorSymbol> symbols;
+        symbols.reserve(impl_->syntax_document.symbols().size());
+
+        for (const auto& symbol : impl_->syntax_document.symbols()) {
+            std::string name = symbol.name.empty() ? symbol.detail : symbol.name;
+            if (name.empty()) {
+                name = "symbol";
+            }
+
+            const std::string indent(static_cast<size_t>(std::max(symbol.depth, 0)) * 2, ' ');
+            symbols.push_back(PythonEditorSymbol{
+                .label = std::format("{}{} {}  L{}",
+                                     indent,
+                                     syntax_symbol_prefix(symbol.kind),
+                                     name,
+                                     symbol.line + 1),
+                .detail = symbol.detail,
+                .byte_offset = symbol.start_byte,
+                .line = symbol.line,
+                .depth = symbol.depth,
+            });
+        }
+
+        return symbols;
+    }
+
+    std::vector<PythonEditorSymbol> PythonEditor::syntaxBreadcrumbs() const {
+        return impl_->syntaxBreadcrumbs();
+    }
+
+    std::vector<PythonEditorFold> PythonEditor::syntaxFolds() const {
+        const std::string text = impl_->getText();
+        std::vector<PythonEditorFold> folds;
+        if (impl_->buffer == nullptr) {
+            return folds;
+        }
+
+        folds.reserve(impl_->buffer->GetFoldRanges().size());
+        for (const auto& fold : impl_->buffer->GetFoldRanges()) {
+            const std::size_t start = static_cast<std::size_t>(std::max(0l, fold.range.first));
+            const std::size_t end = static_cast<std::size_t>(std::max(0l, fold.range.second));
+            const std::string preview = range_preview(text, start, end);
+            folds.push_back(PythonEditorFold{
+                .label = std::format("{} {} block  L{}-{}",
+                                     fold.collapsed ? "[+]" : "[-]",
+                                     fold.kind.empty() ? "syntax" : fold.kind,
+                                     fold.startLine + 1,
+                                     fold.endLine + 1),
+                .detail = preview,
+                .byte_offset = start,
+                .line = static_cast<std::size_t>(std::max(0l, fold.startLine)),
+                .end_line = static_cast<std::size_t>(std::max(0l, fold.endLine)),
+                .collapsed = fold.collapsed,
+            });
+        }
+
+        return folds;
+    }
+
+    bool PythonEditor::syntaxStructureCurrent() const {
+        return impl_->syntax_document.structureCurrent();
+    }
+
+    std::size_t PythonEditor::syntaxFoldCount() const {
+        return impl_->syntax_document.foldRanges().size();
+    }
+
+    std::string PythonEditor::currentSyntaxScope() const {
+        return impl_->current_syntax_scope;
+    }
+
+    void PythonEditor::refreshSyntaxDiagnostics() {
+        impl_->scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
+        if (impl_->editor != nullptr) {
+            impl_->editor->RequestRefresh();
+        }
+    }
+
+    bool PythonEditor::selectEnclosingSyntaxBlock() {
+        return impl_->selectEnclosingSyntaxBlock();
+    }
+
+    bool PythonEditor::expandSyntaxSelection() {
+        return impl_->expandSyntaxSelection();
+    }
+
+    bool PythonEditor::selectCurrentSyntaxFold() {
+        return impl_->selectCurrentSyntaxFold();
+    }
+
+    bool PythonEditor::toggleCurrentSyntaxFold() {
+        return impl_->toggleCurrentSyntaxFold();
+    }
+
+    bool PythonEditor::foldAllSyntaxBlocks() {
+        return impl_->foldAllSyntaxBlocks();
+    }
+
+    bool PythonEditor::unfoldAllSyntaxBlocks() {
+        return impl_->unfoldAllSyntaxBlocks();
+    }
+
+    bool PythonEditor::jumpToParentSyntaxBlock() {
+        return impl_->jumpToParentSyntaxBlock();
+    }
+
+    bool PythonEditor::jumpToChildSyntaxBlock() {
+        return impl_->jumpToChildSyntaxBlock();
+    }
+
+    bool PythonEditor::jumpToSyntaxSymbol(const std::size_t index) {
+        return impl_->jumpToSyntaxSymbol(index);
+    }
+
+    bool PythonEditor::jumpToSyntaxBreadcrumb(const std::size_t index) {
+        return impl_->jumpToSyntaxBreadcrumb(index);
+    }
+
+    bool PythonEditor::jumpToSyntaxFold(const std::size_t index) {
+        return impl_->jumpToSyntaxFold(index);
+    }
+
+    bool PythonEditor::toggleSyntaxFold(const std::size_t index) {
+        return impl_->toggleSyntaxFold(index);
     }
 
     void PythonEditor::updateTheme(const Theme& theme) {

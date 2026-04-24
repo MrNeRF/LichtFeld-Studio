@@ -8,6 +8,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace Rml {
     class Context;
@@ -18,6 +19,11 @@ namespace lfs::vis::gui::rml_documents {
 
     LFS_VIS_API std::string rewriteRelativeImageSources(std::string document_rml,
                                                         const std::filesystem::path& document_path);
+    LFS_VIS_API std::vector<std::filesystem::path> linkedStylesheetPaths(
+        const std::string& document_rml,
+        const std::filesystem::path& document_path);
+    LFS_VIS_API std::vector<std::filesystem::path> loadLinkedStylesheetPaths(
+        const std::filesystem::path& document_path);
     LFS_VIS_API Rml::ElementDocument* loadDocument(Rml::Context* context,
                                                    const std::filesystem::path& document_path);
 

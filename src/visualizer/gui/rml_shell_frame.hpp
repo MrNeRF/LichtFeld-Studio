@@ -39,11 +39,11 @@ namespace lfs::vis::gui {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
+        void reloadResources();
         void render(const ShellRegions& regions);
 
     private:
         void updateTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;

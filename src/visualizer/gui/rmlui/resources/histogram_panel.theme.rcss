@@ -1,0 +1,95 @@
+/* Histogram panel theme overrides. */
+
+#histogram-hero {
+    @{panel.histogram_hero_decor};
+    border-color: @{border};
+}
+
+.stat-card,
+#histogram-card,
+#compare-card,
+.empty-card,
+#histogram-footer {
+    background-color: @{panel.histogram_surface};
+    border-color: @{border};
+}
+
+#histogram-chart,
+#compare-chart {
+    background-color: @{panel.histogram_chart_bg};
+    border-color: @{border};
+}
+
+.histogram-grid-line {
+    background-color: @{panel.histogram_grid};
+}
+
+#histogram-docked-controls {
+    border-left-color: @{panel.histogram_toolbar_divider};
+}
+
+#histogram-docked-controls .histogram-toolbar-item {
+    background-color: @{panel.histogram_toolbar_item};
+    border-color: @{panel.histogram_toolbar_divider};
+}
+
+#histogram-docked-controls .histogram-toolbar-item--action {
+    background-color: transparent;
+    border-width: 0;
+}
+
+#histogram-docked-controls .histogram-select {
+    background-color: @{panel.histogram_toolbar_select};
+    border-color: @{panel.histogram_toolbar_divider};
+}
+
+.hero-eyebrow,
+.stat-label,
+.footer-label,
+.axis-metric,
+#histogram-bin-count,
+#compare-bin-count,
+.control-label,
+.hero-description,
+.empty-message,
+.footer-hint {
+    color: @{text_dim};
+}
+
+.hero-title,
+.stat-value,
+#histogram-summary,
+#compare-summary,
+.axis-label,
+.footer-value,
+#histogram-floating-title,
+.empty-title,
+.histogram-slider-value {
+    color: @{text};
+}
+
+.histogram-bar-fill,
+.compare-cell-fill {
+    @{panel.histogram_fill_decor};
+}
+
+.histogram-bar.selected .histogram-bar-fill,
+.compare-cell.selected .compare-cell-fill {
+    @{panel.histogram_fill_selected_decor};
+}
+
+#histogram-selection,
+#compare-selection {
+    border-color: @{warning};
+    background-color: @{panel.histogram_selection_fill};
+    decorator: none;
+}
+
+.histogram-history-btn:disabled .histogram-history-icon {
+    image-color: @{panel.histogram_history_icon_disabled};
+}
+
+.footer-history-actions {
+    background-color: @{panel.histogram_footer_chip};
+    border-color: @{panel.histogram_toolbar_divider};
+}

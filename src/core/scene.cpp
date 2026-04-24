@@ -2352,7 +2352,8 @@ namespace lfs::core {
                 continue;
             }
 
-            const size_t count = node->model
+            const bool is_training_model_node = node->name == training_model_node_;
+            const size_t count = (node->model && !is_training_model_node)
                                      ? static_cast<size_t>(node->model->visible_count())
                                      : node->gaussian_count.load(std::memory_order_acquire);
             counts.emplace(node->id, count);

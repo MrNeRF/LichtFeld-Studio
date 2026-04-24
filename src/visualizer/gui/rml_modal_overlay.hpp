@@ -43,13 +43,13 @@ namespace lfs::vis::gui {
                     float screen_x, float screen_y,
                     float vp_x, float vp_y, float vp_w, float vp_h);
         void destroyGLResources();
+        void reloadResources();
 
         [[nodiscard]] bool isOpen() const;
 
     private:
         void initContext();
         void syncTheme();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void cacheElements();
 
         void showNext();

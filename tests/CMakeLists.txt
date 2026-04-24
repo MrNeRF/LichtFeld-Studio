@@ -247,6 +247,7 @@ set(TEST_FILES
     test_render_settings_defaults.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
+    test_theme_registry.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
@@ -260,6 +261,7 @@ set(TEST_FILES
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
+    test_rml_static_style_boundaries.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp

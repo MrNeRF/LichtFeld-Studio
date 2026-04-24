@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlViewportOverlay: failed to load viewport_overlay.rml");
                 return;
             }
+            cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
         } catch (const std::exception& e) {
@@ -70,58 +71,59 @@ namespace lfs::vis::gui {
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
         document_ = nullptr;
+        body_template_rml_.clear();
     }
 
-    std::string RmlViewportOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
+    void RmlViewportOverlay::reloadResources() {
+        if (!rml_context_)
+            return;
 
-        const auto toolbar_bg = colorToRml(t.toolbar_background());
-        const auto subtoolbar_bg = colorToRml(t.subtoolbar_background());
-        const auto icon_dim = colorToRmlAlpha(t.palette.text, 0.9f);
-        const auto selected_bg = colorToRml(t.palette.primary);
-        const auto selected_bg_hover = colorToRml(ImVec4(
-            std::min(1.0f, t.palette.primary.x + 0.1f),
-            std::min(1.0f, t.palette.primary.y + 0.1f),
-            std::min(1.0f, t.palette.primary.z + 0.1f),
-            t.palette.primary.w));
-        const auto selected_icon = colorToRml(t.palette.background);
-        const auto hover_bg = colorToRmlAlpha(t.palette.surface_bright, 0.3f);
-        const auto overlay_backdrop = colorToRmlAlpha(t.palette.background, 0.55f);
-        const auto overlay_panel_bg = colorToRmlAlpha(t.palette.surface, 0.97f);
-        const auto overlay_panel_border = colorToRmlAlpha(t.palette.border, 0.45f);
-        const auto overlay_text = colorToRml(t.palette.text);
-        const auto overlay_text_dim = colorToRml(t.palette.text_dim);
-        const auto metrics_bg = colorToRmlAlpha(t.palette.background, 0.92f);
-        const auto metrics_border = colorToRmlAlpha(t.palette.primary, 0.55f);
-        const auto metrics_label = colorToRml(t.palette.text_dim);
-        const auto metrics_value = colorToRml(t.palette.text);
+        if (doc_registered_)
+            lfs::python::unregister_rml_document("viewport_overlay");
+        doc_registered_ = false;
 
-        return std::format(
-            ".toolbar-container {{ background-color: {}; border-radius: {:.0f}dp; }}\n"
-            ".subtoolbar-container {{ background-color: {}; border-radius: {:.0f}dp; }}\n"
-            ".icon-btn img {{ image-color: {}; }}\n"
-            ".icon-btn:hover {{ background-color: {}; }}\n"
-            ".icon-btn.selected {{ background-color: {}; }}\n"
-            ".icon-btn.selected:hover {{ background-color: {}; }}\n"
-            ".icon-btn.selected img {{ image-color: {}; }}\n"
-            ".viewport-metrics-card {{ background-color: {}; border-color: {}; }}\n"
-            ".viewport-metrics-label {{ color: {}; }}\n"
-            ".viewport-metrics-value {{ color: {}; }}\n"
-            ".viewport-status-backdrop {{ background-color: {}; }}\n"
-            ".viewport-status-panel {{ background-color: {}; border-color: {}; border-radius: {:.0f}dp; }}\n"
-            ".viewport-status-title {{ color: {}; }}\n"
-            ".viewport-status-path {{ color: {}; }}\n"
-            ".viewport-status-stage {{ color: {}; }}\n",
-            toolbar_bg, t.sizes.window_rounding,
-            subtoolbar_bg, t.sizes.window_rounding,
-            icon_dim,
-            hover_bg,
-            selected_bg, selected_bg_hover, selected_icon,
-            metrics_bg, metrics_border, metrics_label, metrics_value,
-            overlay_backdrop,
-            overlay_panel_bg, overlay_panel_border, t.sizes.window_rounding,
-            overlay_text, overlay_text_dim, overlay_text_dim);
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        wants_input_ = false;
+        render_needed_ = true;
+        animation_active_ = true;
+        mouse_pos_valid_ = false;
+        last_render_w_ = 0;
+        last_render_h_ = 0;
+        last_document_hook_run_ = {};
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/viewport_overlay.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlViewportOverlay: failed to reload viewport_overlay.rml");
+                return;
+            }
+            cacheBodyTemplate();
+            document_->Show();
+            applyGTMetricsOverlay();
+            updateToolbarRoots();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlViewportOverlay: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        updateTheme();
+    }
+
+    void RmlViewportOverlay::cacheBodyTemplate() {
+        body_template_rml_.clear();
+        if (!document_)
+            return;
+
+        if (auto* const body = document_->GetElementById("overlay-body"))
+            body_template_rml_ = body->GetInnerRML();
     }
 
     bool RmlViewportOverlay::updateTheme() {
@@ -137,7 +139,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/viewport_overlay.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/viewport_overlay.theme.rcss"));
         return true;
     }
 
@@ -346,14 +348,14 @@ namespace lfs::vis::gui {
                 return;
 
             // Wrapper exists but binding is stale (data model was rebuilt).
-            // Tear it down so we can recreate with a fresh binding.
-            std::vector<Rml::Element*> children;
-            children.reserve(existing->GetNumChildren());
-            for (int i = 0; i < existing->GetNumChildren(); ++i)
-                children.push_back(existing->GetChild(i));
-            for (auto* child : children)
-                body->AppendChild(existing->RemoveChild(child));
-            body->RemoveChild(existing);
+            // Restore the original unbound body markup instead of recycling
+            // the live subtree, which may already contain expanded data-for views.
+            if (!body_template_rml_.empty()) {
+                body->SetInnerRML(Rml::String(body_template_rml_));
+            } else {
+                LOG_WARN("RmlViewportOverlay: missing body template for stale data-model rebind");
+                body->RemoveChild(existing);
+            }
         }
 
         // RmlUI does not rebind data-model when the attribute is set after
@@ -376,6 +378,8 @@ namespace lfs::vis::gui {
         }
         for (auto* child : children_to_move)
             wrapper->AppendChild(body->RemoveChild(child));
+
+        applyGTMetricsOverlay();
     }
 
     void RmlViewportOverlay::render() {

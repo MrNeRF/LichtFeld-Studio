@@ -14,6 +14,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/rmlui/rml_path_utils.hpp"
+#include "internal/resource_paths.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "rendering/gl_state_guard.hpp"
 #include "scene/scene_manager.hpp"
@@ -177,6 +178,52 @@ namespace lfs::vis::gui {
                 i += 2;
             }
             return decoded;
+        }
+
+        std::optional<std::filesystem::path> resolve_asset_texture_fallback(
+            const std::string_view original_source,
+            const std::string_view attempted_source) {
+            const auto try_asset = [](std::string asset_name) -> std::optional<std::filesystem::path> {
+                while (asset_name.rfind("../", 0) == 0)
+                    asset_name.erase(0, 3);
+                while (asset_name.rfind("./", 0) == 0)
+                    asset_name.erase(0, 2);
+                if (asset_name.empty())
+                    return std::nullopt;
+
+                try {
+                    const auto path = lfs::vis::getAssetPath(asset_name);
+                    if (std::filesystem::exists(path))
+                        return path;
+                } catch (const std::exception& e) {
+                    LOG_DEBUG("RmlUI texture fallback could not resolve asset '{}': {}",
+                              asset_name,
+                              e.what());
+                }
+                return std::nullopt;
+            };
+
+            for (const std::string_view source : {original_source, attempted_source}) {
+                if (source.empty())
+                    continue;
+
+                if (auto path = try_asset(std::string(source)))
+                    return path;
+
+                constexpr std::string_view rmlui_icon_segment = "rmlui/icon/";
+                if (const auto pos = source.find(rmlui_icon_segment); pos != std::string_view::npos) {
+                    if (auto path = try_asset("icon/" + std::string(source.substr(pos + rmlui_icon_segment.size()))))
+                        return path;
+                }
+
+                constexpr std::string_view icon_segment = "/icon/";
+                if (const auto pos = source.find(icon_segment); pos != std::string_view::npos) {
+                    if (auto path = try_asset("icon/" + std::string(source.substr(pos + icon_segment.size()))))
+                        return path;
+                }
+            }
+
+            return std::nullopt;
         }
 
         PreviewParams parse_preview_url(const Rml::String& source) {
@@ -893,6 +940,13 @@ namespace lfs::vis::gui {
             }
         }
 #endif
+        if (!data) {
+            if (const auto fallback_path = resolve_asset_texture_fallback(source, attempted_source)) {
+                attempted_source = rml_paths::normalizeFilesystemPath(*fallback_path);
+                data = stbi_load(attempted_source.c_str(), &w, &h, &channels, 4);
+            }
+        }
+
         if (!data) {
             LOG_WARN("RmlUI LoadTexture failed: {}", attempted_source);
             return 0;

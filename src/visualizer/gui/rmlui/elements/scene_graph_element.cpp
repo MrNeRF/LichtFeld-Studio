@@ -79,6 +79,12 @@ namespace lfs::vis::gui {
             return std::format("{} ({})", pattern, formatted);
         }
 
+        [[nodiscard]] std::string formatSplatLabel(const std::string& name, const size_t count) {
+            if (count > 0)
+                return std::format("{}  ({})", name, formatWithThousands(count));
+            return name;
+        }
+
         [[nodiscard]] std::string lowerCopy(std::string value) {
             std::ranges::transform(value, value.begin(), [](const unsigned char c) {
                 return static_cast<char>(std::tolower(c));
@@ -397,18 +403,11 @@ namespace lfs::vis::gui {
 
         auto content = doc->CreateElement("div");
         content->SetClass("scene-graph-content", true);
-        content->SetProperty("position", "relative");
-        content->SetProperty("width", "100%");
-        content->SetProperty("height", "0dp");
         content_el_ = AppendChild(std::move(content));
 
         auto header = doc->CreateElement("div");
         header->SetClass("section-header", true);
-        header->SetProperty("position", "absolute");
-        header->SetProperty("left", "0px");
-        header->SetProperty("right", "0px");
-        header->SetProperty("top", "0px");
-        header->SetProperty("height", std::format("{}dp", kHeaderHeightDp));
+        header->SetClass("scene-graph-models-header", true);
         header->SetAttribute("data-role", "models-header");
         header_el_ = content_el_->AppendChild(std::move(header));
 
@@ -432,9 +431,6 @@ namespace lfs::vis::gui {
             RowSlot slot;
             auto row = doc->CreateElement("div");
             row->SetClass("tree-row", true);
-            row->SetProperty("position", "absolute");
-            row->SetProperty("left", "0px");
-            row->SetProperty("right", "0px");
             row->SetProperty("display", "none");
             slot.root = content_el_->AppendChild(std::move(row));
 
@@ -506,6 +502,8 @@ namespace lfs::vis::gui {
         pending_reveal_node_id_ = core::NULL_NODE;
         scene_has_nodes_ = false;
         root_count_ = 0;
+        last_training_model_node_name_.clear();
+        last_training_model_gaussian_count_ = std::numeric_limits<size_t>::max();
         row_top_dp_cache_.clear();
         last_selection_generation_ = std::numeric_limits<uint32_t>::max();
         last_visible_start_ = kUnsetVisibleRange;
@@ -590,12 +588,10 @@ namespace lfs::vis::gui {
 
             switch (node->type) {
             case core::NodeType::SPLAT:
-                if (const auto it = active_gaussian_counts.find(node->id);
-                    it != active_gaussian_counts.end() && it->second > 0) {
-                    snapshot.label = std::format("{}  ({})", node->name, formatWithThousands(it->second));
-                } else {
+                if (const auto it = active_gaussian_counts.find(node->id); it != active_gaussian_counts.end())
+                    snapshot.label = formatSplatLabel(node->name, it->second);
+                else
                     snapshot.label = node->name;
-                }
                 break;
             case core::NodeType::POINTCLOUD:
                 snapshot.label = (node->point_cloud && node->point_cloud->size() > 0)
@@ -771,6 +767,46 @@ namespace lfs::vis::gui {
             drop_target_id_ = core::NULL_NODE;
     }
 
+    bool SceneGraphElement::syncTrainingTopologyLabel(const core::Scene& scene,
+                                                      const bool update_cached_rows) {
+        const std::string& training_model_node_name = scene.getTrainingModelNodeName();
+        const size_t gaussian_count = training_model_node_name.empty()
+                                          ? 0
+                                          : scene.getTrainingModelGaussianCount();
+
+        if (training_model_node_name == last_training_model_node_name_ &&
+            gaussian_count == last_training_model_gaussian_count_) {
+            return false;
+        }
+
+        last_training_model_node_name_ = training_model_node_name;
+        last_training_model_gaussian_count_ = gaussian_count;
+
+        if (!update_cached_rows || training_model_node_name.empty())
+            return false;
+
+        const core::NodeId node_id = scene.getNodeIdByName(training_model_node_name);
+        const auto snapshot_it = node_snapshots_.find(node_id);
+        if (node_id == core::NULL_NODE || snapshot_it == node_snapshots_.end() ||
+            snapshot_it->second.type != core::NodeType::SPLAT) {
+            return false;
+        }
+
+        const std::string label = formatSplatLabel(snapshot_it->second.name, gaussian_count);
+        if (label == snapshot_it->second.label)
+            return false;
+
+        snapshot_it->second.label = label;
+        if (const auto flat_it = flat_index_by_id_.find(node_id);
+            flat_it != flat_index_by_id_.end() && flat_it->second < flat_rows_.size()) {
+            FlatRow& row = flat_rows_[flat_it->second];
+            row.label = label;
+            row.encoded_label = encode(label);
+        }
+        markStateDirty();
+        return true;
+    }
+
     bool SceneGraphElement::syncFromScene(const PanelDrawContext& ctx) {
         const auto* scene = ctx.scene;
         auto* scene_manager = services().sceneOrNull();
@@ -796,12 +832,17 @@ namespace lfs::vis::gui {
 
         changed |= syncSelectionFromScene(*scene, scene_manager);
 
-        if (tree_rebuild_needed_ || last_scene_generation_ != ctx.scene_generation) {
+        const bool tree_needs_rebuild =
+            tree_rebuild_needed_ || last_scene_generation_ != ctx.scene_generation;
+        if (tree_needs_rebuild) {
             captureRenameBuffer();
             rebuildFlatRows(*scene);
             last_scene_generation_ = ctx.scene_generation;
+            syncTrainingTopologyLabel(*scene, false);
             markStateDirty();
             changed = true;
+        } else {
+            changed |= syncTrainingTopologyLabel(*scene, true);
         }
 
         if (pending_reveal_node_id_ != core::NULL_NODE) {

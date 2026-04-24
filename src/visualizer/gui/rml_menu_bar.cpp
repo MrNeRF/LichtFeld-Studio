@@ -273,6 +273,53 @@ namespace lfs::vis::gui {
             closeDropdown();
     }
 
+    void RmlMenuBar::reloadResources() {
+        if (!rml_context_)
+            return;
+
+        if (open_menu_index_ >= 0)
+            closeDropdown();
+
+        if (document_) {
+            rml_context_->UnloadDocument(document_);
+            rml_context_->Update();
+        }
+
+        document_ = nullptr;
+        menu_items_ = nullptr;
+        dropdown_container_ = nullptr;
+        dropdown_overlay_ = nullptr;
+        base_rcss_.clear();
+        has_theme_signature_ = false;
+        wants_input_ = false;
+        render_needed_ = true;
+        mouse_pos_valid_ = false;
+        last_ctx_w_ = 0;
+        last_ctx_h_ = 0;
+        last_document_h_ = 0;
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
+            document_ = rml_documents::loadDocument(rml_context_, rml_path);
+            if (!document_) {
+                LOG_ERROR("RmlMenuBar: failed to reload menubar.rml");
+                return;
+            }
+            document_->Show();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlMenuBar: resource not found during reload: {}", e.what());
+            return;
+        }
+
+        menu_items_ = document_->GetElementById("menu-items");
+        dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
+        dropdown_container_ = document_->GetElementById("dropdown-container");
+
+        rebuildLabels();
+        menu_model_.DirtyVariable("dropdown_items");
+        updateTheme();
+    }
+
     void RmlMenuBar::updateLabels(const std::vector<std::string>& labels,
                                   const std::vector<std::string>& idnames) {
         assert(labels.size() == idnames.size());
@@ -486,35 +533,6 @@ namespace lfs::vis::gui {
         render_needed_ = true;
     }
 
-    std::string RmlMenuBar::generateThemeRCSS(const lfs::vis::Theme& t) const {
-        using rml_theme::colorToRml;
-
-        const auto bg = colorToRml(t.menu_background());
-        const auto text = colorToRml(t.palette.text);
-        const auto text_dim = colorToRml(t.palette.text_dim);
-        const auto hover = colorToRml(t.menu_hover());
-        const auto active = colorToRml(t.menu_active());
-        const auto border = rml_theme::darkenColorToRml(t.palette.surface, t.menu.bottom_border_darken);
-        const auto popup_bg = colorToRml(t.menu_popup_background());
-        const auto popup_border = colorToRml(t.menu_border());
-
-        return std::format(
-            "body {{ color: {}; }}\n"
-            "#menu-items {{ background-color: {}; }}\n"
-            ".menu-label:hover {{ background-color: {}; }}\n"
-            ".menu-label.active {{ background-color: {}; }}\n"
-            "#bottom-border {{ background-color: {}; }}\n"
-            ".dropdown-popup {{ background-color: {}; border-color: {}; }}\n"
-            ".menu-item:hover {{ background-color: {}; }}\n"
-            ".menu-item.disabled {{ color: {}; }}\n"
-            ".menu-item.disabled:hover {{ background-color: transparent; }}\n"
-            ".menu-item .shortcut {{ color: {}; }}\n"
-            ".menu-separator {{ background-color: {}; }}\n",
-            text, bg, hover, active, border,
-            popup_bg, popup_border,
-            hover, text_dim, text_dim, popup_border);
-    }
-
     bool RmlMenuBar::updateTheme() {
         if (!document_)
             return false;
@@ -528,7 +546,7 @@ namespace lfs::vis::gui {
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/menubar.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/menubar.theme.rcss"));
         return true;
     }
 

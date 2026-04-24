@@ -32,7 +32,9 @@ namespace Zep {
     const float UnderlineMargin = 1.0f;
 
     ZepWindow::ZepWindow(ZepTabWindow& window, ZepBuffer* buffer)
-        : ZepComponent(window.GetEditor()), m_tabWindow(window), m_pBuffer(buffer) {
+        : ZepComponent(window.GetEditor()),
+          m_tabWindow(window),
+          m_pBuffer(buffer) {
         m_bufferRegion = std::make_shared<Region>();
         m_numberRegion = std::make_shared<Region>();
         m_indicatorRegion = std::make_shared<Region>();
@@ -240,6 +242,11 @@ namespace Zep {
             }
 
             m_layoutDirty = true;
+            if (pMsg->type == BufferMessageType::FoldsChanged &&
+                m_pBuffer->IsByteHiddenByFold(m_bufferCursor.Index())) {
+                m_bufferCursor = GlyphIterator(m_pBuffer, m_pBuffer->GetVisibleByteForFoldedByte(m_bufferCursor.Index()));
+                m_cursorMoved = true;
+            }
 
             if (pMsg->type != BufferMessageType::PreBufferChange) {
                 // Make sure the cursor is on its 'display' part of the flash cycle after an edit.
@@ -505,9 +512,16 @@ namespace Zep {
             if (m_pBuffer->GetLineCount() <= bufferLine)
                 break;
 
+            if (m_pBuffer->IsLineHiddenByFold(bufferLine)) {
+                bufferLine++;
+                continue;
+            }
+
             ByteRange lineByteRange;
             if (!m_pBuffer->GetLineOffsets(bufferLine, lineByteRange))
                 break;
+
+            const FoldRange* foldedRange = m_pBuffer->GetFoldStartingOnLine(bufferLine);
 
             // Padding at the top of the line
             NVec2f topPadding = NVec2f(DPI_Y((float)GetEditor().GetConfig().lineMargins.x), DPI_Y((float)GetEditor().GetConfig().lineMargins.y));
@@ -564,6 +578,11 @@ namespace Zep {
             lineInfo->lineTextSizePx.x = xOffset;
             lineInfo->lineTextSizePx.y = float(textHeight);
             lineInfo->isSplitContinuation = false;
+            if (foldedRange != nullptr) {
+                lineInfo->hasFoldPlaceholder = true;
+                lineInfo->foldedByteRange = foldedRange->range;
+                lineInfo->foldedLineCount = std::max(1l, foldedRange->endLine - foldedRange->startLine);
+            }
 
             auto inlineMargins = DPI_VEC2(GetEditor().GetConfig().inlineWidgetMargins);
 
@@ -1230,6 +1249,19 @@ namespace Zep {
             lineStart = false;
         }
 
+        if (displayPass == WindowPass::Text && lineInfo.hasFoldPlaceholder) {
+            const std::string foldText =
+                "  ... " + std::to_string(lineInfo.foldedLineCount) +
+                (lineInfo.foldedLineCount == 1 ? " line" : " lines");
+            const auto foldColor = m_pBuffer->GetTheme().GetColor(ThemeColor::TextDim);
+            display.DrawChars(*lineInfo.pFont,
+                              NVec2f(ToWindowX(lineInfo.lineTextSizePx.x + defaultCharSize.x),
+                                     ToWindowY(lineInfo.yOffsetPx + lineInfo.padding.x)),
+                              foldColor,
+                              (const uint8_t*)foldText.c_str(),
+                              (const uint8_t*)(foldText.c_str() + foldText.size()));
+        }
+
         display.SetClipRect(NRectf{});
 
         return true;
@@ -1283,6 +1315,10 @@ namespace Zep {
     }
 
     void ZepWindow::SetBufferCursor(GlyphIterator location) {
+        if (m_pBuffer != nullptr && location.Valid() && m_pBuffer->IsByteHiddenByFold(location.Index())) {
+            location = GlyphIterator(m_pBuffer, m_pBuffer->GetVisibleByteForFoldedByte(location.Index()));
+        }
+
         // Don't move cursor if not necessary
         // This helps preserve 'lastCursorColumn' from being changed all the time
         // during line clamps, etc.
@@ -1319,6 +1355,9 @@ namespace Zep {
     GlyphIterator ZepWindow::GetBufferCursor() {
         // Ensure cursor is always valid inside the buffer
         m_bufferCursor.Clamp();
+        if (m_pBuffer != nullptr && m_pBuffer->IsByteHiddenByFold(m_bufferCursor.Index())) {
+            m_bufferCursor = GlyphIterator(m_pBuffer, m_pBuffer->GetVisibleByteForFoldedByte(m_bufferCursor.Index()));
+        }
         assert(!m_pBuffer || m_bufferCursor.Valid());
         return m_bufferCursor;
     }
@@ -1420,6 +1459,9 @@ namespace Zep {
         bool found = false;
         float xPos = m_xPad;
         auto cursor = m_bufferCursor;
+        if (m_pBuffer != nullptr && cursor.Valid() && m_pBuffer->IsByteHiddenByFold(cursor.Index())) {
+            cursor = GlyphIterator(m_pBuffer, m_pBuffer->GetVisibleByteForFoldedByte(cursor.Index()));
+        }
         cursor.Clamp();
 
         int count = 0;
@@ -1849,19 +1891,24 @@ namespace Zep {
     NVec2i ZepWindow::BufferToDisplay(const GlyphIterator& loc) {
         UpdateLayout();
 
+        GlyphIterator visibleLoc = loc;
+        if (m_pBuffer != nullptr && visibleLoc.Valid() && m_pBuffer->IsByteHiddenByFold(visibleLoc.Index())) {
+            visibleLoc = GlyphIterator(m_pBuffer, m_pBuffer->GetVisibleByteForFoldedByte(visibleLoc.Index()));
+        }
+
         NVec2i ret(0, 0);
         int line_number = 0;
 
         // TODO: Performance; quick lookup for line
         for (auto& line : m_windowLines) {
             // If inside the line...
-            if (line->lineByteRange.first <= loc.Index() && line->lineByteRange.second > loc.Index()) {
+            if (line->lineByteRange.first <= visibleLoc.Index() && line->lineByteRange.second > visibleLoc.Index()) {
                 ret.y = line_number;
                 ret.x = 0;
 
                 // Scan the code points for where we are
                 for (auto& ch : line->lineCodePoints) {
-                    if (ch.iterator == loc) {
+                    if (ch.iterator == visibleLoc) {
                         return ret;
                     }
                     ret.x++;

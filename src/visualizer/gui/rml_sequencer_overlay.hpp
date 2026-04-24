@@ -83,6 +83,7 @@ namespace lfs::vis::gui {
         void render(int screen_w, int screen_h);
         void compositeToScreen(int screen_w, int screen_h) const;
         void destroyGLResources();
+        void reloadResources();
 
         [[nodiscard]] bool isContextMenuOpen() const { return context_menu_open_; }
         [[nodiscard]] bool isPopupOpen() const { return time_edit_active_ || focal_edit_active_; }
@@ -103,7 +104,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool ensureContextReady();
         void syncTheme();
         void syncLocalization();
-        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void cacheElements();
         std::string buildContextMenuHTML(std::optional<size_t> keyframe,
                                          SequencerViewportEditMode edit_mode) const;

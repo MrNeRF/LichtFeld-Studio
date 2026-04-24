@@ -1,0 +1,38 @@
+/* Mesh2Splat panel theme overrides. */
+
+.m2s-section-title,
+.m2s-summary-value {
+    color: @{text};
+}
+
+.m2s-label,
+.m2s-list-name {
+    color: @{text};
+}
+
+.m2s-help,
+.m2s-list-meta,
+.m2s-empty,
+.m2s-stage-text {
+    color: @{text_dim};
+}
+
+.m2s-chip {
+    color: @{text};
+    border-color: @{border};
+}
+
+.m2s-chip:hover,
+.m2s-list-row:hover {
+    background-color: @{alpha(primary,0.12)};
+}
+
+.m2s-chip.selected {
+    color: @{text};
+    background-color: @{alpha(primary,0.22)};
+    border-color: @{primary};
+}
+
+.m2s-error {
+    color: @{error};
+}

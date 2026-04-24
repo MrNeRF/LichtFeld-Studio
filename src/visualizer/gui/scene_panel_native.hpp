@@ -41,6 +41,7 @@ namespace lfs::vis::gui {
         void setForcedHeight(float h) override { host_.setForcedHeight(h); }
         bool wantsKeyboard() const override { return host_.wantsKeyboard(); }
         bool needsAnimationFrame() const override { return host_.needsAnimationFrame(); }
+        void reloadRmlResources() override;
 
     private:
         struct EventListener : Rml::EventListener {
@@ -61,6 +62,7 @@ namespace lfs::vis::gui {
         };
 
         bool ensureInitialized();
+        void clearElementCache();
         void cacheElements();
         void syncPanel(const PanelDrawContext& ctx);
         bool syncSceneState(const PanelDrawContext& ctx);

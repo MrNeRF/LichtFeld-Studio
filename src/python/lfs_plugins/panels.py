@@ -84,7 +84,9 @@ def register_builtin_panels():
         # Viewport overlays
         from .overlays import register as register_overlays
         register_overlays()
+        return True
     except Exception as e:
         import traceback
         print(f"[ERROR] register_builtin_panels failed: {e}")
         traceback.print_exc()
+        return False

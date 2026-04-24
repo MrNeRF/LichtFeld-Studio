@@ -14,6 +14,7 @@
 #include "core/splat_data.hpp"
 #include "io/loader.hpp"
 #include "python/gil.hpp"
+#include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -21,6 +22,7 @@
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -33,6 +35,7 @@
 #include <mutex>
 #include <numbers>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -479,30 +482,193 @@ TEST_F(PythonIntegrationTest, FormatPythonCodePreservesValidBlockIndentation) {
     EXPECT_EQ(result.code, "if True:\n    print(\"x\")\n");
 }
 
-TEST_F(PythonIntegrationTest, FormatPythonCodeDedentsIndentedSnippet) {
-    const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
-
-    if (formatterUnavailable(result)) {
-        GTEST_SKIP() << result.error;
-    }
-    ASSERT_TRUE(result.success) << result.error;
-    EXPECT_EQ(result.code, "if True:\n    print(\"x\")\n");
+TEST_F(PythonIntegrationTest, PythonBufferAnalysisReportsCleanCode) {
+    const auto analysis = lfs::python::analyze_python_buffer("if True:\n    print('x')\n");
+    EXPECT_TRUE(analysis.clean()) << analysis.summary;
+    EXPECT_EQ(analysis.status, lfs::python::PythonBufferStatus::Clean);
 }
 
-TEST_F(PythonIntegrationTest, FormatPythonCodeRepairsUnexpectedTopLevelIndent) {
+TEST_F(PythonIntegrationTest, PythonBufferAnalysisReportsDiagnosticByteRange) {
+    constexpr std::string_view code = "import os\nif True print('x')\n";
+    const auto analysis = lfs::python::analyze_python_buffer(code);
+
+    ASSERT_EQ(analysis.status, lfs::python::PythonBufferStatus::SyntaxError);
+    ASSERT_FALSE(analysis.issues.empty());
+    const auto& issue = analysis.issues.front();
+    EXPECT_LE(issue.start_byte, issue.end_byte);
+    EXPECT_LE(issue.end_byte, code.size());
+    EXPECT_FALSE(issue.message.empty());
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsSymbolsAndScope) {
+    constexpr std::string_view code =
+        "import os\n"
+        "from pathlib import Path\n"
+        "CONFIG = Path('x')\n"
+        "\n"
+        "@decorator\n"
+        "class Tool:\n"
+        "    def run(self):\n"
+        "        pass\n"
+        "\n"
+        "@decorator\n"
+        "def helper():\n"
+        "    return CONFIG\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(code));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+
+    int imports = 0;
+    int classes = 0;
+    int functions = 0;
+    int variables = 0;
+    for (const auto& symbol : document.symbols()) {
+        switch (symbol.kind) {
+        case lfs::python::PythonSymbolKind::Import:
+            ++imports;
+            break;
+        case lfs::python::PythonSymbolKind::Class:
+            ++classes;
+            EXPECT_EQ(symbol.name, "Tool");
+            break;
+        case lfs::python::PythonSymbolKind::Function:
+            ++functions;
+            EXPECT_TRUE(symbol.name == "run" || symbol.name == "helper");
+            break;
+        case lfs::python::PythonSymbolKind::Variable:
+            ++variables;
+            EXPECT_EQ(symbol.name, "CONFIG");
+            break;
+        }
+    }
+
+    EXPECT_EQ(imports, 2);
+    EXPECT_EQ(classes, 1);
+    EXPECT_EQ(functions, 2);
+    EXPECT_EQ(variables, 1);
+    EXPECT_TRUE(document.structureCurrent());
+    EXPECT_FALSE(document.foldRanges().empty());
+    EXPECT_FALSE(document.highlights().empty());
+    EXPECT_EQ(document.scopeAt(code.find("pass")), "Tool.run");
+
+    const auto block = document.enclosingBlockRange(code.find("pass"));
+    ASSERT_TRUE(block.has_value());
+    EXPECT_NE(code.substr(block->start_byte, block->end_byte - block->start_byte).find("def run"),
+              std::string_view::npos);
+
+    const auto ranges = document.enclosingBlockRanges(code.find("pass"));
+    ASSERT_GE(ranges.size(), 2);
+    EXPECT_NE(code.substr(ranges[0].start_byte, ranges[0].end_byte - ranges[0].start_byte).find("def run"),
+              std::string_view::npos);
+    EXPECT_NE(code.substr(ranges[1].start_byte, ranges[1].end_byte - ranges[1].start_byte).find("class Tool"),
+              std::string_view::npos);
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentAppliesIncrementalEdits) {
+    constexpr std::string_view original =
+        "def run():\n"
+        "    pass\n";
+    std::string updated(original);
+    const size_t replace_start = updated.find("pass");
+    ASSERT_NE(replace_start, std::string::npos);
+    constexpr std::string_view replacement = "if True pass";
+    updated.replace(replace_start, std::string_view("pass").size(), replacement);
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(original));
+
+    const lfs::python::PythonBufferEdit edit{
+        .start_byte = replace_start,
+        .old_end_byte = replace_start + std::string_view("pass").size(),
+        .new_end_byte = replace_start + replacement.size(),
+        .start_point = lfs::python::python_buffer_point_at_byte(original, replace_start),
+        .old_end_point =
+            lfs::python::python_buffer_point_at_byte(original, replace_start + std::string_view("pass").size()),
+        .new_end_point = lfs::python::python_buffer_point_at_byte(updated, replace_start + replacement.size()),
+    };
+    const std::array edits{edit};
+
+    ASSERT_TRUE(document.applyEditsAndReparse(updated, edits));
+    EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
+    ASSERT_FALSE(document.analysis().issues.empty());
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentExtractsFallbackHighlightCaptures) {
+    constexpr std::string_view code =
+        "@decorator\n"
+        "def run():\n"
+        "    return 42\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(code));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+
+    bool has_keyword = false;
+    bool has_decorator = false;
+    bool has_function = false;
+    bool has_number = false;
+    for (const auto& highlight : document.highlights()) {
+        has_keyword |= highlight.kind == lfs::python::PythonHighlightKind::Keyword;
+        has_decorator |= highlight.kind == lfs::python::PythonHighlightKind::Decorator;
+        has_function |= highlight.kind == lfs::python::PythonHighlightKind::Function;
+        has_number |= highlight.kind == lfs::python::PythonHighlightKind::Number;
+        EXPECT_LT(highlight.start_byte, highlight.end_byte);
+        EXPECT_LE(highlight.end_byte, code.size());
+    }
+
+    EXPECT_TRUE(has_keyword);
+    EXPECT_TRUE(has_decorator);
+    EXPECT_TRUE(has_function);
+    EXPECT_TRUE(has_number);
+}
+
+TEST_F(PythonIntegrationTest, PythonSyntaxDocumentKeepsStructureDuringSyntaxError) {
+    constexpr std::string_view valid =
+        "class Tool:\n"
+        "    def run(self):\n"
+        "        pass\n";
+    constexpr std::string_view invalid = "if True print('x')\n";
+
+    lfs::python::PythonSyntaxDocument document;
+    ASSERT_TRUE(document.reset(valid));
+    ASSERT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::Clean);
+    ASSERT_TRUE(document.structureCurrent());
+    ASSERT_FALSE(document.symbols().empty());
+    ASSERT_FALSE(document.foldRanges().empty());
+
+    ASSERT_TRUE(document.reset(invalid));
+    EXPECT_EQ(document.analysis().status, lfs::python::PythonBufferStatus::SyntaxError);
+    EXPECT_FALSE(document.structureCurrent());
+    ASSERT_FALSE(document.symbols().empty());
+    ASSERT_FALSE(document.foldRanges().empty());
+
+    bool retained_class = false;
+    bool retained_function = false;
+    for (const auto& symbol : document.symbols()) {
+        retained_class |= symbol.kind == lfs::python::PythonSymbolKind::Class && symbol.name == "Tool";
+        retained_function |= symbol.kind == lfs::python::PythonSymbolKind::Function && symbol.name == "run";
+    }
+    EXPECT_TRUE(retained_class);
+    EXPECT_TRUE(retained_function);
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsIndentedSnippetBeforeBlack) {
+    const auto result = lfs::python::format_python_code("    if True:\n        print('x')\n");
+
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
+
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsUnexpectedTopLevelIndentBeforeBlack) {
     const auto result = lfs::python::format_python_code(
         "import lichtfeld as lf\n    scene = lf.get_scene()\nprint('hello world')\n");
 
-    if (formatterUnavailable(result)) {
-        GTEST_SKIP() << result.error;
-    }
-    ASSERT_TRUE(result.success) << result.error;
-    EXPECT_EQ(result.code.find("\n    scene = lf.get_scene()"), std::string::npos);
-    EXPECT_NE(result.code.find("scene = lf.get_scene()"), std::string::npos);
-    EXPECT_NE(result.code.find("print(\"hello world\")"), std::string::npos);
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
 }
 
-TEST_F(PythonIntegrationTest, FormatPythonCodeCommentsLeadingPreambleBullets) {
+TEST_F(PythonIntegrationTest, FormatPythonCodeRejectsLeadingPreambleBulletsBeforeBlack) {
     const auto result = lfs::python::format_python_code(
         "1. SOURCE_NAME if set\n"
         "2. currently selected node\n"
@@ -511,14 +677,29 @@ TEST_F(PythonIntegrationTest, FormatPythonCodeCommentsLeadingPreambleBullets) {
         "from pathlib import Path\n"
         "import lichtfeld as lf\n");
 
+    ASSERT_FALSE(result.success);
+    EXPECT_NE(result.error.find("Python syntax error"), std::string::npos);
+}
+
+TEST_F(PythonIntegrationTest, CleanPythonCodeRepairsUnindentedFunctionBlock) {
+    const auto result = lfs::python::clean_python_code(
+        "def _safe_path_component(text):\n"
+        "stripped = str(text or \"\").strip()\n"
+        "if not stripped:\n"
+        "    return \"splat\"\n"
+        "safe = \"\".join(ch if ch.isalnum() or ch in (\"-\", \"_\", \".\") else \"_\" for ch in stripped)\n"
+        "safe = safe.strip(\"_\")\n"
+        "return safe or \"splat\"\n");
+
     if (formatterUnavailable(result)) {
         GTEST_SKIP() << result.error;
     }
     ASSERT_TRUE(result.success) << result.error;
-    EXPECT_NE(result.code.find("# 1. SOURCE_NAME if set"), std::string::npos);
-    EXPECT_NE(result.code.find("# 2. currently selected node"), std::string::npos);
-    EXPECT_NE(result.code.find("from pathlib import Path"), std::string::npos);
-    EXPECT_NE(result.code.find("import lichtfeld as lf"), std::string::npos);
+    EXPECT_NE(result.code.find("def _safe_path_component(text):"), std::string::npos);
+    EXPECT_NE(result.code.find("    stripped = str(text or \"\").strip()"), std::string::npos);
+    EXPECT_NE(result.code.find("    if not stripped:"), std::string::npos);
+    EXPECT_NE(result.code.find("        return \"splat\""), std::string::npos);
+    EXPECT_NE(result.code.find("    return safe or \"splat\""), std::string::npos);
 }
 
 TEST_F(PythonIntegrationTest, FormatPythonCodeReportsSyntaxErrorWithoutUnexpectedResultFallback) {

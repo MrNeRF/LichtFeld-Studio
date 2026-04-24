@@ -4,6 +4,7 @@
 
 #include "runner.hpp"
 #include "package_manager.hpp"
+#include "python_buffer_analysis.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -43,6 +44,8 @@ namespace lfs::python {
     static std::mutex g_output_mutex;
     static std::mutex g_plugin_init_mutex;
     static std::atomic<bool> g_python_bridge_ready{false};
+    static std::atomic<bool> g_builtin_ui_ready{false};
+    static std::atomic<bool> g_builtin_ui_deferred_logged{false};
     static std::atomic<bool> g_python_bridge_failed{false};
     static std::mutex g_python_bridge_failure_mutex;
     static std::string g_python_bridge_failure_detail;
@@ -196,6 +199,93 @@ _add_dll_dirs()
             return default_value;
         }
 
+        bool prepend_sys_path_once(PyObject* const sys_path,
+                                   const std::filesystem::path& path,
+                                   const char* label) {
+            if (!sys_path || path.empty()) {
+                return false;
+            }
+
+            const auto path_utf8 = lfs::core::path_to_utf8(path);
+            PyObject* const py_path = PyUnicode_FromString(path_utf8.c_str());
+            if (!py_path) {
+                LOG_WARN("Failed to create Python path string for {}: {}", label, path_utf8);
+                PyErr_Clear();
+                return false;
+            }
+
+            const int contains = PySequence_Contains(sys_path, py_path);
+            if (contains < 0) {
+                LOG_WARN("Failed to inspect sys.path while adding {}: {}", label, path_utf8);
+                PyErr_Clear();
+                Py_DECREF(py_path);
+                return false;
+            }
+
+            if (contains == 0) {
+                if (PyList_Insert(sys_path, 0, py_path) != 0) {
+                    LOG_WARN("Failed to prepend {} to sys.path: {}", label, path_utf8);
+                    PyErr_Clear();
+                    Py_DECREF(py_path);
+                    return false;
+                }
+                LOG_INFO("Added {} to Python path: {}", label, path_utf8);
+            }
+
+            Py_DECREF(py_path);
+            return true;
+        }
+
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+        void prepend_dev_python_source_path(PyObject* const sys_path) {
+            const auto source_dir = lfs::core::utf8_to_path(LFS_DEV_PYTHON_SOURCE_DIR);
+            std::error_code ec;
+            if (!std::filesystem::exists(source_dir / "lfs_plugins", ec)) {
+                LOG_WARN("Python dev source path is unavailable: {}",
+                         lfs::core::path_to_utf8(source_dir));
+                return;
+            }
+
+            prepend_sys_path_once(sys_path, source_dir, "dev source Python dir");
+        }
+
+        void start_dev_python_watcher(PyObject* const lfs_plugins) {
+            if (!env_flag_enabled("LFS_PYTHON_HOT_RELOAD", true)) {
+                LOG_INFO("Python dev hot reload disabled by LFS_PYTHON_HOT_RELOAD");
+                return;
+            }
+            if (!lfs_plugins) {
+                return;
+            }
+
+            PyObject* const manager_cls = PyObject_GetAttrString(lfs_plugins, "PluginManager");
+            if (!manager_cls) {
+                PyErr_Print();
+                LOG_WARN("Python dev hot reload: lfs_plugins.PluginManager not found");
+                return;
+            }
+
+            PyObject* const manager = PyObject_CallMethod(manager_cls, "instance", nullptr);
+            Py_DECREF(manager_cls);
+            if (!manager) {
+                PyErr_Print();
+                LOG_WARN("Python dev hot reload: failed to get PluginManager instance");
+                return;
+            }
+
+            PyObject* const result = PyObject_CallMethod(manager, "start_watcher", nullptr);
+            Py_DECREF(manager);
+            if (!result) {
+                PyErr_Print();
+                LOG_WARN("Python dev hot reload: failed to start watcher");
+                return;
+            }
+
+            Py_DECREF(result);
+            LOG_INFO("Python dev hot reload watcher started");
+        }
+#endif
+
         std::string consume_python_error_detailed() {
             PyObject* type = nullptr;
             PyObject* value = nullptr;
@@ -259,6 +349,16 @@ _add_dll_dirs()
             return message;
         }
 
+        std::string compile_python_buffer_error(const std::string& code) {
+            PyObject* const compiled = Py_CompileString(code.c_str(), "<lfs_formatter>", Py_file_input);
+            if (compiled) {
+                Py_DECREF(compiled);
+                return {};
+            }
+
+            return "Python syntax error: " + consume_python_error_detailed();
+        }
+
         void remember_python_bridge_failure(const std::string& detail) {
             bool expected = false;
             if (g_python_bridge_failed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -292,8 +392,65 @@ _add_dll_dirs()
             return lf;
         }
 
+        bool ensure_builtin_ui_ready_locked() {
+            if (g_builtin_ui_ready.load(std::memory_order_acquire)) {
+                return true;
+            }
+
+            if (!lfs::python::get_rml_manager()) {
+                bool expected = false;
+                if (g_builtin_ui_deferred_logged.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                    LOG_INFO("Builtin Python UI registration deferred until retained UI runtime is available");
+                }
+                return false;
+            }
+
+            PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
+            if (!lfs_plugins) {
+                PyErr_Print();
+                return false;
+            }
+
+            bool builtin_panels_registered = false;
+            PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
+            if (register_fn) {
+                PyObject* result = PyObject_CallNoArgs(register_fn);
+                if (!result) {
+                    PyErr_Print();
+                    LOG_ERROR("Failed to register builtin panels");
+                } else {
+                    const int registered = PyObject_IsTrue(result);
+                    if (registered < 0) {
+                        PyErr_Print();
+                    } else {
+                        builtin_panels_registered = registered != 0;
+                    }
+                    Py_DECREF(result);
+                }
+                Py_DECREF(register_fn);
+            } else {
+                PyErr_Clear();
+                LOG_ERROR("lfs_plugins.register_builtin_panels not found");
+            }
+
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+            if (builtin_panels_registered) {
+                start_dev_python_watcher(lfs_plugins);
+            } else {
+                LOG_INFO("Python dev hot reload watcher skipped because builtin panels were not registered");
+            }
+#endif
+            Py_DECREF(lfs_plugins);
+
+            if (builtin_panels_registered) {
+                g_builtin_ui_ready.store(true, std::memory_order_release);
+            }
+            return builtin_panels_registered;
+        }
+
         bool ensure_python_bridge_ready_locked() {
             if (g_python_bridge_ready.load(std::memory_order_acquire)) {
+                ensure_builtin_ui_ready_locked();
                 return true;
             }
 
@@ -306,21 +463,7 @@ _add_dll_dirs()
             }
             LOG_INFO("lichtfeld module imported successfully");
 
-            PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
-            if (lfs_plugins) {
-                PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
-                if (register_fn) {
-                    PyObject* result = PyObject_CallNoArgs(register_fn);
-                    if (!result) {
-                        PyErr_Print();
-                        LOG_ERROR("Failed to register builtin panels");
-                    } else {
-                        Py_DECREF(result);
-                    }
-                    Py_DECREF(register_fn);
-                }
-                Py_DECREF(lfs_plugins);
-            }
+            ensure_builtin_ui_ready_locked();
 
             // Initialize signal bridge after lfs_plugins.ui.state is available
             // Note: signals is registered as lichtfeld.ui.signals
@@ -543,24 +686,20 @@ _add_dll_dirs()
 
             PyObject* sys_path = PySys_GetObject("path");
             if (sys_path) {
-                const auto user_packages_utf8 = lfs::core::path_to_utf8(user_packages);
-                PyObject* py_path = PyUnicode_FromString(user_packages_utf8.c_str());
-                PyList_Insert(sys_path, 0, py_path);
-                Py_DECREF(py_path);
-                LOG_INFO("Added user packages dir to Python path: {}", user_packages_utf8);
+                prepend_sys_path_once(sys_path, user_packages, "user packages dir");
 
                 const auto python_module_dir = lfs::core::getPythonModuleDir();
                 if (!python_module_dir.empty()) {
-                    const auto python_module_dir_utf8 = lfs::core::path_to_utf8(python_module_dir);
-                    PyObject* const py_mod_path = PyUnicode_FromString(python_module_dir_utf8.c_str());
-                    PyList_Insert(sys_path, 0, py_mod_path);
-                    Py_DECREF(py_mod_path);
-                    LOG_INFO("Added Python module dir to path: {}", python_module_dir_utf8);
+                    prepend_sys_path_once(sys_path, python_module_dir, "Python module dir");
                 } else {
                     const auto exe_dir_utf8 = lfs::core::path_to_utf8(lfs::core::getExecutableDir());
                     LOG_WARN("Python module 'lichtfeld' not found. Expected a lichtfeld*.so/.pyd in: {}/src/python, {}",
                              exe_dir_utf8, exe_dir_utf8);
                 }
+
+#ifdef LFS_DEV_PYTHON_SOURCE_DIR
+                prepend_dev_python_source_path(sys_path);
+#endif
             }
 
             {
@@ -572,6 +711,21 @@ _add_dll_dirs()
             set_gil_state_ready(true);
             LOG_DEBUG("GIL released, external_init={}", !g_we_initialized_python);
         });
+    }
+
+    void ensure_builtin_ui_registered() {
+        ensure_initialized();
+        if (!can_acquire_gil()) {
+            LOG_WARN("Python GIL state not ready, skipping builtin UI registration");
+            return;
+        }
+
+        const GilAcquire gil;
+        std::lock_guard lock(g_plugin_init_mutex);
+        if (!ensure_python_bridge_ready_locked()) {
+            return;
+        }
+        ensure_builtin_ui_ready_locked();
     }
 
     void ensure_plugins_loaded() {
@@ -946,9 +1100,29 @@ _repl_out.close()
         return {};
     }
 
-    FormatResult format_python_code(const std::string& code) {
+    enum class PythonFormatMode {
+        Strict,
+        Cleanup,
+    };
+
+    FormatResult format_python_code_impl(const std::string& code, const PythonFormatMode mode) {
         if (code.empty())
             return {code, "", true};
+
+        if (mode == PythonFormatMode::Strict) {
+            const auto buffer_analysis = analyze_python_buffer(code);
+            if (!buffer_analysis.clean()) {
+                return {code, buffer_analysis.summary, false};
+            }
+
+            ensure_initialized();
+            {
+                const GilAcquire gil;
+                if (const auto compile_error = compile_python_buffer_error(code); !compile_error.empty()) {
+                    return {code, compile_error, false};
+                }
+            }
+        }
 
         auto& pm = PackageManager::instance();
         if (!pm.is_installed("black")) {
@@ -1036,6 +1210,25 @@ def _lfs_format_code(code):
         lines = source.split('\n')
         changed = False
 
+        def _block_boundary(start_idx, header_indent):
+            blank_seen = False
+            for k in range(start_idx, len(lines)):
+                stripped = lines[k].strip()
+                if not stripped:
+                    blank_seen = True
+                    continue
+
+                indent = _indent_width(lines[k])
+                if k > start_idx and indent <= header_indent:
+                    if stripped.startswith(('def ', 'class ', '@')):
+                        return k
+                    if blank_seen and not stripped.startswith((
+                            'return ', 'raise ', 'pass', 'break', 'continue',
+                            'elif ', 'else:', 'except', 'finally:'
+                    )):
+                        return k
+            return len(lines)
+
         for _ in range(len(lines)):
             try:
                 compile('\n'.join(lines), '<lfs_formatter>', 'exec')
@@ -1057,6 +1250,16 @@ def _lfs_format_code(code):
                 target_indent = _expected_indent(lines, idx)
 
                 if 'expected an indented block' in msg:
+                    prev_idx, prev_stripped = _previous_significant_line(lines, idx)
+                    if prev_idx is not None and prev_stripped.startswith(('def ', 'class ')):
+                        header_indent = _indent_width(lines[prev_idx])
+                        prefix = ' ' * (header_indent + 4)
+                        block_end = _block_boundary(idx, header_indent)
+                        for k in range(idx, block_end):
+                            if lines[k].strip():
+                                lines[k] = prefix + lines[k]
+                        changed = True
+                        continue
                     target_indent = max(target_indent, 4)
                 elif 'unexpected indent' not in msg and \
                         'unindent does not match any outer indentation level' not in msg:
@@ -1184,6 +1387,14 @@ def _lfs_format_code(code):
         }
 
         return result;
+    }
+
+    FormatResult format_python_code(const std::string& code) {
+        return format_python_code_impl(code, PythonFormatMode::Strict);
+    }
+
+    FormatResult clean_python_code(const std::string& code) {
+        return format_python_code_impl(code, PythonFormatMode::Cleanup);
     }
 
     // Frame callback for animations

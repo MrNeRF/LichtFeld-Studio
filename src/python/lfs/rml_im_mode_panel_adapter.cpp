@@ -211,6 +211,24 @@ namespace lfs::vis::gui {
         return ops.needs_animation ? ops.needs_animation(host_) : false;
     }
 
+    void RmlImModePanelAdapter::reloadRmlResources() {
+        if (!host_)
+            return;
+
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!ops.reload_document)
+            return;
+
+        layout_.release_elements();
+        if (!ops.reload_document(host_)) {
+            LOG_ERROR("RmlImMode reload_document failed for '{}'", rml_path_);
+            return;
+        }
+        if (ops.mark_content_dirty)
+            ops.mark_content_dirty(host_);
+        last_layout_frame_ = 0;
+    }
+
     bool RmlImModePanelAdapter::poll(const PanelDrawContext& ctx) {
         (void)ctx;
         if (!has_poll_)

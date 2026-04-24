@@ -1,0 +1,44 @@
+/* Theme-dependent modal overlay styles. */
+
+.modal-backdrop {
+    background-color: @{modal.backdrop};
+}
+
+.modal-dialog {
+    background-color: @{modal.surface};
+    border-color: @{modal.border};
+    border-radius: @{num(size.window_rounding)}dp;
+}
+
+.modal-title,
+.modal-content {
+    color: @{text};
+}
+
+.modal-sep {
+    background-color: @{alpha(border,0.5)};
+}
+
+.dim-text {
+    color: @{text_dim};
+}
+
+.error-text {
+    color: @{error};
+}
+
+.warning-text {
+    color: @{warning};
+}
+
+.modal-dialog.style-info {
+    border-color: @{success};
+}
+
+.modal-dialog.style-warning {
+    border-color: @{warning};
+}
+
+.modal-dialog.style-error {
+    border-color: @{error};
+}

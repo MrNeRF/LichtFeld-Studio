@@ -5,6 +5,8 @@
 import lichtfeld as lf
 from .layouts.menus import register_menu, menu_action
 
+__lfs_menu_classes__ = ["ToolsMenu"]
+
 
 @register_menu
 class ToolsMenu:

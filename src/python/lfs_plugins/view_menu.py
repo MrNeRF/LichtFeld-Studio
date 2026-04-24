@@ -3,7 +3,16 @@
 """View menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_submenu, menu_toggle
+from .layouts.menus import menu_action, menu_separator, register_menu, menu_submenu, menu_toggle
+
+__lfs_menu_classes__ = ["ViewMenu"]
+
+
+def _tr_fallback(key: str, fallback: str) -> str:
+    result = lf.ui.tr(key)
+    if result and result != key:
+        return result
+    return fallback
 
 
 @register_menu
@@ -13,14 +22,6 @@ class ViewMenu:
     label = "menu.view"
     location = "MENU_BAR"
     order = 30
-    _THEME_OPTIONS = (
-        ("dark", "menu.view.theme.dark"),
-        ("light", "menu.view.theme.light"),
-        ("gruvbox", "menu.view.theme.gruvbox"),
-        ("catppuccin_mocha", "menu.view.theme.catppuccin_mocha"),
-        ("catppuccin_latte", "menu.view.theme.catppuccin_latte"),
-        ("nord", "menu.view.theme.nord"),
-    )
 
     _SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),
@@ -31,26 +32,20 @@ class ViewMenu:
         (2.0, "200%"),
     )
 
-    @staticmethod
-    def _normalize_theme_name(name: str) -> str:
-        normalized = str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
-        aliases = {
-            "gruvbox_dark": "gruvbox",
-            "catppuccin_dark": "catppuccin_mocha",
-            "catppuccin_light": "catppuccin_latte",
-        }
-        return aliases.get(normalized, normalized)
-
     def menu_items(self):
         tr = lf.ui.tr
-        current_theme = self._normalize_theme_name(lf.ui.get_theme())
+        current_theme = lf.ui.get_theme()
+        theme_catalog = sorted(
+            lf.ui.themes(),
+            key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
+        )
         theme_items = [
             menu_toggle(
-                tr(label_key),
-                lambda theme=theme_id: lf.ui.set_theme(theme),
-                current_theme == theme_id,
+                tr(theme.get("label_key") or theme.get("name") or theme["id"]),
+                lambda theme_id=theme["id"]: lf.ui.set_theme(theme_id),
+                current_theme == theme["id"],
             )
-            for theme_id, label_key in self._THEME_OPTIONS
+            for theme in theme_catalog
         ]
 
         pref = lf.ui.get_ui_scale_preference()
@@ -68,6 +63,9 @@ class ViewMenu:
         return [
             menu_submenu(tr("menu.view.theme"), theme_items),
             menu_submenu(tr("menu.view.ui_scale"), scale_items),
+            menu_separator(),
+            menu_action(_tr_fallback("image_preview.reset_view", "Reset View"), lf.reset_camera),
+            menu_action(_tr_fallback("main_panel.console", "Console"), lf.ui.toggle_system_console),
         ]
 
 

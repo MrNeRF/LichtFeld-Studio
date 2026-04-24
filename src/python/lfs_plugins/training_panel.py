@@ -13,6 +13,9 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui.state import AppState
 
+__lfs_panel_classes__ = ["TrainingPanel"]
+__lfs_panel_ids__ = ["lfs.training"]
+
 
 def tr(key):
     result = lf.ui.tr(key)

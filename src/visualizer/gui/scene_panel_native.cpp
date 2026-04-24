@@ -242,7 +242,7 @@ namespace lfs::vis::gui {
                     is_next ? " is-next" : "");
 
                 html += std::format(
-                    R"(<button type="button" class="{}" style="display:block; width:100%;" data-kind="{}" data-steps="{}"><span class="history-row__line history-row__line--primary text-default">&#9679; {}</span><br /><span class="history-row__line history-row__line--stack text-muted">{}</span><br /><span class="history-row__line history-row__line--secondary text-muted">{}</span></button>)",
+                    R"(<button type="button" class="{}" data-kind="{}" data-steps="{}"><span class="history-row__line history-row__line--primary text-default">&#9679; {}</span><br /><span class="history-row__line history-row__line--stack text-muted">{}</span><br /><span class="history-row__line history-row__line--secondary text-muted">{}</span></button>)",
                     row_classes,
                     kind,
                     index + 1,
@@ -368,6 +368,63 @@ namespace lfs::vis::gui {
             owner->handleEvent(event);
     }
 
+    void NativeScenePanel::clearElementCache() {
+        tree_el_ = nullptr;
+        scene_tab_el_ = nullptr;
+        history_tab_el_ = nullptr;
+        logging_tab_el_ = nullptr;
+        chip_row_el_ = nullptr;
+        summary_model_chip_el_ = nullptr;
+        summary_node_chip_el_ = nullptr;
+        summary_selection_chip_el_ = nullptr;
+        summary_filter_chip_el_ = nullptr;
+        scene_view_el_ = nullptr;
+        search_container_el_ = nullptr;
+        filter_input_el_ = nullptr;
+        filter_clear_el_ = nullptr;
+        empty_state_el_ = nullptr;
+        empty_primary_el_ = nullptr;
+        empty_secondary_el_ = nullptr;
+        history_container_el_ = nullptr;
+        history_summary_label_el_ = nullptr;
+        history_summary_value_el_ = nullptr;
+        history_transaction_el_ = nullptr;
+        history_undo_btn_el_ = nullptr;
+        history_redo_btn_el_ = nullptr;
+        history_clear_btn_el_ = nullptr;
+        history_note_el_ = nullptr;
+        history_undo_title_el_ = nullptr;
+        history_redo_title_el_ = nullptr;
+        history_undo_list_el_ = nullptr;
+        history_redo_list_el_ = nullptr;
+        history_empty_undo_el_ = nullptr;
+        history_empty_redo_el_ = nullptr;
+        logging_container_el_ = nullptr;
+        logging_summary_label_el_ = nullptr;
+        logging_summary_value_el_ = nullptr;
+        logging_level_label_el_ = nullptr;
+        logging_level_select_el_ = nullptr;
+        logging_export_btn_el_ = nullptr;
+        logging_copy_btn_el_ = nullptr;
+        logging_feedback_el_ = nullptr;
+        logging_note_el_ = nullptr;
+        logging_scroll_el_ = nullptr;
+        logging_list_el_ = nullptr;
+        logging_empty_el_ = nullptr;
+    }
+
+    void NativeScenePanel::reloadRmlResources() {
+        filter_input_revert_.clear();
+        host_.reloadDocument();
+        document_ = nullptr;
+        clearElementCache();
+        last_language_.clear();
+        last_history_generation_ = std::numeric_limits<uint64_t>::max();
+        last_log_generation_ = std::numeric_limits<uint64_t>::max();
+        last_prepare_frame_ = 0;
+        logging_feedback_dirty_ = true;
+    }
+
     void NativeScenePanel::preload(const PanelDrawContext& ctx) {
         if (!ensureInitialized())
             return;
@@ -431,6 +488,7 @@ namespace lfs::vis::gui {
 
     void NativeScenePanel::cacheElements() {
         filter_input_revert_.clear();
+        clearElementCache();
         tree_el_ = dynamic_cast<SceneGraphElement*>(document_->GetElementById("tree-container"));
         scene_tab_el_ = document_->GetElementById("scene-tab");
         history_tab_el_ = document_->GetElementById("history-tab");
