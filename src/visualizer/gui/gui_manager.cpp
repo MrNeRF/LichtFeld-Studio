@@ -15,6 +15,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/native_panels.hpp"
@@ -76,6 +77,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
             return ImGuizmo::IsOver() ||
                    ImGuizmo::IsUsing() ||
+                   isBoundsGizmoHovered() ||
+                   isBoundsGizmoActive() ||
                    isRotationGizmoHovered() ||
                    isRotationGizmoActive() ||
                    isTranslationGizmoHovered() ||

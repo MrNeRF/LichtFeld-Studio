@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/bounds_gizmo.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/rotation_gizmo.hpp"
@@ -51,6 +52,8 @@ namespace lfs::vis {
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
             return ImGuizmo::IsOver() ||
                    ImGuizmo::IsUsing() ||
+                   gui::isBoundsGizmoHovered() ||
+                   gui::isBoundsGizmoActive() ||
                    gui::isRotationGizmoHovered() ||
                    gui::isRotationGizmoActive() ||
                    gui::isTranslationGizmoHovered() ||
@@ -59,6 +62,7 @@ namespace lfs::vis {
 
         [[nodiscard]] bool isTransformGizmoUsing() {
             return ImGuizmo::IsUsing() ||
+                   gui::isBoundsGizmoActive() ||
                    gui::isRotationGizmoActive() ||
                    gui::isTranslationGizmoActive();
         }
