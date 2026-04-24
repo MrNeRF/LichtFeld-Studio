@@ -28,6 +28,7 @@
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
@@ -76,7 +77,9 @@ namespace lfs::vis::gui {
             return ImGuizmo::IsOver() ||
                    ImGuizmo::IsUsing() ||
                    isRotationGizmoHovered() ||
-                   isRotationGizmoActive();
+                   isRotationGizmoActive() ||
+                   isTranslationGizmoHovered() ||
+                   isTranslationGizmoActive();
         }
 
 #ifndef LFS_BUILD_PORTABLE

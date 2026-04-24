@@ -13,6 +13,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/rotation_gizmo.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
 #include "input/input_controller.hpp"
 #include "operation/undo_entry.hpp"
@@ -20,6 +21,7 @@
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -166,6 +168,10 @@ namespace lfs::vis::gui {
         inline glm::mat3 extractRotation(const glm::mat4& m) {
             return glm::mat3(glm::normalize(glm::vec3(m[0])), glm::normalize(glm::vec3(m[1])),
                              glm::normalize(glm::vec3(m[2])));
+        }
+
+        inline glm::mat3 userFacingLocalRotation(const glm::mat4& visualizer_world_transform) {
+            return extractRotation(visualizer_world_transform) * lfs::rendering::DATA_TO_VISUALIZER_WORLD_AXES;
         }
 
         inline glm::vec3 extractScale(const glm::mat4& m) {
@@ -603,12 +609,38 @@ namespace lfs::vis::gui {
         const ImGuizmo::MODE gizmo_mode = (actually_using_bounds || !use_world_space) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
         ImGuizmo::PushID(panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel));
+        const bool use_translation_gizmo = node_gizmo_operation_ == ImGuizmo::TRANSLATE && !actually_using_bounds;
         const bool use_rotation_gizmo = node_gizmo_operation_ == ImGuizmo::ROTATE && !actually_using_bounds;
         bool is_using = false;
         bool gizmo_changed = false;
         glm::mat4 delta_matrix(1.0f);
 
-        if (use_rotation_gizmo) {
+        if (use_translation_gizmo) {
+            TranslationGizmoConfig translation_config;
+            translation_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.viewport_pos = active_panel->pos;
+            translation_config.viewport_size = active_panel->size;
+            translation_config.view = view;
+            translation_config.projection = projection;
+            translation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
+            translation_config.orientation_world =
+                (gizmo_mode == ImGuizmo::LOCAL) ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
+            translation_config.draw_list = overlay_drawlist;
+            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.snap_units = TRANSLATE_SNAP_UNITS;
+
+            const auto translation_result = drawTranslationGizmo(translation_config);
+            is_using = translation_result.active;
+            gizmo_changed = translation_result.changed;
+            delta_matrix = glm::translate(glm::mat4(1.0f), translation_result.delta_translation);
+            if (translation_result.active) {
+                gizmo_matrix[3] =
+                    glm::vec4(translation_config.pivot_world + translation_result.total_translation, 1.0f);
+            }
+            if (translation_result.hovered || translation_result.active) {
+                guiFocusState().want_capture_mouse = true;
+            }
+        } else if (use_rotation_gizmo) {
             RotationGizmoConfig rotation_config;
             rotation_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
             rotation_config.viewport_pos = active_panel->pos;
@@ -617,7 +649,7 @@ namespace lfs::vis::gui {
             rotation_config.projection = projection;
             rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             rotation_config.orientation_world =
-                (gizmo_mode == ImGuizmo::LOCAL) ? extractRotation(gizmo_matrix) : glm::mat3(1.0f);
+                (gizmo_mode == ImGuizmo::LOCAL) ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
             rotation_config.draw_list = overlay_drawlist;
             rotation_config.snap = ImGui::GetIO().KeyCtrl;
             rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
@@ -965,7 +997,32 @@ namespace lfs::vis::gui {
         glm::mat4 delta_matrix(1.0f);
         const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
-        if (gizmo_op == ImGuizmo::ROTATE) {
+        if (gizmo_op == ImGuizmo::TRANSLATE) {
+            TranslationGizmoConfig translation_config;
+            translation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.viewport_pos = active_panel->pos;
+            translation_config.viewport_size = active_panel->size;
+            translation_config.view = view;
+            translation_config.projection = projection;
+            translation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
+            translation_config.orientation_world =
+                (gizmo_mode == ImGuizmo::LOCAL) ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
+            translation_config.draw_list = overlay_drawlist;
+            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.snap_units = TRANSLATE_SNAP_UNITS;
+
+            const auto translation_result = drawTranslationGizmo(translation_config);
+            is_using = translation_result.active;
+            gizmo_changed = translation_result.changed;
+            delta_matrix = glm::translate(glm::mat4(1.0f), translation_result.delta_translation);
+            if (translation_result.active) {
+                const glm::vec3 translated_pivot = glm::vec3(gizmo_matrix[3]) + translation_result.delta_translation;
+                gizmo_matrix[3] = glm::vec4(translated_pivot, 1.0f);
+            }
+            if (translation_result.hovered || translation_result.active) {
+                guiFocusState().want_capture_mouse = true;
+            }
+        } else if (gizmo_op == ImGuizmo::ROTATE) {
             RotationGizmoConfig rotation_config;
             rotation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
             rotation_config.viewport_pos = active_panel->pos;
@@ -974,7 +1031,7 @@ namespace lfs::vis::gui {
             rotation_config.projection = projection;
             rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             rotation_config.orientation_world =
-                (gizmo_mode == ImGuizmo::LOCAL) ? gizmo_ops::extractRotation(gizmo_matrix) : glm::mat3(1.0f);
+                (gizmo_mode == ImGuizmo::LOCAL) ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
             rotation_config.draw_list = overlay_drawlist;
             rotation_config.snap = ImGui::GetIO().KeyCtrl;
             rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
@@ -1178,7 +1235,32 @@ namespace lfs::vis::gui {
         glm::mat4 delta_matrix(1.0f);
         const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
-        if (gizmo_op == ImGuizmo::ROTATE) {
+        if (gizmo_op == ImGuizmo::TRANSLATE) {
+            TranslationGizmoConfig translation_config;
+            translation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            translation_config.viewport_pos = active_panel->pos;
+            translation_config.viewport_size = active_panel->size;
+            translation_config.view = view;
+            translation_config.projection = projection;
+            translation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
+            translation_config.orientation_world =
+                (gizmo_mode == ImGuizmo::LOCAL) ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
+            translation_config.draw_list = overlay_drawlist;
+            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.snap_units = TRANSLATE_SNAP_UNITS;
+
+            const auto translation_result = drawTranslationGizmo(translation_config);
+            is_using = translation_result.active;
+            gizmo_changed = translation_result.changed;
+            delta_matrix = glm::translate(glm::mat4(1.0f), translation_result.delta_translation);
+            if (translation_result.active) {
+                const glm::vec3 translated_pivot = glm::vec3(gizmo_matrix[3]) + translation_result.delta_translation;
+                gizmo_matrix[3] = glm::vec4(translated_pivot, 1.0f);
+            }
+            if (translation_result.hovered || translation_result.active) {
+                guiFocusState().want_capture_mouse = true;
+            }
+        } else if (gizmo_op == ImGuizmo::ROTATE) {
             RotationGizmoConfig rotation_config;
             rotation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
             rotation_config.viewport_pos = active_panel->pos;
@@ -1187,7 +1269,7 @@ namespace lfs::vis::gui {
             rotation_config.projection = projection;
             rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             rotation_config.orientation_world =
-                (gizmo_mode == ImGuizmo::LOCAL) ? gizmo_ops::extractRotation(gizmo_matrix) : glm::mat3(1.0f);
+                (gizmo_mode == ImGuizmo::LOCAL) ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
             rotation_config.draw_list = overlay_drawlist;
             rotation_config.snap = ImGui::GetIO().KeyCtrl;
             rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;

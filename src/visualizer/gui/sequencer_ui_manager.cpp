@@ -17,6 +17,7 @@
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/video/video_export_options.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -888,7 +889,8 @@ namespace lfs::vis::gui {
             if (hovered && !hovered->is_loop_point) {
                 if (input.mouse_clicked[0] &&
                     !ImGuizmo::IsOver() &&
-                    !isRotationGizmoHovered()) {
+                    !isRotationGizmoHovered() &&
+                    !isTranslationGizmoHovered()) {
                     beginViewportKeyframeEdit(*hovered_keyframe);
                     guiFocusState().want_capture_mouse = true;
                 }
@@ -991,7 +993,6 @@ namespace lfs::vis::gui {
         const ImVec2 clip_max(rect_pos.x + rect_size.x, rect_pos.y + rect_size.y);
         draw_list->PushClipRect(clip_min, clip_max, true);
 
-        const ImGuizmo::MODE mode = op == ImGuizmo::ROTATE ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
         bool changed = false;
         bool is_using = false;
         glm::mat3 rotation_delta(1.0f);
@@ -1016,20 +1017,26 @@ namespace lfs::vis::gui {
             if (rotation_result.hovered || rotation_result.active)
                 guiFocusState().want_capture_mouse = true;
         } else {
-            ImGuizmo::SetDrawlist(draw_list);
+            TranslationGizmoConfig translation_config;
+            translation_config.id = 4000;
+            translation_config.viewport_pos = rect_pos;
+            translation_config.viewport_size = rect_size;
+            translation_config.view = view;
+            translation_config.projection = projection;
+            translation_config.pivot_world = kf->position;
+            translation_config.orientation_world = glm::mat3(1.0f);
+            translation_config.draw_list = draw_list;
+            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.snap_units = 0.1f;
 
-            glm::mat4 delta(1.0f);
-            changed = ImGuizmo::Manipulate(
-                glm::value_ptr(view),
-                glm::value_ptr(projection),
-                op,
-                mode,
-                glm::value_ptr(gizmo_matrix),
-                glm::value_ptr(delta),
-                nullptr);
-
-            is_using = ImGuizmo::IsUsing();
-            if (ImGuizmo::IsOver() || is_using)
+            const auto translation_result = drawTranslationGizmo(translation_config);
+            changed = translation_result.changed;
+            is_using = translation_result.active;
+            if (translation_result.active) {
+                const glm::vec3 translated_position = kf->position + translation_result.delta_translation;
+                gizmo_matrix[3] = glm::vec4(translated_position, 1.0f);
+            }
+            if (translation_result.hovered || translation_result.active)
                 guiFocusState().want_capture_mouse = true;
         }
 

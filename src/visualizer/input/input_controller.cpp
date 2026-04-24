@@ -10,6 +10,7 @@
 #include "gui/gui_manager.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -51,11 +52,15 @@ namespace lfs::vis {
             return ImGuizmo::IsOver() ||
                    ImGuizmo::IsUsing() ||
                    gui::isRotationGizmoHovered() ||
-                   gui::isRotationGizmoActive();
+                   gui::isRotationGizmoActive() ||
+                   gui::isTranslationGizmoHovered() ||
+                   gui::isTranslationGizmoActive();
         }
 
         [[nodiscard]] bool isTransformGizmoUsing() {
-            return ImGuizmo::IsUsing() || gui::isRotationGizmoActive();
+            return ImGuizmo::IsUsing() ||
+                   gui::isRotationGizmoActive() ||
+                   gui::isTranslationGizmoActive();
         }
 
         [[nodiscard]] bool isEnvironmentMapExtension(const std::string_view ext) {
