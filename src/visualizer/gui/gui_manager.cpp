@@ -27,6 +27,7 @@
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/rotation_gizmo.hpp"
+#include "gui/scale_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/translation_gizmo.hpp"
@@ -81,6 +82,8 @@ namespace lfs::vis::gui {
                    isBoundsGizmoActive() ||
                    isRotationGizmoHovered() ||
                    isRotationGizmoActive() ||
+                   isScaleGizmoHovered() ||
+                   isScaleGizmoActive() ||
                    isTranslationGizmoHovered() ||
                    isTranslationGizmoActive();
         }

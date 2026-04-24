@@ -66,6 +66,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/async_task_manager.cpp
         gui/bounds_gizmo.cpp
         gui/rotation_gizmo.cpp
+        gui/scale_gizmo.cpp
         gui/translation_gizmo.cpp
         gui/video_export_utils.cpp
         gui/startup_overlay.cpp

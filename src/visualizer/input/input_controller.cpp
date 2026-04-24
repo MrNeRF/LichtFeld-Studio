@@ -10,6 +10,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/rotation_gizmo.hpp"
+#include "gui/scale_gizmo.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/translation_gizmo.hpp"
 #include "input/input_router.hpp"
@@ -56,6 +57,8 @@ namespace lfs::vis {
                    gui::isBoundsGizmoActive() ||
                    gui::isRotationGizmoHovered() ||
                    gui::isRotationGizmoActive() ||
+                   gui::isScaleGizmoHovered() ||
+                   gui::isScaleGizmoActive() ||
                    gui::isTranslationGizmoHovered() ||
                    gui::isTranslationGizmoActive();
         }
@@ -64,6 +67,7 @@ namespace lfs::vis {
             return ImGuizmo::IsUsing() ||
                    gui::isBoundsGizmoActive() ||
                    gui::isRotationGizmoActive() ||
+                   gui::isScaleGizmoActive() ||
                    gui::isTranslationGizmoActive();
         }
 
