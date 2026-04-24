@@ -25,7 +25,7 @@ namespace lfs::vis::terminal {
                    (static_cast<TerminalColor>(a) << 24u);
         }
 
-        constexpr TerminalColor TRANSPARENT = 0;
+        constexpr TerminalColor TRANSPARENT_COLOR = 0;
         constexpr TerminalColor BG_COLOR = packRgba(30, 30, 30, 255);
         constexpr TerminalColor SELECTION_COLOR = packRgba(100, 100, 200, 200);
         constexpr TerminalColor DEFAULT_FG = packRgba(229, 229, 229, 255);
@@ -289,10 +289,10 @@ namespace lfs::vis::terminal {
             out.foreground = vtermColorToPackedColor(cell.fg);
             if (out.reverse) {
                 out.foreground = vtermColorToPackedColor(cell.bg);
-                if (out.foreground == TRANSPARENT)
+                if (out.foreground == TRANSPARENT_COLOR)
                     out.foreground = BG_COLOR;
             }
-            if (out.foreground == TRANSPARENT)
+            if (out.foreground == TRANSPARENT_COLOR)
                 out.foreground = DEFAULT_FG;
         };
 
@@ -434,7 +434,7 @@ namespace lfs::vis::terminal {
 
     TerminalColor TerminalWidget::vtermColorToPackedColor(VTermColor color) const {
         if (VTERM_COLOR_IS_DEFAULT_FG(&color) || VTERM_COLOR_IS_DEFAULT_BG(&color)) {
-            return TRANSPARENT;
+            return TRANSPARENT_COLOR;
         }
         if (VTERM_COLOR_IS_INDEXED(&color)) {
             vterm_screen_convert_color_to_rgb(screen_, &color);
