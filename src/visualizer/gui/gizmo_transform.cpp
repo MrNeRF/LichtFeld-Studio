@@ -82,6 +82,8 @@ namespace lfs::vis::gui {
             PivotMode mode,
             GizmoTargetType type) {
 
+            (void)mode;
+
             const auto* node = scene.getNodeById(target_id);
             if (!node)
                 return glm::vec3(0.0f);
@@ -129,8 +131,7 @@ namespace lfs::vis::gui {
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
             TransformSpace space,
-            PivotMode pivot_mode,
-            ImGuizmo::OPERATION operation) {
+            PivotMode pivot_mode) {
 
             GizmoTransformContext ctx;
             ctx.type = GizmoTargetType::CropBox;
@@ -139,7 +140,6 @@ namespace lfs::vis::gui {
             ctx.pivot_local = pivot_local;
             ctx.use_world_space = (space == TransformSpace::World);
             ctx.pivot_mode = pivot_mode;
-            ctx.operation = operation;
 
             const auto* node = scene.getNode(name);
             if (!node || !node->cropbox)
@@ -170,8 +170,7 @@ namespace lfs::vis::gui {
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
             TransformSpace space,
-            PivotMode pivot_mode,
-            ImGuizmo::OPERATION operation) {
+            PivotMode pivot_mode) {
 
             GizmoTransformContext ctx;
             ctx.type = GizmoTargetType::Ellipsoid;
@@ -180,7 +179,6 @@ namespace lfs::vis::gui {
             ctx.pivot_local = pivot_local;
             ctx.use_world_space = (space == TransformSpace::World);
             ctx.pivot_mode = pivot_mode;
-            ctx.operation = operation;
 
             const auto* node = scene.getNode(name);
             if (!node || !node->ellipsoid)
@@ -244,6 +242,8 @@ namespace lfs::vis::gui {
             core::Scene& scene,
             const glm::vec3& delta_scale,
             const glm::vec3& new_pivot_world) {
+
+            (void)new_pivot_world;
 
             ctx.cumulative_scale *= delta_scale;
             const glm::mat4 world_delta = glm::translate(glm::mat4(1.0f), ctx.pivot_world) *

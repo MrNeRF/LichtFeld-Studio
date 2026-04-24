@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
@@ -53,9 +52,6 @@ namespace lfs::vis::gui {
         glm::vec3 cumulative_scale{1.0f};
         glm::vec3 cumulative_translation{0.0f};
 
-        // Current operation being performed
-        ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
-
         // Settings at drag start
         bool use_world_space = false;
         PivotMode pivot_mode = PivotMode::Origin;
@@ -87,7 +83,7 @@ namespace lfs::vis::gui {
             PivotMode mode,
             GizmoTargetType type);
 
-        // Compute gizmo display matrix for ImGuizmo
+        // Compute gizmo display matrix for the custom transform gizmos
         glm::mat4 computeGizmoMatrix(
             const glm::vec3& pivot_world,
             const glm::mat3& rotation,
@@ -102,8 +98,7 @@ namespace lfs::vis::gui {
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
             TransformSpace space,
-            PivotMode pivot_mode,
-            ImGuizmo::OPERATION operation);
+            PivotMode pivot_mode);
 
         GizmoTransformContext captureEllipsoid(
             const core::Scene& scene,
@@ -111,8 +106,7 @@ namespace lfs::vis::gui {
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
             TransformSpace space,
-            PivotMode pivot_mode,
-            ImGuizmo::OPERATION operation);
+            PivotMode pivot_mode);
 
         // Apply cumulative transforms - updates scene nodes
         void applyTranslation(

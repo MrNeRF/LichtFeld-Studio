@@ -433,7 +433,6 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/src/visualizer   # For internal visualizer headers used by GUI MCP
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rendering/include  # For rendering headers (MCP GUI tools)
         ${CMAKE_CURRENT_SOURCE_DIR}/external         # For external headers
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/imguizmo
 
         ${CUDAToolkit_INCLUDE_DIRS}
         ${OPENGL_INCLUDE_DIRS}

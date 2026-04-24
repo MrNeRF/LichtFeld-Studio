@@ -69,11 +69,8 @@ ForEachMacros:
   - BOOST_FOREACH
 IncludeBlocks:   Preserve
 IncludeCategories:
-  # imgui.h must come before ImGuizmo.h (dependency)
   - Regex:           '<imgui\.h>'
     Priority:        10
-  - Regex:           '<ImGuizmo\.h>'
-    Priority:        11
   - Regex:           '^"(llvm|llvm-c|clang|clang-c)/'
     Priority:        2
   - Regex:           '^(<|"(gtest|gmock|isl|json)/)'
@@ -121,4 +118,3 @@ Standard:        Latest
 TabWidth:        4
 UseTab:        Never
 ...
-

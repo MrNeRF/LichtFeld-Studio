@@ -33,11 +33,9 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
-#include <glm/gtc/type_ptr.hpp>
 #include <string_view>
 #include <vector>
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
@@ -888,7 +886,6 @@ namespace lfs::vis::gui {
             const auto* const hovered = timeline.getKeyframe(*hovered_keyframe);
             if (hovered && !hovered->is_loop_point) {
                 if (input.mouse_clicked[0] &&
-                    !ImGuizmo::IsOver() &&
                     !isRotationGizmoHovered() &&
                     !isTranslationGizmoHovered()) {
                     beginViewportKeyframeEdit(*hovered_keyframe);
@@ -980,13 +977,7 @@ namespace lfs::vis::gui {
         glm::mat4 gizmo_matrix(rot_mat);
         gizmo_matrix[3] = glm::vec4(kf->position, 1.0f);
 
-        const ImGuizmo::OPERATION op =
-            viewport_edit_mode_ == SequencerViewportEditMode::Rotate
-                ? ImGuizmo::ROTATE
-                : ImGuizmo::TRANSLATE;
-
-        ImGuizmo::SetOrthographic(settings.orthographic);
-        ImGuizmo::SetRect(rect_pos.x, rect_pos.y, rect_size.x, rect_size.y);
+        const bool rotate_mode = viewport_edit_mode_ == SequencerViewportEditMode::Rotate;
 
         ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
         const ImVec2 clip_min(rect_pos.x, rect_pos.y);
@@ -997,7 +988,7 @@ namespace lfs::vis::gui {
         bool is_using = false;
         glm::mat3 rotation_delta(1.0f);
 
-        if (op == ImGuizmo::ROTATE) {
+        if (rotate_mode) {
             RotationGizmoConfig rotation_config;
             rotation_config.id = 4000;
             rotation_config.viewport_pos = rect_pos;
@@ -1048,7 +1039,7 @@ namespace lfs::vis::gui {
 
         if (changed) {
             const glm::vec3 new_pos(gizmo_matrix[3]);
-            const glm::quat new_rot = op == ImGuizmo::ROTATE
+            const glm::quat new_rot = rotate_mode
                                           ? glm::normalize(glm::quat_cast(rotation_delta * rot_mat))
                                           : glm::normalize(glm::quat_cast(glm::mat3(gizmo_matrix)));
             if (controller_.updateKeyframeById(

@@ -68,7 +68,6 @@
 #include <imgui_internal.h>
 #include <iterator>
 #include <string_view>
-#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
@@ -76,9 +75,7 @@ namespace lfs::vis::gui {
         const FrameInputBuffer* s_frame_input = nullptr;
 
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
-            return ImGuizmo::IsOver() ||
-                   ImGuizmo::IsUsing() ||
-                   isBoundsGizmoHovered() ||
+            return isBoundsGizmoHovered() ||
                    isBoundsGizmoActive() ||
                    isRotationGizmoHovered() ||
                    isRotationGizmoActive() ||
@@ -1192,9 +1189,6 @@ namespace lfs::vis::gui {
                 last_check = now;
             }
         }
-
-        // Initialize ImGuizmo for this frame
-        ImGuizmo::BeginFrame();
 
         if (menu_bar_ && !ui_hidden_) {
             menu_bar_->render();

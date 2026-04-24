@@ -39,7 +39,6 @@
 #include <format>
 #include <limits>
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 namespace lfs::vis {
 
@@ -51,9 +50,7 @@ namespace lfs::vis {
         namespace string_keys = lichtfeld::Strings;
 
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
-            return ImGuizmo::IsOver() ||
-                   ImGuizmo::IsUsing() ||
-                   gui::isBoundsGizmoHovered() ||
+            return gui::isBoundsGizmoHovered() ||
                    gui::isBoundsGizmoActive() ||
                    gui::isRotationGizmoHovered() ||
                    gui::isRotationGizmoActive() ||
@@ -64,8 +61,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool isTransformGizmoUsing() {
-            return ImGuizmo::IsUsing() ||
-                   gui::isBoundsGizmoActive() ||
+            return gui::isBoundsGizmoActive() ||
                    gui::isRotationGizmoActive() ||
                    gui::isScaleGizmoActive() ||
                    gui::isTranslationGizmoActive();
@@ -580,7 +576,7 @@ namespace lfs::vis {
                 return;
             }
 
-            // Block if ImGuizmo is being used or hovered
+            // Block if a transform gizmo is being used or hovered
             if (isTransformGizmoOverOrUsing()) {
                 return;
             }
@@ -761,7 +757,7 @@ namespace lfs::vis {
                     }
                 }
 
-                // Node picking (controlled by bindings, skips if ImGuizmo active)
+                // Node picking (controlled by bindings, skips if a transform gizmo is active)
                 const input::ToolMode input_mode = getCurrentToolMode();
                 const input::Action pick_action = bindings_.getActionForMouseButton(
                     input_mode, input::MouseButton::LEFT, mods);
@@ -1046,7 +1042,7 @@ namespace lfs::vis {
         glm::vec2 pos(x, y);
         last_mouse_pos_ = current_pos;
 
-        // Node rectangle dragging - cancel if ImGuizmo takes over
+        // Node rectangle dragging - cancel if a transform gizmo takes over
         if (is_node_rect_dragging_) {
             if (isTransformGizmoUsing()) {
                 is_node_rect_dragging_ = false;
@@ -1057,7 +1053,7 @@ namespace lfs::vis {
             }
         }
 
-        // Block camera dragging if ImGuizmo is being used
+        // Block camera dragging if a transform gizmo is being used
         if (isTransformGizmoUsing()) {
             return;
         }

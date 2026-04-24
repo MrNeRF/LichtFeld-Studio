@@ -4,13 +4,6 @@
 
 # External dependencies (EXCLUDE_FROM_ALL to prevent third-party install rules)
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/imguizmo/CMakeLists.txt")
-    message(STATUS "Adding ImGuizmo")
-    add_subdirectory(imguizmo EXCLUDE_FROM_ALL)
-else()
-    message(WARNING "ImGuizmo not found - gizmo controls unavailable")
-endif()
-
 # Zep - embeddable editor core
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/zep/CMakeLists.txt")
     message(STATUS "Adding Zep from external/zep")

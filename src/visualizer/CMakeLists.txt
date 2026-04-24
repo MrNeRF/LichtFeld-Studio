@@ -228,7 +228,6 @@ target_link_libraries(lfs_visualizer
         SDL3::SDL3
         imgui::imgui
         implot::implot
-        imguizmo::imguizmo
         Zep::Zep
         glm::glm
         TBB::tbb
