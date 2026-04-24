@@ -2652,7 +2652,7 @@ namespace lfs::vis::editor {
 
     PythonEditor::~PythonEditor() = default;
 
-    bool PythonEditor::render(const ImVec2& size) {
+    bool PythonEditor::render(const float width, const float height) {
         execute_requested_ = false;
         impl_->ensureLspStarted();
         impl_->applyTheme(theme());
@@ -2669,6 +2669,7 @@ namespace lfs::vis::editor {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
         constexpr ImGuiWindowFlags CHILD_FLAGS =
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        const ImVec2 size(std::max(width, 1.0f), std::max(height, 1.0f));
 
         if (ImGui::BeginChild("##python_input", size, true, CHILD_FLAGS)) {
             if (impl_->request_focus) {

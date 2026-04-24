@@ -17,6 +17,10 @@
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Event.h>
+#include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/StringUtilities.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <SDL3/SDL_scancode.h>
 #include <chrono>
 #include <cfloat>
@@ -119,15 +123,70 @@ namespace {
     RmlTerminalPane g_output_terminal_pane;
     RmlTerminalPane g_repl_terminal_pane;
 
+    struct RmlPackagesPane;
+
+    void handle_packages_event(RmlPackagesPane& pane, Rml::Event& event);
+
+    struct PackagesPaneListener : Rml::EventListener {
+        RmlPackagesPane* owner = nullptr;
+        void ProcessEvent(Rml::Event& event) override {
+            if (owner)
+                handle_packages_event(*owner, event);
+        }
+    };
+
+    struct RmlPackagesPane {
+        RmlPackagesPane() { listener.owner = this; }
+
+        std::unique_ptr<lfs::vis::gui::RmlPanelHost> host;
+        lfs::vis::gui::RmlUIManager* manager = nullptr;
+        Rml::ElementDocument* document = nullptr;
+        Rml::Element* refresh_button = nullptr;
+        Rml::ElementFormControlInput* search_input = nullptr;
+        Rml::Element* status_label = nullptr;
+        Rml::Element* table_el = nullptr;
+        Rml::Element* body_el = nullptr;
+        Rml::Element* empty_el = nullptr;
+        PackagesPaneListener listener;
+
+        std::vector<lfs::python::PackageInfo> packages;
+        std::future<std::vector<lfs::python::PackageInfo>> pending_refresh;
+        bool loading = false;
+        bool loaded_once = false;
+        bool listeners_attached = false;
+        std::string search_filter;
+        std::string last_body_rml;
+        std::string last_status_text;
+        bool last_empty_visible = false;
+    };
+
+    RmlPackagesPane g_packages_pane;
+
     void reset_rml_terminal_pane(RmlTerminalPane& pane) {
         pane.view = nullptr;
         pane.host.reset();
         pane.manager = nullptr;
     }
 
+    void reset_rml_packages_pane(RmlPackagesPane& pane) {
+        pane.refresh_button = nullptr;
+        pane.search_input = nullptr;
+        pane.status_label = nullptr;
+        pane.table_el = nullptr;
+        pane.body_el = nullptr;
+        pane.empty_el = nullptr;
+        pane.document = nullptr;
+        pane.host.reset();
+        pane.manager = nullptr;
+        pane.listeners_attached = false;
+        pane.last_body_rml.clear();
+        pane.last_status_text.clear();
+    }
+
     void reset_rml_terminal_panes() {
         reset_rml_terminal_pane(g_output_terminal_pane);
         reset_rml_terminal_pane(g_repl_terminal_pane);
+        reset_rml_packages_pane(g_packages_pane);
     }
 
     std::optional<lfs::vis::terminal::TerminalKey> terminal_key_from_scancode(int scancode) {
@@ -352,6 +411,202 @@ namespace {
             pane.host->markContentDirty();
         terminal.markRendered();
 
+        pane.host->setInput(input);
+        pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        pane.host->setInput(nullptr);
+        ImGui::Dummy(size);
+    }
+
+    void request_packages_refresh(RmlPackagesPane& pane) {
+        if (pane.loading)
+            return;
+
+        pane.loading = true;
+        pane.loaded_once = true;
+        pane.pending_refresh = std::async(std::launch::async, [] {
+            return lfs::python::PackageManager::instance().list_installed();
+        });
+        if (pane.host)
+            pane.host->markContentDirty();
+    }
+
+    void clear_packages_cache(RmlPackagesPane& pane) {
+        pane.document = nullptr;
+        pane.refresh_button = nullptr;
+        pane.search_input = nullptr;
+        pane.status_label = nullptr;
+        pane.table_el = nullptr;
+        pane.body_el = nullptr;
+        pane.empty_el = nullptr;
+        pane.listeners_attached = false;
+        pane.last_body_rml.clear();
+        pane.last_status_text.clear();
+    }
+
+    bool ensure_packages_pane(RmlPackagesPane& pane, lfs::vis::gui::RmlUIManager* manager) {
+        if (!manager || !manager->isInitialized())
+            return false;
+
+        if (pane.manager != manager) {
+            reset_rml_packages_pane(pane);
+            pane.manager = manager;
+        }
+
+        if (!pane.host) {
+            pane.host = std::make_unique<lfs::vis::gui::RmlPanelHost>(
+                manager, "python_console_packages", "rmlui/python_packages_pane.rml");
+        }
+
+        if (!pane.host->ensureDocumentLoaded())
+            return false;
+
+        auto* doc = pane.host->getDocument();
+        if (pane.document != doc) {
+            clear_packages_cache(pane);
+            pane.document = doc;
+        }
+
+        if (!pane.document)
+            return false;
+
+        if (!pane.refresh_button)
+            pane.refresh_button = pane.document->GetElementById("packages-refresh");
+        if (!pane.search_input) {
+            pane.search_input = dynamic_cast<Rml::ElementFormControlInput*>(
+                pane.document->GetElementById("packages-search"));
+        }
+        if (!pane.status_label)
+            pane.status_label = pane.document->GetElementById("packages-status");
+        if (!pane.table_el)
+            pane.table_el = pane.document->GetElementById("packages-table");
+        if (!pane.body_el)
+            pane.body_el = pane.document->GetElementById("packages-body");
+        if (!pane.empty_el)
+            pane.empty_el = pane.document->GetElementById("packages-empty");
+
+        if (!pane.listeners_attached) {
+            if (pane.refresh_button)
+                pane.refresh_button->AddEventListener(Rml::EventId::Click, &pane.listener);
+            if (pane.search_input) {
+                pane.search_input->AddEventListener("change", &pane.listener);
+                pane.search_input->AddEventListener("input", &pane.listener);
+            }
+            pane.listeners_attached = true;
+        }
+
+        return true;
+    }
+
+    void handle_packages_event(RmlPackagesPane& pane, Rml::Event& event) {
+        const std::string type = event.GetType();
+        auto* current = event.GetCurrentElement();
+        auto* target = event.GetTargetElement();
+        const Rml::String current_id = current ? current->GetId() : "";
+        const Rml::String target_id = target ? target->GetId() : "";
+
+        if (type == "click" && (current_id == "packages-refresh" || target_id == "packages-refresh")) {
+            request_packages_refresh(pane);
+            event.StopPropagation();
+            return;
+        }
+
+        if ((type == "change" || type == "input") && current_id == "packages-search") {
+            if (pane.search_input)
+                pane.search_filter = pane.search_input->GetValue();
+            if (pane.host)
+                pane.host->markContentDirty();
+            event.StopPropagation();
+        }
+    }
+
+    bool package_matches_filter(const lfs::python::PackageInfo& pkg, const std::string& filter) {
+        if (filter.empty())
+            return true;
+        return pkg.name.find(filter) != std::string::npos ||
+               pkg.version.find(filter) != std::string::npos ||
+               pkg.path.find(filter) != std::string::npos;
+    }
+
+    void sync_packages_pane(RmlPackagesPane& pane) {
+        if (pane.loading && pane.pending_refresh.valid() &&
+            pane.pending_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            pane.packages = pane.pending_refresh.get();
+            pane.loading = false;
+            if (pane.host)
+                pane.host->markContentDirty();
+        }
+
+        if (pane.search_input) {
+            pane.search_filter = pane.search_input->GetValue();
+        }
+
+        std::string rows;
+        rows.reserve(pane.packages.size() * 192);
+        std::size_t visible_count = 0;
+        for (const auto& pkg : pane.packages) {
+            if (!package_matches_filter(pkg, pane.search_filter))
+                continue;
+            ++visible_count;
+            rows += std::format(
+                R"(<div class="pkg-row"><span class="pkg-name">{}</span><span class="pkg-version">{}</span><span class="pkg-path">{}</span></div>)",
+                Rml::StringUtilities::EncodeRml(pkg.name),
+                Rml::StringUtilities::EncodeRml(pkg.version),
+                Rml::StringUtilities::EncodeRml(pkg.path));
+        }
+
+        if (pane.body_el && rows != pane.last_body_rml) {
+            pane.body_el->SetInnerRML(rows);
+            pane.last_body_rml = std::move(rows);
+            if (pane.host)
+                pane.host->markContentDirty();
+        }
+
+        std::string status;
+        if (pane.loading) {
+            status = "Loading...";
+        } else if (pane.search_filter.empty()) {
+            status = std::format("({})", pane.packages.size());
+        } else {
+            status = std::format("({} / {})", visible_count, pane.packages.size());
+        }
+
+        if (pane.status_label && status != pane.last_status_text) {
+            pane.status_label->SetInnerRML(Rml::StringUtilities::EncodeRml(status));
+            pane.last_status_text = std::move(status);
+            if (pane.host)
+                pane.host->markContentDirty();
+        }
+
+        const bool empty_visible = !pane.loading && visible_count == 0;
+        if (pane.empty_el && empty_visible != pane.last_empty_visible) {
+            pane.empty_el->SetProperty("display", empty_visible ? "block" : "none");
+            pane.last_empty_visible = empty_visible;
+            if (pane.host)
+                pane.host->markContentDirty();
+        }
+        if (pane.table_el) {
+            pane.table_el->SetProperty("display", empty_visible ? "none" : "block");
+        }
+    }
+
+    void draw_rml_packages_pane(RmlPackagesPane& pane,
+                                lfs::vis::gui::RmlUIManager* manager,
+                                const lfs::vis::gui::PanelInputState* input) {
+        const ImVec2 size = ImGui::GetContentRegionAvail();
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return;
+
+        if (!ensure_packages_pane(pane, manager)) {
+            ImGui::TextDisabled("Packages view unavailable");
+            return;
+        }
+
+        if (!pane.loaded_once)
+            request_packages_refresh(pane);
+
+        sync_packages_pane(pane);
+
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
         pane.host->setInput(input);
         pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
         pane.host->setInput(nullptr);
@@ -1180,7 +1435,7 @@ namespace lfs::vis::gui::panels {
             if (auto* editor = state.getEditor()) {
                 editor->setReadOnly(should_block_editor_input(editor, state));
 
-                if (editor->render(editor_size)) {
+                if (editor->render(editor_size.x, editor_size.y)) {
                     // Ctrl+Enter was pressed - execute
                     execute_python_code(editor->getTextStripped(), state);
                 }
@@ -1594,7 +1849,7 @@ namespace lfs::vis::gui::panels {
             if (auto* editor = state.getEditor()) {
                 editor->setReadOnly(should_block_editor_input(editor, state));
 
-                if (editor->render(editor_size)) {
+                if (editor->render(editor_size.x, editor_size.y)) {
                     execute_python_code(editor->getTextStripped(), state);
                 }
                 editor_has_active_completion = editor->hasActiveCompletion();
@@ -1680,63 +1935,7 @@ namespace lfs::vis::gui::panels {
                 // Packages tab - shows installed packages
                 if (ImGui::BeginTabItem("Packages")) {
                     state.setActiveTab(2);
-
-                    static std::vector<python::PackageInfo> cached_packages;
-                    static std::future<std::vector<python::PackageInfo>> pending_refresh;
-                    static bool loading = false;
-                    static char search_filter[128] = "";
-
-                    if (!loading && ImGui::Button("Refresh##docked")) {
-                        loading = true;
-                        pending_refresh = std::async(std::launch::async, []() {
-                            return python::PackageManager::instance().list_installed();
-                        });
-                    }
-
-                    if (loading && pending_refresh.valid() &&
-                        pending_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        cached_packages = pending_refresh.get();
-                        loading = false;
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(PKG_SEARCH_WIDTH);
-                    lfs::vis::gui::widgets::InputTextWithHint("##search_docked", "Search...", search_filter,
-                                                              sizeof(search_filter));
-
-                    ImGui::SameLine();
-                    if (loading) {
-                        ImGui::TextColored(t.palette.text_dim, "Loading...");
-                    } else {
-                        ImGui::TextColored(t.palette.text_dim, "(%zu)", cached_packages.size());
-                    }
-
-                    if (cached_packages.empty() && !loading) {
-                        ImGui::TextColored(t.palette.text_dim, "No packages installed");
-                    } else {
-                        constexpr auto TABLE_FLAGS =
-                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable;
-                        if (ImGui::BeginTable("##docked_pkg_table", 3, TABLE_FLAGS, ImGui::GetContentRegionAvail())) {
-                            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, PKG_NAME_COL_WIDTH);
-                            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, PKG_VERSION_COL_WIDTH);
-                            ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableHeadersRow();
-                            for (const auto& pkg : cached_packages) {
-                                if (search_filter[0] != '\0' &&
-                                    pkg.name.find(search_filter) == std::string::npos)
-                                    continue;
-                                ImGui::TableNextRow();
-                                ImGui::TableNextColumn();
-                                ImGui::Text("%s", pkg.name.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.version.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.path.c_str());
-                            }
-                            ImGui::EndTable();
-                        }
-                    }
-
+                    draw_rml_packages_pane(g_packages_pane, ctx.rml_manager, input);
                     ImGui::EndTabItem();
                 }
 

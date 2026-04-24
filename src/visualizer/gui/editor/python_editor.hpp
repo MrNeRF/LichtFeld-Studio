@@ -7,7 +7,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <imgui.h>
 
 namespace lfs::vis {
     struct Theme;
@@ -41,7 +40,7 @@ namespace lfs::vis::editor {
         PythonEditor& operator=(const PythonEditor&) = delete;
 
         // Render the editor. Returns true if execution was requested this frame.
-        bool render(const ImVec2& size);
+        bool render(float width, float height);
 
         std::string getText() const;
         std::string getTextStripped() const;

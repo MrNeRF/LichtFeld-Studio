@@ -1,0 +1,37 @@
+body,
+#window-frame {
+    background-color: @{background};
+    color: @{text};
+}
+
+#packages-status,
+#packages-empty,
+.pkg-version,
+.pkg-path {
+    color: @{text_dim};
+}
+
+.pkg-header {
+    color: @{text_dim};
+    border-bottom-color: @{border};
+}
+
+.pkg-row {
+    border-bottom-color: @{alpha(border,0.25)};
+}
+
+#packages-refresh {
+    color: @{text};
+    background-color: @{surface_bright};
+    border-color: @{border};
+}
+
+#packages-refresh:hover {
+    background-color: @{alpha(primary,0.18)};
+}
+
+#packages-search {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+}

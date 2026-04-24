@@ -1,0 +1,25 @@
+<rml>
+    <head>
+        <link type="text/rcss" href="python_packages_pane.rcss"/>
+    </head>
+    <body id="window-frame">
+        <div id="content-wrap">
+            <div id="content">
+                <div id="packages-toolbar">
+                    <button id="packages-refresh" type="button">Refresh</button>
+                    <input id="packages-search" type="text" placeholder="Search..."/>
+                    <span id="packages-status">(0)</span>
+                </div>
+                <div id="packages-table">
+                    <div class="pkg-header">
+                        <span class="pkg-name">Name</span>
+                        <span class="pkg-version">Version</span>
+                        <span class="pkg-path">Path</span>
+                    </div>
+                    <div id="packages-body"></div>
+                </div>
+                <div id="packages-empty">No packages installed</div>
+            </div>
+        </div>
+    </body>
+</rml>
