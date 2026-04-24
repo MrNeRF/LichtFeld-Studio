@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <core/logger.hpp>
 #include <cstring>
+#include <imgui.h>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -44,38 +45,72 @@ namespace lfs::vis::terminal {
         constexpr ImU32 DEFAULT_FG = IM_COL32(229, 229, 229, 255);
         constexpr int SCROLL_LINES = 3;
 
-        struct KeyMapping {
-            ImGuiKey key;
+        struct TerminalKeyMapping {
+            TerminalKey key;
             const char* seq;
         };
 
-        constexpr KeyMapping KEY_MAPPINGS[] = {
-            {ImGuiKey_Enter, "\r"},
-            {ImGuiKey_Backspace, "\x7f"},
-            {ImGuiKey_Tab, "\t"},
-            {ImGuiKey_Escape, "\x1b"},
-            {ImGuiKey_UpArrow, "\x1b[A"},
-            {ImGuiKey_DownArrow, "\x1b[B"},
-            {ImGuiKey_RightArrow, "\x1b[C"},
-            {ImGuiKey_LeftArrow, "\x1b[D"},
-            {ImGuiKey_Home, "\x1b[H"},
-            {ImGuiKey_End, "\x1b[F"},
-            {ImGuiKey_PageUp, "\x1b[5~"},
-            {ImGuiKey_PageDown, "\x1b[6~"},
-            {ImGuiKey_Delete, "\x1b[3~"},
-            {ImGuiKey_Insert, "\x1b[2~"},
-            {ImGuiKey_F1, "\x1bOP"},
-            {ImGuiKey_F2, "\x1bOQ"},
-            {ImGuiKey_F3, "\x1bOR"},
-            {ImGuiKey_F4, "\x1bOS"},
-            {ImGuiKey_F5, "\x1b[15~"},
-            {ImGuiKey_F6, "\x1b[17~"},
-            {ImGuiKey_F7, "\x1b[18~"},
-            {ImGuiKey_F8, "\x1b[19~"},
-            {ImGuiKey_F9, "\x1b[20~"},
-            {ImGuiKey_F10, "\x1b[21~"},
-            {ImGuiKey_F11, "\x1b[23~"},
-            {ImGuiKey_F12, "\x1b[24~"},
+        constexpr TerminalKeyMapping TERMINAL_KEY_MAPPINGS[] = {
+            {TerminalKey::Enter, "\r"},
+            {TerminalKey::Backspace, "\x7f"},
+            {TerminalKey::Tab, "\t"},
+            {TerminalKey::Escape, "\x1b"},
+            {TerminalKey::Up, "\x1b[A"},
+            {TerminalKey::Down, "\x1b[B"},
+            {TerminalKey::Right, "\x1b[C"},
+            {TerminalKey::Left, "\x1b[D"},
+            {TerminalKey::Home, "\x1b[H"},
+            {TerminalKey::End, "\x1b[F"},
+            {TerminalKey::PageUp, "\x1b[5~"},
+            {TerminalKey::PageDown, "\x1b[6~"},
+            {TerminalKey::Delete, "\x1b[3~"},
+            {TerminalKey::Insert, "\x1b[2~"},
+            {TerminalKey::F1, "\x1bOP"},
+            {TerminalKey::F2, "\x1bOQ"},
+            {TerminalKey::F3, "\x1bOR"},
+            {TerminalKey::F4, "\x1bOS"},
+            {TerminalKey::F5, "\x1b[15~"},
+            {TerminalKey::F6, "\x1b[17~"},
+            {TerminalKey::F7, "\x1b[18~"},
+            {TerminalKey::F8, "\x1b[19~"},
+            {TerminalKey::F9, "\x1b[20~"},
+            {TerminalKey::F10, "\x1b[21~"},
+            {TerminalKey::F11, "\x1b[23~"},
+            {TerminalKey::F12, "\x1b[24~"},
+        };
+
+        struct ImGuiKeyMapping {
+            ImGuiKey key;
+            TerminalKey terminal_key;
+        };
+
+        constexpr ImGuiKeyMapping IMGUI_KEY_MAPPINGS[] = {
+            {ImGuiKey_Enter, TerminalKey::Enter},
+            {ImGuiKey_Backspace, TerminalKey::Backspace},
+            {ImGuiKey_Tab, TerminalKey::Tab},
+            {ImGuiKey_Escape, TerminalKey::Escape},
+            {ImGuiKey_UpArrow, TerminalKey::Up},
+            {ImGuiKey_DownArrow, TerminalKey::Down},
+            {ImGuiKey_RightArrow, TerminalKey::Right},
+            {ImGuiKey_LeftArrow, TerminalKey::Left},
+            {ImGuiKey_Home, TerminalKey::Home},
+            {ImGuiKey_End, TerminalKey::End},
+            {ImGuiKey_PageUp, TerminalKey::PageUp},
+            {ImGuiKey_PageDown, TerminalKey::PageDown},
+            {ImGuiKey_Delete, TerminalKey::Delete},
+            {ImGuiKey_Insert, TerminalKey::Insert},
+            {ImGuiKey_F1, TerminalKey::F1},
+            {ImGuiKey_F2, TerminalKey::F2},
+            {ImGuiKey_F3, TerminalKey::F3},
+            {ImGuiKey_F4, TerminalKey::F4},
+            {ImGuiKey_F5, TerminalKey::F5},
+            {ImGuiKey_F6, TerminalKey::F6},
+            {ImGuiKey_F7, TerminalKey::F7},
+            {ImGuiKey_F8, TerminalKey::F8},
+            {ImGuiKey_F9, TerminalKey::F9},
+            {ImGuiKey_F10, TerminalKey::F10},
+            {ImGuiKey_F11, TerminalKey::F11},
+            {ImGuiKey_F12, TerminalKey::F12},
         };
 
         size_t encodeUtf8(uint32_t codepoint, char (&out)[4]) {
@@ -102,6 +137,25 @@ namespace lfs::vis::terminal {
             out[2] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
             out[3] = static_cast<char>(0x80 | (codepoint & 0x3F));
             return 4;
+        }
+
+        const char* terminalKeySequence(TerminalKey key) {
+            for (const auto& mapping : TERMINAL_KEY_MAPPINGS) {
+                if (mapping.key == key)
+                    return mapping.seq;
+            }
+            return nullptr;
+        }
+
+        std::string cellText(const VTermScreenCell& cell) {
+            std::string text;
+            for (int i = 0; i < VTERM_MAX_CHARS_PER_CELL && cell.chars[i]; ++i) {
+                char tmp[4];
+                const size_t n = encodeUtf8(cell.chars[i], tmp);
+                if (n > 0)
+                    text.append(tmp, n);
+            }
+            return text;
         }
 
     } // namespace
@@ -243,6 +297,170 @@ namespace lfs::vis::terminal {
         }
     }
 
+    void TerminalWidget::update() {
+        pump();
+    }
+
+    void TerminalWidget::resize(int cols, int rows) {
+        handleResize(std::max(1, cols), std::max(1, rows));
+    }
+
+    TerminalSnapshot TerminalWidget::snapshot() const {
+        std::lock_guard lock(mutex_);
+
+        TerminalSnapshot result;
+        result.cols = cols_;
+        result.rows = rows_;
+        result.cursor_col = cursor_pos_.col;
+        result.cursor_row = cursor_pos_.row;
+        result.cursor_visible = cursor_visible_;
+        result.focused = is_focused_;
+        result.scroll_offset = std::min(scroll_offset_, static_cast<int>(scrollback_.size()));
+        result.visible_rows.resize(static_cast<size_t>(rows_));
+
+        const int scrollback_size = static_cast<int>(scrollback_.size());
+        const int eff_offset = std::min(scroll_offset_, scrollback_size);
+
+        for (int row = 0; row < rows_; ++row) {
+            auto& snapshot_row = result.visible_rows[static_cast<size_t>(row)];
+            snapshot_row.cells.resize(static_cast<size_t>(cols_));
+
+            if (row < eff_offset) {
+                const int idx = eff_offset - 1 - row;
+                const auto& line = scrollback_[static_cast<size_t>(idx)];
+                for (int col = 0; col < cols_ && col < static_cast<int>(line.cells.size()); ++col) {
+                    const auto& cell = line.cells[static_cast<size_t>(col)];
+                    auto& out = snapshot_row.cells[static_cast<size_t>(col)];
+                    out.text = cellText(cell);
+                    out.foreground = vtermColorToPackedColor(cell.fg);
+                    if (out.foreground == IM_COL32(0, 0, 0, 0))
+                        out.foreground = DEFAULT_FG;
+                    out.background = vtermColorToPackedColor(cell.bg);
+                    out.reverse = cell.attrs.reverse != 0;
+                    out.bold = cell.attrs.bold != 0;
+                    out.underline = cell.attrs.underline != 0;
+                }
+                continue;
+            }
+
+            const int screen_row = row - eff_offset;
+            if (screen_row >= rows_)
+                continue;
+
+            for (int col = 0; col < cols_; ++col) {
+                VTermScreenCell cell;
+                vterm_screen_get_cell(screen_, {screen_row, col}, &cell);
+
+                auto& out = snapshot_row.cells[static_cast<size_t>(col)];
+                out.text = cellText(cell);
+                out.selected = isCellSelected(screen_row, col);
+                out.reverse = cell.attrs.reverse != 0;
+                out.bold = cell.attrs.bold != 0;
+                out.underline = cell.attrs.underline != 0;
+
+                out.background = vtermColorToPackedColor(cell.bg);
+                if (out.reverse)
+                    out.background = vtermColorToPackedColor(cell.fg);
+                if (out.selected)
+                    out.background = SELECTION_COLOR;
+
+                out.foreground = vtermColorToPackedColor(cell.fg);
+                if (out.reverse) {
+                    out.foreground = vtermColorToPackedColor(cell.bg);
+                    if (out.foreground == IM_COL32(0, 0, 0, 0))
+                        out.foreground = BG_COLOR;
+                }
+                if (out.foreground == IM_COL32(0, 0, 0, 0))
+                    out.foreground = DEFAULT_FG;
+            }
+        }
+
+        return result;
+    }
+
+    void TerminalWidget::setFocused(bool focused) {
+        is_focused_ = focused;
+        if (focused)
+            cursor_blink_time_ = 0.0f;
+        needs_redraw_ = true;
+    }
+
+    void TerminalWidget::sendText(std::string_view text) {
+        if (read_only_ || text.empty() || !pty_.is_running())
+            return;
+        if (pty_.write(text.data(), text.size()) < 0) {
+            LOG_ERROR("PTY write failed");
+            return;
+        }
+        scrollToBottom();
+    }
+
+    void TerminalWidget::sendCodepoint(uint32_t codepoint) {
+        char utf8[4];
+        const size_t len = encodeUtf8(codepoint, utf8);
+        if (len == 0)
+            return;
+        sendText(std::string_view(utf8, len));
+    }
+
+    void TerminalWidget::sendKey(TerminalKey key) {
+        if (const char* seq = terminalKeySequence(key)) {
+            sendText(seq);
+        }
+    }
+
+    void TerminalWidget::sendControl(char letter) {
+        if (read_only_ || !pty_.is_running())
+            return;
+
+        char upper = letter;
+        if (upper >= 'a' && upper <= 'z')
+            upper = static_cast<char>(upper - 'a' + 'A');
+        if (upper < 'A' || upper > 'Z')
+            return;
+
+        const char control = static_cast<char>(1 + (upper - 'A'));
+        if (pty_.write(&control, 1) < 0) {
+            LOG_ERROR("PTY write failed");
+            return;
+        }
+        scrollToBottom();
+    }
+
+    void TerminalWidget::beginSelection(int row, int col) {
+        std::lock_guard lock(mutex_);
+        row = std::clamp(row, 0, std::max(0, rows_ - 1));
+        col = std::clamp(col, 0, std::max(0, cols_ - 1));
+        selection_start_ = {row, col};
+        selection_end_ = selection_start_;
+        is_selecting_ = true;
+        needs_redraw_ = true;
+    }
+
+    void TerminalWidget::updateSelection(int row, int col) {
+        std::lock_guard lock(mutex_);
+        row = std::clamp(row, 0, std::max(0, rows_ - 1));
+        col = std::clamp(col, 0, std::max(0, cols_ - 1));
+        selection_end_ = {row, col};
+        needs_redraw_ = true;
+    }
+
+    void TerminalWidget::endSelection() {
+        std::lock_guard lock(mutex_);
+        is_selecting_ = false;
+        needs_redraw_ = true;
+    }
+
+    bool TerminalWidget::hasSelection() const {
+        std::lock_guard lock(mutex_);
+        return selection_start_.row != selection_end_.row || selection_start_.col != selection_end_.col;
+    }
+
+    void TerminalWidget::markRendered() {
+        needs_redraw_ = false;
+        has_new_output_ = false;
+    }
+
     bool TerminalWidget::render(ImFont* mono_font) {
         pump();
 
@@ -376,7 +594,7 @@ namespace lfs::vis::terminal {
                         }
                         utf8[len] = '\0';
 
-                        ImU32 fg = vtermColorToImU32(cell.fg);
+                        ImU32 fg = vtermColorToPackedColor(cell.fg);
                         if (fg == IM_COL32(0, 0, 0, 0))
                             fg = DEFAULT_FG;
 
@@ -410,8 +628,7 @@ namespace lfs::vis::terminal {
             ImGui::PopFont();
 
         const bool changed = needs_redraw_;
-        needs_redraw_ = false;
-        has_new_output_ = false;
+        markRendered();
         return changed;
     }
 
@@ -419,35 +636,21 @@ namespace lfs::vis::terminal {
         ImGuiIO& io = ImGui::GetIO();
 
         for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
-            char utf8[4];
-            const size_t len = encodeUtf8(io.InputQueueCharacters[i], utf8);
-            if (len == 0)
-                continue;
-            if (pty_.write(utf8, len) < 0) {
-                LOG_ERROR("PTY write failed");
-                return;
-            }
+            sendCodepoint(io.InputQueueCharacters[i]);
         }
 
         if (io.KeyCtrl) {
             for (int key = ImGuiKey_A; key <= ImGuiKey_Z; ++key) {
                 if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(key), false)) {
-                    const char c = static_cast<char>(1 + (key - ImGuiKey_A));
-                    if (pty_.write(&c, 1) < 0) {
-                        LOG_ERROR("PTY write failed");
-                    }
+                    sendControl(static_cast<char>('A' + (key - ImGuiKey_A)));
                     return;
                 }
             }
         }
 
-        for (const auto& m : KEY_MAPPINGS) {
+        for (const auto& m : IMGUI_KEY_MAPPINGS) {
             if (ImGui::IsKeyPressed(m.key, true)) {
-                if (pty_.write(m.seq, std::strlen(m.seq)) < 0) {
-                    LOG_ERROR("PTY write failed");
-                    return;
-                }
-                scrollToBottom();
+                sendKey(m.terminal_key);
                 return;
             }
         }
@@ -474,21 +677,12 @@ namespace lfs::vis::terminal {
         const ImVec2 p0 = {origin.x + col * char_width_, origin.y + row * char_height_};
         const ImVec2 p1 = {p0.x + char_width_, p0.y + char_height_};
 
-        // Selection check
-        bool in_selection = false;
-        if (selection_start_.row != selection_end_.row || selection_start_.col != selection_end_.col) {
-            VTermPos start = selection_start_, end = selection_end_;
-            if (start.row > end.row || (start.row == end.row && start.col > end.col)) {
-                std::swap(start, end);
-            }
-            in_selection = (row > start.row || (row == start.row && col >= start.col)) &&
-                           (row < end.row || (row == end.row && col <= end.col));
-        }
+        const bool in_selection = isCellSelected(row, col);
 
         // Background
-        ImU32 bg = vtermColorToImU32(cell.bg);
+        ImU32 bg = vtermColorToPackedColor(cell.bg);
         if (cell.attrs.reverse)
-            bg = vtermColorToImU32(cell.fg);
+            bg = vtermColorToPackedColor(cell.fg);
         if (in_selection)
             bg = SELECTION_COLOR;
         if (bg != IM_COL32(0, 0, 0, 0)) {
@@ -509,9 +703,9 @@ namespace lfs::vis::terminal {
             }
             utf8[total_len] = '\0';
 
-            ImU32 fg = vtermColorToImU32(cell.fg);
+            ImU32 fg = vtermColorToPackedColor(cell.fg);
             if (cell.attrs.reverse) {
-                fg = vtermColorToImU32(cell.bg);
+                fg = vtermColorToPackedColor(cell.bg);
                 if (fg == IM_COL32(0, 0, 0, 0))
                     fg = BG_COLOR;
             }
@@ -538,7 +732,7 @@ namespace lfs::vis::terminal {
         needs_redraw_ = true;
     }
 
-    ImU32 TerminalWidget::vtermColorToImU32(VTermColor color) const {
+    TerminalColor TerminalWidget::vtermColorToPackedColor(VTermColor color) const {
         if (VTERM_COLOR_IS_DEFAULT_FG(&color) || VTERM_COLOR_IS_DEFAULT_BG(&color)) {
             return IM_COL32(0, 0, 0, 0);
         }
@@ -549,6 +743,20 @@ namespace lfs::vis::terminal {
             return IM_COL32(color.rgb.red, color.rgb.green, color.rgb.blue, 255);
         }
         return DEFAULT_FG;
+    }
+
+    bool TerminalWidget::isCellSelected(int row, int col) const {
+        if (selection_start_.row == selection_end_.row && selection_start_.col == selection_end_.col) {
+            return false;
+        }
+
+        VTermPos start = selection_start_, end = selection_end_;
+        if (start.row > end.row || (start.row == end.row && start.col > end.col)) {
+            std::swap(start, end);
+        }
+
+        return (row > start.row || (row == start.row && col >= start.col)) &&
+               (row < end.row || (row == end.row && col <= end.col));
     }
 
     void TerminalWidget::scrollUp(int lines) {

@@ -1224,6 +1224,7 @@ namespace lfs::vis::gui {
 
         global_context_menu_->destroyGLResources();
         rml_modal_overlay_.reset();
+        panels::ShutdownPythonConsoleRml();
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
@@ -1527,6 +1528,7 @@ namespace lfs::vis::gui {
             .window_states = &window_states_,
             .editor = &editor_ctx,
             .sequencer_controller = &sequencer_ui_.controller(),
+            .rml_manager = &rmlui_manager_,
             .fonts = buildFontSet()};
 
         // Build draw context for panel registry

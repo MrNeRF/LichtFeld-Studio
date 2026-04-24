@@ -9,14 +9,76 @@
 #undef small // Windows rpcndr.h defines 'small' as 'char'; conflicts with libvterm
 #endif
 
+#include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <vterm.h>
-#include <imgui.h>
+
+struct ImDrawList;
+struct ImFont;
+struct ImVec2;
 
 namespace lfs::vis::terminal {
+
+    enum class TerminalKey {
+        Enter,
+        Backspace,
+        Tab,
+        Escape,
+        Up,
+        Down,
+        Right,
+        Left,
+        Home,
+        End,
+        PageUp,
+        PageDown,
+        Delete,
+        Insert,
+        F1,
+        F2,
+        F3,
+        F4,
+        F5,
+        F6,
+        F7,
+        F8,
+        F9,
+        F10,
+        F11,
+        F12,
+    };
+
+    using TerminalColor = uint32_t;
+
+    struct TerminalCellSnapshot {
+        std::string text;
+        TerminalColor foreground = 0;
+        TerminalColor background = 0;
+        bool selected = false;
+        bool reverse = false;
+        bool bold = false;
+        bool underline = false;
+    };
+
+    struct TerminalRowSnapshot {
+        std::vector<TerminalCellSnapshot> cells;
+    };
+
+    struct TerminalSnapshot {
+        int cols = 0;
+        int rows = 0;
+        int cursor_col = 0;
+        int cursor_row = 0;
+        bool cursor_visible = false;
+        bool focused = false;
+        int scroll_offset = 0;
+        std::vector<TerminalRowSnapshot> visible_rows;
+    };
 
     class TerminalWidget {
     public:
@@ -38,10 +100,29 @@ namespace lfs::vis::terminal {
         // Handle keyboard input (call when terminal is focused)
         void processInput();
 
+        // Backend-neutral update/render surface for RmlUi and tests.
+        void update();
+        void resize(int cols, int rows);
+        [[nodiscard]] TerminalSnapshot snapshot() const;
+        [[nodiscard]] int cols() const { return cols_; }
+        [[nodiscard]] int rows() const { return rows_; }
+
+        void setFocused(bool focused);
+        void sendText(std::string_view text);
+        void sendCodepoint(uint32_t codepoint);
+        void sendKey(TerminalKey key);
+        void sendControl(char letter);
+        void beginSelection(int row, int col);
+        void updateSelection(int row, int col);
+        void endSelection();
+        [[nodiscard]] bool hasSelection() const;
+
         // State
         [[nodiscard]] bool is_running() const { return pty_.is_running(); }
         [[nodiscard]] bool has_output() const { return has_new_output_; }
         [[nodiscard]] bool isFocused() const { return is_focused_; }
+        [[nodiscard]] bool needsRedraw() const { return needs_redraw_ || has_new_output_; }
+        void markRendered();
 
         // Scrollback
         void scrollUp(int lines = 1);
@@ -88,7 +169,8 @@ namespace lfs::vis::terminal {
         static int onPushline(int cols, const VTermScreenCell* cells, void* user);
         static int onPopline(int cols, VTermScreenCell* cells, void* user);
 
-        ImU32 vtermColorToImU32(VTermColor color) const;
+        [[nodiscard]] TerminalColor vtermColorToPackedColor(VTermColor color) const;
+        [[nodiscard]] bool isCellSelected(int row, int col) const;
 
         PtyProcess pty_;
         VTerm* vt_ = nullptr;

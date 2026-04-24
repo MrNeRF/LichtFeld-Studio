@@ -18,6 +18,8 @@ namespace lfs::vis {
     class SequencerController;
 
     namespace gui {
+        class RmlUIManager;
+
         // Font set for typography hierarchy
         struct FontSet {
             ImFont* regular = nullptr;
@@ -55,6 +57,7 @@ namespace lfs::vis {
             std::unordered_map<std::string, bool>* window_states = nullptr;
             EditorContext* editor = nullptr;
             SequencerController* sequencer_controller = nullptr;
+            RmlUIManager* rml_manager = nullptr;
             FontSet fonts;
         };
 

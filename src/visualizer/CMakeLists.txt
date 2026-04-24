@@ -183,6 +183,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
         gui/rmlui/elements/scene_graph_element.cpp
+        gui/rmlui/elements/terminal_element.cpp
 )
 
 set_source_files_properties(

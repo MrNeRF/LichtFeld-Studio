@@ -7,16 +7,25 @@
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/panel_layout.hpp"
+#include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "theme/theme.hpp"
 
+#include <RmlUi/Core/ElementDocument.h>
+#include <SDL3/SDL_scancode.h>
 #include <chrono>
+#include <cfloat>
 #include <fstream>
 #include <future>
+#include <optional>
 #include <sstream>
 #include <thread>
+#include <utility>
 #include <imgui.h>
 
 #include "python/python_compat.hpp"
@@ -99,6 +108,254 @@ namespace {
         }
 
         editor->focus();
+    }
+
+    struct RmlTerminalPane {
+        std::unique_ptr<lfs::vis::gui::RmlPanelHost> host;
+        lfs::vis::gui::TerminalElement* view = nullptr;
+        lfs::vis::gui::RmlUIManager* manager = nullptr;
+    };
+
+    RmlTerminalPane g_output_terminal_pane;
+    RmlTerminalPane g_repl_terminal_pane;
+
+    void reset_rml_terminal_pane(RmlTerminalPane& pane) {
+        pane.view = nullptr;
+        pane.host.reset();
+        pane.manager = nullptr;
+    }
+
+    void reset_rml_terminal_panes() {
+        reset_rml_terminal_pane(g_output_terminal_pane);
+        reset_rml_terminal_pane(g_repl_terminal_pane);
+    }
+
+    std::optional<lfs::vis::terminal::TerminalKey> terminal_key_from_scancode(int scancode) {
+        using lfs::vis::terminal::TerminalKey;
+        switch (scancode) {
+        case SDL_SCANCODE_RETURN:
+        case SDL_SCANCODE_KP_ENTER:
+            return TerminalKey::Enter;
+        case SDL_SCANCODE_BACKSPACE:
+            return TerminalKey::Backspace;
+        case SDL_SCANCODE_TAB:
+            return TerminalKey::Tab;
+        case SDL_SCANCODE_ESCAPE:
+            return TerminalKey::Escape;
+        case SDL_SCANCODE_UP:
+            return TerminalKey::Up;
+        case SDL_SCANCODE_DOWN:
+            return TerminalKey::Down;
+        case SDL_SCANCODE_RIGHT:
+            return TerminalKey::Right;
+        case SDL_SCANCODE_LEFT:
+            return TerminalKey::Left;
+        case SDL_SCANCODE_HOME:
+            return TerminalKey::Home;
+        case SDL_SCANCODE_END:
+            return TerminalKey::End;
+        case SDL_SCANCODE_PAGEUP:
+            return TerminalKey::PageUp;
+        case SDL_SCANCODE_PAGEDOWN:
+            return TerminalKey::PageDown;
+        case SDL_SCANCODE_DELETE:
+            return TerminalKey::Delete;
+        case SDL_SCANCODE_INSERT:
+            return TerminalKey::Insert;
+        case SDL_SCANCODE_F1:
+            return TerminalKey::F1;
+        case SDL_SCANCODE_F2:
+            return TerminalKey::F2;
+        case SDL_SCANCODE_F3:
+            return TerminalKey::F3;
+        case SDL_SCANCODE_F4:
+            return TerminalKey::F4;
+        case SDL_SCANCODE_F5:
+            return TerminalKey::F5;
+        case SDL_SCANCODE_F6:
+            return TerminalKey::F6;
+        case SDL_SCANCODE_F7:
+            return TerminalKey::F7;
+        case SDL_SCANCODE_F8:
+            return TerminalKey::F8;
+        case SDL_SCANCODE_F9:
+            return TerminalKey::F9;
+        case SDL_SCANCODE_F10:
+            return TerminalKey::F10;
+        case SDL_SCANCODE_F11:
+            return TerminalKey::F11;
+        case SDL_SCANCODE_F12:
+            return TerminalKey::F12;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    lfs::vis::gui::TerminalElement* ensure_rml_terminal_view(RmlTerminalPane& pane,
+                                                              lfs::vis::gui::RmlUIManager* manager,
+                                                              const char* context_name) {
+        if (!manager || !manager->isInitialized())
+            return nullptr;
+
+        if (pane.manager != manager) {
+            reset_rml_terminal_pane(pane);
+            pane.manager = manager;
+        }
+
+        if (!pane.host) {
+            pane.host = std::make_unique<lfs::vis::gui::RmlPanelHost>(
+                manager, context_name, "rmlui/python_terminal_pane.rml");
+        }
+
+        if (!pane.host->ensureDocumentLoaded())
+            return nullptr;
+
+        if (!pane.view) {
+            auto* doc = pane.host->getDocument();
+            pane.view = doc
+                            ? dynamic_cast<lfs::vis::gui::TerminalElement*>(
+                                  doc->GetElementById("terminal-view"))
+                            : nullptr;
+        }
+        return pane.view;
+    }
+
+    void process_rml_terminal_input(lfs::vis::terminal::TerminalWidget& terminal,
+                                    const lfs::vis::gui::PanelInputState* input,
+                                    const ImVec2& pos,
+                                    const ImVec2& size,
+                                    float char_w,
+                                    float char_h) {
+        if (!input || size.x <= 0.0f || size.y <= 0.0f || char_w <= 0.0f || char_h <= 0.0f)
+            return;
+
+        const bool hovered =
+            input->mouse_x >= pos.x && input->mouse_x < pos.x + size.x &&
+            input->mouse_y >= pos.y && input->mouse_y < pos.y + size.y;
+
+        const auto mouse_cell = [&]() {
+            const int col = static_cast<int>((input->mouse_x - pos.x) / char_w);
+            const int row = static_cast<int>((input->mouse_y - pos.y) / char_h);
+            return std::pair<int, int>{row, col};
+        };
+
+        if (input->mouse_clicked[0]) {
+            terminal.setFocused(hovered);
+            if (hovered) {
+                const auto [row, col] = mouse_cell();
+                terminal.beginSelection(row, col);
+            }
+        }
+
+        if (terminal.isFocused() && input->mouse_down[0]) {
+            const auto [row, col] = mouse_cell();
+            terminal.updateSelection(row, col);
+        }
+
+        if (input->mouse_released[0]) {
+            terminal.endSelection();
+            if (terminal.hasSelection()) {
+                const std::string selection = terminal.getSelection();
+                if (!selection.empty())
+                    ImGui::SetClipboardText(selection.c_str());
+            }
+        }
+
+        if (hovered && input->mouse_wheel != 0.0f) {
+            if (input->mouse_wheel > 0.0f)
+                terminal.scrollUp(3);
+            else
+                terminal.scrollDown(3);
+        }
+
+        if (!terminal.isFocused() || terminal.isReadOnly())
+            return;
+
+        auto& focus = lfs::vis::gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.want_text_input = true;
+
+        if (input->key_ctrl && input->key_shift) {
+            for (int sc : input->keys_pressed) {
+                if (sc == SDL_SCANCODE_V) {
+                    if (const char* clipboard = ImGui::GetClipboardText())
+                        terminal.paste(clipboard);
+                    return;
+                }
+            }
+        }
+
+        for (int sc : input->keys_pressed) {
+            if (input->key_ctrl && sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_Z) {
+                const char letter = static_cast<char>('A' + (sc - SDL_SCANCODE_A));
+                if (letter == 'C' && terminal.hasSelection()) {
+                    const std::string selection = terminal.getSelection();
+                    if (!selection.empty())
+                        ImGui::SetClipboardText(selection.c_str());
+                } else {
+                    terminal.sendControl(letter);
+                }
+                continue;
+            }
+
+            if (const auto key = terminal_key_from_scancode(sc)) {
+                terminal.sendKey(*key);
+            }
+        }
+
+        if (!input->key_ctrl) {
+            for (const uint32_t cp : input->text_codepoints)
+                terminal.sendCodepoint(cp);
+        }
+    }
+
+    void draw_rml_terminal_pane(RmlTerminalPane& pane,
+                                lfs::vis::gui::RmlUIManager* manager,
+                                const char* context_name,
+                                lfs::vis::terminal::TerminalWidget& terminal,
+                                const lfs::vis::gui::PanelInputState* input,
+                                ImFont* mono_font) {
+        const ImVec2 size = ImGui::GetContentRegionAvail();
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return;
+
+        if (!manager) {
+            terminal.render(mono_font);
+            return;
+        }
+
+        const float font_size = mono_font ? mono_font->LegacySize : ImGui::GetTextLineHeight();
+        const float char_h = std::max(1.0f, font_size);
+        const float char_w = mono_font
+                                 ? std::max(1.0f, mono_font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, "M").x)
+                                 : std::max(1.0f, ImGui::CalcTextSize("M").x);
+        const int cols = std::max(1, static_cast<int>(size.x / char_w));
+        const int rows = std::max(1, static_cast<int>(size.y / char_h));
+
+        terminal.resize(cols, rows);
+        terminal.update();
+
+        auto* view = ensure_rml_terminal_view(pane, manager, context_name);
+        if (!view) {
+            terminal.render(mono_font);
+            return;
+        }
+
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        process_rml_terminal_input(terminal, input, pos, size, char_w, char_h);
+
+        const bool dirty = terminal.needsRedraw();
+        view->SetProperty("font-size", std::format("{:.0f}px", font_size));
+        view->SetProperty("line-height", std::format("{:.0f}px", char_h));
+        view->setSnapshot(terminal.snapshot());
+        if (dirty)
+            pane.host->markContentDirty();
+        terminal.markRendered();
+
+        pane.host->setInput(input);
+        pane.host->drawDirect(pos.x, pos.y, size.x, size.y);
+        pane.host->setInput(nullptr);
+        ImGui::Dummy(size);
     }
 
     void draw_vim_mode_button(lfs::vis::gui::panels::PythonConsoleState& state,
@@ -687,6 +944,10 @@ namespace lfs::vis::gui::panels {
         constexpr float PKG_SEARCH_WIDTH = 150.0f;
     } // namespace
 
+    void ShutdownPythonConsoleRml() {
+        reset_rml_terminal_panes();
+    }
+
     void DrawPythonConsole(const UIContext& ctx, bool* open) {
         if (!open || !*open)
             return;
@@ -1097,7 +1358,8 @@ namespace lfs::vis::gui::panels {
         ImGui::End();
     }
 
-    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h) {
+    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
+                                 const PanelInputState* input) {
         lfs::python::ensure_initialized();
         lfs::python::install_output_redirect();
         setup_sys_path();
@@ -1389,7 +1651,9 @@ namespace lfs::vis::gui::panels {
 
                     if (auto* output = state.getOutputTerminal()) {
                         output->setReadOnly(true);
-                        output->render(scaled_mono_bottom);
+                        draw_rml_terminal_pane(g_output_terminal_pane, ctx.rml_manager,
+                                               "python_console_output_terminal",
+                                               *output, input, scaled_mono_bottom);
                     }
 
                     ImGui::EndTabItem();
@@ -1405,7 +1669,9 @@ namespace lfs::vis::gui::panels {
                             if (fds.valid())
                                 lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
                         }
-                        terminal->render(scaled_mono_bottom);
+                        draw_rml_terminal_pane(g_repl_terminal_pane, ctx.rml_manager,
+                                               "python_console_repl_terminal",
+                                               *terminal, input, scaled_mono_bottom);
                     }
 
                     ImGui::EndTabItem();
