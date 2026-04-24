@@ -54,11 +54,39 @@ namespace lfs::vis::editor {
         constexpr auto SEMANTIC_TOKENS_BOUNDARY_DELAY = std::chrono::milliseconds(90);
         constexpr int COMPLETION_POPUP_MAX_ITEMS = 8;
 
-        Zep::NVec4f to_zep(const ImVec4& color) {
+        struct EditorColor {
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            float w = 1.0f;
+
+            EditorColor() = default;
+
+            EditorColor(float red, float green, float blue, float alpha)
+                : x(red), y(green), z(blue), w(alpha) {}
+
+            template <typename Color>
+            EditorColor(const Color& color)
+                : x(color.x), y(color.y), z(color.z), w(color.w) {}
+
+            template <typename Color>
+            EditorColor& operator=(const Color& color) {
+                x = color.x;
+                y = color.y;
+                z = color.z;
+                w = color.w;
+                return *this;
+            }
+        };
+
+        Zep::NVec4f to_zep(const EditorColor& color) {
             return {color.x, color.y, color.z, color.w};
         }
 
-        Zep::NVec4f mix(const ImVec4& a, const ImVec4& b, float t) {
+        template <typename ColorA, typename ColorB>
+        Zep::NVec4f mix(const ColorA& a_in, const ColorB& b_in, float t) {
+            const EditorColor a = a_in;
+            const EditorColor b = b_in;
             return {
                 a.x + (b.x - a.x) * t,
                 a.y + (b.y - a.y) * t,
@@ -67,7 +95,10 @@ namespace lfs::vis::editor {
             };
         }
 
-        ImVec4 mix_color(const ImVec4& a, const ImVec4& b, float t) {
+        template <typename ColorA, typename ColorB>
+        EditorColor mix_color(const ColorA& a_in, const ColorB& b_in, float t) {
+            const EditorColor a = a_in;
+            const EditorColor b = b_in;
             return {
                 a.x + (b.x - a.x) * t,
                 a.y + (b.y - a.y) * t,
@@ -76,11 +107,15 @@ namespace lfs::vis::editor {
             };
         }
 
-        ImVec4 with_alpha(const ImVec4& color, float alpha) {
+        template <typename Color>
+        EditorColor with_alpha(const Color& color_in, float alpha) {
+            const EditorColor color = color_in;
             return {color.x, color.y, color.z, alpha};
         }
 
-        uint64_t color_to_u32(const ImVec4& color) {
+        template <typename Color>
+        uint64_t color_to_u32(const Color& color_in) {
+            const EditorColor color = color_in;
             const auto to_byte = [](float value) {
                 return static_cast<uint64_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
             };
@@ -726,9 +761,9 @@ namespace lfs::vis::editor {
             config.scrollBarSize = app_theme.sizes.scrollbar_size;
             config.scrollBarMinSize = app_theme.sizes.grab_min_size;
 
-            const ImVec4 scroll_track = with_alpha(app_theme.palette.background, 0.5f);
-            const ImVec4 scroll_thumb = with_alpha(app_theme.palette.text_dim, 0.63f);
-            const ImVec4 scroll_hover = with_alpha(app_theme.palette.primary, 0.78f);
+            const EditorColor scroll_track = with_alpha(app_theme.palette.background, 0.5f);
+            const EditorColor scroll_thumb = with_alpha(app_theme.palette.text_dim, 0.63f);
+            const EditorColor scroll_hover = with_alpha(app_theme.palette.primary, 0.78f);
             zep_theme.SetThemeType(app_theme.isLightTheme() ? Zep::ThemeType::Light
                                                             : Zep::ThemeType::Dark);
 
@@ -1047,7 +1082,7 @@ namespace lfs::vis::editor {
 
         uint64_t semanticPaletteSignature() const {
             const auto& palette = theme().palette;
-            const auto mix_u32 = [](const ImVec4& color) {
+            const auto mix_u32 = [](const auto& color) {
                 return color_to_u32(color);
             };
 
@@ -1292,7 +1327,7 @@ namespace lfs::vis::editor {
             }
 
             const auto& palette = theme().palette;
-            ImVec4 color = palette.text;
+            EditorColor color = palette.text;
             bool use_custom = true;
             bool underline = (token.modifiers & (1u << 4)) != 0;
 
@@ -2025,7 +2060,7 @@ namespace lfs::vis::editor {
                 }
 
                 if (active_row || hovered_row) {
-                    ImVec4 fill = palette.primary;
+                    EditorColor fill = palette.primary;
                     fill.w = active_row ? 0.32f : 0.18f;
                     display.DrawRectFilled(row_rect, to_zep(fill));
                 }

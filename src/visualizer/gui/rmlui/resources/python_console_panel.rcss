@@ -1,0 +1,425 @@
+body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    font-family: Inter;
+    background-color: rgb(30, 30, 30);
+    color: rgb(229, 229, 229);
+}
+
+#window-frame,
+#content-wrap,
+#content {
+    width: 100%;
+    height: 100%;
+}
+
+#window-frame {
+    background-color: rgb(30, 30, 30);
+}
+
+#content-wrap,
+#content {
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+#content {
+    display: flex;
+    flex-direction: column;
+}
+
+#python-console-toolbar {
+    display: flex;
+    align-items: center;
+    min-height: 34dp;
+    padding: 4dp 6dp;
+    border-bottom-width: 1dp;
+    border-bottom-color: rgb(54, 54, 54);
+    background-color: rgb(34, 34, 34);
+    flex-shrink: 0;
+}
+
+.toolbar-group {
+    display: flex;
+    align-items: center;
+    margin-right: 6dp;
+    min-width: 0;
+}
+
+.toolbar-spacer {
+    flex: 1;
+    min-width: 8dp;
+}
+
+button {
+    height: 24dp;
+    min-width: 36dp;
+    padding: 0 8dp;
+    margin-right: 4dp;
+    border-width: 1dp;
+    border-color: rgb(70, 70, 70);
+    border-radius: 4dp;
+    background-color: rgb(46, 46, 46);
+    color: rgb(229, 229, 229);
+    text-align: center;
+}
+
+button:hover {
+    background-color: rgb(58, 58, 58);
+}
+
+button:active,
+button.active {
+    background-color: rgb(64, 96, 130);
+    border-color: rgb(84, 126, 170);
+}
+
+button.disabled {
+    color: rgb(112, 112, 112);
+    background-color: rgb(38, 38, 38);
+    border-color: rgb(50, 50, 50);
+}
+
+.run-button {
+    background-color: rgb(40, 97, 63);
+    border-color: rgb(55, 132, 84);
+}
+
+.run-button:hover {
+    background-color: rgb(47, 115, 73);
+}
+
+.stop-button {
+    background-color: rgb(112, 44, 49);
+    border-color: rgb(148, 58, 65);
+}
+
+.stop-button:hover {
+    background-color: rgb(133, 52, 58);
+}
+
+.stop-button.disabled {
+    background-color: rgb(43, 39, 40);
+    border-color: rgb(56, 50, 51);
+}
+
+#script-label {
+    max-width: 190dp;
+    margin-right: 8dp;
+    color: rgb(198, 205, 212);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#run-status,
+#syntax-status {
+    margin-right: 8dp;
+    color: rgb(150, 150, 150);
+}
+
+#run-status.running {
+    color: rgb(231, 170, 76);
+}
+
+#syntax-status.status-ok {
+    color: rgb(105, 184, 121);
+}
+
+#syntax-status.status-error {
+    color: rgb(221, 94, 94);
+}
+
+.status-group button {
+    max-width: 140dp;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.font-group {
+    margin-right: 0;
+}
+
+.font-button {
+    min-width: 26dp;
+    padding: 0;
+}
+
+#font-status {
+    min-width: 46dp;
+}
+
+#menu-layer {
+    position: absolute;
+    left: 6dp;
+    top: 34dp;
+    width: 100%;
+    height: 0;
+    z-index: 20;
+}
+
+.popup-menu {
+    display: none;
+    position: absolute;
+    top: 0;
+    width: 260dp;
+    max-height: 300dp;
+    overflow-y: auto;
+    border-width: 1dp;
+    border-color: rgb(72, 72, 72);
+    border-radius: 4dp;
+    background-color: rgb(36, 36, 36);
+    padding: 4dp;
+}
+
+#outline-menu {
+    right: 360dp;
+}
+
+#breadcrumb-menu {
+    right: 214dp;
+}
+
+#fold-menu {
+    right: 72dp;
+}
+
+.menu-item {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-height: 24dp;
+    margin: 0 0 2dp 0;
+    padding: 4dp 6dp;
+    text-align: left;
+    border-width: 0;
+    background-color: transparent;
+}
+
+.menu-item:hover {
+    background-color: rgb(54, 62, 70);
+}
+
+.menu-label,
+.menu-detail {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.menu-label {
+    color: rgb(230, 230, 230);
+}
+
+.menu-detail {
+    margin-top: 2dp;
+    color: rgb(146, 146, 146);
+    font-size: 11dp;
+}
+
+.menu-empty {
+    padding: 8dp;
+    color: rgb(146, 146, 146);
+}
+
+.menu-separator {
+    height: 1dp;
+    margin: 4dp 0;
+    background-color: rgb(58, 58, 58);
+}
+
+#editor-panel {
+    flex-shrink: 0;
+    min-height: 80dp;
+    overflow: hidden;
+}
+
+#python-editor-view {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+}
+
+#python-splitter {
+    height: 6dp;
+    flex-shrink: 0;
+    background-color: rgb(40, 40, 40);
+    border-top-width: 1dp;
+    border-top-color: rgb(54, 54, 54);
+    border-bottom-width: 1dp;
+    border-bottom-color: rgb(54, 54, 54);
+}
+
+#python-splitter:hover {
+    background-color: rgb(58, 70, 82);
+}
+
+#bottom-panel {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-height: 80dp;
+    overflow: hidden;
+}
+
+#tabbar {
+    display: flex;
+    align-items: flex-end;
+    height: 28dp;
+    border-bottom-width: 1dp;
+    border-bottom-color: rgb(54, 54, 54);
+    background-color: rgb(31, 31, 31);
+    flex-shrink: 0;
+}
+
+#tabbar button {
+    height: 27dp;
+    min-width: 88dp;
+    margin: 0;
+    border-radius: 0;
+    border-width: 0;
+    border-right-width: 1dp;
+    border-right-color: rgb(54, 54, 54);
+    background-color: rgb(36, 36, 36);
+    color: rgb(170, 170, 170);
+}
+
+#tabbar button:hover {
+    background-color: rgb(45, 45, 45);
+}
+
+#tabbar button.active {
+    background-color: rgb(30, 30, 30);
+    color: rgb(235, 235, 235);
+}
+
+#bottom-content,
+.tab-panel,
+#python-output-terminal,
+#python-repl-terminal {
+    width: 100%;
+    height: 100%;
+}
+
+#bottom-content {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.tab-panel {
+    overflow: hidden;
+}
+
+#python-output-terminal,
+#python-repl-terminal {
+    display: block;
+    overflow: hidden;
+    white-space: pre;
+    font-family: "JetBrains Mono";
+    background-color: rgb(30, 30, 30);
+}
+
+.terminal-row {
+    white-space: pre;
+    overflow: hidden;
+}
+
+#packages-panel {
+    display: flex;
+    flex-direction: column;
+    padding: 8dp;
+}
+
+#packages-toolbar {
+    display: flex;
+    align-items: center;
+    padding-bottom: 6dp;
+    min-width: 0;
+    flex-shrink: 0;
+}
+
+#packages-refresh {
+    min-width: 74dp;
+    flex-shrink: 0;
+}
+
+#packages-search {
+    height: 24dp;
+    flex: 1;
+    min-width: 120dp;
+    margin-right: 6dp;
+}
+
+#packages-status {
+    display: block;
+    min-width: 64dp;
+    text-align: right;
+    color: rgb(150, 150, 150);
+    flex-shrink: 0;
+}
+
+#packages-table {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-width: 0;
+    min-height: 0;
+}
+
+.pkg-header,
+.pkg-row {
+    display: flex;
+    align-items: center;
+    min-height: 24dp;
+    min-width: 0;
+    border-bottom-width: 1dp;
+    border-bottom-color: rgb(45, 45, 45);
+}
+
+.pkg-header {
+    font-weight: bold;
+    color: rgb(170, 170, 170);
+}
+
+.pkg-row {
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+}
+
+.pkg-name {
+    display: block;
+    width: 32%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pkg-version {
+    display: block;
+    width: 18%;
+    min-width: 0;
+    color: rgb(150, 150, 150);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pkg-path {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    color: rgb(150, 150, 150);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#packages-empty {
+    display: none;
+    padding-top: 12dp;
+    color: rgb(150, 150, 150);
+}
