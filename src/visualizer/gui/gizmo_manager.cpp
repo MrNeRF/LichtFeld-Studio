@@ -12,6 +12,7 @@
 #include "core/scene.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rotation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
 #include "input/input_controller.hpp"
 #include "operation/undo_entry.hpp"
@@ -590,57 +591,69 @@ namespace lfs::vis::gui {
             }
         }
 
-        ImGuizmo::PushID(panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel));
-        ImGuizmo::SetOrthographic(settings.orthographic);
-        ImGuizmo::SetRect(active_panel->pos.x, active_panel->pos.y, active_panel->size.x, active_panel->size.y);
-        ImGuizmo::SetAxisLimit(GIZMO_AXIS_LIMIT);
-        ImGuizmo::SetPlaneLimit(GIZMO_AXIS_LIMIT);
-
-        const bool is_using = ImGuizmo::IsUsing();
-
-        if (!is_using) {
-            node_hovered_axis_ = ImGuizmo::IsOver(ImGuizmo::TRANSLATE_X) ||
-                                 ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Y) ||
-                                 ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Z) ||
-                                 ImGuizmo::IsOver(ImGuizmo::BOUNDS);
-            ImGuizmo::SetAxisMask(false, false, false);
-        } else {
-            ImGuizmo::SetAxisMask(node_hovered_axis_, node_hovered_axis_, node_hovered_axis_);
-        }
-
         auto* const main_viewport = ImGui::GetMainViewport();
         ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
         const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
         const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);
-        ImGuizmo::SetDrawlist(overlay_drawlist);
 
         static const float local_bounds[6] = {-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f};
         const ImGuizmo::OPERATION effective_op = actually_using_bounds ? ImGuizmo::BOUNDS : node_gizmo_operation_;
         const float* bounds_ptr = actually_using_bounds ? local_bounds : nullptr;
         const ImGuizmo::MODE gizmo_mode = (actually_using_bounds || !use_world_space) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
-        glm::mat4 delta_matrix;
-        float snap_buf[3] = {};
-        const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
-        const bool gizmo_changed = ImGuizmo::Manipulate(
-            glm::value_ptr(view), glm::value_ptr(projection),
-            effective_op, gizmo_mode,
-            glm::value_ptr(gizmo_matrix), glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
+        ImGuizmo::PushID(panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel));
+        const bool use_rotation_gizmo = node_gizmo_operation_ == ImGuizmo::ROTATE && !actually_using_bounds;
+        bool is_using = false;
+        bool gizmo_changed = false;
+        glm::mat4 delta_matrix(1.0f);
 
-        if (node_gizmo_operation_ == ImGuizmo::ROTATE) {
-            const glm::vec3 pivot_pos = glm::vec3(gizmo_matrix[3]);
-            const glm::vec4 clip_pos = projection * view * glm::vec4(pivot_pos, 1.0f);
-            if (clip_pos.w > 0.0f) {
-                const glm::vec2 ndc(clip_pos.x / clip_pos.w, clip_pos.y / clip_pos.w);
-                const ImVec2 screen_pos(active_panel->pos.x + (ndc.x * 0.5f + 0.5f) * active_panel->size.x,
-                                        active_panel->pos.y + (-ndc.y * 0.5f + 0.5f) * active_panel->size.y);
-                constexpr float PIVOT_RADIUS = 4.0f;
-                constexpr ImU32 PIVOT_COLOR = IM_COL32(255, 255, 255, 200);
-                constexpr ImU32 PIVOT_OUTLINE = IM_COL32(0, 0, 0, 200);
-                overlay_drawlist->AddCircleFilled(screen_pos, PIVOT_RADIUS + 1.0f, PIVOT_OUTLINE);
-                overlay_drawlist->AddCircleFilled(screen_pos, PIVOT_RADIUS, PIVOT_COLOR);
+        if (use_rotation_gizmo) {
+            RotationGizmoConfig rotation_config;
+            rotation_config.id = panelGizmoId(NODE_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.viewport_pos = active_panel->pos;
+            rotation_config.viewport_size = active_panel->size;
+            rotation_config.view = view;
+            rotation_config.projection = projection;
+            rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
+            rotation_config.orientation_world =
+                (gizmo_mode == ImGuizmo::LOCAL) ? extractRotation(gizmo_matrix) : glm::mat3(1.0f);
+            rotation_config.draw_list = overlay_drawlist;
+            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
+
+            const auto rotation_result = drawRotationGizmo(rotation_config);
+            is_using = rotation_result.active;
+            gizmo_changed = rotation_result.changed;
+            delta_matrix = glm::mat4(rotation_result.delta_rotation);
+            if (rotation_result.hovered || rotation_result.active) {
+                guiFocusState().want_capture_mouse = true;
             }
+        } else {
+            ImGuizmo::SetOrthographic(settings.orthographic);
+            ImGuizmo::SetRect(active_panel->pos.x, active_panel->pos.y, active_panel->size.x, active_panel->size.y);
+            ImGuizmo::SetAxisLimit(GIZMO_AXIS_LIMIT);
+            ImGuizmo::SetPlaneLimit(GIZMO_AXIS_LIMIT);
+
+            const bool imguizmo_using = ImGuizmo::IsUsing();
+            if (!imguizmo_using) {
+                node_hovered_axis_ = ImGuizmo::IsOver(ImGuizmo::TRANSLATE_X) ||
+                                     ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Y) ||
+                                     ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Z) ||
+                                     ImGuizmo::IsOver(ImGuizmo::BOUNDS);
+                ImGuizmo::SetAxisMask(false, false, false);
+            } else {
+                ImGuizmo::SetAxisMask(node_hovered_axis_, node_hovered_axis_, node_hovered_axis_);
+            }
+
+            ImGuizmo::SetDrawlist(overlay_drawlist);
+            float snap_buf[3] = {};
+            const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
+            gizmo_changed = ImGuizmo::Manipulate(
+                glm::value_ptr(view), glm::value_ptr(projection),
+                effective_op, gizmo_mode,
+                glm::value_ptr(gizmo_matrix), glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
+            is_using = ImGuizmo::IsUsing();
         }
 
         if (is_using && !node_gizmo_active_) {
@@ -715,23 +728,23 @@ namespace lfs::vis::gui {
         }
 
         if (gizmo_changed && is_using) {
-            if (is_multi_selection) {
+            if (node_gizmo_operation_ == ImGuizmo::ROTATE) {
+                const glm::mat3 delta_rot = extractRotation(delta_matrix);
+                gizmo_cumulative_rotation_ = delta_rot * gizmo_cumulative_rotation_;
+                const glm::mat4 world_delta = glm::translate(glm::mat4(1.0f), gizmo_pivot_) *
+                                              glm::mat4(gizmo_cumulative_rotation_) *
+                                              glm::translate(glm::mat4(1.0f), -gizmo_pivot_);
+
+                for (size_t i = 0; i < node_gizmo_node_names_.size(); ++i) {
+                    const glm::mat4 new_world_transform = world_delta * node_original_visualizer_world_transforms_[i];
+                    gizmo_ops::setNodeVisualizerWorldTransform(
+                        scene_manager->getScene(), node_gizmo_node_names_[i], new_world_transform);
+                }
+            } else if (is_multi_selection) {
                 if (node_gizmo_operation_ == ImGuizmo::TRANSLATE) {
                     const glm::vec3 new_gizmo_pos(gizmo_matrix[3]);
                     const glm::vec3 delta = new_gizmo_pos - gizmo_pivot_;
                     const glm::mat4 world_delta = glm::translate(glm::mat4(1.0f), delta);
-
-                    for (size_t i = 0; i < node_gizmo_node_names_.size(); ++i) {
-                        const glm::mat4 new_world_transform = world_delta * node_original_visualizer_world_transforms_[i];
-                        gizmo_ops::setNodeVisualizerWorldTransform(
-                            scene_manager->getScene(), node_gizmo_node_names_[i], new_world_transform);
-                    }
-                } else if (node_gizmo_operation_ == ImGuizmo::ROTATE) {
-                    const glm::mat3 delta_rot = extractRotation(delta_matrix);
-                    gizmo_cumulative_rotation_ = delta_rot * gizmo_cumulative_rotation_;
-                    const glm::mat4 world_delta = glm::translate(glm::mat4(1.0f), gizmo_pivot_) *
-                                                  glm::mat4(gizmo_cumulative_rotation_) *
-                                                  glm::translate(glm::mat4(1.0f), -gizmo_pivot_);
 
                     for (size_t i = 0; i < node_gizmo_node_names_.size(); ++i) {
                         const glm::mat4 new_world_transform = world_delta * node_original_visualizer_world_transforms_[i];
@@ -935,20 +948,52 @@ namespace lfs::vis::gui {
             gizmo_matrix = glm::scale(gizmo_matrix, scaled_size);
         }
 
-        ImGuizmo::PushID(panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel));
-        ImGuizmo::SetOrthographic(settings.orthographic);
-        ImGuizmo::SetRect(active_panel->pos.x, active_panel->pos.y, active_panel->size.x, active_panel->size.y);
-        ImGuizmo::SetAxisLimit(GIZMO_AXIS_LIMIT);
-        ImGuizmo::SetPlaneLimit(GIZMO_AXIS_LIMIT);
-
         static const float local_bounds[6] = {-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f};
         const bool use_bounds = (gizmo_op == ImGuizmo::SCALE);
         const ImGuizmo::OPERATION effective_op = use_bounds ? ImGuizmo::BOUNDS : gizmo_op;
         const float* bounds_ptr = use_bounds ? local_bounds : nullptr;
 
-        {
-            const bool is_using = ImGuizmo::IsUsing();
-            if (!is_using) {
+        auto* const main_viewport = ImGui::GetMainViewport();
+        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
+        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
+        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
+        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
+
+        ImGuizmo::PushID(panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel));
+        bool gizmo_changed = false;
+        bool is_using = false;
+        glm::mat4 delta_matrix(1.0f);
+        const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+
+        if (gizmo_op == ImGuizmo::ROTATE) {
+            RotationGizmoConfig rotation_config;
+            rotation_config.id = panelGizmoId(CROPBOX_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.viewport_pos = active_panel->pos;
+            rotation_config.viewport_size = active_panel->size;
+            rotation_config.view = view;
+            rotation_config.projection = projection;
+            rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
+            rotation_config.orientation_world =
+                (gizmo_mode == ImGuizmo::LOCAL) ? gizmo_ops::extractRotation(gizmo_matrix) : glm::mat3(1.0f);
+            rotation_config.draw_list = overlay_drawlist;
+            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
+
+            const auto rotation_result = drawRotationGizmo(rotation_config);
+            is_using = rotation_result.active;
+            gizmo_changed = rotation_result.changed;
+            delta_matrix = glm::mat4(rotation_result.delta_rotation);
+            if (rotation_result.hovered || rotation_result.active) {
+                guiFocusState().want_capture_mouse = true;
+            }
+        } else {
+            ImGuizmo::SetOrthographic(settings.orthographic);
+            ImGuizmo::SetRect(active_panel->pos.x, active_panel->pos.y, active_panel->size.x, active_panel->size.y);
+            ImGuizmo::SetAxisLimit(GIZMO_AXIS_LIMIT);
+            ImGuizmo::SetPlaneLimit(GIZMO_AXIS_LIMIT);
+
+            const bool imguizmo_using = ImGuizmo::IsUsing();
+            if (!imguizmo_using) {
                 cropbox_hovered_axis_ = ImGuizmo::IsOver(ImGuizmo::TRANSLATE_X) ||
                                         ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Y) ||
                                         ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Z) ||
@@ -957,26 +1002,16 @@ namespace lfs::vis::gui {
             } else {
                 ImGuizmo::SetAxisMask(cropbox_hovered_axis_, cropbox_hovered_axis_, cropbox_hovered_axis_);
             }
+
+            ImGuizmo::SetDrawlist(overlay_drawlist);
+            float snap_buf[3] = {};
+            const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
+            gizmo_changed = ImGuizmo::Manipulate(
+                glm::value_ptr(view), glm::value_ptr(projection),
+                effective_op, gizmo_mode, glm::value_ptr(gizmo_matrix),
+                glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
+            is_using = ImGuizmo::IsUsing();
         }
-
-        auto* const main_viewport = ImGui::GetMainViewport();
-        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
-        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
-        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
-        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
-        ImGuizmo::SetDrawlist(overlay_drawlist);
-
-        glm::mat4 delta_matrix;
-        const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
-
-        float snap_buf[3] = {};
-        const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
-        const bool gizmo_changed = ImGuizmo::Manipulate(
-            glm::value_ptr(view), glm::value_ptr(projection),
-            effective_op, gizmo_mode, glm::value_ptr(gizmo_matrix),
-            glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
-
-        const bool is_using = ImGuizmo::IsUsing();
 
         if (is_using && !cropbox_gizmo_active_) {
             cropbox_gizmo_active_ = true;
@@ -1126,20 +1161,52 @@ namespace lfs::vis::gui {
             gizmo_matrix = glm::scale(gizmo_matrix, scaled_radii);
         }
 
-        ImGuizmo::PushID(panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel));
-        ImGuizmo::SetOrthographic(settings.orthographic);
-        ImGuizmo::SetRect(active_panel->pos.x, active_panel->pos.y, active_panel->size.x, active_panel->size.y);
-        ImGuizmo::SetAxisLimit(GIZMO_AXIS_LIMIT);
-        ImGuizmo::SetPlaneLimit(GIZMO_AXIS_LIMIT);
-
         static const float local_bounds[6] = {-1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
         const bool use_bounds = (gizmo_op == ImGuizmo::SCALE);
         const ImGuizmo::OPERATION effective_op = use_bounds ? ImGuizmo::BOUNDS : gizmo_op;
         const float* bounds_ptr = use_bounds ? local_bounds : nullptr;
 
-        {
-            const bool is_using = ImGuizmo::IsUsing();
-            if (!is_using) {
+        auto* const main_viewport = ImGui::GetMainViewport();
+        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
+        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
+        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
+        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
+
+        ImGuizmo::PushID(panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel));
+        bool gizmo_changed = false;
+        bool is_using = false;
+        glm::mat4 delta_matrix(1.0f);
+        const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+
+        if (gizmo_op == ImGuizmo::ROTATE) {
+            RotationGizmoConfig rotation_config;
+            rotation_config.id = panelGizmoId(ELLIPSOID_GIZMO_ID_BASE, active_panel->panel);
+            rotation_config.viewport_pos = active_panel->pos;
+            rotation_config.viewport_size = active_panel->size;
+            rotation_config.view = view;
+            rotation_config.projection = projection;
+            rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
+            rotation_config.orientation_world =
+                (gizmo_mode == ImGuizmo::LOCAL) ? gizmo_ops::extractRotation(gizmo_matrix) : glm::mat3(1.0f);
+            rotation_config.draw_list = overlay_drawlist;
+            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
+
+            const auto rotation_result = drawRotationGizmo(rotation_config);
+            is_using = rotation_result.active;
+            gizmo_changed = rotation_result.changed;
+            delta_matrix = glm::mat4(rotation_result.delta_rotation);
+            if (rotation_result.hovered || rotation_result.active) {
+                guiFocusState().want_capture_mouse = true;
+            }
+        } else {
+            ImGuizmo::SetOrthographic(settings.orthographic);
+            ImGuizmo::SetRect(active_panel->pos.x, active_panel->pos.y, active_panel->size.x, active_panel->size.y);
+            ImGuizmo::SetAxisLimit(GIZMO_AXIS_LIMIT);
+            ImGuizmo::SetPlaneLimit(GIZMO_AXIS_LIMIT);
+
+            const bool imguizmo_using = ImGuizmo::IsUsing();
+            if (!imguizmo_using) {
                 ellipsoid_hovered_axis_ = ImGuizmo::IsOver(ImGuizmo::TRANSLATE_X) ||
                                           ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Y) ||
                                           ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Z) ||
@@ -1148,26 +1215,16 @@ namespace lfs::vis::gui {
             } else {
                 ImGuizmo::SetAxisMask(ellipsoid_hovered_axis_, ellipsoid_hovered_axis_, ellipsoid_hovered_axis_);
             }
+
+            ImGuizmo::SetDrawlist(overlay_drawlist);
+            float snap_buf[3] = {};
+            const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
+            gizmo_changed = ImGuizmo::Manipulate(
+                glm::value_ptr(view), glm::value_ptr(projection),
+                effective_op, gizmo_mode, glm::value_ptr(gizmo_matrix),
+                glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
+            is_using = ImGuizmo::IsUsing();
         }
-
-        auto* const main_viewport = ImGui::GetMainViewport();
-        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
-        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
-        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
-        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
-        ImGuizmo::SetDrawlist(overlay_drawlist);
-
-        glm::mat4 delta_matrix;
-        const ImGuizmo::MODE gizmo_mode = gizmo_local_aligned ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
-
-        float snap_buf[3] = {};
-        const float* snap_ptr = computeSnapPtr(snap_buf, effective_op);
-        const bool gizmo_changed = ImGuizmo::Manipulate(
-            glm::value_ptr(view), glm::value_ptr(projection),
-            effective_op, gizmo_mode, glm::value_ptr(gizmo_matrix),
-            glm::value_ptr(delta_matrix), snap_ptr, bounds_ptr);
-
-        const bool is_using = ImGuizmo::IsUsing();
 
         if (is_using && !ellipsoid_gizmo_active_) {
             ellipsoid_gizmo_active_ = true;

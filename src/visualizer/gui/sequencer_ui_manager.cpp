@@ -15,6 +15,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
+#include "gui/rotation_gizmo.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/video/video_export_options.hpp"
@@ -885,7 +886,9 @@ namespace lfs::vis::gui {
         if (mouse_panel && !mouse_blocked_by_ui && hovered_keyframe.has_value()) {
             const auto* const hovered = timeline.getKeyframe(*hovered_keyframe);
             if (hovered && !hovered->is_loop_point) {
-                if (input.mouse_clicked[0] && !ImGuizmo::IsOver()) {
+                if (input.mouse_clicked[0] &&
+                    !ImGuizmo::IsOver() &&
+                    !isRotationGizmoHovered()) {
                     beginViewportKeyframeEdit(*hovered_keyframe);
                     guiFocusState().want_capture_mouse = true;
                 }
@@ -987,21 +990,50 @@ namespace lfs::vis::gui {
         const ImVec2 clip_min(rect_pos.x, rect_pos.y);
         const ImVec2 clip_max(rect_pos.x + rect_size.x, rect_pos.y + rect_size.y);
         draw_list->PushClipRect(clip_min, clip_max, true);
-        ImGuizmo::SetDrawlist(draw_list);
 
-        glm::mat4 delta(1.0f);
         const ImGuizmo::MODE mode = op == ImGuizmo::ROTATE ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
-        const bool changed = ImGuizmo::Manipulate(
-            glm::value_ptr(view),
-            glm::value_ptr(projection),
-            op,
-            mode,
-            glm::value_ptr(gizmo_matrix),
-            glm::value_ptr(delta),
-            nullptr);
+        bool changed = false;
+        bool is_using = false;
+        glm::mat3 rotation_delta(1.0f);
 
-        const bool is_using = ImGuizmo::IsUsing();
-        if (ImGuizmo::IsOver() || is_using)
+        if (op == ImGuizmo::ROTATE) {
+            RotationGizmoConfig rotation_config;
+            rotation_config.id = 4000;
+            rotation_config.viewport_pos = rect_pos;
+            rotation_config.viewport_size = rect_size;
+            rotation_config.view = view;
+            rotation_config.projection = projection;
+            rotation_config.pivot_world = kf->position;
+            rotation_config.orientation_world = rot_mat;
+            rotation_config.draw_list = draw_list;
+            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.snap_degrees = 5.0f;
+
+            const auto rotation_result = drawRotationGizmo(rotation_config);
+            changed = rotation_result.changed;
+            is_using = rotation_result.active;
+            rotation_delta = rotation_result.delta_rotation;
+            if (rotation_result.hovered || rotation_result.active)
+                guiFocusState().want_capture_mouse = true;
+        } else {
+            ImGuizmo::SetDrawlist(draw_list);
+
+            glm::mat4 delta(1.0f);
+            changed = ImGuizmo::Manipulate(
+                glm::value_ptr(view),
+                glm::value_ptr(projection),
+                op,
+                mode,
+                glm::value_ptr(gizmo_matrix),
+                glm::value_ptr(delta),
+                nullptr);
+
+            is_using = ImGuizmo::IsUsing();
+            if (ImGuizmo::IsOver() || is_using)
+                guiFocusState().want_capture_mouse = true;
+        }
+
+        if (is_using)
             guiFocusState().want_capture_mouse = true;
 
         if (is_using && !keyframe_gizmo_active_)
@@ -1009,7 +1041,9 @@ namespace lfs::vis::gui {
 
         if (changed) {
             const glm::vec3 new_pos(gizmo_matrix[3]);
-            const glm::quat new_rot = glm::normalize(glm::quat_cast(glm::mat3(gizmo_matrix)));
+            const glm::quat new_rot = op == ImGuizmo::ROTATE
+                                          ? glm::normalize(glm::quat_cast(rotation_delta * rot_mat))
+                                          : glm::normalize(glm::quat_cast(glm::mat3(gizmo_matrix)));
             if (controller_.updateKeyframeById(
                     *selected_id,
                     new_pos,

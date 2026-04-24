@@ -25,6 +25,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/rotation_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -70,6 +71,13 @@ namespace lfs::vis::gui {
 
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
+
+        [[nodiscard]] bool isTransformGizmoOverOrUsing() {
+            return ImGuizmo::IsOver() ||
+                   ImGuizmo::IsUsing() ||
+                   isRotationGizmoHovered() ||
+                   isRotationGizmoActive();
+        }
 
 #ifndef LFS_BUILD_PORTABLE
         [[nodiscard]] bool envFlagEnabled(const char* name) {
@@ -2020,7 +2028,7 @@ namespace lfs::vis::gui {
             (global_context_menu_ && global_context_menu_->isOpen());
         const bool imgui_wants_input = focus.want_text_input || focus.want_capture_keyboard;
 
-        if ((ImGuizmo::IsOver() || ImGuizmo::IsUsing()) && !any_popup_or_modal_open) {
+        if (isTransformGizmoOverOrUsing() && !any_popup_or_modal_open) {
             focus.want_capture_mouse = false;
             focus.want_capture_keyboard = false;
         }
