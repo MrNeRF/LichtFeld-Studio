@@ -11,7 +11,6 @@
 #include <string>
 #include <vector>
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
@@ -32,18 +31,11 @@ namespace lfs::vis::gui {
         // Per-target original state captured at drag start
         struct TargetState {
             std::string name;
-            glm::mat4 local_transform{1.0f};
             glm::mat4 visualizer_world_transform{1.0f};
-            glm::vec3 world_position{0.0f};
-            glm::mat4 parent_world_inverse{1.0f};
             glm::mat3 rotation{1.0f};
-            glm::vec3 scale{1.0f};
 
-            // CropBox specific
             glm::vec3 bounds_min{0.0f};
             glm::vec3 bounds_max{0.0f};
-
-            // Ellipsoid specific
             glm::vec3 radii{1.0f};
         };
         std::vector<TargetState> targets;
@@ -52,9 +44,6 @@ namespace lfs::vis::gui {
         glm::mat3 cumulative_rotation{1.0f};
         glm::vec3 cumulative_scale{1.0f};
         glm::vec3 cumulative_translation{0.0f};
-
-        // Current operation being performed
-        ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
 
         // Settings at drag start
         bool use_world_space = false;
@@ -73,21 +62,8 @@ namespace lfs::vis::gui {
         void setNodeVisualizerWorldTransform(core::Scene& scene,
                                              const std::string& name,
                                              const glm::mat4& visualizer_world_transform);
-        glm::mat4 visualizerParentWorldInverse(const core::Scene& scene, core::NodeId parent_id);
 
-        // World-to-local conversion via sandwich product
-        // local_delta = parent_rot_inv * world_delta * parent_rot
-        glm::mat3 worldToLocalRotation(const glm::mat3& world_delta, const glm::mat4& parent_world_inverse);
-        glm::mat3 worldToLocalScale(const glm::vec3& world_scale, const glm::mat4& parent_world_inverse);
-
-        // Compute local pivot based on pivot mode and target type
-        glm::vec3 computeLocalPivot(
-            const core::Scene& scene,
-            core::NodeId target_id,
-            PivotMode mode,
-            GizmoTargetType type);
-
-        // Compute gizmo display matrix for ImGuizmo
+        // Compute gizmo display matrix for the custom transform gizmos
         glm::mat4 computeGizmoMatrix(
             const glm::vec3& pivot_world,
             const glm::mat3& rotation,
@@ -102,8 +78,7 @@ namespace lfs::vis::gui {
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
             TransformSpace space,
-            PivotMode pivot_mode,
-            ImGuizmo::OPERATION operation);
+            PivotMode pivot_mode);
 
         GizmoTransformContext captureEllipsoid(
             const core::Scene& scene,
@@ -111,8 +86,7 @@ namespace lfs::vis::gui {
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
             TransformSpace space,
-            PivotMode pivot_mode,
-            ImGuizmo::OPERATION operation);
+            PivotMode pivot_mode);
 
         // Apply cumulative transforms - updates scene nodes
         void applyTranslation(
@@ -125,55 +99,11 @@ namespace lfs::vis::gui {
             core::Scene& scene,
             const glm::mat3& delta_rotation);
 
-        void applyScale(
-            GizmoTransformContext& ctx,
-            core::Scene& scene,
-            const glm::vec3& delta_scale,
-            const glm::vec3& new_pivot_world);
-
         // For cropbox/ellipsoid bounds scaling
         void applyBoundsScale(
             GizmoTransformContext& ctx,
             core::Scene& scene,
             const glm::vec3& new_size);
-
-        // Multi-node capture for transform panel (simpler than GizmoTransformContext)
-        struct MultiNodeCapture {
-            std::vector<std::string> node_names;
-            std::vector<glm::mat4> local_transforms;
-            std::vector<glm::mat4> visualizer_world_transforms;
-            std::vector<glm::vec3> world_positions;
-            std::vector<glm::mat4> parent_world_inverses;
-            std::vector<glm::mat3> rotations;
-            std::vector<glm::vec3> scales;
-
-            bool empty() const { return node_names.empty(); }
-            size_t size() const { return node_names.size(); }
-        };
-
-        // Capture state for multiple nodes at edit start
-        // Filters out nodes whose ancestors are also selected (prevents double-transform)
-        MultiNodeCapture captureNodes(
-            const core::Scene& scene,
-            const std::vector<std::string>& selected_names);
-
-        // Apply cumulative transforms to captured nodes around pivot
-        void applyMultiTranslation(
-            const MultiNodeCapture& capture,
-            core::Scene& scene,
-            const glm::vec3& cumulative_delta);
-
-        void applyMultiRotation(
-            const MultiNodeCapture& capture,
-            core::Scene& scene,
-            const glm::mat3& cumulative_rotation,
-            const glm::vec3& pivot_world);
-
-        void applyMultiScale(
-            const MultiNodeCapture& capture,
-            core::Scene& scene,
-            const glm::vec3& cumulative_scale,
-            const glm::vec3& pivot_world);
 
     } // namespace gizmo_ops
 

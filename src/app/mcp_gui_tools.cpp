@@ -1480,26 +1480,9 @@ namespace lfs::app {
         }
 
         void truncate_sh_degree(core::SplatData& splat, const int target_degree) {
-            if (target_degree >= splat.get_max_sh_degree())
+            if (target_degree < 0)
                 return;
-
-            if (target_degree == 0) {
-                splat.shN() = core::Tensor{};
-            } else {
-                const size_t keep_coeffs = static_cast<size_t>((target_degree + 1) * (target_degree + 1) - 1);
-                auto& sh_n = splat.shN();
-                if (sh_n.is_valid() && sh_n.ndim() >= 2 && sh_n.shape()[1] > keep_coeffs) {
-                    if (sh_n.ndim() == 3) {
-                        sh_n = sh_n.slice(1, 0, static_cast<int64_t>(keep_coeffs)).contiguous();
-                    } else {
-                        constexpr size_t channels = 3;
-                        sh_n = sh_n.slice(1, 0, static_cast<int64_t>(keep_coeffs * channels)).contiguous();
-                    }
-                }
-            }
-
-            splat.set_max_sh_degree(target_degree);
-            splat.set_active_sh_degree(target_degree);
+            splat.set_sh_degree(target_degree);
         }
 
         std::expected<void, std::string> export_scene_nodes(const vis::SceneManager& scene_manager,

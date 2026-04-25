@@ -15,12 +15,17 @@
 #include <glm/gtc/quaternion.hpp>
 #include <string>
 #include <vector>
-#include <ImGuizmo.h>
 
 namespace lfs::vis {
     class VisualizerImpl;
 
     namespace gui {
+
+        enum class GizmoOperation {
+            Translate,
+            Rotate,
+            Scale
+        };
 
         class GizmoManager {
         public:
@@ -41,8 +46,8 @@ namespace lfs::vis {
             void setTransformSpace(TransformSpace space) { transform_space_ = space; }
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
             void setPivotMode(PivotMode mode) { pivot_mode_ = mode; }
-            [[nodiscard]] ImGuizmo::OPERATION getCurrentOperation() const { return current_operation_; }
-            void setCurrentOperation(ImGuizmo::OPERATION op) { current_operation_ = op; }
+            [[nodiscard]] GizmoOperation getCurrentOperation() const { return current_operation_; }
+            void setCurrentOperation(GizmoOperation op) { current_operation_ = op; }
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }
 
             [[nodiscard]] bool isCropboxGizmoActive() const { return cropbox_gizmo_active_; }
@@ -64,22 +69,18 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
 
             // Transform gizmo settings
-            ImGuizmo::OPERATION current_operation_ = ImGuizmo::TRANSLATE;
+            GizmoOperation current_operation_ = GizmoOperation::Translate;
             SelectionSubMode selection_mode_ = SelectionSubMode::Centers;
             TransformSpace transform_space_ = TransformSpace::Local;
             PivotMode pivot_mode_ = PivotMode::Origin;
 
             // Node transform gizmo
             bool show_node_gizmo_ = false;
-            ImGuizmo::OPERATION node_gizmo_operation_ = ImGuizmo::TRANSLATE;
+            GizmoOperation node_gizmo_operation_ = GizmoOperation::Translate;
             bool node_gizmo_active_ = false;
             std::vector<std::string> node_gizmo_node_names_;
             std::vector<glm::mat4> node_transforms_before_drag_;
             std::vector<glm::mat4> node_original_visualizer_world_transforms_;
-            std::vector<glm::vec3> node_original_world_positions_;
-            std::vector<glm::mat4> node_parent_world_inverses_;
-            std::vector<glm::mat3> node_original_rotations_;
-            std::vector<glm::vec3> node_original_scales_;
             glm::vec3 gizmo_pivot_{0.0f};
             glm::mat3 gizmo_cumulative_rotation_{1.0f};
             glm::vec3 gizmo_cumulative_scale_{1.0f};
@@ -119,8 +120,6 @@ namespace lfs::vis {
             glm::vec3 node_bounds_min_{0.0f};
             glm::vec3 node_bounds_max_{0.0f};
             glm::mat4 node_bounds_orig_visualizer_world_transform_{1.0f};
-            glm::vec3 node_bounds_orig_scale_{1.0f};
-            glm::mat3 node_bounds_orig_rotation_{1.0f};
             glm::vec3 node_bounds_world_scale_{1.0f};
 
             // Display cache to avoid per-frame compute_bounds on large splats
@@ -128,11 +127,6 @@ namespace lfs::vis {
             core::NodeId node_bounds_cache_node_id_ = core::NULL_NODE;
             glm::vec3 node_bounds_cache_min_{0.0f};
             glm::vec3 node_bounds_cache_max_{0.0f};
-
-            // Axis hover state for gizmo interaction
-            bool node_hovered_axis_ = false;
-            bool cropbox_hovered_axis_ = false;
-            bool ellipsoid_hovered_axis_ = false;
 
             // Tool tracking
             std::string previous_tool_id_;

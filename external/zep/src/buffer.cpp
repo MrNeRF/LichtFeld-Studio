@@ -51,7 +51,8 @@ namespace Zep {
 
     } // namespace
     ZepBuffer::ZepBuffer(ZepEditor& editor, const std::string& strName)
-        : ZepComponent(editor), m_strName(strName) {
+        : ZepComponent(editor),
+          m_strName(strName) {
         Clear();
     }
 
@@ -1084,22 +1085,37 @@ namespace Zep {
 
     void ZepBuffer::ClearRangeMarker(std::shared_ptr<RangeMarker> spMarker) {
         auto itr = m_rangeMarkers.find(spMarker->GetRange().first);
+        bool removed = false;
         if (itr != m_rangeMarkers.end()) {
-            itr->second.erase(spMarker);
+            removed = itr->second.erase(spMarker) != 0;
             if (itr->second.empty()) {
                 m_rangeMarkers.erase(spMarker->GetRange().first);
             }
         }
 
-        // TODO: Why is this necessary; marks the whole buffer
-        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::MarkersChanged, Begin(), End()));
+        if (removed) {
+            // TODO: Why is this necessary; marks the whole buffer
+            GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::MarkersChanged, Begin(), End()));
+        }
     }
 
     void ZepBuffer::ClearRangeMarkers(const std::set<std::shared_ptr<RangeMarker>>& markers) {
+        bool removed = false;
         for (auto& marker : markers) {
-            ClearRangeMarker(marker);
+            auto itr = m_rangeMarkers.find(marker->GetRange().first);
+            if (itr == m_rangeMarkers.end()) {
+                continue;
+            }
+
+            removed = itr->second.erase(marker) != 0 || removed;
+            if (itr->second.empty()) {
+                m_rangeMarkers.erase(itr);
+            }
         }
-        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::MarkersChanged, Begin(), End()));
+
+        if (removed) {
+            GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::MarkersChanged, Begin(), End()));
+        }
     }
 
     void ZepBuffer::ClearRangeMarkers(uint32_t markerType) {
@@ -1112,11 +1128,7 @@ namespace Zep {
             return true;
         });
 
-        for (auto& victim : markers) {
-            ClearRangeMarker(victim);
-        }
-
-        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::MarkersChanged, Begin(), End()));
+        ClearRangeMarkers(markers);
     }
 
     bool OverlapInclusive(ByteRange r1, ByteRange r2) {
@@ -1126,6 +1138,179 @@ namespace Zep {
             return true;
         }
         return false;
+    }
+
+    void ZepBuffer::SetFoldRanges(std::vector<FoldRange> ranges) {
+        for (auto& range : ranges) {
+            if (range.range.second < range.range.first) {
+                std::swap(range.range.first, range.range.second);
+            }
+            range.startLine = std::clamp(range.startLine, 0l, std::max(0l, GetLineCount() - 1));
+            range.endLine = std::clamp(range.endLine, range.startLine, std::max(0l, GetLineCount() - 1));
+
+            auto previous = std::find_if(m_foldRanges.begin(), m_foldRanges.end(), [&](const FoldRange& existing) {
+                return existing.range.first == range.range.first && existing.range.second == range.range.second;
+            });
+            if (previous != m_foldRanges.end()) {
+                range.collapsed = previous->collapsed;
+            }
+        }
+
+        ranges.erase(std::remove_if(ranges.begin(),
+                                    ranges.end(),
+                                    [](const FoldRange& range) {
+                                        return range.range.first >= range.range.second ||
+                                               range.startLine >= range.endLine;
+                                    }),
+                     ranges.end());
+
+        std::sort(ranges.begin(), ranges.end(), [](const FoldRange& lhs, const FoldRange& rhs) {
+            if (lhs.startLine != rhs.startLine) {
+                return lhs.startLine < rhs.startLine;
+            }
+            return lhs.endLine > rhs.endLine;
+        });
+
+        const bool unchanged =
+            ranges.size() == m_foldRanges.size() &&
+            std::equal(ranges.begin(), ranges.end(), m_foldRanges.begin(), [](const FoldRange& lhs, const FoldRange& rhs) {
+                return lhs.range.first == rhs.range.first &&
+                       lhs.range.second == rhs.range.second &&
+                       lhs.startLine == rhs.startLine &&
+                       lhs.endLine == rhs.endLine &&
+                       lhs.kind == rhs.kind &&
+                       lhs.collapsed == rhs.collapsed;
+            });
+        if (unchanged) {
+            return;
+        }
+
+        m_foldRanges = std::move(ranges);
+        m_collapsedFoldCount = static_cast<long>(std::count_if(m_foldRanges.begin(), m_foldRanges.end(), [](const FoldRange& range) {
+            return range.collapsed;
+        }));
+        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::FoldsChanged, Begin(), End()));
+    }
+
+    void ZepBuffer::ClearFoldRanges() {
+        if (m_foldRanges.empty()) {
+            return;
+        }
+        m_foldRanges.clear();
+        m_collapsedFoldCount = 0;
+        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::FoldsChanged, Begin(), End()));
+    }
+
+    bool ZepBuffer::ToggleFoldAtByte(const ByteIndex byteIndex) {
+        FoldRange* best = nullptr;
+        for (auto& range : m_foldRanges) {
+            if (!range.range.ContainsLocation(byteIndex) && range.range.first != byteIndex) {
+                continue;
+            }
+            if (best == nullptr ||
+                (range.range.second - range.range.first) < (best->range.second - best->range.first)) {
+                best = &range;
+            }
+        }
+
+        if (best == nullptr) {
+            return false;
+        }
+
+        best->collapsed = !best->collapsed;
+        m_collapsedFoldCount += best->collapsed ? 1 : -1;
+        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::FoldsChanged, Begin(), End()));
+        return true;
+    }
+
+    bool ZepBuffer::SetFoldCollapsedAtByte(const ByteIndex byteIndex, const bool collapsed) {
+        FoldRange* best = nullptr;
+        for (auto& range : m_foldRanges) {
+            if (!range.range.ContainsLocation(byteIndex) && range.range.first != byteIndex) {
+                continue;
+            }
+            if (best == nullptr ||
+                (range.range.second - range.range.first) < (best->range.second - best->range.first)) {
+                best = &range;
+            }
+        }
+
+        if (best == nullptr || best->collapsed == collapsed) {
+            return false;
+        }
+
+        best->collapsed = collapsed;
+        m_collapsedFoldCount += best->collapsed ? 1 : -1;
+        GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::FoldsChanged, Begin(), End()));
+        return true;
+    }
+
+    bool ZepBuffer::SetAllFoldsCollapsed(const bool collapsed) {
+        bool changed = false;
+        for (auto& range : m_foldRanges) {
+            if (range.collapsed != collapsed) {
+                range.collapsed = collapsed;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            m_collapsedFoldCount = collapsed ? static_cast<long>(m_foldRanges.size()) : 0;
+            GetEditor().Broadcast(std::make_shared<BufferMessage>(this, BufferMessageType::FoldsChanged, Begin(), End()));
+        }
+        return changed;
+    }
+
+    const std::vector<FoldRange>& ZepBuffer::GetFoldRanges() const {
+        return m_foldRanges;
+    }
+
+    const FoldRange* ZepBuffer::GetFoldStartingOnLine(const long line) const {
+        if (m_collapsedFoldCount == 0) {
+            return nullptr;
+        }
+
+        auto folded = std::find_if(m_foldRanges.begin(), m_foldRanges.end(), [&](const FoldRange& range) {
+            return range.collapsed && range.startLine == line;
+        });
+        return folded == m_foldRanges.end() ? nullptr : &*folded;
+    }
+
+    const FoldRange* ZepBuffer::GetCollapsedFoldContainingLine(const long line) const {
+        if (m_collapsedFoldCount == 0) {
+            return nullptr;
+        }
+
+        const FoldRange* best = nullptr;
+        for (const auto& range : m_foldRanges) {
+            if (!range.collapsed || line <= range.startLine || line > range.endLine) {
+                continue;
+            }
+            if (best == nullptr || (range.endLine - range.startLine) < (best->endLine - best->startLine)) {
+                best = &range;
+            }
+        }
+        return best;
+    }
+
+    const FoldRange* ZepBuffer::GetCollapsedFoldContainingByte(const ByteIndex byteIndex) const {
+        const long line = GetBufferLine(GlyphIterator(this, static_cast<unsigned long>(std::max(0l, byteIndex))));
+        return GetCollapsedFoldContainingLine(line);
+    }
+
+    bool ZepBuffer::IsLineHiddenByFold(const long line) const {
+        return GetCollapsedFoldContainingLine(line) != nullptr;
+    }
+
+    bool ZepBuffer::IsByteHiddenByFold(const ByteIndex byteIndex) const {
+        return GetCollapsedFoldContainingByte(byteIndex) != nullptr;
+    }
+
+    ByteIndex ZepBuffer::GetVisibleByteForFoldedByte(const ByteIndex byteIndex) const {
+        if (const auto* range = GetCollapsedFoldContainingByte(byteIndex)) {
+            return range->range.first;
+        }
+        return byteIndex;
     }
 
     void ZepBuffer::ForEachMarker(uint32_t markerType, Direction dir, const GlyphIterator& begin, const GlyphIterator& end, std::function<bool(const std::shared_ptr<RangeMarker>&)> fnCB) const {

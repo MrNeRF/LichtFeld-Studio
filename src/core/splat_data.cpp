@@ -16,6 +16,8 @@
 #include <vector>
 
 namespace {
+    constexpr int MAX_SUPPORTED_SH_DEGREE = 3;
+    constexpr size_t SH_CHANNELS = 3;
 
     // Point cloud adaptor for nanoflann
     struct PointCloudAdaptor {
@@ -213,6 +215,14 @@ namespace {
         return result.to(points.device());
     }
 
+    size_t sh_rest_coefficients_for_degree(const int degree) {
+        if (degree <= 0) {
+            return 0;
+        }
+        const auto d = static_cast<size_t>(degree);
+        return (d + 1) * (d + 1) - 1;
+    }
+
 } // anonymous namespace
 
 namespace lfs::core {
@@ -308,7 +318,7 @@ namespace lfs::core {
     Tensor SplatData::get_shs() const {
         // _sh0 is [N, 1, 3], _shN is [N, coeffs, 3]
         // Concatenate along dim 1 (coeffs) to get [N, total_coeffs, 3]
-        if (!_shN.is_valid()) {
+        if (!_shN.is_valid() || _shN.shape()[1] == 0) {
             return _sh0; // SH degree 0: only DC component
         }
         return _sh0.cat(_shN, 1);
@@ -328,6 +338,42 @@ namespace lfs::core {
         } else {
             _active_sh_degree = _max_sh_degree;
         }
+    }
+
+    bool SplatData::set_sh_degree(const int sh_degree) {
+        assert(_means.is_valid());
+
+        const int target_degree = std::clamp(sh_degree, 0, MAX_SUPPORTED_SH_DEGREE);
+        const size_t target_coeffs = sh_rest_coefficients_for_degree(target_degree);
+        const size_t n = static_cast<size_t>(size());
+
+        const bool shape_ok = _shN.is_valid() && _shN.ndim() == 3 &&
+                              _shN.shape()[0] == n &&
+                              _shN.shape()[1] == target_coeffs &&
+                              _shN.shape()[2] == SH_CHANNELS;
+
+        bool changed = _max_sh_degree != target_degree || _active_sh_degree != target_degree;
+
+        if (!shape_ok) {
+            const auto device = _shN.is_valid() ? _shN.device() : _means.device();
+            const auto dtype = _shN.is_valid() ? _shN.dtype() : DataType::Float32;
+            auto resized = Tensor::zeros({n, target_coeffs, SH_CHANNELS}, device, dtype);
+
+            if (target_coeffs > 0 && _shN.is_valid() && _shN.ndim() == 3 &&
+                _shN.shape()[0] == n && _shN.shape()[2] == SH_CHANNELS) {
+                const size_t copy_coeffs = std::min(_shN.shape()[1], target_coeffs);
+                if (copy_coeffs > 0) {
+                    resized.slice(1, 0, static_cast<int64_t>(copy_coeffs)) =
+                        _shN.slice(1, 0, static_cast<int64_t>(copy_coeffs));
+                }
+            }
+            _shN = std::move(resized);
+            changed = true;
+        }
+
+        _max_sh_degree = target_degree;
+        _active_sh_degree = target_degree;
+        return changed;
     }
 
     void SplatData::reserve_capacity(const size_t capacity) {

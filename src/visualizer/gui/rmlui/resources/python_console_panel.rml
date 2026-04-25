@@ -1,0 +1,78 @@
+<rml>
+    <head>
+        <link type="text/rcss" href="python_console_panel.rcss"/>
+    </head>
+    <body id="window-frame">
+        <div id="content-wrap">
+            <div id="content">
+                <div id="python-console-toolbar">
+                    <div class="toolbar-row">
+                        <button class="toolbar-button btn-new" type="button" data-action="new">New</button>
+                        <button class="toolbar-button btn-load" type="button" data-action="load">Load</button>
+                        <button id="reload-button" class="toolbar-button btn-reload" type="button" data-action="reload">Reload</button>
+                        <button class="toolbar-button btn-save" type="button" data-action="save">Save</button>
+                        <button class="toolbar-button btn-save-as" type="button" data-action="save-as">Save As</button>
+                        <button class="toolbar-button btn-format" type="button" data-action="format">Format</button>
+                        <button id="vim-button" class="toolbar-button btn-vim" type="button" data-action="toggle-vim">Vim</button>
+                        <button class="toolbar-button btn-run run-button" type="button" data-action="run">Run</button>
+                        <button id="stop-button" class="toolbar-button btn-stop stop-button" type="button" data-action="stop">Stop</button>
+                        <button class="toolbar-button btn-reset" type="button" data-action="reset">Reset</button>
+                        <button class="toolbar-button btn-clear" type="button" data-action="clear">Clear</button>
+                        <span class="toolbar-separator">|</span>
+                        <span id="run-status">Python</span>
+                        <span id="syntax-status">Syntax</span>
+                        <button id="outline-button" type="button" data-action="toggle-outline">Outline</button>
+                        <button id="breadcrumb-button" type="button" data-action="toggle-breadcrumbs">Scope</button>
+                        <button id="fold-button" type="button" data-action="toggle-folds">Blocks</button>
+                        <span id="script-label">Untitled</span>
+                        <button id="font-status" type="button" data-action="font-reset">100%</button>
+                    </div>
+                </div>
+
+                <div id="menu-layer">
+                    <div id="outline-menu" class="popup-menu"></div>
+                    <div id="breadcrumb-menu" class="popup-menu"></div>
+                    <div id="fold-menu" class="popup-menu"></div>
+                </div>
+
+                <div id="editor-panel">
+                    <python-editor-view id="python-editor-view"/>
+                </div>
+
+                <div id="python-splitter"></div>
+
+                <div id="bottom-panel">
+                    <div id="tabbar">
+                        <button id="tab-output" type="button" data-action="tab-output">Output</button>
+                        <button id="tab-terminal" type="button" data-action="tab-terminal">Terminal</button>
+                        <button id="tab-packages" type="button" data-action="tab-packages">Packages</button>
+                    </div>
+                    <div id="bottom-content">
+                        <div id="output-panel" class="tab-panel">
+                            <terminal-view id="python-output-terminal"/>
+                        </div>
+                        <div id="terminal-panel" class="tab-panel">
+                            <terminal-view id="python-repl-terminal"/>
+                        </div>
+                        <div id="packages-panel" class="tab-panel">
+                            <div id="packages-toolbar">
+                                <button id="packages-refresh" type="button" data-action="packages-refresh">Refresh</button>
+                                <input id="packages-search" type="text" placeholder="Search packages..."/>
+                                <span id="packages-status">(0)</span>
+                            </div>
+                            <div id="packages-table">
+                                <div class="pkg-header">
+                                    <span class="pkg-name">Name</span>
+                                    <span class="pkg-version">Version</span>
+                                    <span class="pkg-path">Path</span>
+                                </div>
+                                <div id="packages-body"></div>
+                            </div>
+                            <div id="packages-empty">No packages installed</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</rml>

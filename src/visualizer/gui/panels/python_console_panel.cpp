@@ -7,17 +7,33 @@
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/panel_layout.hpp"
+#include "gui/rmlui/elements/python_editor_element.hpp"
+#include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/terminal/terminal_widget.hpp"
-#include "gui/ui_widgets.hpp"
 #include "gui/utils/native_file_dialog.hpp"
-#include "theme/theme.hpp"
 
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Event.h>
+#include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/StringUtilities.h>
+#include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_scancode.h>
+#include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <exception>
 #include <fstream>
-#include <future>
+#include <memory>
+#include <optional>
 #include <sstream>
 #include <thread>
-#include <imgui.h>
+#include <utility>
 
 #include "python/python_compat.hpp"
 #include <filesystem>
@@ -62,6 +78,7 @@ namespace {
         const std::string original = editor->getText();
         const auto result = lfs::python::format_python_code(original);
         if (!result.success) {
+            editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
                 state.addError("[Format] " + result.error);
             }
@@ -76,35 +93,1102 @@ namespace {
         editor->focus();
     }
 
-    void draw_vim_mode_button(lfs::vis::gui::panels::PythonConsoleState& state,
-                              const lfs::vis::Theme& t) {
+    void clean_editor_script(lfs::vis::gui::panels::PythonConsoleState& state) {
         auto* editor = state.getEditor();
-        const bool enabled = editor && editor->isVimModeEnabled();
-
-        if (enabled) {
-            ImGui::PushStyleColor(ImGuiCol_Button, t.button_selected());
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.button_selected_hovered());
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  lfs::vis::darken(t.button_selected_hovered(), 0.05f));
-        }
         if (!editor) {
-            ImGui::BeginDisabled();
+            return;
         }
 
-        if (ImGui::Button("Vim") && editor) {
-            editor->setVimModeEnabled(!enabled);
-            editor->focus();
+        const std::string original = editor->getText();
+        const auto result = lfs::python::clean_python_code(original);
+        if (!result.success) {
+            editor->refreshSyntaxDiagnostics();
+            if (!result.error.empty()) {
+                state.addError("[Cleanup] " + result.error);
+            }
+            return;
         }
 
-        if (!editor) {
-            ImGui::EndDisabled();
-        }
-        if (enabled) {
-            ImGui::PopStyleColor(3);
+        if (result.code != original) {
+            editor->setText(result.code);
+            state.setModified(true);
         }
 
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip(enabled ? "Disable Vim mode" : "Enable Vim mode");
+        editor->focus();
+    }
+
+    void execute_python_code(const std::string& code,
+                             lfs::vis::gui::panels::PythonConsoleState& state);
+    void reset_python_state(lfs::vis::gui::panels::PythonConsoleState& state);
+    bool load_script(const std::filesystem::path& path,
+                     lfs::vis::gui::panels::PythonConsoleState& state);
+    void open_script_dialog(lfs::vis::gui::panels::PythonConsoleState& state);
+    void save_script_dialog(lfs::vis::gui::panels::PythonConsoleState& state);
+    void save_current_script(lfs::vis::gui::panels::PythonConsoleState& state);
+
+    struct RmlPythonConsolePane;
+
+    void handle_console_event(RmlPythonConsolePane& pane, Rml::Event& event);
+
+    struct ConsolePaneListener : Rml::EventListener {
+        RmlPythonConsolePane* owner = nullptr;
+        void ProcessEvent(Rml::Event& event) override {
+            if (owner)
+                handle_console_event(*owner, event);
+        }
+    };
+
+    enum class ConsolePopover {
+        None,
+        Outline,
+        Breadcrumbs,
+        Folds,
+    };
+
+    struct ElementBounds {
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+    };
+
+    struct PackageRefreshState {
+        std::atomic<bool> ready{false};
+        std::mutex mutex;
+        std::vector<lfs::python::PackageInfo> packages;
+        std::string error;
+    };
+
+    struct PendingConsoleAction {
+        std::string action;
+        int data_index = -1;
+    };
+
+    struct RmlPythonConsolePane {
+        RmlPythonConsolePane() { listener.owner = this; }
+
+        std::unique_ptr<lfs::vis::gui::RmlPanelHost> host;
+        lfs::vis::gui::RmlUIManager* manager = nullptr;
+        Rml::ElementDocument* document = nullptr;
+        lfs::vis::gui::PythonEditorElement* editor_view = nullptr;
+        lfs::vis::gui::TerminalElement* output_view = nullptr;
+        lfs::vis::gui::TerminalElement* repl_view = nullptr;
+
+        Rml::Element* toolbar_el = nullptr;
+        Rml::Element* script_label_el = nullptr;
+        Rml::Element* reload_button_el = nullptr;
+        Rml::Element* vim_button_el = nullptr;
+        Rml::Element* stop_button_el = nullptr;
+        Rml::Element* run_status_el = nullptr;
+        Rml::Element* syntax_status_el = nullptr;
+        Rml::Element* outline_button_el = nullptr;
+        Rml::Element* breadcrumb_button_el = nullptr;
+        Rml::Element* fold_button_el = nullptr;
+        Rml::Element* font_status_el = nullptr;
+        Rml::Element* editor_panel_el = nullptr;
+        Rml::Element* splitter_el = nullptr;
+        Rml::Element* bottom_panel_el = nullptr;
+        Rml::Element* output_panel_el = nullptr;
+        Rml::Element* repl_panel_el = nullptr;
+        Rml::Element* packages_panel_el = nullptr;
+        Rml::Element* output_tab_el = nullptr;
+        Rml::Element* repl_tab_el = nullptr;
+        Rml::Element* packages_tab_el = nullptr;
+        Rml::Element* outline_menu_el = nullptr;
+        Rml::Element* breadcrumb_menu_el = nullptr;
+        Rml::Element* fold_menu_el = nullptr;
+
+        Rml::Element* packages_refresh_button = nullptr;
+        Rml::ElementFormControlInput* packages_search_input = nullptr;
+        Rml::Element* packages_status_label = nullptr;
+        Rml::Element* packages_table_el = nullptr;
+        Rml::Element* packages_body_el = nullptr;
+        Rml::Element* packages_empty_el = nullptr;
+
+        ConsolePaneListener listener;
+        bool listeners_attached = false;
+        bool splitter_dragging = false;
+        ConsolePopover active_popover = ConsolePopover::None;
+        std::vector<PendingConsoleAction> pending_actions;
+        float panel_x = 0.0f;
+        float panel_y = 0.0f;
+        float panel_w = 0.0f;
+        float panel_h = 0.0f;
+        float last_editor_h = -1.0f;
+        float last_bottom_h = -1.0f;
+        float last_font_size = -1.0f;
+
+        std::vector<lfs::python::PackageInfo> packages;
+        std::shared_ptr<PackageRefreshState> pending_packages_refresh;
+        bool packages_loading = false;
+        bool packages_loaded_once = false;
+        bool packages_view_dirty = true;
+        std::size_t packages_visible_count = 0;
+        std::string packages_search_filter;
+        std::string rendered_packages_filter;
+        std::string packages_error;
+        std::string last_packages_body_rml;
+        std::string last_outline_rml;
+        std::string last_breadcrumb_rml;
+        std::string last_fold_rml;
+    };
+
+    RmlPythonConsolePane g_console_pane;
+
+    constexpr float MIN_PANE_HEIGHT = 100.0f;
+    constexpr float SPLITTER_THICKNESS = 6.0f;
+    float g_splitter_ratio = 0.6f;
+
+    void clear_console_document_cache(RmlPythonConsolePane& pane) {
+        pane.document = nullptr;
+        pane.editor_view = nullptr;
+        pane.output_view = nullptr;
+        pane.repl_view = nullptr;
+        pane.toolbar_el = nullptr;
+        pane.script_label_el = nullptr;
+        pane.reload_button_el = nullptr;
+        pane.vim_button_el = nullptr;
+        pane.stop_button_el = nullptr;
+        pane.run_status_el = nullptr;
+        pane.syntax_status_el = nullptr;
+        pane.outline_button_el = nullptr;
+        pane.breadcrumb_button_el = nullptr;
+        pane.fold_button_el = nullptr;
+        pane.font_status_el = nullptr;
+        pane.editor_panel_el = nullptr;
+        pane.splitter_el = nullptr;
+        pane.bottom_panel_el = nullptr;
+        pane.output_panel_el = nullptr;
+        pane.repl_panel_el = nullptr;
+        pane.packages_panel_el = nullptr;
+        pane.output_tab_el = nullptr;
+        pane.repl_tab_el = nullptr;
+        pane.packages_tab_el = nullptr;
+        pane.outline_menu_el = nullptr;
+        pane.breadcrumb_menu_el = nullptr;
+        pane.fold_menu_el = nullptr;
+        pane.packages_refresh_button = nullptr;
+        pane.packages_search_input = nullptr;
+        pane.packages_status_label = nullptr;
+        pane.packages_table_el = nullptr;
+        pane.packages_body_el = nullptr;
+        pane.packages_empty_el = nullptr;
+        pane.listeners_attached = false;
+        pane.splitter_dragging = false;
+        pane.active_popover = ConsolePopover::None;
+        pane.pending_actions.clear();
+        pane.last_editor_h = -1.0f;
+        pane.last_bottom_h = -1.0f;
+        pane.last_font_size = -1.0f;
+        pane.packages_view_dirty = true;
+        pane.packages_visible_count = 0;
+        pane.rendered_packages_filter.clear();
+        pane.last_packages_body_rml.clear();
+        pane.last_outline_rml.clear();
+        pane.last_breadcrumb_rml.clear();
+        pane.last_fold_rml.clear();
+    }
+
+    void reset_rml_python_console_pane(RmlPythonConsolePane& pane) {
+        clear_console_document_cache(pane);
+        pane.host.reset();
+        pane.manager = nullptr;
+    }
+
+    std::optional<lfs::vis::terminal::TerminalKey> terminal_key_from_scancode(int scancode) {
+        using lfs::vis::terminal::TerminalKey;
+        switch (scancode) {
+        case SDL_SCANCODE_RETURN:
+        case SDL_SCANCODE_KP_ENTER:
+            return TerminalKey::Enter;
+        case SDL_SCANCODE_BACKSPACE:
+            return TerminalKey::Backspace;
+        case SDL_SCANCODE_TAB:
+            return TerminalKey::Tab;
+        case SDL_SCANCODE_ESCAPE:
+            return TerminalKey::Escape;
+        case SDL_SCANCODE_UP:
+            return TerminalKey::Up;
+        case SDL_SCANCODE_DOWN:
+            return TerminalKey::Down;
+        case SDL_SCANCODE_RIGHT:
+            return TerminalKey::Right;
+        case SDL_SCANCODE_LEFT:
+            return TerminalKey::Left;
+        case SDL_SCANCODE_HOME:
+            return TerminalKey::Home;
+        case SDL_SCANCODE_END:
+            return TerminalKey::End;
+        case SDL_SCANCODE_PAGEUP:
+            return TerminalKey::PageUp;
+        case SDL_SCANCODE_PAGEDOWN:
+            return TerminalKey::PageDown;
+        case SDL_SCANCODE_DELETE:
+            return TerminalKey::Delete;
+        case SDL_SCANCODE_INSERT:
+            return TerminalKey::Insert;
+        case SDL_SCANCODE_F1:
+            return TerminalKey::F1;
+        case SDL_SCANCODE_F2:
+            return TerminalKey::F2;
+        case SDL_SCANCODE_F3:
+            return TerminalKey::F3;
+        case SDL_SCANCODE_F4:
+            return TerminalKey::F4;
+        case SDL_SCANCODE_F5:
+            return TerminalKey::F5;
+        case SDL_SCANCODE_F6:
+            return TerminalKey::F6;
+        case SDL_SCANCODE_F7:
+            return TerminalKey::F7;
+        case SDL_SCANCODE_F8:
+            return TerminalKey::F8;
+        case SDL_SCANCODE_F9:
+            return TerminalKey::F9;
+        case SDL_SCANCODE_F10:
+            return TerminalKey::F10;
+        case SDL_SCANCODE_F11:
+            return TerminalKey::F11;
+        case SDL_SCANCODE_F12:
+            return TerminalKey::F12;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    float console_font_size(const lfs::vis::gui::panels::PythonConsoleState& state) {
+        return std::round(std::clamp(14.0f * state.getFontScale(), 10.0f, 34.0f));
+    }
+
+    bool has_key(const lfs::vis::gui::PanelInputState& input, const int scancode) {
+        return std::find(input.keys_pressed.begin(), input.keys_pressed.end(), scancode) !=
+               input.keys_pressed.end();
+    }
+
+    void mark_dirty(RmlPythonConsolePane& pane) {
+        if (pane.host)
+            pane.host->markContentDirty();
+    }
+
+    void set_class(RmlPythonConsolePane& pane,
+                   Rml::Element* el,
+                   const char* class_name,
+                   const bool enabled) {
+        if (!el || el->IsClassSet(class_name) == enabled)
+            return;
+        el->SetClass(class_name, enabled);
+        mark_dirty(pane);
+    }
+
+    void set_disabled(RmlPythonConsolePane& pane, Rml::Element* el, const bool disabled) {
+        if (!el)
+            return;
+
+        bool changed = false;
+        if (el->IsClassSet("disabled") != disabled) {
+            el->SetClass("disabled", disabled);
+            changed = true;
+        }
+
+        if (el->HasAttribute("disabled") != disabled) {
+            if (disabled)
+                el->SetAttribute("disabled", "disabled");
+            else
+                el->RemoveAttribute("disabled");
+            changed = true;
+        }
+
+        if (changed)
+            mark_dirty(pane);
+    }
+
+    bool set_cached_property(RmlPythonConsolePane& pane,
+                             Rml::Element* el,
+                             const char* property,
+                             const std::string& value,
+                             const char* cache_attr) {
+        if (!el || el->GetAttribute<Rml::String>(cache_attr, "") == value)
+            return false;
+        el->SetProperty(property, value);
+        el->SetAttribute(cache_attr, value);
+        mark_dirty(pane);
+        return true;
+    }
+
+    void set_display(RmlPythonConsolePane& pane,
+                     Rml::Element* el,
+                     const bool visible,
+                     const char* display = "block") {
+        set_cached_property(pane, el, "display", visible ? display : "none", "data-lfs-display");
+    }
+
+    void set_text(RmlPythonConsolePane& pane, Rml::Element* el, const std::string& text) {
+        if (!el || el->GetAttribute<Rml::String>("data-lfs-text", "") == text)
+            return;
+        el->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
+        el->SetAttribute("data-lfs-text", text);
+        mark_dirty(pane);
+    }
+
+    std::string get_clipboard_text() {
+        char* text = SDL_GetClipboardText();
+        std::string result = text ? text : "";
+        SDL_free(text);
+        return result;
+    }
+
+    void set_clipboard_text(const std::string& text) {
+        SDL_SetClipboardText(text.c_str());
+    }
+
+    bool can_stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
+        return lfs::python::has_frame_callback() ||
+               state.isScriptRunning() ||
+               (state.getOutputTerminal() && state.getOutputTerminal()->is_running()) ||
+               lfs::python::PackageManager::instance().has_running_operation();
+    }
+
+    void stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
+        if (lfs::python::has_frame_callback())
+            lfs::python::clear_frame_callback();
+        if (state.isScriptRunning())
+            state.interruptScript();
+        if (lfs::python::PackageManager::instance().has_running_operation())
+            lfs::python::PackageManager::instance().cancel_async();
+        if (auto* output = state.getOutputTerminal())
+            output->interrupt();
+    }
+
+    void new_script(lfs::vis::gui::panels::PythonConsoleState& state) {
+        if (auto* editor = state.getEditor())
+            editor->clear();
+        state.setScriptPath({});
+        state.setModified(false);
+    }
+
+    bool package_matches_filter(const lfs::python::PackageInfo& pkg, const std::string& filter) {
+        if (filter.empty())
+            return true;
+        return pkg.name.find(filter) != std::string::npos ||
+               pkg.version.find(filter) != std::string::npos ||
+               pkg.path.find(filter) != std::string::npos;
+    }
+
+    Rml::Element* find_action_target(Rml::Element* target) {
+        while (target) {
+            if (!target->GetAttribute<Rml::String>("data-action", "").empty())
+                return target;
+            target = target->GetParentNode();
+        }
+        return nullptr;
+    }
+
+    int data_index(Rml::Element* el) {
+        return el ? el->GetAttribute<int>("data-index", -1) : -1;
+    }
+
+    void attach_action_listeners(RmlPythonConsolePane& pane, Rml::Element* root) {
+        if (!root)
+            return;
+
+        if (!root->GetAttribute<Rml::String>("data-action", "").empty())
+            root->AddEventListener(Rml::EventId::Click, &pane.listener);
+
+        const int child_count = root->GetNumChildren();
+        for (int i = 0; i < child_count; ++i)
+            attach_action_listeners(pane, root->GetChild(i));
+    }
+
+    void request_packages_refresh(RmlPythonConsolePane& pane) {
+        if (pane.packages_loading)
+            return;
+        auto refresh = std::make_shared<PackageRefreshState>();
+        pane.packages_loading = true;
+        pane.packages_loaded_once = true;
+        pane.packages_error.clear();
+        pane.pending_packages_refresh = refresh;
+        std::thread([refresh] {
+            std::vector<lfs::python::PackageInfo> packages;
+            std::string error;
+            try {
+                packages = lfs::python::PackageManager::instance().list_installed();
+            } catch (const std::exception& e) {
+                error = e.what();
+            } catch (...) {
+                error = "Unknown package refresh error";
+            }
+
+            {
+                std::lock_guard lock(refresh->mutex);
+                refresh->packages = std::move(packages);
+                refresh->error = std::move(error);
+            }
+            refresh->ready.store(true);
+        }).detach();
+        mark_dirty(pane);
+    }
+
+    void cache_console_elements(RmlPythonConsolePane& pane) {
+        auto* doc = pane.document;
+        if (!doc)
+            return;
+
+        pane.toolbar_el = doc->GetElementById("python-console-toolbar");
+        pane.script_label_el = doc->GetElementById("script-label");
+        pane.reload_button_el = doc->GetElementById("reload-button");
+        pane.vim_button_el = doc->GetElementById("vim-button");
+        pane.stop_button_el = doc->GetElementById("stop-button");
+        pane.run_status_el = doc->GetElementById("run-status");
+        pane.syntax_status_el = doc->GetElementById("syntax-status");
+        pane.outline_button_el = doc->GetElementById("outline-button");
+        pane.breadcrumb_button_el = doc->GetElementById("breadcrumb-button");
+        pane.fold_button_el = doc->GetElementById("fold-button");
+        pane.font_status_el = doc->GetElementById("font-status");
+        pane.editor_panel_el = doc->GetElementById("editor-panel");
+        pane.splitter_el = doc->GetElementById("python-splitter");
+        pane.bottom_panel_el = doc->GetElementById("bottom-panel");
+        pane.output_panel_el = doc->GetElementById("output-panel");
+        pane.repl_panel_el = doc->GetElementById("terminal-panel");
+        pane.packages_panel_el = doc->GetElementById("packages-panel");
+        pane.output_tab_el = doc->GetElementById("tab-output");
+        pane.repl_tab_el = doc->GetElementById("tab-terminal");
+        pane.packages_tab_el = doc->GetElementById("tab-packages");
+        pane.outline_menu_el = doc->GetElementById("outline-menu");
+        pane.breadcrumb_menu_el = doc->GetElementById("breadcrumb-menu");
+        pane.fold_menu_el = doc->GetElementById("fold-menu");
+        pane.editor_view = dynamic_cast<lfs::vis::gui::PythonEditorElement*>(
+            doc->GetElementById("python-editor-view"));
+        pane.output_view = dynamic_cast<lfs::vis::gui::TerminalElement*>(
+            doc->GetElementById("python-output-terminal"));
+        pane.repl_view = dynamic_cast<lfs::vis::gui::TerminalElement*>(
+            doc->GetElementById("python-repl-terminal"));
+
+        pane.packages_refresh_button = doc->GetElementById("packages-refresh");
+        pane.packages_search_input = dynamic_cast<Rml::ElementFormControlInput*>(
+            doc->GetElementById("packages-search"));
+        pane.packages_status_label = doc->GetElementById("packages-status");
+        pane.packages_table_el = doc->GetElementById("packages-table");
+        pane.packages_body_el = doc->GetElementById("packages-body");
+        pane.packages_empty_el = doc->GetElementById("packages-empty");
+    }
+
+    bool ensure_console_pane(RmlPythonConsolePane& pane, lfs::vis::gui::RmlUIManager* manager) {
+        if (!manager || !manager->isInitialized())
+            return false;
+
+        if (pane.manager != manager) {
+            reset_rml_python_console_pane(pane);
+            pane.manager = manager;
+        }
+
+        if (!pane.host) {
+            pane.host = std::make_unique<lfs::vis::gui::RmlPanelHost>(
+                manager, "python_console_panel", "rmlui/python_console_panel.rml");
+        }
+
+        if (!pane.host->ensureDocumentLoaded())
+            return false;
+
+        auto* doc = pane.host->getDocument();
+        if (pane.document != doc) {
+            clear_console_document_cache(pane);
+            pane.document = doc;
+            cache_console_elements(pane);
+        }
+
+        if (!pane.document)
+            return false;
+
+        if (!pane.listeners_attached) {
+            pane.document->AddEventListener(Rml::EventId::Click, &pane.listener);
+            attach_action_listeners(pane, pane.document);
+            if (pane.packages_search_input) {
+                pane.packages_search_input->AddEventListener("input", &pane.listener);
+                pane.packages_search_input->AddEventListener("change", &pane.listener);
+            }
+            pane.listeners_attached = true;
+        }
+
+        return pane.editor_view && pane.output_view && pane.repl_view;
+    }
+
+    void handle_console_action(RmlPythonConsolePane& pane,
+                               lfs::vis::gui::panels::PythonConsoleState& state,
+                               const PendingConsoleAction& pending) {
+        const std::string& action = pending.action;
+        if (action.empty())
+            return;
+
+        auto* editor = state.getEditor();
+        const auto close_popover = [&] {
+            pane.active_popover = ConsolePopover::None;
+            mark_dirty(pane);
+        };
+
+        if (action == "new") {
+            new_script(state);
+        } else if (action == "load") {
+            open_script_dialog(state);
+        } else if (action == "reload") {
+            if (!state.getScriptPath().empty())
+                load_script(state.getScriptPath(), state);
+        } else if (action == "save") {
+            save_current_script(state);
+        } else if (action == "save-as") {
+            save_script_dialog(state);
+        } else if (action == "format") {
+            format_editor_script(state);
+        } else if (action == "clean") {
+            clean_editor_script(state);
+        } else if (action == "toggle-vim") {
+            if (editor) {
+                editor->setVimModeEnabled(!editor->isVimModeEnabled());
+                editor->focus();
+            }
+        } else if (action == "run") {
+            if (editor)
+                execute_python_code(editor->getTextStripped(), state);
+        } else if (action == "stop") {
+            stop_python_work(state);
+        } else if (action == "reset") {
+            reset_python_state(state);
+        } else if (action == "clear") {
+            state.clear();
+        } else if (action == "tab-output") {
+            state.setActiveTab(0);
+            if (auto* terminal = state.getTerminal())
+                terminal->setFocused(false);
+        } else if (action == "tab-terminal") {
+            state.setActiveTab(1);
+        } else if (action == "tab-packages") {
+            state.setActiveTab(2);
+            if (auto* terminal = state.getTerminal())
+                terminal->setFocused(false);
+        } else if (action == "font-inc") {
+            state.increaseFontScale();
+        } else if (action == "font-dec") {
+            state.decreaseFontScale();
+        } else if (action == "font-reset") {
+            state.resetFontScale();
+        } else if (action == "toggle-outline") {
+            pane.active_popover = pane.active_popover == ConsolePopover::Outline
+                                      ? ConsolePopover::None
+                                      : ConsolePopover::Outline;
+        } else if (action == "toggle-breadcrumbs") {
+            pane.active_popover = pane.active_popover == ConsolePopover::Breadcrumbs
+                                      ? ConsolePopover::None
+                                      : ConsolePopover::Breadcrumbs;
+        } else if (action == "toggle-folds") {
+            pane.active_popover = pane.active_popover == ConsolePopover::Folds
+                                      ? ConsolePopover::None
+                                      : ConsolePopover::Folds;
+        } else if (action == "jump-symbol") {
+            if (editor) {
+                const int index = pending.data_index;
+                if (index >= 0)
+                    editor->jumpToSyntaxSymbol(static_cast<std::size_t>(index));
+            }
+            close_popover();
+        } else if (action == "jump-breadcrumb") {
+            if (editor) {
+                const int index = pending.data_index;
+                if (index >= 0)
+                    editor->jumpToSyntaxBreadcrumb(static_cast<std::size_t>(index));
+            }
+            close_popover();
+        } else if (action == "toggle-fold") {
+            if (editor) {
+                const int index = pending.data_index;
+                if (index >= 0)
+                    editor->toggleSyntaxFold(static_cast<std::size_t>(index));
+            }
+            close_popover();
+        } else if (action == "fold-all") {
+            if (editor)
+                editor->foldAllSyntaxBlocks();
+            close_popover();
+        } else if (action == "unfold-all") {
+            if (editor)
+                editor->unfoldAllSyntaxBlocks();
+            close_popover();
+        } else if (action == "packages-refresh") {
+            request_packages_refresh(pane);
+        }
+
+        mark_dirty(pane);
+    }
+
+    void process_pending_console_actions(RmlPythonConsolePane& pane,
+                                         lfs::vis::gui::panels::PythonConsoleState& state) {
+        if (pane.pending_actions.empty())
+            return;
+
+        auto actions = std::move(pane.pending_actions);
+        pane.pending_actions.clear();
+        for (const auto& action : actions)
+            handle_console_action(pane, state, action);
+    }
+
+    void handle_console_event(RmlPythonConsolePane& pane, Rml::Event& event) {
+        const std::string type = event.GetType();
+        if ((type == "input" || type == "change") && event.GetCurrentElement() == pane.packages_search_input) {
+            if (pane.packages_search_input)
+                pane.packages_search_filter = pane.packages_search_input->GetValue();
+            mark_dirty(pane);
+            event.StopPropagation();
+            return;
+        }
+
+        if (type != "click")
+            return;
+
+        if (auto* action_el = find_action_target(event.GetTargetElement())) {
+            if (!action_el->HasAttribute("disabled")) {
+                pane.pending_actions.push_back({
+                    .action = action_el->GetAttribute<Rml::String>("data-action", ""),
+                    .data_index = data_index(action_el),
+                });
+                mark_dirty(pane);
+            }
+            event.StopPropagation();
+            return;
+        }
+
+        if (pane.active_popover != ConsolePopover::None) {
+            pane.active_popover = ConsolePopover::None;
+            mark_dirty(pane);
+        }
+    }
+
+    bool measure_element_screen_bounds(RmlPythonConsolePane& pane,
+                                       Rml::Element* el,
+                                       ElementBounds& out) {
+        if (!pane.document || !el)
+            return false;
+        const auto document_offset = pane.document->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = el->GetBox().GetSize(Rml::BoxArea::Border);
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return false;
+        out.x = pane.panel_x + offset.x - document_offset.x;
+        out.y = pane.panel_y + offset.y - document_offset.y;
+        out.width = size.x;
+        out.height = size.y;
+        return true;
+    }
+
+    void process_rml_terminal_input(lfs::vis::terminal::TerminalWidget& terminal,
+                                    const lfs::vis::gui::PanelInputState* input,
+                                    const ElementBounds& bounds,
+                                    float char_w,
+                                    float char_h) {
+        if (!input || bounds.width <= 0.0f || bounds.height <= 0.0f ||
+            char_w <= 0.0f || char_h <= 0.0f)
+            return;
+
+        const bool hovered =
+            input->mouse_x >= bounds.x && input->mouse_x < bounds.x + bounds.width &&
+            input->mouse_y >= bounds.y && input->mouse_y < bounds.y + bounds.height;
+
+        const auto mouse_cell = [&]() {
+            const int col = static_cast<int>((input->mouse_x - bounds.x) / char_w);
+            const int row = static_cast<int>((input->mouse_y - bounds.y) / char_h);
+            return std::pair<int, int>{row, col};
+        };
+
+        if (input->mouse_clicked[0]) {
+            terminal.setFocused(hovered);
+            if (hovered) {
+                const auto [row, col] = mouse_cell();
+                terminal.beginSelection(row, col);
+            }
+        }
+
+        if (terminal.isFocused() && input->mouse_down[0]) {
+            const auto [row, col] = mouse_cell();
+            terminal.updateSelection(row, col);
+        }
+
+        if (input->mouse_released[0]) {
+            terminal.endSelection();
+            if (terminal.hasSelection()) {
+                const std::string selection = terminal.getSelection();
+                if (!selection.empty())
+                    set_clipboard_text(selection);
+            }
+        }
+
+        if (hovered && input->mouse_wheel != 0.0f) {
+            if (input->mouse_wheel > 0.0f)
+                terminal.scrollUp(3);
+            else
+                terminal.scrollDown(3);
+        }
+
+        if (!terminal.isFocused() || terminal.isReadOnly())
+            return;
+
+        auto& focus = lfs::vis::gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.want_text_input = true;
+
+        if (input->key_ctrl && input->key_shift && has_key(*input, SDL_SCANCODE_V)) {
+            terminal.paste(get_clipboard_text());
+            return;
+        }
+
+        const auto process_terminal_key = [&](const int sc, const bool repeated) {
+            if (input->key_ctrl && sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_Z) {
+                const char letter = static_cast<char>('A' + (sc - SDL_SCANCODE_A));
+                if (letter == 'C' && terminal.hasSelection()) {
+                    if (!repeated) {
+                        const std::string selection = terminal.getSelection();
+                        if (!selection.empty())
+                            set_clipboard_text(selection);
+                    }
+                } else {
+                    terminal.sendControl(letter);
+                }
+                return;
+            }
+
+            if (const auto key = terminal_key_from_scancode(sc))
+                terminal.sendKey(*key);
+        };
+
+        for (int sc : input->keys_pressed)
+            process_terminal_key(sc, false);
+        for (int sc : input->keys_repeated)
+            process_terminal_key(sc, true);
+
+        if (!input->key_ctrl) {
+            for (const uint32_t cp : input->text_codepoints)
+                terminal.sendCodepoint(cp);
+        }
+    }
+
+    void sync_terminal_view(RmlPythonConsolePane& pane,
+                            lfs::vis::terminal::TerminalWidget& terminal,
+                            lfs::vis::gui::TerminalElement* view,
+                            Rml::Element* view_el,
+                            const lfs::vis::gui::PanelInputState* input,
+                            const float font_size,
+                            const bool process_input) {
+        terminal.update();
+        if (!view || !view_el)
+            return;
+
+        ElementBounds bounds;
+        if (!measure_element_screen_bounds(pane, view_el, bounds))
+            return;
+
+        const float char_h = std::max(1.0f, font_size);
+        const float char_w = std::max(1.0f, font_size * 0.62f);
+        const int cols = std::max(1, static_cast<int>(bounds.width / char_w));
+        const int rows = std::max(1, static_cast<int>(bounds.height / char_h));
+
+        terminal.resize(cols, rows);
+        terminal.update();
+        if (process_input)
+            process_rml_terminal_input(terminal, input, bounds, char_w, char_h);
+
+        const bool dirty = terminal.needsRedraw();
+        const uint64_t redraw_generation = terminal.redrawGeneration();
+        set_cached_property(pane, view, "font-size", std::format("{:.0f}px", font_size),
+                            "data-lfs-font-size");
+        set_cached_property(pane, view, "line-height", std::format("{:.0f}px", char_h),
+                            "data-lfs-line-height");
+        if (dirty) {
+            view->setSnapshot(terminal.snapshot());
+            mark_dirty(pane);
+            terminal.markRendered(redraw_generation);
+        }
+    }
+
+    std::string menu_item_rml(const std::string& action,
+                              const std::size_t index,
+                              const std::string& label,
+                              const std::string& detail = {}) {
+        std::string row = std::format(
+            R"(<button class="menu-item" data-action="{}" data-index="{}"><span class="menu-label">{}</span>)",
+            action,
+            index,
+            Rml::StringUtilities::EncodeRml(label));
+        if (!detail.empty()) {
+            row += std::format(R"(<span class="menu-detail">{}</span>)",
+                               Rml::StringUtilities::EncodeRml(detail));
+        }
+        row += "</button>";
+        return row;
+    }
+
+    void sync_syntax_menus(RmlPythonConsolePane& pane,
+                           lfs::vis::gui::panels::PythonConsoleState& state) {
+        auto* editor = state.getEditor();
+        const auto symbols = editor ? editor->syntaxSymbols()
+                                    : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
+        const auto breadcrumbs = editor ? editor->syntaxBreadcrumbs()
+                                        : std::vector<lfs::vis::editor::PythonEditorSymbol>{};
+        const auto folds = editor ? editor->syntaxFolds()
+                                  : std::vector<lfs::vis::editor::PythonEditorFold>{};
+
+        std::string outline_rml;
+        if (symbols.empty()) {
+            outline_rml = R"(<div class="menu-empty">No symbols</div>)";
+        } else {
+            for (std::size_t i = 0; i < symbols.size(); ++i)
+                outline_rml += menu_item_rml("jump-symbol", i, symbols[i].label, symbols[i].detail);
+        }
+        if (outline_rml != pane.last_outline_rml && pane.outline_menu_el) {
+            pane.outline_menu_el->SetInnerRML(outline_rml);
+            pane.last_outline_rml = std::move(outline_rml);
+            mark_dirty(pane);
+        }
+
+        std::string breadcrumb_rml;
+        if (breadcrumbs.empty()) {
+            breadcrumb_rml = R"(<div class="menu-empty">No scope</div>)";
+        } else {
+            for (std::size_t i = 0; i < breadcrumbs.size(); ++i)
+                breadcrumb_rml += menu_item_rml("jump-breadcrumb", i, breadcrumbs[i].label, breadcrumbs[i].detail);
+        }
+        if (breadcrumb_rml != pane.last_breadcrumb_rml && pane.breadcrumb_menu_el) {
+            pane.breadcrumb_menu_el->SetInnerRML(breadcrumb_rml);
+            pane.last_breadcrumb_rml = std::move(breadcrumb_rml);
+            mark_dirty(pane);
+        }
+
+        std::string fold_rml;
+        if (folds.empty()) {
+            fold_rml = R"(<div class="menu-empty">No blocks</div>)";
+        } else {
+            for (std::size_t i = 0; i < folds.size(); ++i) {
+                const std::string label = folds[i].collapsed ? ("+ " + folds[i].label)
+                                                             : ("- " + folds[i].label);
+                fold_rml += menu_item_rml("toggle-fold", i, label, folds[i].detail);
+            }
+            fold_rml += R"(<div class="menu-separator"></div>)";
+            fold_rml += R"(<button class="menu-item" data-action="fold-all"><span class="menu-label">Fold all</span></button>)";
+            fold_rml += R"(<button class="menu-item" data-action="unfold-all"><span class="menu-label">Unfold all</span></button>)";
+        }
+        if (fold_rml != pane.last_fold_rml && pane.fold_menu_el) {
+            pane.fold_menu_el->SetInnerRML(fold_rml);
+            pane.last_fold_rml = std::move(fold_rml);
+            mark_dirty(pane);
+        }
+
+        set_disabled(pane, pane.outline_button_el, symbols.empty());
+        set_disabled(pane, pane.breadcrumb_button_el, breadcrumbs.empty());
+        set_disabled(pane, pane.fold_button_el, folds.empty());
+        set_display(pane, pane.outline_menu_el, pane.active_popover == ConsolePopover::Outline);
+        set_display(pane, pane.breadcrumb_menu_el, pane.active_popover == ConsolePopover::Breadcrumbs);
+        set_display(pane, pane.fold_menu_el, pane.active_popover == ConsolePopover::Folds);
+    }
+
+    void sync_packages(RmlPythonConsolePane& pane) {
+        if (pane.packages_loading && pane.pending_packages_refresh &&
+            pane.pending_packages_refresh->ready.load()) {
+            {
+                std::lock_guard lock(pane.pending_packages_refresh->mutex);
+                pane.packages = std::move(pane.pending_packages_refresh->packages);
+                pane.packages_error = std::move(pane.pending_packages_refresh->error);
+            }
+            pane.pending_packages_refresh.reset();
+            pane.packages_loading = false;
+            pane.packages_view_dirty = true;
+            mark_dirty(pane);
+        }
+
+        if (pane.packages_search_input) {
+            const std::string next_filter = pane.packages_search_input->GetValue();
+            if (next_filter != pane.packages_search_filter) {
+                pane.packages_search_filter = next_filter;
+                pane.packages_view_dirty = true;
+            }
+        }
+
+        if (pane.packages_view_dirty ||
+            pane.rendered_packages_filter != pane.packages_search_filter) {
+            std::string rows;
+            rows.reserve(pane.packages.size() * 192);
+            std::size_t visible_count = 0;
+            if (pane.packages_error.empty()) {
+                for (const auto& pkg : pane.packages) {
+                    if (!package_matches_filter(pkg, pane.packages_search_filter))
+                        continue;
+                    ++visible_count;
+                    rows += std::format(
+                        R"(<div class="pkg-row"><span class="pkg-name">{}</span><span class="pkg-version">{}</span><span class="pkg-path">{}</span></div>)",
+                        Rml::StringUtilities::EncodeRml(pkg.name),
+                        Rml::StringUtilities::EncodeRml(pkg.version),
+                        Rml::StringUtilities::EncodeRml(pkg.path));
+                }
+            }
+
+            pane.packages_visible_count = visible_count;
+            pane.rendered_packages_filter = pane.packages_search_filter;
+            pane.packages_view_dirty = false;
+            if (pane.packages_body_el && rows != pane.last_packages_body_rml) {
+                pane.packages_body_el->SetInnerRML(rows);
+                pane.last_packages_body_rml = std::move(rows);
+                mark_dirty(pane);
+            }
+        }
+
+        std::string status;
+        if (pane.packages_loading)
+            status = "Loading...";
+        else if (!pane.packages_error.empty())
+            status = "Error";
+        else if (pane.packages_search_filter.empty())
+            status = std::format("({})", pane.packages.size());
+        else
+            status = std::format("({} / {})", pane.packages_visible_count, pane.packages.size());
+        set_text(pane, pane.packages_status_label, status);
+
+        set_text(pane,
+                 pane.packages_empty_el,
+                 pane.packages_error.empty() ? "No packages installed" : pane.packages_error);
+
+        const bool empty_visible = !pane.packages_loading &&
+                                   (!pane.packages_error.empty() || pane.packages_visible_count == 0);
+        set_display(pane, pane.packages_empty_el, empty_visible);
+        set_display(pane, pane.packages_table_el, !empty_visible);
+    }
+
+    void sync_console_dom(RmlPythonConsolePane& pane,
+                          lfs::vis::gui::panels::PythonConsoleState& state,
+                          const float panel_h) {
+        auto* editor = state.getEditor();
+        const bool has_script = !state.getScriptPath().empty();
+        const bool can_stop = can_stop_python_work(state);
+        const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
+
+        set_disabled(pane, pane.reload_button_el, !has_script);
+        set_disabled(pane, pane.stop_button_el, !can_stop);
+        set_text(pane, pane.run_status_el, can_stop ? "Running..." : "Python");
+        set_class(pane, pane.run_status_el, "running", can_stop);
+
+        const bool vim_enabled = editor && editor->isVimModeEnabled();
+        set_class(pane, pane.vim_button_el, "active", vim_enabled);
+
+        set_display(pane, pane.output_panel_el, active_tab == 0);
+        set_display(pane, pane.repl_panel_el, active_tab == 1);
+        set_display(pane, pane.packages_panel_el, active_tab == 2);
+        set_class(pane, pane.output_tab_el, "active", active_tab == 0);
+        set_class(pane, pane.repl_tab_el, "active", active_tab == 1);
+        set_class(pane, pane.packages_tab_el, "active", active_tab == 2);
+
+        if (active_tab == 2 && !pane.packages_loaded_once)
+            request_packages_refresh(pane);
+        if (pane.active_popover != ConsolePopover::None)
+            sync_syntax_menus(pane, state);
+        if (active_tab == 2 || pane.packages_loading)
+            sync_packages(pane);
+
+        const float toolbar_h = pane.toolbar_el
+                                    ? std::max(34.0f, pane.toolbar_el->GetBox().GetSize(Rml::BoxArea::Border).y)
+                                    : 38.0f;
+        const float available_h = std::max(0.0f, panel_h - toolbar_h - SPLITTER_THICKNESS);
+        const float min_h = std::min(MIN_PANE_HEIGHT, available_h * 0.45f);
+        const float bottom_h = available_h > 0.0f
+                                   ? std::clamp(available_h * (1.0f - g_splitter_ratio),
+                                                min_h, std::max(min_h, available_h - min_h))
+                                   : 0.0f;
+        const float editor_h = std::max(0.0f, available_h - bottom_h);
+        if (std::abs(editor_h - pane.last_editor_h) > 0.5f && pane.editor_panel_el) {
+            set_cached_property(pane, pane.editor_panel_el, "height", std::format("{:.0f}px", editor_h),
+                                "data-lfs-height");
+            pane.last_editor_h = editor_h;
+        }
+        if (std::abs(bottom_h - pane.last_bottom_h) > 0.5f && pane.bottom_panel_el) {
+            set_cached_property(pane, pane.bottom_panel_el, "height", std::format("{:.0f}px", bottom_h),
+                                "data-lfs-height");
+            pane.last_bottom_h = bottom_h;
+        }
+    }
+
+    bool process_splitter(RmlPythonConsolePane& pane,
+                          const lfs::vis::gui::PanelInputState* input) {
+        if (!input || !pane.splitter_el)
+            return false;
+
+        ElementBounds bounds;
+        if (!measure_element_screen_bounds(pane, pane.splitter_el, bounds))
+            return false;
+
+        const bool hovered =
+            input->mouse_x >= bounds.x && input->mouse_x < bounds.x + bounds.width &&
+            input->mouse_y >= bounds.y && input->mouse_y < bounds.y + bounds.height;
+        if (input->mouse_clicked[0] && hovered)
+            pane.splitter_dragging = true;
+        if (!input->mouse_down[0])
+            pane.splitter_dragging = false;
+
+        if (!pane.splitter_dragging)
+            return false;
+
+        const float toolbar_h = pane.toolbar_el
+                                    ? std::max(34.0f, pane.toolbar_el->GetBox().GetSize(Rml::BoxArea::Border).y)
+                                    : 38.0f;
+        const float available_h = std::max(1.0f, pane.panel_h - toolbar_h - SPLITTER_THICKNESS);
+        const float local_y = std::clamp(input->mouse_y - pane.panel_y - toolbar_h,
+                                         0.0f, available_h);
+        const float next_ratio = std::clamp(local_y / available_h, 0.2f, 0.8f);
+        if (std::abs(next_ratio - g_splitter_ratio) < 0.001f)
+            return false;
+        g_splitter_ratio = next_ratio;
+        mark_dirty(pane);
+        return true;
+    }
+
+    void process_console_shortcuts(lfs::vis::gui::panels::PythonConsoleState& state,
+                                   const lfs::vis::gui::PanelInputState* input) {
+        if (!input)
+            return;
+
+        const bool terminal_focused =
+            (state.getTerminal() && state.getTerminal()->isFocused()) ||
+            (state.getOutputTerminal() && state.getOutputTerminal()->isFocused());
+        auto* editor = state.getEditor();
+
+        if (!terminal_focused && has_key(*input, SDL_SCANCODE_F5) && editor) {
+            execute_python_code(editor->getTextStripped(), state);
+        }
+
+        if (!input->key_ctrl || terminal_focused)
+            return;
+
+        if (input->key_shift && has_key(*input, SDL_SCANCODE_O)) {
+            if (!state.getScriptPath().empty())
+                load_script(state.getScriptPath(), state);
+            return;
+        }
+        if (has_key(*input, SDL_SCANCODE_L)) {
+            state.clear();
+        } else if (has_key(*input, SDL_SCANCODE_R)) {
+            reset_python_state(state);
+        } else if (has_key(*input, SDL_SCANCODE_N)) {
+            new_script(state);
+        } else if (has_key(*input, SDL_SCANCODE_O)) {
+            open_script_dialog(state);
+        } else if (has_key(*input, SDL_SCANCODE_S)) {
+            save_current_script(state);
+        } else if (input->key_shift && has_key(*input, SDL_SCANCODE_F)) {
+            format_editor_script(state);
+        } else if (input->key_shift && has_key(*input, SDL_SCANCODE_I)) {
+            clean_editor_script(state);
+        } else if (has_key(*input, SDL_SCANCODE_EQUALS) ||
+                   has_key(*input, SDL_SCANCODE_KP_PLUS)) {
+            state.increaseFontScale();
+        } else if (has_key(*input, SDL_SCANCODE_MINUS) ||
+                   has_key(*input, SDL_SCANCODE_KP_MINUS)) {
+            state.decreaseFontScale();
+        } else if (has_key(*input, SDL_SCANCODE_0) ||
+                   has_key(*input, SDL_SCANCODE_KP_0)) {
+            state.resetFontScale();
+        } else if (has_key(*input, SDL_SCANCODE_C) && can_stop_python_work(state)) {
+            stop_python_work(state);
         }
     }
 
@@ -503,806 +1587,92 @@ namespace lfs::vis::gui::panels {
         return output_terminal_->getAllText();
     }
 
-    namespace {
-        float g_splitter_ratio = 0.6f;
-        constexpr float MIN_PANE_HEIGHT = 100.0f;
-        constexpr float SPLITTER_THICKNESS = 6.0f;
-
-        constexpr float PKG_NAME_COL_WIDTH = 120.0f;
-        constexpr float PKG_VERSION_COL_WIDTH = 60.0f;
-        constexpr float PKG_SEARCH_WIDTH = 150.0f;
-    } // namespace
-
-    void DrawPythonConsole(const UIContext& ctx, bool* open) {
-        if (!open || !*open)
-            return;
-
-        // Initialize Python and set up output capture
-        lfs::python::ensure_initialized();
-        lfs::python::install_output_redirect();
-        setup_sys_path();
-        setup_console_output_capture();
-
-        auto& state = PythonConsoleState::getInstance();
-        const auto& t = theme();
-
-        // Build window title with script name and modified indicator
-        std::string window_title = "Python Console";
-        if (!state.getScriptPath().empty()) {
-            window_title += " - " + lfs::core::path_to_utf8(state.getScriptPath().filename());
-        }
-        if (state.isModified()) {
-            window_title += " *";
-        }
-        window_title += "###python_console";
-
-        ImGui::SetNextWindowSize(ImVec2(700, 600), ImGuiCond_FirstUseEver);
-        if (!ImGui::Begin(window_title.c_str(), open, ImGuiWindowFlags_MenuBar)) {
-            ImGui::End();
-            return;
-        }
-
-        // Menu bar
-        if (ImGui::BeginMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("New Script", "Ctrl+N")) {
-                    if (auto* editor = state.getEditor()) {
-                        editor->clear();
-                    }
-                    state.setScriptPath({});
-                    state.setModified(false);
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Open...", "Ctrl+O")) {
-                    open_script_dialog(state);
-                }
-                if (ImGui::MenuItem("Reload", "Ctrl+Shift+O", false, !state.getScriptPath().empty())) {
-                    load_script(state.getScriptPath(), state);
-                }
-                if (ImGui::MenuItem("Save", "Ctrl+S")) {
-                    save_current_script(state);
-                }
-                if (ImGui::MenuItem("Save As...")) {
-                    save_script_dialog(state);
-                }
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu("Edit")) {
-                if (ImGui::MenuItem("Clear Output", "Ctrl+L")) {
-                    state.clear();
-                }
-                if (ImGui::MenuItem("Format Script", "Ctrl+Shift+F")) {
-                    format_editor_script(state);
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Copy Selection")) {
-                    if (auto* output = state.getOutputTerminal()) {
-                        ImGui::SetClipboardText(output->getSelection().c_str());
-                    }
-                }
-                if (ImGui::MenuItem("Copy All")) {
-                    if (auto* output = state.getOutputTerminal()) {
-                        ImGui::SetClipboardText(output->getAllText().c_str());
-                    }
-                }
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu("Run")) {
-                if (ImGui::MenuItem("Run Script", "F5")) {
-                    if (auto* editor = state.getEditor()) {
-                        execute_python_code(editor->getTextStripped(), state);
-                    }
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Reset Python State", "Ctrl+R")) {
-                    reset_python_state(state);
-                }
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu("Help")) {
-                ImGui::MenuItem("Ctrl+Enter to execute", nullptr, false, false);
-                ImGui::MenuItem("F5 to run script", nullptr, false, false);
-                ImGui::MenuItem("Ctrl+R to reset state", nullptr, false, false);
-                ImGui::EndMenu();
-            }
-            ImGui::EndMenuBar();
-        }
-
-        // Toolbar
-        {
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
-
-            // Run button
-            ImGui::PushStyleColor(ImGuiCol_Button, t.palette.success);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lighten(t.palette.success, 0.1f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, darken(t.palette.success, 0.1f));
-            if (ImGui::Button("Run") || ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
-                if (auto* editor = state.getEditor()) {
-                    execute_python_code(editor->getTextStripped(), state);
-                }
-            }
-            ImGui::PopStyleColor(3);
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Run script (F5)");
-            }
-
-            ImGui::SameLine();
-
-            // Stop button (for animations, running scripts, and UV operations)
-            const bool has_animation = python::has_frame_callback();
-            const bool has_running_script = state.isScriptRunning();
-            const bool has_running_terminal = state.getOutputTerminal() && state.getOutputTerminal()->is_running();
-            const bool has_uv_operation = python::PackageManager::instance().has_running_operation();
-            const bool can_stop = has_animation || has_running_script || has_running_terminal || has_uv_operation;
-            if (!can_stop) {
-                ImGui::BeginDisabled();
-            }
-            ImGui::PushStyleColor(ImGuiCol_Button, t.palette.error);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lighten(t.palette.error, 0.1f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, darken(t.palette.error, 0.1f));
-            if (ImGui::Button("Stop")) {
-                if (has_animation) {
-                    python::clear_frame_callback();
-                }
-                if (has_running_script) {
-                    state.interruptScript();
-                }
-                if (has_uv_operation) {
-                    python::PackageManager::instance().cancel_async();
-                }
-                if (auto* output = state.getOutputTerminal()) {
-                    output->interrupt();
-                }
-            }
-            ImGui::PopStyleColor(3);
-            if (!can_stop) {
-                ImGui::EndDisabled();
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("Stop running script (Ctrl+C)");
-            }
-
-            ImGui::SameLine();
-
-            // Reset button
-            if (ImGui::Button("Reset")) {
-                reset_python_state(state);
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Reset Python state (Ctrl+R)");
-            }
-
-            ImGui::SameLine();
-
-            // Clear button
-            if (ImGui::Button("Clear")) {
-                state.clear();
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Clear console output (Ctrl+L)");
-            }
-
-            ImGui::SameLine();
-            draw_vim_mode_button(state, t);
-
-            ImGui::SameLine();
-            ImGui::Separator();
-            ImGui::SameLine();
-
-            // Status indicator
-            if (can_stop) {
-                ImGui::TextColored(t.palette.warning, "Running...");
-            } else {
-                ImGui::TextColored(t.palette.text_dim, "Python");
-            }
-
-            ImGui::PopStyleVar(2);
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-
-        // Calculate pane sizes
-        const ImVec2 content_avail = ImGui::GetContentRegionAvail();
-        const float total_height = content_avail.y;
-
-        float top_height = total_height * g_splitter_ratio - SPLITTER_THICKNESS / 2;
-        float bottom_height = total_height * (1.0f - g_splitter_ratio) - SPLITTER_THICKNESS / 2;
-        bool editor_has_active_completion = false;
-
-        top_height = std::max(top_height, MIN_PANE_HEIGHT);
-        bottom_height = std::max(bottom_height, MIN_PANE_HEIGHT);
-
-        // Script Editor (top pane)
-        ImGui::BeginChild("##script_editor_pane", ImVec2(content_avail.x, top_height), false);
-        {
-            ImGui::TextColored(t.palette.text_dim, "Script Editor");
-            ImGui::Spacing();
-
-            const ImVec2 editor_size(ImGui::GetContentRegionAvail().x,
-                                     ImGui::GetContentRegionAvail().y);
-
-            // Use monospace font for code editor
-            if (ctx.fonts.monospace) {
-                ImGui::PushFont(ctx.fonts.monospace);
-            }
-
-            if (auto* editor = state.getEditor()) {
-                editor->setReadOnly(should_block_editor_input(editor, state));
-
-                if (editor->render(editor_size)) {
-                    // Ctrl+Enter was pressed - execute
-                    execute_python_code(editor->getTextStripped(), state);
-                }
-                editor_has_active_completion = editor->hasActiveCompletion();
-                if (editor->consumeTextChanged()) {
-                    state.setModified(true);
-                }
-            }
-
-            if (ctx.fonts.monospace) {
-                ImGui::PopFont();
-            }
-        }
-        ImGui::EndChild();
-
-        // Horizontal splitter
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.palette.primary_dim);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.palette.primary);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0);
-
-        ImGui::Button("##splitter", ImVec2(content_avail.x, SPLITTER_THICKNESS));
-
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        }
-
-        if (ImGui::IsItemActive()) {
-            const float delta = ImGui::GetIO().MouseDelta.y;
-            if (delta != 0.0f) {
-                g_splitter_ratio += delta / total_height;
-                g_splitter_ratio = std::clamp(g_splitter_ratio, 0.2f, 0.8f);
-            }
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        }
-
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
-
-        // Bottom pane with tabs
-        const ImGuiWindowFlags bottom_pane_flags =
-            editor_has_active_completion ? ImGuiWindowFlags_NoNav : ImGuiWindowFlags_None;
-        ImGui::BeginChild("##bottom_pane", ImVec2(content_avail.x, bottom_height), false,
-                          bottom_pane_flags);
-        {
-            const bool terminal_has_focus = state.getTerminal() && state.getTerminal()->isFocused();
-            const ImGuiTabItemFlags terminal_tab_flags =
-                terminal_has_focus ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-
-            if (ImGui::BeginTabBar("##console_tabs")) {
-                // Output tab (read-only terminal for script output)
-                if (ImGui::BeginTabItem("Output")) {
-                    state.setActiveTab(0);
-
-                    if (auto* output = state.getOutputTerminal()) {
-                        output->setReadOnly(true);
-                        output->render(ctx.fonts.monospace);
-                    }
-
-                    ImGui::EndTabItem();
-                }
-
-                // Terminal tab (interactive Python REPL)
-                if (ImGui::BeginTabItem("Terminal", nullptr, terminal_tab_flags)) {
-                    state.setActiveTab(1);
-
-                    if (auto* terminal = state.getTerminal()) {
-                        if (!terminal->is_running()) {
-                            const auto fds = terminal->spawnEmbedded();
-                            if (fds.valid())
-                                lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
-                        }
-                        terminal->render(ctx.fonts.monospace);
-                    }
-
-                    ImGui::EndTabItem();
-                }
-
-                // Packages tab - shows installed packages
-                if (ImGui::BeginTabItem("Packages")) {
-                    state.setActiveTab(2);
-
-                    static std::vector<python::PackageInfo> cached_packages;
-                    static std::future<std::vector<python::PackageInfo>> pending_refresh;
-                    static bool loading = false;
-                    static char search_filter[128] = "";
-
-                    if (!loading && ImGui::Button("Refresh")) {
-                        loading = true;
-                        pending_refresh = std::async(std::launch::async, []() {
-                            return python::PackageManager::instance().list_installed();
-                        });
-                    }
-
-                    if (loading && pending_refresh.valid() &&
-                        pending_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        cached_packages = pending_refresh.get();
-                        loading = false;
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(PKG_SEARCH_WIDTH);
-                    lfs::vis::gui::widgets::InputTextWithHint("##search", "Search...", search_filter, sizeof(search_filter));
-
-                    ImGui::SameLine();
-                    if (loading) {
-                        ImGui::TextColored(t.palette.text_dim, "Loading...");
-                    } else {
-                        ImGui::TextColored(t.palette.text_dim, "(%zu)", cached_packages.size());
-                    }
-
-                    if (cached_packages.empty() && !loading) {
-                        ImGui::TextColored(t.palette.text_dim, "No packages installed");
-                    } else {
-                        constexpr auto TABLE_FLAGS =
-                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable;
-                        if (ImGui::BeginTable("##pkg_table", 3, TABLE_FLAGS, ImGui::GetContentRegionAvail())) {
-                            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, PKG_NAME_COL_WIDTH);
-                            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, PKG_VERSION_COL_WIDTH);
-                            ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableHeadersRow();
-                            for (const auto& pkg : cached_packages) {
-                                if (search_filter[0] != '\0' &&
-                                    pkg.name.find(search_filter) == std::string::npos)
-                                    continue;
-                                ImGui::TableNextRow();
-                                ImGui::TableNextColumn();
-                                ImGui::Text("%s", pkg.name.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.version.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.path.c_str());
-                            }
-                            ImGui::EndTable();
-                        }
-                    }
-
-                    ImGui::EndTabItem();
-                }
-
-                ImGui::EndTabBar();
-            }
-        }
-        ImGui::EndChild();
-
-        // Handle keyboard shortcuts
-        if (ImGui::GetIO().KeyCtrl) {
-            if (ImGui::IsKeyPressed(ImGuiKey_L, false)) {
-                state.clear();
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
-                reset_python_state(state);
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_N, false)) {
-                if (auto* editor = state.getEditor()) {
-                    editor->clear();
-                }
-                state.setScriptPath({});
-                state.setModified(false);
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_O, false)) {
-                open_script_dialog(state);
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-                save_current_script(state);
-            }
-            if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
-                format_editor_script(state);
-            }
-        }
-
-        ImGui::End();
+    void ShutdownPythonConsoleRml() {
+        reset_rml_python_console_pane(g_console_pane);
     }
 
-    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h) {
+    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
+                                 const PanelInputState* input) {
         lfs::python::ensure_initialized();
         lfs::python::install_output_redirect();
         setup_sys_path();
         setup_console_output_capture();
 
         auto& state = PythonConsoleState::getInstance();
-        const auto& t = theme();
-
-        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
-
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, t.palette.background);
-
-        constexpr ImGuiWindowFlags PANEL_FLAGS =
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
-            ImGuiWindowFlags_NoScrollWithMouse;
-
-        if (!ImGui::Begin("##DockedPythonConsole", nullptr, PANEL_FLAGS)) {
-            ImGui::End();
-            ImGui::PopStyleColor();
+        auto& pane = g_console_pane;
+        if (!ensure_console_pane(pane, ctx.rml_manager))
             return;
+
+        pane.panel_x = x;
+        pane.panel_y = y;
+        pane.panel_w = w;
+        pane.panel_h = h;
+
+        const float font_size = console_font_size(state);
+        if (auto* editor = state.getEditor()) {
+            editor->setReadOnly(should_block_editor_input(editor, state));
+            pane.editor_view->setEditor(editor);
+            pane.editor_view->setFontSizePx(font_size);
+            set_cached_property(pane, pane.editor_view, "font-size",
+                                std::format("{:.0f}px", font_size),
+                                "data-lfs-font-size");
         }
 
-        // Toolbar
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 4));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
-
-        if (ImGui::Button("New")) {
-            if (auto* editor = state.getEditor()) {
-                editor->clear();
-            }
-            state.setScriptPath({});
-            state.setModified(false);
+        sync_console_dom(pane, state, h);
+        pane.host->syncDirectLayout(w, h);
+        if (process_splitter(pane, input)) {
+            sync_console_dom(pane, state, h);
+            pane.host->syncDirectLayout(w, h);
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Clear editor (Ctrl+N)");
 
-        ImGui::SameLine();
-
-        // Load button
-        if (ImGui::Button("Load")) {
-            open_script_dialog(state);
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Load script (Ctrl+O)");
-
-        ImGui::SameLine();
-
-        // Reload button
-        const bool has_script = !state.getScriptPath().empty();
-        if (!has_script)
-            ImGui::BeginDisabled();
-        if (ImGui::Button("Reload")) {
-            if (has_script) {
-                load_script(state.getScriptPath(), state);
-            }
-        }
-        if (!has_script)
-            ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            if (has_script) {
-                const std::string filename_utf8 =
-                    lfs::core::path_to_utf8(state.getScriptPath().filename());
-                ImGui::SetTooltip("Reload: %s", filename_utf8.c_str());
+        const int active_tab = std::clamp(state.getActiveTab(), 0, 2);
+        if (auto* output = state.getOutputTerminal()) {
+            output->setReadOnly(true);
+            if (active_tab == 0) {
+                sync_terminal_view(pane, *output, pane.output_view, pane.output_view, input,
+                                   font_size, true);
             } else {
-                ImGui::SetTooltip("No script loaded");
+                output->update();
             }
         }
 
-        ImGui::SameLine();
-
-        // Save button
-        if (ImGui::Button("Save")) {
-            save_current_script(state);
+        if (auto* terminal = state.getTerminal()) {
+            terminal->setReadOnly(false);
+            if (active_tab == 1) {
+                if (!terminal->is_running()) {
+                    const auto fds = terminal->spawnEmbedded();
+                    if (fds.valid())
+                        lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
+                }
+                sync_terminal_view(pane, *terminal, pane.repl_view, pane.repl_view, input,
+                                   font_size, true);
+            } else {
+                terminal->update();
+                terminal->setFocused(false);
+            }
+            state.setTerminalFocused(active_tab == 1 && terminal->isFocused());
         }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Save script (Ctrl+S)");
 
-        ImGui::SameLine();
+        process_console_shortcuts(state, input);
 
-        // Save As button
-        if (ImGui::Button("Save As")) {
-            save_script_dialog(state);
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Save script as...");
+        if (auto* editor = state.getEditor(); editor && editor->needsRmlFrame())
+            mark_dirty(pane);
 
-        ImGui::SameLine();
+        pane.host->setInput(input);
+        if (input)
+            pane.host->drawDirect(x, y, w, h);
+        else
+            pane.host->prepareDirect(w, h);
+        pane.host->setInput(nullptr);
 
-        // Format button
-        if (ImGui::Button("Format")) {
-            format_editor_script(state);
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Format code (Ctrl+Shift+F)");
+        process_pending_console_actions(pane, state);
 
-        ImGui::SameLine();
-        draw_vim_mode_button(state, t);
-
-        ImGui::SameLine();
-        ImGui::TextColored(t.palette.text_dim, "|");
-        ImGui::SameLine();
-
-        // Run button
-        ImGui::PushStyleColor(ImGuiCol_Button, t.palette.success);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lighten(t.palette.success, 0.1f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, darken(t.palette.success, 0.1f));
-        if (ImGui::Button("Run") || ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
-            if (auto* editor = state.getEditor()) {
+        if (auto* editor = state.getEditor()) {
+            if (editor->consumeExecuteRequested())
                 execute_python_code(editor->getTextStripped(), state);
-            }
+            if (editor->consumeTextChanged())
+                state.setModified(true);
         }
-        ImGui::PopStyleColor(3);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Run script (F5)");
-
-        ImGui::SameLine();
-
-        // Stop button
-        const bool has_animation = python::has_frame_callback();
-        const bool has_running_script = state.isScriptRunning();
-        const bool has_running_terminal = state.getOutputTerminal() && state.getOutputTerminal()->is_running();
-        const bool has_uv_operation = python::PackageManager::instance().has_running_operation();
-        const bool can_stop = has_animation || has_running_script || has_running_terminal || has_uv_operation;
-        {
-            if (!can_stop) {
-                ImGui::BeginDisabled();
-            }
-            ImGui::PushStyleColor(ImGuiCol_Button, t.palette.error);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, lighten(t.palette.error, 0.1f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, darken(t.palette.error, 0.1f));
-            if (ImGui::Button("Stop")) {
-                if (has_animation) {
-                    python::clear_frame_callback();
-                }
-                if (has_running_script) {
-                    state.interruptScript();
-                }
-                if (has_uv_operation) {
-                    python::PackageManager::instance().cancel_async();
-                }
-                if (auto* output = state.getOutputTerminal()) {
-                    output->interrupt();
-                }
-            }
-            ImGui::PopStyleColor(3);
-            if (!can_stop) {
-                ImGui::EndDisabled();
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Stop running script (Ctrl+C)");
-        }
-
-        ImGui::SameLine();
-
-        // Reset button
-        if (ImGui::Button("Reset")) {
-            reset_python_state(state);
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Reset Python state (Ctrl+R)");
-
-        ImGui::SameLine();
-
-        // Clear button
-        if (ImGui::Button("Clear")) {
-            state.clear();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Clear console (Ctrl+L)");
-
-        ImGui::SameLine();
-        ImGui::TextColored(t.palette.text_dim, "|");
-        ImGui::SameLine();
-
-        // Status indicator
-        if (can_stop) {
-            ImGui::TextColored(t.palette.warning, "Running...");
-        } else {
-            ImGui::TextColored(t.palette.text_dim, "Python");
-        }
-
-        ImGui::PopStyleVar(2);
-
-        ImGui::Spacing();
-        ImGui::Separator();
-
-        // Calculate pane sizes
-        const ImVec2 content_avail = ImGui::GetContentRegionAvail();
-        const float total_height = content_avail.y;
-
-        float top_height = total_height * g_splitter_ratio - SPLITTER_THICKNESS / 2;
-        float bottom_height = total_height * (1.0f - g_splitter_ratio) - SPLITTER_THICKNESS / 2;
-        bool editor_has_active_completion = false;
-
-        top_height = std::max(top_height, MIN_PANE_HEIGHT);
-        bottom_height = std::max(bottom_height, MIN_PANE_HEIGHT);
-
-        // Script Editor (top pane)
-        ImGui::BeginChild("##docked_script_editor_pane", ImVec2(content_avail.x, top_height), false,
-                          ImGuiWindowFlags_HorizontalScrollbar);
-        {
-            ImFont* const scaled_mono = ctx.fonts.monoForScale(state.getFontScale());
-            if (scaled_mono) {
-                ImGui::PushFont(scaled_mono);
-            }
-
-            const ImVec2 editor_size(ImGui::GetContentRegionAvail().x,
-                                     ImGui::GetContentRegionAvail().y);
-
-            if (auto* editor = state.getEditor()) {
-                editor->setReadOnly(should_block_editor_input(editor, state));
-
-                if (editor->render(editor_size)) {
-                    execute_python_code(editor->getTextStripped(), state);
-                }
-                editor_has_active_completion = editor->hasActiveCompletion();
-                if (editor->consumeTextChanged()) {
-                    state.setModified(true);
-                }
-            }
-
-            if (scaled_mono) {
-                ImGui::PopFont();
-            }
-        }
-        ImGui::EndChild();
-
-        // Horizontal splitter
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.palette.primary_dim);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.palette.primary);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0);
-
-        ImGui::Button("##docked_splitter", ImVec2(content_avail.x, SPLITTER_THICKNESS));
-
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        }
-
-        if (ImGui::IsItemActive()) {
-            const float delta = ImGui::GetIO().MouseDelta.y;
-            if (delta != 0.0f) {
-                g_splitter_ratio += delta / total_height;
-                g_splitter_ratio = std::clamp(g_splitter_ratio, 0.2f, 0.8f);
-            }
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-        }
-
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(3);
-
-        // Bottom pane with tabs
-        const ImGuiWindowFlags bottom_pane_flags =
-            editor_has_active_completion ? ImGuiWindowFlags_NoNav : ImGuiWindowFlags_None;
-        ImGui::BeginChild("##docked_bottom_pane", ImVec2(content_avail.x, bottom_height), false,
-                          bottom_pane_flags);
-        {
-            ImFont* const scaled_mono_bottom = ctx.fonts.monoForScale(state.getFontScale());
-            const bool terminal_has_focus = state.getTerminal() && state.getTerminal()->isFocused();
-            const ImGuiTabItemFlags terminal_tab_flags =
-                terminal_has_focus ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-
-            if (ImGui::BeginTabBar("##docked_console_tabs")) {
-                // Output tab (read-only terminal for script output)
-                if (ImGui::BeginTabItem("Output")) {
-                    state.setActiveTab(0);
-
-                    if (auto* output = state.getOutputTerminal()) {
-                        output->setReadOnly(true);
-                        output->render(scaled_mono_bottom);
-                    }
-
-                    ImGui::EndTabItem();
-                }
-
-                // Terminal tab (interactive Python REPL)
-                if (ImGui::BeginTabItem("Terminal", nullptr, terminal_tab_flags)) {
-                    state.setActiveTab(1);
-
-                    if (auto* terminal = state.getTerminal()) {
-                        if (!terminal->is_running()) {
-                            const auto fds = terminal->spawnEmbedded();
-                            if (fds.valid())
-                                lfs::python::start_embedded_repl(fds.read_fd, fds.write_fd);
-                        }
-                        terminal->render(scaled_mono_bottom);
-                    }
-
-                    ImGui::EndTabItem();
-                }
-
-                // Packages tab - shows installed packages
-                if (ImGui::BeginTabItem("Packages")) {
-                    state.setActiveTab(2);
-
-                    static std::vector<python::PackageInfo> cached_packages;
-                    static std::future<std::vector<python::PackageInfo>> pending_refresh;
-                    static bool loading = false;
-                    static char search_filter[128] = "";
-
-                    if (!loading && ImGui::Button("Refresh##docked")) {
-                        loading = true;
-                        pending_refresh = std::async(std::launch::async, []() {
-                            return python::PackageManager::instance().list_installed();
-                        });
-                    }
-
-                    if (loading && pending_refresh.valid() &&
-                        pending_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-                        cached_packages = pending_refresh.get();
-                        loading = false;
-                    }
-
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(PKG_SEARCH_WIDTH);
-                    lfs::vis::gui::widgets::InputTextWithHint("##search_docked", "Search...", search_filter,
-                                                              sizeof(search_filter));
-
-                    ImGui::SameLine();
-                    if (loading) {
-                        ImGui::TextColored(t.palette.text_dim, "Loading...");
-                    } else {
-                        ImGui::TextColored(t.palette.text_dim, "(%zu)", cached_packages.size());
-                    }
-
-                    if (cached_packages.empty() && !loading) {
-                        ImGui::TextColored(t.palette.text_dim, "No packages installed");
-                    } else {
-                        constexpr auto TABLE_FLAGS =
-                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable;
-                        if (ImGui::BeginTable("##docked_pkg_table", 3, TABLE_FLAGS, ImGui::GetContentRegionAvail())) {
-                            ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, PKG_NAME_COL_WIDTH);
-                            ImGui::TableSetupColumn("Version", ImGuiTableColumnFlags_WidthFixed, PKG_VERSION_COL_WIDTH);
-                            ImGui::TableSetupColumn("Path", ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableHeadersRow();
-                            for (const auto& pkg : cached_packages) {
-                                if (search_filter[0] != '\0' &&
-                                    pkg.name.find(search_filter) == std::string::npos)
-                                    continue;
-                                ImGui::TableNextRow();
-                                ImGui::TableNextColumn();
-                                ImGui::Text("%s", pkg.name.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.version.c_str());
-                                ImGui::TableNextColumn();
-                                ImGui::TextColored(t.palette.text_dim, "%s", pkg.path.c_str());
-                            }
-                            ImGui::EndTable();
-                        }
-                    }
-
-                    ImGui::EndTabItem();
-                }
-
-                ImGui::EndTabBar();
-            }
-        }
-        ImGui::EndChild();
-
-        // Keyboard shortcuts
-        if (ImGui::GetIO().KeyCtrl) {
-            if (ImGui::IsKeyPressed(ImGuiKey_L, false)) {
-                state.clear();
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_R, false)) {
-                reset_python_state(state);
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_O, false)) {
-                open_script_dialog(state);
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-                save_current_script(state);
-            }
-            if (ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
-                format_editor_script(state);
-            }
-            // Font scaling: Ctrl++ / Ctrl+= to increase, Ctrl+- to decrease, Ctrl+0 to reset
-            if (ImGui::IsKeyPressed(ImGuiKey_Equal, false) ||
-                ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, false)) {
-                state.increaseFontScale();
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_Minus, false) ||
-                ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract, false)) {
-                state.decreaseFontScale();
-            }
-            if (ImGui::IsKeyPressed(ImGuiKey_0, false) ||
-                ImGui::IsKeyPressed(ImGuiKey_Keypad0, false)) {
-                state.resetFontScale();
-            }
-        }
-
-        ImGui::End();
-        ImGui::PopStyleColor();
     }
 
 } // namespace lfs::vis::gui::panels

@@ -41,8 +41,6 @@ foreach(LINE ${LINES})
     # Determine module from path (more granular)
     if(OBJ_FILE MATCHES "external/nvImageCodec")
         set(MODULE "nvImageCodec")
-    elseif(OBJ_FILE MATCHES "external/imguizmo")
-        set(MODULE "imguizmo")
     # training_new submodules
     elseif(OBJ_FILE MATCHES "src/training_new/rasterization")
         set(MODULE "training/rasterizer")

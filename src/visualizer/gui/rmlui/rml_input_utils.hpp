@@ -44,6 +44,14 @@ namespace lfs::vis::gui::rml_input {
         return element && element->GetTagName() != "body";
     }
 
+    inline bool isCustomTextInputElement(Rml::Element* element) {
+        return element && element->GetAttribute<Rml::String>("data-text-input", "") == "true";
+    }
+
+    inline bool wantsTextInput(Rml::Element* element) {
+        return isTextEditableElement(element) || isCustomTextInputElement(element);
+    }
+
     inline bool isSingleLineTextInput(Rml::Element* element) {
         return element && element->GetTagName() == "input" && isTextEditableElement(element);
     }

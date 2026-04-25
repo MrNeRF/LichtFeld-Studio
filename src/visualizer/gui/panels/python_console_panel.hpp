@@ -15,7 +15,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <imgui.h>
 
 namespace lfs::vis::editor {
     class PythonEditor;
@@ -24,6 +23,10 @@ namespace lfs::vis::editor {
 namespace lfs::vis::terminal {
     class TerminalWidget;
 } // namespace lfs::vis::terminal
+
+namespace lfs::vis::gui {
+    struct PanelInputState;
+} // namespace lfs::vis::gui
 
 namespace lfs::vis::gui::panels {
 
@@ -109,10 +112,10 @@ namespace lfs::vis::gui::panels {
         std::thread script_thread_;
     };
 
-    // Draw the Python console window (floating)
-    void DrawPythonConsole(const UIContext& ctx, bool* open);
-
     // Draw the Python console as a docked panel (fixed position/size)
-    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h);
+    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
+                                 const PanelInputState* input = nullptr);
+
+    void ShutdownPythonConsoleRml();
 
 } // namespace lfs::vis::gui::panels

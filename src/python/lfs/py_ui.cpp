@@ -4685,7 +4685,7 @@ namespace lfs::python {
         m.def("cancel_video_export", &cancel_video_export,
               "Cancel an ongoing video export operation");
 
-        // Sequencer UI state for Python access (uses callback to avoid ImGuizmo dependency)
+        // Sequencer UI state for Python access
         nb::class_<SequencerUIStateData>(m, "SequencerUIState")
             .def_rw("show_camera_path", &SequencerUIStateData::show_camera_path, "Whether camera path is displayed in viewport")
             .def_rw("snap_to_grid", &SequencerUIStateData::snap_to_grid, "Whether keyframe snapping is enabled")
@@ -4776,7 +4776,7 @@ namespace lfs::python {
             "Set easing type for keyframe (0=Linear, 1=EaseIn, 2=EaseOut, 3=EaseInOut)");
 
         // Section drawing wrappers - callable from Python panel draw()
-        // These use callbacks to avoid ImGuizmo header dependency in py_ui.cpp
+        // These use callbacks to keep py_ui.cpp independent of visualizer internals
         m.def("draw_tools_section", &draw_tools_section,
               "Draw tools section (C++ implementation)");
 

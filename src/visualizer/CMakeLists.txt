@@ -68,6 +68,10 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/native_panels.cpp
         gui/layout_state.cpp
         gui/async_task_manager.cpp
+        gui/bounds_gizmo.cpp
+        gui/rotation_gizmo.cpp
+        gui/scale_gizmo.cpp
+        gui/translation_gizmo.cpp
         gui/video_export_utils.cpp
         gui/startup_overlay.cpp
         gui/rml_menu_bar.cpp
@@ -94,6 +98,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/python_scripts_panel.cpp
         gui/editor/python_lsp_client.cpp
         gui/editor/python_editor.cpp
+        gui/editor/zep_rml_display.cpp
         gui/editor/stdio_process.cpp
 
         # Terminal emulator
@@ -182,7 +187,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
+        gui/rmlui/elements/python_editor_element.cpp
         gui/rmlui/elements/scene_graph_element.cpp
+        gui/rmlui/elements/terminal_element.cpp
 )
 
 set_source_files_properties(
@@ -228,7 +235,6 @@ target_link_libraries(lfs_visualizer
         SDL3::SDL3
         imgui::imgui
         implot::implot
-        imguizmo::imguizmo
         Zep::Zep
         glm::glm
         TBB::tbb
@@ -395,6 +401,8 @@ foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
 endforeach ()
 add_custom_target(copy_rmlui_resources ALL
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${RMLUI_RESOURCE_FILES}
         "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"

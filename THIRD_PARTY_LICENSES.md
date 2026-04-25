@@ -46,7 +46,6 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | Project | Description | License |
 |---------|-------------|---------|
 | [Dear ImGui](https://github.com/ocornut/imgui) | Immediate mode GUI library | MIT |
-| [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | Gizmo manipulation for ImGui | MIT |
 | [SDL3](https://www.libsdl.org/) | Window/input/context management | zlib |
 | [GLM](https://github.com/g-truc/glm) | OpenGL Mathematics library | MIT |
 | [glad](https://github.com/Dav1dde/glad) | OpenGL loader | MIT |

@@ -15,6 +15,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/native_panels.hpp"
@@ -25,8 +26,11 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
+#include "gui/rotation_gizmo.hpp"
+#include "gui/scale_gizmo.hpp"
 #include "gui/scene_panel_native.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
@@ -66,12 +70,22 @@
 #include <iterator>
 #include <string_view>
 #include <unordered_set>
-#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
+
+        [[nodiscard]] bool isTransformGizmoOverOrUsing() {
+            return isBoundsGizmoHovered() ||
+                   isBoundsGizmoActive() ||
+                   isRotationGizmoHovered() ||
+                   isRotationGizmoActive() ||
+                   isScaleGizmoHovered() ||
+                   isScaleGizmoActive() ||
+                   isTranslationGizmoHovered() ||
+                   isTranslationGizmoActive();
+        }
 
         enum class DevResourceKind {
             None,
@@ -132,6 +146,7 @@ namespace lfs::vis::gui {
             input.key_super = false;
             input.viewport_keyboard_focus = false;
             input.keys_pressed.clear();
+            input.keys_repeated.clear();
             input.keys_released.clear();
             input.text_codepoints.clear();
             input.text_inputs.clear();
@@ -1224,6 +1239,7 @@ namespace lfs::vis::gui {
 
         global_context_menu_->destroyGLResources();
         rml_modal_overlay_.reset();
+        panels::ShutdownPythonConsoleRml();
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
@@ -1429,9 +1445,6 @@ namespace lfs::vis::gui {
             }
         }
 
-        // Initialize ImGuizmo for this frame
-        ImGuizmo::BeginFrame();
-
         if (menu_bar_ && !ui_hidden_) {
             menu_bar_->render();
 
@@ -1527,6 +1540,7 @@ namespace lfs::vis::gui {
             .window_states = &window_states_,
             .editor = &editor_ctx,
             .sequencer_controller = &sequencer_ui_.controller(),
+            .rml_manager = &rmlui_manager_,
             .fonts = buildFontSet()};
 
         // Build draw context for panel registry
@@ -2274,7 +2288,7 @@ namespace lfs::vis::gui {
             (global_context_menu_ && global_context_menu_->isOpen());
         const bool imgui_wants_input = focus.want_text_input || focus.want_capture_keyboard;
 
-        if ((ImGuizmo::IsOver() || ImGuizmo::IsUsing()) && !any_popup_or_modal_open) {
+        if (isTransformGizmoOverOrUsing() && !any_popup_or_modal_open) {
             focus.want_capture_mouse = false;
             focus.want_capture_keyboard = false;
         }

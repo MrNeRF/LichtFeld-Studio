@@ -71,25 +71,7 @@ namespace lfs::vis::gui {
     }
 
     void truncateSHDegree(lfs::core::SplatData& splat, const int target_degree) {
-        if (target_degree >= splat.get_max_sh_degree())
-            return;
-
-        if (target_degree == 0) {
-            splat.shN() = lfs::core::Tensor{};
-        } else {
-            const size_t keep_coeffs = static_cast<size_t>((target_degree + 1) * (target_degree + 1) - 1);
-            auto& shN = splat.shN();
-            if (shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > keep_coeffs) {
-                if (shN.ndim() == 3) {
-                    shN = shN.slice(1, 0, static_cast<int64_t>(keep_coeffs)).contiguous();
-                } else {
-                    constexpr size_t CHANNELS = 3;
-                    shN = shN.slice(1, 0, static_cast<int64_t>(keep_coeffs * CHANNELS)).contiguous();
-                }
-            }
-        }
-        splat.set_max_sh_degree(target_degree);
-        splat.set_active_sh_degree(target_degree);
+        splat.set_sh_degree(target_degree);
     }
 
     template <typename F>

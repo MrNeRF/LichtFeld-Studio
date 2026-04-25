@@ -31,6 +31,9 @@ namespace lfs::vis::gui {
         input.keys_pressed.reserve(buf.keys_pressed.size());
         for (auto sc : buf.keys_pressed)
             input.keys_pressed.push_back(static_cast<int>(sc));
+        input.keys_repeated.reserve(buf.keys_repeated.size());
+        for (auto sc : buf.keys_repeated)
+            input.keys_repeated.push_back(static_cast<int>(sc));
         input.keys_released.reserve(buf.keys_released.size());
         for (auto sc : buf.keys_released)
             input.keys_released.push_back(static_cast<int>(sc));

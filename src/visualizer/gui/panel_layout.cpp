@@ -27,6 +27,7 @@ namespace lfs::vis::gui {
 
     void PanelLayoutManager::saveState() const {
         LayoutState state;
+        state.load();
         // right_panel_width not saved — always start at default
         state.scene_panel_ratio = scene_panel_ratio_;
         state.python_console_width = python_console_width_;
@@ -535,7 +536,7 @@ namespace lfs::vis::gui {
         if (python_console_hovering_edge_ || python_console_resizing_)
             cursor_request_ = CursorRequest::ResizeEW;
 
-        panels::DrawDockedPythonConsole(ctx, panel_x, screen.work_pos.y, python_console_width_, panel_h);
+        panels::DrawDockedPythonConsole(ctx, panel_x, screen.work_pos.y, python_console_width_, panel_h, &input);
     }
 
 } // namespace lfs::vis::gui

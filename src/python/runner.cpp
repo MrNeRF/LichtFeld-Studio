@@ -4,6 +4,7 @@
 
 #include "runner.hpp"
 #include "package_manager.hpp"
+#include "python_buffer_analysis.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -346,6 +347,16 @@ _add_dll_dirs()
             Py_XDECREF(value);
             Py_XDECREF(tb);
             return message;
+        }
+
+        std::string compile_python_buffer_error(const std::string& code) {
+            PyObject* const compiled = Py_CompileString(code.c_str(), "<lfs_formatter>", Py_file_input);
+            if (compiled) {
+                Py_DECREF(compiled);
+                return {};
+            }
+
+            return "Python syntax error: " + consume_python_error_detailed();
         }
 
         void remember_python_bridge_failure(const std::string& detail) {
@@ -1089,9 +1100,29 @@ _repl_out.close()
         return {};
     }
 
-    FormatResult format_python_code(const std::string& code) {
+    enum class PythonFormatMode {
+        Strict,
+        Cleanup,
+    };
+
+    FormatResult format_python_code_impl(const std::string& code, const PythonFormatMode mode) {
         if (code.empty())
             return {code, "", true};
+
+        if (mode == PythonFormatMode::Strict) {
+            const auto buffer_analysis = analyze_python_buffer(code);
+            if (!buffer_analysis.clean()) {
+                return {code, buffer_analysis.summary, false};
+            }
+
+            ensure_initialized();
+            {
+                const GilAcquire gil;
+                if (const auto compile_error = compile_python_buffer_error(code); !compile_error.empty()) {
+                    return {code, compile_error, false};
+                }
+            }
+        }
 
         auto& pm = PackageManager::instance();
         if (!pm.is_installed("black")) {
@@ -1179,6 +1210,25 @@ def _lfs_format_code(code):
         lines = source.split('\n')
         changed = False
 
+        def _block_boundary(start_idx, header_indent):
+            blank_seen = False
+            for k in range(start_idx, len(lines)):
+                stripped = lines[k].strip()
+                if not stripped:
+                    blank_seen = True
+                    continue
+
+                indent = _indent_width(lines[k])
+                if k > start_idx and indent <= header_indent:
+                    if stripped.startswith(('def ', 'class ', '@')):
+                        return k
+                    if blank_seen and not stripped.startswith((
+                            'return ', 'raise ', 'pass', 'break', 'continue',
+                            'elif ', 'else:', 'except', 'finally:'
+                    )):
+                        return k
+            return len(lines)
+
         for _ in range(len(lines)):
             try:
                 compile('\n'.join(lines), '<lfs_formatter>', 'exec')
@@ -1200,6 +1250,16 @@ def _lfs_format_code(code):
                 target_indent = _expected_indent(lines, idx)
 
                 if 'expected an indented block' in msg:
+                    prev_idx, prev_stripped = _previous_significant_line(lines, idx)
+                    if prev_idx is not None and prev_stripped.startswith(('def ', 'class ')):
+                        header_indent = _indent_width(lines[prev_idx])
+                        prefix = ' ' * (header_indent + 4)
+                        block_end = _block_boundary(idx, header_indent)
+                        for k in range(idx, block_end):
+                            if lines[k].strip():
+                                lines[k] = prefix + lines[k]
+                        changed = True
+                        continue
                     target_indent = max(target_indent, 4)
                 elif 'unexpected indent' not in msg and \
                         'unindent does not match any outer indentation level' not in msg:
@@ -1327,6 +1387,14 @@ def _lfs_format_code(code):
         }
 
         return result;
+    }
+
+    FormatResult format_python_code(const std::string& code) {
+        return format_python_code_impl(code, PythonFormatMode::Strict);
+    }
+
+    FormatResult clean_python_code(const std::string& code) {
+        return format_python_code_impl(code, PythonFormatMode::Cleanup);
     }
 
     // Frame callback for animations

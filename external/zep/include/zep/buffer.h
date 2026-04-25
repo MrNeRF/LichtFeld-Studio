@@ -84,6 +84,14 @@ namespace Zep {
         Replace,
     };
 
+    struct FoldRange {
+        ByteRange range;
+        long startLine = 0;
+        long endLine = 0;
+        std::string kind;
+        bool collapsed = false;
+    };
+
     struct ChangeRecord {
         std::string strDeleted;
         std::string strInserted;
@@ -212,6 +220,19 @@ namespace Zep {
         void HideMarkers(uint32_t markerType);
         void ShowMarkers(uint32_t markerType, uint32_t displayType);
 
+        void SetFoldRanges(std::vector<FoldRange> ranges);
+        void ClearFoldRanges();
+        bool ToggleFoldAtByte(ByteIndex byteIndex);
+        bool SetFoldCollapsedAtByte(ByteIndex byteIndex, bool collapsed);
+        bool SetAllFoldsCollapsed(bool collapsed);
+        const std::vector<FoldRange>& GetFoldRanges() const;
+        const FoldRange* GetFoldStartingOnLine(long line) const;
+        const FoldRange* GetCollapsedFoldContainingLine(long line) const;
+        const FoldRange* GetCollapsedFoldContainingByte(ByteIndex byteIndex) const;
+        bool IsLineHiddenByFold(long line) const;
+        bool IsByteHiddenByFold(ByteIndex byteIndex) const;
+        ByteIndex GetVisibleByteForFoldedByte(ByteIndex byteIndex) const;
+
         void ForEachMarker(uint32_t types, Direction dir, const GlyphIterator& begin, const GlyphIterator& end, std::function<bool(const std::shared_ptr<RangeMarker>&)> fnCB) const;
         std::shared_ptr<RangeMarker> FindNextMarker(GlyphIterator start, Direction dir, uint32_t markerType);
 
@@ -284,6 +305,8 @@ namespace Zep {
         // Selections
         GlyphRange m_selection;
         tRangeMarkers m_rangeMarkers;
+        std::vector<FoldRange> m_foldRanges;
+        long m_collapsedFoldCount = 0;
 
         // Modes
         std::shared_ptr<ZepMode> m_spMode;
@@ -301,12 +324,17 @@ namespace Zep {
         TextDeleted,
         TextAdded,
         Loaded,
-        MarkersChanged
+        MarkersChanged,
+        FoldsChanged
     };
 
     struct BufferMessage : public ZepMessage {
         BufferMessage(ZepBuffer* pBuff, BufferMessageType messageType, const GlyphIterator& startLoc, const GlyphIterator& endLoc)
-            : ZepMessage(Msg::Buffer), pBuffer(pBuff), type(messageType), startLocation(startLoc), endLocation(endLoc) {
+            : ZepMessage(Msg::Buffer),
+              pBuffer(pBuff),
+              type(messageType),
+              startLocation(startLoc),
+              endLocation(endLoc) {
         }
 
         ZepBuffer* pBuffer;

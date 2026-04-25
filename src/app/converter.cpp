@@ -19,7 +19,6 @@ namespace lfs::app {
 
     namespace {
 
-        constexpr size_t SH_CHANNELS = 3;
         constexpr const char* VALID_EXTENSIONS[] = {".ply", ".sog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume", ".rad"};
 
         enum class OverwriteChoice { YES,
@@ -41,21 +40,9 @@ namespace lfs::app {
         }
 
         void truncateSHDegree(SplatData& splat, const int degree) {
-            if (degree < 0 || degree >= splat.get_max_sh_degree())
+            if (degree < 0)
                 return;
-
-            if (degree == 0) {
-                splat.shN() = Tensor{};
-            } else {
-                const size_t keep = static_cast<size_t>((degree + 1) * (degree + 1) - 1);
-                auto& shN = splat.shN();
-                if (shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > keep) {
-                    const auto slice_end = static_cast<int64_t>(shN.ndim() == 3 ? keep : keep * SH_CHANNELS);
-                    shN = shN.slice(1, 0, slice_end).contiguous();
-                }
-            }
-            splat.set_max_sh_degree(degree);
-            splat.set_active_sh_degree(degree);
+            splat.set_sh_degree(degree);
         }
 
         std::vector<std::filesystem::path> getInputFiles(const std::filesystem::path& path) {
@@ -145,9 +132,9 @@ namespace lfs::app {
             auto splat = std::move(*splat_ptr);
             std::println("  Loaded {} gaussians, SH degree {}", splat->size(), splat->get_max_sh_degree());
 
-            if (params.sh_degree >= 0 && params.sh_degree < splat->get_max_sh_degree()) {
+            if (params.sh_degree >= 0 && params.sh_degree != splat->get_max_sh_degree()) {
                 truncateSHDegree(*splat, params.sh_degree);
-                std::println("  Truncated to SH degree {}", params.sh_degree);
+                std::println("  Set SH degree {}", params.sh_degree);
             }
 
             lfs::io::Result<void> result;

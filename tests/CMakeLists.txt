@@ -372,7 +372,6 @@ target_link_libraries(lichtfeld_tests PRIVATE
     nanobind-static
     imgui::imgui
     implot::implot
-    imguizmo::imguizmo
     ${TORCH_LIBRARIES}
     ${OPENGL_LIBRARIES}
     OpenImageIO::OpenImageIO

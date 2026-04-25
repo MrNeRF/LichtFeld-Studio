@@ -1,0 +1,120 @@
+body {
+    background-color: @{background};
+    color: @{text};
+}
+
+#window-frame,
+#python-editor-view,
+#python-output-terminal,
+#python-repl-terminal {
+    background-color: @{background};
+}
+
+#python-editor-view {
+    color: @{text};
+}
+
+#python-console-toolbar,
+#tabbar {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+button {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
+}
+
+button:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+button.active,
+button:active {
+    background-color: @{alpha(primary,0.32)};
+    border-color: @{primary};
+}
+
+button.disabled {
+    background-color: @{blend(surface,background,0.35)};
+    border-color: @{border};
+    color: @{text_dim};
+}
+
+.run-button {
+    background-color: @{alpha(success,0.35)};
+    border-color: @{success};
+}
+
+.stop-button {
+    background-color: @{alpha(error,0.35)};
+    border-color: @{error};
+}
+
+#script-label,
+.menu-label,
+#tabbar button.active {
+    color: @{text};
+}
+
+#run-status,
+#syntax-status,
+#packages-status,
+.menu-detail,
+.menu-empty,
+.pkg-version,
+.pkg-path,
+#packages-empty {
+    color: @{text_dim};
+}
+
+#run-status.running {
+    color: @{warning};
+}
+
+#syntax-status.status-ok {
+    color: @{success};
+}
+
+#syntax-status.status-error {
+    color: @{error};
+}
+
+.popup-menu {
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.menu-item:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+#python-splitter {
+    background-color: @{blend(surface,background,0.35)};
+    border-color: @{border};
+}
+
+#python-splitter:hover {
+    background-color: @{primary_dim};
+}
+
+#tabbar button {
+    background-color: @{blend(surface,background,0.35)};
+    border-color: @{border};
+    color: @{text_dim};
+}
+
+#tabbar button:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+#tabbar button.active {
+    background-color: @{background};
+}
+
+.pkg-header,
+.pkg-row,
+.menu-separator {
+    border-color: @{border};
+}

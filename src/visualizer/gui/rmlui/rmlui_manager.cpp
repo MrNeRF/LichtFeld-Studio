@@ -8,7 +8,9 @@
 #include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/crf_curve_element.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
+#include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
+#include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -69,12 +71,16 @@ namespace lfs::vis::gui {
         static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
         static Rml::ElementInstancerGeneric<LossGraphElement> loss_graph_instancer;
+        static Rml::ElementInstancerGeneric<PythonEditorElement> python_editor_instancer;
         static Rml::ElementInstancerGeneric<SceneGraphElement> scene_graph_instancer;
+        static Rml::ElementInstancerGeneric<TerminalElement> terminal_instancer;
         Rml::Factory::RegisterElementInstancer("chromaticity-diagram", &chromaticity_instancer);
         Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
         Rml::Factory::RegisterElementInstancer("loss-graph", &loss_graph_instancer);
+        Rml::Factory::RegisterElementInstancer("python-editor-view", &python_editor_instancer);
         Rml::Factory::RegisterElementInstancer("scene-graph", &scene_graph_instancer);
+        Rml::Factory::RegisterElementInstancer("terminal-view", &terminal_instancer);
 
         try {
             const auto regular_path = lfs::vis::getAssetPath("fonts/Inter-Regular.ttf");

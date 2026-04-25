@@ -6,9 +6,13 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/bounds_gizmo.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/rotation_gizmo.hpp"
+#include "gui/scale_gizmo.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/translation_gizmo.hpp"
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -35,7 +39,6 @@
 #include <format>
 #include <limits>
 #include <imgui.h>
-#include <ImGuizmo.h>
 
 namespace lfs::vis {
 
@@ -45,6 +48,24 @@ namespace lfs::vis {
         constexpr float kWasdShiftSpeedBonus = 20.0f;
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         namespace string_keys = lichtfeld::Strings;
+
+        [[nodiscard]] bool isTransformGizmoOverOrUsing() {
+            return gui::isBoundsGizmoHovered() ||
+                   gui::isBoundsGizmoActive() ||
+                   gui::isRotationGizmoHovered() ||
+                   gui::isRotationGizmoActive() ||
+                   gui::isScaleGizmoHovered() ||
+                   gui::isScaleGizmoActive() ||
+                   gui::isTranslationGizmoHovered() ||
+                   gui::isTranslationGizmoActive();
+        }
+
+        [[nodiscard]] bool isTransformGizmoUsing() {
+            return gui::isBoundsGizmoActive() ||
+                   gui::isRotationGizmoActive() ||
+                   gui::isScaleGizmoActive() ||
+                   gui::isTranslationGizmoActive();
+        }
 
         [[nodiscard]] bool isEnvironmentMapExtension(const std::string_view ext) {
             return ext == ".hdr" || ext == ".exr";
@@ -555,8 +576,8 @@ namespace lfs::vis {
                 return;
             }
 
-            // Block if ImGuizmo is being used or hovered
-            if (ImGuizmo::IsOver() || ImGuizmo::IsUsing()) {
+            // Block if a transform gizmo is being used or hovered
+            if (isTransformGizmoOverOrUsing()) {
                 return;
             }
 
@@ -673,7 +694,7 @@ namespace lfs::vis {
             case input::Action::SELECTION_ADD:
             case input::Action::SELECTION_REMOVE:
                 if (!over_gui && !over_gizmo && tool_context_ &&
-                    !ImGuizmo::IsOver() && !ImGuizmo::IsUsing()) {
+                    !isTransformGizmoOverOrUsing()) {
                     if (selection_tool_ && selection_tool_->isEnabled()) {
                         // Invoke selection stroke operator
                         auto* gm = services().guiOrNull();
@@ -736,7 +757,7 @@ namespace lfs::vis {
                     }
                 }
 
-                // Node picking (controlled by bindings, skips if ImGuizmo active)
+                // Node picking (controlled by bindings, skips if a transform gizmo is active)
                 const input::ToolMode input_mode = getCurrentToolMode();
                 const input::Action pick_action = bindings_.getActionForMouseButton(
                     input_mode, input::MouseButton::LEFT, mods);
@@ -746,7 +767,7 @@ namespace lfs::vis {
                                                drag_action == input::Action::NODE_RECT_SELECT);
 
                 if (!over_gui && !over_gizmo && is_left_button && tool_context_ &&
-                    !ImGuizmo::IsOver() && !ImGuizmo::IsUsing() && has_node_binding) {
+                    !isTransformGizmoOverOrUsing() && has_node_binding) {
                     is_node_rect_dragging_ = true;
                     node_rect_panel_ = splitPanelForScreenX(x);
                     node_rect_start_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
@@ -1021,9 +1042,9 @@ namespace lfs::vis {
         glm::vec2 pos(x, y);
         last_mouse_pos_ = current_pos;
 
-        // Node rectangle dragging - cancel if ImGuizmo takes over
+        // Node rectangle dragging - cancel if a transform gizmo takes over
         if (is_node_rect_dragging_) {
-            if (ImGuizmo::IsUsing()) {
+            if (isTransformGizmoUsing()) {
                 is_node_rect_dragging_ = false;
             } else {
                 node_rect_end_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
@@ -1032,8 +1053,8 @@ namespace lfs::vis {
             }
         }
 
-        // Block camera dragging if ImGuizmo is being used
-        if (ImGuizmo::IsUsing()) {
+        // Block camera dragging if a transform gizmo is being used
+        if (isTransformGizmoUsing()) {
             return;
         }
 

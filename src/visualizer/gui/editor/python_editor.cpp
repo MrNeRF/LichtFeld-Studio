@@ -5,9 +5,17 @@
 
 #include "python_lsp_client.hpp"
 
+#include "gui/editor/zep_rml_display.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "python/python_buffer_analysis.hpp"
 #include "theme/theme.hpp"
 
+#include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Event.h>
+#include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/StringUtilities.h>
 #include <SDL3/SDL_clipboard.h>
 
 #include <algorithm>
@@ -16,17 +24,16 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <vector>
 
-#include <imgui.h>
-
 #include <zep/buffer.h>
 #include <zep/commands.h>
-#include <zep/imgui/display_imgui.h>
-#include <zep/imgui/editor_imgui.h>
+#include <zep/editor.h>
 #include <zep/mode.h>
 #include <zep/mode_standard.h>
 #include <zep/mode_vim.h>
@@ -42,15 +49,44 @@ namespace lfs::vis::editor {
         using Clock = std::chrono::steady_clock;
         constexpr auto AUTO_COMPLETION_DEBOUNCE = std::chrono::milliseconds(8);
         constexpr auto ACTIVE_COMPLETION_DEBOUNCE = std::chrono::milliseconds(0);
+        constexpr auto SYNTAX_ANALYSIS_DEBOUNCE = std::chrono::milliseconds(160);
         constexpr auto SEMANTIC_TOKENS_WORD_DELAY = std::chrono::milliseconds(800);
         constexpr auto SEMANTIC_TOKENS_BOUNDARY_DELAY = std::chrono::milliseconds(90);
         constexpr int COMPLETION_POPUP_MAX_ITEMS = 8;
 
-        Zep::NVec4f to_zep(const ImVec4& color) {
+        struct EditorColor {
+            float x = 0.0f;
+            float y = 0.0f;
+            float z = 0.0f;
+            float w = 1.0f;
+
+            EditorColor() = default;
+
+            EditorColor(float red, float green, float blue, float alpha)
+                : x(red), y(green), z(blue), w(alpha) {}
+
+            template <typename Color>
+            EditorColor(const Color& color)
+                : x(color.x), y(color.y), z(color.z), w(color.w) {}
+
+            template <typename Color>
+            EditorColor& operator=(const Color& color) {
+                x = color.x;
+                y = color.y;
+                z = color.z;
+                w = color.w;
+                return *this;
+            }
+        };
+
+        Zep::NVec4f to_zep(const EditorColor& color) {
             return {color.x, color.y, color.z, color.w};
         }
 
-        Zep::NVec4f mix(const ImVec4& a, const ImVec4& b, float t) {
+        template <typename ColorA, typename ColorB>
+        Zep::NVec4f mix(const ColorA& a_in, const ColorB& b_in, float t) {
+            const EditorColor a = a_in;
+            const EditorColor b = b_in;
             return {
                 a.x + (b.x - a.x) * t,
                 a.y + (b.y - a.y) * t,
@@ -59,7 +95,10 @@ namespace lfs::vis::editor {
             };
         }
 
-        ImVec4 mix_imgui(const ImVec4& a, const ImVec4& b, float t) {
+        template <typename ColorA, typename ColorB>
+        EditorColor mix_color(const ColorA& a_in, const ColorB& b_in, float t) {
+            const EditorColor a = a_in;
+            const EditorColor b = b_in;
             return {
                 a.x + (b.x - a.x) * t,
                 a.y + (b.y - a.y) * t,
@@ -68,8 +107,146 @@ namespace lfs::vis::editor {
             };
         }
 
-        ImVec4 with_alpha(const ImVec4& color, float alpha) {
+        template <typename Color>
+        EditorColor with_alpha(const Color& color_in, float alpha) {
+            const EditorColor color = color_in;
             return {color.x, color.y, color.z, alpha};
+        }
+
+        template <typename Color>
+        uint64_t color_to_u32(const Color& color_in) {
+            const EditorColor color = color_in;
+            const auto to_byte = [](float value) {
+                return static_cast<uint64_t>(std::clamp(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+            };
+            return to_byte(color.x) |
+                   (to_byte(color.y) << 8u) |
+                   (to_byte(color.z) << 16u) |
+                   (to_byte(color.w) << 24u);
+        }
+
+        uint32_t zep_modifiers_from_rml(const Rml::Event& event) {
+            uint32_t modifiers = 0;
+            if (event.GetParameter<int>("ctrl_key", 0) != 0)
+                modifiers |= Zep::ModifierKey::Ctrl;
+            if (event.GetParameter<int>("shift_key", 0) != 0)
+                modifiers |= Zep::ModifierKey::Shift;
+            if (event.GetParameter<int>("alt_key", 0) != 0)
+                modifiers |= Zep::ModifierKey::Alt;
+            return modifiers;
+        }
+
+        std::optional<uint32_t> zep_key_from_rml(const Rml::Input::KeyIdentifier key,
+                                                 const uint32_t modifiers) {
+            switch (key) {
+            case Rml::Input::KI_RETURN:
+            case Rml::Input::KI_NUMPADENTER:
+                return Zep::ExtKeys::RETURN;
+            case Rml::Input::KI_BACK:
+                return Zep::ExtKeys::BACKSPACE;
+            case Rml::Input::KI_TAB:
+                return Zep::ExtKeys::TAB;
+            case Rml::Input::KI_ESCAPE:
+                return Zep::ExtKeys::ESCAPE;
+            case Rml::Input::KI_DELETE:
+                return Zep::ExtKeys::DEL;
+            case Rml::Input::KI_HOME:
+                return Zep::ExtKeys::HOME;
+            case Rml::Input::KI_END:
+                return Zep::ExtKeys::END;
+            case Rml::Input::KI_RIGHT:
+                return Zep::ExtKeys::RIGHT;
+            case Rml::Input::KI_LEFT:
+                return Zep::ExtKeys::LEFT;
+            case Rml::Input::KI_UP:
+                return Zep::ExtKeys::UP;
+            case Rml::Input::KI_DOWN:
+                return Zep::ExtKeys::DOWN;
+            case Rml::Input::KI_NEXT:
+                return Zep::ExtKeys::PAGEDOWN;
+            case Rml::Input::KI_PRIOR:
+                return Zep::ExtKeys::PAGEUP;
+            case Rml::Input::KI_INSERT:
+                return std::nullopt;
+            case Rml::Input::KI_F1:
+            case Rml::Input::KI_F2:
+            case Rml::Input::KI_F3:
+            case Rml::Input::KI_F4:
+            case Rml::Input::KI_F5:
+            case Rml::Input::KI_F6:
+            case Rml::Input::KI_F7:
+            case Rml::Input::KI_F8:
+            case Rml::Input::KI_F9:
+            case Rml::Input::KI_F10:
+            case Rml::Input::KI_F11:
+            case Rml::Input::KI_F12:
+                return Zep::ExtKeys::F1 + (static_cast<int>(key) - static_cast<int>(Rml::Input::KI_F1));
+            default:
+                break;
+            }
+
+            if ((modifiers & Zep::ModifierKey::Ctrl) == 0)
+                return std::nullopt;
+
+            if (key >= Rml::Input::KI_A && key <= Rml::Input::KI_Z)
+                return static_cast<uint32_t>('a' + (static_cast<int>(key) - static_cast<int>(Rml::Input::KI_A)));
+            if (key >= Rml::Input::KI_0 && key <= Rml::Input::KI_9)
+                return static_cast<uint32_t>('0' + (static_cast<int>(key) - static_cast<int>(Rml::Input::KI_0)));
+
+            switch (key) {
+            case Rml::Input::KI_SPACE:
+                return static_cast<uint32_t>(' ');
+            case Rml::Input::KI_OEM_1:
+                return static_cast<uint32_t>(';');
+            case Rml::Input::KI_OEM_PLUS:
+                return static_cast<uint32_t>('=');
+            case Rml::Input::KI_OEM_COMMA:
+                return static_cast<uint32_t>(',');
+            case Rml::Input::KI_OEM_MINUS:
+                return static_cast<uint32_t>('-');
+            case Rml::Input::KI_OEM_PERIOD:
+                return static_cast<uint32_t>('.');
+            case Rml::Input::KI_OEM_2:
+                return static_cast<uint32_t>('/');
+            case Rml::Input::KI_OEM_3:
+                return static_cast<uint32_t>('`');
+            case Rml::Input::KI_OEM_4:
+                return static_cast<uint32_t>('[');
+            case Rml::Input::KI_OEM_5:
+                return static_cast<uint32_t>('\\');
+            case Rml::Input::KI_OEM_6:
+                return static_cast<uint32_t>(']');
+            case Rml::Input::KI_OEM_7:
+                return static_cast<uint32_t>('\'');
+            default:
+                return std::nullopt;
+            }
+        }
+
+        Zep::ZepMouseButton zep_mouse_button_from_rml(const int button) {
+            switch (button) {
+            case 0:
+                return Zep::ZepMouseButton::Left;
+            case 1:
+                return Zep::ZepMouseButton::Right;
+            case 2:
+                return Zep::ZepMouseButton::Middle;
+            default:
+                return Zep::ZepMouseButton::Unknown;
+            }
+        }
+
+        bool point_in_rect(const Zep::NRectf& rect, const float x, const float y) {
+            return x >= rect.topLeftPx.x && x < rect.bottomRightPx.x &&
+                   y >= rect.topLeftPx.y && y < rect.bottomRightPx.y;
+        }
+
+        float zep_text_width(Zep::ZepFont& font, const std::string& text) {
+            if (text.empty()) {
+                return 0.0f;
+            }
+            const auto* begin = reinterpret_cast<const uint8_t*>(text.data());
+            return font.GetTextSize(begin, begin + text.size()).x;
         }
 
         std::string get_system_clipboard_text() {
@@ -338,6 +515,33 @@ namespace lfs::vis::editor {
             }
         }
 
+        const char* syntax_symbol_prefix(const lfs::python::PythonSymbolKind kind) {
+            switch (kind) {
+            case lfs::python::PythonSymbolKind::Function:
+                return "def";
+            case lfs::python::PythonSymbolKind::Class:
+                return "class";
+            case lfs::python::PythonSymbolKind::Import:
+                return "import";
+            case lfs::python::PythonSymbolKind::Variable:
+                return "var";
+            }
+            return "sym";
+        }
+
+        std::string range_preview(std::string_view text, const size_t start, const size_t end) {
+            if (start >= end || start >= text.size()) {
+                return {};
+            }
+
+            const size_t clamped_end = std::min(end, text.size());
+            std::string preview(text.substr(start, clamped_end - start));
+            if (const auto newline = preview.find('\n'); newline != std::string::npos) {
+                preview.erase(newline);
+            }
+            return std::string(trim_right(preview));
+        }
+
         struct CursorLocation {
             size_t byte_index = 0;
             size_t line_start = 0;
@@ -384,6 +588,18 @@ namespace lfs::vis::editor {
             int end_line = 0;
             size_t start_byte = 0;
             size_t end_byte = 0;
+        };
+
+        struct DiagnosticByteRange {
+            size_t start = 0;
+            size_t end = 0;
+        };
+
+        struct PendingSyntaxPreEdit {
+            size_t start_byte = 0;
+            size_t end_byte = 0;
+            lfs::python::PythonBufferPoint start_point;
+            lfs::python::PythonBufferPoint end_point;
         };
 
     } // namespace
@@ -464,6 +680,11 @@ namespace lfs::vis::editor {
                 }
 
                 switch (buffer_message->type) {
+                case Zep::BufferMessageType::PreBufferChange:
+                    owner_.recordSyntaxPreEdit(
+                        static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
+                        static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    break;
                 case Zep::BufferMessageType::TextAdded:
                 case Zep::BufferMessageType::TextChanged:
                 case Zep::BufferMessageType::TextDeleted:
@@ -471,6 +692,11 @@ namespace lfs::vis::editor {
                     owner_.noteSemanticDirtyRange(
                         static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
                         static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    owner_.recordSyntaxPostEdit(
+                        buffer_message->type,
+                        static_cast<size_t>(std::max(0l, buffer_message->startLocation.Index())),
+                        static_cast<size_t>(std::max(0l, buffer_message->endLocation.Index())));
+                    owner_.scheduleSyntaxAnalysis();
                     break;
                 default:
                     break;
@@ -486,9 +712,9 @@ namespace lfs::vis::editor {
         };
 
         Impl()
-            : editor(std::make_unique<Zep::ZepEditor_ImGui>(
+            : editor(std::make_unique<Zep::ZepEditor>(
+                  new ZepDisplay_Rml(),
                   std::filesystem::path(PROJECT_ROOT_PATH) / "external" / "zep",
-                  Zep::NVec2f(1.0f),
                   Zep::ZepEditorFlags::DisableThreads)),
               host(*this) {
             editor->RegisterCallback(&host);
@@ -497,7 +723,7 @@ namespace lfs::vis::editor {
 
             auto& config = editor->GetConfig();
             config.showLineNumbers = true;
-            config.showIndicatorRegion = false;
+            config.showIndicatorRegion = true;
             config.autoHideCommandRegion = true;
             config.cursorLineSolid = true;
             config.showNormalModeKeyStrokes = false;
@@ -535,9 +761,9 @@ namespace lfs::vis::editor {
             config.scrollBarSize = app_theme.sizes.scrollbar_size;
             config.scrollBarMinSize = app_theme.sizes.grab_min_size;
 
-            const ImVec4 scroll_track = with_alpha(app_theme.palette.background, 0.5f);
-            const ImVec4 scroll_thumb = with_alpha(app_theme.palette.text_dim, 0.63f);
-            const ImVec4 scroll_hover = with_alpha(app_theme.palette.primary, 0.78f);
+            const EditorColor scroll_track = with_alpha(app_theme.palette.background, 0.5f);
+            const EditorColor scroll_thumb = with_alpha(app_theme.palette.text_dim, 0.63f);
+            const EditorColor scroll_hover = with_alpha(app_theme.palette.primary, 0.78f);
             zep_theme.SetThemeType(app_theme.isLightTheme() ? Zep::ThemeType::Light
                                                             : Zep::ThemeType::Dark);
 
@@ -581,33 +807,18 @@ namespace lfs::vis::editor {
             editor->RequestRefresh();
         }
 
-        void syncFontsToImGui() {
-            ImFont* const font = ImGui::GetFont();
-            const float font_size = ImGui::GetFontSize();
-            if (font == nullptr) {
+        ZepDisplay_Rml& rmlDisplay() {
+            return static_cast<ZepDisplay_Rml&>(editor->GetDisplay());
+        }
+
+        void syncFontsToRml(const float font_size_px) {
+            const float font_size = font_size_px > 0.0f ? font_size_px : 14.0f;
+            if (std::abs(font_size - bound_font_size) < 0.5f) {
                 return;
             }
 
-            if (font == bound_font && std::abs(font_size - bound_font_size) < 0.5f) {
-                return;
-            }
-
-            auto& display = static_cast<Zep::ZepDisplay_ImGui&>(editor->GetDisplay());
-            auto make_font = [&](float scale) {
-                return std::make_shared<Zep::ZepFont_ImGui>(
-                    display,
-                    font,
-                    std::max(1, static_cast<int>(std::lround(font_size * scale))));
-            };
-
-            display.SetFont(Zep::ZepTextType::UI, make_font(0.95f));
-            display.SetFont(Zep::ZepTextType::Text, make_font(1.0f));
-            display.SetFont(Zep::ZepTextType::Heading1, make_font(1.35f));
-            display.SetFont(Zep::ZepTextType::Heading2, make_font(1.2f));
-            display.SetFont(Zep::ZepTextType::Heading3, make_font(1.1f));
-
-            bound_font = font;
             bound_font_size = font_size;
+            rmlDisplay().setBaseFontSize(font_size);
             editor->RequestRefresh();
         }
 
@@ -656,6 +867,11 @@ namespace lfs::vis::editor {
                 document_version = lsp->updateDocument(text);
             }
             clearCompletionState();
+            clearSyntaxDiagnosticMarkers();
+            buffer->ClearFoldRanges();
+            pending_syntax_pre_edit.reset();
+            pending_syntax_edits.clear();
+            syntax_full_reparse_required = true;
             clearSemanticHighlighting();
             semantic_dirty_range.clear();
             semantic_full_refresh_required = true;
@@ -665,6 +881,7 @@ namespace lfs::vis::editor {
             next_semantic_tokens_request_at = last_text_change_at + semantic_tokens_idle_delay;
             last_semantic_tokens_requested_version = -1;
             pending_semantic_tokens.reset();
+            scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
 
             if (auto* window = editor->GetActiveWindow()) {
                 const size_t target = cursor_byte_index.value_or(0);
@@ -865,8 +1082,8 @@ namespace lfs::vis::editor {
 
         uint64_t semanticPaletteSignature() const {
             const auto& palette = theme().palette;
-            const auto mix_u32 = [](const ImVec4& color) {
-                return static_cast<uint64_t>(ImGui::ColorConvertFloat4ToU32(color));
+            const auto mix_u32 = [](const auto& color) {
+                return color_to_u32(color);
             };
 
             uint64_t signature = 1469598103934665603ull;
@@ -889,6 +1106,7 @@ namespace lfs::vis::editor {
         void clearSemanticHighlighting() {
             semantic_highlights.clear();
             semantic_highlight_palette_signature = semanticPaletteSignature();
+            semantic_highlighting_from_tree_sitter = false;
             semantic_full_refresh_required = true;
             semantic_dirty_range.clear();
 
@@ -898,6 +1116,199 @@ namespace lfs::vis::editor {
 
             if (auto* syntax = dynamic_cast<Zep::ZepSyntax_Python*>(buffer->GetSyntax())) {
                 syntax->ClearSemanticHighlighting();
+            }
+        }
+
+        void scheduleSyntaxAnalysis(
+            const std::chrono::milliseconds delay = SYNTAX_ANALYSIS_DEBOUNCE) {
+            syntax_analysis_pending = true;
+            next_syntax_analysis_at = Clock::now() + delay;
+        }
+
+        void recordSyntaxPreEdit(const size_t start, const size_t end) {
+            const std::string text = getText();
+            const size_t clamped_start = std::min(start, text.size());
+            const size_t clamped_end = std::min(std::max(start, end), text.size());
+            pending_syntax_pre_edit = PendingSyntaxPreEdit{
+                .start_byte = clamped_start,
+                .end_byte = clamped_end,
+                .start_point = lfs::python::python_buffer_point_at_byte(text, clamped_start),
+                .end_point = lfs::python::python_buffer_point_at_byte(text, clamped_end),
+            };
+        }
+
+        void recordSyntaxPostEdit(const Zep::BufferMessageType type, const size_t start, const size_t end) {
+            const std::string text = getText();
+            if (!pending_syntax_pre_edit.has_value()) {
+                syntax_full_reparse_required = true;
+                return;
+            }
+
+            lfs::python::PythonBufferEdit edit;
+            edit.start_byte = pending_syntax_pre_edit->start_byte;
+            edit.start_point = pending_syntax_pre_edit->start_point;
+
+            switch (type) {
+            case Zep::BufferMessageType::TextAdded: {
+                const size_t new_end = std::min(std::max(start, end), text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->start_byte;
+                edit.old_end_point = pending_syntax_pre_edit->start_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            case Zep::BufferMessageType::TextDeleted: {
+                const size_t new_end = std::min(start, text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->end_byte;
+                edit.old_end_point = pending_syntax_pre_edit->end_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            case Zep::BufferMessageType::TextChanged: {
+                const size_t new_end = std::min(std::max(start, end), text.size());
+                edit.old_end_byte = pending_syntax_pre_edit->end_byte;
+                edit.old_end_point = pending_syntax_pre_edit->end_point;
+                edit.new_end_byte = new_end;
+                edit.new_end_point = lfs::python::python_buffer_point_at_byte(text, new_end);
+                break;
+            }
+            default:
+                syntax_full_reparse_required = true;
+                pending_syntax_pre_edit.reset();
+                return;
+            }
+
+            pending_syntax_edits.push_back(edit);
+            pending_syntax_pre_edit.reset();
+        }
+
+        void clearSyntaxDiagnosticMarkers() {
+            if (buffer != nullptr && !syntax_markers.empty()) {
+                buffer->ClearRangeMarkers(syntax_markers);
+            }
+            syntax_markers.clear();
+        }
+
+        [[nodiscard]] std::optional<DiagnosticByteRange> diagnosticRangeForIssue(
+            const lfs::python::PythonBufferIssue& issue,
+            std::string_view text) const {
+            size_t start = std::min(issue.start_byte, text.size());
+            size_t end = std::min(issue.end_byte, text.size());
+            if (end < start) {
+                std::swap(start, end);
+            }
+
+            if (start < end) {
+                return DiagnosticByteRange{.start = start, .end = end};
+            }
+
+            if (text.empty()) {
+                return std::nullopt;
+            }
+
+            const size_t line_start = line_start_offset(text, static_cast<int>(issue.line));
+            const size_t newline = text.find('\n', line_start);
+            const size_t line_end = newline == std::string_view::npos ? text.size() : newline;
+
+            if (line_start < line_end) {
+                start = std::clamp(start, line_start, line_end - 1);
+                end = start;
+                decode_utf8(text, end);
+                end = std::clamp(end, start + 1, line_end);
+            } else {
+                start = std::min(start, text.size() - 1);
+                end = start + 1;
+            }
+
+            if (start >= end) {
+                return std::nullopt;
+            }
+            return DiagnosticByteRange{.start = start, .end = end};
+        }
+
+        void applySyntaxDiagnostics(const std::string& text) {
+            clearSyntaxDiagnosticMarkers();
+            if (buffer == nullptr || editor == nullptr ||
+                syntax_document.analysis().status != lfs::python::PythonBufferStatus::SyntaxError) {
+                return;
+            }
+
+            for (const auto& issue : syntax_document.analysis().issues) {
+                const auto range = diagnosticRangeForIssue(issue, text);
+                if (!range.has_value()) {
+                    continue;
+                }
+
+                auto marker = std::make_shared<Zep::RangeMarker>(*buffer);
+                marker->markerType = Zep::RangeMarkerType::Mark;
+                marker->displayType = Zep::RangeMarkerDisplayType::Underline |
+                                      Zep::RangeMarkerDisplayType::Tooltip |
+                                      Zep::RangeMarkerDisplayType::Indicator;
+                marker->tipPos = Zep::ToolTipPos::RightLine;
+                marker->SetName("Python syntax");
+                marker->SetDescription(issue.message);
+                marker->SetColors(Zep::ThemeColor::Background, Zep::ThemeColor::Text, Zep::ThemeColor::Error);
+                marker->SetAlpha(0.95f);
+                marker->SetRange(Zep::ByteRange(static_cast<Zep::ByteIndex>(range->start),
+                                                static_cast<Zep::ByteIndex>(range->end)));
+                syntax_markers.insert(std::move(marker));
+            }
+
+            editor->RequestRefresh();
+        }
+
+        void syncSyntaxFolds(const std::string& text) {
+            if (buffer == nullptr) {
+                return;
+            }
+
+            if (text.empty() || !syntax_document.hasTree()) {
+                buffer->ClearFoldRanges();
+                return;
+            }
+
+            std::vector<Zep::FoldRange> folds;
+            folds.reserve(syntax_document.foldRanges().size());
+            for (const auto& fold : syntax_document.foldRanges()) {
+                if (fold.end_byte > text.size() || fold.start_byte >= fold.end_byte ||
+                    fold.end_line <= fold.line) {
+                    continue;
+                }
+
+                folds.push_back(Zep::FoldRange{
+                    .range = Zep::ByteRange(static_cast<Zep::ByteIndex>(fold.start_byte),
+                                            static_cast<Zep::ByteIndex>(fold.end_byte)),
+                    .startLine = static_cast<long>(fold.line),
+                    .endLine = static_cast<long>(fold.end_line),
+                    .kind = fold.kind,
+                    .collapsed = false,
+                });
+            }
+
+            buffer->SetFoldRanges(std::move(folds));
+        }
+
+        void updateSyntaxDiagnostics(const std::string& text, const CursorLocation& cursor) {
+            current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
+            if (!syntax_analysis_pending || Clock::now() < next_syntax_analysis_at) {
+                return;
+            }
+
+            syntax_analysis_pending = false;
+            if (syntax_full_reparse_required || !syntax_document.hasTree()) {
+                syntax_document.reset(text);
+            } else {
+                syntax_document.applyEditsAndReparse(text, pending_syntax_edits);
+            }
+            pending_syntax_edits.clear();
+            pending_syntax_pre_edit.reset();
+            syntax_full_reparse_required = false;
+            current_syntax_scope = syntax_document.scopeAt(cursor.byte_index);
+            applySyntaxDiagnostics(text);
+            syncSyntaxFolds(text);
+            if (shouldUseTreeSitterHighlightingFallback()) {
+                applyTreeSitterHighlightingFallback(text);
             }
         }
 
@@ -916,7 +1327,7 @@ namespace lfs::vis::editor {
             }
 
             const auto& palette = theme().palette;
-            ImVec4 color = palette.text;
+            EditorColor color = palette.text;
             bool use_custom = true;
             bool underline = (token.modifiers & (1u << 4)) != 0;
 
@@ -925,15 +1336,15 @@ namespace lfs::vis::editor {
                 token.type == "typeParameter") {
                 color = palette.info;
             } else if (token.type == "function" || token.type == "method") {
-                color = mix_imgui(palette.primary, palette.info, 0.35f);
+                color = mix_color(palette.primary, palette.info, 0.35f);
             } else if (token.type == "decorator") {
-                color = mix_imgui(palette.primary, palette.secondary, 0.25f);
+                color = mix_color(palette.primary, palette.secondary, 0.25f);
             } else if (token.type == "namespace" || token.type == "module") {
                 color = palette.secondary;
             } else if (token.type == "property" || token.type == "enumMember") {
-                color = mix_imgui(palette.secondary, palette.text, 0.35f);
+                color = mix_color(palette.secondary, palette.text, 0.35f);
             } else if (token.type == "parameter") {
-                color = mix_imgui(palette.warning, palette.text, 0.25f);
+                color = mix_color(palette.warning, palette.text, 0.25f);
             } else if (token.type == "keyword") {
                 color = palette.primary;
             } else if (token.type == "comment") {
@@ -956,6 +1367,68 @@ namespace lfs::vis::editor {
             };
         }
 
+        [[nodiscard]] bool shouldUseTreeSitterHighlightingFallback() const {
+            return lsp == nullptr || !lsp->isAvailable();
+        }
+
+        [[nodiscard]] Zep::NVec4f treeSitterHighlightColor(
+            const lfs::python::PythonHighlightKind kind) const {
+            const auto& palette = theme().palette;
+            switch (kind) {
+            case lfs::python::PythonHighlightKind::Keyword:
+                return to_zep(palette.primary);
+            case lfs::python::PythonHighlightKind::Comment:
+                return to_zep(palette.text_dim);
+            case lfs::python::PythonHighlightKind::String:
+                return to_zep(palette.success);
+            case lfs::python::PythonHighlightKind::Number:
+            case lfs::python::PythonHighlightKind::Constant:
+                return to_zep(palette.warning);
+            case lfs::python::PythonHighlightKind::Decorator:
+                return to_zep(mix_color(palette.primary, palette.secondary, 0.25f));
+            case lfs::python::PythonHighlightKind::Function:
+                return to_zep(mix_color(palette.primary, palette.info, 0.35f));
+            case lfs::python::PythonHighlightKind::Type:
+                return to_zep(palette.info);
+            case lfs::python::PythonHighlightKind::Property:
+                return to_zep(mix_color(palette.secondary, palette.text, 0.35f));
+            }
+            return to_zep(palette.text);
+        }
+
+        void applyTreeSitterHighlightingFallback(const std::string& text) {
+            if (buffer == nullptr) {
+                return;
+            }
+
+            auto* syntax = dynamic_cast<Zep::ZepSyntax_Python*>(buffer->GetSyntax());
+            if (syntax == nullptr) {
+                return;
+            }
+
+            std::vector<Zep::ZepSemanticHighlight> highlights;
+            highlights.reserve(syntax_document.highlights().size());
+            for (const auto& highlight : syntax_document.highlights()) {
+                if (highlight.start_byte >= highlight.end_byte || highlight.end_byte > text.size()) {
+                    continue;
+                }
+
+                highlights.push_back(Zep::ZepSemanticHighlight{
+                    .start = static_cast<long>(highlight.start_byte),
+                    .end = static_cast<long>(highlight.end_byte),
+                    .foreground = Zep::ThemeColor::Custom,
+                    .custom_foreground = true,
+                    .custom_foreground_color = treeSitterHighlightColor(highlight.kind),
+                    .underline = false,
+                });
+            }
+
+            syntax->SetSemanticHighlighting(highlights);
+            semantic_highlighting_from_tree_sitter = true;
+            semantic_highlight_palette_signature = semanticPaletteSignature();
+            semantic_full_refresh_required = false;
+        }
+
         void applySemanticHighlighting(const std::string& text) {
             if (buffer == nullptr) {
                 return;
@@ -975,6 +1448,7 @@ namespace lfs::vis::editor {
             }
 
             syntax->SetSemanticHighlighting(highlights);
+            semantic_highlighting_from_tree_sitter = false;
             semantic_highlight_palette_signature = semanticPaletteSignature();
             semantic_full_refresh_required = false;
         }
@@ -1002,6 +1476,7 @@ namespace lfs::vis::editor {
 
             syntax->ReplaceSemanticHighlighting(static_cast<long>(range.start_byte),
                                                 static_cast<long>(range.end_byte), highlights);
+            semantic_highlighting_from_tree_sitter = false;
             semantic_highlight_palette_signature = semanticPaletteSignature();
             semantic_full_refresh_required = false;
         }
@@ -1076,6 +1551,7 @@ namespace lfs::vis::editor {
 
         void issueSemanticTokensRequest() {
             if (!lsp || !lsp->isAvailable()) {
+                semantic_tokens_request_pending = false;
                 return;
             }
 
@@ -1108,6 +1584,7 @@ namespace lfs::vis::editor {
                                     const CursorLocation& cursor,
                                     const bool manual) {
             if (!lsp || !lsp->isAvailable() || !isInsertMode()) {
+                completion_request_pending = false;
                 return;
             }
 
@@ -1210,6 +1687,13 @@ namespace lfs::vis::editor {
                     applySemanticHighlightingRange(text, semanticDirtyLineRange(text));
                 }
                 semantic_dirty_range.clear();
+            }
+
+            if (shouldUseTreeSitterHighlightingFallback() &&
+                !syntax_analysis_pending &&
+                (!semantic_highlighting_from_tree_sitter || text_changed ||
+                 semantic_highlight_palette_signature != semanticPaletteSignature())) {
+                applyTreeSitterHighlightingFallback(text);
             }
 
             last_cursor_byte_index = cursor.byte_index;
@@ -1344,73 +1828,66 @@ namespace lfs::vis::editor {
             return true;
         }
 
-        bool handleCompletionKeys(const std::string& text, const CursorLocation& cursor) {
-            if (!is_focused || read_only) {
-                if (!completion.visible) {
-                    return false;
-                }
-            }
-
+        bool handleCompletionKey(const Rml::Input::KeyIdentifier key,
+                                 const uint32_t modifiers,
+                                 const std::string& text,
+                                 const CursorLocation& cursor) {
             if (read_only) {
                 return false;
             }
 
-            bool consumed = false;
-            if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+            if ((modifiers & Zep::ModifierKey::Ctrl) != 0 && key == Rml::Input::KI_SPACE) {
                 manual_completion_requested = true;
-                consumed = true;
-            }
-
-            if (!completion.visible || completion.items.empty()) {
-                return consumed;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-                completion.clear();
                 return true;
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, false)) {
+            if (!completion.visible || completion.items.empty()) {
+                return false;
+            }
+
+            switch (key) {
+            case Rml::Input::KI_ESCAPE:
+                completion.clear();
+                return true;
+            case Rml::Input::KI_DOWN:
                 completion.selected_index =
                     (completion.selected_index + 1) % static_cast<int>(completion.items.size());
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, false)) {
+            case Rml::Input::KI_UP:
                 completion.selected_index =
                     (completion.selected_index + static_cast<int>(completion.items.size()) - 1) %
                     static_cast<int>(completion.items.size());
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_PageDown, false)) {
+            case Rml::Input::KI_NEXT:
                 completion.selected_index = std::min(
                     completion.selected_index + COMPLETION_POPUP_MAX_ITEMS,
                     static_cast<int>(completion.items.size()) - 1);
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_PageUp, false)) {
+            case Rml::Input::KI_PRIOR:
                 completion.selected_index =
                     std::max(completion.selected_index - COMPLETION_POPUP_MAX_ITEMS, 0);
                 completion.scroll_to_selected = true;
                 completion.keyboard_navigation_active = true;
                 return true;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_Tab, false) ||
-                (!ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false))) {
+            case Rml::Input::KI_TAB:
                 applyCompletion(text, cursor, completion.items[completion.selected_index].item);
                 return true;
+            case Rml::Input::KI_RETURN:
+            case Rml::Input::KI_NUMPADENTER:
+                if ((modifiers & Zep::ModifierKey::Ctrl) == 0) {
+                    applyCompletion(text, cursor, completion.items[completion.selected_index].item);
+                    return true;
+                }
+                return false;
+            default:
+                return false;
             }
-
-            return consumed;
         }
 
         float completionAnchorX(const std::string& text,
@@ -1456,8 +1933,42 @@ namespace lfs::vis::editor {
             return preview;
         }
 
-        void renderCompletionPopup(const std::string& text, const CursorLocation& cursor) {
+        bool handleCompletionMouseDown(const std::string& text,
+                                       const CursorLocation& cursor,
+                                       const float x,
+                                       const float y,
+                                       const int button) {
+            if (!completion.visible || completion.items.empty() ||
+                !point_in_rect(completion_popup_rect, x, y)) {
+                return false;
+            }
+
+            completion.hovered = true;
+            completion.keyboard_navigation_active = false;
+            if (button != 0) {
+                return true;
+            }
+
+            const int row = static_cast<int>(
+                std::floor((y - completion_popup_rect.topLeftPx.y - 6.0f) /
+                           std::max(completion_popup_row_height, 1.0f)));
+            const int index = completion_popup_first_index + row;
+            if (index >= 0 && index < static_cast<int>(completion.items.size())) {
+                completion.selected_index = index;
+                completion.scroll_to_selected = false;
+                applyCompletion(text, cursor, completion.items[index].item);
+            }
+            return true;
+        }
+
+        void renderCompletionPopup(const std::string& text,
+                                   const CursorLocation& cursor,
+                                   const float editor_width,
+                                   const float editor_height) {
             completion.hovered = false;
+            completion_popup_rect = {};
+            completion_popup_first_index = 0;
+            completion_popup_row_height = 0.0f;
             if (!completion.visible || completion.items.empty()) {
                 return;
             }
@@ -1468,171 +1979,149 @@ namespace lfs::vis::editor {
                 return;
             }
 
-            const auto cursor_rect = window->GetCursorRect();
-            const float row_height = ImGui::GetTextLineHeightWithSpacing() + 2.0f;
-            const ImVec2 editor_window_pos = ImGui::GetWindowPos();
-            const ImVec2 editor_window_size = ImGui::GetWindowSize();
-            const float popup_width =
-                std::max(180.0f, std::min(440.0f, editor_window_size.x - 12.0f));
-            const float popup_height = std::min(
-                std::min<int>(static_cast<int>(completion.items.size()), COMPLETION_POPUP_MAX_ITEMS) *
-                        row_height +
-                    12.0f,
-                std::max(row_height + 12.0f, editor_window_size.y - 12.0f));
-
-            ImGuiViewport* const viewport = ImGui::GetWindowViewport();
-            ImVec2 popup_pos(completionAnchorX(text, cursor, cursor_rect),
-                             cursor_rect.bottomRightPx.y + 4.0f);
-            if (popup_pos.y + popup_height > editor_window_pos.y + editor_window_size.y - 6.0f) {
-                popup_pos.y =
-                    std::max(editor_window_pos.y + 6.0f,
-                             cursor_rect.topLeftPx.y - popup_height - 4.0f);
-            }
-            popup_pos.x = std::clamp(
-                popup_pos.x,
-                editor_window_pos.x + 6.0f,
-                editor_window_pos.x + editor_window_size.x - popup_width - 6.0f);
-            popup_pos.y = std::clamp(
-                popup_pos.y,
-                editor_window_pos.y + 6.0f,
-                editor_window_pos.y + editor_window_size.y - popup_height - 6.0f);
-
+            auto& display = rmlDisplay();
+            auto& ui_font = display.GetFont(Zep::ZepTextType::UI);
+            auto& text_font = display.GetFont(Zep::ZepTextType::Text);
             const auto& palette = theme().palette;
 
-            ImGui::SetNextWindowViewport(viewport->ID);
-            ImGui::SetNextWindowPos(popup_pos);
-            ImGui::SetNextWindowSize(ImVec2(popup_width, popup_height));
-            ImGui::SetNextWindowBgAlpha(1.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 6.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
-            ImVec4 header = palette.primary;
-            header.w *= 0.25f;
-            ImVec4 header_hovered = palette.primary;
-            header_hovered.w *= 0.5f;
-            ImVec4 header_active = palette.primary;
-            header_active.w *= 0.7f;
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, palette.background);
-            ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
-            ImGui::PushStyleColor(ImGuiCol_Header, header);
-            ImGui::PushStyleColor(ImGuiCol_HeaderHovered, header_hovered);
-            ImGui::PushStyleColor(ImGuiCol_HeaderActive, header_active);
+            const auto cursor_rect = window->GetCursorRect();
+            const float row_height = std::max(18.0f, static_cast<float>(ui_font.GetPixelHeight()) + 6.0f);
+            const int visible_count =
+                std::min<int>(static_cast<int>(completion.items.size()), COMPLETION_POPUP_MAX_ITEMS);
+            float desired_width = 160.0f;
+            for (int i = 0; i < visible_count; ++i) {
+                const auto& item = completion.items[static_cast<size_t>(i)].item;
+                const std::string detail = item.detail.empty() ? item.description : item.detail;
+                const float label_width = zep_text_width(text_font, item.label);
+                const float detail_width = detail.empty() ? 0.0f : zep_text_width(ui_font, detail);
+                desired_width = std::max(desired_width,
+                                         48.0f + label_width +
+                                             (detail_width > 0.0f ? detail_width + 36.0f : 18.0f));
+            }
+            const float popup_width = std::clamp(
+                desired_width,
+                160.0f,
+                std::min(440.0f, std::max(160.0f, editor_width - 12.0f)));
+            const float popup_height = std::min(
+                visible_count * row_height + 12.0f,
+                std::max(row_height + 12.0f, editor_height - 12.0f));
 
-            constexpr ImGuiWindowFlags POPUP_FLAGS =
-                ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
-                ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_Tooltip;
+            float popup_x = completionAnchorX(text, cursor, cursor_rect);
+            float popup_y = cursor_rect.bottomRightPx.y + 4.0f;
+            if (popup_y + popup_height > editor_height - 6.0f) {
+                popup_y = std::max(6.0f, cursor_rect.topLeftPx.y - popup_height - 4.0f);
+            }
+            popup_x = std::clamp(popup_x, 6.0f, std::max(6.0f, editor_width - popup_width - 6.0f));
+            popup_y = std::clamp(popup_y, 6.0f, std::max(6.0f, editor_height - popup_height - 6.0f));
 
-            if (ImGui::Begin("##python_completion_popup", nullptr, POPUP_FLAGS)) {
-                completion.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
-                if (completion.hovered) {
-                    gui::guiFocusState().want_capture_mouse = true;
+            completion_popup_rect = Zep::NRectf(popup_x, popup_y, popup_width, popup_height);
+            completion_popup_row_height = row_height;
+            completion.hovered = mouse_pos_valid &&
+                                 point_in_rect(completion_popup_rect, mouse_x, mouse_y);
+            if (completion.hovered) {
+                gui::guiFocusState().want_capture_mouse = true;
+            }
+
+            const int item_count = static_cast<int>(completion.items.size());
+            int first_index = std::clamp(
+                completion.selected_index - visible_count / 2,
+                0,
+                std::max(0, item_count - visible_count));
+            if (!completion.scroll_to_selected) {
+                first_index = std::clamp(
+                    completion_popup_first_index,
+                    0,
+                    std::max(0, item_count - visible_count));
+            }
+            completion_popup_first_index = first_index;
+            completion.scroll_to_selected = false;
+
+            display.DrawRectFilled(completion_popup_rect, to_zep(palette.background));
+            const auto border = to_zep(palette.border);
+            display.DrawRectFilled(Zep::NRectf(popup_x, popup_y, popup_width, 1.0f), border);
+            display.DrawRectFilled(Zep::NRectf(popup_x, popup_y + popup_height - 1.0f, popup_width, 1.0f), border);
+            display.DrawRectFilled(Zep::NRectf(popup_x, popup_y, 1.0f, popup_height), border);
+            display.DrawRectFilled(Zep::NRectf(popup_x + popup_width - 1.0f, popup_y, 1.0f, popup_height), border);
+
+            auto draw_text = [&](Zep::ZepFont& font,
+                                 const float x,
+                                 const float y,
+                                 const Zep::NVec4f& color,
+                                 std::string_view value) {
+                if (value.empty()) {
+                    return;
+                }
+                const auto* begin = reinterpret_cast<const uint8_t*>(value.data());
+                display.DrawChars(font, {x, y}, color, begin, begin + value.size());
+            };
+
+            const float row_left = popup_x + 1.0f;
+            const float row_right = popup_x + popup_width - 1.0f;
+            for (int visible = 0; visible < visible_count; ++visible) {
+                const int index = first_index + visible;
+                const auto& entry = completion.items[index];
+                const auto& item = entry.item;
+                const bool active_row = index == completion.selected_index;
+                const float row_y = popup_y + 6.0f + visible * row_height;
+                const Zep::NRectf row_rect(row_left, row_y, row_right - row_left, row_height);
+                const bool hovered_row = mouse_pos_valid && point_in_rect(row_rect, mouse_x, mouse_y);
+
+                if (hovered_row && !completion.keyboard_navigation_active) {
+                    completion.selected_index = index;
                 }
 
-                if (std::abs(ImGui::GetIO().MouseDelta.x) > 0.0f ||
-                    std::abs(ImGui::GetIO().MouseDelta.y) > 0.0f ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                    completion.keyboard_navigation_active = false;
+                if (active_row || hovered_row) {
+                    EditorColor fill = palette.primary;
+                    fill.w = active_row ? 0.32f : 0.18f;
+                    display.DrawRectFilled(row_rect, to_zep(fill));
                 }
 
-                ImDrawList* const draw_list = ImGui::GetWindowDrawList();
-                const float row_left =
-                    ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x;
-                const float row_right =
-                    ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
-                ImGuiListClipper clipper;
-                clipper.Begin(static_cast<int>(completion.items.size()), row_height);
-                while (clipper.Step()) {
-                    for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-                        const auto& entry = completion.items[index];
-                        const auto& item = entry.item;
-                        const bool selected = index == completion.selected_index;
+                const auto active_foreground = palette.text;
+                const Zep::NVec4f badge_color =
+                    to_zep(active_row ? active_foreground : palette.text_dim);
+                const Zep::NVec4f text_color =
+                    to_zep(active_row ? active_foreground
+                                      : (item.deprecated ? palette.text_dim : palette.text));
+                const Zep::NVec4f highlight_color =
+                    to_zep(active_row ? active_foreground : palette.primary);
+                const Zep::NVec4f detail_color =
+                    to_zep(active_row ? active_foreground : palette.text_dim);
+                const float text_y = row_y + 3.0f;
 
-                        ImGui::PushID(index);
-                        const float row_width = std::max(1.0f, row_right - row_left);
-                        if (ImGui::Selectable("##completion_item", selected,
-                                              ImGuiSelectableFlags_AllowOverlap,
-                                              ImVec2(row_width, row_height))) {
-                            completion.selected_index = index;
-                            completion.scroll_to_selected = false;
-                            completion.keyboard_navigation_active = false;
-                            applyCompletion(text, cursor, item);
-                        }
+                draw_text(ui_font, row_left + 9.0f, text_y, badge_color,
+                          completion_kind_badge(item.kind));
 
-                        const bool hovered = ImGui::IsItemHovered();
-                        if (hovered && !completion.keyboard_navigation_active) {
-                            completion.selected_index = index;
-                            completion.scroll_to_selected = false;
-                        }
+                const float label_x = row_left + 30.0f;
+                const size_t label_highlight =
+                    common_prefix_length_ci(item.label, completion.typed_prefix);
+                if (label_highlight > 0 && label_highlight < item.label.size()) {
+                    const std::string highlight_text = item.label.substr(0, label_highlight);
+                    draw_text(text_font, label_x, text_y, highlight_color, highlight_text);
+                    draw_text(text_font,
+                              label_x + zep_text_width(text_font, highlight_text),
+                              text_y,
+                              text_color,
+                              std::string_view(item.label).substr(label_highlight));
+                } else {
+                    draw_text(text_font, label_x, text_y,
+                              label_highlight > 0 ? highlight_color : text_color,
+                              item.label);
+                }
 
-                        if (selected && completion.scroll_to_selected) {
-                            ImGui::SetScrollHereY(0.35f);
-                            completion.scroll_to_selected = false;
-                        }
+                std::string detail = item.detail.empty() ? item.description : item.detail;
+                const std::string insert_preview = completionInsertPreviewText(item);
+                if (active_row && !insert_preview.empty() && insert_preview != item.label) {
+                    detail = "-> " + insert_preview;
+                }
 
-                        const ImVec2 min = ImGui::GetItemRectMin();
-                        const ImVec2 max = ImGui::GetItemRectMax();
-                        const bool active_row = index == completion.selected_index;
-                        if (active_row || hovered) {
-                            draw_list->AddRectFilled(
-                                ImVec2(row_left, min.y),
-                                ImVec2(row_right, max.y),
-                                active_row ? theme().selection_fill_u32()
-                                           : ImGui::GetColorU32(ImGuiCol_HeaderHovered));
-                        }
-
-                        const ImU32 badge_color = ImGui::ColorConvertFloat4ToU32(
-                            active_row ? palette.primary : palette.text_dim);
-                        const ImU32 text_color = ImGui::ColorConvertFloat4ToU32(
-                            item.deprecated ? palette.text_dim : palette.text);
-                        const ImU32 highlight_color =
-                            ImGui::ColorConvertFloat4ToU32(palette.primary);
-                        const ImU32 detail_color =
-                            ImGui::ColorConvertFloat4ToU32(palette.text_dim);
-
-                        draw_list->AddText(ImVec2(min.x + 10.0f, min.y + 3.0f), badge_color,
-                                           completion_kind_badge(item.kind));
-                        const ImVec2 label_pos(min.x + 30.0f, min.y + 3.0f);
-                        const size_t label_highlight =
-                            common_prefix_length_ci(item.label, completion.typed_prefix);
-                        if (label_highlight > 0) {
-                            const std::string highlight_text =
-                                item.label.substr(0, label_highlight);
-                            draw_list->AddText(label_pos, highlight_color, highlight_text.c_str());
-
-                            const ImVec2 highlight_size =
-                                ImGui::CalcTextSize(highlight_text.c_str());
-                            draw_list->AddText(ImVec2(label_pos.x + highlight_size.x, label_pos.y),
-                                               text_color,
-                                               item.label.c_str() + static_cast<ptrdiff_t>(label_highlight));
-                        } else {
-                            draw_list->AddText(label_pos, text_color, item.label.c_str());
-                        }
-
-                        std::string detail = item.detail.empty() ? item.description : item.detail;
-                        const std::string insert_preview = completionInsertPreviewText(item);
-                        if (active_row && !insert_preview.empty() && insert_preview != item.label) {
-                            detail = "-> " + insert_preview;
-                        }
-
-                        if (!detail.empty()) {
-                            const ImVec2 detail_size = ImGui::CalcTextSize(detail.c_str());
-                            draw_list->AddText(
-                                ImVec2(std::max(min.x + 150.0f, max.x - detail_size.x - 10.0f),
-                                       min.y + 3.0f),
-                                active_row ? highlight_color : detail_color,
-                                detail.c_str());
-                        }
-
-                        ImGui::PopID();
+                if (!detail.empty()) {
+                    const float detail_width = zep_text_width(ui_font, detail);
+                    const float detail_x = row_right - detail_width - 10.0f;
+                    if (detail_x > label_x + 150.0f) {
+                        draw_text(ui_font, detail_x, text_y, detail_color, detail);
                     }
                 }
             }
-            ImGui::End();
-
-            ImGui::PopStyleColor(5);
-            ImGui::PopStyleVar(2);
         }
 
         void handlePostKey(uint32_t key, uint32_t modifier) {
@@ -1787,6 +2276,107 @@ namespace lfs::vis::editor {
             }
         }
 
+        [[nodiscard]] std::optional<lfs::python::PythonByteRange> currentSelectionByteRange() const {
+            const auto selection = currentSelectionRange();
+            if (!selection.has_value()) {
+                return std::nullopt;
+            }
+
+            const auto end = selectionEndExclusive(*selection);
+            if (!selection->first.Valid() || !end.Valid() || !(selection->first < end)) {
+                return std::nullopt;
+            }
+
+            return lfs::python::PythonByteRange{
+                .start_byte = static_cast<size_t>(std::max(0l, selection->first.Index())),
+                .end_byte = static_cast<size_t>(std::max(0l, end.Index())),
+            };
+        }
+
+        bool ensureSyntaxDocumentCurrent(const std::string& text, const size_t cursor_byte) {
+            if (!syntax_analysis_pending && syntax_document.hasTree()) {
+                current_syntax_scope = syntax_document.scopeAt(cursor_byte);
+                return true;
+            }
+
+            if (!syntax_full_reparse_required && syntax_document.hasTree()) {
+                syntax_document.applyEditsAndReparse(text, pending_syntax_edits);
+            } else {
+                syntax_document.reset(text);
+            }
+            pending_syntax_edits.clear();
+            pending_syntax_pre_edit.reset();
+            syntax_full_reparse_required = false;
+            syntax_analysis_pending = false;
+            current_syntax_scope = syntax_document.scopeAt(cursor_byte);
+            applySyntaxDiagnostics(text);
+            syncSyntaxFolds(text);
+            if (shouldUseTreeSitterHighlightingFallback()) {
+                applyTreeSitterHighlightingFallback(text);
+            }
+            return syntax_document.hasTree();
+        }
+
+        bool moveCursorToByte(const size_t byte_offset) {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            auto* window = editor->GetActiveWindow();
+            if (window == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const auto cursor =
+                Zep::GlyphIterator(buffer, static_cast<long>(std::min(byte_offset, text.size())));
+            if (!cursor.Valid()) {
+                return false;
+            }
+
+            buffer->ClearSelection();
+            if (auto* mode = buffer->GetMode()) {
+                mode->SwitchMode(mode->DefaultMode());
+            }
+            window->SetBufferCursor(cursor);
+            current_syntax_scope = syntax_document.scopeAt(std::min(byte_offset, text.size()));
+            editor->RequestRefresh();
+            focusEditor();
+            return true;
+        }
+
+        bool selectSyntaxByteRange(const lfs::python::PythonByteRange& range) {
+            if (buffer == nullptr || editor == nullptr || range.start_byte >= range.end_byte) {
+                return false;
+            }
+
+            auto* window = editor->GetActiveWindow();
+            if (window == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            if (range.end_byte > text.size()) {
+                return false;
+            }
+
+            const auto begin = Zep::GlyphIterator(buffer, static_cast<long>(range.start_byte));
+            const auto end = Zep::GlyphIterator(buffer, static_cast<long>(range.end_byte));
+            if (!begin.Valid() || !end.Valid() || !(begin < end)) {
+                return false;
+            }
+
+            buffer->SetSelection(Zep::GlyphRange(begin, end));
+            window->SetBufferCursor(end);
+            if (auto* mode = buffer->GetMode()) {
+                mode->SwitchMode(Zep::EditorMode::Visual);
+            }
+            current_syntax_scope = syntax_document.scopeAt(range.start_byte);
+            editor->RequestRefresh();
+            focusEditor();
+            return true;
+        }
+
         void cutSelectionToClipboard() {
             if (read_only || buffer == nullptr || editor == nullptr) {
                 return;
@@ -1886,6 +2476,271 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
+        bool selectEnclosingSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto range = syntax_document.enclosingBlockRange(cursor.byte_index);
+            if (!range.has_value()) {
+                return false;
+            }
+
+            return selectSyntaxByteRange(*range);
+        }
+
+        [[nodiscard]] std::optional<lfs::python::PythonByteRange> innermostFoldRangeAt(
+            const size_t byte_offset) const {
+            std::optional<lfs::python::PythonByteRange> best;
+            for (const auto& fold : syntax_document.foldRanges()) {
+                if (fold.start_byte > byte_offset || byte_offset > fold.end_byte) {
+                    continue;
+                }
+                if (!best.has_value() ||
+                    (fold.end_byte - fold.start_byte) < (best->end_byte - best->start_byte)) {
+                    best = lfs::python::PythonByteRange{
+                        .start_byte = fold.start_byte,
+                        .end_byte = fold.end_byte,
+                    };
+                }
+            }
+            return best;
+        }
+
+        bool expandSyntaxSelection() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto selection = currentSelectionByteRange();
+            if (!selection.has_value()) {
+                return selectEnclosingSyntaxBlock();
+            }
+
+            const auto ranges = syntax_document.enclosingBlockRanges(selection->start_byte);
+            for (const auto& range : ranges) {
+                if (range.start_byte <= selection->start_byte && range.end_byte >= selection->end_byte &&
+                    (range.start_byte < selection->start_byte || range.end_byte > selection->end_byte)) {
+                    return selectSyntaxByteRange(range);
+                }
+            }
+
+            return false;
+        }
+
+        bool selectCurrentSyntaxFold() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto range = innermostFoldRangeAt(cursor.byte_index);
+            if (!range.has_value()) {
+                return false;
+            }
+
+            return selectSyntaxByteRange(*range);
+        }
+
+        bool toggleCurrentSyntaxFold() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto range = innermostFoldRangeAt(cursor.byte_index);
+            if (!range.has_value()) {
+                return false;
+            }
+
+            const bool changed =
+                buffer->ToggleFoldAtByte(static_cast<Zep::ByteIndex>(range->start_byte));
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
+        bool foldAllSyntaxBlocks() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const bool changed = buffer->SetAllFoldsCollapsed(true);
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
+        bool unfoldAllSyntaxBlocks() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const bool changed = buffer->SetAllFoldsCollapsed(false);
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
+        bool jumpToParentSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto ranges = syntax_document.enclosingBlockRanges(cursor.byte_index);
+            if (ranges.empty()) {
+                return false;
+            }
+
+            const auto& target = ranges.front().start_byte == cursor.byte_index && ranges.size() > 1
+                                     ? ranges[1]
+                                     : ranges.front();
+            return moveCursorToByte(target.start_byte);
+        }
+
+        bool jumpToChildSyntaxBlock() {
+            if (buffer == nullptr || editor == nullptr) {
+                return false;
+            }
+
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
+                return false;
+            }
+
+            const auto parent = syntax_document.enclosingBlockRange(cursor.byte_index).value_or(lfs::python::PythonByteRange{.start_byte = 0, .end_byte = text.size()});
+            std::optional<lfs::python::PythonByteRange> first_child;
+            std::optional<lfs::python::PythonByteRange> next_child;
+
+            for (const auto& fold : syntax_document.foldRanges()) {
+                if (fold.start_byte <= parent.start_byte || fold.end_byte > parent.end_byte) {
+                    continue;
+                }
+
+                const lfs::python::PythonByteRange range{
+                    .start_byte = fold.start_byte,
+                    .end_byte = fold.end_byte,
+                };
+                if (!first_child.has_value() || range.start_byte < first_child->start_byte) {
+                    first_child = range;
+                }
+                if (range.start_byte > cursor.byte_index &&
+                    (!next_child.has_value() || range.start_byte < next_child->start_byte)) {
+                    next_child = range;
+                }
+            }
+
+            if (next_child.has_value()) {
+                return moveCursorToByte(next_child->start_byte);
+            }
+            if (first_child.has_value()) {
+                return moveCursorToByte(first_child->start_byte);
+            }
+            return false;
+        }
+
+        bool jumpToSyntaxSymbol(const size_t index) {
+            if (buffer == nullptr || editor == nullptr || index >= syntax_document.symbols().size()) {
+                return false;
+            }
+
+            const auto& symbol = syntax_document.symbols()[index];
+            return moveCursorToByte(symbol.start_byte);
+        }
+
+        [[nodiscard]] std::vector<PythonEditorSymbol> syntaxBreadcrumbs() const {
+            std::vector<PythonEditorSymbol> breadcrumbs;
+            const std::string text = getText();
+            const CursorLocation cursor = getCursorLocation(text);
+
+            for (const auto& symbol : syntax_document.symbols()) {
+                if ((symbol.kind != lfs::python::PythonSymbolKind::Class &&
+                     symbol.kind != lfs::python::PythonSymbolKind::Function) ||
+                    symbol.start_byte > cursor.byte_index || cursor.byte_index > symbol.end_byte) {
+                    continue;
+                }
+
+                breadcrumbs.push_back(PythonEditorSymbol{
+                    .label = symbol.name.empty() ? symbol.detail : symbol.name,
+                    .detail = symbol.detail,
+                    .byte_offset = symbol.start_byte,
+                    .line = symbol.line,
+                    .depth = symbol.depth,
+                });
+            }
+
+            return breadcrumbs;
+        }
+
+        bool jumpToSyntaxBreadcrumb(const size_t index) {
+            const auto breadcrumbs = syntaxBreadcrumbs();
+            if (index >= breadcrumbs.size()) {
+                return false;
+            }
+            return moveCursorToByte(breadcrumbs[index].byte_offset);
+        }
+
+        bool jumpToSyntaxFold(const size_t index) {
+            if (buffer == nullptr || index >= buffer->GetFoldRanges().size()) {
+                return false;
+            }
+            return moveCursorToByte(static_cast<size_t>(buffer->GetFoldRanges()[index].range.first));
+        }
+
+        bool toggleSyntaxFold(const size_t index) {
+            if (buffer == nullptr || editor == nullptr || index >= buffer->GetFoldRanges().size()) {
+                return false;
+            }
+
+            const bool changed = buffer->ToggleFoldAtByte(buffer->GetFoldRanges()[index].range.first);
+            if (changed) {
+                editor->RequestRefresh();
+                focusEditor();
+            }
+            return changed;
+        }
+
         void undo() {
             if (buffer == nullptr) {
                 return;
@@ -1908,12 +2763,29 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
-        std::unique_ptr<Zep::ZepEditor_ImGui> editor;
+        [[nodiscard]] bool needsRmlFrame() const {
+            return request_focus ||
+                   is_focused ||
+                   completion.visible ||
+                   completion.hovered ||
+                   manual_completion_requested ||
+                   completion_request_pending ||
+                   semantic_tokens_request_pending ||
+                   pending_semantic_tokens.has_value() ||
+                   syntax_analysis_pending;
+        }
+
+        std::unique_ptr<Zep::ZepEditor> editor;
         Zep::ZepBuffer* buffer = nullptr;
         Host host;
         std::unique_ptr<PythonLspClient> lsp;
         CompletionPopupState completion;
         SemanticHighlightState semantic_highlights;
+        lfs::python::PythonSyntaxDocument syntax_document;
+        std::set<std::shared_ptr<Zep::RangeMarker>> syntax_markers;
+        std::optional<PendingSyntaxPreEdit> pending_syntax_pre_edit;
+        std::vector<lfs::python::PythonBufferEdit> pending_syntax_edits;
+        std::string current_syntax_scope;
 
         bool request_focus = false;
         bool is_focused = false;
@@ -1923,9 +2795,18 @@ namespace lfs::vis::editor {
         bool suppress_buffer_events = false;
         bool completion_request_pending = false;
         bool manual_completion_requested = false;
+        bool syntax_analysis_pending = true;
+        bool syntax_full_reparse_required = true;
         bool semantic_tokens_request_pending = false;
+        bool semantic_highlighting_from_tree_sitter = false;
         std::optional<PythonLspClient::SemanticTokenList> pending_semantic_tokens;
         SemanticDirtyRange semantic_dirty_range;
+        Zep::NRectf completion_popup_rect;
+        int completion_popup_first_index = 0;
+        float completion_popup_row_height = 0.0f;
+        float mouse_x = 0.0f;
+        float mouse_y = 0.0f;
+        bool mouse_pos_valid = false;
         bool semantic_full_refresh_required = true;
         int document_version = 1;
         int last_requested_version = -1;
@@ -1936,11 +2817,11 @@ namespace lfs::vis::editor {
         int last_cursor_character = -1;
         size_t last_cursor_byte_index = std::string::npos;
         Clock::time_point next_completion_request_at = Clock::now();
+        Clock::time_point next_syntax_analysis_at = Clock::now();
         Clock::time_point next_semantic_tokens_request_at = Clock::now();
         Clock::time_point last_text_change_at = Clock::now();
         std::chrono::milliseconds semantic_tokens_idle_delay = SEMANTIC_TOKENS_WORD_DELAY;
         uint64_t semantic_highlight_palette_signature = 0;
-        ImFont* bound_font = nullptr;
         float bound_font_size = 0.0f;
         bool vim_mode_enabled = false;
     };
@@ -1951,129 +2832,220 @@ namespace lfs::vis::editor {
 
     PythonEditor::~PythonEditor() = default;
 
-    bool PythonEditor::render(const ImVec2& size) {
-        execute_requested_ = false;
+    bool PythonEditor::renderRml(Rml::Element& element,
+                                 const float width,
+                                 const float height,
+                                 const float font_size_px) {
         impl_->ensureLspStarted();
         impl_->applyTheme(theme());
-        if (!impl_->semantic_highlights.tokens.empty() &&
+        if (impl_->semantic_highlighting_from_tree_sitter &&
             impl_->semantic_highlight_palette_signature != impl_->semanticPaletteSignature()) {
+            impl_->applyTreeSitterHighlightingFallback(impl_->getText());
+        } else if (!impl_->semantic_highlights.tokens.empty() &&
+                   impl_->semantic_highlight_palette_signature != impl_->semanticPaletteSignature()) {
             impl_->applySemanticHighlighting(impl_->getText());
         }
 
-        ImGuiIO& io = ImGui::GetIO();
+        if (impl_->request_focus) {
+            element.Focus();
+            impl_->force_unfocused = false;
+        }
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        constexpr ImGuiWindowFlags CHILD_FLAGS =
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
-
-        if (ImGui::BeginChild("##python_input", size, true, CHILD_FLAGS)) {
-            if (impl_->request_focus) {
-                ImGui::SetWindowFocus();
-                impl_->force_unfocused = false;
+        bool element_focused = false;
+        if (auto* document = element.GetOwnerDocument()) {
+            if (auto* context = document->GetContext()) {
+                element_focused = context->GetFocusElement() == &element;
             }
+        }
+        impl_->is_focused =
+            !impl_->force_unfocused && (element_focused || impl_->request_focus);
 
-            impl_->syncFontsToImGui();
+        impl_->syncFontsToRml(font_size_px);
 
-            const ImVec2 min = ImGui::GetCursorScreenPos();
-            const ImVec2 avail = ImGui::GetContentRegionAvail();
-            const ImVec2 max(min.x + std::max(avail.x, 1.0f), min.y + std::max(avail.y, 1.0f));
+        const float editor_width = std::max(width, 1.0f);
+        const float editor_height = std::max(height, 1.0f);
+        impl_->rmlDisplay().beginFrame(element);
+        impl_->editor->SetDisplayRegion({0.0f, 0.0f}, {editor_width, editor_height});
+        impl_->editor->Display();
 
-            impl_->editor->SetDisplayRegion(Zep::NVec2f(min.x, min.y), Zep::NVec2f(max.x, max.y));
-            impl_->editor->Display();
+        const std::string updated_text = impl_->getText();
+        const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
+        impl_->updateLanguageServerState(updated_text, updated_cursor);
+        impl_->updateSyntaxDiagnostics(updated_text, updated_cursor);
+        impl_->renderCompletionPopup(updated_text, updated_cursor, editor_width, editor_height);
+        impl_->rmlDisplay().endFrame();
 
-            const bool child_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
-            const bool child_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-            const bool activated_by_click =
-                child_hovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                  ImGui::IsMouseClicked(ImGuiMouseButton_Right));
-            const bool mouse_interaction =
-                child_hovered && (activated_by_click || io.MouseReleased[0] || io.MouseReleased[1] ||
-                                  io.MouseWheel != 0.0f || io.MouseDelta.x != 0.0f ||
-                                  io.MouseDelta.y != 0.0f);
-
-            if (activated_by_click) {
-                impl_->force_unfocused = false;
+        const bool editor_has_keyboard_focus =
+            impl_->is_focused || impl_->request_focus || impl_->completion.visible;
+        if (editor_has_keyboard_focus) {
+            gui::guiFocusState().want_capture_keyboard = true;
+            gui::guiFocusState().any_item_active = true;
+            if (!impl_->read_only) {
+                gui::guiFocusState().want_text_input = true;
             }
+        }
+        if (impl_->completion.visible || impl_->completion.hovered) {
+            gui::guiFocusState().want_capture_keyboard = true;
+            gui::guiFocusState().want_text_input = !impl_->read_only;
+        }
 
-            impl_->is_focused =
-                !impl_->force_unfocused && (child_focused || impl_->request_focus || activated_by_click);
+        impl_->request_focus = false;
+
+        return execute_requested_;
+    }
+
+    void PythonEditor::processRmlEvent(Rml::Element& element, Rml::Event& event) {
+        if (!impl_ || !impl_->editor) {
+            return;
+        }
+
+        const std::string type = event.GetType();
+        const auto local_mouse = [&]() {
+            const auto offset = element.GetAbsoluteOffset(Rml::BoxArea::Content);
+            return Zep::NVec2f{
+                event.GetParameter("mouse_x", 0.0f) - offset.x,
+                event.GetParameter("mouse_y", 0.0f) - offset.y,
+            };
+        };
+
+        if (type == "focus") {
+            impl_->is_focused = true;
+            impl_->force_unfocused = false;
+            return;
+        }
+        if (type == "blur") {
+            impl_->is_focused = false;
+            impl_->mouse_pos_valid = false;
+            impl_->completion.clear();
+            return;
+        }
+
+        if (type == "mousemove" || type == "drag") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            impl_->editor->OnMouseMove(mouse);
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "mousedown") {
+            element.Focus();
+            impl_->is_focused = true;
+            impl_->force_unfocused = false;
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
 
             const std::string text = impl_->getText();
             const CursorLocation cursor = impl_->getCursorLocation(text);
-            const bool completion_key_consumed = impl_->handleCompletionKeys(text, cursor);
-
-            const bool editor_has_keyboard_focus =
-                impl_->is_focused || impl_->request_focus || impl_->completion.visible;
-            if (editor_has_keyboard_focus) {
-                execute_requested_ = io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false);
-                ImGui::GetIO().WantCaptureKeyboard = true;
-                gui::guiFocusState().want_capture_keyboard = true;
-                gui::guiFocusState().any_item_active = true;
-                if (!impl_->read_only) {
-                    ImGui::GetIO().WantTextInput = true;
-                    gui::guiFocusState().want_text_input = true;
-                }
+            const int button = event.GetParameter("button", 0);
+            if (impl_->handleCompletionMouseDown(text, cursor, mouse.x, mouse.y, button)) {
+                event.StopPropagation();
+                return;
             }
 
-            const bool should_handle_input =
-                !impl_->read_only && ((impl_->is_focused || impl_->request_focus) || mouse_interaction);
-            if (should_handle_input && !execute_requested_ && !completion_key_consumed) {
-                impl_->editor->HandleInput();
-            }
-
-            const std::string updated_text = impl_->getText();
-            const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
-            impl_->updateLanguageServerState(updated_text, updated_cursor);
-            impl_->renderCompletionPopup(updated_text, updated_cursor);
-
-            if (impl_->completion.visible || impl_->completion.hovered) {
-                gui::guiFocusState().want_capture_keyboard = true;
-                gui::guiFocusState().want_text_input = true;
-            }
-
-            if (impl_->completion.hovered || (impl_->completion.visible && child_hovered)) {
-                gui::guiFocusState().want_capture_mouse = true;
-            }
-
-            if (impl_->completion.visible && !impl_->completion.hovered &&
-                !child_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                impl_->completion.clear();
-            }
-
-            if (ImGui::BeginPopupContextWindow("##python_editor_context",
-                                               ImGuiPopupFlags_MouseButtonRight)) {
-                const bool has_selection = impl_->hasEditableSelection();
-                const bool can_modify = !impl_->read_only;
-
-                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, can_modify)) {
-                    impl_->undo();
-                }
-                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, can_modify)) {
-                    impl_->redo();
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Cut", "Ctrl+X", false, can_modify && has_selection)) {
-                    impl_->cutSelectionToClipboard();
-                }
-                if (ImGui::MenuItem("Copy", "Ctrl+C", false, has_selection)) {
-                    impl_->copySelectionToClipboard();
-                }
-                if (ImGui::MenuItem("Paste", "Ctrl+V", false, can_modify)) {
-                    impl_->pasteFromClipboard();
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Select All", "Ctrl+A")) {
-                    impl_->selectAll();
-                }
-                ImGui::EndPopup();
-            }
-
-            impl_->request_focus = false;
+            impl_->editor->OnMouseDown(mouse, zep_mouse_button_from_rml(button));
+            event.StopPropagation();
+            return;
         }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
 
-        return execute_requested_;
+        if (type == "mouseup") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            impl_->editor->OnMouseUp(mouse, zep_mouse_button_from_rml(event.GetParameter("button", 0)));
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "mousewheel") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            const float wheel = event.GetParameter("wheel_delta_y",
+                                                   event.GetParameter("wheel_delta", 0.0f));
+            impl_->editor->OnMouseWheel(mouse, -wheel);
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "keydown") {
+            if (!impl_->is_focused && !impl_->completion.visible) {
+                return;
+            }
+
+            const auto key = static_cast<Rml::Input::KeyIdentifier>(
+                event.GetParameter("key_identifier", static_cast<int>(Rml::Input::KI_UNKNOWN)));
+            const uint32_t modifiers = zep_modifiers_from_rml(event);
+            const std::string text = impl_->getText();
+            const CursorLocation cursor = impl_->getCursorLocation(text);
+
+            if ((modifiers & Zep::ModifierKey::Ctrl) != 0 &&
+                (key == Rml::Input::KI_RETURN || key == Rml::Input::KI_NUMPADENTER)) {
+                execute_requested_ = true;
+                event.StopPropagation();
+                return;
+            }
+            if (key == Rml::Input::KI_F5) {
+                execute_requested_ = true;
+                event.StopPropagation();
+                return;
+            }
+
+            if (impl_->handleCompletionKey(key, modifiers, text, cursor)) {
+                event.StopPropagation();
+                return;
+            }
+
+            if (!impl_->read_only) {
+                if (auto mapped = zep_key_from_rml(key, modifiers)) {
+                    if (auto* buffer = impl_->buffer) {
+                        if (auto* mode = buffer->GetMode()) {
+                            mode->AddKeyPress(*mapped, modifiers);
+                            event.StopPropagation();
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        if (type == "textinput") {
+            if (impl_->read_only || !impl_->is_focused || impl_->buffer == nullptr) {
+                return;
+            }
+            auto* mode = impl_->buffer->GetMode();
+            if (!mode) {
+                return;
+            }
+
+            Rml::String input = event.GetParameter<Rml::String>("text", "");
+            if (input.empty())
+                input = event.GetParameter<Rml::String>("data", "");
+
+            const auto add_codepoint = [&](const uint32_t codepoint) {
+                if (codepoint != '\r' && codepoint != 0)
+                    mode->AddKeyPress(codepoint, 0);
+            };
+
+            size_t index = 0;
+            while (index < input.size()) {
+                add_codepoint(decode_utf8(input, index));
+            }
+
+            if (input.empty()) {
+                uint32_t codepoint = static_cast<uint32_t>(event.GetParameter("character", 0));
+                if (codepoint == 0)
+                    codepoint = static_cast<uint32_t>(event.GetParameter("codepoint", 0));
+                add_codepoint(codepoint);
+            }
+            event.StopPropagation();
+        }
     }
 
     std::string PythonEditor::getText() const {
@@ -2094,10 +3066,197 @@ namespace lfs::vis::editor {
         current_input_.clear();
     }
 
+    bool PythonEditor::consumeExecuteRequested() {
+        const bool requested = execute_requested_;
+        execute_requested_ = false;
+        return requested;
+    }
+
     bool PythonEditor::consumeTextChanged() {
         const bool changed = impl_->text_changed;
         impl_->text_changed = false;
         return changed;
+    }
+
+    bool PythonEditor::hasSyntaxErrors() const {
+        return impl_->syntax_document.analysis().status == lfs::python::PythonBufferStatus::SyntaxError;
+    }
+
+    bool PythonEditor::syntaxDiagnosticsAvailable() const {
+        return impl_->syntax_document.analysis().status != lfs::python::PythonBufferStatus::ParserUnavailable;
+    }
+
+    std::string PythonEditor::syntaxSummary() const {
+        if (!impl_->syntax_document.analysis().summary.empty()) {
+            return impl_->syntax_document.analysis().summary;
+        }
+        return "Python syntax analysis pending";
+    }
+
+    std::string PythonEditor::syntaxStructureSummary() const {
+        int class_count = 0;
+        int function_count = 0;
+        int import_count = 0;
+        int variable_count = 0;
+        for (const auto& symbol : impl_->syntax_document.symbols()) {
+            switch (symbol.kind) {
+            case lfs::python::PythonSymbolKind::Class:
+                ++class_count;
+                break;
+            case lfs::python::PythonSymbolKind::Function:
+                ++function_count;
+                break;
+            case lfs::python::PythonSymbolKind::Import:
+                ++import_count;
+                break;
+            case lfs::python::PythonSymbolKind::Variable:
+                ++variable_count;
+                break;
+            }
+        }
+
+        std::string summary = std::format("{} import{}, {} class{}, {} function{}, {} variable{}, {} fold{}",
+                                          import_count,
+                                          import_count == 1 ? "" : "s",
+                                          class_count,
+                                          class_count == 1 ? "" : "es",
+                                          function_count,
+                                          function_count == 1 ? "" : "s",
+                                          variable_count,
+                                          variable_count == 1 ? "" : "s",
+                                          impl_->syntax_document.foldRanges().size(),
+                                          impl_->syntax_document.foldRanges().size() == 1 ? "" : "s");
+        if (!impl_->syntax_document.structureCurrent()) {
+            summary += " (partial)";
+        }
+        return summary;
+    }
+
+    std::vector<PythonEditorSymbol> PythonEditor::syntaxSymbols() const {
+        std::vector<PythonEditorSymbol> symbols;
+        symbols.reserve(impl_->syntax_document.symbols().size());
+
+        for (const auto& symbol : impl_->syntax_document.symbols()) {
+            std::string name = symbol.name.empty() ? symbol.detail : symbol.name;
+            if (name.empty()) {
+                name = "symbol";
+            }
+
+            const std::string indent(static_cast<size_t>(std::max(symbol.depth, 0)) * 2, ' ');
+            symbols.push_back(PythonEditorSymbol{
+                .label = std::format("{}{} {}  L{}",
+                                     indent,
+                                     syntax_symbol_prefix(symbol.kind),
+                                     name,
+                                     symbol.line + 1),
+                .detail = symbol.detail,
+                .byte_offset = symbol.start_byte,
+                .line = symbol.line,
+                .depth = symbol.depth,
+            });
+        }
+
+        return symbols;
+    }
+
+    std::vector<PythonEditorSymbol> PythonEditor::syntaxBreadcrumbs() const {
+        return impl_->syntaxBreadcrumbs();
+    }
+
+    std::vector<PythonEditorFold> PythonEditor::syntaxFolds() const {
+        const std::string text = impl_->getText();
+        std::vector<PythonEditorFold> folds;
+        if (impl_->buffer == nullptr) {
+            return folds;
+        }
+
+        folds.reserve(impl_->buffer->GetFoldRanges().size());
+        for (const auto& fold : impl_->buffer->GetFoldRanges()) {
+            const std::size_t start = static_cast<std::size_t>(std::max(0l, fold.range.first));
+            const std::size_t end = static_cast<std::size_t>(std::max(0l, fold.range.second));
+            const std::string preview = range_preview(text, start, end);
+            folds.push_back(PythonEditorFold{
+                .label = std::format("{} {} block  L{}-{}",
+                                     fold.collapsed ? "[+]" : "[-]",
+                                     fold.kind.empty() ? "syntax" : fold.kind,
+                                     fold.startLine + 1,
+                                     fold.endLine + 1),
+                .detail = preview,
+                .byte_offset = start,
+                .line = static_cast<std::size_t>(std::max(0l, fold.startLine)),
+                .end_line = static_cast<std::size_t>(std::max(0l, fold.endLine)),
+                .collapsed = fold.collapsed,
+            });
+        }
+
+        return folds;
+    }
+
+    bool PythonEditor::syntaxStructureCurrent() const {
+        return impl_->syntax_document.structureCurrent();
+    }
+
+    std::size_t PythonEditor::syntaxFoldCount() const {
+        return impl_->syntax_document.foldRanges().size();
+    }
+
+    std::string PythonEditor::currentSyntaxScope() const {
+        return impl_->current_syntax_scope;
+    }
+
+    void PythonEditor::refreshSyntaxDiagnostics() {
+        impl_->scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
+        if (impl_->editor != nullptr) {
+            impl_->editor->RequestRefresh();
+        }
+    }
+
+    bool PythonEditor::selectEnclosingSyntaxBlock() {
+        return impl_->selectEnclosingSyntaxBlock();
+    }
+
+    bool PythonEditor::expandSyntaxSelection() {
+        return impl_->expandSyntaxSelection();
+    }
+
+    bool PythonEditor::selectCurrentSyntaxFold() {
+        return impl_->selectCurrentSyntaxFold();
+    }
+
+    bool PythonEditor::toggleCurrentSyntaxFold() {
+        return impl_->toggleCurrentSyntaxFold();
+    }
+
+    bool PythonEditor::foldAllSyntaxBlocks() {
+        return impl_->foldAllSyntaxBlocks();
+    }
+
+    bool PythonEditor::unfoldAllSyntaxBlocks() {
+        return impl_->unfoldAllSyntaxBlocks();
+    }
+
+    bool PythonEditor::jumpToParentSyntaxBlock() {
+        return impl_->jumpToParentSyntaxBlock();
+    }
+
+    bool PythonEditor::jumpToChildSyntaxBlock() {
+        return impl_->jumpToChildSyntaxBlock();
+    }
+
+    bool PythonEditor::jumpToSyntaxSymbol(const std::size_t index) {
+        return impl_->jumpToSyntaxSymbol(index);
+    }
+
+    bool PythonEditor::jumpToSyntaxBreadcrumb(const std::size_t index) {
+        return impl_->jumpToSyntaxBreadcrumb(index);
+    }
+
+    bool PythonEditor::jumpToSyntaxFold(const std::size_t index) {
+        return impl_->jumpToSyntaxFold(index);
+    }
+
+    bool PythonEditor::toggleSyntaxFold(const std::size_t index) {
+        return impl_->toggleSyntaxFold(index);
     }
 
     void PythonEditor::updateTheme(const Theme& theme) {
@@ -2165,6 +3324,10 @@ namespace lfs::vis::editor {
 
     bool PythonEditor::hasActiveCompletion() const {
         return impl_->completion.visible && !impl_->completion.items.empty();
+    }
+
+    bool PythonEditor::needsRmlFrame() const {
+        return impl_ && impl_->needsRmlFrame();
     }
 
     void PythonEditor::setVimModeEnabled(const bool enabled) {

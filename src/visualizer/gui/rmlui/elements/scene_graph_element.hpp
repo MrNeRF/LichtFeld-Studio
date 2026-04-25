@@ -113,6 +113,7 @@ namespace lfs::vis::gui {
         void captureSceneSnapshot(const core::Scene& scene,
                                   std::unordered_map<core::NodeId, NodeSnapshot>& snapshots,
                                   std::vector<core::NodeId>& root_ids);
+        bool syncTrainingTopologyLabel(const core::Scene& scene, bool update_cached_rows);
         void appendSnapshotRows(core::NodeId node_id, int depth, std::vector<FlatRow>& rows,
                                 const std::string& filter_text_lower) const;
         void appendVisibleSubtreeRows(core::NodeId node_id, int depth,
@@ -165,6 +166,7 @@ namespace lfs::vis::gui {
         core::NodeId pending_reveal_node_id_ = core::NULL_NODE;
 
         std::string filter_text_;
+        std::string last_training_model_node_name_;
         core::NodeId click_anchor_id_ = core::NULL_NODE;
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
@@ -183,6 +185,7 @@ namespace lfs::vis::gui {
         uint64_t state_revision_ = 1;
         uint64_t last_bound_revision_ = 0;
         uint32_t last_selection_generation_ = std::numeric_limits<uint32_t>::max();
+        size_t last_training_model_gaussian_count_ = std::numeric_limits<size_t>::max();
         size_t last_visible_start_ = kUnsetVisibleRange;
         size_t last_visible_end_ = kUnsetVisibleRange;
         float last_client_height_ = -1.0f;

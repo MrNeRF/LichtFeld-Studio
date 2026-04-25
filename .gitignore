@@ -18,6 +18,7 @@ data
 !src/python/lfs_splat_lod_hierarchy.py
 !src/python/lfs_plugins/**/*.py
 !src/python/scripts/manage_stubs.py
+!tests/real_bicycle_sh_degree_training.py
 !tests/python/**/*.py
 !docs/plugins/examples/**/*.py
 .venv/
@@ -46,5 +47,8 @@ tasks/
 
 # USD generated files
 lib/
+!external/tree-sitter/lib/
+!external/tree-sitter/lib/src/
+!external/tree-sitter/lib/src/query.c
 generatedSchema.usda
 plugInfo.json

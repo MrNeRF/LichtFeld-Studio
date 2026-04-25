@@ -122,6 +122,7 @@ endif()
 # Static library for other Python utilities
 add_library(lfs_python_utils STATIC
     runner.cpp
+    python_buffer_analysis.cpp
     package_manager.cpp
     plugin_runner.cpp
     subprocess.cpp
@@ -139,6 +140,8 @@ target_link_libraries(lfs_python_utils
         Python::Python
         lfs_core
         lfs_python_runtime
+        lfs::tree_sitter
+        lfs::tree_sitter_python
 )
 
 set(LFS_PYTHON_UTILS_DEFINITIONS
