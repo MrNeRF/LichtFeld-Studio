@@ -53,7 +53,7 @@ void fast_lfs::rasterization::backward(
     const int n_tiles = grid.x * grid.y;
 
     // These blobs are from the arena and are guaranteed to be valid
-    const int key_end_bit = 32 + extract_end_bit(static_cast<uint>(n_tiles - 1));
+    const int key_end_bit = packed_instance_key_end_bit(static_cast<uint>(n_tiles));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 

@@ -55,6 +55,9 @@ std::tuple<int, int, int> fast_lfs::rasterization::forward(
     const dim3 block(config::tile_width, config::tile_height, 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
+    const uint n_tiles_u32 = static_cast<uint>(n_tiles);
+    const uint depth_bits = static_cast<uint>(packed_instance_depth_bits(n_tiles_u32));
+    const int key_end_bit = packed_instance_key_end_bit(n_tiles_u32);
 
     // Allocate per-tile buffers through arena
     char* per_tile_buffers_blob = per_tile_buffers_func(required<PerTileBuffers>(n_tiles));
@@ -109,6 +112,7 @@ std::tuple<int, int, int> fast_lfs::rasterization::forward(
         cy,
         near_,
         far_,
+        depth_bits,
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
@@ -126,7 +130,6 @@ std::tuple<int, int, int> fast_lfs::rasterization::forward(
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
     const int alloc_instances = std::max(n_instances, 1);
-    const int key_end_bit = 32 + extract_end_bit(static_cast<uint>(n_tiles - 1));
     char* per_instance_buffers_blob = per_instance_buffers_func(required<PerInstanceBuffers>(alloc_instances, key_end_bit));
     PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, alloc_instances, key_end_bit);
 
@@ -141,6 +144,7 @@ std::tuple<int, int, int> fast_lfs::rasterization::forward(
             per_instance_buffers.keys.Current(),
             per_instance_buffers.primitive_indices.Current(),
             grid.x,
+            depth_bits,
             n_primitives);
         CHECK_CUDA(config::debug, "create_instances")
 
@@ -163,6 +167,7 @@ std::tuple<int, int, int> fast_lfs::rasterization::forward(
         kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges>>>(
             per_instance_buffers.keys.Current(),
             per_tile_buffers.instance_ranges,
+            depth_bits,
             n_instances);
         CHECK_CUDA(config::debug, "extract_instance_ranges")
     }

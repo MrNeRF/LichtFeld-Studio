@@ -15,8 +15,22 @@ namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::forward {
 
-    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key) {
-        return (static_cast<InstanceKey>(tile_key) << 32) | static_cast<InstanceKey>(depth_key);
+    __device__ __forceinline__ uint quantize_depth_key(float depth, const uint depth_bits) {
+        if (depth_bits == 0)
+            return 0;
+
+        constexpr uint FLOAT32_FRACTION_BITS = 23;
+        constexpr uint FLOAT32_FRACTION_MASK = (1u << FLOAT32_FRACTION_BITS) - 1u;
+        constexpr uint FLOAT32_BELOW_TWO = 0x3fffffffu;
+
+        float normalized_depth = (2.0f * depth + 1.0f) / (depth + 1.0f);
+        normalized_depth = fminf(fmaxf(normalized_depth, 1.0f), __uint_as_float(FLOAT32_BELOW_TWO));
+        const uint fraction = __float_as_uint(normalized_depth) & FLOAT32_FRACTION_MASK;
+        return fraction >> (FLOAT32_FRACTION_BITS - depth_bits);
+    }
+
+    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key, const uint depth_bits) {
+        return (static_cast<InstanceKey>(tile_key) << depth_bits) | static_cast<InstanceKey>(depth_key);
     }
 
     __global__ void preprocess_cu(
@@ -47,6 +61,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float cy,
         const float near_, // near and far are macros in windowns
         const float far_,
+        const uint depth_bits,
         const bool mip_filter) {
         auto primitive_idx = cg::this_grid().thread_rank();
         bool active = true;
@@ -204,7 +219,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
             primitive_idx, active_sh_bases, total_bases_sh_rest);
-        primitive_depth_keys[primitive_idx] = __float_as_uint(depth);
+        primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
@@ -218,6 +233,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
         const uint grid_width,
+        const uint depth_bits,
         const uint n_primitives) {
         auto block = cg::this_thread_block();
         auto warp = cg::tiled_partition<32u>(block);
@@ -263,7 +279,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const uint tile_x = screen_bounds.x + (instance_idx % screen_bounds_width);
                 if (will_primitive_contribute(mean2d_shifted, conic, tile_x, tile_y, power_threshold)) {
                     const uint tile_key = tile_y * grid_width + tile_x;
-                    instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key);
+                    instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
                     instance_primitive_indices[current_write_offset] = primitive_idx;
                     current_write_offset++;
                 }
@@ -308,7 +324,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const uint write_offset = current_write_offset_coop + write_offset_current;
                 if (write) {
                     const uint tile_key = tile_y * grid_width + tile_x;
-                    instance_keys[write_offset] = make_instance_key(tile_key, depth_key_coop);
+                    instance_keys[write_offset] = make_instance_key(tile_key, depth_key_coop, depth_bits);
                     instance_primitive_indices[write_offset] = primitive_idx_coop;
                 }
                 current_write_offset_coop += n_writes;
@@ -321,15 +337,16 @@ namespace fast_lfs::rasterization::kernels::forward {
     __global__ void extract_instance_ranges_cu(
         const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
+        const uint depth_bits,
         const uint n_instances) {
         auto instance_idx = cg::this_grid().thread_rank();
         if (instance_idx >= n_instances)
             return;
-        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> 32);
+        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> depth_bits);
         if (instance_idx == 0)
             tile_instance_ranges[instance_tile_idx].x = 0;
         else {
-            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> 32);
+            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> depth_bits);
             if (instance_tile_idx != previous_instance_tile_idx) {
                 tile_instance_ranges[previous_instance_tile_idx].y = instance_idx;
                 tile_instance_ranges[instance_tile_idx].x = instance_idx;
