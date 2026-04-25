@@ -7,9 +7,13 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/point_cloud.hpp"
+#include "geometry/geometry_misc.hpp"
 #include "io/loader.hpp"
 #include <algorithm>
+#include <glm/glm.hpp>
 #include <memory>
+#include <random>
 #include <vector>
 
 namespace lfs::io {
@@ -43,6 +47,106 @@ namespace lfs::io {
             LOG_INFO("Alpha channel detected in {}/{} images", alpha_count, cameras.size());
         }
         return images_have_alpha;
+    }
+
+    // Centralizes the scene in-place based on the given mode.
+    // Shifts both cameras and point cloud by the computed center.
+    // Returns the updated scene_center (zeros if a shift was applied, initial_scene_center otherwise).
+    inline lfs::core::Tensor centralize_scene(
+        std::vector<std::shared_ptr<lfs::core::Camera>>& cameras,
+        std::shared_ptr<lfs::core::PointCloud>& point_cloud,
+        CentralizeDataset mode,
+        lfs::core::Tensor initial_scene_center) {
+
+        lfs::core::Tensor center;
+
+        auto build_pts = [&]() {
+            auto positions = point_cloud->means.cpu().contiguous();
+            const int64_t N = static_cast<int64_t>(positions.shape()[0]);
+            auto pos_acc = positions.accessor<float, 2>();
+            constexpr int64_t MAX_SAMPLES = 50000;
+            std::vector<glm::vec3> pts;
+            if (N <= MAX_SAMPLES) {
+                pts.resize(static_cast<size_t>(N));
+                for (int64_t i = 0; i < N; ++i)
+                    pts[static_cast<size_t>(i)] = {pos_acc(i, 0), pos_acc(i, 1), pos_acc(i, 2)};
+            } else {
+                pts.resize(MAX_SAMPLES);
+                std::mt19937 rng(33550336);
+                std::uniform_int_distribution<int64_t> dist(0, N - 1);
+                for (int64_t i = 0; i < MAX_SAMPLES; ++i) {
+                    int64_t idx = dist(rng);
+                    pts[static_cast<size_t>(i)] = {pos_acc(idx, 0), pos_acc(idx, 1), pos_acc(idx, 2)};
+                }
+            }
+            return pts;
+        };
+
+        auto build_camera_pts = [&]() {
+            std::vector<glm::vec3> pts;
+            pts.reserve(cameras.size());
+            for (const auto& cam : cameras) {
+                auto pos = cam->cam_position().cpu();
+                const float* p = pos.ptr<float>();
+                pts.push_back({p[0], p[1], p[2]});
+            }
+            return pts;
+        };
+
+        if (mode == CentralizeDataset::Auto && point_cloud && point_cloud->size() > 0) {
+            // Shift only when the origin is clearly outside the scene distribution.
+            // factor=2.0 -> threshold ~= 2xMAD ~= 3sigma under normality (MAD ~= 0.6745sigma),
+            // meaning we centre only when the origin is a strong outlier w.r.t. the
+            // point cloud spread - robust against near-origin scenes that need no shift.
+            constexpr float k = 2.0f;
+
+            auto pts = build_pts();
+            auto med = lfs::geometry::geometric_median(pts);
+            float mad = lfs::geometry::geometric_mad(pts, med);
+            float origin_dist = glm::length(med);
+
+            if (origin_dist > k * mad) {
+                std::vector<float> center_data = {med.x, med.y, med.z};
+                center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
+                LOG_INFO("Auto-centralizing: origin {:.3f} > {:.1f}xMAD ({:.3f}) - shifting by median [{:.3f}, {:.3f}, {:.3f}]",
+                         origin_dist, k, k * mad, med.x, med.y, med.z);
+            } else {
+                LOG_INFO("Auto-centralizing: origin {:.3f} <= {:.1f}xMAD ({:.3f}) - no shift needed",
+                         origin_dist, k, k * mad);
+            }
+
+        } else if (mode == CentralizeDataset::ByPointCloud &&
+                   point_cloud && point_cloud->size() > 0) {
+            auto pts = build_pts();
+            auto med = lfs::geometry::geometric_median(pts);
+            std::vector<float> center_data = {med.x, med.y, med.z};
+            center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
+            LOG_INFO("Centralizing by point cloud (geometric median): center=[{:.3f}, {:.3f}, {:.3f}]",
+                     med.x, med.y, med.z);
+
+        } else if (mode == CentralizeDataset::ByCameras && !cameras.empty()) {
+            auto cam_pts = build_camera_pts();
+            auto med = lfs::geometry::geometric_median(cam_pts);
+            std::vector<float> center_data = {med.x, med.y, med.z};
+            center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
+            LOG_INFO("Centralizing by cameras (geometric median): center=[{:.3f}, {:.3f}, {:.3f}]",
+                     med.x, med.y, med.z);
+        }
+
+        if (center.is_valid()) {
+            if (point_cloud && point_cloud->size() > 0 && point_cloud->means.is_valid()) {
+                auto center_dev = center.to(point_cloud->means.device());
+                point_cloud->means = point_cloud->means - center_dev;
+            }
+
+            auto neg_center = center.neg();
+            for (auto& cam : cameras)
+                cam->translate(neg_center);
+
+            return lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU);
+        }
+
+        return initial_scene_center;
     }
 
 } // namespace lfs::io

@@ -233,6 +233,9 @@ namespace lfs::io {
                 warnings.emplace_back("No point cloud file found, using random initialization");
             }
 
+            // Centralize scene
+            scene_center = centralize_scene(cameras, point_cloud, options.centralize, scene_center);
+
             if (options.progress) {
                 options.progress(100.0f, "Blender/NeRF loading complete");
             }
