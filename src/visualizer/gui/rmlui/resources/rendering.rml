@@ -118,6 +118,13 @@
         <span class="slider-value">{{render_scale | format_float(2)}}</span>
       </div>
     </div>
+    <div class="setting-row setting-row--aligned" data-if="is_windows" data-tooltip="tooltip.cuda_sysmem_fallback">
+      <span class="setting-row__label-col">{{label_cuda_sysmem_fallback}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox rendering-cuda-sysmem-control">
+        <input type="checkbox" data-checked="cuda_sysmem_fallback_enabled" />
+        <span class="text-muted rendering-cuda-sysmem-status" data-if="cuda_sysmem_restart_pending">{{cuda_sysmem_restart_status}}</span>
+      </label>
+    </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.environment_mode">
       <span class="setting-row__label-col">{{label_environment_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">

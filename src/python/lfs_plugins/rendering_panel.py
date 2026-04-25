@@ -2,13 +2,17 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Rendering panel - main tab for rendering settings."""
 
+import ctypes
 import math
 import os
+import subprocess
+import sys
 
 import lichtfeld as lf
 
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
+from .settings import SettingsManager
 from .transform_controls import TransformControlsController
 from .types import Panel
 
@@ -54,6 +58,10 @@ DEFAULT_SIMPLIFY_KNN_K = 16
 DEFAULT_SIMPLIFY_MERGE_CAP = 0.5
 DEFAULT_SIMPLIFY_OPACITY_PRUNE_THRESHOLD = 0.1
 MAX_SIMPLIFY_KNN_K = 64
+CUDA_SYSMEM_FALLBACK_SETTING_KEY = "cuda_sysmem_fallback_enabled"
+CUDA_SYSMEM_FALLBACK_SETTING_ID = 0x10ECECC9
+CUDA_SYSMEM_FALLBACK_ENABLED_VALUE = 0x00000002
+CUDA_SYSMEM_FALLBACK_DISABLED_VALUE = 0x00000001
 
 BOOL_PROPS = [
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
@@ -229,6 +237,7 @@ class RenderingPanel(Panel):
 
     def __init__(self):
         self._handle = None
+        self._settings = SettingsManager.instance().get(self.id)
         self._transform_controls = TransformControlsController()
         self._color_edit_prop = None
         self._collapsed = {"selection", "mesh", "post_process", "ppisp_crf"}
@@ -251,6 +260,8 @@ class RenderingPanel(Panel):
         self._simplify_error_text = ""
         self._last_environment_state = None
         self._last_custom_environment_map_path = ""
+        self._cuda_sysmem_restart_pending = False
+        self._cuda_sysmem_apply_checked = False
         self._escape_revert = w.EscapeRevertController()
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
@@ -290,10 +301,271 @@ class RenderingPanel(Panel):
         self._transform_controls.mount(doc)
         self._sync_section_states()
 
+    def _coerce_bool(self, value) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _get_cuda_sysmem_fallback_enabled(self) -> bool:
+        return self._coerce_bool(
+            self._settings.get(CUDA_SYSMEM_FALLBACK_SETTING_KEY, True)
+        )
+
+    def _dirty_cuda_sysmem_fallback_bindings(self):
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _set_cuda_sysmem_fallback_enabled(self, value):
+        enabled = self._coerce_bool(value)
+        old_enabled = self._get_cuda_sysmem_fallback_enabled()
+        if enabled == old_enabled:
+            return
+
+        self._settings.set(CUDA_SYSMEM_FALLBACK_SETTING_KEY, enabled)
+        changed = self._apply_cuda_sysmem_fallback(enabled, user_visible=True)
+        self._cuda_sysmem_restart_pending = self._cuda_sysmem_restart_pending or changed
+        self._dirty_cuda_sysmem_fallback_bindings()
+        if changed:
+            self._show_cuda_sysmem_restart_dialog()
+
+    def _ensure_cuda_sysmem_fallback_applied(self):
+        if self._cuda_sysmem_apply_checked or not lf.ui.is_windows_platform():
+            return
+        self._cuda_sysmem_apply_checked = True
+        changed = self._apply_cuda_sysmem_fallback(
+            self._get_cuda_sysmem_fallback_enabled(), user_visible=False
+        )
+        if changed:
+            self._cuda_sysmem_restart_pending = True
+            self._dirty_cuda_sysmem_fallback_bindings()
+            self._show_cuda_sysmem_restart_dialog()
+
+    def _apply_cuda_sysmem_fallback(self, enabled: bool, *, user_visible: bool) -> bool:
+        if not lf.ui.is_windows_platform():
+            return False
+        try:
+            return self._apply_nvidia_cuda_sysmem_fallback(enabled)
+        except Exception as exc:
+            message = str(exc)
+            lf.log.warn(f"Could not update NVIDIA CUDA sysmem fallback policy: {message}")
+            if user_visible:
+                lf.ui.message_dialog(
+                    _tr_fallback("rendering_panel.cuda_sysmem_fallback_error_title",
+                                 "NVIDIA Setting Unavailable"),
+                    _tr_fallback(
+                        "rendering_panel.cuda_sysmem_fallback_error_message",
+                        "LichtFeld Studio could not update the NVIDIA driver profile. "
+                        "Check that NVIDIA drivers are installed and try changing "
+                        "CUDA - Sysmem Fallback Policy in NVIDIA Control Panel."
+                    ) + f"\n\n{message}",
+                    "warning",
+                )
+            return False
+
+    def _show_cuda_sysmem_restart_dialog(self):
+        restart_now = _tr_fallback("rendering_panel.restart_now", "Restart Now")
+
+        def _on_result(button, expected=restart_now):
+            if button == expected:
+                self._restart_application()
+
+        lf.ui.confirm_dialog(
+            _tr_fallback("rendering_panel.cuda_sysmem_fallback_restart_title",
+                         "Restart Required"),
+            _tr_fallback(
+                "rendering_panel.cuda_sysmem_fallback_restart_message",
+                "The CUDA system memory fallback preference was saved. "
+                "Restart LichtFeld Studio for the change to apply to this process."
+            ),
+            [_tr_fallback("rendering_panel.restart_later", "Later"), restart_now],
+            _on_result,
+        )
+
+    def _current_process_args(self):
+        if os.name == "nt":
+            try:
+                kernel32 = ctypes.windll.kernel32
+                shell32 = ctypes.windll.shell32
+
+                exe_buf = ctypes.create_unicode_buffer(32768)
+                kernel32.GetModuleFileNameW.argtypes = [
+                    ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32
+                ]
+                kernel32.GetModuleFileNameW.restype = ctypes.c_uint32
+                if kernel32.GetModuleFileNameW(None, exe_buf, len(exe_buf)) == 0:
+                    raise RuntimeError("GetModuleFileNameW failed")
+                executable = exe_buf.value
+
+                kernel32.GetCommandLineW.restype = ctypes.c_wchar_p
+                cmdline = kernel32.GetCommandLineW()
+                argc = ctypes.c_int()
+                shell32.CommandLineToArgvW.argtypes = [
+                    ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_int)
+                ]
+                shell32.CommandLineToArgvW.restype = ctypes.POINTER(ctypes.c_wchar_p)
+                kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+                kernel32.LocalFree.restype = ctypes.c_void_p
+                argv_ptr = shell32.CommandLineToArgvW(cmdline, ctypes.byref(argc))
+                if not argv_ptr:
+                    raise RuntimeError("CommandLineToArgvW failed")
+                try:
+                    args = [argv_ptr[i] for i in range(argc.value)]
+                finally:
+                    kernel32.LocalFree(ctypes.cast(argv_ptr, ctypes.c_void_p))
+                if args:
+                    args[0] = executable
+                    return args
+                return [executable]
+            except Exception as exc:
+                lf.log.warn(f"Could not read Windows command line for restart: {exc}")
+
+        if os.path.exists("/proc/self/cmdline"):
+            try:
+                with open("/proc/self/cmdline", "rb") as f:
+                    parts = [p.decode("utf-8", "surrogateescape") for p in f.read().split(b"\0") if p]
+                executable = os.readlink("/proc/self/exe") if os.path.exists("/proc/self/exe") else ""
+                if parts:
+                    if executable:
+                        parts[0] = executable
+                    return parts
+            except Exception as exc:
+                lf.log.warn(f"Could not read /proc/self/cmdline for restart: {exc}")
+
+        executable = sys.executable or (sys.argv[0] if sys.argv else "")
+        if not executable:
+            raise RuntimeError("Current executable path is unavailable")
+        return [executable] + list(sys.argv[1:])
+
+    def _restart_application(self):
+        try:
+            args = self._current_process_args()
+            popen_kwargs = {
+                "cwd": os.getcwd(),
+                "close_fds": True,
+            }
+            if os.name == "nt":
+                creationflags = 0
+                creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+                if creationflags:
+                    popen_kwargs["creationflags"] = creationflags
+            else:
+                popen_kwargs["start_new_session"] = True
+            subprocess.Popen(args, **popen_kwargs)
+        except Exception as exc:
+            lf.log.warn(f"Could not restart LichtFeld Studio: {exc}")
+            lf.ui.message_dialog(
+                _tr_fallback("rendering_panel.restart_failed_title", "Restart Failed"),
+                _tr_fallback(
+                    "rendering_panel.restart_failed_message",
+                    "LichtFeld Studio could not relaunch itself. Your setting was saved; "
+                    "close and reopen the application to apply it."
+                ) + f"\n\n{exc}",
+                "warning",
+            )
+            return
+        lf.force_exit()
+
+    def _apply_nvidia_cuda_sysmem_fallback(self, enabled: bool) -> bool:
+        if os.name != "nt":
+            raise RuntimeError("NVAPI is only available on Windows")
+
+        nvapi = ctypes.CDLL("nvapi64.dll" if ctypes.sizeof(ctypes.c_void_p) == 8 else "nvapi.dll")
+        query_interface = nvapi.nvapi_QueryInterface
+        query_interface.argtypes = [ctypes.c_uint32]
+        query_interface.restype = ctypes.c_void_p
+
+        def _load_function(api_id, restype, argtypes):
+            address = query_interface(api_id)
+            if not address:
+                raise RuntimeError(f"NVAPI function 0x{api_id:08X} is unavailable")
+            return ctypes.CFUNCTYPE(restype, *argtypes)(address)
+
+        def _check(status, api_name):
+            if status != 0:
+                raise RuntimeError(f"{api_name} failed with NVAPI status {status}")
+
+        class NvdrsSetting(ctypes.Structure):
+            _fields_ = [
+                ("version", ctypes.c_uint32),
+                ("setting_name", ctypes.c_wchar * 2048),
+                ("setting_id", ctypes.c_uint32),
+                ("setting_type", ctypes.c_uint32),
+                ("setting_location", ctypes.c_uint32),
+                ("is_current_predefined", ctypes.c_uint32),
+                ("is_predefined_valid", ctypes.c_uint32),
+                ("predefined_value", ctypes.c_uint32),
+                ("_predefined_padding", ctypes.c_byte * 0x1000),
+                ("current_value", ctypes.c_uint32),
+                ("_current_padding", ctypes.c_byte * 0x1000),
+            ]
+
+        initialize = _load_function(0x0150E828, ctypes.c_int, [])
+        create_session = _load_function(
+            0x0694D52E, ctypes.c_int, [ctypes.POINTER(ctypes.c_void_p)]
+        )
+        load_settings = _load_function(0x375DBD6B, ctypes.c_int, [ctypes.c_void_p])
+        get_base_profile = _load_function(
+            0xDA8466A0, ctypes.c_int,
+            [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        )
+        get_setting = _load_function(
+            0x73BF8338, ctypes.c_int,
+            [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+             ctypes.POINTER(NvdrsSetting)]
+        )
+        set_setting = _load_function(
+            0x577DD202, ctypes.c_int,
+            [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(NvdrsSetting)]
+        )
+        save_settings = _load_function(0xFCBC7E14, ctypes.c_int, [ctypes.c_void_p])
+        destroy_session = _load_function(0x0DAD9CFF8, ctypes.c_int, [ctypes.c_void_p])
+
+        target_value = (
+            CUDA_SYSMEM_FALLBACK_ENABLED_VALUE
+            if enabled else CUDA_SYSMEM_FALLBACK_DISABLED_VALUE
+        )
+        session = ctypes.c_void_p()
+        profile = ctypes.c_void_p()
+        setting_version = ctypes.sizeof(NvdrsSetting) | (1 << 16)
+
+        _check(initialize(), "NvAPI_Initialize")
+        try:
+            _check(create_session(ctypes.byref(session)), "NvAPI_DRS_CreateSession")
+            _check(load_settings(session), "NvAPI_DRS_LoadSettings")
+            _check(get_base_profile(session, ctypes.byref(profile)), "NvAPI_DRS_GetBaseProfile")
+
+            current = NvdrsSetting()
+            current.version = setting_version
+            if get_setting(session, profile, CUDA_SYSMEM_FALLBACK_SETTING_ID,
+                           ctypes.byref(current)) == 0:
+                if current.current_value == target_value:
+                    return False
+
+            setting = NvdrsSetting()
+            setting.version = setting_version
+            setting.setting_id = CUDA_SYSMEM_FALLBACK_SETTING_ID
+            setting.setting_type = 0  # NVDRS_DWORD_TYPE
+            setting.setting_location = 0  # NVDRS_CURRENT_PROFILE_LOCATION
+            setting.is_current_predefined = 0
+            setting.is_predefined_valid = 0
+            setting.predefined_value = target_value
+            setting.current_value = target_value
+
+            _check(set_setting(session, profile, ctypes.byref(setting)),
+                   "NvAPI_DRS_SetSetting")
+            _check(save_settings(session), "NvAPI_DRS_SaveSettings")
+            return True
+        finally:
+            if session:
+                destroy_session(session)
+
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("rendering")
         if model is None:
             return
+
+        self._ensure_cuda_sysmem_fallback_applied()
 
         s = lf.get_render_settings
 
@@ -331,6 +603,19 @@ class RenderingPanel(Panel):
 
         model.bind_func("environment_enabled",
                         lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
+        model.bind("cuda_sysmem_fallback_enabled",
+                   self._get_cuda_sysmem_fallback_enabled,
+                   self._set_cuda_sysmem_fallback_enabled)
+        model.bind_func("label_cuda_sysmem_fallback",
+                        lambda: _entry_label(
+                            _tr_fallback("main_panel.cuda_sysmem_fallback",
+                                         "CUDA Sysmem Fallback")))
+        model.bind_func("cuda_sysmem_restart_pending",
+                        lambda: self._cuda_sysmem_restart_pending)
+        model.bind_func("cuda_sysmem_restart_status",
+                        lambda: _tr_fallback(
+                            "rendering_panel.restart_required", "Restart required"
+                        ) if self._cuda_sysmem_restart_pending else "")
 
         all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + [
             "environment_mode", "environment_map_path", "ppisp_mode"
