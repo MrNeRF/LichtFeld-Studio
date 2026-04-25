@@ -2540,6 +2540,8 @@ namespace lfs::training {
             auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;
             int tiles_processed = 0;
+            const bool in_sparsification = get_active_sparsify_steps() > 0 &&
+                                           iter > get_sparsity_boundary_iteration();
 
             // Determine controller phase before tile loop (does not depend on tile results)
             const bool known_ppisp_camera = ppisp_ && ppisp_->is_known_camera(cam->camera_id());
@@ -2553,6 +2555,10 @@ namespace lfs::training {
                                              iter >= ppisp_activation_step &&
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
+            const bool freeze_gaussians_this_iter = ppisp_controller_pool_ &&
+                                                    params_.optimization.ppisp_use_controller &&
+                                                    params_.optimization.ppisp_freeze_gaussians_on_distill &&
+                                                    iter >= ppisp_activation_step;
             const bool use_pixel_error_densification =
                 (params_.optimization.strategy == "mcmc") ||
                 (params_.optimization.strategy == "igs+") ||
@@ -2564,6 +2570,82 @@ namespace lfs::training {
                 densification_type = DensificationType::MCMC;
             else if (core::param::is_mrnf_strategy(params_.optimization.strategy))
                 densification_type = DensificationType::MRNF;
+            const bool fastgs_path = !params_.optimization.gut;
+            const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
+            if (fastgs_path && update_gaussians_this_iter && num_tiles != 1) {
+                return std::unexpected("FastGS fused-Adam training requires tile_mode=1; multi-tile needs compact accumulation/finalize support");
+            }
+            const bool run_fastgs_gaussian_backward =
+                fastgs_path &&
+                update_gaussians_this_iter;
+
+            bool fastgs_strategy_hooks_at_start = false;
+            if (fastgs_path && !in_sparsification) {
+                strategy_->pre_step(iter, r_output);
+
+                std::unique_lock<std::shared_mutex> lock(render_mutex_);
+                auto& model = strategy_->get_model();
+                const size_t model_size_before = static_cast<size_t>(model.size());
+                strategy_->post_backward(iter, r_output);
+                fastgs_strategy_hooks_at_start = true;
+
+                if (sparsity_optimizer_ &&
+                    sparsity_optimizer_->is_initialized() &&
+                    static_cast<size_t>(model.size()) != model_size_before) {
+                    LOG_WARN("Sparsity: resetting ADMM state after topology change at iter {} ({} -> {})",
+                             iter, model_size_before, model.size());
+                    sparsity_optimizer_->reset();
+                }
+                if (static_cast<size_t>(model.size()) != model_size_before) {
+                    syncTrainingSceneTopology(scene_, model);
+                }
+            }
+
+            FastGSFusedExtraGradients fused_extra_gradients;
+            lfs::core::Tensor fused_scale_reg_loss_gpu;
+            lfs::core::Tensor fused_opacity_reg_loss_gpu;
+            lfs::core::Tensor sparsity_loss_gpu;
+            if (fastgs_path) {
+                auto& model = strategy_->get_model();
+                if (run_fastgs_gaussian_backward) {
+                    fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
+                    fused_extra_gradients.opacity_reg_weight = params_.optimization.opacity_reg;
+                }
+
+                if (params_.optimization.scale_reg > 0.0f) {
+                    auto scale_loss_result = lfs::training::losses::ScaleRegularization::forward_loss_only(
+                        model.scaling_raw(),
+                        {.weight = params_.optimization.scale_reg});
+                    if (!scale_loss_result) {
+                        return std::unexpected(scale_loss_result.error());
+                    }
+                    fused_scale_reg_loss_gpu = *scale_loss_result;
+                }
+                if (params_.optimization.opacity_reg > 0.0f) {
+                    auto opacity_loss_result = lfs::training::losses::OpacityRegularization::forward_loss_only(
+                        model.opacity_raw(),
+                        {.weight = params_.optimization.opacity_reg});
+                    if (!opacity_loss_result) {
+                        return std::unexpected(opacity_loss_result.error());
+                    }
+                    fused_opacity_reg_loss_gpu = *opacity_loss_result;
+                }
+                if (run_fastgs_gaussian_backward &&
+                    sparsity_optimizer_ && sparsity_optimizer_->should_apply_loss(iter)) {
+                    auto sparsity_result = compute_sparsity_loss_forward(iter, model);
+                    if (!sparsity_result) {
+                        return std::unexpected(sparsity_result.error());
+                    }
+                    auto& [loss_tensor, ctx] = *sparsity_result;
+                    sparsity_loss_gpu = std::move(loss_tensor);
+                    fused_extra_gradients.sparsity_opa_sigmoid = ctx.opa_sigmoid_ptr;
+                    fused_extra_gradients.sparsity_z = ctx.z_ptr;
+                    fused_extra_gradients.sparsity_u = ctx.u_ptr;
+                    fused_extra_gradients.sparsity_n = static_cast<int>(ctx.n);
+                    fused_extra_gradients.sparsity_rho = ctx.rho;
+                    fused_extra_gradients.sparsity_grad_loss = 1.0f;
+                }
+            }
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -2963,6 +3045,10 @@ namespace lfs::training {
                         }
                         fastgs_entries.emplace_back("fastgs.grad_mean2d_helper", grad_mean2d_helper_bytes);
                         fastgs_entries.emplace_back("fastgs.grad_conic_helper", grad_conic_helper_bytes);
+                        if (run_fastgs_gaussian_backward) {
+                            fastgs_entries.emplace_back("fastgs.fused_grad_opacity_helper", n_primitives * sizeof(float));
+                            fastgs_entries.emplace_back("fastgs.fused_grad_color_helper", n_primitives * 3 * sizeof(float));
+                        }
                         fastgs_entries.emplace_back("render.output_image", tensor_reserved_bytes(output.image));
                         fastgs_entries.emplace_back("render.output_alpha", tensor_reserved_bytes(output.alpha));
                         fastgs_entries.emplace_back("train.gt_tile", tensor_reserved_bytes(gt_tile));
@@ -3045,10 +3131,16 @@ namespace lfs::training {
                                                   use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
                     } else {
                         tile_context_guard.release();
-                        fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
-                                                strategy_->get_optimizer(), tile_grad_alpha,
-                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
-                                                densification_type);
+                        if (run_fastgs_gaussian_backward) {
+                            fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
+                                                    strategy_->get_optimizer(), tile_grad_alpha,
+                                                    use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                    densification_type,
+                                                    iter,
+                                                    fused_extra_gradients);
+                        } else {
+                            cleanup_tile_context();
+                        }
                     }
                     nvtxRangePop();
                 }
@@ -3081,21 +3173,29 @@ namespace lfs::training {
 
                 if (params_.optimization.scale_reg > 0.0f) {
                     nvtxRangePush("compute_scale_reg_loss");
-                    auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
-                    if (!scale_loss_result) {
-                        return std::unexpected(scale_loss_result.error());
+                    if (fastgs_path) {
+                        loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
+                    } else {
+                        auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
+                        if (!scale_loss_result) {
+                            return std::unexpected(scale_loss_result.error());
+                        }
+                        loss_tensor_gpu = loss_tensor_gpu + *scale_loss_result;
                     }
-                    loss_tensor_gpu = loss_tensor_gpu + *scale_loss_result;
                     nvtxRangePop();
                 }
 
                 if (params_.optimization.opacity_reg > 0.0f) {
                     nvtxRangePush("compute_opacity_reg_loss");
-                    auto opacity_loss_result = compute_opacity_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
-                    if (!opacity_loss_result) {
-                        return std::unexpected(opacity_loss_result.error());
+                    if (fastgs_path) {
+                        loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
+                    } else {
+                        auto opacity_loss_result = compute_opacity_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
+                        if (!opacity_loss_result) {
+                            return std::unexpected(opacity_loss_result.error());
+                        }
+                        loss_tensor_gpu = loss_tensor_gpu + *opacity_loss_result;
                     }
-                    loss_tensor_gpu = loss_tensor_gpu + *opacity_loss_result;
                     nvtxRangePop();
                 }
 
@@ -3126,23 +3226,26 @@ namespace lfs::training {
             }
 
             // Sparsity loss - ALL ON GPU, no CPU sync here
-            lfs::core::Tensor sparsity_loss_gpu;
-            if (sparsity_optimizer_ && sparsity_optimizer_->should_apply_loss(iter)) {
+            if (sparsity_optimizer_ &&
+                sparsity_optimizer_->should_apply_loss(iter) &&
+                (!fastgs_path || update_gaussians_this_iter)) {
                 nvtxRangePush("sparsity_loss");
-                auto sparsity_result = compute_sparsity_loss_forward(iter, strategy_->get_model());
-                if (!sparsity_result) {
-                    nvtxRangePop();
-                    return std::unexpected(sparsity_result.error());
-                }
-                auto& [loss_tensor, ctx] = *sparsity_result;
-                sparsity_loss_gpu = std::move(loss_tensor);
-
-                if (ctx.n > 0) {
-                    if (auto result = sparsity_optimizer_->compute_loss_backward(
-                            ctx, 1.0f, strategy_->get_optimizer().get_grad(ParamType::Opacity));
-                        !result) {
+                if (!run_fastgs_gaussian_backward) {
+                    auto sparsity_result = compute_sparsity_loss_forward(iter, strategy_->get_model());
+                    if (!sparsity_result) {
                         nvtxRangePop();
-                        return std::unexpected(result.error());
+                        return std::unexpected(sparsity_result.error());
+                    }
+                    auto& [loss_tensor, ctx] = *sparsity_result;
+                    sparsity_loss_gpu = std::move(loss_tensor);
+
+                    if (ctx.n > 0) {
+                        if (auto result = sparsity_optimizer_->compute_loss_backward(
+                                ctx, 1.0f, strategy_->get_optimizer().get_grad(ParamType::Opacity));
+                            !result) {
+                            nvtxRangePop();
+                            return std::unexpected(result.error());
+                        }
                     }
                 }
                 nvtxRangePop();
@@ -3187,10 +3290,7 @@ namespace lfs::training {
                     .emit();
             }
 
-            const bool in_sparsification = get_active_sparsify_steps() > 0 &&
-                                           iter > get_sparsity_boundary_iteration();
-
-            if (!in_sparsification) {
+            if (!in_sparsification && !fastgs_strategy_hooks_at_start) {
                 strategy_->pre_step(iter, r_output);
             }
 
@@ -3216,7 +3316,7 @@ namespace lfs::training {
                         lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PreOptimizerStep, ctx);
                     }
 
-                    if (!in_sparsification) {
+                    if (!in_sparsification && !fastgs_strategy_hooks_at_start) {
                         strategy_->post_backward(iter, r_output);
                     }
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "fused_adam_types.h"
 #include "helper_math.h"
 #include "rasterization_config.h"
 #include <functional>
@@ -27,12 +28,8 @@ namespace fast_lfs::rasterization {
         char* per_tile_buffers_blob,
         char* per_instance_buffers_blob,
         char* per_bucket_buffers_blob,
-        float3* grad_means,
-        float3* grad_scales_raw,
-        float4* grad_rotations_raw,
-        float* grad_opacities_raw,
-        float3* grad_sh_coefficients_0,
-        float3* grad_sh_coefficients_rest,
+        float* grad_opacity_helper,
+        float3* grad_color_helper,
         float2* grad_mean2d_helper,
         float* grad_conic_helper,
         float4* grad_w2c,
@@ -52,6 +49,7 @@ namespace fast_lfs::rasterization {
         const float cx,
         const float cy,
         bool mip_filter,
-        DensificationType densification_type = DensificationType::None);
+        DensificationType densification_type = DensificationType::None,
+        FusedAdamSettings fused_adam = {});
 
 }

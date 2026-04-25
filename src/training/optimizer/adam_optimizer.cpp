@@ -6,6 +6,7 @@
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cuda_runtime.h>
 #include <stdexcept>
@@ -32,6 +33,11 @@ namespace lfs::training {
           splat_data_(splat_data) {}
 
     void AdamOptimizer::step(const int iteration) {
+        if (fused_step_iteration_ == iteration) {
+            last_step_zeroed_gradients_ = true;
+            return;
+        }
+        last_step_zeroed_gradients_ = false;
         for (const auto type : all_param_types()) {
             step_param(type, iteration);
         }
@@ -55,17 +61,17 @@ namespace lfs::training {
             const size_t param_size = param.shape()[0];
             const size_t alloc_cap = (capacity > param_size) ? capacity : param_size;
 
-            // Handle zero-size tensors (e.g., shN with sh-degree 0 has shape [N, 0, 3])
-            // Still allocate state tensors to maintain valid structure for densification
+            // Handle zero-size tensors (e.g., shN with sh-degree 0 has shape [N, 0, 3]).
+            // Moment tensors are persistent Adam state. Gradients are transient and allocated
+            // lazily by get_grad(); fused fastgs backward never needs the full gradient buffers.
             if (alloc_cap > param_size) {
-                state.grad = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
                 state.exp_avg = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
                 state.exp_avg_sq = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
             } else {
-                state.grad = lfs::core::Tensor::zeros(param.shape(), param.device());
                 state.exp_avg = lfs::core::Tensor::zeros(param.shape(), param.device());
                 state.exp_avg_sq = lfs::core::Tensor::zeros(param.shape(), param.device());
             }
+            state.grad = {};
             state.capacity = alloc_cap;
             state.size = param_size;
             state.step_count = 0;
@@ -84,6 +90,10 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::zero_grad(int /*iteration*/) {
+        if (last_step_zeroed_gradients_) {
+            last_step_zeroed_gradients_ = false;
+            return;
+        }
         for (auto& [_, state] : states_) {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
                 const size_t bytes = state.size * (state.grad.numel() / state.grad.shape()[0]) * sizeof(float);
@@ -108,9 +118,10 @@ namespace lfs::training {
         const auto name = param_name(type);
         const auto it = states_.find(name);
         if (it == states_.end()) {
-            throw std::runtime_error("get_grad: " + name + " not initialized");
+            init_state(type, false);
         }
-        return it->second.grad;
+        ensure_grad(type);
+        return states_[name].grad;
     }
 
     std::string AdamOptimizer::param_name(ParamType type) const {
@@ -125,7 +136,7 @@ namespace lfs::training {
         return "unknown";
     }
 
-    void AdamOptimizer::init_state(ParamType type) {
+    void AdamOptimizer::init_state(ParamType type, bool allocate_grad) {
         auto& param = get_param(type);
         const auto name = param_name(type);
 
@@ -140,7 +151,7 @@ namespace lfs::training {
         const size_t param_size = param.shape()[0];
         const size_t initial_cap = compute_new_capacity(0, param_size);
 
-        if (!state.grad.is_valid() || state.grad.numel() == 0) {
+        if (allocate_grad && (!state.grad.is_valid() || state.grad.numel() == 0)) {
             state.grad = (initial_cap > param_size)
                              ? lfs::core::Tensor::zeros_direct(param.shape(), initial_cap)
                              : lfs::core::Tensor::zeros(param.shape(), param.device());
@@ -160,6 +171,30 @@ namespace lfs::training {
         LOG_DEBUG("Initialized optimizer state for {}: size={}, capacity={}", name, param_size, state.capacity);
     }
 
+    void AdamOptimizer::ensure_grad(ParamType type) {
+        auto& param = get_param(type);
+        const auto name = param_name(type);
+        if (!states_.contains(name)) {
+            init_state(type, false);
+        }
+
+        auto& state = states_[name];
+        if (state.grad.is_valid() && state.grad.numel() > 0) {
+            return;
+        }
+        if (!param.is_valid() || param.ndim() == 0) {
+            throw std::runtime_error("ensure_grad: " + name + " param invalid");
+        }
+
+        const size_t param_size = param.shape()[0];
+        const size_t alloc_cap = state.capacity > param_size ? state.capacity : param_size;
+        state.grad = (alloc_cap > param_size)
+                         ? lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap)
+                         : lfs::core::Tensor::zeros(param.shape(), param.device());
+        state.size = param_size;
+        state.capacity = std::max(state.capacity, alloc_cap);
+    }
+
     void AdamOptimizer::step_param(ParamType type, const int iteration) {
         auto& param = get_param(type);
         if (!param.is_valid() || param.numel() == 0) {
@@ -168,7 +203,7 @@ namespace lfs::training {
 
         const auto name = param_name(type);
         if (!states_.contains(name)) {
-            init_state(type);
+            init_state(type, false);
         }
 
         auto& state = states_[name];
@@ -208,6 +243,86 @@ namespace lfs::training {
             config_.eps,
             bias_correction1_rcp,
             bias_correction2_sqrt_rcp);
+    }
+
+    FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(const int iteration) {
+        FastGSFusedAdamState fused;
+        fused.enabled = true;
+        fused.beta1 = static_cast<float>(config_.beta1);
+        fused.beta2 = static_cast<float>(config_.beta2);
+        fused.eps = static_cast<float>(config_.eps);
+
+        auto prepare_param = [&](ParamType type, const int n_attributes, const bool update_enabled) {
+            FastGSFusedAdamParam out;
+            auto& param = get_param(type);
+            if (!param.is_valid() || param.numel() == 0 || n_attributes <= 0) {
+                return out;
+            }
+
+            const auto name = param_name(type);
+            if (!states_.contains(name)) {
+                init_state(type, false);
+            }
+            auto& state = states_[name];
+            if (!state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid()) {
+                init_state(type, false);
+            }
+
+            const size_t param_size = param.shape()[0];
+            if (param_size != state.size) {
+                throw std::runtime_error("Optimizer state desync before fused Adam: " + name);
+            }
+            if (!update_enabled) {
+                return out;
+            }
+
+            const auto next_step = state.step_count + 1;
+            const double bias_correction1_rcp = 1.0 / (1.0 - std::pow(config_.beta1, next_step));
+            const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, next_step));
+
+            out.param = param.ptr<float>();
+            out.exp_avg = state.exp_avg.ptr<float>();
+            out.exp_avg_sq = state.exp_avg_sq.ptr<float>();
+            out.n_elements = static_cast<int>(param.numel());
+            out.n_attributes = n_attributes;
+            out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
+            out.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
+            out.enabled = true;
+            return out;
+        };
+
+        fused.means = prepare_param(ParamType::Means, 3, true);
+        fused.sh0 = prepare_param(ParamType::Sh0, 3, true);
+        fused.shN = prepare_param(ParamType::ShN,
+                                  splat_data_.shN().is_valid() && splat_data_.shN().ndim() >= 2
+                                      ? static_cast<int>(splat_data_.shN().shape()[1] * 3)
+                                      : 0,
+                                  iteration > SH_WARMUP_ITERATIONS);
+        fused.scaling = prepare_param(ParamType::Scaling, 3, true);
+        fused.rotation = prepare_param(ParamType::Rotation, 4, true);
+        fused.opacity = prepare_param(ParamType::Opacity, 1, true);
+
+        fused.enabled = fused.means.enabled || fused.sh0.enabled || fused.shN.enabled ||
+                        fused.scaling.enabled || fused.rotation.enabled || fused.opacity.enabled;
+        return fused;
+    }
+
+    void AdamOptimizer::commit_fastgs_fused_adam(const int iteration) {
+        for (const auto type : all_param_types()) {
+            auto& param = get_param(type);
+            if (!param.is_valid() || param.numel() == 0)
+                continue;
+            const auto name = param_name(type);
+            if (!states_.contains(name)) {
+                continue;
+            }
+            auto& state = states_[name];
+            if (state.exp_avg.is_valid() && state.exp_avg_sq.is_valid()) {
+                state.step_count++;
+            }
+        }
+        fused_step_iteration_ = iteration;
+        last_step_zeroed_gradients_ = true;
     }
 
     void AdamOptimizer::reset_state_at_indices(ParamType type, const std::vector<int64_t>& indices) {
@@ -277,10 +392,12 @@ namespace lfs::training {
         }
 
         // Fast path: use reserved capacity
-        const bool all_have_capacity = state.grad.capacity() > 0 &&
+        const bool grad_has_capacity = !state.grad.is_valid() || state.grad.capacity() > 0;
+        const bool all_have_capacity = grad_has_capacity &&
                                        state.exp_avg.capacity() > 0 &&
                                        state.exp_avg_sq.capacity() > 0;
-        const bool fits_in_capacity = new_size <= state.grad.capacity() &&
+        const bool grad_fits = !state.grad.is_valid() || new_size <= state.grad.capacity();
+        const bool fits_in_capacity = grad_fits &&
                                       new_size <= state.exp_avg.capacity() &&
                                       new_size <= state.exp_avg_sq.capacity();
         if (all_have_capacity && fits_in_capacity) {
@@ -288,7 +405,8 @@ namespace lfs::training {
             state.exp_avg.append_gather(indices);
             state.exp_avg_sq.append_gather(indices);
             // grad: append zeros (new Gaussians have no gradients yet)
-            state.grad.append_zeros(n_new);
+            if (state.grad.is_valid())
+                state.grad.append_zeros(n_new);
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
             LOG_DEBUG("extend_state_by_gather({}): fast path done", name);
@@ -305,7 +423,8 @@ namespace lfs::training {
         }
 
         const auto tensor_shape = lfs::core::TensorShape(new_dims);
-        state.grad = lfs::core::Tensor::zeros(tensor_shape, param.device());
+        if (state.grad.is_valid())
+            state.grad = lfs::core::Tensor::zeros(tensor_shape, param.device());
 
         auto new_exp_avg = lfs::core::Tensor::empty(tensor_shape, param.device());
         auto new_exp_avg_sq = lfs::core::Tensor::empty(tensor_shape, param.device());
@@ -366,14 +485,17 @@ namespace lfs::training {
         }
 
         // Fast path: use reserved capacity (all tensors must have capacity)
-        const bool all_have_capacity = state.grad.capacity() > 0 &&
+        const bool grad_has_capacity = !state.grad.is_valid() || state.grad.capacity() > 0;
+        const bool all_have_capacity = grad_has_capacity &&
                                        state.exp_avg.capacity() > 0 &&
                                        state.exp_avg_sq.capacity() > 0;
-        const bool fits_in_capacity = new_size <= state.grad.capacity() &&
+        const bool grad_fits = !state.grad.is_valid() || new_size <= state.grad.capacity();
+        const bool fits_in_capacity = grad_fits &&
                                       new_size <= state.exp_avg.capacity() &&
                                       new_size <= state.exp_avg_sq.capacity();
         if (all_have_capacity && fits_in_capacity) {
-            state.grad.append_zeros(n_new);
+            if (state.grad.is_valid())
+                state.grad.append_zeros(n_new);
             state.exp_avg.append_zeros(n_new);
             state.exp_avg_sq.append_zeros(n_new);
             state.size = new_size;
@@ -392,7 +514,8 @@ namespace lfs::training {
         }
 
         const auto tensor_shape = lfs::core::TensorShape(new_dims);
-        state.grad = lfs::core::Tensor::zeros(tensor_shape, param.device());
+        if (state.grad.is_valid())
+            state.grad = lfs::core::Tensor::zeros(tensor_shape, param.device());
         auto new_exp_avg = lfs::core::Tensor::empty(tensor_shape, param.device());
         auto new_exp_avg_sq = lfs::core::Tensor::empty(tensor_shape, param.device());
 
@@ -689,12 +812,7 @@ namespace lfs::training {
             states_[name] = std::move(state);
         }
 
-        // Allocate gradient buffers (not serialized)
-        for (auto& [_, state] : states_) {
-            if (state.exp_avg.is_valid()) {
-                state.grad = lfs::core::Tensor::zeros_direct(state.exp_avg.shape(), state.capacity);
-            }
-        }
+        // Gradient buffers are transient and allocated lazily by get_grad().
         LOG_DEBUG("Deserialized AdamOptimizer: {} states", num_states);
     }
 
@@ -703,8 +821,10 @@ namespace lfs::training {
             if (capacity > state.capacity) {
                 if (state.grad.is_valid())
                     state.grad.reserve(capacity);
-                state.exp_avg.reserve(capacity);
-                state.exp_avg_sq.reserve(capacity);
+                if (state.exp_avg.is_valid())
+                    state.exp_avg.reserve(capacity);
+                if (state.exp_avg_sq.is_valid())
+                    state.exp_avg_sq.reserve(capacity);
                 state.capacity = capacity;
             }
         }

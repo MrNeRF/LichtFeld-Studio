@@ -36,6 +36,10 @@ namespace lfs::training::losses {
             const lfs::core::Tensor& scaling_raw,
             lfs::core::Tensor& scaling_raw_grad,
             const Params& params);
+
+        static std::expected<lfs::core::Tensor, std::string> forward_loss_only(
+            const lfs::core::Tensor& scaling_raw,
+            const Params& params);
     };
 
     /**
@@ -63,6 +67,10 @@ namespace lfs::training::losses {
         static std::expected<lfs::core::Tensor, std::string> forward(
             const lfs::core::Tensor& opacity_raw,
             lfs::core::Tensor& opacity_raw_grad,
+            const Params& params);
+
+        static std::expected<lfs::core::Tensor, std::string> forward_loss_only(
+            const lfs::core::Tensor& opacity_raw,
             const Params& params);
     };
 

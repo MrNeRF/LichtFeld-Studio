@@ -55,6 +55,17 @@ namespace lfs::training {
         lfs::core::Tensor bg_image;
     };
 
+    struct FastGSFusedExtraGradients {
+        float scale_reg_weight = 0.0f;
+        float opacity_reg_weight = 0.0f;
+        const float* sparsity_opa_sigmoid = nullptr;
+        const float* sparsity_z = nullptr;
+        const float* sparsity_u = nullptr;
+        int sparsity_n = 0;
+        float sparsity_rho = 0.0f;
+        float sparsity_grad_loss = 0.0f;
+    };
+
     // Explicit forward pass - returns render output and context for backward
     // Optional tile parameters for memory-efficient training (tile_width/height=0 means full image)
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
@@ -77,7 +88,9 @@ namespace lfs::training {
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& grad_alpha_extra = {},
         const lfs::core::Tensor& pixel_error_map = {},
-        DensificationType densification_type = DensificationType::None);
+        DensificationType densification_type = DensificationType::None,
+        int iteration = 0,
+        const FastGSFusedExtraGradients& fused_extra_gradients = {});
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

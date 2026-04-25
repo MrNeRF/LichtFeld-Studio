@@ -35,8 +35,9 @@ namespace lfs::training::kernels {
             // Accumulate for loss
             local_sum += exp_x;
 
-            // Accumulate gradient: ∂L/∂x = grad_scale * exp(x)
-            atomicAdd(&param_grads[idx], grad_scale * exp_x);
+            if (param_grads != nullptr) {
+                atomicAdd(&param_grads[idx], grad_scale * exp_x);
+            }
         }
 
         // Block-level warp reduction (tiny-cuda-nn style - much faster!)
@@ -127,8 +128,9 @@ namespace lfs::training::kernels {
             // Accumulate for loss
             local_sum += sigmoid_x;
 
-            // Gradient: ∂L/∂x = grad_scale * sigmoid(x) * (1 - sigmoid(x))
-            atomicAdd(&param_grads[idx], grad_scale * sigmoid_x * (1.0f - sigmoid_x));
+            if (param_grads != nullptr) {
+                atomicAdd(&param_grads[idx], grad_scale * sigmoid_x * (1.0f - sigmoid_x));
+            }
         }
 
         // Block-level warp reduction (tiny-cuda-nn style - much faster!)

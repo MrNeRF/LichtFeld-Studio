@@ -31,6 +31,7 @@ namespace fast_lfs::rasterization::config {
     DEF int block_size_create_instances = 256;
     DEF int block_size_extract_instance_ranges = 256;
     DEF int block_size_extract_bucket_counts = 256;
+    DEF int block_size_adam_step_invisible = 256;
     DEF int tile_width = 16;
     DEF int tile_height = 16;
     DEF int block_size_blend = tile_width * tile_height;

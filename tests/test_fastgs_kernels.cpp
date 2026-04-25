@@ -21,6 +21,18 @@ namespace {
     constexpr const char* GARDEN_PATH = "data/garden";
     constexpr int W = 640, H = 480;
     constexpr float FX = 500.0f, FY = 500.0f;
+
+    const Tensor& adam_moment(const AdamOptimizer& opt, ParamType type) {
+        const auto* state = opt.get_state(type);
+        if (!state || !state->exp_avg.is_valid()) {
+            throw std::runtime_error("Missing Adam moment state");
+        }
+        return state->exp_avg;
+    }
+
+    Tensor recovered_fused_grad(const AdamOptimizer& opt, ParamType type, float beta1 = 0.9f) {
+        return adam_moment(opt, type).mul(1.0f / (1.0f - beta1));
+    }
 } // namespace
 
 class FastGSKernelTest : public ::testing::Test {
@@ -162,8 +174,8 @@ TEST_F(FastGSKernelTest, Backward_Blend) {
     fast_rasterize_backward(r->second, Tensor::ones_like(r->first.image),
                             *splat_, *opt, Tensor::zeros_like(r->first.alpha));
 
-    EXPECT_GT(opt->get_grad(ParamType::Means).pow(2.0f).sum().item<float>(), 0.0f);
-    EXPECT_GT(opt->get_grad(ParamType::Scaling).pow(2.0f).sum().item<float>(), 0.0f);
+    EXPECT_GT(adam_moment(*opt, ParamType::Means).pow(2.0f).sum().item<float>(), 0.0f);
+    EXPECT_GT(adam_moment(*opt, ParamType::Scaling).pow(2.0f).sum().item<float>(), 0.0f);
 }
 
 TEST_F(FastGSKernelTest, Backward_Preprocess) {
@@ -175,8 +187,8 @@ TEST_F(FastGSKernelTest, Backward_Preprocess) {
     fast_rasterize_backward(r->second, Tensor::randn_like(r->first.image).mul(0.1f),
                             *splat_, *opt, Tensor::randn_like(r->first.alpha).mul(0.1f));
 
-    EXPECT_TRUE(opt->get_grad(ParamType::Means).is_valid());
-    EXPECT_TRUE(opt->get_grad(ParamType::Rotation).is_valid());
+    EXPECT_TRUE(adam_moment(*opt, ParamType::Means).is_valid());
+    EXPECT_TRUE(adam_moment(*opt, ParamType::Rotation).is_valid());
 }
 
 TEST_F(FastGSKernelTest, Backward_Full) {
@@ -239,11 +251,11 @@ TEST_F(FastGSKernelTest, Numerical_GradientFinite) {
         }
     };
 
-    check(opt->get_grad(ParamType::Means));
-    check(opt->get_grad(ParamType::Scaling));
-    check(opt->get_grad(ParamType::Rotation));
-    check(opt->get_grad(ParamType::Opacity));
-    check(opt->get_grad(ParamType::Sh0));
+    check(adam_moment(*opt, ParamType::Means));
+    check(adam_moment(*opt, ParamType::Scaling));
+    check(adam_moment(*opt, ParamType::Rotation));
+    check(adam_moment(*opt, ParamType::Opacity));
+    check(adam_moment(*opt, ParamType::Sh0));
 }
 
 // Edge cases
@@ -461,9 +473,9 @@ protected:
         opt->zero_grad(0);
 
         auto grad_out = r->first.image.mul(2.0f);
-        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, 1);
 
-        return opt->get_grad(param).clone();
+        return recovered_fused_grad(*opt, param).clone();
     }
 
     size_t n_;
@@ -570,8 +582,7 @@ TEST_F(FastGSGradientTest, GradientDirection) {
     opt->zero_grad(0);
 
     auto grad_out = r->first.image.mul(2.0f);
-    fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
-    opt->step(1);
+    fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, 1);
 
     r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(r.has_value());
@@ -694,9 +705,9 @@ protected:
         opt->zero_grad(0);
 
         auto grad_out = r->first.image.mul(2.0f);
-        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, 1);
 
-        return opt->get_grad(param).clone();
+        return recovered_fused_grad(*opt, param).clone();
     }
 
     size_t n_;
@@ -799,8 +810,7 @@ TEST_F(FastGSMultiBucketGradientTest, GradientDescent_MultiBucket) {
 
         opt->zero_grad(0);
         auto grad_out = r->first.image.mul(2.0f);
-        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
-        opt->step(step + 1);
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, step + 1);
     }
 
     r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);

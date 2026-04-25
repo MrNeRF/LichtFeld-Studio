@@ -28,12 +28,8 @@ void fast_lfs::rasterization::backward(
     char* per_tile_buffers_blob,
     char* per_instance_buffers_blob,
     char* per_bucket_buffers_blob,
-    float3* grad_means,
-    float3* grad_scales_raw,
-    float4* grad_rotations_raw,
-    float* grad_opacities_raw,
-    float3* grad_sh_coefficients_0,
-    float3* grad_sh_coefficients_rest,
+    float* grad_opacity_helper,
+    float3* grad_color_helper,
     float2* grad_mean2d_helper,
     float* grad_conic_helper,
     float4* grad_w2c,
@@ -53,10 +49,8 @@ void fast_lfs::rasterization::backward(
     const float cx,
     const float cy,
     bool mip_filter,
-    DensificationType densification_type) {
-    if (n_visible_primitives == 0 || n_instances == 0 || n_buckets == 0)
-        return;
-
+    DensificationType densification_type,
+    FusedAdamSettings fused_adam) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const int n_tiles = grid.x * grid.y;
 
@@ -64,80 +58,102 @@ void fast_lfs::rasterization::backward(
     const int end_bit = extract_end_bit(static_cast<uint>(n_tiles - 1));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
-    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, end_bit);
-    PerBucketBuffers per_bucket_buffers = PerBucketBuffers::from_blob(per_bucket_buffers_blob, n_buckets);
 
     // Restore selectors from forward pass
     per_primitive_buffers.primitive_indices.selector = primitive_primitive_indices_selector;
-    per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
 
-    // Backward blend (template dispatch eliminates densification branch from inner loop)
-    auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
-        kernels::backward::blend_backward_cu<DENS_TYPE><<<n_buckets, 32>>>(
-            per_tile_buffers.instance_ranges,
-            per_tile_buffers.bucket_offsets,
-            per_instance_buffers.primitive_indices.Current(),
-            per_primitive_buffers.mean2d,
-            per_primitive_buffers.conic_opacity,
-            per_primitive_buffers.color,
-            raw_opacities,
-            grad_image,
-            grad_alpha,
-            image,
-            alpha,
-            per_tile_buffers.max_n_contributions,
-            per_tile_buffers.n_contributions,
-            per_bucket_buffers.tile_index,
-            per_bucket_buffers.checkpoint_uint8,
+    if (n_visible_primitives != 0 && n_instances != 0 && n_buckets != 0) {
+        PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, end_bit);
+        PerBucketBuffers per_bucket_buffers = PerBucketBuffers::from_blob(per_bucket_buffers_blob, n_buckets);
+        per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
+
+        // Backward blend (template dispatch eliminates densification branch from inner loop)
+        auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
+            kernels::backward::blend_backward_cu<DENS_TYPE><<<n_buckets, 32>>>(
+                per_tile_buffers.instance_ranges,
+                per_tile_buffers.bucket_offsets,
+                per_instance_buffers.primitive_indices.Current(),
+                per_primitive_buffers.mean2d,
+                per_primitive_buffers.conic_opacity,
+                per_primitive_buffers.color,
+                raw_opacities,
+                grad_image,
+                grad_alpha,
+                image,
+                alpha,
+                per_tile_buffers.max_n_contributions,
+                per_tile_buffers.n_contributions,
+                per_bucket_buffers.tile_index,
+                per_bucket_buffers.checkpoint_uint8,
+                grad_mean2d_helper,
+                grad_conic_helper,
+                grad_opacity_helper,
+                grad_color_helper,
+                densification_info,
+                densification_error_map,
+                n_buckets,
+                n_primitives,
+                width,
+                height,
+                grid.x,
+                mip_filter);
+        };
+        if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
+            launch_blend_backward.template operator()<DensificationType::MRNF>();
+        } else if (densification_info != nullptr && densification_error_map != nullptr) {
+            launch_blend_backward.template operator()<DensificationType::MCMC>();
+        } else {
+            launch_blend_backward.template operator()<DensificationType::None>();
+        }
+        CHECK_CUDA(config::debug, "blend_backward")
+
+        // Backward preprocess
+        kernels::backward::preprocess_backward_cu<<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward>>>(
+            means,
+            scales_raw,
+            rotations_raw,
+            sh_coefficients_rest,
+            w2c,
+            cam_position,
+            per_primitive_buffers.n_touched_tiles,
             grad_mean2d_helper,
             grad_conic_helper,
-            grad_opacities_raw,
-            grad_sh_coefficients_0, // used to store intermediate gradients
-            densification_info,
-            densification_error_map,
-            n_buckets,
+            grad_opacity_helper,
+            grad_color_helper,
+            grad_w2c,
+            (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
             n_primitives,
-            width,
-            height,
-            grid.x,
-            mip_filter);
-    };
-    if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
-        launch_blend_backward.template operator()<DensificationType::MRNF>();
-    } else if (densification_info != nullptr && densification_error_map != nullptr) {
-        launch_blend_backward.template operator()<DensificationType::MCMC>();
-    } else {
-        launch_blend_backward.template operator()<DensificationType::None>();
+            active_sh_bases,
+            total_bases_sh_rest,
+            static_cast<float>(width),
+            static_cast<float>(height),
+            fx,
+            fy,
+            cx,
+            cy,
+            mip_filter,
+            fused_adam);
+        CHECK_CUDA(config::debug, "preprocess_backward")
     }
-    CHECK_CUDA(config::debug, "blend_backward")
 
-    // Backward preprocess
-    kernels::backward::preprocess_backward_cu<<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward>>>(
-        means,
-        scales_raw,
-        rotations_raw,
-        sh_coefficients_rest,
-        w2c,
-        cam_position,
-        per_primitive_buffers.n_touched_tiles,
-        grad_mean2d_helper,
-        grad_conic_helper,
-        grad_means,
-        grad_scales_raw,
-        grad_rotations_raw,
-        grad_sh_coefficients_0,
-        grad_sh_coefficients_rest,
-        grad_w2c,
-        (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
-        n_primitives,
-        active_sh_bases,
-        total_bases_sh_rest,
-        static_cast<float>(width),
-        static_cast<float>(height),
-        fx,
-        fy,
-        cx,
-        cy,
-        mip_filter);
-    CHECK_CUDA(config::debug, "preprocess_backward")
+    auto launch_invisible = [&](const FusedAdamParam& param, const char* name, const int extra_grad_kind = 0) {
+        if (!param.enabled || param.n_elements <= 0 || param.n_attributes <= 0)
+            return;
+        kernels::backward::adam_step_invisible<<<div_round_up(param.n_elements, config::block_size_adam_step_invisible), config::block_size_adam_step_invisible>>>(
+            per_primitive_buffers.n_touched_tiles,
+            param,
+            fused_adam,
+            extra_grad_kind,
+            fused_adam.beta1,
+            fused_adam.beta2,
+            fused_adam.eps);
+        CHECK_CUDA(config::debug, name)
+    };
+
+    launch_invisible(fused_adam.means, "adam_step_invisible (means)");
+    launch_invisible(fused_adam.scaling, "adam_step_invisible (scaling)", 1);
+    launch_invisible(fused_adam.rotation, "adam_step_invisible (rotation)");
+    launch_invisible(fused_adam.opacity, "adam_step_invisible (opacity)", 2);
+    launch_invisible(fused_adam.sh0, "adam_step_invisible (sh0)");
+    launch_invisible(fused_adam.shN, "adam_step_invisible (shN)");
 }
