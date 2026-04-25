@@ -44,12 +44,21 @@ namespace lfs::io {
         Transforms
     };
 
+    // Centralize dataset enum
+    enum class CentralizeDataset {
+        None,
+        Auto,
+        ByPointCloud,
+        ByCameras
+    };
+
     // Public types that clients need
     struct LoadOptions {
         int resize_factor = -1;
         int max_width = 3840;
         std::string images_folder = "images";
         bool validate_only = false;
+        CentralizeDataset centralize = CentralizeDataset::Auto;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
     };

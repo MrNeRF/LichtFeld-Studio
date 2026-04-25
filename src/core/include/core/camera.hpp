@@ -110,6 +110,9 @@ namespace lfs::core {
         float FoVx() const noexcept { return _FoVx; }
         float FoVy() const noexcept { return _FoVy; }
 
+        // Translate the camera by trans in world space (cam_pos += trans, T updated accordingly)
+        void translate(const Tensor& trans);
+
         void precompute_undistortion(float blank_pixels = 0.0f);
         bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
         void prepare_undistortion(float blank_pixels = 0.0f);

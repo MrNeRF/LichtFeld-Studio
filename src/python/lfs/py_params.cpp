@@ -1388,7 +1388,11 @@ namespace lfs::python {
                         throw std::runtime_error("Cannot edit dataset params during training");
                     self.params().loading_params.use_fs_cache = v;
                 },
-                "Use filesystem cache for images");
+                "Use filesystem cache for images")
+            .def_prop_ro(
+                "centralize_dataset",
+                [](const PyDatasetConfig& self) { return self.params().centralize_dataset; },
+                "Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'");
 
         m.def(
             "dataset_params", []() { return PyDatasetConfig{}; },

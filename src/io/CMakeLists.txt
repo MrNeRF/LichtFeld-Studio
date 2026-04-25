@@ -236,6 +236,7 @@ target_link_libraries(lfs_io
         PUBLIC
         lfs_core            # Link to modular core library for SplatData, Camera, etc.
         PRIVATE
+        lfs_geometry
         TBB::tbb
         spdlog::spdlog
         nlohmann_json::nlohmann_json

@@ -452,6 +452,31 @@ namespace lfs::core {
         _undistort_prepared = true;
     }
 
+    void Camera::translate(const Tensor& trans) {
+        // Shift the camera's world-space position by trans.
+        // For the view transform: new T = T - R * trans
+        // (so that p_cam = R*p_world_new + T_new still holds after shifting world by trans)
+        auto R_cpu = _R.cpu().contiguous();
+        auto T_cpu = _T.cpu().contiguous();
+        auto t_cpu = trans.cpu().contiguous();
+
+        auto R_acc = R_cpu.accessor<float, 2>();
+        auto T_acc = T_cpu.accessor<float, 1>();
+        auto t_acc = t_cpu.accessor<float, 1>();
+
+        std::vector<float> T_new(3);
+        for (int i = 0; i < 3; ++i) {
+            float Rt_i = 0.f;
+            for (int j = 0; j < 3; ++j)
+                Rt_i += R_acc(i, j) * t_acc(j);
+            T_new[i] = T_acc(i) - Rt_i;
+        }
+
+        _T = Tensor::from_vector(T_new, {3}, Device::CPU);
+        _world_view_transform = world_to_view(_R, _T);
+        _cam_position = _cam_position + trans.to(Device::CUDA).contiguous();
+    }
+
     bool Camera::has_distortion() const noexcept {
         if (_radial_distortion.is_valid() && _radial_distortion.numel() > 0)
             return true;

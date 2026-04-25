@@ -6,6 +6,7 @@
 set(GEOMETRY_SOURCES
     euclidean_transform.cpp
     bounding_box.cpp
+    geometry_misc.cpp
 )
 
 add_library(lfs_geometry STATIC ${GEOMETRY_SOURCES})
@@ -32,4 +33,4 @@ message(STATUS "╔════════════════════�
 message(STATUS "║  geometry - LibTorch-free Geometry Module                 ║")
 message(STATUS "╚════════════════════════════════════════════════════════════════╝")
 message(STATUS "  • Namespace: lfs::geometry")
-message(STATUS "  • Contains: EuclideanTransform, BoundingBox")
+message(STATUS "  • Contains: EuclideanTransform, BoundingBox, geometry_misc")
