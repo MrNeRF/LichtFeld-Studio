@@ -2754,7 +2754,7 @@ namespace lfs::training {
                     output = std::move(rasterize_result->first);
                     fast_ctx.emplace(std::move(rasterize_result->second));
 
-                    if (fast_ctx->forward_ctx.n_visible_primitives == 0) {
+                    if (fast_ctx->forward_ctx.n_instances == 0) {
                         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                         arena.end_frame(fast_ctx->forward_ctx.frame_id);
                         nvtxRangePop();
@@ -3085,8 +3085,7 @@ namespace lfs::training {
                                      stats.prefetch_queue_size);
                         }
 
-                        LOG_INFO("[MEM] fastgs counts visible_primitives={}, instances={}, buckets={}, image={}x{}, tile_mode={}, num_tiles={}",
-                                 fast_ctx->forward_ctx.n_visible_primitives,
+                        LOG_INFO("[MEM] fastgs counts instances={}, buckets={}, image={}x{}, tile_mode={}, num_tiles={}",
                                  fast_ctx->forward_ctx.n_instances,
                                  fast_ctx->forward_ctx.n_buckets,
                                  output.width,

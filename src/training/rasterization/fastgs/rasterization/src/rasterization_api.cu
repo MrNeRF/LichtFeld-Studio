@@ -146,34 +146,32 @@ namespace fast_lfs::rasterization {
 
         try {
             // Call the actual forward implementation
-            auto [n_visible_primitives, n_instances, n_buckets,
-                  primitive_primitive_indices_selector,
-                  instance_primitive_indices_selector] = forward(per_primitive_buffers_func,
-                                                                 per_tile_buffers_func,
-                                                                 per_instance_buffers_func,
-                                                                 per_bucket_buffers_func,
-                                                                 reinterpret_cast<const float3*>(means_ptr),
-                                                                 reinterpret_cast<const float3*>(scales_raw_ptr),
-                                                                 reinterpret_cast<const float4*>(rotations_raw_ptr),
-                                                                 opacities_raw_ptr,
-                                                                 reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
-                                                                 reinterpret_cast<const float3*>(sh_coefficients_rest_ptr),
-                                                                 reinterpret_cast<const float4*>(w2c_ptr),
-                                                                 reinterpret_cast<const float3*>(cam_position_ptr),
-                                                                 image_ptr,
-                                                                 alpha_ptr,
-                                                                 n_primitives,
-                                                                 active_sh_bases,
-                                                                 total_bases_sh_rest,
-                                                                 width,
-                                                                 height,
-                                                                 focal_x,
-                                                                 focal_y,
-                                                                 center_x,
-                                                                 center_y,
-                                                                 near_plane,
-                                                                 far_plane,
-                                                                 mip_filter);
+            auto [n_instances, n_buckets, instance_primitive_indices_selector] = forward(per_primitive_buffers_func,
+                                                                                         per_tile_buffers_func,
+                                                                                         per_instance_buffers_func,
+                                                                                         per_bucket_buffers_func,
+                                                                                         reinterpret_cast<const float3*>(means_ptr),
+                                                                                         reinterpret_cast<const float3*>(scales_raw_ptr),
+                                                                                         reinterpret_cast<const float4*>(rotations_raw_ptr),
+                                                                                         opacities_raw_ptr,
+                                                                                         reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
+                                                                                         reinterpret_cast<const float3*>(sh_coefficients_rest_ptr),
+                                                                                         reinterpret_cast<const float4*>(w2c_ptr),
+                                                                                         reinterpret_cast<const float3*>(cam_position_ptr),
+                                                                                         image_ptr,
+                                                                                         alpha_ptr,
+                                                                                         n_primitives,
+                                                                                         active_sh_bases,
+                                                                                         total_bases_sh_rest,
+                                                                                         width,
+                                                                                         height,
+                                                                                         focal_x,
+                                                                                         focal_y,
+                                                                                         center_x,
+                                                                                         center_y,
+                                                                                         near_plane,
+                                                                                         far_plane,
+                                                                                         mip_filter);
 
             // Verify allocations happened
             if (n_instances > 0 && !per_instance_buffers_blob) {
@@ -203,10 +201,8 @@ namespace fast_lfs::rasterization {
             ctx.per_tile_buffers_size = per_tile_size;
             ctx.per_instance_buffers_size = per_instance_size;
             ctx.per_bucket_buffers_size = per_bucket_size;
-            ctx.n_visible_primitives = n_visible_primitives;
             ctx.n_instances = n_instances;
             ctx.n_buckets = n_buckets;
-            ctx.primitive_primitive_indices_selector = primitive_primitive_indices_selector;
             ctx.instance_primitive_indices_selector = instance_primitive_indices_selector;
             ctx.frame_id = frame_id;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
@@ -361,10 +357,8 @@ namespace fast_lfs::rasterization {
                 grad_w2c_ptr ? reinterpret_cast<float4*>(grad_w2c_ptr) : nullptr,
                 densification_info_ptr,
                 n_primitives,
-                forward_ctx.n_visible_primitives,
                 forward_ctx.n_instances,
                 forward_ctx.n_buckets,
-                forward_ctx.primitive_primitive_indices_selector,
                 forward_ctx.instance_primitive_indices_selector,
                 active_sh_bases,
                 total_bases_sh_rest,

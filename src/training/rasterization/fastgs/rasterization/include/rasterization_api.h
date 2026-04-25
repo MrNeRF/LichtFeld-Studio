@@ -34,10 +34,8 @@ namespace fast_lfs::rasterization {
         size_t per_tile_buffers_size;
         size_t per_instance_buffers_size;
         size_t per_bucket_buffers_size;
-        int n_visible_primitives;
         int n_instances;
         int n_buckets;
-        int primitive_primitive_indices_selector;
         int instance_primitive_indices_selector;
         uint64_t frame_id;
         // Add helper buffer pointers to avoid re-allocation in backward

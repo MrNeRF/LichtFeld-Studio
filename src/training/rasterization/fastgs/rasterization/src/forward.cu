@@ -23,8 +23,7 @@ namespace {
     }
 } // namespace
 
-// sorting is done separately for depth and tile as proposed in https://github.com/m-schuetz/Splatshop
-std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
+std::tuple<int, int, int> fast_lfs::rasterization::forward(
     std::function<char*(size_t)> per_primitive_buffers_func,
     std::function<char*(size_t)> per_tile_buffers_func,
     std::function<char*(size_t)> per_instance_buffers_func,
@@ -81,9 +80,6 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(n_primitives));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
 
-    cudaMemset(per_primitive_buffers.n_visible_primitives, 0, sizeof(uint));
-    cudaMemset(per_primitive_buffers.n_instances, 0, sizeof(uint));
-
     // Preprocess primitives
     kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess>>>(
         means,
@@ -94,15 +90,12 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         sh_coefficients_rest,
         w2c,
         cam_position,
-        per_primitive_buffers.depth_keys.Current(),
-        per_primitive_buffers.primitive_indices.Current(),
+        per_primitive_buffers.depth_keys,
         per_primitive_buffers.n_touched_tiles,
         per_primitive_buffers.screen_bounds,
         per_primitive_buffers.mean2d,
         per_primitive_buffers.conic_opacity,
         per_primitive_buffers.color,
-        per_primitive_buffers.n_visible_primitives,
-        per_primitive_buffers.n_instances,
         n_primitives,
         grid.x,
         grid.y,
@@ -119,70 +112,45 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
-    uint32_t n_visible_primitives_u32;
-    cudaMemcpy(&n_visible_primitives_u32, per_primitive_buffers.n_visible_primitives, sizeof(n_visible_primitives_u32), cudaMemcpyDeviceToHost);
-    CHECK_CUDA(config::debug, "cudaMemcpy(n_visible_primitives)")
-    const int n_visible_primitives = checked_to_int(n_visible_primitives_u32, "n_visible_primitives exceeds int range");
+    cub::DeviceScan::InclusiveSum(
+        per_primitive_buffers.cub_workspace,
+        per_primitive_buffers.cub_workspace_size,
+        per_primitive_buffers.n_touched_tiles,
+        per_primitive_buffers.offset,
+        n_primitives);
+    CHECK_CUDA(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)")
 
     uint32_t n_instances_u32;
-    cudaMemcpy(&n_instances_u32, per_primitive_buffers.n_instances, sizeof(n_instances_u32), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&n_instances_u32, per_primitive_buffers.offset + n_primitives - 1, sizeof(n_instances_u32), cudaMemcpyDeviceToHost);
     CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)")
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
     const int alloc_instances = std::max(n_instances, 1);
-    const int end_bit = extract_end_bit(static_cast<uint>(n_tiles - 1));
-    char* per_instance_buffers_blob = per_instance_buffers_func(required<PerInstanceBuffers>(alloc_instances, end_bit));
-    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, alloc_instances, end_bit);
+    const int key_end_bit = 32 + extract_end_bit(static_cast<uint>(n_tiles - 1));
+    char* per_instance_buffers_blob = per_instance_buffers_func(required<PerInstanceBuffers>(alloc_instances, key_end_bit));
+    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, alloc_instances, key_end_bit);
 
-    if (n_visible_primitives > 0) {
-        cub::DeviceRadixSort::SortPairs(
-            per_primitive_buffers.cub_workspace,
-            per_primitive_buffers.cub_workspace_size,
-            per_primitive_buffers.depth_keys,
-            per_primitive_buffers.primitive_indices,
-            n_visible_primitives);
-        CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Depth)")
-
-        // Apply depth ordering
-        kernels::forward::apply_depth_ordering_cu<<<div_round_up(n_visible_primitives, config::block_size_apply_depth_ordering), config::block_size_apply_depth_ordering>>>(
-            per_primitive_buffers.primitive_indices.Current(),
+    if (n_instances > 0) {
+        kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances>>>(
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
-            n_visible_primitives);
-        CHECK_CUDA(config::debug, "apply_depth_ordering")
-
-        // Compute exclusive sum for offsets
-        cub::DeviceScan::ExclusiveSum(
-            per_primitive_buffers.cub_workspace,
-            per_primitive_buffers.cub_workspace_size,
-            per_primitive_buffers.offset,
-            per_primitive_buffers.offset,
-            n_visible_primitives);
-        CHECK_CUDA(config::debug, "cub::DeviceScan::ExclusiveSum (Primitive Offsets)")
-
-        // Create instances
-        kernels::forward::create_instances_cu<<<div_round_up(n_visible_primitives, config::block_size_create_instances), config::block_size_create_instances>>>(
-            per_primitive_buffers.primitive_indices.Current(),
-            per_primitive_buffers.offset,
+            per_primitive_buffers.depth_keys,
             per_primitive_buffers.screen_bounds,
             per_primitive_buffers.mean2d,
             per_primitive_buffers.conic_opacity,
             per_instance_buffers.keys.Current(),
             per_instance_buffers.primitive_indices.Current(),
             grid.x,
-            n_visible_primitives);
+            n_primitives);
         CHECK_CUDA(config::debug, "create_instances")
 
-        // Sort by tile
-        if (n_instances > 0) {
-            cub::DeviceRadixSort::SortPairs(
-                per_instance_buffers.cub_workspace,
-                per_instance_buffers.cub_workspace_size,
-                per_instance_buffers.keys,
-                per_instance_buffers.primitive_indices,
-                n_instances, 0, end_bit);
-            CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile)")
-        }
+        cub::DeviceRadixSort::SortPairs(
+            per_instance_buffers.cub_workspace,
+            per_instance_buffers.cub_workspace_size,
+            per_instance_buffers.keys,
+            per_instance_buffers.primitive_indices,
+            n_instances, 0, key_end_bit);
+        CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)")
     }
 
     // Wait for memset to complete (GPU-side wait, doesn't block CPU)
@@ -244,5 +212,5 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         grid.x);
     CHECK_CUDA(config::debug, "blend")
 
-    return {n_visible_primitives, n_instances, n_buckets, per_primitive_buffers.primitive_indices.selector, per_instance_buffers.primitive_indices.selector};
+    return {n_instances, n_buckets, per_instance_buffers.primitive_indices.selector};
 }

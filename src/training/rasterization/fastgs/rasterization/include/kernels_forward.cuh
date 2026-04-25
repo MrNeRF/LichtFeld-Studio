@@ -15,6 +15,10 @@ namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::forward {
 
+    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key) {
+        return (static_cast<InstanceKey>(tile_key) << 32) | static_cast<InstanceKey>(depth_key);
+    }
+
     __global__ void preprocess_cu(
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
@@ -25,14 +29,11 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
-        uint* __restrict__ primitive_indices,
         uint* __restrict__ primitive_n_touched_tiles,
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
         float4* __restrict__ primitive_conic_opacity,
         float3* __restrict__ primitive_color,
-        uint* __restrict__ n_visible_primitives,
-        uint* __restrict__ n_instances,
         const uint n_primitives,
         const uint grid_width,
         const uint grid_height,
@@ -203,66 +204,53 @@ namespace fast_lfs::rasterization::kernels::forward {
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
             primitive_idx, active_sh_bases, total_bases_sh_rest);
-
-        const uint offset = atomicAdd(n_visible_primitives, 1);
-        const uint depth_key = __float_as_uint(depth);
-        primitive_depth_keys[offset] = depth_key;
-        primitive_indices[offset] = primitive_idx;
-        atomicAdd(n_instances, n_touched_tiles);
-    }
-
-    __global__ void apply_depth_ordering_cu(
-        const uint* primitive_indices_sorted,
-        const uint* primitive_n_touched_tiles,
-        uint* primitive_offset,
-        const uint n_visible_primitives) {
-        auto idx = cg::this_grid().thread_rank();
-        if (idx >= n_visible_primitives)
-            return;
-        const uint primitive_idx = primitive_indices_sorted[idx];
-        primitive_offset[idx] = primitive_n_touched_tiles[primitive_idx];
+        primitive_depth_keys[primitive_idx] = __float_as_uint(depth);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
-        const uint* __restrict__ primitive_indices_sorted,
+        const uint* __restrict__ primitive_n_touched_tiles,
         const uint* __restrict__ primitive_offsets,
+        const uint* __restrict__ primitive_depth_keys,
         const ushort4* __restrict__ primitive_screen_bounds,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
-        ushort* __restrict__ instance_keys,
+        InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
         const uint grid_width,
-        const uint n_visible_primitives) {
+        const uint n_primitives) {
         auto block = cg::this_thread_block();
         auto warp = cg::tiled_partition<32u>(block);
         uint idx = cg::this_grid().thread_rank();
 
         bool active = true;
-        if (idx >= n_visible_primitives) {
+        if (idx >= n_primitives) {
             active = false;
-            idx = n_visible_primitives - 1;
+            idx = n_primitives - 1;
         }
+
+        const uint primitive_idx = idx;
+        const uint n_touched_tiles = active ? primitive_n_touched_tiles[primitive_idx] : 0;
+        active = active && n_touched_tiles > 0;
 
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
-        const uint primitive_idx = primitive_indices_sorted[idx];
-
-        const ushort4 screen_bounds = primitive_screen_bounds[primitive_idx];
+        const ushort4 screen_bounds = active ? primitive_screen_bounds[primitive_idx] : make_ushort4(0, 0, 0, 0);
         const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
         const uint tile_count = static_cast<uint>(screen_bounds.w - screen_bounds.z) * screen_bounds_width;
+        const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
 
         __shared__ ushort4 collected_screen_bounds[config::block_size_create_instances];
         __shared__ float2 collected_mean2d_shifted[config::block_size_create_instances];
         __shared__ float4 collected_conic_power_threshold[config::block_size_create_instances];
         collected_screen_bounds[block.thread_rank()] = screen_bounds;
-        collected_mean2d_shifted[block.thread_rank()] = primitive_mean2d[primitive_idx] - 0.5f;
-        const float4 conic_opacity_loaded = primitive_conic_opacity[primitive_idx];
+        collected_mean2d_shifted[block.thread_rank()] = active ? primitive_mean2d[primitive_idx] - 0.5f : make_float2(0.0f, 0.0f);
+        const float4 conic_opacity_loaded = active ? primitive_conic_opacity[primitive_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
         const float power_threshold_precomputed = logf(conic_opacity_loaded.w * config::min_alpha_threshold_rcp);
         collected_conic_power_threshold[block.thread_rank()] = make_float4(make_float3(conic_opacity_loaded), power_threshold_precomputed);
 
-        uint current_write_offset = primitive_offsets[idx];
+        uint current_write_offset = idx == 0 ? 0 : primitive_offsets[idx - 1];
 
         if (active) {
             const float2 mean2d_shifted = collected_mean2d_shifted[block.thread_rank()];
@@ -274,8 +262,8 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
                 const uint tile_x = screen_bounds.x + (instance_idx % screen_bounds_width);
                 if (will_primitive_contribute(mean2d_shifted, conic, tile_x, tile_y, power_threshold)) {
-                    const ushort tile_key = static_cast<ushort>(tile_y * grid_width + tile_x);
-                    instance_keys[current_write_offset] = tile_key;
+                    const uint tile_key = tile_y * grid_width + tile_x;
+                    instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key);
                     instance_primitive_indices[current_write_offset] = primitive_idx;
                     current_write_offset++;
                 }
@@ -295,6 +283,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             int current_lane = __fns(remaining_threads, 0, n + 1);
             uint primitive_idx_coop = __shfl_sync(0xffffffffu, primitive_idx, current_lane);
             uint current_write_offset_coop = __shfl_sync(0xffffffffu, current_write_offset, current_lane);
+            uint depth_key_coop = __shfl_sync(0xffffffffu, depth_key, current_lane);
 
             const ushort4 screen_bounds_coop = collected_screen_bounds[warp.meta_group_rank() * 32 + current_lane];
             const uint screen_bounds_width_coop = static_cast<uint>(screen_bounds_coop.y - screen_bounds_coop.x);
@@ -318,8 +307,8 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const uint write_offset_current = __popc(write_ballot & lane_mask_allprev_excl);
                 const uint write_offset = current_write_offset_coop + write_offset_current;
                 if (write) {
-                    const ushort tile_key = static_cast<ushort>(tile_y * grid_width + tile_x);
-                    instance_keys[write_offset] = tile_key;
+                    const uint tile_key = tile_y * grid_width + tile_x;
+                    instance_keys[write_offset] = make_instance_key(tile_key, depth_key_coop);
                     instance_primitive_indices[write_offset] = primitive_idx_coop;
                 }
                 current_write_offset_coop += n_writes;
@@ -330,17 +319,17 @@ namespace fast_lfs::rasterization::kernels::forward {
     }
 
     __global__ void extract_instance_ranges_cu(
-        const ushort* instance_keys,
+        const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
         const uint n_instances) {
         auto instance_idx = cg::this_grid().thread_rank();
         if (instance_idx >= n_instances)
             return;
-        const ushort instance_tile_idx = instance_keys[instance_idx];
+        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> 32);
         if (instance_idx == 0)
             tile_instance_ranges[instance_tile_idx].x = 0;
         else {
-            const ushort previous_instance_tile_idx = instance_keys[instance_idx - 1];
+            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> 32);
             if (instance_tile_idx != previous_instance_tile_idx) {
                 tile_instance_ranges[previous_instance_tile_idx].y = instance_idx;
                 tile_instance_ranges[instance_tile_idx].x = instance_idx;

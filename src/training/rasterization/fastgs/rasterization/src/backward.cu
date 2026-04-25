@@ -35,10 +35,8 @@ void fast_lfs::rasterization::backward(
     float4* grad_w2c,
     float* densification_info,
     const int n_primitives,
-    const int n_visible_primitives,
     const int n_instances,
     const int n_buckets,
-    const int primitive_primitive_indices_selector,
     const int instance_primitive_indices_selector,
     const int active_sh_bases,
     const int total_bases_sh_rest,
@@ -55,15 +53,12 @@ void fast_lfs::rasterization::backward(
     const int n_tiles = grid.x * grid.y;
 
     // These blobs are from the arena and are guaranteed to be valid
-    const int end_bit = extract_end_bit(static_cast<uint>(n_tiles - 1));
+    const int key_end_bit = 32 + extract_end_bit(static_cast<uint>(n_tiles - 1));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
-    // Restore selectors from forward pass
-    per_primitive_buffers.primitive_indices.selector = primitive_primitive_indices_selector;
-
-    if (n_visible_primitives != 0 && n_instances != 0 && n_buckets != 0) {
-        PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, end_bit);
+    if (n_instances != 0 && n_buckets != 0) {
+        PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, key_end_bit);
         PerBucketBuffers per_bucket_buffers = PerBucketBuffers::from_blob(per_bucket_buffers_blob, n_buckets);
         per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
 

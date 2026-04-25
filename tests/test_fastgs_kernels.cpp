@@ -118,11 +118,10 @@ protected:
 TEST_F(FastGSKernelTest, Forward_Preprocess) {
     auto r = forward();
     ASSERT_TRUE(r.has_value()) << r.error();
-    EXPECT_GT(r->second.forward_ctx.n_visible_primitives, 0);
-    EXPECT_LE(r->second.forward_ctx.n_visible_primitives, static_cast<int>(n_));
+    EXPECT_GT(r->second.forward_ctx.n_instances, 0);
 }
 
-TEST_F(FastGSKernelTest, Forward_DepthOrdering) {
+TEST_F(FastGSKernelTest, Forward_TileDepthOrdering) {
     auto r = forward();
     ASSERT_TRUE(r.has_value());
     EXPECT_TRUE(r->first.image.is_valid());
@@ -721,17 +720,13 @@ TEST_F(FastGSMultiBucketGradientTest, VerifyBucketCount) {
     auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(r.has_value());
 
-    // With 128 gaussians concentrated in single tile, we should have:
-    // - ~128 visible (all in front of camera)
-    // - ~128 instances (each gaussian in 1 tile)
-    // - 2 buckets (128/64 = 2 with checkpoint_interval=64)
-    printf("  n_visible=%d, n_instances=%d, n_buckets=%d\n",
-           r->second.forward_ctx.n_visible_primitives,
+    // With 128 gaussians concentrated in a single tile, we should have
+    // ~128 instances and 2 buckets (128/64 = 2 with checkpoint_interval=64).
+    printf("  n_instances=%d, n_buckets=%d\n",
            r->second.forward_ctx.n_instances,
            r->second.forward_ctx.n_buckets);
 
-    // Expect at least 100 visible (most should be visible since they're in front of camera)
-    EXPECT_GT(r->second.forward_ctx.n_visible_primitives, 100);
+    EXPECT_GT(r->second.forward_ctx.n_instances, 100);
     // Expect at least 2 buckets (which means sub_bucket > 0 will be triggered)
     // With 128 instances in 1-2 tiles and checkpoint_interval=64, we need >= 2 buckets
     EXPECT_GE(r->second.forward_ctx.n_buckets, 2) << "Need at least 2 buckets to test sub-bucket logic";
