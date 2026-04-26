@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/data_loading_service.hpp"
+#include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
@@ -296,14 +297,21 @@ namespace lfs::vis {
         const std::filesystem::path& output_path) {
         LOG_TIMER("LoadCheckpointForTraining");
         try {
-            // Override dataset/output paths if provided by user
+            // Load checkpoint params first to preserve init_path and other settings
+            auto checkpoint_params_result = lfs::core::load_checkpoint_params(checkpoint_path);
             lfs::core::param::TrainingParameters params;
+            if (checkpoint_params_result) {
+                params = *checkpoint_params_result;
+            }
+            // Override dataset/output paths if provided by user
             if (!dataset_path.empty()) {
                 params.dataset.data_path = dataset_path;
             }
             if (!output_path.empty()) {
                 params.dataset.output_path = output_path;
             }
+            // Update our stored params so getParameters() returns checkpoint params
+            params_ = params;
             scene_manager_->loadCheckpointForTraining(checkpoint_path, params);
             return {};
         } catch (const std::exception& e) {

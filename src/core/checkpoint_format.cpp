@@ -90,6 +90,9 @@ namespace lfs::core {
                     if (params_json.contains("dataset")) {
                         params.dataset = param::DatasetConfig::from_json(params_json["dataset"]);
                     }
+                    if (params_json.contains("init_path")) {
+                        params.init_path = params_json["init_path"].get<std::string>();
+                    }
                 } else {
                     params.optimization = param::OptimizationParameters::from_json(params_json);
                 }
