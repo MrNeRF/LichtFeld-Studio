@@ -17,6 +17,7 @@
     "edit.input_settings": "Input Settings...",
     "edit.preferences": "Preferences...",
     "tools": "Tools",
+    "tools.asset_manager": "Asset Manager",
     "tools.python_console": "Python Console",
     "tools.plugin_marketplace": "Plugin Marketplace",
     "view": "View",

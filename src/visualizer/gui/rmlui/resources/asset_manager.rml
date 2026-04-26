@@ -1,0 +1,238 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="asset_manager.rcss"/>
+</head>
+
+<body template="floating-window" data-model="asset_manager">
+  <div id="asset-popup">
+
+    <!-- Toolbar: Search, Sort, View Toggle -->
+    <div id="asset-popup-toolbar">
+      <div class="asset-search-box">
+        <span class="asset-search-icon">Search</span>
+        <input type="text" placeholder="Search assets..." data-value="search_query" data-event-change="on_search" />
+      </div>
+
+      <button class="asset-sort-button">Sort by: Recent</button>
+
+      <div class="asset-view-toggle">
+        <button class="asset-view-button" data-class-is-active="is_gallery_view" data-event-click="set_view_mode('gallery')">Gallery</button>
+        <button class="asset-view-button" data-class-is-active="is_list_view" data-event-click="set_view_mode('list')">List</button>
+      </div>
+    </div>
+
+    <!-- Summary: Asset counts -->
+    <div id="asset-popup-summary">
+      <span data-value="asset_count">0</span> assets
+      <span data-value="collection_count">0</span> collections
+      <span data-value="selected_count">0</span> selected
+    </div>
+
+    <!-- Main Content: Sidebar + Gallery + Info Panel -->
+    <div id="asset-popup-content">
+
+      <!-- Left Sidebar: Filters, Tags, Collections -->
+      <div id="asset-sidebar">
+
+        <!-- Filters Section -->
+        <div class="asset-sidebar-section">
+          <div class="asset-sidebar-title">FILTERS</div>
+          <div data-for="filter : filters">
+            <div class="asset-filter-row" data-class-is-active="filter.id == active_filter" data-event-click="set_filter(filter.id)">
+              <span class="asset-row-label" data-value="filter.label"></span>
+              <span class="asset-row-count" data-value="filter.count"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tags Section -->
+        <div class="asset-sidebar-section">
+          <div class="asset-sidebar-title">TAGS</div>
+          <div data-for="tag : tags">
+            <div class="asset-filter-row" data-event-click="set_filter(tag.id)">
+              <span class="asset-row-label" data-value="tag.label"></span>
+              <span class="asset-row-count" data-value="tag.count"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Collections Section -->
+        <div class="asset-sidebar-section">
+          <div class="asset-sidebar-title">COLLECTIONS</div>
+          <div data-for="collection : collections">
+            <div class="asset-filter-row" data-event-click="set_filter(collection.id)">
+              <span class="asset-row-label" data-value="collection.label"></span>
+              <span class="asset-row-count" data-value="collection.count"></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Middle: Asset Gallery -->
+      <div id="asset-gallery">
+        <div class="asset-gallery-header">
+          <span class="asset-gallery-title" data-value="view_mode">Gallery</span>
+          <span class="asset-gallery-subtitle">Visual-first browsing for splats, videos, and exports</span>
+        </div>
+
+        <div class="asset-gallery-scroll">
+          <div class="asset-card-grid">
+
+            <!-- Dynamic Asset Cards -->
+            <div data-for="asset : assets">
+              <div class="asset-card" data-class-is-selected="asset.is_selected" data-event-click="toggle_asset_selection(asset.id)">
+                <div class="asset-card-thumb" data-class-attr="asset.thumb_class">
+                  <div class="asset-card-overlay">
+                    <div class="asset-checkbox" data-class-is-checked="asset.is_selected">v</div>
+                    <span class="asset-pill asset-pill-ply" data-if="asset.type == 'ply'">PLY</span>
+                    <span class="asset-pill asset-pill-mp4" data-if="asset.type == 'mp4'">MP4</span>
+                    <span class="asset-pill asset-pill-rad" data-if="asset.type == 'rad'">RAD</span>
+                  </div>
+                  <span class="asset-thumb-label" data-value="asset.thumb_label"></span>
+                  <span class="asset-video-duration" data-if="asset.duration" data-value="asset.duration"></span>
+                </div>
+                <div class="asset-card-body">
+                  <div class="asset-card-title-row">
+                    <span class="asset-card-title" data-value="asset.name"></span>
+                    <span class="asset-favorite" data-if="asset.is_favorite">*</span>
+                  </div>
+                  <div class="asset-card-meta">
+                    <span data-if="asset.points">{{asset.points}} points</span>
+                    <span data-if="asset.resolution">{{asset.resolution}}</span>
+                    <span>  {{asset.size}}</span>
+                  </div>
+                  <div class="asset-card-tags">
+                    <span data-for="tag : asset.tags">
+                      <span class="asset-card-tag" data-value="tag"></span>
+                    </span>
+                  </div>
+                  <div class="asset-card-actions">
+                    <button class="asset-card-button">Preview</button>
+                    <button class="asset-card-button">Load</button>
+                    <button class="asset-card-button">...</button>
+                    <button class="asset-card-button">i</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Info Panel -->
+      <div id="asset-info-panel">
+
+        <!-- Info Tabs -->
+        <div class="asset-info-tabs">
+          <div class="asset-info-tab" data-class-is-active="active_tab == 'info'" data-event-click="set_tab('info')">Info</div>
+          <div class="asset-info-tab" data-class-is-active="active_tab == 'parameters'" data-event-click="set_tab('parameters')">Parameters</div>
+          <div class="asset-info-tab" data-class-is-active="active_tab == 'history'" data-event-click="set_tab('history')">History</div>
+        </div>
+
+        <!-- Info Content -->
+        <div class="asset-info-content">
+
+          <!-- Asset Header -->
+          <div class="asset-info-header">
+            <span class="asset-info-name">dante_statue_01</span>
+            <span class="asset-info-favorite">*</span>
+            <span class="asset-pill asset-pill-ply">PLY</span>
+          </div>
+
+          <!-- Training Details Section -->
+          <div class="asset-info-section">
+            <div class="asset-info-section-title">Training Details</div>
+            <div class="parameter-row">
+              <span class="parameter-label">Iterations</span>
+              <span class="parameter-value">30,000</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">SH Degree</span>
+              <span class="parameter-value">3</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Source Images</span>
+              <span class="parameter-value">412</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Resolution Scale</span>
+              <span class="parameter-value">1.00</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Optimizer</span>
+              <span class="parameter-value">Adam</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Densify Interval</span>
+              <span class="parameter-value">100</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Opacity Reset</span>
+              <span class="parameter-value">3,000</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Learning Rate</span>
+              <span class="parameter-value">0.00016</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Background</span>
+              <span class="parameter-value">Black</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Train Time</span>
+              <span class="parameter-value">02:41:17</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Created</span>
+              <span class="parameter-value">May 10, 2024, 14:22</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">Modified</span>
+              <span class="parameter-value">May 10, 2024, 16:08</span>
+            </div>
+            <div class="parameter-row">
+              <span class="parameter-label">File Size</span>
+              <span class="parameter-value">182 MB</span>
+            </div>
+          </div>
+
+          <!-- Preview Section -->
+          <div class="asset-info-section">
+            <div class="asset-info-section-title">Preview</div>
+            <div class="asset-preview-thumb asset-thumb-statue">
+              <span class="asset-thumb-label">Statue</span>
+            </div>
+            <button class="asset-open-viewer-btn">Open in Viewer</button>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer: Batch Actions -->
+    <div id="asset-popup-footer">
+      <div class="asset-batch-summary">
+        <span class="asset-batch-title" data-value="selected_count_text">0 selected</span>
+        <span class="asset-batch-subtitle" data-value="selected_total_text">Total: 0 MB</span>
+      </div>
+
+      <div class="asset-batch-actions">
+        <button class="asset-batch-button">
+          <span class="asset-btn-icon">v</span> Load Selected
+        </button>
+        <button class="asset-batch-button">
+          <span class="asset-btn-icon">E</span> Export Selected
+        </button>
+        <button class="asset-batch-button is-danger">
+          <span class="asset-btn-icon">T</span> Delete Selected
+        </button>
+      </div>
+    </div>
+
+  </div>
+</body>
+</rml>

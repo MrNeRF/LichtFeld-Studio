@@ -1,0 +1,278 @@
+/* Asset Manager theme-dependent styles */
+
+/* ── Window ────────────────────────────────────────────── */
+
+#asset-popup {
+    background-color: @{surface};
+    color: @{text};
+    border-color: @{border};
+}
+
+/* ── Toolbar ─────────────────────────────────────────────── */
+
+#asset-popup-toolbar {
+    background-color: @{blend(surface,background,0.5)};
+    border-bottom-color: @{border};
+}
+
+.asset-search-box {
+    background-color: @{surface_bright};
+    border-color: @{border};
+}
+
+.asset-search-icon {
+    color: @{text_dim};
+}
+
+.asset-search-box input[type="text"] {
+    color: @{text};
+}
+
+.asset-sort-button {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
+}
+
+.asset-view-button {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text_dim};
+}
+
+.asset-view-button.is-active {
+    background-color: @{lighten(surface_bright,0.06)};
+    color: @{text};
+    border-color: @{primary};
+}
+
+/* ── Summary Bar ─────────────────────────────────────────── */
+
+#asset-popup-summary {
+    background-color: @{surface};
+    border-bottom-color: @{border};
+    color: @{text_dim};
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+
+#asset-sidebar {
+    background-color: @{blend(surface,background,0.35)};
+    border-right-color: @{border};
+}
+
+.asset-sidebar-title {
+    color: @{text_dim};
+}
+
+.asset-filter-row:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+.asset-filter-row.is-active {
+    background-color: @{alpha(primary,0.20)};
+}
+
+.asset-filter-row.is-active .asset-row-label {
+    color: @{primary};
+}
+
+.asset-row-label {
+    color: @{text};
+}
+
+.asset-row-count {
+    color: @{text_dim};
+}
+
+/* ── Gallery ─────────────────────────────────────────────── */
+
+#asset-gallery {
+    background-color: @{surface};
+}
+
+.asset-gallery-header {
+    border-bottom-color: @{border};
+}
+
+.asset-gallery-title {
+    color: @{text};
+}
+
+.asset-gallery-subtitle {
+    color: @{text_dim};
+}
+
+/* ── Asset Cards ─────────────────────────────────────────── */
+
+.asset-card {
+    background-color: @{surface_bright};
+    border-color: @{border};
+}
+
+.asset-card:hover {
+    border-color: @{primary};
+}
+
+.asset-card.is-selected {
+    border-color: @{primary};
+}
+
+.asset-card-thumb {
+    border-bottom-color: @{border};
+}
+
+.asset-checkbox {
+    background-color: @{alpha(background,0.7)};
+    border-color: @{primary};
+    color: @{primary};
+}
+
+.asset-checkbox.is-checked {
+    background-color: @{primary};
+    color: @{background};
+}
+
+.asset-pill-ply {
+    background-color: @{alpha(success,0.25)};
+    color: @{success};
+}
+
+.asset-pill-mp4 {
+    background-color: @{alpha(warning,0.25)};
+    color: @{warning};
+}
+
+.asset-pill-rad {
+    background-color: @{alpha(primary_dim,0.35)};
+    color: @{primary_dim};
+}
+
+.asset-video-duration {
+    color: @{text};
+    background-color: @{alpha(background,0.7)};
+}
+
+.asset-card-title {
+    color: @{text};
+}
+
+.asset-favorite {
+    color: @{warning};
+}
+
+.asset-card-meta {
+    color: @{text_dim};
+}
+
+.asset-card-tag {
+    color: @{text_dim};
+    background-color: @{lighten(surface_bright,0.06)};
+}
+
+.asset-card-button {
+    color: @{text};
+    background-color: @{lighten(surface_bright,0.06)};
+    border-color: @{border};
+}
+
+.asset-card-button:hover {
+    background-color: @{lighten(surface_bright,0.12)};
+    border-color: @{primary};
+}
+
+/* ── Info Panel ──────────────────────────────────────────── */
+
+#asset-info-panel {
+    background-color: @{blend(surface,background,0.35)};
+    border-left-color: @{border};
+}
+
+.asset-info-tabs {
+    border-bottom-color: @{border};
+}
+
+.asset-info-tab {
+    color: @{text_dim};
+    border-bottom-color: transparent;
+}
+
+.asset-info-tab:hover {
+    color: @{text};
+}
+
+.asset-info-tab.is-active {
+    color: @{primary};
+    border-bottom-color: @{primary};
+}
+
+.asset-info-name {
+    color: @{text};
+}
+
+.asset-info-favorite {
+    color: @{warning};
+}
+
+.asset-info-section-title {
+    color: @{text_dim};
+}
+
+.parameter-row {
+    border-bottom-color: @{border};
+}
+
+.parameter-label {
+    color: @{text_dim};
+}
+
+.parameter-value {
+    color: @{text};
+}
+
+.asset-open-viewer-btn {
+    color: @{text};
+    background-color: @{lighten(surface_bright,0.06)};
+    border-color: @{border};
+}
+
+.asset-open-viewer-btn:hover {
+    background-color: @{lighten(surface_bright,0.12)};
+    border-color: @{primary};
+}
+
+/* ── Footer / Batch Actions ─────────────────────────────── */
+
+#asset-popup-footer {
+    background-color: @{blend(surface,background,0.5)};
+    border-top-color: @{border};
+}
+
+.asset-batch-title {
+    color: @{text};
+}
+
+.asset-batch-subtitle {
+    color: @{text_dim};
+}
+
+.asset-batch-button {
+    color: @{text};
+    background-color: @{lighten(surface_bright,0.06)};
+    border-color: @{border};
+}
+
+.asset-batch-button:hover {
+    background-color: @{lighten(surface_bright,0.12)};
+    border-color: @{primary};
+}
+
+.asset-batch-button.is-danger {
+    color: @{error};
+    border-color: @{alpha(error,0.5)};
+}
+
+.asset-batch-button.is-danger:hover {
+    background-color: @{alpha(error,0.15)};
+    border-color: @{error};
+}
