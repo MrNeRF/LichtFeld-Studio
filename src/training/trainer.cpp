@@ -1724,6 +1724,7 @@ namespace lfs::training {
             if (max_cap < splat.size()) {
                 LOG_WARN("Max cap is less than to {} initial splats {}. Choosing randomly {} splats", max_cap, splat.size(), max_cap);
                 lfs::core::random_choose(splat, max_cap);
+                syncTrainingSceneTopology(scene_, splat);
             }
 
             // Re-initialize strategy with new parameters
