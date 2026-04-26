@@ -10,11 +10,10 @@
 
 namespace fast_lfs::rasterization {
 
-    std::tuple<int, int, int> forward(
+    std::tuple<int, int> forward(
         std::function<char*(size_t)> per_primitive_buffers_func,
         std::function<char*(size_t)> per_tile_buffers_func,
         std::function<char*(size_t)> per_instance_buffers_func,
-        std::function<char*(size_t)> per_bucket_buffers_func,
         const float3* means,
         const float3* scales_raw,
         const float4* rotations_raw,

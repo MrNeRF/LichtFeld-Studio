@@ -321,31 +321,15 @@ namespace fast_lfs::rasterization::kernels::forward {
             tile_instance_ranges[instance_tile_idx].y = n_instances;
     }
 
-    __global__ void extract_bucket_counts(
-        uint2* tile_instance_ranges,
-        uint* tile_n_buckets,
-        const uint n_tiles) {
-        auto tile_idx = cg::this_grid().thread_rank();
-        if (tile_idx >= n_tiles)
-            return;
-        const uint2 instance_range = tile_instance_ranges[tile_idx];
-        const uint n_buckets = div_round_up(instance_range.y - instance_range.x, static_cast<uint>(config::checkpoint_interval));
-        tile_n_buckets[tile_idx] = n_buckets;
-    }
-
     __global__ void __launch_bounds__(config::block_size_blend) blend_cu(
         const uint2* __restrict__ tile_instance_ranges,
-        const uint* __restrict__ tile_bucket_offsets,
         const uint* __restrict__ instance_primitive_indices,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const float3* __restrict__ primitive_color,
         float* __restrict__ image,
         float* __restrict__ alpha_map,
-        uint* __restrict__ tile_max_n_contributions,
         uint* __restrict__ tile_n_contributions,
-        uint* __restrict__ bucket_tile_index,
-        uint* __restrict__ bucket_checkpoint_uint8,
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -360,13 +344,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint tile_idx = group_index.y * grid_width + group_index.x;
         const uint2 tile_range = tile_instance_ranges[tile_idx];
         const int n_points_total = tile_range.y - tile_range.x;
-
-        uint bucket_offset = tile_idx == 0 ? 0 : tile_bucket_offsets[tile_idx - 1];
-        const int n_buckets = div_round_up(n_points_total, config::checkpoint_interval); // re-computing is faster than reading from tile_n_buckets
-        for (int n_buckets_remaining = n_buckets, current_bucket_idx = thread_rank; n_buckets_remaining > 0; n_buckets_remaining -= config::block_size_blend, current_bucket_idx += config::block_size_blend) {
-            if (current_bucket_idx < n_buckets)
-                bucket_tile_index[bucket_offset + current_bucket_idx] = tile_idx;
-        }
 
         // setup shared memory
         __shared__ float2 collected_mean2d[config::block_size_blend];
@@ -386,21 +363,12 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const uint primitive_idx = instance_primitive_indices[current_fetch_idx];
                 collected_mean2d[thread_rank] = primitive_mean2d[primitive_idx];
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
-                const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_checkpoint_color);
+                const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_blend_color);
                 collected_color[thread_rank] = color;
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
             for (int j = 0; !done && j < current_batch_size; ++j) {
-                if (j % config::checkpoint_interval == 0) {
-                    constexpr float COLOR_SCALE = 255.0f / config::max_checkpoint_color;
-                    const uint r = static_cast<uint>(color_pixel.x * COLOR_SCALE + 0.5f);
-                    const uint g = static_cast<uint>(color_pixel.y * COLOR_SCALE + 0.5f);
-                    const uint b = static_cast<uint>(color_pixel.z * COLOR_SCALE + 0.5f);
-                    const uint t = min(static_cast<uint>(fmaxf(transmittance, 0.0f) * 255.0f + 0.5f), 255u);
-                    bucket_checkpoint_uint8[bucket_offset * config::block_size_blend + thread_rank] = r | (g << 8) | (b << 16) | (t << 24);
-                    bucket_offset++;
-                }
                 n_possible_contributions++;
                 const float4 conic_opacity = collected_conic_opacity[j];
                 const float3 conic = make_float3(conic_opacity);
@@ -432,13 +400,6 @@ namespace fast_lfs::rasterization::kernels::forward {
             alpha_map[pixel_idx] = 1.0f - transmittance;
             tile_n_contributions[pixel_idx] = n_contributions;
         }
-
-        // max reduce the number of contributions
-        typedef cub::BlockReduce<uint, config::tile_width, cub::BLOCK_REDUCE_WARP_REDUCTIONS, config::tile_height> BlockReduce;
-        __shared__ typename BlockReduce::TempStorage temp_storage;
-        n_contributions = BlockReduce(temp_storage).Reduce(n_contributions, thrust::maximum<uint>());
-        if (thread_rank == 0)
-            tile_max_n_contributions[tile_idx] = n_contributions;
     }
 
 } // namespace fast_lfs::rasterization::kernels::forward

@@ -27,7 +27,6 @@ void fast_lfs::rasterization::backward(
     char* per_primitive_buffers_blob,
     char* per_tile_buffers_blob,
     char* per_instance_buffers_blob,
-    char* per_bucket_buffers_blob,
     float* grad_opacity_helper,
     float3* grad_color_helper,
     float2* grad_mean2d_helper,
@@ -36,7 +35,6 @@ void fast_lfs::rasterization::backward(
     float* densification_info,
     const int n_primitives,
     const int n_instances,
-    const int n_buckets,
     const int instance_primitive_indices_selector,
     const int active_sh_bases,
     const int total_bases_sh_rest,
@@ -57,16 +55,14 @@ void fast_lfs::rasterization::backward(
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
-    if (n_instances != 0 && n_buckets != 0) {
+    if (n_instances != 0) {
         PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, key_end_bit);
-        PerBucketBuffers per_bucket_buffers = PerBucketBuffers::from_blob(per_bucket_buffers_blob, n_buckets);
         per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
 
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
-            kernels::backward::blend_backward_cu<DENS_TYPE><<<n_buckets, 32>>>(
+            kernels::backward::blend_backward_cu<DENS_TYPE><<<n_tiles, config::block_size_blend>>>(
                 per_tile_buffers.instance_ranges,
-                per_tile_buffers.bucket_offsets,
                 per_instance_buffers.primitive_indices.Current(),
                 per_primitive_buffers.mean2d,
                 per_primitive_buffers.conic_opacity,
@@ -76,17 +72,13 @@ void fast_lfs::rasterization::backward(
                 grad_alpha,
                 image,
                 alpha,
-                per_tile_buffers.max_n_contributions,
                 per_tile_buffers.n_contributions,
-                per_bucket_buffers.tile_index,
-                per_bucket_buffers.checkpoint_uint8,
                 grad_mean2d_helper,
                 grad_conic_helper,
                 grad_opacity_helper,
                 grad_color_helper,
                 densification_info,
                 densification_error_map,
-                n_buckets,
                 n_primitives,
                 width,
                 height,

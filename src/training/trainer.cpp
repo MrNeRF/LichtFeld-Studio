@@ -3039,10 +3039,6 @@ namespace lfs::training {
                             fastgs_entries.emplace_back("fastgs.per_instance_buffers",
                                                         fast_ctx->forward_ctx.per_instance_buffers_size);
                         }
-                        if (fast_ctx->forward_ctx.per_bucket_buffers_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.per_bucket_buffers",
-                                                        fast_ctx->forward_ctx.per_bucket_buffers_size);
-                        }
                         fastgs_entries.emplace_back("fastgs.grad_mean2d_helper", grad_mean2d_helper_bytes);
                         fastgs_entries.emplace_back("fastgs.grad_conic_helper", grad_conic_helper_bytes);
                         if (run_fastgs_gaussian_backward) {
@@ -3085,9 +3081,8 @@ namespace lfs::training {
                                      stats.prefetch_queue_size);
                         }
 
-                        LOG_INFO("[MEM] fastgs counts instances={}, buckets={}, image={}x{}, tile_mode={}, num_tiles={}",
+                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}, tile_mode={}, num_tiles={}",
                                  fast_ctx->forward_ctx.n_instances,
-                                 fast_ctx->forward_ctx.n_buckets,
                                  output.width,
                                  output.height,
                                  params_.optimization.tile_mode,

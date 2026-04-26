@@ -130,40 +130,14 @@ namespace fast_lfs::rasterization {
     };
 
     struct PerTileBuffers {
-        size_t cub_workspace_size;
-        char* cub_workspace;
         uint2* instance_ranges;
-        uint* n_buckets;
-        uint* bucket_offsets;
-        uint* max_n_contributions;
         uint* n_contributions;
 
         static PerTileBuffers from_blob(char*& blob, int n_tiles) {
             PerTileBuffers buffers;
             obtain(blob, buffers.instance_ranges, n_tiles, 128);
-            obtain(blob, buffers.n_buckets, n_tiles, 128);
-            obtain(blob, buffers.bucket_offsets, n_tiles, 128);
-            obtain(blob, buffers.max_n_contributions, n_tiles, 128);
             obtain(blob, buffers.n_contributions,
                    static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
-            cub::DeviceScan::InclusiveSum(
-                nullptr, buffers.cub_workspace_size,
-                buffers.n_buckets, buffers.bucket_offsets,
-                n_tiles);
-            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
-            return buffers;
-        }
-    };
-
-    struct PerBucketBuffers {
-        uint* tile_index;
-        uint* checkpoint_uint8; // packed RGBA as 4x uint8 (colors [0,4], transmittance [0,1])
-
-        static PerBucketBuffers from_blob(char*& blob, int n_buckets) {
-            PerBucketBuffers buffers;
-            obtain(blob, buffers.tile_index, n_buckets, 128);
-            obtain(blob, buffers.checkpoint_uint8,
-                   static_cast<std::size_t>(n_buckets) * static_cast<std::size_t>(config::block_size_blend), 128);
             return buffers;
         }
     };

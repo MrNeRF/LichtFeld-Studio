@@ -23,11 +23,10 @@ namespace {
     }
 } // namespace
 
-std::tuple<int, int, int> fast_lfs::rasterization::forward(
+std::tuple<int, int> fast_lfs::rasterization::forward(
     std::function<char*(size_t)> per_primitive_buffers_func,
     std::function<char*(size_t)> per_tile_buffers_func,
     std::function<char*(size_t)> per_instance_buffers_func,
-    std::function<char*(size_t)> per_bucket_buffers_func,
     const float3* means,
     const float3* scales_raw,
     const float4* rotations_raw,
@@ -172,50 +171,20 @@ std::tuple<int, int, int> fast_lfs::rasterization::forward(
         CHECK_CUDA(config::debug, "extract_instance_ranges")
     }
 
-    // Extract bucket counts
-    kernels::forward::extract_bucket_counts<<<div_round_up(n_tiles, config::block_size_extract_bucket_counts), config::block_size_extract_bucket_counts>>>(
-        per_tile_buffers.instance_ranges,
-        per_tile_buffers.n_buckets,
-        n_tiles);
-    CHECK_CUDA(config::debug, "extract_bucket_counts")
-
-    // Compute inclusive sum for bucket offsets
-    cub::DeviceScan::InclusiveSum(
-        per_tile_buffers.cub_workspace,
-        per_tile_buffers.cub_workspace_size,
-        per_tile_buffers.n_buckets,
-        per_tile_buffers.bucket_offsets,
-        n_tiles);
-    CHECK_CUDA(config::debug, "cub::DeviceScan::InclusiveSum (Bucket Counts)")
-
-    // Get number of buckets
-    uint32_t n_buckets_u32;
-    cudaMemcpy(&n_buckets_u32, per_tile_buffers.bucket_offsets + n_tiles - 1, sizeof(n_buckets_u32), cudaMemcpyDeviceToHost);
-    CHECK_CUDA(config::debug, "cudaMemcpy(n_buckets)")
-    const int n_buckets = checked_to_int(n_buckets_u32, "n_buckets exceeds int range");
-
-    const int alloc_buckets = std::max(n_buckets, 1);
-    char* per_bucket_buffers_blob = per_bucket_buffers_func(required<PerBucketBuffers>(alloc_buckets));
-    PerBucketBuffers per_bucket_buffers = PerBucketBuffers::from_blob(per_bucket_buffers_blob, alloc_buckets);
-
     // Perform blending
     kernels::forward::blend_cu<<<grid, block>>>(
         per_tile_buffers.instance_ranges,
-        per_tile_buffers.bucket_offsets,
         per_instance_buffers.primitive_indices.Current(),
         per_primitive_buffers.mean2d,
         per_primitive_buffers.conic_opacity,
         per_primitive_buffers.color,
         image,
         alpha,
-        per_tile_buffers.max_n_contributions,
         per_tile_buffers.n_contributions,
-        per_bucket_buffers.tile_index,
-        per_bucket_buffers.checkpoint_uint8,
         width,
         height,
         grid.x);
     CHECK_CUDA(config::debug, "blend")
 
-    return {n_instances, n_buckets, per_instance_buffers.primitive_indices.selector};
+    return {n_instances, per_instance_buffers.primitive_indices.selector};
 }

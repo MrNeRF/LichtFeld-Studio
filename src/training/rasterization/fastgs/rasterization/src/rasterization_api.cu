@@ -118,9 +118,7 @@ namespace fast_lfs::rasterization {
 
         // These will be allocated later based on n_instances
         char* per_instance_buffers_blob = nullptr;
-        char* per_bucket_buffers_blob = nullptr;
         size_t per_instance_size = 0;
-        size_t per_bucket_size = 0;
 
         std::function<char*(size_t)> per_instance_buffers_func =
             [&arena_allocator, &per_instance_buffers_blob, &per_instance_size](size_t size) -> char* {
@@ -133,45 +131,33 @@ namespace fast_lfs::rasterization {
             return per_instance_buffers_blob;
         };
 
-        std::function<char*(size_t)> per_bucket_buffers_func =
-            [&arena_allocator, &per_bucket_buffers_blob, &per_bucket_size](size_t size) -> char* {
-            per_bucket_size = size;
-            per_bucket_buffers_blob = arena_allocator(size);
-            if (!per_bucket_buffers_blob) {
-                // Throw immediately to prevent nullptr from being used
-                throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate bucket buffers");
-            }
-            return per_bucket_buffers_blob;
-        };
-
         try {
             // Call the actual forward implementation
-            auto [n_instances, n_buckets, instance_primitive_indices_selector] = forward(per_primitive_buffers_func,
-                                                                                         per_tile_buffers_func,
-                                                                                         per_instance_buffers_func,
-                                                                                         per_bucket_buffers_func,
-                                                                                         reinterpret_cast<const float3*>(means_ptr),
-                                                                                         reinterpret_cast<const float3*>(scales_raw_ptr),
-                                                                                         reinterpret_cast<const float4*>(rotations_raw_ptr),
-                                                                                         opacities_raw_ptr,
-                                                                                         reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
-                                                                                         reinterpret_cast<const float3*>(sh_coefficients_rest_ptr),
-                                                                                         reinterpret_cast<const float4*>(w2c_ptr),
-                                                                                         reinterpret_cast<const float3*>(cam_position_ptr),
-                                                                                         image_ptr,
-                                                                                         alpha_ptr,
-                                                                                         n_primitives,
-                                                                                         active_sh_bases,
-                                                                                         total_bases_sh_rest,
-                                                                                         width,
-                                                                                         height,
-                                                                                         focal_x,
-                                                                                         focal_y,
-                                                                                         center_x,
-                                                                                         center_y,
-                                                                                         near_plane,
-                                                                                         far_plane,
-                                                                                         mip_filter);
+            auto [n_instances, instance_primitive_indices_selector] = forward(per_primitive_buffers_func,
+                                                                              per_tile_buffers_func,
+                                                                              per_instance_buffers_func,
+                                                                              reinterpret_cast<const float3*>(means_ptr),
+                                                                              reinterpret_cast<const float3*>(scales_raw_ptr),
+                                                                              reinterpret_cast<const float4*>(rotations_raw_ptr),
+                                                                              opacities_raw_ptr,
+                                                                              reinterpret_cast<const float3*>(sh_coefficients_0_ptr),
+                                                                              reinterpret_cast<const float3*>(sh_coefficients_rest_ptr),
+                                                                              reinterpret_cast<const float4*>(w2c_ptr),
+                                                                              reinterpret_cast<const float3*>(cam_position_ptr),
+                                                                              image_ptr,
+                                                                              alpha_ptr,
+                                                                              n_primitives,
+                                                                              active_sh_bases,
+                                                                              total_bases_sh_rest,
+                                                                              width,
+                                                                              height,
+                                                                              focal_x,
+                                                                              focal_y,
+                                                                              center_x,
+                                                                              center_y,
+                                                                              near_plane,
+                                                                              far_plane,
+                                                                              mip_filter);
 
             // Verify allocations happened
             if (n_instances > 0 && !per_instance_buffers_blob) {
@@ -182,27 +168,15 @@ namespace fast_lfs::rasterization {
                 error_ctx.frame_id = frame_id;
                 return error_ctx;
             }
-            if (n_buckets > 0 && !per_bucket_buffers_blob) {
-                arena.end_frame(frame_id);
-                ForwardContext error_ctx = {};
-                error_ctx.success = false;
-                error_ctx.error_message = "OUT_OF_MEMORY: Bucket buffers were not allocated despite n_buckets > 0";
-                error_ctx.frame_id = frame_id;
-                return error_ctx;
-            }
-
             // Create and return context
             ForwardContext ctx;
             ctx.per_primitive_buffers = per_primitive_buffers_blob;
             ctx.per_tile_buffers = per_tile_buffers_blob;
             ctx.per_instance_buffers = per_instance_buffers_blob;
-            ctx.per_bucket_buffers = per_bucket_buffers_blob;
             ctx.per_primitive_buffers_size = per_primitive_size;
             ctx.per_tile_buffers_size = per_tile_size;
             ctx.per_instance_buffers_size = per_instance_size;
-            ctx.per_bucket_buffers_size = per_bucket_size;
             ctx.n_instances = n_instances;
-            ctx.n_buckets = n_buckets;
             ctx.instance_primitive_indices_selector = instance_primitive_indices_selector;
             ctx.frame_id = frame_id;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
@@ -292,11 +266,6 @@ namespace fast_lfs::rasterization {
             return outputs;
         }
 
-        if (forward_ctx.n_buckets > 0 && !forward_ctx.per_bucket_buffers) {
-            outputs.error_message = "Missing bucket buffers in forward context";
-            return outputs;
-        }
-
         // Use pre-allocated helper buffers from forward context
         if (!forward_ctx.grad_mean2d_helper || !forward_ctx.grad_conic_helper) {
             outputs.error_message = "Missing pre-allocated helper buffers in forward context";
@@ -349,7 +318,6 @@ namespace fast_lfs::rasterization {
                 static_cast<char*>(forward_ctx.per_primitive_buffers),
                 static_cast<char*>(forward_ctx.per_tile_buffers),
                 static_cast<char*>(forward_ctx.per_instance_buffers),
-                static_cast<char*>(forward_ctx.per_bucket_buffers),
                 grad_opacity_helper,
                 reinterpret_cast<float3*>(grad_color_helper),
                 reinterpret_cast<float2*>(grad_mean2d_helper),
@@ -358,7 +326,6 @@ namespace fast_lfs::rasterization {
                 densification_info_ptr,
                 n_primitives,
                 forward_ctx.n_instances,
-                forward_ctx.n_buckets,
                 forward_ctx.instance_primitive_indices_selector,
                 active_sh_bases,
                 total_bases_sh_rest,

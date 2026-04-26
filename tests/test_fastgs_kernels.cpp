@@ -133,10 +133,10 @@ TEST_F(FastGSKernelTest, Forward_Instances) {
     EXPECT_GT(r->second.forward_ctx.n_instances, 0);
 }
 
-TEST_F(FastGSKernelTest, Forward_Buckets) {
+TEST_F(FastGSKernelTest, Forward_TileState) {
     auto r = forward();
     ASSERT_TRUE(r.has_value());
-    EXPECT_GE(r->second.forward_ctx.n_buckets, 0);
+    EXPECT_GT(r->second.forward_ctx.per_tile_buffers_size, 0);
 }
 
 TEST_F(FastGSKernelTest, Forward_Blend) {
@@ -591,16 +591,15 @@ TEST_F(FastGSGradientTest, GradientDirection) {
 }
 
 // =============================================================================
-// Test for checkpoint_interval > 32 (sub-bucket gradient correctness)
-// This tests the case where a single bucket contains more than 32 gaussians
+// Dense single-tile gradient test. This exercises the tile backward path with
+// many splats contributing to the same pixels.
 // =============================================================================
 
-class FastGSMultiBucketGradientTest : public ::testing::Test {
+class FastGSDenseTileGradientTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // Create 128 gaussians concentrated in a SINGLE 16x16 tile
-        // This ensures many gaussians (>64) end up in the same tile, triggering
-        // multiple sub-buckets per bucket when checkpoint_interval=64
+        // This ensures many gaussians end up in the same tile.
         n_ = 128;
         std::mt19937 gen(456);
         // Very small spread - all gaussians within ~1 pixel of each other
@@ -714,25 +713,18 @@ protected:
     std::unique_ptr<Camera> camera_;
 };
 
-TEST_F(FastGSMultiBucketGradientTest, VerifyBucketCount) {
-    // Verify we actually have multiple sub-buckets (>64 instances per tile)
+TEST_F(FastGSDenseTileGradientTest, VerifyDenseTileInstances) {
+    // Verify this setup actually produces a dense tile workload.
     auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
     auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(r.has_value());
 
-    // With 128 gaussians concentrated in a single tile, we should have
-    // ~128 instances and 2 buckets (128/64 = 2 with checkpoint_interval=64).
-    printf("  n_instances=%d, n_buckets=%d\n",
-           r->second.forward_ctx.n_instances,
-           r->second.forward_ctx.n_buckets);
+    printf("  n_instances=%d\n", r->second.forward_ctx.n_instances);
 
     EXPECT_GT(r->second.forward_ctx.n_instances, 100);
-    // Expect at least 2 buckets (which means sub_bucket > 0 will be triggered)
-    // With 128 instances in 1-2 tiles and checkpoint_interval=64, we need >= 2 buckets
-    EXPECT_GE(r->second.forward_ctx.n_buckets, 2) << "Need at least 2 buckets to test sub-bucket logic";
 }
 
-TEST_F(FastGSMultiBucketGradientTest, Numerical_Means_MultiBucket) {
+TEST_F(FastGSDenseTileGradientTest, Numerical_Means_DenseTile) {
     auto num = numerical_grad(ParamType::Means);
     auto ana = analytical_grad(ParamType::Means);
     ASSERT_TRUE(num.is_valid() && ana.is_valid());
@@ -751,16 +743,16 @@ TEST_F(FastGSMultiBucketGradientTest, Numerical_Means_MultiBucket) {
         dot += n[i] * a[i];
     }
     float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
-    printf("  MultiBucket Means: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+    printf("  DenseTile Means: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
            std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
 
-    EXPECT_GT(cos_sim, 0.80f) << "Gradient direction mismatch - possible sub-bucket bug";
+    EXPECT_GT(cos_sim, 0.80f) << "Gradient direction mismatch in dense tile backward";
 
     float mean_err = sum_err / num.numel();
     EXPECT_LT(mean_err, 2.0f) << "Mean gradient error too high";
 }
 
-TEST_F(FastGSMultiBucketGradientTest, Numerical_Opacity_MultiBucket) {
+TEST_F(FastGSDenseTileGradientTest, Numerical_Opacity_DenseTile) {
     auto num = numerical_grad(ParamType::Opacity);
     auto ana = analytical_grad(ParamType::Opacity);
     ASSERT_TRUE(num.is_valid() && ana.is_valid());
@@ -779,13 +771,13 @@ TEST_F(FastGSMultiBucketGradientTest, Numerical_Opacity_MultiBucket) {
         dot += n[i] * a[i];
     }
     float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
-    printf("  MultiBucket Opacity: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+    printf("  DenseTile Opacity: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
            std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
 
-    EXPECT_GT(cos_sim, 0.95f) << "Gradient direction mismatch - possible sub-bucket bug";
+    EXPECT_GT(cos_sim, 0.95f) << "Gradient direction mismatch in dense tile backward";
 }
 
-TEST_F(FastGSMultiBucketGradientTest, GradientDescent_MultiBucket) {
+TEST_F(FastGSDenseTileGradientTest, GradientDescent_DenseTile) {
     // Verify gradient descent actually reduces loss with many gaussians per tile
     auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
     auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
