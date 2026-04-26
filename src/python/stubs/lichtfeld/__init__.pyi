@@ -1900,7 +1900,9 @@ class DatasetParams:
 
     @property
     def centralize_dataset(self) -> str:
-        """Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'"""
+        """
+        Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'
+        """
 
 def dataset_params() -> DatasetParams:
     """Get the dataset parameters object"""

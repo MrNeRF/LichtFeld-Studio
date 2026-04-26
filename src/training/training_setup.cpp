@@ -25,6 +25,14 @@ namespace lfs::training {
             return std::make_shared<lfs::core::PointCloud>(positions, colors);
         }
 
+        lfs::io::CentralizeDataset parse_centralize(const std::string& s) {
+            if (s == "by_pointcloud")
+                return lfs::io::CentralizeDataset::ByPointCloud;
+            if (s == "by_cameras")
+                return lfs::io::CentralizeDataset::ByCameras;
+            return lfs::io::CentralizeDataset::Off;
+        }
+
         void applyTrainingSHDegree(lfs::core::SplatData& splat, const int target_degree) {
             const int before = splat.get_max_sh_degree();
             if (splat.set_sh_degree(target_degree)) {
@@ -45,6 +53,7 @@ namespace lfs::training {
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
             .validate_only = false,
+            .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
                 lfs::core::events::state::DatasetLoadProgress{

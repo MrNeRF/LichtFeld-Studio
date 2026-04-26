@@ -145,6 +145,13 @@ namespace {
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
             ::args::Flag undistort(dataset_group, "undistort", "Undistort images on-the-fly before training", {"undistort"});
+            ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
+                                                                 "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
+                                                                 {"centralize"},
+                                                                 std::unordered_map<std::string, std::string>{
+                                                                     {"off", "off"},
+                                                                     {"by_pointcloud", "by_pointcloud"},
+                                                                     {"by_cameras", "by_cameras"}});
 
             // =============================================================================
             // MASK OPTIONS
@@ -544,6 +551,7 @@ namespace {
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
+                                        centralize_val = cli_option_present({"--centralize"}) ? std::optional<std::string>(::args::get(centralize)) : std::optional<std::string>(),
                                         // Capture flag states
                                         enable_mip_flag = bool(enable_mip),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
@@ -651,6 +659,7 @@ namespace {
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;
+                setVal(centralize_val, ds.centralize_dataset);
 
                 // Python scripts
                 if (python_scripts_val) {
