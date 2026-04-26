@@ -795,7 +795,7 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
         nb::arg("output_path") = "", nb::arg("init_path") = "",
-        nb::arg("centralize_dataset") = "auto",
+        nb::arg("centralize_dataset") = "off",
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

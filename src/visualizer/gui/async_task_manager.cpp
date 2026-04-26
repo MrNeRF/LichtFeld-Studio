@@ -978,13 +978,13 @@ namespace lfs::vis::gui {
                 }
 
                 const auto parse_centralize = [](const std::string& s) {
-                    if (s == "none")
-                        return lfs::io::CentralizeDataset::None;
+                    if (s == "off")
+                        return lfs::io::CentralizeDataset::Off;
                     if (s == "by_pointcloud")
                         return lfs::io::CentralizeDataset::ByPointCloud;
                     if (s == "by_cameras")
                         return lfs::io::CentralizeDataset::ByCameras;
-                    return lfs::io::CentralizeDataset::Auto;
+                    return lfs::io::CentralizeDataset::Off;
                 };
                 const lfs::io::LoadOptions load_options{
                     .resize_factor = local_params.dataset.resize_factor,

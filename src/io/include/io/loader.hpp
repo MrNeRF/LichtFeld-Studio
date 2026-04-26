@@ -46,7 +46,7 @@ namespace lfs::io {
 
     // Centralize dataset enum
     enum class CentralizeDataset {
-        None,
+        Off,
         Auto,
         ByPointCloud,
         ByCameras
@@ -58,7 +58,7 @@ namespace lfs::io {
         int max_width = 3840;
         std::string images_folder = "images";
         bool validate_only = false;
-        CentralizeDataset centralize = CentralizeDataset::Auto;
+        CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
     };

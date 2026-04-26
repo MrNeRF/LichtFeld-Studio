@@ -81,8 +81,7 @@
       <div class="impdlg-control-main">
         <div class="impdlg-control-row">
           <select class="impdlg-input" data-value="centralize_dataset">
-            <option value="none">None</option>
-            <option value="auto" selected>Auto</option>
+            <option value="off" selected>Off</option>
             <option value="by_pointcloud">By PointCloud</option>
             <option value="by_cameras">By Cameras</option>
           </select>

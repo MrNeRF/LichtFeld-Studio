@@ -239,8 +239,7 @@ namespace lfs::core {
             float mask_threshold = 0.5f;
 
             // Not serialized — UI-controlled per import.
-            // Headless/CLI default is "none"; GUI overrides this to "auto" on reset.
-            std::string centralize_dataset = "none";
+            std::string centralize_dataset = "off";
 
             nlohmann::json to_json() const;
             static DatasetConfig from_json(const nlohmann::json& j);

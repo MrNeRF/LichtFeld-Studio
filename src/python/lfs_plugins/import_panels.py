@@ -125,7 +125,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._output_path = ""
         self._init_path = ""
         self._ppisp_sidecar_path = ""
-        self._centralize_dataset = "auto"
+        self._centralize_dataset = "off"
         self._last_lang = ""
 
     def on_bind_model(self, ctx):
@@ -172,7 +172,7 @@ class DatasetImportPanel(_ImportDialogPanel):
             return False
 
         self._init_path = ""
-        self._centralize_dataset = "auto"
+        self._centralize_dataset = "off"
         params = lf.optimization_params()
         self._ppisp_sidecar_path = (
             str(params.ppisp_sidecar_path) if params and params.has_params() else ""
