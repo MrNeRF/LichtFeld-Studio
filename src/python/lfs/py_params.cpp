@@ -275,7 +275,7 @@ namespace lfs::python {
                         "Initial rho for sparsity optimization")
             .int_prop(&OptimizationParameters::tile_mode,
                       "tile_mode", "Tile Mode", 1, 1, 4,
-                      "Tile mode (1, 2, or 4)")
+                      "Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)")
             .float_prop(&OptimizationParameters::steps_scaler,
                         "steps_scaler", "Steps Scaler", 1.0f, 0.0f, 10.0f,
                         "Scale training step counts")
@@ -1105,7 +1105,7 @@ namespace lfs::python {
                 "tile_mode",
                 [](PyOptimizationParams& self) { return self.params().tile_mode; },
                 [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.tile_mode = v; }); },
-                "Tile mode (1, 2, or 4)")
+                "Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)")
             .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },

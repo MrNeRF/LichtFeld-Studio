@@ -466,6 +466,7 @@ namespace lfs::training {
         bool memory_breakdown_logged_first_batch_ = false;
         bool memory_breakdown_logged_first_raster_ = false;
         bool memory_breakdown_logged_first_step_ = false;
+        bool fastgs_tiling_warning_logged_ = false;
 
         // Current training state
         std::atomic<int> current_iteration_{0};

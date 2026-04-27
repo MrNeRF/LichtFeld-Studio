@@ -1637,6 +1637,7 @@ namespace lfs::training {
             memory_breakdown_logged_first_batch_ = false;
             memory_breakdown_logged_first_raster_ = false;
             memory_breakdown_logged_first_step_ = false;
+            fastgs_tiling_warning_logged_ = false;
 
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
@@ -2504,12 +2505,22 @@ namespace lfs::training {
                 bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
             }
 
-            // Configurable tile-based training to reduce peak memory
+            // Configurable tile-based training to reduce peak memory in 3DGUT.
             const int full_width = cam->image_width();
             const int full_height = cam->image_height();
+            const bool fastgs_path = !params_.optimization.gut;
 
             // Read tile mode from parameters (1=1 tile, 2=2 tiles, 4=4 tiles)
-            const TileMode tile_mode = static_cast<TileMode>(params_.optimization.tile_mode);
+            const TileMode requested_tile_mode = static_cast<TileMode>(params_.optimization.tile_mode);
+            TileMode tile_mode = requested_tile_mode;
+            if (fastgs_path && requested_tile_mode != TileMode::One) {
+                if (!fastgs_tiling_warning_logged_) {
+                    LOG_WARN("tile_mode={} was requested, but tiled training is only available for 3DGUT. 3DGS/FastGS will render full images with tile_mode=1.",
+                             params_.optimization.tile_mode);
+                    fastgs_tiling_warning_logged_ = true;
+                }
+                tile_mode = TileMode::One;
+            }
 
             // Determine tile configuration
             int tile_rows = 1, tile_cols = 1;
@@ -2570,11 +2581,7 @@ namespace lfs::training {
                 densification_type = DensificationType::MCMC;
             else if (core::param::is_mrnf_strategy(params_.optimization.strategy))
                 densification_type = DensificationType::MRNF;
-            const bool fastgs_path = !params_.optimization.gut;
             const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
-            if (fastgs_path && update_gaussians_this_iter && num_tiles != 1) {
-                return std::unexpected("FastGS fused-Adam training requires tile_mode=1; multi-tile needs compact accumulation/finalize support");
-            }
             const bool run_fastgs_gaussian_backward =
                 fastgs_path &&
                 update_gaussians_this_iter;
@@ -2711,7 +2718,7 @@ namespace lfs::training {
                     output = std::move(rasterize_result->first);
                     gsplat_ctx.emplace(std::move(rasterize_result->second));
                 } else {
-                    // Standard mode: use fast rasterizer with tiling support
+                    // Standard 3DGS/FastGS mode renders full images; tiling is 3DGUT-only.
                     auto rasterize_result = fast_rasterize_forward(
                         *cam, strategy_->get_model(), bg,
                         tile_x_offset, tile_y_offset,
@@ -2726,23 +2733,9 @@ namespace lfs::training {
                             nvtxRangePop(); // rasterize_forward
                             nvtxRangePop(); // tile
 
-                            // Handle OOM by switching tile mode
-                            if (tile_mode == TileMode::Four) {
-                                // Already at maximum tiling - can't tile further, return error
-                                LOG_ERROR("OUT OF MEMORY at maximum tile mode (2x2). Cannot continue training.");
-                                LOG_ERROR("Arena error: {}", error);
-                                return std::unexpected(error);
-                            } else {
-                                // Upgrade to next tile mode
-                                TileMode new_mode = (tile_mode == TileMode::One) ? TileMode::Two : TileMode::Four;
-                                LOG_WARN("OUT OF MEMORY detected. Switching tile mode from {} to {}",
-                                         static_cast<int>(tile_mode), static_cast<int>(new_mode));
-                                LOG_WARN("Arena error: {}", error);
-                                params_.optimization.tile_mode = static_cast<int>(new_mode);
-
-                                // Retry this step with new tile mode
-                                return std::unexpected("OOM_RETRY"); // Signal to retry the step
-                            }
+                            LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training. Tiling is only available for 3DGUT; enable --gut to use tiled training.");
+                            LOG_ERROR("Arena error: {}", error);
+                            return std::unexpected(error);
                         } else {
                             // Non-OOM error - propagate
                             nvtxRangePop();
@@ -3096,7 +3089,7 @@ namespace lfs::training {
                                  fast_ctx->forward_ctx.n_instances,
                                  output.width,
                                  output.height,
-                                 params_.optimization.tile_mode,
+                                 static_cast<int>(tile_mode),
                                  num_tiles);
                         memory_breakdown_logged_first_raster_ = true;
                     }

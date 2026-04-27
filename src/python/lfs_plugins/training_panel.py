@@ -585,6 +585,9 @@ class TrainingPanel(Panel):
             "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
         )
         model.bind_func(
+            "dep_gut", lambda: p() is not None and p().has_params() and p().gut
+        )
+        model.bind_func(
             "show_progress",
             lambda: AppState.max_iterations.value > 0 and _iteration() > 0,
         )
@@ -2151,23 +2154,24 @@ class TrainingPanel(Panel):
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.sh_degree"))
 
-            layout.table_next_row()
-            layout.table_next_column()
-            layout.label(tr("training_params.tile_mode"))
-            layout.table_next_column()
-            layout.push_item_width(-1)
-            tile_idx = {1: 0, 2: 1, 4: 2}.get(params.tile_mode, 0)
-            tile_mode_items = [
-                tr("training.options.tile.full"),
-                tr("training.options.tile.half"),
-                tr("training.options.tile.quarter"),
-            ]
-            changed, new_idx = layout.combo("##py_tile_mode", tile_idx, tile_mode_items)
-            if changed:
-                params.tile_mode = [1, 2, 4][new_idx]
-            layout.pop_item_width()
-            if layout.is_item_hovered():
-                layout.set_tooltip(tr("training.tooltip.tile_mode"))
+            if params.gut:
+                layout.table_next_row()
+                layout.table_next_column()
+                layout.label(tr("training_params.tile_mode"))
+                layout.table_next_column()
+                layout.push_item_width(-1)
+                tile_idx = {1: 0, 2: 1, 4: 2}.get(params.tile_mode, 0)
+                tile_mode_items = [
+                    tr("training.options.tile.full"),
+                    tr("training.options.tile.half"),
+                    tr("training.options.tile.quarter"),
+                ]
+                changed, new_idx = layout.combo("##py_tile_mode", tile_idx, tile_mode_items)
+                if changed:
+                    params.tile_mode = [1, 2, 4][new_idx]
+                layout.pop_item_width()
+                if layout.is_item_hovered():
+                    layout.set_tooltip(tr("training.tooltip.tile_mode"))
 
             layout.table_next_row()
             layout.table_next_column()
