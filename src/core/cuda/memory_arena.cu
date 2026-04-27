@@ -1029,7 +1029,7 @@ namespace lfs::core {
             // Create with VMM-optimized settings
             RasterizerMemoryArena::Config config;
             config.virtual_size = 32ULL << 30; // 32GB virtual (costs nothing!)
-            config.initial_commit = 512 << 20; // 512MB initial physical (was 256MB)
+            config.initial_commit = 128 << 20; // 128MB initial physical; grows lazily
             config.max_physical = total_mem;   // Auto-detected from GPU
             config.granularity = 2 << 20;      // 2MB chunks
             config.alignment = 256;
