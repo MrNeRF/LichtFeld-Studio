@@ -25,7 +25,7 @@ void fast_lfs::rasterization::backward(
     const float3* cam_position,
     char* per_primitive_buffers_blob,
     char* per_tile_buffers_blob,
-    char* per_instance_buffers_blob,
+    const uint* sorted_primitive_indices,
     float* grad_opacity_helper,
     float3* grad_color_helper,
     float2* grad_mean2d_helper,
@@ -34,7 +34,6 @@ void fast_lfs::rasterization::backward(
     float* densification_info,
     const int n_primitives,
     const int n_instances,
-    const int instance_primitive_indices_selector,
     const int active_sh_bases,
     const int total_bases_sh_rest,
     const int width,
@@ -50,19 +49,15 @@ void fast_lfs::rasterization::backward(
     const int n_tiles = grid.x * grid.y;
 
     // These blobs are from the arena and are guaranteed to be valid
-    const int key_end_bit = packed_instance_key_end_bit(static_cast<uint>(n_tiles));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
     if (n_instances != 0) {
-        PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, key_end_bit);
-        per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
-
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE, bool MIP_FILTER>() {
             kernels::backward::blend_backward_cu<DENS_TYPE, MIP_FILTER><<<n_tiles, config::block_size_blend_backward>>>(
                 per_tile_buffers.instance_ranges,
-                per_instance_buffers.primitive_indices.Current(),
+                sorted_primitive_indices,
                 per_primitive_buffers.mean2d,
                 per_primitive_buffers.conic_opacity,
                 per_primitive_buffers.color,

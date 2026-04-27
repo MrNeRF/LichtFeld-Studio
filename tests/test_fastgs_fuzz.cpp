@@ -682,6 +682,7 @@ TEST_F(FastGSFuzzTest, RandomStress_LargeBatch) {
         EXPECT_FALSE(has_nan(result->first.image)) << "NaN in large trial " << trial;
         EXPECT_FALSE(has_inf(result->first.image)) << "Inf in large trial " << trial;
 
+        result->second.release_forward_context();
         cleanup_arena();
     }
 }

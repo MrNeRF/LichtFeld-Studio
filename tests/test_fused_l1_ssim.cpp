@@ -218,6 +218,33 @@ TEST_F(FusedL1SSIMTest, ErrorMapForwardMatchesSSIMReduction) {
     EXPECT_LT(diff.mean().item<float>(), 1e-7f);
 }
 
+TEST_F(FusedL1SSIMTest, FusedChannelMeanMapSupportsInPlaceErrorMap) {
+    const int N = 1, C = 3, H = 64, W = 64;
+    auto img1 = Tensor::randn({N, C, H, W}, Device::CUDA);
+    auto img2 = Tensor::randn({N, C, H, W}, Device::CUDA);
+
+    auto full_ssim = ssim_forward_map(img1, img2, /*apply_valid_padding=*/false);
+    auto expected_error = Tensor::empty({H, W}, Device::CUDA);
+    launch_ssim_to_error_map(full_ssim.ssim_map, expected_error);
+
+    FusedL1SSIMWorkspace workspace;
+    auto [loss, ctx] = fused_l1_ssim_forward(img1, img2, 0.2f, workspace, false);
+    (void)loss;
+    (void)ctx;
+
+    ASSERT_EQ(workspace.ssim_map.shape()[0], static_cast<size_t>(1));
+    ASSERT_EQ(workspace.ssim_map.shape()[1], static_cast<size_t>(1));
+    ASSERT_EQ(workspace.ssim_map.shape()[2], static_cast<size_t>(H));
+    ASSERT_EQ(workspace.ssim_map.shape()[3], static_cast<size_t>(W));
+
+    auto inplace_error = workspace.ssim_map.reshape({H, W});
+    launch_ssim_to_error_map(workspace.ssim_map, inplace_error);
+
+    auto diff = (inplace_error - expected_error).abs();
+    EXPECT_LT(diff.max().item<float>(), 1e-6f);
+    EXPECT_LT(diff.mean().item<float>(), 1e-7f);
+}
+
 // Test 3D input (no batch dimension)
 TEST_F(FusedL1SSIMTest, ThreeDimensionalInput) {
     const int C = 3, H = 64, W = 64;

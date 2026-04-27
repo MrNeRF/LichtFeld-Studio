@@ -26,23 +26,24 @@ namespace fast_lfs::rasterization {
     };
 
     struct ForwardContext {
-        void* per_primitive_buffers;
-        void* per_tile_buffers;
-        void* per_instance_buffers;
-        size_t per_primitive_buffers_size;
-        size_t per_tile_buffers_size;
-        size_t per_instance_buffers_size;
-        int n_instances;
-        int instance_primitive_indices_selector;
-        uint64_t frame_id;
+        void* per_primitive_buffers = nullptr;
+        void* per_tile_buffers = nullptr;
+        void* sorted_primitive_indices = nullptr;
+        size_t per_primitive_buffers_size = 0;
+        size_t per_tile_buffers_size = 0;
+        size_t sorted_primitive_indices_size = 0;
+        size_t per_instance_sort_scratch_size = 0;
+        size_t per_instance_sort_total_size = 0;
+        int n_instances = 0;
+        uint64_t frame_id = 0;
         // Add helper buffer pointers to avoid re-allocation in backward
-        void* grad_mean2d_helper;
-        void* grad_conic_helper;
-        void* grad_opacity_helper;
-        void* grad_color_helper;
+        void* grad_mean2d_helper = nullptr;
+        void* grad_conic_helper = nullptr;
+        void* grad_opacity_helper = nullptr;
+        void* grad_color_helper = nullptr;
         // Error handling for OOM
-        bool success;
-        const char* error_message;
+        bool success = false;
+        const char* error_message = nullptr;
     };
 
     ForwardContext forward_raw(
@@ -68,6 +69,8 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter = false);
+
+    void release_forward_context(const ForwardContext& forward_ctx);
 
     struct BackwardOutputs {
         bool success;

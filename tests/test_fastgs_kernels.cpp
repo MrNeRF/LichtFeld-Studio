@@ -227,10 +227,14 @@ TEST_F(FastGSKernelTest, Optimizer_ZeroRows) {
 // Numerical tests
 TEST_F(FastGSKernelTest, Numerical_Deterministic) {
     auto r1 = forward();
-    auto r2 = forward();
-    ASSERT_TRUE(r1.has_value() && r2.has_value());
+    ASSERT_TRUE(r1.has_value());
+    auto image1 = r1->first.image.clone();
+    r1->second.release_forward_context();
 
-    float diff = (r1->first.image - r2->first.image).abs().max().item<float>();
+    auto r2 = forward();
+    ASSERT_TRUE(r2.has_value());
+
+    float diff = (image1 - r2->first.image).abs().max().item<float>();
     EXPECT_LT(diff, 1e-5f);
 }
 
@@ -304,11 +308,12 @@ TEST_F(FastGSKernelTest, TiledRendering_Single) {
 TEST_F(FastGSKernelTest, TiledRendering_Consistency) {
     auto full = forward();
     ASSERT_TRUE(full.has_value());
+    auto region = full->first.image.slice(1, 50, 200).slice(2, 100, 300).clone();
+    full->second.release_forward_context();
 
     auto tile = fast_rasterize_forward(*camera_, *splat_, bg_, 100, 50, 200, 150, false);
     ASSERT_TRUE(tile.has_value());
 
-    auto region = full->first.image.slice(1, 50, 200).slice(2, 100, 300);
     float diff = (tile->first.image - region).abs().max().item<float>();
     EXPECT_LT(diff, 0.01f);
 }
@@ -334,11 +339,14 @@ TEST_F(FastGSKernelTest, Performance_Backward) {
     ASSERT_TRUE(r.has_value());
 
     auto grad = Tensor::randn_like(r->first.image);
+    r->second.release_forward_context();
     auto opt = make_optimizer();
 
     for (int i = 0; i < 3; ++i) {
+        auto fwd = forward();
+        ASSERT_TRUE(fwd.has_value());
         opt->zero_grad(0);
-        fast_rasterize_backward(r->second, grad, *splat_, *opt, {});
+        fast_rasterize_backward(fwd->second, grad, *splat_, *opt, {});
     }
     cudaDeviceSynchronize();
 
@@ -785,6 +793,7 @@ TEST_F(FastGSDenseTileGradientTest, GradientDescent_DenseTile) {
 
     float loss_before = r->first.image.pow(2.0f).sum().item<float>();
     printf("  Loss before: %.4f\n", loss_before);
+    r->second.release_forward_context();
 
     AdamConfig cfg{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
     auto opt = std::make_unique<AdamOptimizer>(*splat, cfg);

@@ -8,11 +8,14 @@
 #include "kernels_forward.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
+#include <algorithm>
 #include <cstdint>
 #include <cub/cub.cuh>
+#include <cuda_runtime.h>
 #include <functional>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace {
     int checked_to_int(uint64_t value, const char* message) {
@@ -21,12 +24,85 @@ namespace {
         }
         return static_cast<int>(value);
     }
+
+    class StreamOrderedDeviceBuffer {
+    public:
+        StreamOrderedDeviceBuffer() = default;
+        explicit StreamOrderedDeviceBuffer(size_t size) {
+            allocate(size);
+        }
+
+        StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
+        StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
+
+        StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&& other) noexcept
+            : ptr_(other.ptr_), size_(other.size_) {
+            other.ptr_ = nullptr;
+            other.size_ = 0;
+        }
+
+        ~StreamOrderedDeviceBuffer() {
+            reset();
+        }
+
+        void allocate(size_t size) {
+            reset();
+            if (size == 0) {
+                return;
+            }
+
+            void* ptr = nullptr;
+#if CUDART_VERSION >= 11020
+            const cudaError_t err = cudaMallocAsync(&ptr, size, nullptr);
+#else
+            const cudaError_t err = cudaMalloc(&ptr, size);
+#endif
+            if (err != cudaSuccess) {
+                throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate FastGS sort buffer (" +
+                                         std::to_string(size) + " bytes): " + cudaGetErrorString(err));
+            }
+            ptr_ = ptr;
+            size_ = size;
+        }
+
+        void reset() noexcept {
+            if (!ptr_) {
+                return;
+            }
+#if CUDART_VERSION >= 11020
+            cudaFreeAsync(ptr_, nullptr);
+#else
+            cudaFree(ptr_);
+#endif
+            ptr_ = nullptr;
+            size_ = 0;
+        }
+
+        void* release() noexcept {
+            void* ptr = ptr_;
+            ptr_ = nullptr;
+            size_ = 0;
+            return ptr;
+        }
+
+        template <typename T>
+        T* as() const noexcept {
+            return static_cast<T*>(ptr_);
+        }
+
+        size_t size() const noexcept {
+            return size_;
+        }
+
+    private:
+        void* ptr_ = nullptr;
+        size_t size_ = 0;
+    };
 } // namespace
 
-std::tuple<int, int> fast_lfs::rasterization::forward(
+fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     std::function<char*(size_t)> per_primitive_buffers_func,
     std::function<char*(size_t)> per_tile_buffers_func,
-    std::function<char*(size_t)> per_instance_buffers_func,
     const float3* means,
     const float3* scales_raw,
     const float4* rotations_raw,
@@ -128,11 +204,45 @@ std::tuple<int, int> fast_lfs::rasterization::forward(
     CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)")
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
-    const int alloc_instances = std::max(n_instances, 1);
-    char* per_instance_buffers_blob = per_instance_buffers_func(required<PerInstanceBuffers>(alloc_instances, key_end_bit));
-    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, alloc_instances, key_end_bit);
+    StreamOrderedDeviceBuffer keys_current;
+    StreamOrderedDeviceBuffer keys_alternate;
+    StreamOrderedDeviceBuffer primitive_indices_current;
+    StreamOrderedDeviceBuffer primitive_indices_alternate;
+    StreamOrderedDeviceBuffer cub_workspace;
+
+    cub::DoubleBuffer<InstanceKey> keys;
+    cub::DoubleBuffer<uint> primitive_indices;
+    size_t cub_workspace_size = 0;
+    size_t per_instance_sort_total_size = 0;
+    uint* sorted_primitive_indices = nullptr;
 
     if (n_instances > 0) {
+        const size_t n_instances_size = static_cast<size_t>(n_instances);
+        keys_current.allocate(n_instances_size * sizeof(InstanceKey));
+        keys_alternate.allocate(n_instances_size * sizeof(InstanceKey));
+        primitive_indices_current.allocate(n_instances_size * sizeof(uint));
+        primitive_indices_alternate.allocate(n_instances_size * sizeof(uint));
+
+        keys = cub::DoubleBuffer<InstanceKey>(keys_current.as<InstanceKey>(), keys_alternate.as<InstanceKey>());
+        primitive_indices = cub::DoubleBuffer<uint>(primitive_indices_current.as<uint>(), primitive_indices_alternate.as<uint>());
+
+        cub::DeviceRadixSort::SortPairs(
+            nullptr,
+            cub_workspace_size,
+            keys,
+            primitive_indices,
+            n_instances,
+            0,
+            key_end_bit);
+        cub_workspace.allocate(cub_workspace_size);
+
+        per_instance_sort_total_size =
+            keys_current.size() +
+            keys_alternate.size() +
+            primitive_indices_current.size() +
+            primitive_indices_alternate.size() +
+            cub_workspace.size();
+
         kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances>>>(
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
@@ -140,20 +250,22 @@ std::tuple<int, int> fast_lfs::rasterization::forward(
             per_primitive_buffers.screen_bounds,
             per_primitive_buffers.mean2d,
             per_primitive_buffers.conic_opacity,
-            per_instance_buffers.keys.Current(),
-            per_instance_buffers.primitive_indices.Current(),
+            keys.Current(),
+            primitive_indices.Current(),
             grid.x,
             depth_bits,
             n_primitives);
         CHECK_CUDA(config::debug, "create_instances")
 
         cub::DeviceRadixSort::SortPairs(
-            per_instance_buffers.cub_workspace,
-            per_instance_buffers.cub_workspace_size,
-            per_instance_buffers.keys,
-            per_instance_buffers.primitive_indices,
+            cub_workspace.as<char>(),
+            cub_workspace_size,
+            keys,
+            primitive_indices,
             n_instances, 0, key_end_bit);
         CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)")
+
+        sorted_primitive_indices = primitive_indices.Current();
     }
 
     // Wait for memset to complete (GPU-side wait, doesn't block CPU)
@@ -164,7 +276,7 @@ std::tuple<int, int> fast_lfs::rasterization::forward(
     // Extract instance ranges
     if (n_instances > 0) {
         kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges>>>(
-            per_instance_buffers.keys.Current(),
+            keys.Current(),
             per_tile_buffers.instance_ranges,
             depth_bits,
             n_instances);
@@ -174,7 +286,7 @@ std::tuple<int, int> fast_lfs::rasterization::forward(
     // Perform blending
     kernels::forward::blend_cu<<<grid, block>>>(
         per_tile_buffers.instance_ranges,
-        per_instance_buffers.primitive_indices.Current(),
+        sorted_primitive_indices,
         per_primitive_buffers.mean2d,
         per_primitive_buffers.conic_opacity,
         per_primitive_buffers.color,
@@ -187,5 +299,23 @@ std::tuple<int, int> fast_lfs::rasterization::forward(
         grid.x);
     CHECK_CUDA(config::debug, "blend")
 
-    return {n_instances, per_instance_buffers.primitive_indices.selector};
+    if (n_instances > 0) {
+        if (sorted_primitive_indices == primitive_indices_current.as<uint>()) {
+            primitive_indices_current.release();
+        } else if (sorted_primitive_indices == primitive_indices_alternate.as<uint>()) {
+            primitive_indices_alternate.release();
+        } else {
+            throw std::runtime_error("FastGS radix sort returned an unexpected sorted index buffer");
+        }
+    }
+
+    ForwardResult result;
+    result.n_instances = n_instances;
+    result.sorted_primitive_indices = sorted_primitive_indices;
+    result.sorted_primitive_indices_size = static_cast<size_t>(std::max(n_instances, 0)) * sizeof(uint);
+    result.per_instance_sort_total_size = per_instance_sort_total_size;
+    result.per_instance_sort_scratch_size = per_instance_sort_total_size > result.sorted_primitive_indices_size
+                                                ? per_instance_sort_total_size - result.sorted_primitive_indices_size
+                                                : 0;
+    return result;
 }

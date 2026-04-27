@@ -2755,8 +2755,7 @@ namespace lfs::training {
                     fast_ctx.emplace(std::move(rasterize_result->second));
 
                     if (fast_ctx->forward_ctx.n_instances == 0) {
-                        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                        arena.end_frame(fast_ctx->forward_ctx.frame_id);
+                        fast_ctx->release_forward_context();
                         nvtxRangePop();
                         nvtxRangePop();
                         continue;
@@ -2773,11 +2772,11 @@ namespace lfs::training {
                     }
                     tile_context_cleaned = true;
 
-                    auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                     if (fast_ctx) {
-                        arena.end_frame(fast_ctx->forward_ctx.frame_id);
+                        fast_ctx->release_forward_context();
                         fast_ctx.reset();
                     } else if (gsplat_ctx) {
+                        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                         if (gsplat_ctx->isect_ids_ptr != nullptr) {
                             cudaFree(gsplat_ctx->isect_ids_ptr);
                             gsplat_ctx->isect_ids_ptr = nullptr;
@@ -2968,7 +2967,13 @@ namespace lfs::training {
                             } else {
                                 ssim_map = photometric_loss_.ssim_workspace().ssim_map;
                             }
-                            {
+                            if (ssim_map.shape()[0] == 1 && ssim_map.shape()[1] == 1 &&
+                                ssim_map.is_contiguous()) {
+                                const size_t H = ssim_map.shape()[2];
+                                const size_t W = ssim_map.shape()[3];
+                                tile_error_map = ssim_map.reshape({static_cast<int>(H), static_cast<int>(W)});
+                                lfs::training::kernels::launch_ssim_to_error_map(ssim_map, tile_error_map);
+                            } else {
                                 const size_t H = ssim_map.shape()[2];
                                 const size_t W = ssim_map.shape()[3];
                                 if (!densification_error_map_.is_valid() ||
@@ -3035,9 +3040,9 @@ namespace lfs::training {
                             fastgs_entries.emplace_back("fastgs.per_tile_buffers",
                                                         fast_ctx->forward_ctx.per_tile_buffers_size);
                         }
-                        if (fast_ctx->forward_ctx.per_instance_buffers_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.per_instance_buffers",
-                                                        fast_ctx->forward_ctx.per_instance_buffers_size);
+                        if (fast_ctx->forward_ctx.sorted_primitive_indices_size > 0) {
+                            fastgs_entries.emplace_back("fastgs.sorted_primitive_indices_live",
+                                                        fast_ctx->forward_ctx.sorted_primitive_indices_size);
                         }
                         fastgs_entries.emplace_back("fastgs.grad_mean2d_helper", grad_mean2d_helper_bytes);
                         fastgs_entries.emplace_back("fastgs.grad_conic_helper", grad_conic_helper_bytes);
@@ -3055,6 +3060,12 @@ namespace lfs::training {
                             fastgs_entries.emplace_back("train.tile_error_map", tensor_reserved_bytes(tile_error_map));
                         }
                         log_entry_bytes("first_fastgs_tile_live", fastgs_entries);
+                        if (fast_ctx->forward_ctx.per_instance_sort_total_size > 0) {
+                            LOG_INFO("[MEM] fastgs_sort_transient total_forward={:.2f} MiB, released_after_forward={:.2f} MiB, sorted_indices_live={:.2f} MiB",
+                                     bytes_to_mib(fast_ctx->forward_ctx.per_instance_sort_total_size),
+                                     bytes_to_mib(fast_ctx->forward_ctx.per_instance_sort_scratch_size),
+                                     bytes_to_mib(fast_ctx->forward_ctx.sorted_primitive_indices_size));
+                        }
 
                         std::vector<std::pair<std::string, size_t>> trainer_entries;
                         if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {

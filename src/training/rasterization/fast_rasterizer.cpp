@@ -389,6 +389,11 @@ namespace lfs::training {
             return std::unexpected(std::string(forward_ctx.error_message));
         }
 
+        // Take ownership before any post-forward tensor work so exceptions cannot leak
+        // the retained sorted-index buffer or leave the arena frame active.
+        FastRasterizeContext ctx;
+        ctx.set_forward_context(forward_ctx);
+
         // Prepare render output
         RenderOutput render_output;
         const cudaStream_t stream = image.stream();
@@ -401,7 +406,6 @@ namespace lfs::training {
         render_output.height = height;
 
         // Prepare context for backward
-        FastRasterizeContext ctx;
         ctx.image = image;
         ctx.alpha = alpha;
         ctx.bg_color = bg_color; // Save bg_color for alpha gradient
@@ -417,9 +421,6 @@ namespace lfs::training {
         // Store camera pointers directly (tensors are managed by camera, already contiguous)
         ctx.w2c_ptr = w2c_ptr;
         ctx.cam_position_ptr = cam_position_ptr;
-
-        // Store forward context (contains buffer pointers, frame_id, etc.)
-        ctx.forward_ctx = forward_ctx;
 
         ctx.active_sh_bases = active_sh_bases;
         ctx.total_bases_sh_rest = total_bases_sh_rest;
@@ -439,11 +440,11 @@ namespace lfs::training {
         ctx.tile_width = tile_width;
         ctx.tile_height = tile_height;
 
-        return std::pair{render_output, ctx};
+        return std::pair{std::move(render_output), std::move(ctx)};
     }
 
     void fast_rasterize_backward(
-        const FastRasterizeContext& ctx,
+        FastRasterizeContext& ctx,
         const core::Tensor& grad_image,
         core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
@@ -598,6 +599,8 @@ namespace lfs::training {
             ctx.mip_filter,
             densification_type,
             &fused_adam);
+
+        ctx.mark_forward_context_released();
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
