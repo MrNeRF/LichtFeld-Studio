@@ -15,21 +15,35 @@ namespace cg = cooperative_groups;
 
 namespace edge_compute::rasterization::kernels::forward {
 
+    __device__ __forceinline__ uint quantize_depth_key(float depth, const uint depth_bits) {
+        if (depth_bits == 0)
+            return 0;
+
+        constexpr uint FLOAT32_FRACTION_BITS = 23;
+        constexpr uint FLOAT32_FRACTION_MASK = (1u << FLOAT32_FRACTION_BITS) - 1u;
+        constexpr uint FLOAT32_BELOW_TWO = 0x3fffffffu;
+
+        float normalized_depth = (2.0f * depth + 1.0f) / (depth + 1.0f);
+        normalized_depth = fminf(fmaxf(normalized_depth, 1.0f), __uint_as_float(FLOAT32_BELOW_TWO));
+        const uint fraction = __float_as_uint(normalized_depth) & FLOAT32_FRACTION_MASK;
+        return fraction >> (FLOAT32_FRACTION_BITS - depth_bits);
+    }
+
+    __device__ __forceinline__ InstanceKey make_instance_key(const uint tile_key, const uint depth_key, const uint depth_bits) {
+        return (static_cast<InstanceKey>(tile_key) << depth_bits) | static_cast<InstanceKey>(depth_key);
+    }
+
     __global__ void preprocess_cu(
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
         const float4* __restrict__ w2c,
-        const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
-        uint* __restrict__ primitive_indices,
         uint* __restrict__ primitive_n_touched_tiles,
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
         float4* __restrict__ primitive_conic_opacity,
-        uint* __restrict__ n_visible_primitives,
-        uint* __restrict__ n_instances,
         const uint n_primitives,
         const uint grid_width,
         const uint grid_height,
@@ -41,6 +55,7 @@ namespace edge_compute::rasterization::kernels::forward {
         const float cy,
         const float near_, // near and far are macros in windowns
         const float far_,
+        const uint depth_bits,
         const bool mip_filter) {
         auto primitive_idx = cg::this_grid().thread_rank();
         bool active = true;
@@ -179,9 +194,9 @@ namespace edge_compute::rasterization::kernels::forward {
         // compute exact number of tiles the primitive overlaps
         const uint n_touched_tiles = compute_exact_n_touched_tiles(
             mean2d, conic, screen_bounds,
-            power_threshold, n_touched_tiles_max, active);
+            power_threshold, active);
 
-        // cooperative threads no longer needed
+        // Skip primitives whose exact tile range collapsed after ellipse refinement.
         if (n_touched_tiles == 0 || !active)
             return;
 
@@ -194,144 +209,99 @@ namespace edge_compute::rasterization::kernels::forward {
             static_cast<ushort>(screen_bounds.w));
         primitive_mean2d[primitive_idx] = mean2d;
         primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
-
-        const uint offset = atomicAdd(n_visible_primitives, 1);
-        const uint depth_key = __float_as_uint(depth);
-        primitive_depth_keys[offset] = depth_key;
-        primitive_indices[offset] = primitive_idx;
-        atomicAdd(n_instances, n_touched_tiles);
-    }
-
-    __global__ void apply_depth_ordering_cu(
-        const uint* primitive_indices_sorted,
-        const uint* primitive_n_touched_tiles,
-        uint* primitive_offset,
-        const uint n_visible_primitives) {
-        auto idx = cg::this_grid().thread_rank();
-        if (idx >= n_visible_primitives)
-            return;
-        const uint primitive_idx = primitive_indices_sorted[idx];
-        primitive_offset[idx] = primitive_n_touched_tiles[primitive_idx];
+        primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
-        const uint* __restrict__ primitive_indices_sorted,
+        const uint* __restrict__ primitive_n_touched_tiles,
         const uint* __restrict__ primitive_offsets,
+        const uint* __restrict__ primitive_depth_keys,
         const ushort4* __restrict__ primitive_screen_bounds,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
-        ushort* __restrict__ instance_keys,
+        InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
         const uint grid_width,
-        const uint n_visible_primitives) {
-        auto block = cg::this_thread_block();
-        auto warp = cg::tiled_partition<32u>(block);
+        const uint depth_bits,
+        const uint n_primitives) {
         uint idx = cg::this_grid().thread_rank();
 
         bool active = true;
-        if (idx >= n_visible_primitives) {
+        if (idx >= n_primitives) {
             active = false;
-            idx = n_visible_primitives - 1;
+            idx = n_primitives - 1;
         }
+
+        const uint primitive_idx = idx;
+        const uint n_touched_tiles = active ? primitive_n_touched_tiles[primitive_idx] : 0;
+        active = active && n_touched_tiles > 0;
 
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
-        const uint primitive_idx = primitive_indices_sorted[idx];
+        const ushort4 screen_bounds = active ? primitive_screen_bounds[primitive_idx] : make_ushort4(0, 0, 0, 0);
+        const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
+        const uint write_offset_end = active ? primitive_offsets[idx] : 0;
 
-        const ushort4 screen_bounds = primitive_screen_bounds[primitive_idx];
-        const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
-        const uint tile_count = static_cast<uint>(screen_bounds.w - screen_bounds.z) * screen_bounds_width;
-
-        __shared__ ushort4 collected_screen_bounds[config::block_size_create_instances];
-        __shared__ float2 collected_mean2d_shifted[config::block_size_create_instances];
-        __shared__ float4 collected_conic_power_threshold[config::block_size_create_instances];
-        collected_screen_bounds[block.thread_rank()] = screen_bounds;
-        collected_mean2d_shifted[block.thread_rank()] = primitive_mean2d[primitive_idx] - 0.5f;
-        const float4 conic_opacity_loaded = primitive_conic_opacity[primitive_idx];
+        const float2 mean2d_shifted = active ? primitive_mean2d[primitive_idx] - 0.5f : make_float2(0.0f, 0.0f);
+        const float4 conic_opacity_loaded = active ? primitive_conic_opacity[primitive_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
+        const float3 conic = make_float3(conic_opacity_loaded);
         const float power_threshold_precomputed = logf(conic_opacity_loaded.w * config::min_alpha_threshold_rcp);
-        collected_conic_power_threshold[block.thread_rank()] = make_float4(make_float3(conic_opacity_loaded), power_threshold_precomputed);
+        const float radius_sq = 2.0f * power_threshold_precomputed;
 
-        uint current_write_offset = primitive_offsets[idx];
+        uint current_write_offset = idx == 0 ? 0 : primitive_offsets[idx - 1];
 
         if (active) {
-            const float2 mean2d_shifted = collected_mean2d_shifted[block.thread_rank()];
-            const float4 conic_pt = collected_conic_power_threshold[block.thread_rank()];
-            const float3 conic = make_float3(conic_pt);
-            const float power_threshold = conic_pt.w;
+            const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
+            const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
 
-            for (uint instance_idx = 0; instance_idx < tile_count && instance_idx < config::n_sequential_threshold; instance_idx++) {
-                const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
-                const uint tile_x = screen_bounds.x + (instance_idx % screen_bounds_width);
-                if (will_primitive_contribute(mean2d_shifted, conic, tile_x, tile_y, power_threshold)) {
-                    const ushort tile_key = static_cast<ushort>(tile_y * grid_width + tile_x);
-                    instance_keys[current_write_offset] = tile_key;
-                    instance_primitive_indices[current_write_offset] = primitive_idx;
-                    current_write_offset++;
+            if (screen_bounds_height <= screen_bounds_width) {
+                for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
+                    const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
+                    const float y1 = y0 + static_cast<float>(config::tile_height);
+                    const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
+                    const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
+                    const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
+                    for (uint tile_x = min_x; tile_x < max_x && current_write_offset < write_offset_end; tile_x++) {
+                        const uint tile_key = tile_y * grid_width + tile_x;
+                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
+                        instance_primitive_indices[current_write_offset] = primitive_idx;
+                        current_write_offset++;
+                    }
+                }
+            } else {
+                const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
+                for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
+                    const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
+                    const float x1 = x0 + static_cast<float>(config::tile_width);
+                    const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
+                    const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
+                    const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
+                    for (uint tile_y = min_y; tile_y < max_y && current_write_offset < write_offset_end; tile_y++) {
+                        const uint tile_key = tile_y * grid_width + tile_x;
+                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
+                        instance_primitive_indices[current_write_offset] = primitive_idx;
+                        current_write_offset++;
+                    }
                 }
             }
-        }
-
-        const uint lane_idx = cg::this_thread_block().thread_rank() % 32u;
-        const uint warp_idx = cg::this_thread_block().thread_rank() / 32u;
-        const uint lane_mask_allprev_excl = (1u << lane_idx) - 1u;
-        const int compute_cooperatively = active && tile_count > config::n_sequential_threshold;
-        const uint remaining_threads = __ballot_sync(0xffffffffu, compute_cooperatively);
-        if (remaining_threads == 0)
-            return;
-
-        const uint n_remaining_threads = __popc(remaining_threads);
-        for (int n = 0; n < n_remaining_threads && n < 32; n++) {
-            int current_lane = __fns(remaining_threads, 0, n + 1);
-            uint primitive_idx_coop = __shfl_sync(0xffffffffu, primitive_idx, current_lane);
-            uint current_write_offset_coop = __shfl_sync(0xffffffffu, current_write_offset, current_lane);
-
-            const ushort4 screen_bounds_coop = collected_screen_bounds[warp.meta_group_rank() * 32 + current_lane];
-            const uint screen_bounds_width_coop = static_cast<uint>(screen_bounds_coop.y - screen_bounds_coop.x);
-            const uint tile_count_coop = screen_bounds_width_coop * static_cast<uint>(screen_bounds_coop.w - screen_bounds_coop.z);
-
-            const float2 mean2d_shifted_coop = collected_mean2d_shifted[warp.meta_group_rank() * 32 + current_lane];
-            const float4 conic_pt_coop = collected_conic_power_threshold[warp.meta_group_rank() * 32 + current_lane];
-            const float3 conic_coop = make_float3(conic_pt_coop);
-            const float power_threshold_coop = conic_pt_coop.w;
-
-            const uint remaining_tile_count = tile_count_coop - config::n_sequential_threshold;
-            const int n_iterations = div_round_up(remaining_tile_count, 32u);
-            for (int i = 0; i < n_iterations; i++) {
-                const int instance_idx = i * 32 + lane_idx + config::n_sequential_threshold;
-                const int active_current = instance_idx < tile_count_coop;
-                const uint tile_y = screen_bounds_coop.z + (instance_idx / screen_bounds_width_coop);
-                const uint tile_x = screen_bounds_coop.x + (instance_idx % screen_bounds_width_coop);
-                const uint write = active_current && will_primitive_contribute(mean2d_shifted_coop, conic_coop, tile_x, tile_y, power_threshold_coop);
-                const uint write_ballot = __ballot_sync(0xffffffffu, write);
-                const uint n_writes = __popc(write_ballot);
-                const uint write_offset_current = __popc(write_ballot & lane_mask_allprev_excl);
-                const uint write_offset = current_write_offset_coop + write_offset_current;
-                if (write) {
-                    const ushort tile_key = static_cast<ushort>(tile_y * grid_width + tile_x);
-                    instance_keys[write_offset] = tile_key;
-                    instance_primitive_indices[write_offset] = primitive_idx_coop;
-                }
-                current_write_offset_coop += n_writes;
-            }
-
-            __syncwarp();
         }
     }
 
     __global__ void extract_instance_ranges_cu(
-        const ushort* instance_keys,
+        const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
+        const uint depth_bits,
         const uint n_instances) {
         auto instance_idx = cg::this_grid().thread_rank();
         if (instance_idx >= n_instances)
             return;
-        const ushort instance_tile_idx = instance_keys[instance_idx];
+        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> depth_bits);
         if (instance_idx == 0)
             tile_instance_ranges[instance_tile_idx].x = 0;
         else {
-            const ushort previous_instance_tile_idx = instance_keys[instance_idx - 1];
+            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> depth_bits);
             if (instance_tile_idx != previous_instance_tile_idx) {
                 tile_instance_ranges[previous_instance_tile_idx].y = instance_idx;
                 tile_instance_ranges[instance_tile_idx].x = instance_idx;
@@ -341,24 +311,11 @@ namespace edge_compute::rasterization::kernels::forward {
             tile_instance_ranges[instance_tile_idx].y = n_instances;
     }
 
-    __global__ void extract_bucket_counts(
-        uint2* tile_instance_ranges,
-        uint* tile_n_buckets,
-        const uint n_tiles) {
-        auto tile_idx = cg::this_grid().thread_rank();
-        if (tile_idx >= n_tiles)
-            return;
-        const uint2 instance_range = tile_instance_ranges[tile_idx];
-        const uint n_buckets = div_round_up(instance_range.y - instance_range.x, static_cast<uint>(config::checkpoint_interval));
-        tile_n_buckets[tile_idx] = n_buckets;
-    }
-
     __global__ void __launch_bounds__(config::block_size_blend) edge_blend_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
-        float* __restrict__ alpha_map,
         const uint width,
         const uint height,
         const uint grid_width,
@@ -433,10 +390,6 @@ namespace edge_compute::rasterization::kernels::forward {
                     continue;
                 }
             }
-        }
-        if (inside) {
-            // store results
-            alpha_map[pixel_idx] = 1.0f - transmittance;
         }
     }
 

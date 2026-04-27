@@ -4,42 +4,21 @@
 
 #include "edge_rasterizer.hpp"
 #include "core/cuda/memory_arena.hpp"
-#include "core/logger.hpp"
-#include "core/path_utils.hpp"
-#include "core/tensor/internal/tensor_serialization.hpp"
-#include "training/kernels/grad_alpha.hpp"
+#include <edge_rasterization_api.h>
 #include <cassert>
-#include <chrono>
-#include <filesystem>
-#include <fstream>
 
 namespace lfs::training {
 
-    std::expected<std::pair<RenderOutput, FastRasterizeContext>, std::string> edge_rasterize_forward(
+    std::expected<RenderOutput, std::string> edge_rasterize_forward(
         core::Camera& viewpoint_camera,
         core::SplatData& gaussian_model,
-        core::Tensor& bg_color,
         const lfs::core::Tensor& pixel_weights,
-        int tile_x_offset,
-        int tile_y_offset,
-        int tile_width,
-        int tile_height,
-        bool mip_filter,
-        const core::Tensor& bg_image) {
+        bool mip_filter) {
         // Get camera parameters
-        const int full_width = viewpoint_camera.image_width();
-        const int full_height = viewpoint_camera.image_height();
-
-        // Determine tile dimensions (tile_width/height=0 means render full image)
-        const int width = (tile_width > 0) ? tile_width : full_width;
-        const int height = (tile_height > 0) ? tile_height : full_height;
+        const int width = viewpoint_camera.image_width();
+        const int height = viewpoint_camera.image_height();
 
         auto [fx, fy, cx, cy] = viewpoint_camera.get_intrinsics();
-
-        // Adjust camera center point for tile rendering
-        // When rendering a tile at offset, the principal point shifts
-        const float cx_adjusted = cx - static_cast<float>(tile_x_offset);
-        const float cy_adjusted = cy - static_cast<float>(tile_y_offset);
 
         assert(!pixel_weights.is_valid() ||
                pixel_weights.numel() == static_cast<size_t>(width) * static_cast<size_t>(height));
@@ -55,24 +34,11 @@ namespace lfs::training {
 
         // Get direct GPU pointers (tensors are already contiguous on CUDA)
         const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
-        const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
         const int n_primitives = static_cast<int>(means.shape()[0]);
 
         if (n_primitives == 0) {
             return std::unexpected("n_primitives is 0 - model has no gaussians");
-        }
-
-        // Pre-allocate output tensors (reused across iterations)
-        thread_local core::Tensor alpha;
-        thread_local int last_width = -1;
-        thread_local int last_height = -1;
-
-        // Only reallocate if dimensions changed
-        if (last_width != width || last_height != height) {
-            alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
-            last_width = width;
-            last_height = height;
         }
 
         // Input pixel_weights pointer and output accum_weights
@@ -91,17 +57,16 @@ namespace lfs::training {
             raw_rotations.ptr<float>(),
             raw_opacities.ptr<float>(),
             w2c_ptr,
-            cam_position_ptr,
-            alpha.ptr<float>(),
             n_primitives,
             width,
             height,
             fx,
             fy,
-            cx_adjusted, // Use adjusted cx for tile offset
-            cy_adjusted, // Use adjusted cy for tile offset
+            cx,
+            cy,
             near_plane,
             far_plane,
+            mip_filter,
             pixel_weights_ptr,
             accum_weights_out);
 
@@ -118,10 +83,10 @@ namespace lfs::training {
 
         render_output.edges_score = std::move(accum_weights);
         render_output.image = core::Tensor();
-        render_output.alpha = alpha;
+        render_output.alpha = core::Tensor();
         render_output.width = width;
         render_output.height = height;
 
-        return std::pair{render_output, FastRasterizeContext{}};
+        return render_output;
     }
 } // namespace lfs::training

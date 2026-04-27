@@ -300,8 +300,7 @@ namespace lfs::training {
             apply_canny_filter(image, canny_ws);
             normalize_by_positive_median_inplace(canny_ws.nms_output);
 
-            lfs::core::Tensor bg;
-            auto score_render = edge_rasterize(*cam, this->get_model(), bg, canny_ws.nms_output);
+            auto score_render = edge_rasterize(*cam, this->get_model(), canny_ws.nms_output);
 
             normalize_by_positive_median_inplace(score_render.edges_score);
             gaussian_scores.add_(score_render.edges_score);

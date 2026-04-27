@@ -10,22 +10,19 @@
 #include "forward.h"
 #include "helper_math.h"
 #include "utils.h"
-#include <cstring>
 #include <cuda_runtime.h>
 #include <functional>
+#include <string>
 #include <stdexcept>
-#include <vector>
 
 namespace edge_compute::rasterization {
 
-    ForwardContext edge_forward_raw(
+    ForwardResult edge_forward_raw(
         const float* means_ptr,
         const float* scales_raw_ptr,
         const float* rotations_raw_ptr,
         const float* opacities_raw_ptr,
         const float* w2c_ptr,
-        const float* cam_position_ptr,
-        float* alpha_ptr,
         int n_primitives,
         int width,
         int height,
@@ -35,6 +32,7 @@ namespace edge_compute::rasterization {
         float center_y,
         float near_plane,
         float far_plane,
+        bool mip_filter,
         const float* pixel_weights,
         float* accum_weights) {
         // Validate inputs using pure CUDA validation
@@ -43,8 +41,6 @@ namespace edge_compute::rasterization {
         CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
         CHECK_CUDA_PTR(opacities_raw_ptr, "opacities_raw_ptr");
         CHECK_CUDA_PTR(w2c_ptr, "w2c_ptr");
-        CHECK_CUDA_PTR(cam_position_ptr, "cam_position_ptr");
-        CHECK_CUDA_PTR(alpha_ptr, "alpha_ptr");
 
         if (n_primitives <= 0 || width <= 0 || height <= 0) {
             throw std::runtime_error("Invalid dimensions in forward_raw");
@@ -71,11 +67,7 @@ namespace edge_compute::rasterization {
 
         if (!per_primitive_buffers_blob || !per_tile_buffers_blob) {
             arena.end_frame(frame_id);
-            ForwardContext error_ctx = {};
-            error_ctx.success = false;
-            error_ctx.error_message = "OUT_OF_MEMORY: Failed to allocate initial buffers from arena";
-            error_ctx.frame_id = frame_id; // Set frame_id so caller knows it's ended
-            return error_ctx;
+            return {frame_id, false, "OUT_OF_MEMORY: Failed to allocate initial buffers from arena"};
         }
 
         // Create allocation wrappers
@@ -92,11 +84,9 @@ namespace edge_compute::rasterization {
 
         // These will be allocated later based on n_instances
         char* per_instance_buffers_blob = nullptr;
-        size_t per_instance_size = 0;
 
         std::function<char*(size_t)> per_instance_buffers_func =
-            [&arena_allocator, &per_instance_buffers_blob, &per_instance_size](size_t size) -> char* {
-            per_instance_size = size;
+            [&arena_allocator, &per_instance_buffers_blob](size_t size) -> char* {
             per_instance_buffers_blob = arena_allocator(size);
             if (!per_instance_buffers_blob) {
                 // Throw immediately to prevent nullptr from being used
@@ -107,66 +97,41 @@ namespace edge_compute::rasterization {
 
         try {
             // Call the actual forward implementation
-            auto [n_visible_primitives, n_instances,
-                  primitive_primitive_indices_selector,
-                  instance_primitive_indices_selector] = edge_forward(per_primitive_buffers_func,
-                                                                      per_tile_buffers_func,
-                                                                      per_instance_buffers_func,
-                                                                      reinterpret_cast<const float3*>(means_ptr),
-                                                                      reinterpret_cast<const float3*>(scales_raw_ptr),
-                                                                      reinterpret_cast<const float4*>(rotations_raw_ptr),
-                                                                      opacities_raw_ptr,
-                                                                      reinterpret_cast<const float4*>(w2c_ptr),
-                                                                      reinterpret_cast<const float3*>(cam_position_ptr),
-                                                                      alpha_ptr,
-                                                                      n_primitives,
-                                                                      width,
-                                                                      height,
-                                                                      focal_x,
-                                                                      focal_y,
-                                                                      center_x,
-                                                                      center_y,
-                                                                      near_plane,
-                                                                      far_plane,
-                                                                      pixel_weights,
-                                                                      accum_weights);
+            const int n_instances = edge_forward(per_primitive_buffers_func,
+                                                 per_tile_buffers_func,
+                                                 per_instance_buffers_func,
+                                                 reinterpret_cast<const float3*>(means_ptr),
+                                                 reinterpret_cast<const float3*>(scales_raw_ptr),
+                                                 reinterpret_cast<const float4*>(rotations_raw_ptr),
+                                                 opacities_raw_ptr,
+                                                 reinterpret_cast<const float4*>(w2c_ptr),
+                                                 n_primitives,
+                                                 width,
+                                                 height,
+                                                 focal_x,
+                                                 focal_y,
+                                                 center_x,
+                                                 center_y,
+                                                 near_plane,
+                                                 far_plane,
+                                                 mip_filter,
+                                                 pixel_weights,
+                                                 accum_weights);
 
             // Verify allocations happened
             if (n_instances > 0 && !per_instance_buffers_blob) {
                 arena.end_frame(frame_id);
-                ForwardContext error_ctx = {};
-                error_ctx.success = false;
-                error_ctx.error_message = "OUT_OF_MEMORY: Instance buffers were not allocated despite n_instances > 0";
-                error_ctx.frame_id = frame_id;
-                return error_ctx;
+                return {frame_id, false, "OUT_OF_MEMORY: Instance buffers were not allocated despite n_instances > 0"};
             }
 
-            // Create and return context
-            ForwardContext ctx;
-            ctx.per_primitive_buffers = per_primitive_buffers_blob;
-            ctx.per_tile_buffers = per_tile_buffers_blob;
-            ctx.per_instance_buffers = per_instance_buffers_blob;
-            ctx.per_primitive_buffers_size = per_primitive_size;
-            ctx.per_tile_buffers_size = per_tile_size;
-            ctx.per_instance_buffers_size = per_instance_size;
-            ctx.n_visible_primitives = n_visible_primitives;
-            ctx.n_instances = n_instances;
-            ctx.primitive_primitive_indices_selector = primitive_primitive_indices_selector;
-            ctx.instance_primitive_indices_selector = instance_primitive_indices_selector;
-            ctx.frame_id = frame_id;
-            ctx.success = true;
-            ctx.error_message = nullptr;
-
-            return ctx;
+            return {frame_id, true, nullptr};
 
         } catch (const std::exception& e) {
             // Clean up frame on error and return error context instead of throwing
             arena.end_frame(frame_id);
-            ForwardContext error_ctx = {};
-            error_ctx.success = false;
-            error_ctx.error_message = e.what();
-            error_ctx.frame_id = frame_id;
-            return error_ctx;
+            static thread_local std::string error_message;
+            error_message = e.what();
+            return {frame_id, false, error_message.c_str()};
         }
     }
 
