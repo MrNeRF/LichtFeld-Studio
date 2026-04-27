@@ -93,29 +93,7 @@ namespace lfs::io {
             return pts;
         };
 
-        if (mode == CentralizeDataset::Auto && point_cloud && point_cloud->size() > 0) {
-            // Shift only when the origin is clearly outside the scene distribution.
-            // factor=2.0 -> threshold ~= 2xMAD ~= 3sigma under normality (MAD ~= 0.6745sigma),
-            // meaning we centre only when the origin is a strong outlier w.r.t. the
-            // point cloud spread - robust against near-origin scenes that need no shift.
-            constexpr float k = 2.0f;
-
-            auto pts = build_pts();
-            auto med = lfs::geometry::geometric_median(pts);
-            float mad = lfs::geometry::geometric_mad(pts, med);
-            float origin_dist = glm::length(med);
-
-            if (origin_dist > k * mad) {
-                std::vector<float> center_data = {med.x, med.y, med.z};
-                center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
-                LOG_INFO("Auto-centralizing: origin {:.3f} > {:.1f}xMAD ({:.3f}) - shifting by median [{:.3f}, {:.3f}, {:.3f}]",
-                         origin_dist, k, k * mad, med.x, med.y, med.z);
-            } else {
-                LOG_INFO("Auto-centralizing: origin {:.3f} <= {:.1f}xMAD ({:.3f}) - no shift needed",
-                         origin_dist, k, k * mad);
-            }
-
-        } else if (mode == CentralizeDataset::ByPointCloud &&
+        if (mode == CentralizeDataset::ByPointCloud &&
                    point_cloud && point_cloud->size() > 0) {
             auto pts = build_pts();
             auto med = lfs::geometry::geometric_median(pts);

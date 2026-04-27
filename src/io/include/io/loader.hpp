@@ -47,7 +47,6 @@ namespace lfs::io {
     // Centralize dataset enum
     enum class CentralizeDataset {
         Off,
-        Auto,
         ByPointCloud,
         ByCameras
     };

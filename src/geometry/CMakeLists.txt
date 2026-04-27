@@ -33,4 +33,4 @@ message(STATUS "╔════════════════════�
 message(STATUS "║  geometry - LibTorch-free Geometry Module                 ║")
 message(STATUS "╚════════════════════════════════════════════════════════════════╝")
 message(STATUS "  • Namespace: lfs::geometry")
-message(STATUS "  • Contains: EuclideanTransform, BoundingBox, geometry_misc")
+message(STATUS "  • Contains: EuclideanTransform, BoundingBox")

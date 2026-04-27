@@ -804,7 +804,11 @@
     "output_dir": "Output:      ",
     "init_file": "Init file (optioneel, vervangt points3D):",
     "help_text": "Checkpoints, logs en geëxporteerde modellen worden opgeslagen in de output map.",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "Dataset centreren",
+    "centralize_off": "Uit",
+    "centralize_by_pointcloud": "Op puntenwolk",
+    "centralize_by_cameras": "Op camera's"
   },
   "notification": {
     "cannot_open": "Kan niet openen",

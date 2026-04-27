@@ -804,7 +804,11 @@
     "output_dir": "Sortie : ",
     "init_file": "Init file (optionnel, remplace points3D) :",
     "help_text": "Les checkpoints, logs et modèles exportés seront sauvegardés dans le répertoire de sortie.",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "Centraliser le dataset",
+    "centralize_off": "Désactivé",
+    "centralize_by_pointcloud": "Par nuage de points",
+    "centralize_by_cameras": "Par caméras"
   },
   "notification": {
     "cannot_open": "Impossible d'ouvrir",
