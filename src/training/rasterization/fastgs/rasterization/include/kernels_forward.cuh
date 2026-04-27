@@ -330,6 +330,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         float* __restrict__ image,
         float* __restrict__ alpha_map,
         uint* __restrict__ tile_n_contributions,
+        float* __restrict__ tile_final_transmittance,
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -400,6 +401,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             alpha_map[pixel_idx] = 1.0f - transmittance;
             tile_n_contributions[pixel_idx] = n_contributions;
         }
+        tile_final_transmittance[tile_idx * config::block_size_blend + thread_rank] = inside ? transmittance : 1.0f;
     }
 
 } // namespace fast_lfs::rasterization::kernels::forward

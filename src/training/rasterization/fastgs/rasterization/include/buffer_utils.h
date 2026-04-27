@@ -132,11 +132,14 @@ namespace fast_lfs::rasterization {
     struct PerTileBuffers {
         uint2* instance_ranges;
         uint* n_contributions;
+        float* final_transmittance;
 
         static PerTileBuffers from_blob(char*& blob, int n_tiles) {
             PerTileBuffers buffers;
             obtain(blob, buffers.instance_ranges, n_tiles, 128);
             obtain(blob, buffers.n_contributions,
+                   static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
+            obtain(blob, buffers.final_transmittance,
                    static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
             return buffers;
         }

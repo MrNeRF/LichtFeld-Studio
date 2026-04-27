@@ -347,6 +347,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float* __restrict__ image,
         const float* __restrict__ alpha_map,
         const uint* __restrict__ tile_n_contributions,
+        const float* __restrict__ tile_final_transmittance,
         float2* __restrict__ grad_mean2d,
         float* __restrict__ grad_conic,
         float* __restrict__ grad_raw_opacity,
@@ -357,6 +358,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint width,
         const uint height,
         const uint grid_width) {
+        (void)image;
+        (void)alpha_map;
         auto block = cg::this_thread_block();
         const uint tile_idx = block.group_index().x;
         const uint thread_rank = block.thread_rank();
@@ -375,6 +378,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         __shared__ float3 s_grad_color_state[config::block_size_blend];
         __shared__ float s_grad_transmittance_state[config::block_size_blend];
 
+        const uint tile_pixel_state_base = tile_idx * config::block_size_blend;
         for (int pixel_rank = static_cast<int>(thread_rank);
              pixel_rank < config::block_size_blend;
              pixel_rank += config::block_size_blend_backward) {
@@ -384,8 +388,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             const uint pixel_idx = valid_pixel ? width * pixel_coords.y + pixel_coords.x : 0;
 
             s_last_contributor[pixel_rank] = valid_pixel ? tile_n_contributions[pixel_idx] : 0;
-            const float alpha_pixel = valid_pixel ? alpha_map[pixel_idx] : 0.0f;
-            s_transmittance_state[pixel_rank] = valid_pixel ? fmaxf(1.0f - alpha_pixel, 0.0f) : 1.0f;
+            s_transmittance_state[pixel_rank] = valid_pixel ? tile_final_transmittance[tile_pixel_state_base + pixel_rank] : 1.0f;
             s_grad_color_state[pixel_rank] = valid_pixel
                                                  ? make_float3(grad_image[pixel_idx], grad_image[n_pixels + pixel_idx], grad_image[2 * n_pixels + pixel_idx])
                                                  : make_float3(0.0f);
@@ -401,6 +404,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         } else if (tile_n_primitives <= 36) {
             splat_batch_size = 96;
         }
+
         for (int batch_base = 0; batch_base < tile_n_primitives; batch_base += splat_batch_size) {
             const int n_splats_in_batch = ((tile_n_primitives - batch_base) < splat_batch_size)
                                               ? (tile_n_primitives - batch_base)

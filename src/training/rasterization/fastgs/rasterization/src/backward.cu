@@ -72,6 +72,7 @@ void fast_lfs::rasterization::backward(
                 image,
                 alpha,
                 per_tile_buffers.n_contributions,
+                per_tile_buffers.final_transmittance,
                 grad_mean2d_helper,
                 grad_conic_helper,
                 grad_opacity_helper,

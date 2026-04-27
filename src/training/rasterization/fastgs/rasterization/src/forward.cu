@@ -181,6 +181,7 @@ std::tuple<int, int> fast_lfs::rasterization::forward(
         image,
         alpha,
         per_tile_buffers.n_contributions,
+        per_tile_buffers.final_transmittance,
         width,
         height,
         grid.x);
