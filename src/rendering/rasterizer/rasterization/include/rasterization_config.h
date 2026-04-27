@@ -12,7 +12,7 @@ namespace lfs::rendering::config {
     DEF bool debug = false;
     DEF float pre_blur_amount = 0.0f;
     DEF float blur_amount = 0.3f;
-    DEF float max_stddev = 2.8284271247461903f; // Spark default: sqrt(8)
+    DEF float max_stddev = 2.8284271247461903f; // sqrt(8)
     DEF float max_power_threshold = 4.0f;       // 0.5 * max_stddev^2
     DEF float min_alpha_threshold = 0.5f / 255.0f;
     DEF float min_alpha_threshold_rcp = 1.0f / min_alpha_threshold;

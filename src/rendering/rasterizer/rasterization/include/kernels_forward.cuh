@@ -350,8 +350,8 @@ namespace lfs::rendering::kernels::forward {
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
-        const float power_threshold = config::max_power_threshold;
-        const float power_threshold_factor = config::max_stddev;
+        const float power_threshold = power_threshold_for_opacity(output_opacity);
+        const float power_threshold_factor = stddev_for_power_threshold(power_threshold);
         const float max_sigma = (config::max_pixel_radius + 0.5f) / fmaxf(power_threshold_factor, 1e-6f);
         const float max_variance = max_sigma * max_sigma;
         const float eigen_avg = 0.5f * (cov2d.x + cov2d.z);
@@ -586,7 +586,7 @@ namespace lfs::rendering::kernels::forward {
             const float2 mean2d_shifted = collected_mean2d_shifted[block.thread_rank()];
             const float4 conic_opacity = collected_conic_opacity[block.thread_rank()];
             const float3 conic = make_float3(conic_opacity);
-            const float power_threshold = config::max_power_threshold;
+            const float power_threshold = power_threshold_for_opacity(conic_opacity.w);
 
             for (uint instance_idx = 0; instance_idx < tile_count && instance_idx < config::n_sequential_threshold; instance_idx++) {
                 const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
@@ -621,7 +621,7 @@ namespace lfs::rendering::kernels::forward {
             const float2 mean2d_shifted_coop = collected_mean2d_shifted[warp.meta_group_rank() * 32 + current_lane];
             const float4 conic_opacity_coop = collected_conic_opacity[warp.meta_group_rank() * 32 + current_lane];
             const float3 conic_coop = make_float3(conic_opacity_coop);
-            const float power_threshold_coop = config::max_power_threshold;
+            const float power_threshold_coop = power_threshold_for_opacity(conic_opacity_coop.w);
 
             const uint remaining_tile_count = tile_count_coop - config::n_sequential_threshold;
             const int n_iterations = div_round_up(remaining_tile_count, 32u);
@@ -750,7 +750,7 @@ namespace lfs::rendering::kernels::forward {
                 const float2 delta = collected_mean2d[j] - pixel;
                 const float opacity = conic_opacity.w;
                 const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                if (sigma_over_2 < 0.0f || sigma_over_2 > config::max_power_threshold)
+                if (sigma_over_2 < 0.0f || sigma_over_2 > power_threshold_for_opacity(opacity))
                     continue;
                 float gaussian = expf(-sigma_over_2);
 

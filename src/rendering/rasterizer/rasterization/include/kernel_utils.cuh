@@ -46,6 +46,16 @@ namespace lfs::rendering::kernels {
         return result;
     }
 
+    __device__ inline float power_threshold_for_opacity(const float opacity) {
+        const float safe_opacity = fmaxf(opacity, config::min_alpha_threshold);
+        const float alpha_cutoff_power = logf(safe_opacity * config::min_alpha_threshold_rcp);
+        return fmaxf(config::max_power_threshold, alpha_cutoff_power);
+    }
+
+    __device__ inline float stddev_for_power_threshold(const float power_threshold) {
+        return sqrtf(2.0f * power_threshold);
+    }
+
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L131
     __device__ inline bool will_primitive_contribute(
         const float2& mean,
