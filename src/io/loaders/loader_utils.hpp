@@ -93,22 +93,29 @@ namespace lfs::io {
             return pts;
         };
 
-        if (mode == CentralizeDataset::ByPointCloud &&
-                   point_cloud && point_cloud->size() > 0) {
-            auto pts = build_pts();
-            auto med = lfs::geometry::geometric_median(pts);
-            std::vector<float> center_data = {med.x, med.y, med.z};
-            center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
-            LOG_INFO("Centralizing by point cloud (geometric median): center=[{:.3f}, {:.3f}, {:.3f}]",
-                     med.x, med.y, med.z);
-
-        } else if (mode == CentralizeDataset::ByCameras && !cameras.empty()) {
-            auto cam_pts = build_camera_pts();
-            auto med = lfs::geometry::geometric_median(cam_pts);
-            std::vector<float> center_data = {med.x, med.y, med.z};
-            center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
-            LOG_INFO("Centralizing by cameras (geometric median): center=[{:.3f}, {:.3f}, {:.3f}]",
-                     med.x, med.y, med.z);
+        switch (mode) {
+        case CentralizeDataset::ByPointCloud:
+            if (point_cloud && point_cloud->size() > 0) {
+                auto pts = build_pts();
+                auto med = lfs::geometry::geometric_median(pts);
+                std::vector<float> center_data = {med.x, med.y, med.z};
+                center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
+                LOG_INFO("Centralizing by point cloud (geometric median): center=[{:.3f}, {:.3f}, {:.3f}]",
+                         med.x, med.y, med.z);
+            }
+            break;
+        case CentralizeDataset::ByCameras:
+            if (!cameras.empty()) {
+                auto cam_pts = build_camera_pts();
+                auto med = lfs::geometry::geometric_median(cam_pts);
+                std::vector<float> center_data = {med.x, med.y, med.z};
+                center = lfs::core::Tensor::from_vector(center_data, {3}, lfs::core::Device::CPU);
+                LOG_INFO("Centralizing by cameras (geometric median): center=[{:.3f}, {:.3f}, {:.3f}]",
+                         med.x, med.y, med.z);
+            }
+            break;
+        default:
+            break;
         }
 
         if (center.is_valid()) {
