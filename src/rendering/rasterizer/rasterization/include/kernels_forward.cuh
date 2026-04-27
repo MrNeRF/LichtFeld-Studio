@@ -318,26 +318,64 @@ namespace lfs::rendering::kernels::forward {
                               ? kernels::project_orthographic(cam_x, cam_y, cx, cy, ortho_scale, w2c_r1, w2c_r2)
                               : kernels::project_perspective(cam_x, cam_y, depth, fx, fy, cx, cy, w, h, w2c_r1, w2c_r2, w2c_r3);
         const float2 mean2d = proj.mean2d;
+
+        const float clip_margin_factor = fmaxf(0.0f, 0.5f * (config::clip_xy - 1.0f));
+        const float margin_x = clip_margin_factor * w;
+        const float margin_y = clip_margin_factor * h;
+        if (!isfinite(mean2d.x) || !isfinite(mean2d.y) ||
+            mean2d.x < -margin_x || mean2d.x > w + margin_x ||
+            mean2d.y < -margin_y || mean2d.y > h + margin_y) {
+            active = false;
+        }
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
+        const float2 raster_mean2d = active ? mean2d : make_float2(0.0f, 0.0f);
+
         float3 cov2d = kernels::project_cov3d(proj.jw_r1, proj.jw_r2, cov3d);
 
-        // Mip filter: use smaller dilation and compensate opacity
-        const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
-        cov2d.x += kernel_size;
-        cov2d.z += kernel_size;
-        const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-        if (det < 1e-8f)
+        cov2d.x += config::pre_blur_amount;
+        cov2d.z += config::pre_blur_amount;
+        const float det_orig = fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f);
+        cov2d.x += config::blur_amount;
+        cov2d.z += config::blur_amount;
+        const float det_for_opacity = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+        if (det_for_opacity < 1e-8f)
             active = false;
-        const float det_safe = fmaxf(det, 1e-8f);
-        const float det_rcp = 1.0f / det_safe;
-        const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
-        const bool low_opacity_query_only =
+        const float det_for_opacity_safe = fmaxf(det_for_opacity, 1e-8f);
+        const float output_opacity = opacity * sqrtf(det_orig / det_for_opacity_safe);
+        const bool low_opacity_query_only = active &&
             output_opacity < config::min_alpha_threshold && include_low_opacity_selection_queries;
         if (output_opacity < config::min_alpha_threshold && !include_low_opacity_selection_queries)
             active = false;
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
+        const float power_threshold = config::max_power_threshold;
+        const float power_threshold_factor = config::max_stddev;
+        const float max_sigma = (config::max_pixel_radius + 0.5f) / fmaxf(power_threshold_factor, 1e-6f);
+        const float max_variance = max_sigma * max_sigma;
+        const float eigen_avg = 0.5f * (cov2d.x + cov2d.z);
+        const float eigen_delta = sqrtf(fmaxf(0.0f, eigen_avg * eigen_avg - det_for_opacity));
+        const float eigen1 = eigen_avg + eigen_delta;
+        const float eigen2 = fmaxf(eigen_avg - eigen_delta, 0.0f);
+        const float eigen1_clamped = fminf(eigen1, max_variance);
+        const float eigen2_clamped = fminf(eigen2, max_variance);
+        if (eigen1_clamped < eigen1 || eigen2_clamped < eigen2) {
+            const float2 eigen_vec1 = fabsf(cov2d.y) > 1e-6f
+                                          ? normalize(make_float2(cov2d.y, eigen1 - cov2d.x))
+                                          : (cov2d.x >= cov2d.z ? make_float2(1.0f, 0.0f) : make_float2(0.0f, 1.0f));
+            const float2 eigen_vec2 = make_float2(eigen_vec1.y, -eigen_vec1.x);
+            cov2d = make_float3(
+                eigen1_clamped * eigen_vec1.x * eigen_vec1.x + eigen2_clamped * eigen_vec2.x * eigen_vec2.x,
+                eigen1_clamped * eigen_vec1.x * eigen_vec1.y + eigen2_clamped * eigen_vec2.x * eigen_vec2.y,
+                eigen1_clamped * eigen_vec1.y * eigen_vec1.y + eigen2_clamped * eigen_vec2.y * eigen_vec2.y);
+        }
+
+        const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+        if (det < 1e-8f)
+            active = false;
+        const float det_safe = fmaxf(det, 1e-8f);
+        const float det_rcp = 1.0f / det_safe;
         const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
 
         if (low_opacity_query_only) {
@@ -359,16 +397,20 @@ namespace lfs::rendering::kernels::forward {
         }
 
         // Compute bounds
-        const float safe_output_opacity = fmaxf(output_opacity, config::min_alpha_threshold);
-        const float power_threshold = logf(safe_output_opacity * config::min_alpha_threshold_rcp);
-        const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
+        if (!isfinite(extent_x) || !isfinite(extent_y))
+            active = false;
+        if (!active) {
+            extent_x = 0.0f;
+            extent_y = 0.0f;
+        }
+
         const uint4 screen_bounds = make_uint4(
-            min(grid_width, static_cast<uint>(max(0, __float2int_rd((mean2d.x - extent_x) / static_cast<float>(config::tile_width))))),   // x_min
-            min(grid_width, static_cast<uint>(max(0, __float2int_ru((mean2d.x + extent_x) / static_cast<float>(config::tile_width))))),   // x_max
-            min(grid_height, static_cast<uint>(max(0, __float2int_rd((mean2d.y - extent_y) / static_cast<float>(config::tile_height))))), // y_min
-            min(grid_height, static_cast<uint>(max(0, __float2int_ru((mean2d.y + extent_y) / static_cast<float>(config::tile_height)))))  // y_max
+            min(grid_width, static_cast<uint>(max(0, __float2int_rd((raster_mean2d.x - extent_x) / static_cast<float>(config::tile_width))))),   // x_min
+            min(grid_width, static_cast<uint>(max(0, __float2int_ru((raster_mean2d.x + extent_x) / static_cast<float>(config::tile_width))))),   // x_max
+            min(grid_height, static_cast<uint>(max(0, __float2int_rd((raster_mean2d.y - extent_y) / static_cast<float>(config::tile_height))))), // y_min
+            min(grid_height, static_cast<uint>(max(0, __float2int_ru((raster_mean2d.y + extent_y) / static_cast<float>(config::tile_height)))))  // y_max
         );
         const uint n_touched_tiles_max = (screen_bounds.y - screen_bounds.x) * (screen_bounds.w - screen_bounds.z);
         if (n_touched_tiles_max == 0)
@@ -482,8 +524,9 @@ namespace lfs::rendering::kernels::forward {
         primitive_global_idx[primitive_idx] = global_idx;
 
         const uint offset = atomicAdd(n_visible_primitives, 1);
-        const uint depth_key = __float_as_uint(depth);
-        primitive_depth_keys[offset] = depth_key;
+        const float3 sort_delta = mean3d - cam_position[0];
+        const float radial_sort_metric = dot(sort_delta, sort_delta);
+        primitive_depth_keys[offset] = __float_as_uint(radial_sort_metric);
         primitive_indices[offset] = primitive_idx;
         atomicAdd(n_instances, n_touched_tiles);
     }
@@ -543,7 +586,7 @@ namespace lfs::rendering::kernels::forward {
             const float2 mean2d_shifted = collected_mean2d_shifted[block.thread_rank()];
             const float4 conic_opacity = collected_conic_opacity[block.thread_rank()];
             const float3 conic = make_float3(conic_opacity);
-            const float power_threshold = logf(conic_opacity.w * config::min_alpha_threshold_rcp);
+            const float power_threshold = config::max_power_threshold;
 
             for (uint instance_idx = 0; instance_idx < tile_count && instance_idx < config::n_sequential_threshold; instance_idx++) {
                 const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
@@ -578,7 +621,7 @@ namespace lfs::rendering::kernels::forward {
             const float2 mean2d_shifted_coop = collected_mean2d_shifted[warp.meta_group_rank() * 32 + current_lane];
             const float4 conic_opacity_coop = collected_conic_opacity[warp.meta_group_rank() * 32 + current_lane];
             const float3 conic_coop = make_float3(conic_opacity_coop);
-            const float power_threshold_coop = logf(conic_opacity_coop.w * config::min_alpha_threshold_rcp);
+            const float power_threshold_coop = config::max_power_threshold;
 
             const uint remaining_tile_count = tile_count_coop - config::n_sequential_threshold;
             const int n_iterations = div_round_up(remaining_tile_count, 32u);
@@ -707,7 +750,7 @@ namespace lfs::rendering::kernels::forward {
                 const float2 delta = collected_mean2d[j] - pixel;
                 const float opacity = conic_opacity.w;
                 const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                if (sigma_over_2 < 0.0f)
+                if (sigma_over_2 < 0.0f || sigma_over_2 > config::max_power_threshold)
                     continue;
                 float gaussian = expf(-sigma_over_2);
 
