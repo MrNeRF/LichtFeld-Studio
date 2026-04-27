@@ -11,7 +11,6 @@
 #include "utils.h"
 #include <cooperative_groups.h>
 #include <cstdint>
-#include <cub/cub.cuh>
 namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::backward {
@@ -31,6 +30,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         return make_float4(clamp_grad(g.x), clamp_grad(g.y), clamp_grad(g.z), clamp_grad(g.w));
     }
 
+    template <bool MIP_FILTER, int ACTIVE_SH_BASES>
     __global__ void preprocess_backward_cu(
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
@@ -46,7 +46,6 @@ namespace fast_lfs::rasterization::kernels::backward {
         float4* __restrict__ grad_w2c,
         float* __restrict__ densification_info,
         const uint n_primitives,
-        const uint active_sh_bases,
         const uint total_bases_sh_rest,
         const float w,
         const float h,
@@ -54,7 +53,6 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float fy,
         const float cx,
         const float cy,
-        const bool mip_filter,
         FusedAdamSettings fused_adam) {
         auto primitive_idx = cg::this_grid().thread_rank();
         if (primitive_idx >= n_primitives || primitive_n_touched_tiles[primitive_idx] == 0)
@@ -75,11 +73,11 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3 mean3d = means[primitive_idx];
 
         // sh evaluation backward
-        const float3 dL_dmean3d_from_color = convert_sh_to_color_backward(
+        const float3 dL_dmean3d_from_color = convert_sh_to_color_backward<ACTIVE_SH_BASES>(
             sh_coefficients_rest, grad_color_helper,
             fused_adam,
             mean3d, cam_position[0],
-            primitive_idx, active_sh_bases, total_bases_sh_rest);
+            primitive_idx, total_bases_sh_rest);
 
         const float4 w2c_r3 = w2c[2];
         const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
@@ -149,7 +147,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
         // 2d covariance gradient (use same dilation as forward pass)
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
         const float a = dot(jwc_r1, jw_r1) + kernel_size, b = dot(jwc_r1, jw_r2), c = dot(jwc_r2, jw_r2) + kernel_size;
         const float aa = a * a, bb = b * b, cc = c * c;
         const float ac = a * c, ab = a * b, bc = b * c;
@@ -336,25 +334,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
-    struct BlendBackwardAccumAdd {
-        __host__ __device__ __forceinline__ BlendBackwardAccum operator()(const BlendBackwardAccum& a, const BlendBackwardAccum& b) const {
-            return {
-                a.mean_x + b.mean_x,
-                a.mean_y + b.mean_y,
-                a.conic_x + b.conic_x,
-                a.conic_y + b.conic_y,
-                a.conic_z + b.conic_z,
-                a.raw_opacity + b.raw_opacity,
-                a.color_x + b.color_x,
-                a.color_y + b.color_y,
-                a.color_z + b.color_z,
-                a.densification_weight + b.densification_weight,
-                a.densification_error_weighted + b.densification_error_weighted};
-        }
-    };
-
-    template <DensificationType DENSIFICATION_TYPE>
-    __global__ void __launch_bounds__(config::block_size_blend) blend_backward_cu(
+    template <DensificationType DENSIFICATION_TYPE, bool MIP_FILTER>
+    __global__ void __launch_bounds__(config::block_size_blend_backward) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const float2* __restrict__ primitive_mean2d,
@@ -375,8 +356,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint n_primitives,
         const uint width,
         const uint height,
-        const uint grid_width,
-        const bool mip_filter) {
+        const uint grid_width) {
         auto block = cg::this_thread_block();
         const uint tile_idx = block.group_index().x;
         const uint thread_rank = block.thread_rank();
@@ -388,133 +368,171 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint n_pixels = width * height;
         const uint2 tile_coords = {tile_idx % grid_width, tile_idx / grid_width};
         const uint2 start_pixel_coords = {tile_coords.x * config::tile_width, tile_coords.y * config::tile_height};
-        const uint2 pixel_coords = {start_pixel_coords.x + thread_rank % config::tile_width,
-                                    start_pixel_coords.y + thread_rank / config::tile_width};
-        const bool valid_pixel = pixel_coords.x < width && pixel_coords.y < height;
-        const uint pixel_idx = valid_pixel ? width * pixel_coords.y + pixel_coords.x : 0;
-        const float2 pixel = make_float2(__uint2float_rn(pixel_coords.x), __uint2float_rn(pixel_coords.y)) + 0.5f;
+        static_assert(config::block_size_blend_backward <= config::block_size_blend);
 
-        const uint last_contributor = valid_pixel ? tile_n_contributions[pixel_idx] : 0;
-        float3 color_pixel_after = valid_pixel
-                                       ? make_float3(image[pixel_idx], image[n_pixels + pixel_idx], image[2 * n_pixels + pixel_idx])
-                                       : make_float3(0.0f);
-        const float3 grad_color_pixel = valid_pixel
-                                            ? make_float3(grad_image[pixel_idx], grad_image[n_pixels + pixel_idx], grad_image[2 * n_pixels + pixel_idx])
-                                            : make_float3(0.0f);
-        const float alpha_pixel = valid_pixel ? alpha_map[pixel_idx] : 0.0f;
-        const float grad_alpha_common = valid_pixel ? grad_alpha_map[pixel_idx] * (1.0f - alpha_pixel) : 0.0f;
-        float transmittance = 1.0f;
+        __shared__ uint s_last_contributor[config::block_size_blend];
+        __shared__ float s_transmittance_state[config::block_size_blend];
+        __shared__ float3 s_grad_color_state[config::block_size_blend];
+        __shared__ float s_grad_transmittance_state[config::block_size_blend];
 
-        __shared__ uint shared_primitive_idx;
-        __shared__ float2 shared_mean2d;
-        __shared__ float3 shared_conic;
-        __shared__ float shared_compensated_opacity;
-        __shared__ float shared_original_opacity;
-        __shared__ float3 shared_color;
-        __shared__ float3 shared_color_grad_factor;
+        for (int pixel_rank = static_cast<int>(thread_rank);
+             pixel_rank < config::block_size_blend;
+             pixel_rank += config::block_size_blend_backward) {
+            const uint2 pixel_coords = {start_pixel_coords.x + static_cast<uint>(pixel_rank % config::tile_width),
+                                        start_pixel_coords.y + static_cast<uint>(pixel_rank / config::tile_width)};
+            const bool valid_pixel = pixel_coords.x < width && pixel_coords.y < height;
+            const uint pixel_idx = valid_pixel ? width * pixel_coords.y + pixel_coords.x : 0;
 
-        using BlockReduce = cub::BlockReduce<BlendBackwardAccum, config::block_size_blend>;
-        __shared__ typename BlockReduce::TempStorage reduce_storage;
+            s_last_contributor[pixel_rank] = valid_pixel ? tile_n_contributions[pixel_idx] : 0;
+            const float alpha_pixel = valid_pixel ? alpha_map[pixel_idx] : 0.0f;
+            s_transmittance_state[pixel_rank] = valid_pixel ? fmaxf(1.0f - alpha_pixel, 0.0f) : 1.0f;
+            s_grad_color_state[pixel_rank] = valid_pixel
+                                                 ? make_float3(grad_image[pixel_idx], grad_image[n_pixels + pixel_idx], grad_image[2 * n_pixels + pixel_idx])
+                                                 : make_float3(0.0f);
+            s_grad_transmittance_state[pixel_rank] = valid_pixel ? -grad_alpha_map[pixel_idx] : 0.0f;
+        }
+        block.sync();
 
-        for (int tile_primitive_idx = 0; tile_primitive_idx < tile_n_primitives; ++tile_primitive_idx) {
-            if (thread_rank == 0) {
-                shared_primitive_idx = instance_primitive_indices[tile_instance_range.x + tile_primitive_idx];
-                shared_mean2d = primitive_mean2d[shared_primitive_idx];
-                const float4 conic_opacity = primitive_conic_opacity[shared_primitive_idx];
-                shared_conic = make_float3(conic_opacity);
-                shared_compensated_opacity = conic_opacity.w;
-                shared_original_opacity = mip_filter ? __frcp_rn(1.0f + __expf(-raw_opacities[shared_primitive_idx]))
-                                                     : shared_compensated_opacity;
-                const float3 color_unclamped = primitive_color[shared_primitive_idx];
-                shared_color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
-                shared_color_grad_factor = make_float3(
+        int splat_batch_size = config::block_size_blend_backward;
+        if (tile_n_primitives <= 4) {
+            splat_batch_size = 32;
+        } else if (tile_n_primitives <= 16) {
+            splat_batch_size = 64;
+        } else if (tile_n_primitives <= 36) {
+            splat_batch_size = 96;
+        }
+        for (int batch_base = 0; batch_base < tile_n_primitives; batch_base += splat_batch_size) {
+            const int n_splats_in_batch = ((tile_n_primitives - batch_base) < splat_batch_size)
+                                              ? (tile_n_primitives - batch_base)
+                                              : splat_batch_size;
+            const int lane = static_cast<int>(thread_rank);
+            const bool valid_splat = lane < n_splats_in_batch;
+            const int tile_primitive_idx = tile_n_primitives - batch_base - lane - 1;
+
+            uint primitive_idx = 0;
+            float2 mean2d = make_float2(0.0f, 0.0f);
+            float3 conic = make_float3(0.0f);
+            float compensated_opacity = 0.0f;
+            float original_opacity = 0.0f;
+            float3 color = make_float3(0.0f);
+            float3 color_grad_factor = make_float3(0.0f);
+
+            if (valid_splat) {
+                primitive_idx = instance_primitive_indices[tile_instance_range.x + tile_primitive_idx];
+                mean2d = primitive_mean2d[primitive_idx];
+                const float4 conic_opacity = primitive_conic_opacity[primitive_idx];
+                conic = make_float3(conic_opacity);
+                compensated_opacity = conic_opacity.w;
+                if constexpr (MIP_FILTER) {
+                    original_opacity = __frcp_rn(1.0f + __expf(-raw_opacities[primitive_idx]));
+                } else {
+                    original_opacity = compensated_opacity;
+                }
+                const float3 color_unclamped = primitive_color[primitive_idx];
+                color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
+                color_grad_factor = make_float3(
                     (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color) ? 1.0f : 0.0f,
                     (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color) ? 1.0f : 0.0f,
                     (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_blend_color) ? 1.0f : 0.0f);
             }
-            block.sync();
 
-            BlendBackwardAccum local = make_zero_blend_backward_accum();
-            const bool skip = !valid_pixel || static_cast<uint>(tile_primitive_idx) >= last_contributor;
-            if (!skip) {
-                const float2 delta = shared_mean2d - pixel;
-                const float sigma_over_2 = 0.5f * (shared_conic.x * delta.x * delta.x + shared_conic.z * delta.y * delta.y) +
-                                           shared_conic.y * delta.x * delta.y;
-                if (sigma_over_2 >= 0.0f) {
-                    const float gaussian = expf(-sigma_over_2);
-                    const float unclamped_alpha = shared_compensated_opacity * gaussian;
-                    const float alpha = fminf(unclamped_alpha, config::max_fragment_alpha);
-                    if (alpha >= config::min_alpha_threshold) {
-                        const bool alpha_saturated = unclamped_alpha >= config::max_fragment_alpha;
-                        const float one_minus_alpha = 1.0f - alpha;
-                        const float blending_weight = transmittance * alpha;
+            BlendBackwardAccum accum = make_zero_blend_backward_accum();
+            bool has_contribution = false;
 
-                        if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
-                            const float pixel_error = densification_error_map[pixel_idx];
-                            local.densification_weight = blending_weight;
-                            local.densification_error_weighted = blending_weight * pixel_error;
+            for (int diagonal = 0; diagonal < n_splats_in_batch + config::block_size_blend - 1; ++diagonal) {
+                const int pixel_local_rank = diagonal - lane;
+                if (valid_splat && pixel_local_rank >= 0 && pixel_local_rank < config::block_size_blend) {
+                    const int pixel_rank = pixel_local_rank;
+                    const uint last_contributor = s_last_contributor[pixel_rank];
+                    if (static_cast<uint>(tile_primitive_idx) < last_contributor) {
+                        const uint2 pixel_coords = {start_pixel_coords.x + static_cast<uint>(pixel_rank % config::tile_width),
+                                                    start_pixel_coords.y + static_cast<uint>(pixel_rank / config::tile_width)};
+                        const float2 pixel = make_float2(__uint2float_rn(pixel_coords.x), __uint2float_rn(pixel_coords.y)) + 0.5f;
+                        const float2 delta = mean2d - pixel;
+                        const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
+                                                   conic.y * delta.x * delta.y;
+                        if (sigma_over_2 >= 0.0f) {
+                            const float gaussian = expf(-sigma_over_2);
+                            const float unclamped_alpha = compensated_opacity * gaussian;
+                            const float alpha = fminf(unclamped_alpha, config::max_fragment_alpha);
+                            if (alpha >= config::min_alpha_threshold) {
+                                has_contribution = true;
+                                const bool alpha_saturated = unclamped_alpha >= config::max_fragment_alpha;
+                                const float one_minus_alpha = 1.0f - alpha;
+                                const float one_minus_alpha_safe = fmaxf(one_minus_alpha, 1e-4f);
+                                const float transmittance_after = s_transmittance_state[pixel_rank];
+                                const float transmittance_before = transmittance_after / one_minus_alpha_safe;
+                                const float blending_weight = transmittance_before * alpha;
+                                const float3 grad_color_pixel = s_grad_color_state[pixel_rank];
+                                const float grad_transmittance_after = s_grad_transmittance_state[pixel_rank];
+
+                                if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
+                                    const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                                    const float pixel_error = densification_error_map[pixel_idx];
+                                    accum.densification_weight += blending_weight;
+                                    accum.densification_error_weighted += blending_weight * pixel_error;
+                                }
+
+                                const float3 dL_dcolor = blending_weight * grad_color_pixel * color_grad_factor;
+                                accum.color_x += dL_dcolor.x;
+                                accum.color_y += dL_dcolor.y;
+                                accum.color_z += dL_dcolor.z;
+
+                                const float dL_dalpha = dot(transmittance_before * color, grad_color_pixel) -
+                                                        grad_transmittance_after * transmittance_before;
+                                accum.raw_opacity += alpha_saturated ? 0.0f : gaussian * dL_dalpha;
+
+                                const float gaussian_grad_helper = alpha_saturated ? 0.0f : -alpha * dL_dalpha;
+                                accum.conic_x += 0.5f * gaussian_grad_helper * delta.x * delta.x;
+                                accum.conic_y += 0.5f * gaussian_grad_helper * delta.x * delta.y;
+                                accum.conic_z += 0.5f * gaussian_grad_helper * delta.y * delta.y;
+                                const float2 dL_dmean2d = gaussian_grad_helper * make_float2(
+                                                                                     conic.x * delta.x + conic.y * delta.y,
+                                                                                     conic.y * delta.x + conic.z * delta.y);
+                                accum.mean_x += dL_dmean2d.x;
+                                accum.mean_y += dL_dmean2d.y;
+
+                                if constexpr (DENSIFICATION_TYPE == DensificationType::MRNF) {
+                                    const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                                    const float pixel_error = (densification_error_map != nullptr)
+                                                                  ? densification_error_map[pixel_idx]
+                                                                  : 1.0f;
+                                    accum.densification_weight += blending_weight;
+                                    accum.densification_error_weighted += blending_weight * pixel_error;
+                                }
+
+                                s_transmittance_state[pixel_rank] = transmittance_before;
+                                s_grad_transmittance_state[pixel_rank] = dot(grad_color_pixel, alpha * color) +
+                                                                         grad_transmittance_after * one_minus_alpha;
+                            }
                         }
-
-                        const float3 dL_dcolor = blending_weight * grad_color_pixel * shared_color_grad_factor;
-                        local.color_x = dL_dcolor.x;
-                        local.color_y = dL_dcolor.y;
-                        local.color_z = dL_dcolor.z;
-
-                        color_pixel_after -= blending_weight * shared_color;
-
-                        const float one_minus_alpha_safe = fmaxf(one_minus_alpha, 1e-4f);
-                        const float one_minus_alpha_rcp = 1.0f / one_minus_alpha_safe;
-                        const float dL_dalpha_from_color = dot(transmittance * shared_color - color_pixel_after * one_minus_alpha_rcp,
-                                                               grad_color_pixel);
-                        const float dL_dalpha_from_alpha = grad_alpha_common * one_minus_alpha_rcp;
-                        const float dL_dalpha = dL_dalpha_from_color + dL_dalpha_from_alpha;
-                        local.raw_opacity = alpha_saturated ? 0.0f : gaussian * dL_dalpha;
-
-                        const float gaussian_grad_helper = alpha_saturated ? 0.0f : -alpha * dL_dalpha;
-                        local.conic_x = 0.5f * gaussian_grad_helper * delta.x * delta.x;
-                        local.conic_y = 0.5f * gaussian_grad_helper * delta.x * delta.y;
-                        local.conic_z = 0.5f * gaussian_grad_helper * delta.y * delta.y;
-                        const float2 dL_dmean2d = gaussian_grad_helper * make_float2(
-                                                                             shared_conic.x * delta.x + shared_conic.y * delta.y,
-                                                                             shared_conic.y * delta.x + shared_conic.z * delta.y);
-                        local.mean_x = dL_dmean2d.x;
-                        local.mean_y = dL_dmean2d.y;
-
-                        if constexpr (DENSIFICATION_TYPE == DensificationType::MRNF) {
-                            const float pixel_error = (densification_error_map != nullptr)
-                                                          ? densification_error_map[pixel_idx]
-                                                          : 1.0f;
-                            local.densification_weight = blending_weight;
-                            local.densification_error_weighted = blending_weight * pixel_error;
-                        }
-
-                        transmittance *= one_minus_alpha;
                     }
                 }
+                block.sync();
             }
 
-            const BlendBackwardAccum total = BlockReduce(reduce_storage).Reduce(local, BlendBackwardAccumAdd());
-            block.sync();
+            if (valid_splat && has_contribution && primitive_idx < n_primitives) {
+                atomicAdd(&grad_mean2d[primitive_idx].x, clamp_grad(accum.mean_x));
+                atomicAdd(&grad_mean2d[primitive_idx].y, clamp_grad(accum.mean_y));
+                atomicAdd(&grad_conic[primitive_idx], clamp_grad(accum.conic_x));
+                atomicAdd(&grad_conic[n_primitives + primitive_idx], clamp_grad(accum.conic_y));
+                atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], clamp_grad(accum.conic_z));
 
-            if (thread_rank == 0 && shared_primitive_idx < n_primitives) {
-                atomicAdd(&grad_mean2d[shared_primitive_idx].x, clamp_grad(total.mean_x));
-                atomicAdd(&grad_mean2d[shared_primitive_idx].y, clamp_grad(total.mean_y));
-                atomicAdd(&grad_conic[shared_primitive_idx], clamp_grad(total.conic_x));
-                atomicAdd(&grad_conic[n_primitives + shared_primitive_idx], clamp_grad(total.conic_y));
-                atomicAdd(&grad_conic[2 * n_primitives + shared_primitive_idx], clamp_grad(total.conic_z));
+                float conv_factor = 1.0f;
+                if constexpr (MIP_FILTER) {
+                    conv_factor = compensated_opacity / fmaxf(original_opacity, 1e-6f);
+                }
+                const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+                atomicAdd(&grad_raw_opacity[primitive_idx],
+                          clamp_grad(accum.raw_opacity * conv_factor * sigmoid_derivative));
 
-                const float conv_factor = mip_filter ? shared_compensated_opacity / fmaxf(shared_original_opacity, 1e-6f) : 1.0f;
-                const float sigmoid_derivative = shared_original_opacity * (1.0f - shared_original_opacity);
-                atomicAdd(&grad_raw_opacity[shared_primitive_idx],
-                          clamp_grad(total.raw_opacity * conv_factor * sigmoid_derivative));
-
-                atomicAdd(&grad_color[shared_primitive_idx].x, clamp_grad(total.color_x));
-                atomicAdd(&grad_color[shared_primitive_idx].y, clamp_grad(total.color_y));
-                atomicAdd(&grad_color[shared_primitive_idx].z, clamp_grad(total.color_z));
+                atomicAdd(&grad_color[primitive_idx].x, clamp_grad(accum.color_x));
+                atomicAdd(&grad_color[primitive_idx].y, clamp_grad(accum.color_y));
+                atomicAdd(&grad_color[primitive_idx].z, clamp_grad(accum.color_z));
 
                 if constexpr (DENSIFICATION_TYPE != DensificationType::None) {
-                    atomicAdd(&densification_info[shared_primitive_idx], total.densification_weight);
-                    atomicAdd(&densification_info[n_primitives + shared_primitive_idx], total.densification_error_weighted);
+                    atomicAdd(&densification_info[primitive_idx], accum.densification_weight);
+                    atomicAdd(&densification_info[n_primitives + primitive_idx], accum.densification_error_weighted);
                 }
             }
             block.sync();

@@ -8,7 +8,6 @@
 #include "kernels_backward.cuh"
 #include "rasterization_config.h"
 #include "utils.h"
-#include <cub/cub.cuh>
 #include <functional>
 
 void fast_lfs::rasterization::backward(
@@ -60,8 +59,8 @@ void fast_lfs::rasterization::backward(
         per_instance_buffers.primitive_indices.selector = instance_primitive_indices_selector;
 
         // Backward blend (template dispatch eliminates densification branch from inner loop)
-        auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
-            kernels::backward::blend_backward_cu<DENS_TYPE><<<n_tiles, config::block_size_blend>>>(
+        auto launch_blend_backward = [&]<DensificationType DENS_TYPE, bool MIP_FILTER>() {
+            kernels::backward::blend_backward_cu<DENS_TYPE, MIP_FILTER><<<n_tiles, config::block_size_blend_backward>>>(
                 per_tile_buffers.instance_ranges,
                 per_instance_buffers.primitive_indices.Current(),
                 per_primitive_buffers.mean2d,
@@ -82,44 +81,66 @@ void fast_lfs::rasterization::backward(
                 n_primitives,
                 width,
                 height,
-                grid.x,
-                mip_filter);
+                grid.x);
+        };
+        auto launch_blend_backward_for_mip = [&]<DensificationType DENS_TYPE>() {
+            if (mip_filter) {
+                launch_blend_backward.template operator()<DENS_TYPE, true>();
+            } else {
+                launch_blend_backward.template operator()<DENS_TYPE, false>();
+            }
         };
         if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
-            launch_blend_backward.template operator()<DensificationType::MRNF>();
+            launch_blend_backward_for_mip.template operator()<DensificationType::MRNF>();
         } else if (densification_info != nullptr && densification_error_map != nullptr) {
-            launch_blend_backward.template operator()<DensificationType::MCMC>();
+            launch_blend_backward_for_mip.template operator()<DensificationType::MCMC>();
         } else {
-            launch_blend_backward.template operator()<DensificationType::None>();
+            launch_blend_backward_for_mip.template operator()<DensificationType::None>();
         }
         CHECK_CUDA(config::debug, "blend_backward")
 
         // Backward preprocess
-        kernels::backward::preprocess_backward_cu<<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward>>>(
-            means,
-            scales_raw,
-            rotations_raw,
-            sh_coefficients_rest,
-            w2c,
-            cam_position,
-            per_primitive_buffers.n_touched_tiles,
-            grad_mean2d_helper,
-            grad_conic_helper,
-            grad_opacity_helper,
-            grad_color_helper,
-            grad_w2c,
-            (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
-            n_primitives,
-            active_sh_bases,
-            total_bases_sh_rest,
-            static_cast<float>(width),
-            static_cast<float>(height),
-            fx,
-            fy,
-            cx,
-            cy,
-            mip_filter,
-            fused_adam);
+        auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES>() {
+            kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward>>>(
+                means,
+                scales_raw,
+                rotations_raw,
+                sh_coefficients_rest,
+                w2c,
+                cam_position,
+                per_primitive_buffers.n_touched_tiles,
+                grad_mean2d_helper,
+                grad_conic_helper,
+                grad_opacity_helper,
+                grad_color_helper,
+                grad_w2c,
+                (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
+                n_primitives,
+                total_bases_sh_rest,
+                static_cast<float>(width),
+                static_cast<float>(height),
+                fx,
+                fy,
+                cx,
+                cy,
+                fused_adam);
+        };
+        auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {
+            if (mip_filter) {
+                launch_preprocess_backward.template operator()<true, ACTIVE_SH_BASES>();
+            } else {
+                launch_preprocess_backward.template operator()<false, ACTIVE_SH_BASES>();
+            }
+        };
+        if (active_sh_bases <= 1) {
+            launch_preprocess_backward_for_mip.template operator()<1>();
+        } else if (active_sh_bases <= 4) {
+            launch_preprocess_backward_for_mip.template operator()<4>();
+        } else if (active_sh_bases <= 9) {
+            launch_preprocess_backward_for_mip.template operator()<9>();
+        } else {
+            launch_preprocess_backward_for_mip.template operator()<16>();
+        }
         CHECK_CUDA(config::debug, "preprocess_backward")
     }
 

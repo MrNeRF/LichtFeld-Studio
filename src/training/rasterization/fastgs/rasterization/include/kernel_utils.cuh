@@ -118,6 +118,7 @@ namespace fast_lfs::rasterization::kernels {
         adam_step_helper(grad.z, fused_adam.shN, primitive_idx, base_offset + 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
     }
 
+    template <int ACTIVE_SH_BASES>
     __device__ inline float3 convert_sh_to_color_backward(
         const float3* sh_coefficients_rest,
         float3* grad_color_helper,
@@ -125,7 +126,6 @@ namespace fast_lfs::rasterization::kernels {
         const float3& position,
         const float3& cam_position,
         const uint primitive_idx,
-        const uint active_sh_bases,
         const uint total_bases_sh_rest) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         const float3 grad_color = grad_color_helper[primitive_idx];
@@ -134,7 +134,7 @@ namespace fast_lfs::rasterization::kernels {
         adam_step_helper(dL_dsh0.y, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         adam_step_helper(dL_dsh0.z, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         float3 dcolor_dposition = make_float3(0.0f);
-        if (active_sh_bases > 1) {
+        if constexpr (ACTIVE_SH_BASES > 1) {
             const int coefficients_base_idx = primitive_idx * total_bases_sh_rest;
             const float3* coefficients_ptr = sh_coefficients_rest + coefficients_base_idx;
             auto [x_raw, y_raw, z_raw] = position - cam_position;
@@ -145,7 +145,7 @@ namespace fast_lfs::rasterization::kernels {
             float3 grad_direction_x = -0.48860251190291987f * coefficients_ptr[2];
             float3 grad_direction_y = -0.48860251190291987f * coefficients_ptr[0];
             float3 grad_direction_z = 0.48860251190291987f * coefficients_ptr[1];
-            if (active_sh_bases > 4) {
+            if constexpr (ACTIVE_SH_BASES > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
                 const float xy = x * y, xz = x * z, yz = y * z;
                 apply_shN_grad(3, (1.0925484305920792f * xy) * grad_color, fused_adam, primitive_idx);
@@ -156,7 +156,7 @@ namespace fast_lfs::rasterization::kernels {
                 grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[6] + (1.0925484305920792f * x) * coefficients_ptr[7];
                 grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[4] + (-1.0925484305920792f * y) * coefficients_ptr[7];
                 grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * coefficients_ptr[4] + (1.8923493915151202f * z) * coefficients_ptr[5] + (-1.0925484305920792f * x) * coefficients_ptr[6];
-                if (active_sh_bases > 9) {
+                if constexpr (ACTIVE_SH_BASES > 9) {
                     apply_shN_grad(8, (0.59004358992664352f * y * (-3.0f * xx + yy)) * grad_color, fused_adam, primitive_idx);
                     apply_shN_grad(9, (2.8906114426405538f * xy * z) * grad_color, fused_adam, primitive_idx);
                     apply_shN_grad(10, (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * grad_color, fused_adam, primitive_idx);

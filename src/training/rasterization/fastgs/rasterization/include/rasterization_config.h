@@ -33,6 +33,7 @@ namespace fast_lfs::rasterization::config {
     DEF int tile_width = 16;
     DEF int tile_height = 16;
     DEF int block_size_blend = tile_width * tile_height;
+    DEF int block_size_blend_backward = 128;
 } // namespace fast_lfs::rasterization::config
 
 namespace config = fast_lfs::rasterization::config;
