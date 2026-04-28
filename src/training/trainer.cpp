@@ -2577,6 +2577,8 @@ namespace lfs::training {
             }
             auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;
+            r_output.camera = cam;
+            r_output.target_image = gt_image;
             int tiles_processed = 0;
             const bool in_sparsification = get_active_sparsify_steps() > 0 &&
                                            iter > get_sparsity_boundary_iteration();
@@ -2783,6 +2785,8 @@ namespace lfs::training {
                 }
 
                 r_output = output; // Save last tile for densification
+                r_output.camera = cam;
+                r_output.target_image = gt_image;
                 nvtxRangePop();
 
                 bool tile_context_cleaned = false;
