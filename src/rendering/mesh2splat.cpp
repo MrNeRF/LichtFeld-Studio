@@ -414,7 +414,7 @@ namespace lfs::rendering {
         // Texture upload
         // ========================================================================
 
-        GLuint upload_texture(const TextureImage& img) {
+        GLuint upload_texture(const TextureImage& img, bool is_srgb = false) {
             assert(img.width > 0 && img.height > 0);
             assert(!img.pixels.empty());
 
@@ -435,7 +435,7 @@ namespace lfs::rendering {
                 break;
             case 4:
                 format = GL_RGBA;
-                internal_format = GL_RGBA8;
+                internal_format = is_srgb ?  GL_SRGB8_ALPHA8 : GL_RGBA8;
                 break;
             default: return 0;
             }
@@ -584,7 +584,7 @@ namespace lfs::rendering {
                 if (!img.pixels.empty()) {
                     LOG_DEBUG("mesh2splat: uploading albedo texture {}x{} ({} ch, {} bytes)",
                               img.width, img.height, img.channels, img.pixels.size());
-                    albedo_gl = upload_texture(img);
+                    albedo_gl = upload_texture(img, true);
                     if (albedo_gl)
                         cleanup.textures.push_back(albedo_gl);
                 }

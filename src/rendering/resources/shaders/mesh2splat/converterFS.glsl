@@ -130,11 +130,7 @@ void main() {
     vec3 diffuse = kD * albedo / PI;
     vec3 spec = (NDF * G * F) / (4.0 * max(dot(N, V), 0.0) * NdotL + 0.0001);
 
-    vec3 Lo = (diffuse + spec) * NdotL * u_lightIntensity;
-    vec3 ambient_color = albedo * u_ambient * ao;
-    vec3 color = ambient_color + Lo;
-
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+    vec3 color = pow(clamp(albedo, 0.0, 1.0), vec3(1.0 / 2.2));
 
     gaussianBuffer.vertices[index].position = vec4(Position.xyz, 1);
     gaussianBuffer.vertices[index].color = vec4(color, out_Color.a);
