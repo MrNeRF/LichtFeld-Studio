@@ -17,6 +17,24 @@ namespace lfs::io::cuda {
         size_t channels,
         cudaStream_t stream = nullptr);
 
+    // Fused kernel: uint8 HWC -> uint8 CHW
+    void launch_uint8_hwc_to_uint8_chw(
+        const uint8_t* input,
+        uint8_t* output,
+        size_t height,
+        size_t width,
+        size_t channels,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: float32 CHW normalized [0,1] -> uint8 CHW
+    void launch_float32_chw_to_uint8_chw(
+        const float* input,
+        uint8_t* output,
+        size_t height,
+        size_t width,
+        size_t channels,
+        cudaStream_t stream = nullptr);
+
     // Grayscale uint8 [H,W] -> float32 [H,W] normalized [0,1]
     void launch_uint8_hw_to_float32_hw(
         const uint8_t* input,
@@ -29,6 +47,15 @@ namespace lfs::io::cuda {
     void launch_uint8_rgba_split_to_float32_rgb_and_alpha(
         const uint8_t* input,
         float* rgb_output,
+        float* alpha_output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream = nullptr);
+
+    // Split uint8 RGBA [H,W,4] into uint8 RGB [3,H,W] + float32 alpha [H,W], normalized [0,1]
+    void launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
+        const uint8_t* input,
+        uint8_t* rgb_output,
         float* alpha_output,
         size_t height,
         size_t width,

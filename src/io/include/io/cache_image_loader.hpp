@@ -41,6 +41,7 @@ namespace lfs::io {
         int max_width = 0;
         void* cuda_stream = nullptr;
         const lfs::core::UndistortParams* undistort = nullptr;
+        bool output_uint8 = false;
     };
 
     struct CachedImageData {

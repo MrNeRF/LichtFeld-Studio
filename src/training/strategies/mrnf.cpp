@@ -271,7 +271,8 @@ namespace lfs::training {
         }
 
         void apply_canny_filter(const lfs::core::Tensor& input_data, CannyWorkspace& ws) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32);
+            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
+                   input_data.dtype() == lfs::core::DataType::UInt8);
             assert(input_data.device() == lfs::core::Device::CUDA);
             assert(input_data.ndim() == 3);
             assert(input_data.shape()[0] >= 3);
@@ -279,7 +280,9 @@ namespace lfs::training {
             const int width = static_cast<int>(input_data.shape()[2]);
             const int height = static_cast<int>(input_data.shape()[1]);
 
-            auto input_contig = input_data.contiguous();
+            auto input_contig = input_data.dtype() == lfs::core::DataType::UInt8
+                                    ? (input_data.to(lfs::core::DataType::Float32) / 255.0f).contiguous()
+                                    : input_data.contiguous();
             kernels::launch_fused_canny_edge_filter_chw(
                 input_contig.ptr<float>(),
                 ws.nms_output.ptr<float>(),
@@ -288,7 +291,8 @@ namespace lfs::training {
         }
 
         void apply_canny_filter(const lfs::core::Tensor& input_data, lfs::core::Tensor& nms_output) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32);
+            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
+                   input_data.dtype() == lfs::core::DataType::UInt8);
             assert(input_data.device() == lfs::core::Device::CUDA);
             assert(input_data.ndim() == 3);
             assert(input_data.shape()[0] >= 3);
@@ -297,7 +301,9 @@ namespace lfs::training {
             const int height = static_cast<int>(input_data.shape()[1]);
 
             ensure_canny_workspace(nms_output, height, width);
-            auto input_contig = input_data.contiguous();
+            auto input_contig = input_data.dtype() == lfs::core::DataType::UInt8
+                                    ? (input_data.to(lfs::core::DataType::Float32) / 255.0f).contiguous()
+                                    : input_data.contiguous();
             kernels::launch_fused_canny_edge_filter_chw(
                 input_contig.ptr<float>(),
                 nms_output.ptr<float>(),
@@ -484,7 +490,8 @@ namespace lfs::training {
         if (!render_output.camera ||
             !render_output.target_image.is_valid() ||
             render_output.target_image.device() != Device::CUDA ||
-            render_output.target_image.dtype() != DataType::Float32 ||
+            (render_output.target_image.dtype() != DataType::Float32 &&
+             render_output.target_image.dtype() != DataType::UInt8) ||
             render_output.target_image.ndim() != 3 ||
             render_output.target_image.shape()[0] < 3) {
             return;
@@ -1187,6 +1194,7 @@ namespace lfs::training {
             lfs::io::LoadParams params;
             params.resize_factor = _views->get_resize_factor();
             params.max_width = _views->get_max_width();
+            params.output_uint8 = true;
             if (cam->is_undistort_prepared()) {
                 params.undistort = &cam->undistort_params();
             }

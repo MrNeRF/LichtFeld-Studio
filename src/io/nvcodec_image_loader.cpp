@@ -404,20 +404,19 @@ namespace lfs::io {
             pool_cv.notify_one();
         }
 
-        ~Impl() {
-            // Check if CUDA context is still valid before cleanup
-            CUcontext current_ctx = nullptr;
-            CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
+        ~Impl() noexcept {
+            try {
+                CUcontext current_ctx = nullptr;
+                const CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
+                if (ctx_result != CUDA_SUCCESS || current_ctx == nullptr) {
+                    return;
+                }
 
-            // Only cleanup if CUDA runtime is still initialized and context is valid
-            if (ctx_result == CUDA_SUCCESS && current_ctx != nullptr) {
-                // Destroy encoder first (if created)
                 if (encoder) {
                     nvimgcodecEncoderDestroy(encoder);
                     encoder = nullptr;
                 }
 
-                // Destroy all decoders in the pool
                 for (auto& decoder : decoder_pool) {
                     if (decoder) {
                         nvimgcodecDecoderDestroy(decoder);
@@ -427,14 +426,15 @@ namespace lfs::io {
                 decoder_pool.clear();
                 decoder_available.clear();
 
-                // Destroy the instance last
                 if (instance) {
                     nvimgcodecInstanceDestroy(instance);
                     instance = nullptr;
                 }
+            } catch (const std::exception& e) {
+                LOG_WARN("[NvCodecImageLoader] Ignoring nvImageCodec shutdown error: {}", e.what());
+            } catch (...) {
+                LOG_WARN("[NvCodecImageLoader] Ignoring unknown nvImageCodec shutdown error");
             }
-            // If CUDA context is invalid, skip cleanup to avoid crashes
-            // This can happen during program shutdown when CUDA runtime is already torn down
         }
     };
 
@@ -537,7 +537,8 @@ namespace lfs::io {
         int resize_factor,
         int max_width,
         void* cuda_stream,
-        DecodeFormat format) {
+        DecodeFormat format,
+        bool output_uint8) {
 
         LOG_DEBUG("NvCodecImageLoader: Loading {}", lfs::core::path_to_utf8(path));
 
@@ -557,7 +558,7 @@ namespace lfs::io {
             throw std::runtime_error("WebP not supported by nvImageCodec");
         }
 
-        return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format);
+        return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format, output_uint8);
     }
 
     lfs::core::Tensor NvCodecImageLoader::load_image_from_memory_gpu(
@@ -565,7 +566,8 @@ namespace lfs::io {
         int resize_factor,
         [[maybe_unused]] int max_width,
         void* cuda_stream,
-        DecodeFormat format) {
+        DecodeFormat format,
+        bool output_uint8) {
 
         const bool is_grayscale = (format == DecodeFormat::Grayscale);
         const int num_channels = is_grayscale ? 1 : 3;
@@ -729,6 +731,17 @@ namespace lfs::io {
             } else {
                 output_tensor = lanczos_resize(uint8_tensor, target_height, target_width,
                                                LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
+                if (output_uint8) {
+                    auto output_uint8_tensor = Tensor::empty(output_tensor.shape(), Device::CUDA, DataType::UInt8);
+                    cuda::launch_float32_chw_to_uint8_chw(
+                        output_tensor.ptr<float>(),
+                        output_uint8_tensor.ptr<uint8_t>(),
+                        output_tensor.shape()[1],
+                        output_tensor.shape()[2],
+                        output_tensor.shape()[0],
+                        static_cast<cudaStream_t>(cuda_stream));
+                    output_tensor = std::move(output_uint8_tensor);
+                }
             }
         } else {
             if (is_grayscale) {
@@ -742,11 +755,19 @@ namespace lfs::io {
             } else {
                 const auto shape = uint8_tensor.shape();
                 const size_t H = shape[0], W = shape[1], C = shape[2];
-                output_tensor = Tensor::zeros(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
-                cuda::launch_uint8_hwc_to_float32_chw(
-                    reinterpret_cast<const uint8_t*>(uint8_tensor.data_ptr()),
-                    reinterpret_cast<float*>(output_tensor.data_ptr()),
-                    H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                if (output_uint8) {
+                    output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
+                    cuda::launch_uint8_hwc_to_uint8_chw(
+                        reinterpret_cast<const uint8_t*>(uint8_tensor.data_ptr()),
+                        reinterpret_cast<uint8_t*>(output_tensor.data_ptr()),
+                        H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                } else {
+                    output_tensor = Tensor::zeros(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
+                    cuda::launch_uint8_hwc_to_float32_chw(
+                        reinterpret_cast<const uint8_t*>(uint8_tensor.data_ptr()),
+                        reinterpret_cast<float*>(output_tensor.data_ptr()),
+                        H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                }
             }
         }
 

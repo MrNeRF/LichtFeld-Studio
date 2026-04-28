@@ -54,14 +54,16 @@ namespace lfs::io {
          * @param max_width Maximum width/height (0 = no limit)
          * @param cuda_stream Optional CUDA stream for async operations
          * @param format Output format (RGB: [C,H,W], Grayscale: [H,W])
-         * @return Tensor in GPU memory, float32, normalized [0-1]
+         * @param output_uint8 If true for RGB, return uint8 [C,H,W] instead of float32 [0-1]
+         * @return Tensor in GPU memory
          */
         lfs::core::Tensor load_image_gpu(
             const std::filesystem::path& path,
             int resize_factor = 1,
             int max_width = 0,
             void* cuda_stream = nullptr,
-            DecodeFormat format = DecodeFormat::RGB);
+            DecodeFormat format = DecodeFormat::RGB,
+            bool output_uint8 = false);
 
         /**
          * @brief Decode JPEG from memory to GPU
@@ -71,14 +73,16 @@ namespace lfs::io {
          * @param max_width Maximum width/height (0 = no limit)
          * @param cuda_stream Optional CUDA stream for async operations
          * @param format Output format (RGB: [C,H,W], Grayscale: [H,W])
-         * @return Tensor in GPU memory, float32, normalized [0-1]
+         * @param output_uint8 If true for RGB, return uint8 [C,H,W] instead of float32 [0-1]
+         * @return Tensor in GPU memory
          */
         lfs::core::Tensor load_image_from_memory_gpu(
             const std::vector<uint8_t>& jpeg_data,
             int resize_factor = 1,
             int max_width = 0,
             void* cuda_stream = nullptr,
-            DecodeFormat format = DecodeFormat::RGB);
+            DecodeFormat format = DecodeFormat::RGB,
+            bool output_uint8 = false);
 
         // Load and decode multiple images in batch
         std::vector<lfs::core::Tensor> load_images_batch_gpu(

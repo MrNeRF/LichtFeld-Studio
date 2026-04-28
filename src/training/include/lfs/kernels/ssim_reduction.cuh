@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include <cstdint>
 #include <cuda_runtime.h>
 
 namespace lfs::training::kernels {
@@ -49,6 +50,17 @@ namespace lfs::training::kernels {
         bool apply_valid_padding,
         cudaStream_t stream = nullptr);
 
+    void launch_fused_l1_ssim_mean_device(
+        const float* img1,
+        const uint8_t* img2,
+        const float* ssim_map,
+        float ssim_weight,
+        float* temp_buffer,
+        float* result_buffer,
+        int N, int C, int H, int W,
+        bool apply_valid_padding,
+        cudaStream_t stream = nullptr);
+
     /**
      * @brief Reduce masked fused L1+SSIM directly to a normalized scalar loss
      *
@@ -61,6 +73,42 @@ namespace lfs::training::kernels {
         const float* img2,
         const float* ssim_map,
         const float* mask,
+        float ssim_weight,
+        float* temp_buffer,
+        float* loss_buffer,
+        float* mask_sum_buffer,
+        int N, int C, int H, int W,
+        cudaStream_t stream = nullptr);
+
+    void launch_masked_fused_l1_ssim_mean_device(
+        const float* img1,
+        const float* img2,
+        const float* ssim_map,
+        const uint8_t* mask,
+        float ssim_weight,
+        float* temp_buffer,
+        float* loss_buffer,
+        float* mask_sum_buffer,
+        int N, int C, int H, int W,
+        cudaStream_t stream = nullptr);
+
+    void launch_masked_fused_l1_ssim_mean_device(
+        const float* img1,
+        const uint8_t* img2,
+        const float* ssim_map,
+        const float* mask,
+        float ssim_weight,
+        float* temp_buffer,
+        float* loss_buffer,
+        float* mask_sum_buffer,
+        int N, int C, int H, int W,
+        cudaStream_t stream = nullptr);
+
+    void launch_masked_fused_l1_ssim_mean_device(
+        const float* img1,
+        const uint8_t* img2,
+        const float* ssim_map,
+        const uint8_t* mask,
         float ssim_weight,
         float* temp_buffer,
         float* loss_buffer,
