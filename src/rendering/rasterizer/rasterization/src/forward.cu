@@ -11,90 +11,16 @@
 #include "utils.h"
 #include <algorithm>
 #include <array>
-#include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <functional>
-#include <limits>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 namespace {
 
     constexpr float kInvalidScreenPositionSentinel = -10000.0f;
     constexpr float kInvalidScreenPositionThreshold = -1000.0f;
-
-    int checked_to_int(uint64_t value, const char* message) {
-        if (value > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-            throw std::overflow_error(message);
-        }
-        return static_cast<int>(value);
-    }
-
-    class StreamOrderedDeviceBuffer {
-    public:
-        StreamOrderedDeviceBuffer() = default;
-
-        explicit StreamOrderedDeviceBuffer(cudaStream_t stream)
-            : stream_(stream) {}
-
-        StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
-        StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
-
-        StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&& other) noexcept
-            : ptr_(other.ptr_), size_(other.size_), stream_(other.stream_) {
-            other.ptr_ = nullptr;
-            other.size_ = 0;
-        }
-
-        ~StreamOrderedDeviceBuffer() {
-            reset();
-        }
-
-        void allocate(size_t size) {
-            reset();
-            if (size == 0) {
-                return;
-            }
-
-            void* ptr = nullptr;
-#if CUDART_VERSION >= 11020
-            const cudaError_t err = cudaMallocAsync(&ptr, size, stream_);
-#else
-            const cudaError_t err = cudaMalloc(&ptr, size);
-#endif
-            if (err != cudaSuccess) {
-                throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate viewer raster sort buffer (" +
-                                         std::to_string(size) + " bytes): " + cudaGetErrorString(err));
-            }
-            ptr_ = ptr;
-            size_ = size;
-        }
-
-        void reset() noexcept {
-            if (!ptr_) {
-                return;
-            }
-#if CUDART_VERSION >= 11020
-            cudaFreeAsync(ptr_, stream_);
-#else
-            cudaFree(ptr_);
-#endif
-            ptr_ = nullptr;
-            size_ = 0;
-        }
-
-        template <typename T>
-        T* as() const noexcept {
-            return static_cast<T*>(ptr_);
-        }
-
-    private:
-        void* ptr_ = nullptr;
-        size_t size_ = 0;
-        cudaStream_t stream_ = nullptr;
-    };
 
     struct PrimitiveFailureOffender {
         uint primitive_idx = 0;
@@ -139,7 +65,7 @@ namespace {
     void log_instance_failure_offenders(
         const lfs::rendering::PerPrimitiveBuffers& per_primitive_buffers,
         int n_primitives,
-        uint n_processed_primitives,
+        uint n_visible_primitives,
         uint n_instances) {
         std::vector<uint> n_touched_tiles(static_cast<size_t>(n_primitives));
         const auto copy_error = cudaMemcpy(
@@ -176,11 +102,11 @@ namespace {
         }
 
         LOG_ERROR(
-            "Rasterization failure summary: n_primitives={}, n_processed_primitives={}, n_instances={}, avg_instances_per_processed={:.2f}",
+            "Rasterization failure summary: n_primitives={}, n_visible_primitives={}, n_instances={}, avg_instances_per_visible={:.2f}",
             n_primitives,
-            n_processed_primitives,
+            n_visible_primitives,
             n_instances,
-            n_processed_primitives > 0 ? static_cast<double>(n_instances) / static_cast<double>(n_processed_primitives) : 0.0);
+            n_visible_primitives > 0 ? static_cast<double>(n_instances) / static_cast<double>(n_visible_primitives) : 0.0);
 
         for (size_t rank = 0; rank < top_offenders.size(); ++rank) {
             auto& offender = top_offenders[rank];
@@ -217,10 +143,10 @@ namespace {
     void log_rasterization_failure_diagnostics(
         const lfs::rendering::PerPrimitiveBuffers& per_primitive_buffers,
         int n_primitives,
-        uint n_processed_primitives,
+        uint n_visible_primitives,
         uint n_instances) {
         log_last_igs_plus_failure_snapshot();
-        log_instance_failure_offenders(per_primitive_buffers, n_primitives, n_processed_primitives, n_instances);
+        log_instance_failure_offenders(per_primitive_buffers, n_primitives, n_visible_primitives, n_instances);
     }
 
 } // namespace
@@ -500,6 +426,7 @@ void lfs::rendering::polygon_select_mode(
 void lfs::rendering::forward(
     std::function<char*(size_t)> per_primitive_buffers_func,
     std::function<char*(size_t)> per_tile_buffers_func,
+    std::function<char*(size_t)> per_instance_buffers_func,
     const float3* means,
     const float3* scales_raw,
     const float4* rotations_raw,
@@ -571,11 +498,7 @@ void lfs::rendering::forward(
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
-    const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
-    const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
-    const uint n_tiles_u32 = static_cast<uint>(n_tiles);
-    const uint depth_bits = static_cast<uint>(packed_instance_depth_bits(n_tiles_u32));
-    const int key_end_bit = packed_instance_key_end_bit(n_tiles_u32);
+    const int n_tiles = grid.x * grid.y;
 
     char* per_tile_buffers_blob = per_tile_buffers_func(required<PerTileBuffers>(n_tiles));
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
@@ -589,6 +512,9 @@ void lfs::rendering::forward(
 
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(buffer_n_primitives));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, buffer_n_primitives);
+
+    cudaMemsetAsync(per_primitive_buffers.n_visible_primitives, 0, sizeof(uint), stream);
+    cudaMemsetAsync(per_primitive_buffers.n_instances, 0, sizeof(uint), stream);
 
     // Initialize mean2d with invalid marker values for brush selection
     // Only visible Gaussians will have their mean2d updated by preprocess kernel
@@ -610,7 +536,8 @@ void lfs::rendering::forward(
         sh_coefficients_rest,
         w2c,
         cam_position,
-        per_primitive_buffers.depth_keys,
+        per_primitive_buffers.depth_keys.Current(),
+        per_primitive_buffers.primitive_indices.Current(),
         per_primitive_buffers.n_touched_tiles,
         per_primitive_buffers.screen_bounds,
         per_primitive_buffers.mean2d,
@@ -620,6 +547,8 @@ void lfs::rendering::forward(
         per_primitive_buffers.outside_crop,
         per_primitive_buffers.selection_status,
         per_primitive_buffers.global_idx,
+        per_primitive_buffers.n_visible_primitives,
+        per_primitive_buffers.n_instances,
         buffer_n_primitives,
         visible_indices,
         grid.x,
@@ -634,7 +563,6 @@ void lfs::rendering::forward(
         cy,
         near_,
         far_,
-        depth_bits,
         model_transforms,
         transform_indices,
         num_transforms,
@@ -695,129 +623,110 @@ void lfs::rendering::forward(
         }
     }
 
-    cub::DeviceScan::InclusiveSum(
-        per_primitive_buffers.cub_workspace,
-        per_primitive_buffers.cub_workspace_size,
-        per_primitive_buffers.n_touched_tiles,
-        per_primitive_buffers.offset,
-        buffer_n_primitives,
-        stream);
-    CHECK_CUDA(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)")
+    uint n_visible_primitives = 0;
+    uint n_instances = 0;
+    cudaStreamSynchronize(stream);
+    cudaMemcpy(&n_visible_primitives, per_primitive_buffers.n_visible_primitives, sizeof(uint), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&n_instances, per_primitive_buffers.n_instances, sizeof(uint), cudaMemcpyDeviceToHost);
 
-    uint32_t n_instances_u32 = 0;
-    if (buffer_n_primitives > 0) {
-        const cudaError_t copy_err = cudaMemcpyAsync(
-            &n_instances_u32,
-            per_primitive_buffers.offset + buffer_n_primitives - 1,
-            sizeof(n_instances_u32),
-            cudaMemcpyDeviceToHost,
-            stream);
-        if (copy_err != cudaSuccess) {
-            throw std::runtime_error(std::string("cudaMemcpyAsync(n_instances) failed: ") + cudaGetErrorString(copy_err));
-        }
-        const cudaError_t sync_err = cudaStreamSynchronize(stream);
-        if (sync_err != cudaSuccess) {
-            throw std::runtime_error(std::string("cudaStreamSynchronize(n_instances) failed: ") + cudaGetErrorString(sync_err));
-        }
+    if (n_visible_primitives > 0x7fffffffu) {
+        log_rasterization_failure_diagnostics(per_primitive_buffers, buffer_n_primitives, n_visible_primitives, n_instances);
+        LOG_ERROR("Rasterization suspicious visible primitive count: {}", n_visible_primitives);
+        throw std::runtime_error("Rasterization failed: visible primitive count exceeds 32-bit launch range");
+    }
+    if (n_instances > 0x7fffffffu) {
+        log_rasterization_failure_diagnostics(per_primitive_buffers, buffer_n_primitives, n_visible_primitives, n_instances);
+        LOG_ERROR(
+            "Rasterization suspicious instance count: {} instances across {} visible primitives",
+            n_instances,
+            n_visible_primitives);
+        throw std::runtime_error("Rasterization failed: instance count exceeds 32-bit allocation range");
     }
 
-    const int n_instances_i = checked_to_int(n_instances_u32, "n_instances exceeds int range");
-    uint* sorted_primitive_indices = nullptr;
+    const int n_visible_primitives_i = static_cast<int>(n_visible_primitives);
+    const int n_instances_i = static_cast<int>(n_instances);
+    const int alloc_instances = std::max(n_instances_i, 1);
+    const size_t per_instance_bytes = required<PerInstanceBuffers>(alloc_instances);
+    constexpr size_t hard_alloc_bytes = size_t{128} << 30;
+    if (per_instance_bytes > hard_alloc_bytes) {
+        log_rasterization_failure_diagnostics(per_primitive_buffers, buffer_n_primitives, n_visible_primitives, n_instances);
+        LOG_ERROR(
+            "Rasterization rejecting suspicious instance allocation: {} instances across {} visible primitives would request {:.2f} GiB",
+            n_instances,
+            n_visible_primitives,
+            static_cast<double>(per_instance_bytes) / (1024.0 * 1024.0 * 1024.0));
+        throw std::runtime_error("Rasterization failed: suspicious per-instance allocation request");
+    }
 
-    StreamOrderedDeviceBuffer keys_current(stream);
-    StreamOrderedDeviceBuffer keys_alternate(stream);
-    StreamOrderedDeviceBuffer primitive_indices_current(stream);
-    StreamOrderedDeviceBuffer primitive_indices_alternate(stream);
-    StreamOrderedDeviceBuffer sort_workspace(stream);
+    char* per_instance_buffers_blob = per_instance_buffers_func(per_instance_bytes);
+    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, alloc_instances);
 
-    if (n_instances_i > 0) {
-        const size_t n_instances_size = static_cast<size_t>(n_instances_i);
-        const size_t fixed_sort_bytes =
-            n_instances_size * (2 * sizeof(InstanceKey) + 2 * sizeof(uint));
-        constexpr size_t hard_alloc_bytes = size_t{128} << 30;
-        if (fixed_sort_bytes > hard_alloc_bytes) {
-            log_rasterization_failure_diagnostics(
-                per_primitive_buffers, buffer_n_primitives, buffer_n_primitives, n_instances_u32);
-            LOG_ERROR(
-                "Rasterization rejecting suspicious instance allocation: {} instances across {} processed primitives would request at least {:.2f} GiB",
-                n_instances_u32,
-                buffer_n_primitives,
-                static_cast<double>(fixed_sort_bytes) / (1024.0 * 1024.0 * 1024.0));
-            throw std::runtime_error("Rasterization failed: suspicious per-instance allocation request");
-        }
-
-        keys_current.allocate(n_instances_size * sizeof(InstanceKey));
-        keys_alternate.allocate(n_instances_size * sizeof(InstanceKey));
-        primitive_indices_current.allocate(n_instances_size * sizeof(uint));
-        primitive_indices_alternate.allocate(n_instances_size * sizeof(uint));
-
-        cub::DoubleBuffer<InstanceKey> instance_keys(keys_current.as<InstanceKey>(), keys_alternate.as<InstanceKey>());
-        cub::DoubleBuffer<uint> instance_primitive_indices(
-            primitive_indices_current.as<uint>(),
-            primitive_indices_alternate.as<uint>());
-
-        size_t sort_workspace_size = 0;
+    if (n_visible_primitives > 0) {
         cub::DeviceRadixSort::SortPairs(
-            nullptr,
-            sort_workspace_size,
-            instance_keys,
-            instance_primitive_indices,
-            n_instances_i,
+            per_primitive_buffers.cub_workspace,
+            per_primitive_buffers.cub_workspace_size,
+            per_primitive_buffers.depth_keys,
+            per_primitive_buffers.primitive_indices,
+            n_visible_primitives_i,
             0,
-            key_end_bit,
+            static_cast<int>(sizeof(uint) * 8),
             stream);
+        CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Depth)")
 
-        const size_t total_sort_bytes = fixed_sort_bytes + sort_workspace_size;
-        if (total_sort_bytes > hard_alloc_bytes) {
-            log_rasterization_failure_diagnostics(
-                per_primitive_buffers, buffer_n_primitives, buffer_n_primitives, n_instances_u32);
-            LOG_ERROR(
-                "Rasterization rejecting suspicious instance allocation: {} instances across {} processed primitives would request {:.2f} GiB",
-                n_instances_u32,
-                buffer_n_primitives,
-                static_cast<double>(total_sort_bytes) / (1024.0 * 1024.0 * 1024.0));
-            throw std::runtime_error("Rasterization failed: suspicious per-instance allocation request");
-        }
-        sort_workspace.allocate(sort_workspace_size);
-
-        kernels::forward::create_instances_cu<<<div_round_up(buffer_n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
+        kernels::forward::apply_depth_ordering_cu<<<div_round_up(n_visible_primitives_i, config::block_size_apply_depth_ordering), config::block_size_apply_depth_ordering, 0, stream>>>(
+            per_primitive_buffers.primitive_indices.Current(),
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
-            per_primitive_buffers.depth_keys,
+            n_visible_primitives_i);
+        CHECK_CUDA(config::debug, "apply_depth_ordering")
+
+        cub::DeviceScan::ExclusiveSum(
+            per_primitive_buffers.cub_workspace,
+            per_primitive_buffers.cub_workspace_size,
+            per_primitive_buffers.offset,
+            per_primitive_buffers.offset,
+            n_visible_primitives_i,
+            stream);
+        CHECK_CUDA(config::debug, "cub::DeviceScan::ExclusiveSum (Primitive Offsets)")
+
+        kernels::forward::create_instances_cu<<<div_round_up(n_visible_primitives_i, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
+            per_primitive_buffers.primitive_indices.Current(),
+            per_primitive_buffers.offset,
+            per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.screen_bounds,
             per_primitive_buffers.mean2d,
             per_primitive_buffers.conic_opacity,
-            instance_keys.Current(),
-            instance_primitive_indices.Current(),
+            per_instance_buffers.keys.Current(),
+            per_instance_buffers.primitive_indices.Current(),
             grid.x,
-            depth_bits,
-            buffer_n_primitives);
+            n_visible_primitives_i);
         CHECK_CUDA(config::debug, "create_instances")
 
-        cub::DeviceRadixSort::SortPairs(
-            sort_workspace.as<char>(),
-            sort_workspace_size,
-            instance_keys,
-            instance_primitive_indices,
-            n_instances_i,
-            0,
-            key_end_bit,
-            stream);
-        CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)")
+        if (n_instances > 0) {
+            cub::DeviceRadixSort::SortPairs(
+                per_instance_buffers.cub_workspace,
+                per_instance_buffers.cub_workspace_size,
+                per_instance_buffers.keys,
+                per_instance_buffers.primitive_indices,
+                n_instances_i,
+                0,
+                static_cast<int>(sizeof(uint) * 8),
+                stream);
+            CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile)")
+        }
+    }
 
-        sorted_primitive_indices = instance_primitive_indices.Current();
-
+    if (n_instances > 0) {
         kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances_i, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
-            instance_keys.Current(),
+            per_instance_buffers.keys.Current(),
             per_tile_buffers.instance_ranges,
-            depth_bits,
             n_instances_i);
         CHECK_CUDA(config::debug, "extract_instance_ranges")
     }
 
     kernels::forward::blend_cu<<<grid, block, 0, stream>>>(
         per_tile_buffers.instance_ranges,
-        sorted_primitive_indices,
+        per_instance_buffers.primitive_indices.Current(),
         per_primitive_buffers.mean2d,
         per_primitive_buffers.conic_opacity,
         per_primitive_buffers.color,
