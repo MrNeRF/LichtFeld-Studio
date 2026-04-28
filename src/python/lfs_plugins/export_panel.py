@@ -11,6 +11,17 @@ from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 
+# Asset Manager integration (optional)
+try:
+    from .asset_index import AssetIndex, Asset
+    from .asset_scanner import AssetScanner
+    from .asset_thumbnails import AssetThumbnails
+    from .asset_manager_panel import get_asset_manager_panel
+
+    ASSET_MANAGER_AVAILABLE = True
+except ImportError:
+    ASSET_MANAGER_AVAILABLE = False
+
 __lfs_panel_classes__ = ["ExportPanel"]
 __lfs_panel_ids__ = ["lfs.export"]
 
@@ -79,6 +90,8 @@ class ExportPanel(Panel):
         self._rad_new_lod_str = "100"
         self._rad_lod_collapsed = True  # Whether LOD levels section is collapsed
         self._doc = None  # Document reference for DOM access
+        self._last_export_path = None  # Track last export path for Asset Manager
+        self._last_export_format = None  # Track last export format for Asset Manager
 
     # ── Data model ────────────────────────────────────────────
 
@@ -592,6 +605,10 @@ class ExportPanel(Panel):
         path = self._get_save_path(default_name)
 
         if path:
+            # Store export info for Asset Manager registration
+            self._last_export_path = path
+            self._last_export_format = self._format
+
             # Prepare RAD LOD settings if applicable
             rad_lod_ratios = None
             if self._format == ExportFormat.RAD and self._rad_customize_lod:
@@ -636,6 +653,11 @@ class ExportPanel(Panel):
         if not state.get("active", False):
             self._exporting = False
             self._selection_seeded = False
+            # Register export with Asset Manager if successful
+            if self._last_export_path and self._last_export_format is not None:
+                self._register_export(self._last_export_path, self._last_export_format)
+                self._last_export_path = None
+                self._last_export_format = None
             lf.ui.set_panel_enabled("lfs.export", False)
             return True
 
@@ -647,3 +669,89 @@ class ExportPanel(Panel):
             return True
 
         return False
+
+    def _format_to_asset_type(self, fmt: ExportFormat) -> str:
+        """Map ExportFormat to asset type string for Asset Manager."""
+        mapping = {
+            ExportFormat.PLY: "ply",
+            ExportFormat.SOG: "sog",
+            ExportFormat.SPZ: "spz",
+            ExportFormat.RAD: "rad",
+            ExportFormat.USD: "usd",
+            ExportFormat.NUREC_USDZ: "usdz",
+            ExportFormat.HTML_VIEWER: "html",
+        }
+        return mapping.get(fmt, "unknown")
+
+    def _register_export(self, path: str, fmt: ExportFormat):
+        """Register exported file with Asset Manager catalog.
+
+        Called after successful export to add/update the asset in the catalog
+        and refresh the Asset Manager UI if open.
+
+        Args:
+            path: Output file path
+            fmt: Export format used
+        """
+        if not ASSET_MANAGER_AVAILABLE:
+            return
+
+        try:
+            # Determine asset type from format
+            asset_type = self._format_to_asset_type(fmt)
+
+            # Determine role - check if this was post-training by looking at scene state
+            role = "export"
+            try:
+                scene = lf.get_scene()
+                if scene and hasattr(scene, "was_trained") and scene.was_trained:
+                    role = "trained_output"
+            except Exception:
+                pass
+
+            # Get or create AssetIndex
+            asset_index = AssetIndex.get_instance()
+            if asset_index is None:
+                asset_index = AssetIndex()
+
+            # Check if asset already exists at this path
+            existing_asset = None
+            for asset in asset_index.assets.values():
+                if asset.path == path:
+                    existing_asset = asset
+                    break
+
+            if existing_asset:
+                # Update existing asset
+                existing_asset.type = asset_type
+                existing_asset.role = role
+                existing_asset.refresh_metadata()
+            else:
+                # Create new asset entry
+                asset = Asset(
+                    path=path,
+                    asset_type=asset_type,
+                    role=role,
+                )
+                asset_index.add_asset(asset)
+
+            # Generate placeholder thumbnail (async)
+            try:
+                thumbnails = AssetThumbnails.get_instance()
+                if thumbnails:
+                    thumbnails.generate_placeholder(path, asset_type)
+            except Exception:
+                pass  # Thumbnail generation is optional
+
+            # Refresh Asset Manager UI if open
+            try:
+                panel = get_asset_manager_panel()
+                if panel:
+                    panel.refresh_catalog()
+            except Exception:
+                pass  # UI refresh is optional
+
+        except Exception:
+            # Asset Manager integration is non-intrusive
+            # Log error but don't fail the export
+            pass

@@ -5,6 +5,7 @@
 import os
 import re
 import time
+from typing import Any, Optional
 
 import lichtfeld as lf
 
@@ -12,6 +13,15 @@ from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui.state import AppState
+
+# Asset Manager integration (optional)
+try:
+    from .asset_index import AssetIndex, TrainingRun
+    from .asset_manager_panel import AssetManagerPanel
+
+    ASSET_MANAGER_AVAILABLE = True
+except ImportError:
+    ASSET_MANAGER_AVAILABLE = False
 
 __lfs_panel_classes__ = ["TrainingPanel"]
 __lfs_panel_ids__ = ["lfs.training"]
@@ -410,6 +420,11 @@ class TrainingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
+        # Asset Manager integration
+        self._current_run_id: Optional[str] = None
+        self._asset_index: Optional[Any] = None
+        if ASSET_MANAGER_AVAILABLE:
+            self._initialize_asset_manager()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -1136,6 +1151,14 @@ class TrainingPanel(Panel):
         dirty = False
         state = AppState.trainer_state.value
         if state != self._last_state:
+            # Handle training state transitions for Asset Manager
+            if self._last_state == "running" and state in (
+                "completed",
+                "stopped",
+                "error",
+            ):
+                self._handle_training_state_transition(state)
+
             self._last_state = state
             if state == "ready":
                 _rate_tracker.clear()
@@ -1364,7 +1387,11 @@ class TrainingPanel(Panel):
             params.ppisp = True
         elif prop == "ppisp" and not val:
             params.ppisp_freeze_from_sidecar = False
-        if prop == "enable_eval" and val and not self._clamp_current_test_every_for_eval():
+        if (
+            prop == "enable_eval"
+            and val
+            and not self._clamp_current_test_every_for_eval()
+        ):
             return
         setattr(params, prop, val)
         if prop == "enable_eval" and val:
@@ -1787,8 +1814,11 @@ class TrainingPanel(Panel):
         elif action == "switch_edit":
             lf.switch_to_edit_mode()
         elif action == "save_checkpoint":
+            checkpoint_path = self._get_checkpoint_save_path()
             lf.save_checkpoint()
             self._checkpoint_saved_time = time.time()
+            if checkpoint_path:
+                self._register_checkpoint_saved(checkpoint_path)
         elif action == "browse_bg":
             selected = lf.ui.open_image_file_dialog("")
             if selected:
@@ -1847,9 +1877,11 @@ class TrainingPanel(Panel):
                 p = lf.optimization_params()
                 if button == _mcmc:
                     p.set_strategy("mcmc")
+                    self._register_training_start()
                     lf.start_training()
                 elif button == _gut:
                     p.gut = False
+                    self._register_training_start()
                     lf.start_training()
 
             lf.ui.confirm_dialog(
@@ -1861,6 +1893,7 @@ class TrainingPanel(Panel):
         elif self._should_offer_pc_save():
             self._show_save_pc_dialog()
         else:
+            self._register_training_start()
             lf.start_training()
 
     def _should_offer_pc_save(self):
@@ -1880,8 +1913,10 @@ class TrainingPanel(Panel):
                     self._save_modified_pc()
                 except Exception as e:
                     lf.log.error(f"Failed to save point cloud: {e}")
+                self._register_training_start()
                 lf.start_training()
             elif button == _k:
+                self._register_training_start()
                 lf.start_training()
 
         lf.ui.confirm_dialog(
@@ -1910,6 +1945,327 @@ class TrainingPanel(Panel):
                     lf.log.info(f"Saved point cloud ({pc.size} points) to {save_path}")
                     scene.is_point_cloud_modified = False
                     return
+
+    # ── Asset Manager Integration ───────────────────────────
+
+    def _initialize_asset_manager(self):
+        """Initialize AssetIndex connection if available."""
+        if not ASSET_MANAGER_AVAILABLE:
+            return
+        try:
+            from pathlib import Path
+
+            storage_path = Path.home() / ".lichtfeld" / "asset_manager"
+            storage_path.mkdir(parents=True, exist_ok=True)
+            self._asset_index = AssetIndex(library_path=storage_path / "library.json")
+            self._asset_index.load()
+        except Exception as e:
+            lf.log.warn(f"Failed to initialize Asset Manager in training panel: {e}")
+            self._asset_index = None
+
+    def _get_or_create_project_scene(self):
+        """Infer project/scene names from dataset path or current context.
+
+        Returns:
+            Tuple of (project_name, scene_name, dataset_path) or (None, None, None)
+        """
+        d = lf.dataset_params()
+        if not d or not d.has_params() or not d.data_path:
+            return None, None, None
+
+        dataset_path = d.data_path
+        # Use dataset folder name as project name
+        project_name = os.path.basename(os.path.normpath(dataset_path))
+        if not project_name:
+            project_name = "Untitled Project"
+
+        # Use parent directory + timestamp as scene name
+        parent_dir = os.path.basename(os.path.dirname(os.path.normpath(dataset_path)))
+        if parent_dir and parent_dir != ".":
+            scene_name = f"{parent_dir}_{project_name}"
+        else:
+            scene_name = project_name
+
+        return project_name, scene_name, dataset_path
+
+    def _register_training_start(self):
+        """Register training start with Asset Manager.
+
+        Creates project, scene, and training run entries.
+        Called when training begins.
+        """
+        if not ASSET_MANAGER_AVAILABLE or self._asset_index is None:
+            return
+
+        try:
+            project_name, scene_name, dataset_path = self._get_or_create_project_scene()
+            if project_name is None:
+                return
+
+            # Find or create project
+            project = None
+            for p in self._asset_index.list_projects():
+                if p.name == project_name:
+                    project = p
+                    break
+
+            if project is None:
+                project = self._asset_index.create_project(
+                    name=project_name, description=f"Auto-created from training panel"
+                )
+
+            # Find or create scene
+            scene = None
+            for s in self._asset_index.list_scenes(project_id=project.id):
+                if s.name == scene_name:
+                    scene = s
+                    break
+
+            if scene is None:
+                scene = self._asset_index.create_scene(
+                    project_id=project.id,
+                    name=scene_name,
+                    description=f"Scene for dataset: {dataset_path}",
+                )
+
+            # Create training run
+            params = lf.optimization_params()
+            param_snapshot = {}
+            if params and params.has_params():
+                # Capture key parameters
+                param_snapshot = {
+                    "strategy": params.strategy,
+                    "iterations": params.iterations,
+                    "max_cap": params.max_cap,
+                    "sh_degree": params.sh_degree,
+                    "means_lr": params.means_lr,
+                    "shs_lr": params.shs_lr,
+                    "opacity_lr": params.opacity_lr,
+                    "scaling_lr": params.scaling_lr,
+                    "rotation_lr": params.rotation_lr,
+                }
+
+            run_name = (
+                f"Run_{lf.get_iteration():06d}"
+                if lf.get_iteration() > 0
+                else "Run_000000"
+            )
+
+            run = self._asset_index.create_run(
+                project_id=project.id,
+                scene_id=scene.id,
+                name=run_name,
+                parameters=param_snapshot,
+            )
+
+            if run:
+                self._current_run_id = run.id
+                self._asset_index.set_run_status(run.id, "running")
+                lf.log.info(f"Asset Manager: Registered training run {run.id}")
+
+        except Exception as e:
+            lf.log.warn(f"Asset Manager: Failed to register training start: {e}")
+
+    def _register_checkpoint_saved(self, checkpoint_path: str):
+        """Register checkpoint save with Asset Manager.
+
+        Creates asset entry for checkpoint and links to current run.
+        Called when checkpoint is saved.
+
+        Args:
+            checkpoint_path: Path to the saved checkpoint file
+        """
+        if not ASSET_MANAGER_AVAILABLE or self._asset_index is None:
+            return
+
+        if not self._current_run_id:
+            return
+
+        try:
+            run = self._asset_index.get_run(self._current_run_id)
+            if not run:
+                return
+
+            # Get file size
+            file_size = 0
+            try:
+                file_size = os.path.getsize(checkpoint_path)
+            except OSError:
+                pass
+
+            # Create asset entry
+            asset_name = os.path.basename(checkpoint_path)
+            asset = self._asset_index.create_asset(
+                project_id=run.project_id,
+                name=asset_name,
+                type="checkpoint",
+                path=checkpoint_path,
+                absolute_path=os.path.abspath(checkpoint_path),
+                scene_id=run.scene_id,
+                run_id=self._current_run_id,
+                role="training_checkpoint",
+                file_size_bytes=file_size,
+            )
+
+            if asset:
+                lf.log.info(f"Asset Manager: Registered checkpoint {asset.id}")
+
+        except Exception as e:
+            lf.log.warn(f"Asset Manager: Failed to register checkpoint: {e}")
+
+    def _register_training_complete(self, metrics: dict):
+        """Register training completion with Asset Manager.
+
+        Updates run status to completed and stores final metrics.
+        Called when training finishes.
+
+        Args:
+            metrics: Dictionary of final training metrics (loss, psnr, etc.)
+        """
+        if not ASSET_MANAGER_AVAILABLE or self._asset_index is None:
+            return
+
+        if not self._current_run_id:
+            return
+
+        try:
+            # Update run with final metrics and status
+            final_metrics = metrics.copy()
+            final_metrics["final_iteration"] = lf.get_iteration()
+            final_metrics["final_gaussians"] = AppState.num_gaussians.value
+
+            self._asset_index.update_run(
+                self._current_run_id,
+                status="completed",
+                metrics=final_metrics,
+                completed_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            )
+
+            lf.log.info(f"Asset Manager: Training run {self._current_run_id} completed")
+
+            # Clear current run ID
+            self._current_run_id = None
+
+        except Exception as e:
+            lf.log.warn(f"Asset Manager: Failed to register training completion: {e}")
+            self._current_run_id = None
+
+    def _register_training_failed(self, error_message: str):
+        """Register training failure with Asset Manager.
+
+        Updates run status to failed and stores error info.
+        Called when training fails.
+
+        Args:
+            error_message: Error message describing the failure
+        """
+        if not ASSET_MANAGER_AVAILABLE or self._asset_index is None:
+            return
+
+        if not self._current_run_id:
+            return
+
+        try:
+            self._asset_index.update_run(
+                self._current_run_id,
+                status="failed",
+                metrics={"error": error_message, "final_iteration": lf.get_iteration()},
+                completed_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            )
+
+            lf.log.info(
+                f"Asset Manager: Training run {self._current_run_id} marked as failed"
+            )
+
+            # Clear current run ID
+            self._current_run_id = None
+
+        except Exception as e:
+            lf.log.warn(f"Asset Manager: Failed to register training failure: {e}")
+            self._current_run_id = None
+
+    def _register_training_stopped(self):
+        """Register training stop with Asset Manager.
+
+        Updates run status to cancelled.
+        Called when training is stopped by user.
+        """
+        if not ASSET_MANAGER_AVAILABLE or self._asset_index is None:
+            return
+
+        if not self._current_run_id:
+            return
+
+        try:
+            self._asset_index.update_run(
+                self._current_run_id,
+                status="cancelled",
+                metrics={
+                    "final_iteration": lf.get_iteration(),
+                    "stopped_by_user": True,
+                },
+                completed_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
+            )
+
+            lf.log.info(
+                f"Asset Manager: Training run {self._current_run_id} marked as cancelled"
+            )
+
+            # Clear current run ID
+            self._current_run_id = None
+
+        except Exception as e:
+            lf.log.warn(f"Asset Manager: Failed to register training stop: {e}")
+            self._current_run_id = None
+
+    def _get_checkpoint_save_path(self) -> Optional[str]:
+        """Get the expected checkpoint save path based on current state.
+
+        Returns:
+            Path where checkpoint will be saved, or None if cannot determine
+        """
+        d = lf.dataset_params()
+        if not d or not d.has_params():
+            return None
+
+        output_path = d.output_path
+        if not output_path:
+            return None
+
+        iteration = lf.get_iteration()
+        # Checkpoint naming convention: model_iteration.pth or similar
+        # This may need adjustment based on actual checkpoint naming in lichtfeld
+        checkpoint_name = f"model_{iteration:06d}.pth"
+        return os.path.join(output_path, checkpoint_name)
+
+    def _handle_training_state_transition(self, new_state: str):
+        """Handle training state transitions for Asset Manager.
+
+        Called when training transitions from running to a terminal state.
+
+        Args:
+            new_state: The new training state (completed, stopped, error)
+        """
+        if not ASSET_MANAGER_AVAILABLE:
+            return
+
+        # Collect final metrics
+        metrics = {}
+        loss_data = lf.loss_buffer()
+        psnr_data = lf.psnr_buffer()
+
+        if loss_data:
+            metrics["final_loss"] = float(loss_data[-1])
+        if psnr_data:
+            metrics["final_psnr"] = float(psnr_data[-1])
+
+        if new_state == "completed":
+            self._register_training_complete(metrics)
+        elif new_state == "stopped":
+            self._register_training_stopped()
+        elif new_state == "error":
+            error_msg = lf.trainer_error() or "Unknown error"
+            self._register_training_failed(error_msg)
 
     def _on_remove_step_event(self, handle, event, args):
         if not args:
@@ -2044,8 +2400,11 @@ class TrainingPanel(Panel):
             if layout.button_styled(
                 tr("training_panel.save_checkpoint"), "primary", FULL_WIDTH
             ):
+                checkpoint_path = self._get_checkpoint_save_path()
                 lf.save_checkpoint()
                 self._checkpoint_saved_time = time.time()
+                if checkpoint_path:
+                    self._register_checkpoint_saved(checkpoint_path)
 
             if time.time() - self._checkpoint_saved_time < 2.0:
                 theme = lf.ui.theme()
@@ -2166,7 +2525,9 @@ class TrainingPanel(Panel):
                     tr("training.options.tile.half"),
                     tr("training.options.tile.quarter"),
                 ]
-                changed, new_idx = layout.combo("##py_tile_mode", tile_idx, tile_mode_items)
+                changed, new_idx = layout.combo(
+                    "##py_tile_mode", tile_idx, tile_mode_items
+                )
                 if changed:
                     params.tile_mode = [1, 2, 4][new_idx]
                 layout.pop_item_width()
