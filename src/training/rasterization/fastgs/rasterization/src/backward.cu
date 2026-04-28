@@ -54,14 +54,13 @@ void fast_lfs::rasterization::backward(
 
     if (n_instances != 0) {
         // Backward blend (template dispatch eliminates densification branch from inner loop)
-        auto launch_blend_backward = [&]<DensificationType DENS_TYPE, bool MIP_FILTER>() {
-            kernels::backward::blend_backward_cu<DENS_TYPE, MIP_FILTER><<<n_tiles, config::block_size_blend_backward>>>(
+        auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
+            kernels::backward::blend_backward_cu<DENS_TYPE><<<n_tiles, config::block_size_blend_backward>>>(
                 per_tile_buffers.instance_ranges,
                 sorted_primitive_indices,
                 per_primitive_buffers.mean2d,
                 per_primitive_buffers.conic_opacity,
                 per_primitive_buffers.color,
-                raw_opacities,
                 grad_image,
                 grad_alpha,
                 image,
@@ -79,19 +78,12 @@ void fast_lfs::rasterization::backward(
                 height,
                 grid.x);
         };
-        auto launch_blend_backward_for_mip = [&]<DensificationType DENS_TYPE>() {
-            if (mip_filter) {
-                launch_blend_backward.template operator()<DENS_TYPE, true>();
-            } else {
-                launch_blend_backward.template operator()<DENS_TYPE, false>();
-            }
-        };
         if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
-            launch_blend_backward_for_mip.template operator()<DensificationType::MRNF>();
+            launch_blend_backward.template operator()<DensificationType::MRNF>();
         } else if (densification_info != nullptr && densification_error_map != nullptr) {
-            launch_blend_backward_for_mip.template operator()<DensificationType::MCMC>();
+            launch_blend_backward.template operator()<DensificationType::MCMC>();
         } else {
-            launch_blend_backward_for_mip.template operator()<DensificationType::None>();
+            launch_blend_backward.template operator()<DensificationType::None>();
         }
         CHECK_CUDA(config::debug, "blend_backward")
 
@@ -104,6 +96,7 @@ void fast_lfs::rasterization::backward(
                 sh_coefficients_rest,
                 w2c,
                 cam_position,
+                raw_opacities,
                 per_primitive_buffers.n_touched_tiles,
                 grad_mean2d_helper,
                 grad_conic_helper,

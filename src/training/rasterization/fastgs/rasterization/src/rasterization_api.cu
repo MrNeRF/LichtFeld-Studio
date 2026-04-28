@@ -257,6 +257,7 @@ namespace fast_lfs::rasterization {
         CHECK_CUDA_PTR(means_ptr, "means_ptr");
         CHECK_CUDA_PTR(scales_raw_ptr, "scales_raw_ptr");
         CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
+        CHECK_CUDA_PTR(raw_opacities_ptr, "raw_opacities_ptr");
         if (total_bases_sh_rest > 0) {
             CHECK_CUDA_PTR(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
         }
