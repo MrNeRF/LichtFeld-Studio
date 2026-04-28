@@ -5,12 +5,19 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <cuda_runtime.h>
 
 namespace lfs::training::kernels {
 
     void launch_fused_canny_edge_filter_chw(
         const float* d_input_chw,
+        float* d_output_hw,
+        const int height,
+        const int width,
+        cudaStream_t stream = nullptr);
+    void launch_fused_canny_edge_filter_chw(
+        const uint8_t* d_input_chw,
         float* d_output_hw,
         const int height,
         const int width,

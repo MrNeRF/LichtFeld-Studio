@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numeric>
 #include <random>
 
@@ -76,14 +77,20 @@ namespace lfs::training {
             const int width = input_data.shape()[2];
             const int height = input_data.shape()[1];
 
-            auto input_contig = input_data.dtype() == lfs::core::DataType::UInt8
-                                    ? (input_data.to(lfs::core::DataType::Float32) / 255.0f).contiguous()
-                                    : input_data.contiguous();
-            kernels::launch_fused_canny_edge_filter_chw(
-                input_contig.ptr<float>(),
-                ws.nms_output.ptr<float>(),
-                height,
-                width);
+            auto input_contig = input_data.contiguous();
+            if (input_contig.dtype() == lfs::core::DataType::UInt8) {
+                kernels::launch_fused_canny_edge_filter_chw(
+                    input_contig.ptr<uint8_t>(),
+                    ws.nms_output.ptr<float>(),
+                    height,
+                    width);
+            } else {
+                kernels::launch_fused_canny_edge_filter_chw(
+                    input_contig.ptr<float>(),
+                    ws.nms_output.ptr<float>(),
+                    height,
+                    width);
+            }
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
