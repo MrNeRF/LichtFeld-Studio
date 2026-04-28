@@ -249,6 +249,39 @@ def test_integer_commas_are_normalized_while_float_decimal_commas_still_fail(tra
     assert params.means_lr == 0.25
 
 
+def test_max_width_zero_disables_cap(training_panel_module, monkeypatch):
+    dataset = _DatasetStub()
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(dataset_params=lambda: dataset),
+    )
+
+    panel = training_panel_module.TrainingPanel()
+
+    assert panel._set_max_width("0") is True
+    assert dataset.max_width == 0
+
+
+def test_max_width_step_clamps_at_zero(training_panel_module, monkeypatch):
+    dataset = _DatasetStub()
+    dataset.max_width = 8
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(dataset_params=lambda: dataset),
+    )
+
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    panel._apply_num_step("max_width", -1)
+
+    assert dataset.max_width == 0
+    assert panel._text_bufs["max_width_str"] == "0"
+    assert panel._handle.dirty_fields == ["max_width_str"]
+
+
 @pytest.mark.parametrize(
     ("binding_name", "expected_text"),
     [

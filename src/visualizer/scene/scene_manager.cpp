@@ -474,7 +474,7 @@ namespace lfs::vis {
             auto loader = lfs::io::Loader::create();
             lfs::io::LoadOptions options{
                 .resize_factor = -1,
-                .max_width = 3840,
+                .max_width = 0,
                 .images_folder = "images",
                 .validate_only = false};
 
@@ -677,7 +677,7 @@ namespace lfs::vis {
             auto loader = lfs::io::Loader::create();
             const lfs::io::LoadOptions options{
                 .resize_factor = -1,
-                .max_width = 3840,
+                .max_width = 0,
                 .images_folder = "images",
                 .validate_only = false};
 

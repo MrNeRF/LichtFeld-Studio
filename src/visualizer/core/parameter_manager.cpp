@@ -119,7 +119,7 @@ namespace lfs::vis {
         const auto& ds = params.dataset;
         if (ds.resize_factor > 0)
             dataset_config_.resize_factor = ds.resize_factor;
-        if (ds.max_width > 0)
+        if (ds.max_width >= 0)
             dataset_config_.max_width = ds.max_width;
         if (!ds.images.empty())
             dataset_config_.images = ds.images;

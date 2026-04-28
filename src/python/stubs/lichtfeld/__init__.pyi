@@ -1881,7 +1881,7 @@ class DatasetParams:
 
     @property
     def max_width(self) -> int:
-        """Maximum image width in pixels"""
+        """Maximum image width in pixels; 0 disables the cap"""
 
     @max_width.setter
     def max_width(self, arg: int, /) -> None: ...

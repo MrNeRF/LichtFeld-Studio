@@ -21,12 +21,12 @@ namespace lfs::core {
     LFS_CORE_API std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
-    load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 3840);
+    load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 0);
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image_from_memory(const uint8_t* data, size_t size);
 
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
-    load_image(std::filesystem::path p, int res_div = -1, int max_width = 3840);
+    load_image(std::filesystem::path p, int res_div = -1, int max_width = 0);
     LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image);
     LFS_CORE_API void save_image(const std::filesystem::path& path,
                                  const std::vector<Tensor>& images,

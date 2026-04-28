@@ -176,7 +176,7 @@
     "tooltip.num_points": "Number of random init points",
     "tooltip.extent": "Bounding box size for random init",
     "tooltip.resize_factor": "Downsample training images",
-    "tooltip.max_width": "Maximum image width in pixels",
+    "tooltip.max_width": "Maximum image width in pixels. 0 keeps native resolution.",
     "tooltip.cpu_cache": "Cache decoded images in RAM",
     "tooltip.fs_cache": "Cache decoded images on disk",
     "tooltip.test_every": "Use every Nth image as test set",

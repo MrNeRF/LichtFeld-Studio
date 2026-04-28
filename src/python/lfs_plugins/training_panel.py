@@ -1498,7 +1498,7 @@ class TrainingPanel(Panel):
             return False
         try:
             val = int(_parse_num(str(val_str), int))
-            if 0 < val <= 4096:
+            if val >= 0:
                 d.max_width = val
                 return True
         except (ValueError, TypeError, RuntimeError):
@@ -1674,7 +1674,7 @@ class TrainingPanel(Panel):
             d = lf.dataset_params()
             if not d or not d.has_params():
                 return
-            new_val = max(1, min(4096, d.max_width + 16 * direction))
+            new_val = max(0, d.max_width + 16 * direction)
             d.max_width = new_val
             self._text_bufs["max_width_str"] = f"{new_val:,}"
             if self._handle:
@@ -2514,7 +2514,7 @@ class TrainingPanel(Panel):
                             changed, new_val = layout.input_int(
                                 "##py_max_width", dataset.max_width, 80, 400
                             )
-                            if changed and 0 < new_val <= 4096:
+                            if changed and new_val >= 0:
                                 dataset.max_width = new_val
                             layout.pop_item_width()
                         else:
