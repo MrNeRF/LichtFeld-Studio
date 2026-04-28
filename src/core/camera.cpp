@@ -257,13 +257,13 @@ namespace lfs::core {
         return {_focal_x * x_scale, _focal_y * y_scale, _center_x * x_scale, _center_y * y_scale};
     }
 
-    Tensor Camera::load_and_get_image(int resize_factor, int max_width) {
+    Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8) {
         const ImageLoadParams params{
             .path = _image_path,
             .resize_factor = resize_factor,
             .max_width = max_width,
             .stream = _stream,
-            .output_uint8 = true};
+            .output_uint8 = output_uint8};
 
         auto image = load_image_cached(params);
 

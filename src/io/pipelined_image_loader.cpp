@@ -529,8 +529,6 @@ namespace lfs::io {
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (params.undistort)
             key += "_ud";
-        if (params.output_uint8)
-            key += "_u8";
         return key;
     }
 

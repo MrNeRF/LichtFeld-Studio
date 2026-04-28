@@ -299,12 +299,15 @@ namespace lfs::io {
         return total;
     }
 
-    std::string CacheLoader::generate_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
+    std::string CacheLoader::generate_cache_key(
+        const std::filesystem::path& path,
+        const LoadParams& params,
+        const bool include_output_format) const {
         auto key = std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
         if (params.undistort)
             key += "_ud";
-        if (params.output_uint8)
-            key += "_u8";
+        if (include_output_format)
+            key += params.output_uint8 ? "_u8" : "_f32";
         return key;
     }
 
@@ -339,7 +342,7 @@ namespace lfs::io {
         const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        const std::string cache_key = generate_cache_key(path, params);
+        const std::string cache_key = generate_cache_key(path, params, true);
 
         // Check cache
         {
@@ -418,8 +421,7 @@ namespace lfs::io {
         }
 
         // Hash avoids Unicode path issues on Windows (operator/ interprets std::string as ANSI)
-        const std::string cache_key = std::format("rf{}_mw{}_{}_{}", params.resize_factor, params.max_width,
-                                                  params.output_uint8 ? "u8" : "f32", lfs::core::path_to_utf8(path));
+        const std::string cache_key = generate_cache_key(path, params, false);
         const auto cache_img_path = cache_folder_ / (std::to_string(std::hash<std::string>{}(cache_key)) + ".jpg");
 
         std::tuple<unsigned char*, int, int, int> result;
@@ -568,6 +570,8 @@ namespace lfs::io {
 
         NvCodecImageLoader& get_nvcodec_loader() {
             static std::once_flag init_flag;
+            // nvImageCodec can throw during process shutdown after CUDA/nvJPEG teardown.
+            // Keep this singleton alive for process lifetime; pipeline loaders still own their normal instances.
             static NvCodecImageLoader* instance = nullptr;
 
             std::call_once(init_flag, [] {
@@ -624,7 +628,7 @@ namespace lfs::io {
         const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        const std::string cache_key = generate_cache_key(path, params);
+        const std::string cache_key = generate_cache_key(path, params, false);
         std::vector<uint8_t> jpeg_bytes;
         bool from_cache = false;
 

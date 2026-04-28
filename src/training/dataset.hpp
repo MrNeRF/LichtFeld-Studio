@@ -230,7 +230,7 @@ namespace lfs::training {
             auto& cam = cameras_[camera_idx];
 
             // Load image using the new LibTorch-free Camera
-            lfs::core::Tensor image = cam->load_and_get_image(config_.resize_factor, config_.max_width);
+            lfs::core::Tensor image = cam->load_and_get_image(config_.resize_factor, config_.max_width, true);
 
             return {
                 {cam.get(), std::move(image)},
