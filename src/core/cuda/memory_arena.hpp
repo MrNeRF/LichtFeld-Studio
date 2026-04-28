@@ -21,7 +21,7 @@ namespace lfs::core {
     public:
         struct Config {
             size_t virtual_size = 32ULL << 30; // 32GB virtual address space (free!)
-            size_t initial_commit = 256 << 20; // 256MB initial physical memory
+            size_t initial_commit = 128 << 20; // 128MB initial physical memory
             size_t max_physical = 8ULL << 30;  // 8GB max physical memory
             size_t granularity = 2 << 20;      // 2MB allocation granularity
             size_t alignment = 256;

@@ -275,7 +275,7 @@ namespace lfs::python {
                         "Initial rho for sparsity optimization")
             .int_prop(&OptimizationParameters::tile_mode,
                       "tile_mode", "Tile Mode", 1, 1, 4,
-                      "Tile mode (1, 2, or 4)")
+                      "Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)")
             .float_prop(&OptimizationParameters::steps_scaler,
                         "steps_scaler", "Steps Scaler", 1.0f, 0.0f, 10.0f,
                         "Scale training step counts")
@@ -1105,7 +1105,7 @@ namespace lfs::python {
                 "tile_mode",
                 [](PyOptimizationParams& self) { return self.params().tile_mode; },
                 [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.tile_mode = v; }); },
-                "Tile mode (1, 2, or 4)")
+                "Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)")
             .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
@@ -1388,7 +1388,11 @@ namespace lfs::python {
                         throw std::runtime_error("Cannot edit dataset params during training");
                     self.params().loading_params.use_fs_cache = v;
                 },
-                "Use filesystem cache for images");
+                "Use filesystem cache for images")
+            .def_prop_ro(
+                "centralize_dataset",
+                [](const PyDatasetConfig& self) { return self.params().centralize_dataset; },
+                "Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'");
 
         m.def(
             "dataset_params", []() { return PyDatasetConfig{}; },

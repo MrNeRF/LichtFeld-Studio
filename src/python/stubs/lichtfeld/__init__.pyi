@@ -244,7 +244,7 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '') -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off') -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_config_file(path: str) -> None:
@@ -1634,7 +1634,9 @@ class OptimizationParams:
 
     @property
     def tile_mode(self) -> int:
-        """Tile mode (1, 2, or 4)"""
+        """
+        Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)
+        """
 
     @tile_mode.setter
     def tile_mode(self, arg: int, /) -> None: ...
@@ -1897,6 +1899,12 @@ class DatasetParams:
 
     @use_fs_cache.setter
     def use_fs_cache(self, arg: bool, /) -> None: ...
+
+    @property
+    def centralize_dataset(self) -> str:
+        """
+        Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'
+        """
 
 def dataset_params() -> DatasetParams:
     """Get the dataset parameters object"""

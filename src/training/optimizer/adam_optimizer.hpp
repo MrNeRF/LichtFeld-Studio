@@ -58,11 +58,45 @@ namespace lfs::training {
         Opacity
     };
 
+    struct FastGSFusedAdamParam {
+        float* param = nullptr;
+        float* exp_avg = nullptr;
+        float* exp_avg_sq = nullptr;
+        int n_elements = 0;
+        int n_attributes = 0;
+        float step_size = 0.0f;
+        float bias_correction2_sqrt_rcp = 1.0f;
+        bool enabled = false;
+    };
+
+    struct FastGSFusedAdamState {
+        bool enabled = false;
+        float beta1 = 0.9f;
+        float beta2 = 0.999f;
+        float eps = 1e-15f;
+        float scale_reg_weight = 0.0f;
+        float opacity_reg_weight = 0.0f;
+        const float* sparsity_opa_sigmoid = nullptr;
+        const float* sparsity_z = nullptr;
+        const float* sparsity_u = nullptr;
+        int sparsity_n = 0;
+        float sparsity_rho = 0.0f;
+        float sparsity_grad_loss = 0.0f;
+        FastGSFusedAdamParam means;
+        FastGSFusedAdamParam sh0;
+        FastGSFusedAdamParam shN;
+        FastGSFusedAdamParam scaling;
+        FastGSFusedAdamParam rotation;
+        FastGSFusedAdamParam opacity;
+    };
+
     class AdamOptimizer {
     public:
         explicit AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config);
 
         void step(int iteration);
+        FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration);
+        void commit_fastgs_fused_adam(int iteration);
 
         // Gradient management
         void allocate_gradients();
@@ -119,10 +153,13 @@ namespace lfs::training {
         AdamConfig config_;
         lfs::core::SplatData& splat_data_;
         std::unordered_map<std::string, AdamParamState> states_;
+        int64_t fused_step_iteration_ = -1;
+        bool last_step_zeroed_gradients_ = false;
 
         lfs::core::Tensor& get_param(ParamType type);
         std::string param_name(ParamType type) const;
-        void init_state(ParamType type);
+        void init_state(ParamType type, bool allocate_grad = false);
+        void ensure_grad(ParamType type);
         void step_param(ParamType type, int iteration);
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
     };

@@ -12,10 +12,31 @@
 #include <expected>
 #include <rasterization_api.h>
 #include <string>
+#include <utility>
 
 namespace lfs::training {
     // Forward pass context - holds intermediate buffers needed for backward
     struct FastRasterizeContext {
+        FastRasterizeContext() = default;
+        ~FastRasterizeContext() {
+            release_forward_context();
+        }
+
+        FastRasterizeContext(const FastRasterizeContext&) = delete;
+        FastRasterizeContext& operator=(const FastRasterizeContext&) = delete;
+
+        FastRasterizeContext(FastRasterizeContext&& other) noexcept {
+            move_from(std::move(other));
+        }
+
+        FastRasterizeContext& operator=(FastRasterizeContext&& other) noexcept {
+            if (this != &other) {
+                release_forward_context();
+                move_from(std::move(other));
+            }
+            return *this;
+        }
+
         lfs::core::Tensor image;
         lfs::core::Tensor alpha;
         lfs::core::Tensor bg_color; // Saved for alpha gradient computation
@@ -31,18 +52,18 @@ namespace lfs::training {
         const float* cam_position_ptr = nullptr;
 
         // Forward context (contains buffer pointers, frame_id, etc.)
-        fast_lfs::rasterization::ForwardContext forward_ctx;
+        fast_lfs::rasterization::ForwardContext forward_ctx = {};
 
-        int active_sh_bases;
-        int total_bases_sh_rest;
-        int width;
-        int height;
-        float focal_x;
-        float focal_y;
-        float center_x;
-        float center_y;
-        float near_plane;
-        float far_plane;
+        int active_sh_bases = 0;
+        int total_bases_sh_rest = 0;
+        int width = 0;
+        int height = 0;
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        float center_x = 0.0f;
+        float center_y = 0.0f;
+        float near_plane = 0.0f;
+        float far_plane = 0.0f;
         bool mip_filter = false;
 
         // Tile information (for tile-based training)
@@ -53,6 +74,71 @@ namespace lfs::training {
 
         // Background image for per-pixel blending (optional, empty = use bg_color)
         lfs::core::Tensor bg_image;
+
+        void set_forward_context(fast_lfs::rasterization::ForwardContext ctx) noexcept {
+            release_forward_context();
+            forward_ctx = ctx;
+            owns_forward_context_ = ctx.success;
+        }
+
+        void release_forward_context() noexcept {
+            if (!owns_forward_context_) {
+                return;
+            }
+            owns_forward_context_ = false;
+            fast_lfs::rasterization::release_forward_context(forward_ctx);
+            forward_ctx = {};
+        }
+
+        void mark_forward_context_released() noexcept {
+            owns_forward_context_ = false;
+            forward_ctx = {};
+        }
+
+    private:
+        bool owns_forward_context_ = false;
+
+        void move_from(FastRasterizeContext&& other) noexcept {
+            image = std::move(other.image);
+            alpha = std::move(other.alpha);
+            bg_color = std::move(other.bg_color);
+            means = std::move(other.means);
+            raw_scales = std::move(other.raw_scales);
+            raw_rotations = std::move(other.raw_rotations);
+            raw_opacities = std::move(other.raw_opacities);
+            shN = std::move(other.shN);
+            w2c_ptr = std::exchange(other.w2c_ptr, nullptr);
+            cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
+            forward_ctx = std::exchange(other.forward_ctx, {});
+            active_sh_bases = std::exchange(other.active_sh_bases, 0);
+            total_bases_sh_rest = std::exchange(other.total_bases_sh_rest, 0);
+            width = std::exchange(other.width, 0);
+            height = std::exchange(other.height, 0);
+            focal_x = std::exchange(other.focal_x, 0.0f);
+            focal_y = std::exchange(other.focal_y, 0.0f);
+            center_x = std::exchange(other.center_x, 0.0f);
+            center_y = std::exchange(other.center_y, 0.0f);
+            near_plane = std::exchange(other.near_plane, 0.0f);
+            far_plane = std::exchange(other.far_plane, 0.0f);
+            mip_filter = std::exchange(other.mip_filter, false);
+            tile_x_offset = std::exchange(other.tile_x_offset, 0);
+            tile_y_offset = std::exchange(other.tile_y_offset, 0);
+            tile_width = std::exchange(other.tile_width, 0);
+            tile_height = std::exchange(other.tile_height, 0);
+            bg_image = std::move(other.bg_image);
+            owns_forward_context_ = std::exchange(other.owns_forward_context_, false);
+        }
+    };
+
+    struct FastGSFusedExtraGradients {
+        float scale_reg_weight = 0.0f;
+        float opacity_reg_weight = 0.0f;
+        const float* sparsity_opa_sigmoid = nullptr;
+        const float* sparsity_z = nullptr;
+        const float* sparsity_u = nullptr;
+        int sparsity_n = 0;
+        float sparsity_rho = 0.0f;
+        float sparsity_grad_loss = 0.0f;
     };
 
     // Explicit forward pass - returns render output and context for backward
@@ -71,13 +157,15 @@ namespace lfs::training {
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
-        const FastRasterizeContext& ctx,
+        FastRasterizeContext& ctx,
         const lfs::core::Tensor& grad_image,
         lfs::core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
         const lfs::core::Tensor& grad_alpha_extra = {},
         const lfs::core::Tensor& pixel_error_map = {},
-        DensificationType densification_type = DensificationType::None);
+        DensificationType densification_type = DensificationType::None,
+        int iteration = 0,
+        const FastGSFusedExtraGradients& fused_extra_gradients = {});
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(
@@ -90,9 +178,9 @@ namespace lfs::training {
         if (!result) {
             throw std::runtime_error(result.error());
         }
-        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(result->second.forward_ctx.frame_id);
-        return result->first;
+        RenderOutput output = std::move(result->first);
+        result->second.release_forward_context();
+        return output;
     }
 
     // Inference-only rasterization does not mutate the camera; this overload avoids

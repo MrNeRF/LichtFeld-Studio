@@ -35,7 +35,8 @@ namespace lfs::training::kernels {
      * @brief Reduce fused L1+SSIM loss directly to a scalar mean
      *
      * Computes mean((1-w)*abs(img1-img2) + w*(1-ssim_map)) with optional valid padding
-     * without materializing an intermediate full-resolution loss map.
+     * without materializing an intermediate full-resolution loss map. `ssim_map`
+     * is a channel-mean map with shape [N, 1, H, W].
      */
     void launch_fused_l1_ssim_mean_device(
         const float* img1,
@@ -52,6 +53,7 @@ namespace lfs::training::kernels {
      * @brief Reduce masked fused L1+SSIM directly to a normalized scalar loss
      *
      * Computes the masked numerator and denominator in one pass without a loss map.
+     * `ssim_map` is a channel-mean map with shape [N, 1, H, W].
      * `temp_buffer` must provide room for 2 * min(1024, total_pixels/256) floats.
      */
     void launch_masked_fused_l1_ssim_mean_device(

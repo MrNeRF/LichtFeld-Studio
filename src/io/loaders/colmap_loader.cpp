@@ -13,12 +13,11 @@
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/loaders/loader_utils.hpp"
-#include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <format>
 #include <system_error>
+#include <vector>
 
 namespace lfs::io {
 
@@ -257,6 +256,9 @@ namespace lfs::io {
                 LOG_WARN("No point cloud found - will use random initialization");
                 point_cloud = std::make_shared<PointCloud>();
             }
+
+            // Centralize scene
+            scene_center = centralize_scene(cameras, point_cloud, options.centralize, scene_center);
 
             if (options.progress) {
                 options.progress(100.0f, "COLMAP loading complete");

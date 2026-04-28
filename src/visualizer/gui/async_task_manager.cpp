@@ -608,6 +608,8 @@ namespace lfs::vis::gui {
                 cmd.output_path.empty() ? lfs::core::param::default_dataset_output_path(cmd.path) : cmd.output_path;
             if (!cmd.init_path.empty())
                 params.init_path = lfs::core::path_to_utf8(cmd.init_path);
+            if (!cmd.centralize_dataset.empty())
+                params.dataset.centralize_dataset = cmd.centralize_dataset;
             startAsyncImport(cmd.path, params);
         });
 
@@ -975,11 +977,21 @@ namespace lfs::vis::gui {
                     local_params = import_state_.params;
                 }
 
+                const auto parse_centralize = [](const std::string& s) {
+                    if (s == "off")
+                        return lfs::io::CentralizeDataset::Off;
+                    if (s == "by_pointcloud")
+                        return lfs::io::CentralizeDataset::ByPointCloud;
+                    if (s == "by_cameras")
+                        return lfs::io::CentralizeDataset::ByCameras;
+                    return lfs::io::CentralizeDataset::Off;
+                };
                 const lfs::io::LoadOptions load_options{
                     .resize_factor = local_params.dataset.resize_factor,
                     .max_width = local_params.dataset.max_width,
                     .images_folder = local_params.dataset.images,
                     .validate_only = false,
+                    .centralize = parse_centralize(local_params.dataset.centralize_dataset),
                     .progress = [this, &stop_token](const float pct, const std::string& msg) {
                         if (stop_token.stop_requested())
                             return;

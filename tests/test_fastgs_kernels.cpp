@@ -21,6 +21,18 @@ namespace {
     constexpr const char* GARDEN_PATH = "data/garden";
     constexpr int W = 640, H = 480;
     constexpr float FX = 500.0f, FY = 500.0f;
+
+    const Tensor& adam_moment(const AdamOptimizer& opt, ParamType type) {
+        const auto* state = opt.get_state(type);
+        if (!state || !state->exp_avg.is_valid()) {
+            throw std::runtime_error("Missing Adam moment state");
+        }
+        return state->exp_avg;
+    }
+
+    Tensor recovered_fused_grad(const AdamOptimizer& opt, ParamType type, float beta1 = 0.9f) {
+        return adam_moment(opt, type).mul(1.0f / (1.0f - beta1));
+    }
 } // namespace
 
 class FastGSKernelTest : public ::testing::Test {
@@ -106,11 +118,10 @@ protected:
 TEST_F(FastGSKernelTest, Forward_Preprocess) {
     auto r = forward();
     ASSERT_TRUE(r.has_value()) << r.error();
-    EXPECT_GT(r->second.forward_ctx.n_visible_primitives, 0);
-    EXPECT_LE(r->second.forward_ctx.n_visible_primitives, static_cast<int>(n_));
+    EXPECT_GT(r->second.forward_ctx.n_instances, 0);
 }
 
-TEST_F(FastGSKernelTest, Forward_DepthOrdering) {
+TEST_F(FastGSKernelTest, Forward_TileDepthOrdering) {
     auto r = forward();
     ASSERT_TRUE(r.has_value());
     EXPECT_TRUE(r->first.image.is_valid());
@@ -122,10 +133,10 @@ TEST_F(FastGSKernelTest, Forward_Instances) {
     EXPECT_GT(r->second.forward_ctx.n_instances, 0);
 }
 
-TEST_F(FastGSKernelTest, Forward_Buckets) {
+TEST_F(FastGSKernelTest, Forward_TileState) {
     auto r = forward();
     ASSERT_TRUE(r.has_value());
-    EXPECT_GE(r->second.forward_ctx.n_buckets, 0);
+    EXPECT_GT(r->second.forward_ctx.per_tile_buffers_size, 0);
 }
 
 TEST_F(FastGSKernelTest, Forward_Blend) {
@@ -162,8 +173,8 @@ TEST_F(FastGSKernelTest, Backward_Blend) {
     fast_rasterize_backward(r->second, Tensor::ones_like(r->first.image),
                             *splat_, *opt, Tensor::zeros_like(r->first.alpha));
 
-    EXPECT_GT(opt->get_grad(ParamType::Means).pow(2.0f).sum().item<float>(), 0.0f);
-    EXPECT_GT(opt->get_grad(ParamType::Scaling).pow(2.0f).sum().item<float>(), 0.0f);
+    EXPECT_GT(adam_moment(*opt, ParamType::Means).pow(2.0f).sum().item<float>(), 0.0f);
+    EXPECT_GT(adam_moment(*opt, ParamType::Scaling).pow(2.0f).sum().item<float>(), 0.0f);
 }
 
 TEST_F(FastGSKernelTest, Backward_Preprocess) {
@@ -175,8 +186,8 @@ TEST_F(FastGSKernelTest, Backward_Preprocess) {
     fast_rasterize_backward(r->second, Tensor::randn_like(r->first.image).mul(0.1f),
                             *splat_, *opt, Tensor::randn_like(r->first.alpha).mul(0.1f));
 
-    EXPECT_TRUE(opt->get_grad(ParamType::Means).is_valid());
-    EXPECT_TRUE(opt->get_grad(ParamType::Rotation).is_valid());
+    EXPECT_TRUE(adam_moment(*opt, ParamType::Means).is_valid());
+    EXPECT_TRUE(adam_moment(*opt, ParamType::Rotation).is_valid());
 }
 
 TEST_F(FastGSKernelTest, Backward_Full) {
@@ -216,10 +227,14 @@ TEST_F(FastGSKernelTest, Optimizer_ZeroRows) {
 // Numerical tests
 TEST_F(FastGSKernelTest, Numerical_Deterministic) {
     auto r1 = forward();
-    auto r2 = forward();
-    ASSERT_TRUE(r1.has_value() && r2.has_value());
+    ASSERT_TRUE(r1.has_value());
+    auto image1 = r1->first.image.clone();
+    r1->second.release_forward_context();
 
-    float diff = (r1->first.image - r2->first.image).abs().max().item<float>();
+    auto r2 = forward();
+    ASSERT_TRUE(r2.has_value());
+
+    float diff = (image1 - r2->first.image).abs().max().item<float>();
     EXPECT_LT(diff, 1e-5f);
 }
 
@@ -239,11 +254,11 @@ TEST_F(FastGSKernelTest, Numerical_GradientFinite) {
         }
     };
 
-    check(opt->get_grad(ParamType::Means));
-    check(opt->get_grad(ParamType::Scaling));
-    check(opt->get_grad(ParamType::Rotation));
-    check(opt->get_grad(ParamType::Opacity));
-    check(opt->get_grad(ParamType::Sh0));
+    check(adam_moment(*opt, ParamType::Means));
+    check(adam_moment(*opt, ParamType::Scaling));
+    check(adam_moment(*opt, ParamType::Rotation));
+    check(adam_moment(*opt, ParamType::Opacity));
+    check(adam_moment(*opt, ParamType::Sh0));
 }
 
 // Edge cases
@@ -293,11 +308,12 @@ TEST_F(FastGSKernelTest, TiledRendering_Single) {
 TEST_F(FastGSKernelTest, TiledRendering_Consistency) {
     auto full = forward();
     ASSERT_TRUE(full.has_value());
+    auto region = full->first.image.slice(1, 50, 200).slice(2, 100, 300).clone();
+    full->second.release_forward_context();
 
     auto tile = fast_rasterize_forward(*camera_, *splat_, bg_, 100, 50, 200, 150, false);
     ASSERT_TRUE(tile.has_value());
 
-    auto region = full->first.image.slice(1, 50, 200).slice(2, 100, 300);
     float diff = (tile->first.image - region).abs().max().item<float>();
     EXPECT_LT(diff, 0.01f);
 }
@@ -323,11 +339,14 @@ TEST_F(FastGSKernelTest, Performance_Backward) {
     ASSERT_TRUE(r.has_value());
 
     auto grad = Tensor::randn_like(r->first.image);
+    r->second.release_forward_context();
     auto opt = make_optimizer();
 
     for (int i = 0; i < 3; ++i) {
+        auto fwd = forward();
+        ASSERT_TRUE(fwd.has_value());
         opt->zero_grad(0);
-        fast_rasterize_backward(r->second, grad, *splat_, *opt, {});
+        fast_rasterize_backward(fwd->second, grad, *splat_, *opt, {});
     }
     cudaDeviceSynchronize();
 
@@ -461,9 +480,9 @@ protected:
         opt->zero_grad(0);
 
         auto grad_out = r->first.image.mul(2.0f);
-        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, 1);
 
-        return opt->get_grad(param).clone();
+        return recovered_fused_grad(*opt, param).clone();
     }
 
     size_t n_;
@@ -570,8 +589,7 @@ TEST_F(FastGSGradientTest, GradientDirection) {
     opt->zero_grad(0);
 
     auto grad_out = r->first.image.mul(2.0f);
-    fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
-    opt->step(1);
+    fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, 1);
 
     r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(r.has_value());
@@ -581,16 +599,15 @@ TEST_F(FastGSGradientTest, GradientDirection) {
 }
 
 // =============================================================================
-// Test for checkpoint_interval > 32 (sub-bucket gradient correctness)
-// This tests the case where a single bucket contains more than 32 gaussians
+// Dense single-tile gradient test. This exercises the tile backward path with
+// many splats contributing to the same pixels.
 // =============================================================================
 
-class FastGSMultiBucketGradientTest : public ::testing::Test {
+class FastGSDenseTileGradientTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // Create 128 gaussians concentrated in a SINGLE 16x16 tile
-        // This ensures many gaussians (>64) end up in the same tile, triggering
-        // multiple sub-buckets per bucket when checkpoint_interval=64
+        // This ensures many gaussians end up in the same tile.
         n_ = 128;
         std::mt19937 gen(456);
         // Very small spread - all gaussians within ~1 pixel of each other
@@ -694,9 +711,9 @@ protected:
         opt->zero_grad(0);
 
         auto grad_out = r->first.image.mul(2.0f);
-        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, 1);
 
-        return opt->get_grad(param).clone();
+        return recovered_fused_grad(*opt, param).clone();
     }
 
     size_t n_;
@@ -704,29 +721,18 @@ protected:
     std::unique_ptr<Camera> camera_;
 };
 
-TEST_F(FastGSMultiBucketGradientTest, VerifyBucketCount) {
-    // Verify we actually have multiple sub-buckets (>64 instances per tile)
+TEST_F(FastGSDenseTileGradientTest, VerifyDenseTileInstances) {
+    // Verify this setup actually produces a dense tile workload.
     auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
     auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(r.has_value());
 
-    // With 128 gaussians concentrated in single tile, we should have:
-    // - ~128 visible (all in front of camera)
-    // - ~128 instances (each gaussian in 1 tile)
-    // - 2 buckets (128/64 = 2 with checkpoint_interval=64)
-    printf("  n_visible=%d, n_instances=%d, n_buckets=%d\n",
-           r->second.forward_ctx.n_visible_primitives,
-           r->second.forward_ctx.n_instances,
-           r->second.forward_ctx.n_buckets);
+    printf("  n_instances=%d\n", r->second.forward_ctx.n_instances);
 
-    // Expect at least 100 visible (most should be visible since they're in front of camera)
-    EXPECT_GT(r->second.forward_ctx.n_visible_primitives, 100);
-    // Expect at least 2 buckets (which means sub_bucket > 0 will be triggered)
-    // With 128 instances in 1-2 tiles and checkpoint_interval=64, we need >= 2 buckets
-    EXPECT_GE(r->second.forward_ctx.n_buckets, 2) << "Need at least 2 buckets to test sub-bucket logic";
+    EXPECT_GT(r->second.forward_ctx.n_instances, 100);
 }
 
-TEST_F(FastGSMultiBucketGradientTest, Numerical_Means_MultiBucket) {
+TEST_F(FastGSDenseTileGradientTest, Numerical_Means_DenseTile) {
     auto num = numerical_grad(ParamType::Means);
     auto ana = analytical_grad(ParamType::Means);
     ASSERT_TRUE(num.is_valid() && ana.is_valid());
@@ -745,16 +751,16 @@ TEST_F(FastGSMultiBucketGradientTest, Numerical_Means_MultiBucket) {
         dot += n[i] * a[i];
     }
     float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
-    printf("  MultiBucket Means: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+    printf("  DenseTile Means: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
            std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
 
-    EXPECT_GT(cos_sim, 0.80f) << "Gradient direction mismatch - possible sub-bucket bug";
+    EXPECT_GT(cos_sim, 0.80f) << "Gradient direction mismatch in dense tile backward";
 
     float mean_err = sum_err / num.numel();
     EXPECT_LT(mean_err, 2.0f) << "Mean gradient error too high";
 }
 
-TEST_F(FastGSMultiBucketGradientTest, Numerical_Opacity_MultiBucket) {
+TEST_F(FastGSDenseTileGradientTest, Numerical_Opacity_DenseTile) {
     auto num = numerical_grad(ParamType::Opacity);
     auto ana = analytical_grad(ParamType::Opacity);
     ASSERT_TRUE(num.is_valid() && ana.is_valid());
@@ -773,13 +779,13 @@ TEST_F(FastGSMultiBucketGradientTest, Numerical_Opacity_MultiBucket) {
         dot += n[i] * a[i];
     }
     float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
-    printf("  MultiBucket Opacity: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+    printf("  DenseTile Opacity: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
            std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
 
-    EXPECT_GT(cos_sim, 0.95f) << "Gradient direction mismatch - possible sub-bucket bug";
+    EXPECT_GT(cos_sim, 0.95f) << "Gradient direction mismatch in dense tile backward";
 }
 
-TEST_F(FastGSMultiBucketGradientTest, GradientDescent_MultiBucket) {
+TEST_F(FastGSDenseTileGradientTest, GradientDescent_DenseTile) {
     // Verify gradient descent actually reduces loss with many gaussians per tile
     auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
     auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
@@ -787,6 +793,7 @@ TEST_F(FastGSMultiBucketGradientTest, GradientDescent_MultiBucket) {
 
     float loss_before = r->first.image.pow(2.0f).sum().item<float>();
     printf("  Loss before: %.4f\n", loss_before);
+    r->second.release_forward_context();
 
     AdamConfig cfg{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
     auto opt = std::make_unique<AdamOptimizer>(*splat, cfg);
@@ -799,8 +806,7 @@ TEST_F(FastGSMultiBucketGradientTest, GradientDescent_MultiBucket) {
 
         opt->zero_grad(0);
         auto grad_out = r->first.image.mul(2.0f);
-        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
-        opt->step(step + 1);
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {}, {}, DensificationType::None, step + 1);
     }
 
     r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);

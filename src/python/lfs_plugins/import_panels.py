@@ -125,6 +125,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._output_path = ""
         self._init_path = ""
         self._ppisp_sidecar_path = ""
+        self._centralize_dataset = "off"
         self._last_lang = ""
 
     def on_bind_model(self, ctx):
@@ -146,6 +147,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind("output_path", lambda: self._output_path, self._set_output_path)
         model.bind("init_path", lambda: self._init_path, self._set_init_path)
         model.bind("ppisp_sidecar_path", lambda: self._ppisp_sidecar_path, self._set_ppisp_sidecar_path)
+        model.bind("centralize_dataset", lambda: self._centralize_dataset, self._set_centralize_dataset)
 
         model.bind_event("browse_dataset", self._on_browse_dataset)
         model.bind_event("browse_output", self._on_browse_output)
@@ -170,6 +172,7 @@ class DatasetImportPanel(_ImportDialogPanel):
             return False
 
         self._init_path = ""
+        self._centralize_dataset = "off"
         params = lf.optimization_params()
         self._ppisp_sidecar_path = (
             str(params.ppisp_sidecar_path) if params and params.has_params() else ""
@@ -277,6 +280,13 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._ppisp_sidecar_path = next_value
         self._dirty_model("ppisp_sidecar_path")
 
+    def _set_centralize_dataset(self, value):
+        next_value = str(value)
+        if next_value == self._centralize_dataset:
+            return
+        self._centralize_dataset = next_value
+        self._dirty_model("centralize_dataset")
+
     def _on_browse_dataset(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_dataset_folder_dialog()
         if path:
@@ -309,6 +319,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         dataset_path = self._dataset_path.strip()
         init_path = self._init_path.strip()
         ppisp_sidecar_path = self._ppisp_sidecar_path.strip()
+        centralize_dataset = self._centralize_dataset
 
         params = lf.optimization_params()
         if params and params.has_params():
@@ -323,6 +334,7 @@ class DatasetImportPanel(_ImportDialogPanel):
             is_dataset=True,
             output_path=self._output_path.strip(),
             init_path=init_path,
+            centralize_dataset=centralize_dataset,
         )
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):

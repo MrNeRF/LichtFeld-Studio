@@ -127,7 +127,7 @@ namespace lfs::training::kernels {
 
     // Workspace for fused L1+SSIM (extends SSIMWorkspace)
     struct FusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;      // [N, C, H, W] per-pixel SSIM values (optional output)
+        lfs::core::Tensor ssim_map;      // [N, 1, H, W] per-pixel channel-mean SSIM values
         lfs::core::Tensor dm_dmu1;       // [N, C, H, W] SSIM partial derivative
         lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] SSIM partial derivative
         lfs::core::Tensor dm_dsigma12;   // [N, C, H, W] SSIM partial derivative
@@ -145,7 +145,9 @@ namespace lfs::training::kernels {
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
-                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                std::vector<size_t> map_shape = shape;
+                map_shape[1] = 1;
+                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
                 dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
@@ -192,7 +194,7 @@ namespace lfs::training::kernels {
     };
 
     struct DecoupledFusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;          // [N, C, H, W] decoupled SSIM map = l(corrected, gt) * cs(raw, gt)
+        lfs::core::Tensor ssim_map;          // [N, 1, H, W] channel-mean decoupled SSIM map
         lfs::core::Tensor app_dm_dmu1;       // [N, C, H, W] d(ssim_map)/d mu(corrected)
         lfs::core::Tensor raw_dm_dmu1;       // [N, C, H, W] indirect mu(raw) contribution via sigma terms
         lfs::core::Tensor raw_dm_dsigma1_sq; // [N, C, H, W] lambda-scaled d(ssim_map)/d sigma^2(raw)
@@ -208,7 +210,9 @@ namespace lfs::training::kernels {
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
-                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                std::vector<size_t> map_shape = shape;
+                map_shape[1] = 1;
+                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
                 app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
@@ -253,7 +257,7 @@ namespace lfs::training::kernels {
     // ============================================================================
 
     struct MaskedFusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;       // [N, C, H, W] per-pixel SSIM values (optional output)
+        lfs::core::Tensor ssim_map;       // [N, 1, H, W] per-pixel channel-mean SSIM values
         lfs::core::Tensor dm_dmu1;        // [N, C, H, W]
         lfs::core::Tensor dm_dsigma1_sq;  // [N, C, H, W]
         lfs::core::Tensor dm_dsigma12;    // [N, C, H, W]
@@ -267,7 +271,9 @@ namespace lfs::training::kernels {
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
-                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                std::vector<size_t> map_shape = shape;
+                map_shape[1] = 1;
+                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
                 dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
@@ -306,7 +312,7 @@ namespace lfs::training::kernels {
         MaskedFusedL1SSIMWorkspace& workspace);
 
     struct MaskedDecoupledFusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;    // [N, C, H, W]
+        lfs::core::Tensor ssim_map;    // [N, 1, H, W]
         lfs::core::Tensor app_dm_dmu1; // [N, C, H, W]
         lfs::core::Tensor raw_dm_dmu1;
         lfs::core::Tensor raw_dm_dsigma1_sq;
@@ -323,7 +329,9 @@ namespace lfs::training::kernels {
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
-                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                std::vector<size_t> map_shape = shape;
+                map_shape[1] = 1;
+                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
                 app_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 raw_dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 raw_dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);

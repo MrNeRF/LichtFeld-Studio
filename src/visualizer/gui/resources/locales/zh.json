@@ -804,7 +804,11 @@
     "output_dir": "输出：  ",
     "init_file": "Init file（可选，替换 points3D）：",
     "help_text": "检查点、日志和导出的模型将保存到输出目录。",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "居中数据集",
+    "centralize_off": "关闭",
+    "centralize_by_pointcloud": "按点云",
+    "centralize_by_cameras": "按相机"
   },
   "notification": {
     "cannot_open": "无法打开",

@@ -804,7 +804,11 @@
     "output_dir": "출력:   ",
     "init_file": "Init file (선택 사항, points3D 대체):",
     "help_text": "체크포인트, 로그 및 내보낸 모델이 출력 디렉터리에 저장됩니다.",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "데이터셋 중앙 정렬",
+    "centralize_off": "끄기",
+    "centralize_by_pointcloud": "포인트 클라우드 기준",
+    "centralize_by_cameras": "카메라 기준"
   },
   "notification": {
     "cannot_open": "열 수 없음",

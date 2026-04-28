@@ -389,6 +389,11 @@ namespace lfs::training {
             return std::unexpected(std::string(forward_ctx.error_message));
         }
 
+        // Take ownership before any post-forward tensor work so exceptions cannot leak
+        // the retained sorted-index buffer or leave the arena frame active.
+        FastRasterizeContext ctx;
+        ctx.set_forward_context(forward_ctx);
+
         // Prepare render output
         RenderOutput render_output;
         const cudaStream_t stream = image.stream();
@@ -401,7 +406,6 @@ namespace lfs::training {
         render_output.height = height;
 
         // Prepare context for backward
-        FastRasterizeContext ctx;
         ctx.image = image;
         ctx.alpha = alpha;
         ctx.bg_color = bg_color; // Save bg_color for alpha gradient
@@ -417,9 +421,6 @@ namespace lfs::training {
         // Store camera pointers directly (tensors are managed by camera, already contiguous)
         ctx.w2c_ptr = w2c_ptr;
         ctx.cam_position_ptr = cam_position_ptr;
-
-        // Store forward context (contains buffer pointers, frame_id, etc.)
-        ctx.forward_ctx = forward_ctx;
 
         ctx.active_sh_bases = active_sh_bases;
         ctx.total_bases_sh_rest = total_bases_sh_rest;
@@ -439,17 +440,19 @@ namespace lfs::training {
         ctx.tile_width = tile_width;
         ctx.tile_height = tile_height;
 
-        return std::pair{render_output, ctx};
+        return std::pair{std::move(render_output), std::move(ctx)};
     }
 
     void fast_rasterize_backward(
-        const FastRasterizeContext& ctx,
+        FastRasterizeContext& ctx,
         const core::Tensor& grad_image,
         core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
         const core::Tensor& grad_alpha_extra,
         const core::Tensor& pixel_error_map,
-        DensificationType densification_type) {
+        DensificationType densification_type,
+        int iteration,
+        const FastGSFusedExtraGradients& fused_extra_gradients) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -532,6 +535,42 @@ namespace lfs::training {
         auto raw_image = ctx.image;
         compose_background_in_place(raw_image, ctx.alpha, ctx.bg_color, ctx.bg_image, H, W, stream, true);
 
+        fast_lfs::rasterization::FusedAdamSettings fused_adam;
+        const auto optimizer_fused = optimizer.prepare_fastgs_fused_adam(iteration);
+        auto convert_param = [](const FastGSFusedAdamParam& src) {
+            fast_lfs::rasterization::FusedAdamParam dst;
+            dst.param = src.param;
+            dst.exp_avg = src.exp_avg;
+            dst.exp_avg_sq = src.exp_avg_sq;
+            dst.n_elements = src.n_elements;
+            dst.n_attributes = src.n_attributes;
+            dst.step_size = src.step_size;
+            dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
+            dst.enabled = src.enabled;
+            return dst;
+        };
+        fused_adam.enabled = optimizer_fused.enabled;
+        fused_adam.beta1 = optimizer_fused.beta1;
+        fused_adam.beta2 = optimizer_fused.beta2;
+        fused_adam.eps = optimizer_fused.eps;
+        fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
+        fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
+        fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
+        fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
+        fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
+        fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
+        fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
+        fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
+        fused_adam.means = convert_param(optimizer_fused.means);
+        fused_adam.scaling = convert_param(optimizer_fused.scaling);
+        fused_adam.rotation = convert_param(optimizer_fused.rotation);
+        fused_adam.opacity = convert_param(optimizer_fused.opacity);
+        fused_adam.sh0 = convert_param(optimizer_fused.sh0);
+        fused_adam.shN = convert_param(optimizer_fused.shN);
+        if (!fused_adam.enabled) {
+            throw std::runtime_error("FastGS fused Adam state is not available");
+        }
+
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
@@ -547,12 +586,6 @@ namespace lfs::training {
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,
-            optimizer.get_grad(ParamType::Means).ptr<float>(),
-            optimizer.get_grad(ParamType::Scaling).ptr<float>(),
-            optimizer.get_grad(ParamType::Rotation).ptr<float>(),
-            optimizer.get_grad(ParamType::Opacity).ptr<float>(),
-            optimizer.get_grad(ParamType::Sh0).ptr<float>(),
-            optimizer.get_grad(ParamType::ShN).ptr<float>(),
             nullptr,
             n_primitives,
             ctx.active_sh_bases,
@@ -564,10 +597,16 @@ namespace lfs::training {
             ctx.center_x,
             ctx.center_y,
             ctx.mip_filter,
-            densification_type);
+            densification_type,
+            &fused_adam);
+
+        ctx.mark_forward_context_released();
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
+        }
+        if (fused_adam.enabled) {
+            optimizer.commit_fastgs_fused_adam(iteration);
         }
     }
 } // namespace lfs::training

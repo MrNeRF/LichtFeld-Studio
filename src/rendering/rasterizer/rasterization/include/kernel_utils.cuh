@@ -7,8 +7,6 @@
 #include "helper_math.h"
 #include "rasterization_config.h"
 #include "utils.h"
-#include <cooperative_groups.h>
-namespace cg = cooperative_groups;
 
 namespace lfs::rendering::kernels {
 
@@ -46,105 +44,94 @@ namespace lfs::rendering::kernels {
         return result;
     }
 
-    // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L131
-    __device__ inline bool will_primitive_contribute(
-        const float2& mean,
-        const float3& conic,
-        const uint tile_x,
-        const uint tile_y,
-        const float power_threshold) {
-        const float2 rect_min = make_float2(static_cast<float>(tile_x * config::tile_width), static_cast<float>(tile_y * config::tile_height));
-        const float2 rect_max = make_float2(static_cast<float>((tile_x + 1) * config::tile_width - 1), static_cast<float>((tile_y + 1) * config::tile_height - 1));
+    __device__ inline float power_threshold_for_opacity(const float opacity) {
+        const float safe_opacity = fmaxf(opacity, config::min_alpha_threshold);
+        const float alpha_cutoff_power = logf(safe_opacity * config::min_alpha_threshold_rcp);
+        return fmaxf(config::max_power_threshold, alpha_cutoff_power);
+    }
 
-        const float x_min_diff = rect_min.x - mean.x;
-        const float x_left = static_cast<float>(x_min_diff > 0.0f);
-        const float not_in_x_range = x_left + static_cast<float>(mean.x > rect_max.x);
-        const float y_min_diff = rect_min.y - mean.y;
-        const float y_above = static_cast<float>(y_min_diff > 0.0f);
-        const float not_in_y_range = y_above + static_cast<float>(mean.y > rect_max.y);
-
-        // let's hope the compiler optimizes this properly
-        if (not_in_y_range + not_in_x_range == 0.0f) {
-            return true;
-        }
-        const float2 closest_corner = make_float2(
-            fast_lerp(rect_max.x, rect_min.x, x_left),
-            fast_lerp(rect_max.y, rect_min.y, y_above));
-        const float2 diff = mean - closest_corner;
-
-        const float2 d = make_float2(
-            copysignf(static_cast<float>(config::tile_width - 1), x_min_diff),
-            copysignf(static_cast<float>(config::tile_height - 1), y_min_diff));
-        const float2 t = make_float2(
-            not_in_y_range * __saturatef((d.x * conic.x * diff.x + d.x * conic.y * diff.y) / (d.x * conic.x * d.x)),
-            not_in_x_range * __saturatef((d.y * conic.y * diff.x + d.y * conic.z * diff.y) / (d.y * conic.z * d.y)));
-        const float2 max_contribution_point = closest_corner + t * d;
-        const float2 delta = mean - max_contribution_point;
-        const float max_power_in_tile = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-        return max_power_in_tile <= power_threshold;
+    __device__ inline float stddev_for_power_threshold(const float power_threshold) {
+        return sqrtf(2.0f * power_threshold);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L177
+    __device__ inline float2 ellipse_range_bound(
+        const float3& conic,
+        const float radius_sq,
+        const float y0,
+        const float y1) {
+        const float a = conic.x;
+        const float b = conic.y;
+        const float c = conic.z;
+        const float det = fmaxf(a * c - b * b, 1e-20f);
+        const float ym = -b / c * sqrtf(fmaxf(c * radius_sq / det, 0.0f));
+
+        const float v0 = fminf(fmaxf(-ym, y0), y1);
+        const float v1 = fminf(fmaxf(ym, y0), y1);
+        const float bv0 = -b * v0;
+        const float bv1 = -b * v1;
+
+        const float inv_a = 1.0f / a;
+        const float x0 = inv_a * (bv0 - sqrtf(fmaxf(bv0 * bv0 - a * (c * v0 * v0 - radius_sq), 0.0f)));
+        const float x1 = inv_a * (bv1 + sqrtf(fmaxf(bv1 * bv1 - a * (c * v1 * v1 - radius_sq), 0.0f)));
+        return make_float2(x0, x1);
+    }
+
+    __device__ inline uint floor_tile_clamped(
+        const float coord,
+        const uint min_tile,
+        const uint max_tile,
+        const uint tile_size) {
+        const int tile = __float2int_rd(coord / static_cast<float>(tile_size));
+        return static_cast<uint>(min(max(tile, static_cast<int>(min_tile)), static_cast<int>(max_tile)));
+    }
+
+    __device__ inline uint ceil_tile_clamped(
+        const float coord,
+        const uint min_tile,
+        const uint max_tile,
+        const uint tile_size) {
+        const int tile = __float2int_ru(coord / static_cast<float>(tile_size));
+        return static_cast<uint>(min(max(tile, static_cast<int>(min_tile)), static_cast<int>(max_tile)));
+    }
+
     __device__ inline uint compute_exact_n_touched_tiles(
         const float2& mean2d,
         const float3& conic,
         const uint4& screen_bounds,
         const float power_threshold,
-        const uint tile_count,
         const bool active) {
+        if (!active)
+            return 0;
+
         const float2 mean2d_shifted = mean2d - 0.5f;
+        const float radius_sq = 2.0f * power_threshold;
+        if (radius_sq <= 0.0f)
+            return 0;
+
+        const uint screen_bounds_width = screen_bounds.y - screen_bounds.x;
+        const uint screen_bounds_height = screen_bounds.w - screen_bounds.z;
 
         uint n_touched_tiles = 0;
-        if (active) {
-            const uint screen_bounds_width = screen_bounds.y - screen_bounds.x;
-            for (uint instance_idx = 0; instance_idx < tile_count && instance_idx < config::n_sequential_threshold; instance_idx++) {
-                const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
-                const uint tile_x = screen_bounds.x + (instance_idx % screen_bounds_width);
-                if (will_primitive_contribute(mean2d_shifted, conic, tile_x, tile_y, power_threshold))
-                    n_touched_tiles++;
+
+        if (screen_bounds_height <= screen_bounds_width) {
+            for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
+                const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
+                const float y1 = y0 + static_cast<float>(config::tile_height);
+                const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
+                const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
+                const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
+                n_touched_tiles += max_x - min_x;
             }
-        }
-
-        const uint lane_idx = cg::this_thread_block().thread_rank() % 32u;
-        const uint warp_idx = cg::this_thread_block().thread_rank() / 32u;
-
-        const int compute_cooperatively = active && tile_count > config::n_sequential_threshold;
-        const uint remaining_threads = __ballot_sync(0xffffffffu, compute_cooperatively);
-        if (remaining_threads == 0)
-            return n_touched_tiles;
-
-        const uint n_remaining_threads = __popc(remaining_threads);
-        for (int n = 0; n < n_remaining_threads && n < 32; n++) {
-            const uint current_lane = __fns(remaining_threads, 0, n + 1); // find lane index of next remaining thread
-
-            const uint4 screen_bounds_coop = make_uint4(
-                __shfl_sync(0xffffffffu, screen_bounds.x, current_lane),
-                __shfl_sync(0xffffffffu, screen_bounds.y, current_lane),
-                __shfl_sync(0xffffffffu, screen_bounds.z, current_lane),
-                __shfl_sync(0xffffffffu, screen_bounds.w, current_lane));
-            const uint screen_bounds_width_coop = screen_bounds_coop.y - screen_bounds_coop.x;
-            const uint tile_count_coop = (screen_bounds_coop.w - screen_bounds_coop.z) * screen_bounds_width_coop;
-
-            const float2 mean2d_shifted_coop = make_float2(
-                __shfl_sync(0xffffffffu, mean2d_shifted.x, current_lane),
-                __shfl_sync(0xffffffffu, mean2d_shifted.y, current_lane));
-            const float3 conic_coop = make_float3(
-                __shfl_sync(0xffffffffu, conic.x, current_lane),
-                __shfl_sync(0xffffffffu, conic.y, current_lane),
-                __shfl_sync(0xffffffffu, conic.z, current_lane));
-            const float power_threshold_coop = __shfl_sync(0xffffffffu, power_threshold, current_lane);
-
-            const uint remaining_tile_count = tile_count_coop - config::n_sequential_threshold;
-            const int n_iterations = div_round_up(remaining_tile_count, 32u);
-            for (int i = 0; i < n_iterations; i++) {
-                const int instance_idx = i * 32 + lane_idx + config::n_sequential_threshold;
-                const int active_current = instance_idx < tile_count_coop;
-                const uint tile_y = screen_bounds_coop.z + (instance_idx / screen_bounds_width_coop);
-                const uint tile_x = screen_bounds_coop.x + (instance_idx % screen_bounds_width_coop);
-                const uint contributes = active_current && will_primitive_contribute(mean2d_shifted_coop, conic_coop, tile_x, tile_y, power_threshold_coop);
-                const uint contributes_ballot = __ballot_sync(0xffffffffu, contributes);
-                const uint n_contributes = __popc(contributes_ballot);
-                n_touched_tiles += (current_lane == lane_idx) * n_contributes;
+        } else {
+            const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
+            for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
+                const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
+                const float x1 = x0 + static_cast<float>(config::tile_width);
+                const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
+                const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
+                const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
+                n_touched_tiles += max_y - min_y;
             }
         }
 

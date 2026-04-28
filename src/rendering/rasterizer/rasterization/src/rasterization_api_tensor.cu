@@ -570,7 +570,6 @@ namespace lfs::rendering {
 
             const std::function<char*(size_t)> per_primitive_buffers_func = arena_allocator;
             const std::function<char*(size_t)> per_tile_buffers_func = arena_allocator;
-            const std::function<char*(size_t)> per_instance_buffers_func = arena_allocator;
 
             Tensor w2c_contig = w2c.is_contiguous() ? w2c : w2c.contiguous();
             Tensor cam_pos_contig = cam_position.is_contiguous() ? cam_position : cam_position.contiguous();
@@ -604,7 +603,6 @@ namespace lfs::rendering {
             forward(
                 per_primitive_buffers_func,
                 per_tile_buffers_func,
-                per_instance_buffers_func,
                 reinterpret_cast<const float3*>(means.ptr<float>()),
                 reinterpret_cast<const float3*>(scales_raw.ptr<float>()),
                 reinterpret_cast<const float4*>(rotations_raw.ptr<float>()),
@@ -781,7 +779,6 @@ namespace lfs::rendering {
             for (size_t i = 0; i < views.size(); ++i) {
                 tasks[i] = [&, i](cudaStream_t stream) {
                     forward(
-                        arena_allocator,
                         arena_allocator,
                         arena_allocator,
                         reinterpret_cast<const float3*>(means.ptr<float>()),

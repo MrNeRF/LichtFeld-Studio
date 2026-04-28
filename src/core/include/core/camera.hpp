@@ -8,12 +8,19 @@
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include <cassert>
+#include <cstdint>
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <future>
 #include <string>
 
 namespace lfs::core {
+
+    enum class CameraSplit : uint8_t {
+        Train,
+        Eval
+    };
 
     class LFS_CORE_API Camera {
     public:
@@ -104,11 +111,19 @@ namespace lfs::core {
         bool has_mask() const noexcept { return !_mask_path.empty() && std::filesystem::exists(_mask_path); }
         bool has_alpha() const noexcept { return _has_alpha; }
         void set_has_alpha(bool v) noexcept { _has_alpha = v; }
+        CameraSplit split() const noexcept { return _split; }
+        void set_split(const CameraSplit split) noexcept {
+            assert((split == CameraSplit::Train || split == CameraSplit::Eval) && "Camera split must be Train or Eval");
+            _split = split;
+        }
         int uid() const noexcept { return _uid; }
         int camera_id() const noexcept { return _camera_id; }
 
         float FoVx() const noexcept { return _FoVx; }
         float FoVy() const noexcept { return _FoVy; }
+
+        // Translate the camera by trans in world space (cam_pos += trans, T updated accordingly)
+        void translate(const Tensor& trans);
 
         void precompute_undistortion(float blank_pixels = 0.0f);
         bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
@@ -141,6 +156,7 @@ namespace lfs::core {
         std::filesystem::path _image_path;
         std::filesystem::path _mask_path;
         bool _has_alpha = false;
+        CameraSplit _split = CameraSplit::Train;
         int _camera_width = 0;
         int _camera_height = 0;
         int _image_width = 0;

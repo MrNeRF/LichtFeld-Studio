@@ -89,6 +89,7 @@ namespace lfs::vis {
         igs_session_ = lfs::core::param::OptimizationParameters::igs_plus_defaults();
         igs_current_ = igs_session_;
         dataset_config_ = lfs::core::param::DatasetConfig{};
+        dataset_config_.centralize_dataset = "off";
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
         dirty_.store(false, std::memory_order_release);
     }

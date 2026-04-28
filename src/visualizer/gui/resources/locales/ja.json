@@ -804,7 +804,11 @@
     "output_dir": "出力:   ",
     "init_file": "Init file（任意、points3Dを置換）:",
     "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "データセットを中心に配置",
+    "centralize_off": "オフ",
+    "centralize_by_pointcloud": "点群を基準",
+    "centralize_by_cameras": "カメラを基準"
   },
   "notification": {
     "cannot_open": "開けません",

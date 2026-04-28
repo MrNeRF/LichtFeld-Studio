@@ -215,6 +215,11 @@ namespace lfs::training {
             return cameras_[indices_[index]].get();
         }
 
+        size_t local_to_source(size_t index) const {
+            assert(index < indices_.size());
+            return indices_[index];
+        }
+
         /// Get single example by index
         CameraExample get(size_t index) const {
             if (index >= indices_.size()) {
@@ -604,7 +609,8 @@ namespace lfs::training {
                 if (!indices || indices->empty())
                     break;
 
-                const size_t camera_idx = (*indices)[0];
+                const size_t local_idx = (*indices)[0];
+                const size_t camera_idx = dataset_->local_to_source(local_idx);
                 auto& cam = dataset_->get_cameras()[camera_idx];
                 const size_t seq_id = next_sequence_id_++;
                 sequence_to_camera_[seq_id] = camera_idx;

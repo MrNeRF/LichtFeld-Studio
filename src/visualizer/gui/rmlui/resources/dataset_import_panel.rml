@@ -76,6 +76,19 @@
       </div>
     </div>
 
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.centralize_dataset</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <select class="impdlg-input" data-value="centralize_dataset">
+            <option value="off" selected>@tr:load_dataset_popup.centralize_off</option>
+            <option value="by_pointcloud">@tr:load_dataset_popup.centralize_by_pointcloud</option>
+            <option value="by_cameras">@tr:load_dataset_popup.centralize_by_cameras</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <span class="impdlg-note text-muted">@tr:load_dataset_popup.help_text</span>
 
     <div class="impdlg-buttons">

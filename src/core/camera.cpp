@@ -140,6 +140,7 @@ namespace lfs::core {
           _image_path(std::move(other._image_path)),
           _image_name(std::move(other._image_name)),
           _mask_path(std::move(other._mask_path)),
+          _split(other._split),
           _camera_width(other._camera_width),
           _camera_height(other._camera_height),
           _image_width(other._image_width),
@@ -182,6 +183,7 @@ namespace lfs::core {
             _image_path = std::move(other._image_path);
             _image_name = std::move(other._image_name);
             _mask_path = std::move(other._mask_path);
+            _split = other._split;
             _camera_width = other._camera_width;
             _camera_height = other._camera_height;
             _image_width = other._image_width;
@@ -219,6 +221,7 @@ namespace lfs::core {
           _image_name(other._image_name),
           _image_path(other._image_path),
           _mask_path(other._mask_path),
+          _split(other._split),
           _camera_width(other._camera_width),
           _camera_height(other._camera_height),
           _image_width(other._image_width),
@@ -450,6 +453,31 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
         _undistort_prepared = true;
+    }
+
+    void Camera::translate(const Tensor& trans) {
+        // Shift the camera's world-space position by trans.
+        // For the view transform: new T = T - R * trans
+        // (so that p_cam = R*p_world_new + T_new still holds after shifting world by trans)
+        auto R_cpu = _R.cpu().contiguous();
+        auto T_cpu = _T.cpu().contiguous();
+        auto t_cpu = trans.cpu().contiguous();
+
+        auto R_acc = R_cpu.accessor<float, 2>();
+        auto T_acc = T_cpu.accessor<float, 1>();
+        auto t_acc = t_cpu.accessor<float, 1>();
+
+        std::vector<float> T_new(3);
+        for (int i = 0; i < 3; ++i) {
+            float Rt_i = 0.f;
+            for (int j = 0; j < 3; ++j)
+                Rt_i += R_acc(i, j) * t_acc(j);
+            T_new[i] = T_acc(i) - Rt_i;
+        }
+
+        _T = Tensor::from_vector(T_new, {3}, Device::CPU);
+        _world_view_transform = world_to_view(_R, _T);
+        _cam_position = _cam_position + trans.to(Device::CUDA).contiguous();
     }
 
     bool Camera::has_distortion() const noexcept {

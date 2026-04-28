@@ -804,7 +804,11 @@
     "output_dir": "Ausgabe: ",
     "init_file": "Init-Datei (optional, ersetzt points3D):",
     "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden im Ausgabeverzeichnis gespeichert.",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "Datensatz zentrieren",
+    "centralize_off": "Aus",
+    "centralize_by_pointcloud": "Nach Punktwolke",
+    "centralize_by_cameras": "Nach Kameras"
   },
   "notification": {
     "cannot_open": "Kann nicht öffnen",

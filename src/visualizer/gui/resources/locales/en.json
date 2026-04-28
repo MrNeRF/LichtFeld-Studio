@@ -153,7 +153,7 @@
     "tooltip.iterations": "Total training iterations",
     "tooltip.max_gaussians": "Maximum number of Gaussians",
     "tooltip.sh_degree": "Spherical harmonics degree (0-3)",
-    "tooltip.tile_mode": "Use tiled rendering for large images",
+    "tooltip.tile_mode": "Use tiled rendering for large images in 3DGUT training.",
     "tooltip.steps_scaler": "Scale training steps. Auto-set from image count (1.0 for <=300 images, images/300 for more)",
     "tooltip.bilateral_grid": "Appearance embedding for exposure/color correction",
     "tooltip.sparsity": "Enable pruning for model compression",
@@ -245,9 +245,9 @@
     "options.strategy.mcmc": "MCMC",
     "options.strategy.mrnf": "MRNF",
     "options.strategy.igs_plus": "IGS+",
-    "options.tile.full": "1 (Full)",
-    "options.tile.half": "2 (Half)",
-    "options.tile.quarter": "4 (Quarter)",
+    "options.tile.full": "1 tile",
+    "options.tile.half": "2 tiles (3DGUT)",
+    "options.tile.quarter": "4 tiles (3DGUT)",
     "options.mask.none": "None",
     "options.mask.segment": "Segment",
     "options.mask.ignore": "Ignore",
@@ -308,9 +308,9 @@
           "3": "Third-order SH — best quality, most VRAM"
         },
         "tile_mode": {
-          "full": "Full resolution rasterization",
-          "half": "Half resolution rasterization (~4× faster)",
-          "quarter": "Quarter resolution rasterization (~16× faster)"
+          "full": "Full image (1 tile)",
+          "half": "2 tiles (3DGUT only)",
+          "quarter": "4 tiles (3DGUT only)"
         },
         "mask_mode": {
           "none": "Train on the entire image, no masking",
@@ -817,7 +817,11 @@
     "output_dir": "Output:  ",
     "init_file": "Init file (optional, replaces points3D):",
     "help_text": "Training checkpoints, logs, and exported models will be saved to the output directory.",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "Centralize Dataset",
+    "centralize_off": "Off",
+    "centralize_by_pointcloud": "By PointCloud",
+    "centralize_by_cameras": "By Cameras"
   },
   "notification": {
     "cannot_open": "Cannot Open",

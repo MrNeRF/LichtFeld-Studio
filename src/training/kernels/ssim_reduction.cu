@@ -75,7 +75,9 @@ namespace lfs::training::kernels {
 
                 if (h >= h_start && h < h_end && w >= w_start && w < w_end) {
                     const float l1 = fabsf(img1[idx] - img2[idx]);
-                    local_sum += l1_weight * l1 + ssim_weight * (1.0f - ssim_map[idx]);
+                    const size_t batch_idx = idx / (static_cast<size_t>(C) * H * W);
+                    const float ssim = ssim_map[batch_idx * H * W + rem];
+                    local_sum += l1_weight * l1 + ssim_weight * (1.0f - ssim);
                 }
             }
 
@@ -105,7 +107,9 @@ namespace lfs::training::kernels {
                 const int w = static_cast<int>(rem % W);
                 const float mask_value = mask[h * W + w];
                 const float l1 = fabsf(img1[idx] - img2[idx]);
-                const float loss = l1_weight * l1 + ssim_weight * (1.0f - ssim_map[idx]);
+                const size_t batch_idx = idx / (static_cast<size_t>(C) * H * W);
+                const float ssim = ssim_map[batch_idx * H * W + rem];
+                const float loss = l1_weight * l1 + ssim_weight * (1.0f - ssim);
                 local_sum += loss * mask_value;
             }
 

@@ -25,6 +25,14 @@ namespace lfs::training {
             return std::make_shared<lfs::core::PointCloud>(positions, colors);
         }
 
+        lfs::io::CentralizeDataset parse_centralize(const std::string& s) {
+            if (s == "by_pointcloud")
+                return lfs::io::CentralizeDataset::ByPointCloud;
+            if (s == "by_cameras")
+                return lfs::io::CentralizeDataset::ByCameras;
+            return lfs::io::CentralizeDataset::Off;
+        }
+
         void applyTrainingSHDegree(lfs::core::SplatData& splat, const int target_degree) {
             const int before = splat.get_max_sh_degree();
             if (splat.set_sh_degree(target_degree)) {
@@ -45,6 +53,7 @@ namespace lfs::training {
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
             .validate_only = false,
+            .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
                 lfs::core::events::state::DatasetLoadProgress{
@@ -155,7 +164,9 @@ namespace lfs::training {
                 size_t val_count = 0;
                 size_t mask_count = 0;
                 for (size_t i = 0; i < cameras.size(); ++i) {
-                    if (enable_eval && (i % test_every) == 0) {
+                    const bool is_eval = enable_eval && (i % test_every) == 0;
+                    cameras[i]->set_split(is_eval ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
+                    if (is_eval) {
                         val_count++;
                     } else {
                         train_count++;
@@ -426,6 +437,13 @@ namespace lfs::training {
                             return std::unexpected(std::format("Init failed: {}", splat_result.error()));
                         }
 
+                        const int max_cap = params.optimization.max_cap;
+                        if (max_cap > 0 && max_cap < static_cast<int>(splat_result->size())) {
+                            LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
+                                     max_cap, splat_result->size(), max_cap);
+                            lfs::core::random_choose(*splat_result, max_cap);
+                        }
+
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Init {} gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
@@ -466,6 +484,7 @@ namespace lfs::training {
                 size_t train_count = 0, val_count = 0, mask_count = 0;
                 for (size_t i = 0; i < cameras.size(); ++i) {
                     const bool is_val = enable_eval && (i % test_every) == 0;
+                    cameras[i]->set_split(is_val ? lfs::core::CameraSplit::Eval : lfs::core::CameraSplit::Train);
                     is_val ? ++val_count : ++train_count;
                     if (cameras[i]->has_mask())
                         ++mask_count;

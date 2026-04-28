@@ -54,6 +54,14 @@ namespace {
         return false;
     }
 
+    const Tensor& adam_moment(const AdamOptimizer& opt, ParamType type) {
+        const auto* state = opt.get_state(type);
+        if (!state || !state->exp_avg.is_valid()) {
+            throw std::runtime_error("Missing Adam moment state");
+        }
+        return state->exp_avg;
+    }
+
     int count_nonzero(const Tensor& t) {
         auto cpu = t.to(Device::CPU);
         float* ptr = cpu.ptr<float>();
@@ -537,10 +545,10 @@ TEST_F(FastGSFuzzTest, Backward_ZeroGradient) {
     auto grad_out = Tensor::zeros_like(result->first.image);
     fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-    // All gradients should be zero
-    auto grad_means = opt->get_grad(ParamType::Means);
-    EXPECT_FALSE(has_nan(grad_means));
-    float grad_sum = grad_means.abs().sum().item<float>();
+    // Fused Adam stores the first moment directly instead of materializing gradients.
+    const auto& means_moment = adam_moment(*opt, ParamType::Means);
+    EXPECT_FALSE(has_nan(means_moment));
+    float grad_sum = means_moment.abs().sum().item<float>();
     EXPECT_LT(grad_sum, 1e-6f);
 }
 
@@ -569,10 +577,10 @@ TEST_F(FastGSFuzzTest, Backward_LargeGradient) {
     auto grad_out = Tensor::full_like(result->first.image, 1e6f);
     fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-    // Gradients should be clamped, not NaN/Inf
-    auto grad_means = opt->get_grad(ParamType::Means);
-    EXPECT_FALSE(has_nan(grad_means));
-    EXPECT_FALSE(has_inf(grad_means));
+    // Fused Adam moments should be clamped, not NaN/Inf.
+    const auto& means_moment = adam_moment(*opt, ParamType::Means);
+    EXPECT_FALSE(has_nan(means_moment));
+    EXPECT_FALSE(has_inf(means_moment));
 }
 
 TEST_F(FastGSFuzzTest, Backward_AllCulled) {
@@ -602,9 +610,9 @@ TEST_F(FastGSFuzzTest, Backward_AllCulled) {
     auto grad_out = result->first.image.mul(2.0f);
     fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-    // All culled - gradients should be zero
-    auto grad_means = opt->get_grad(ParamType::Means);
-    EXPECT_FALSE(has_nan(grad_means));
+    // All culled - moment update should stay finite.
+    const auto& means_moment = adam_moment(*opt, ParamType::Means);
+    EXPECT_FALSE(has_nan(means_moment));
 }
 
 // =============================================================================
@@ -644,9 +652,9 @@ TEST_F(FastGSFuzzTest, RandomStress_SmallBatch) {
         auto grad_out = result->first.image.mul(2.0f);
         fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-        auto grad_means = opt->get_grad(ParamType::Means);
-        EXPECT_FALSE(has_nan(grad_means)) << "NaN gradient in trial " << trial;
-        EXPECT_FALSE(has_inf(grad_means)) << "Inf gradient in trial " << trial;
+        const auto& means_moment = adam_moment(*opt, ParamType::Means);
+        EXPECT_FALSE(has_nan(means_moment)) << "NaN Adam moment in trial " << trial;
+        EXPECT_FALSE(has_inf(means_moment)) << "Inf Adam moment in trial " << trial;
 
         cleanup_arena();
     }
@@ -674,6 +682,7 @@ TEST_F(FastGSFuzzTest, RandomStress_LargeBatch) {
         EXPECT_FALSE(has_nan(result->first.image)) << "NaN in large trial " << trial;
         EXPECT_FALSE(has_inf(result->first.image)) << "Inf in large trial " << trial;
 
+        result->second.release_forward_context();
         cleanup_arena();
     }
 }
@@ -710,9 +719,9 @@ TEST_F(FastGSFuzzTest, MipFilter_Enabled) {
     auto grad_out = result->first.image.mul(2.0f);
     fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-    auto grad_opacity = opt->get_grad(ParamType::Opacity);
-    EXPECT_FALSE(has_nan(grad_opacity));
-    EXPECT_FALSE(has_inf(grad_opacity));
+    const auto& opacity_moment = adam_moment(*opt, ParamType::Opacity);
+    EXPECT_FALSE(has_nan(opacity_moment));
+    EXPECT_FALSE(has_inf(opacity_moment));
 }
 
 // =============================================================================
@@ -803,8 +812,8 @@ TEST_F(FastGSFuzzTest, HigherOrderSH) {
     auto grad_out = result->first.image.mul(2.0f);
     fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-    auto grad_shN = opt->get_grad(ParamType::ShN);
-    EXPECT_FALSE(has_nan(grad_shN));
+    const auto& shn_moment = adam_moment(*opt, ParamType::ShN);
+    EXPECT_FALSE(has_nan(shn_moment));
 }
 
 TEST_F(FastGSFuzzTest, ExtremeSHCoefficients) {
@@ -1142,9 +1151,9 @@ TEST_F(FastGSFuzzTest, GradientStability_MultipleIterations) {
         auto grad_out = result->first.image.mul(2.0f);
         fast_rasterize_backward(result->second, grad_out, *splat, *opt, {});
 
-        auto grad_means = opt->get_grad(ParamType::Means);
-        EXPECT_FALSE(has_nan(grad_means)) << "NaN gradient at iteration " << iter;
-        EXPECT_FALSE(has_inf(grad_means)) << "Inf gradient at iteration " << iter;
+        const auto& means_moment = adam_moment(*opt, ParamType::Means);
+        EXPECT_FALSE(has_nan(means_moment)) << "NaN Adam moment at iteration " << iter;
+        EXPECT_FALSE(has_inf(means_moment)) << "Inf Adam moment at iteration " << iter;
 
         cleanup_arena();
     }

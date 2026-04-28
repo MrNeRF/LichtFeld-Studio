@@ -357,6 +357,7 @@ namespace lfs::vis::op {
         std::string image_name;
         std::filesystem::path image_path;
         std::filesystem::path mask_path;
+        lfs::core::CameraSplit split = lfs::core::CameraSplit::Train;
         float focal_x = 0.0f;
         float focal_y = 0.0f;
         float center_x = 0.0f;

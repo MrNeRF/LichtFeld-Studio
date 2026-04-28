@@ -22,6 +22,27 @@ namespace lfs::rendering::kernels::forward {
     constexpr float SELECTION_PREVIEW_BLEND = 0.9f;
     constexpr float SELECTION_COMMITTED_BLEND = 0.8f;
 
+    __device__ __forceinline__ uint quantize_depth_key(float depth, const uint depth_bits) {
+        if (depth_bits == 0)
+            return 0;
+
+        constexpr uint FLOAT32_FRACTION_BITS = 23;
+        constexpr uint FLOAT32_FRACTION_MASK = (1u << FLOAT32_FRACTION_BITS) - 1u;
+        constexpr uint FLOAT32_BELOW_TWO = 0x3fffffffu;
+
+        float normalized_depth = (2.0f * depth + 1.0f) / (depth + 1.0f);
+        normalized_depth = fminf(fmaxf(normalized_depth, 1.0f), __uint_as_float(FLOAT32_BELOW_TWO));
+        const uint fraction = __float_as_uint(normalized_depth) & FLOAT32_FRACTION_MASK;
+        return fraction >> (FLOAT32_FRACTION_BITS - depth_bits);
+    }
+
+    __device__ __forceinline__ InstanceKey make_instance_key(
+        const uint tile_key,
+        const uint depth_key,
+        const uint depth_bits) {
+        return (static_cast<InstanceKey>(tile_key) << depth_bits) | static_cast<InstanceKey>(depth_key);
+    }
+
     __global__ void preprocess_cu(
         const float3* means,
         const float3* raw_scales,
@@ -32,7 +53,6 @@ namespace lfs::rendering::kernels::forward {
         const float4* w2c,
         const float3* cam_position,
         uint* primitive_depth_keys,
-        uint* primitive_indices,
         uint* primitive_n_touched_tiles,
         ushort4* primitive_screen_bounds,
         float2* primitive_mean2d,
@@ -42,8 +62,6 @@ namespace lfs::rendering::kernels::forward {
         bool* primitive_outside_crop,
         uint8_t* primitive_selection_status,
         uint* primitive_global_idx,
-        uint* n_visible_primitives,
-        uint* n_instances,
         const uint n_primitives,
         const int* visible_indices,
         const uint grid_width,
@@ -58,6 +76,7 @@ namespace lfs::rendering::kernels::forward {
         const float cy,
         const float near_, // near and far are macros in windowns
         const float far_,
+        const uint depth_bits,
         const float* model_transforms, // Array of 4x4 transforms (row-major), one per node
         const int* transform_indices,  // Per-Gaussian index into transforms array [N]
         const int num_transforms,      // Number of transforms in array
@@ -254,7 +273,14 @@ namespace lfs::rendering::kernels::forward {
             return;
         const float q_norm_sq_safe = fmaxf(q_norm_sq, 1e-8f);
         const float3 raw_scale = active ? raw_scales[global_idx] : make_float3(0.0f, 0.0f, 0.0f);
-        const float3 variance = make_float3(expf(2.0f * raw_scale.x), expf(2.0f * raw_scale.y), expf(2.0f * raw_scale.z));
+        const float3 clamped_scale = make_float3(
+            fminf(raw_scale.x, config::max_raw_scale),
+            fminf(raw_scale.y, config::max_raw_scale),
+            fminf(raw_scale.z, config::max_raw_scale));
+        const float3 variance = make_float3(
+            expf(2.0f * clamped_scale.x),
+            expf(2.0f * clamped_scale.y),
+            expf(2.0f * clamped_scale.z));
         const float qxx = 2.0f * qxx_raw / q_norm_sq_safe, qyy = 2.0f * qyy_raw / q_norm_sq_safe, qzz = 2.0f * qzz_raw / q_norm_sq_safe;
         const float qxy = 2.0f * qx * qy / q_norm_sq_safe, qxz = 2.0f * qx * qz / q_norm_sq_safe, qyz = 2.0f * qy * qz / q_norm_sq_safe;
         const float qrx = 2.0f * qr * qx / q_norm_sq_safe, qry = 2.0f * qr * qy / q_norm_sq_safe, qrz = 2.0f * qr * qz / q_norm_sq_safe;
@@ -318,26 +344,64 @@ namespace lfs::rendering::kernels::forward {
                               ? kernels::project_orthographic(cam_x, cam_y, cx, cy, ortho_scale, w2c_r1, w2c_r2)
                               : kernels::project_perspective(cam_x, cam_y, depth, fx, fy, cx, cy, w, h, w2c_r1, w2c_r2, w2c_r3);
         const float2 mean2d = proj.mean2d;
+
+        const float clip_margin_factor = fmaxf(0.0f, 0.5f * (config::clip_xy - 1.0f));
+        const float margin_x = clip_margin_factor * w;
+        const float margin_y = clip_margin_factor * h;
+        if (!isfinite(mean2d.x) || !isfinite(mean2d.y) ||
+            mean2d.x < -margin_x || mean2d.x > w + margin_x ||
+            mean2d.y < -margin_y || mean2d.y > h + margin_y) {
+            active = false;
+        }
+        if (__ballot_sync(0xffffffffu, active) == 0)
+            return;
+        const float2 raster_mean2d = active ? mean2d : make_float2(0.0f, 0.0f);
+
         float3 cov2d = kernels::project_cov3d(proj.jw_r1, proj.jw_r2, cov3d);
 
-        // Mip filter: use smaller dilation and compensate opacity
-        const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
-        cov2d.x += kernel_size;
-        cov2d.z += kernel_size;
-        const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-        if (det < 1e-8f)
+        cov2d.x += config::pre_blur_amount;
+        cov2d.z += config::pre_blur_amount;
+        const float det_orig = fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f);
+        cov2d.x += config::blur_amount;
+        cov2d.z += config::blur_amount;
+        const float det_for_opacity = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+        if (det_for_opacity < 1e-8f)
             active = false;
-        const float det_safe = fmaxf(det, 1e-8f);
-        const float det_rcp = 1.0f / det_safe;
-        const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
-        const bool low_opacity_query_only =
-            output_opacity < config::min_alpha_threshold && include_low_opacity_selection_queries;
+        const float det_for_opacity_safe = fmaxf(det_for_opacity, 1e-8f);
+        const float output_opacity = opacity * sqrtf(det_orig / det_for_opacity_safe);
+        const bool low_opacity_query_only = active &&
+                                            output_opacity < config::min_alpha_threshold && include_low_opacity_selection_queries;
         if (output_opacity < config::min_alpha_threshold && !include_low_opacity_selection_queries)
             active = false;
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
+        const float power_threshold = power_threshold_for_opacity(output_opacity);
+        const float power_threshold_factor = stddev_for_power_threshold(power_threshold);
+        const float max_sigma = (config::max_pixel_radius + 0.5f) / fmaxf(power_threshold_factor, 1e-6f);
+        const float max_variance = max_sigma * max_sigma;
+        const float eigen_avg = 0.5f * (cov2d.x + cov2d.z);
+        const float eigen_delta = sqrtf(fmaxf(0.0f, eigen_avg * eigen_avg - det_for_opacity));
+        const float eigen1 = eigen_avg + eigen_delta;
+        const float eigen2 = fmaxf(eigen_avg - eigen_delta, 0.0f);
+        const float eigen1_clamped = fminf(eigen1, max_variance);
+        const float eigen2_clamped = fminf(eigen2, max_variance);
+        if (eigen1_clamped < eigen1 || eigen2_clamped < eigen2) {
+            const float2 eigen_vec1 = fabsf(cov2d.y) > 1e-6f
+                                          ? normalize(make_float2(cov2d.y, eigen1 - cov2d.x))
+                                          : (cov2d.x >= cov2d.z ? make_float2(1.0f, 0.0f) : make_float2(0.0f, 1.0f));
+            const float2 eigen_vec2 = make_float2(eigen_vec1.y, -eigen_vec1.x);
+            cov2d = make_float3(
+                eigen1_clamped * eigen_vec1.x * eigen_vec1.x + eigen2_clamped * eigen_vec2.x * eigen_vec2.x,
+                eigen1_clamped * eigen_vec1.x * eigen_vec1.y + eigen2_clamped * eigen_vec2.x * eigen_vec2.y,
+                eigen1_clamped * eigen_vec1.y * eigen_vec1.y + eigen2_clamped * eigen_vec2.y * eigen_vec2.y);
+        }
+
+        const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+        if (det < 1e-8f)
+            active = false;
+        const float det_safe = fmaxf(det, 1e-8f);
+        const float det_rcp = 1.0f / det_safe;
         const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
 
         if (low_opacity_query_only) {
@@ -359,19 +423,23 @@ namespace lfs::rendering::kernels::forward {
         }
 
         // Compute bounds
-        const float safe_output_opacity = fmaxf(output_opacity, config::min_alpha_threshold);
-        const float power_threshold = logf(safe_output_opacity * config::min_alpha_threshold_rcp);
-        const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
+        if (!isfinite(extent_x) || !isfinite(extent_y))
+            active = false;
+        if (!active) {
+            extent_x = 0.0f;
+            extent_y = 0.0f;
+        }
+
         const uint4 screen_bounds = make_uint4(
-            min(grid_width, static_cast<uint>(max(0, __float2int_rd((mean2d.x - extent_x) / static_cast<float>(config::tile_width))))),   // x_min
-            min(grid_width, static_cast<uint>(max(0, __float2int_ru((mean2d.x + extent_x) / static_cast<float>(config::tile_width))))),   // x_max
-            min(grid_height, static_cast<uint>(max(0, __float2int_rd((mean2d.y - extent_y) / static_cast<float>(config::tile_height))))), // y_min
-            min(grid_height, static_cast<uint>(max(0, __float2int_ru((mean2d.y + extent_y) / static_cast<float>(config::tile_height)))))  // y_max
+            min(grid_width, static_cast<uint>(max(0, __float2int_rd((raster_mean2d.x - extent_x) / static_cast<float>(config::tile_width))))),   // x_min
+            min(grid_width, static_cast<uint>(max(0, __float2int_ru((raster_mean2d.x + extent_x) / static_cast<float>(config::tile_width))))),   // x_max
+            min(grid_height, static_cast<uint>(max(0, __float2int_rd((raster_mean2d.y - extent_y) / static_cast<float>(config::tile_height))))), // y_min
+            min(grid_height, static_cast<uint>(max(0, __float2int_ru((raster_mean2d.y + extent_y) / static_cast<float>(config::tile_height)))))  // y_max
         );
-        const uint n_touched_tiles_max = (screen_bounds.y - screen_bounds.x) * (screen_bounds.w - screen_bounds.z);
-        if (n_touched_tiles_max == 0)
+        const uint bounding_tile_count = (screen_bounds.y - screen_bounds.x) * (screen_bounds.w - screen_bounds.z);
+        if (bounding_tile_count == 0)
             active = false;
 
         // early exit if whole warp is inactive
@@ -381,7 +449,7 @@ namespace lfs::rendering::kernels::forward {
         // compute exact number of tiles the primitive overlaps
         const uint n_touched_tiles = compute_exact_n_touched_tiles(
             mean2d, conic, screen_bounds,
-            power_threshold, n_touched_tiles_max, active);
+            power_threshold, active);
 
         // cooperative threads no longer needed
         if (n_touched_tiles == 0 || !active)
@@ -480,142 +548,100 @@ namespace lfs::rendering::kernels::forward {
         primitive_outside_crop[primitive_idx] = outside_crop || outside_view_volume;
         primitive_selection_status[primitive_idx] = sel_status;
         primitive_global_idx[primitive_idx] = global_idx;
-
-        const uint offset = atomicAdd(n_visible_primitives, 1);
-        const uint depth_key = __float_as_uint(depth);
-        primitive_depth_keys[offset] = depth_key;
-        primitive_indices[offset] = primitive_idx;
-        atomicAdd(n_instances, n_touched_tiles);
-    }
-
-    __global__ void apply_depth_ordering_cu(
-        const uint* primitive_indices_sorted,
-        const uint* primitive_n_touched_tiles,
-        uint* primitive_offset,
-        const uint n_visible_primitives) {
-        auto idx = cg::this_grid().thread_rank();
-        if (idx >= n_visible_primitives)
-            return;
-        const uint primitive_idx = primitive_indices_sorted[idx];
-        primitive_offset[idx] = primitive_n_touched_tiles[primitive_idx];
+        const float3 sort_delta = mean3d - cam_position[0];
+        const float radial_sort_metric = dot(sort_delta, sort_delta);
+        primitive_depth_keys[primitive_idx] = quantize_depth_key(radial_sort_metric, depth_bits);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
-        const uint* primitive_indices_sorted,
-        const uint* primitive_offsets,
-        const ushort4* primitive_screen_bounds,
-        const float2* primitive_mean2d,
-        const float4* primitive_conic_opacity,
-        ushort* instance_keys,
-        uint* instance_primitive_indices,
+        const uint* __restrict__ primitive_n_touched_tiles,
+        const uint* __restrict__ primitive_offsets,
+        const uint* __restrict__ primitive_depth_keys,
+        const ushort4* __restrict__ primitive_screen_bounds,
+        const float2* __restrict__ primitive_mean2d,
+        const float4* __restrict__ primitive_conic_opacity,
+        InstanceKey* __restrict__ instance_keys,
+        uint* __restrict__ instance_primitive_indices,
         const uint grid_width,
-        const uint n_visible_primitives) {
-        auto block = cg::this_thread_block();
-        auto warp = cg::tiled_partition<32u>(block);
+        const uint depth_bits,
+        const uint n_primitives) {
         uint idx = cg::this_grid().thread_rank();
 
         bool active = true;
-        if (idx >= n_visible_primitives) {
+        if (idx >= n_primitives) {
             active = false;
-            idx = n_visible_primitives - 1;
+            idx = n_primitives - 1;
         }
+
+        const uint primitive_idx = idx;
+        const uint n_touched_tiles = active ? primitive_n_touched_tiles[primitive_idx] : 0;
+        active = active && n_touched_tiles > 0;
 
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
-        const uint primitive_idx = primitive_indices_sorted[idx];
-
-        const ushort4 screen_bounds = primitive_screen_bounds[primitive_idx];
-        const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
-        const uint tile_count = static_cast<uint>(screen_bounds.w - screen_bounds.z) * screen_bounds_width;
-
-        __shared__ ushort4 collected_screen_bounds[config::block_size_create_instances];
-        __shared__ float2 collected_mean2d_shifted[config::block_size_create_instances];
-        __shared__ float4 collected_conic_opacity[config::block_size_create_instances];
-        collected_screen_bounds[block.thread_rank()] = screen_bounds;
-        collected_mean2d_shifted[block.thread_rank()] = primitive_mean2d[primitive_idx] - 0.5f;
-        collected_conic_opacity[block.thread_rank()] = primitive_conic_opacity[primitive_idx];
-
-        uint current_write_offset = primitive_offsets[idx];
-
         if (active) {
-            const float2 mean2d_shifted = collected_mean2d_shifted[block.thread_rank()];
-            const float4 conic_opacity = collected_conic_opacity[block.thread_rank()];
+            const ushort4 screen_bounds = primitive_screen_bounds[primitive_idx];
+            const uint depth_key = primitive_depth_keys[primitive_idx];
+            const uint write_offset_end = primitive_offsets[idx];
+
+            const float2 mean2d_shifted = primitive_mean2d[primitive_idx] - 0.5f;
+            const float4 conic_opacity = primitive_conic_opacity[primitive_idx];
             const float3 conic = make_float3(conic_opacity);
-            const float power_threshold = logf(conic_opacity.w * config::min_alpha_threshold_rcp);
+            const float power_threshold = power_threshold_for_opacity(conic_opacity.w);
+            const float radius_sq = 2.0f * power_threshold;
 
-            for (uint instance_idx = 0; instance_idx < tile_count && instance_idx < config::n_sequential_threshold; instance_idx++) {
-                const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
-                const uint tile_x = screen_bounds.x + (instance_idx % screen_bounds_width);
-                if (will_primitive_contribute(mean2d_shifted, conic, tile_x, tile_y, power_threshold)) {
-                    const ushort tile_key = static_cast<ushort>(tile_y * grid_width + tile_x);
-                    instance_keys[current_write_offset] = tile_key;
-                    instance_primitive_indices[current_write_offset] = primitive_idx;
-                    current_write_offset++;
+            uint current_write_offset = idx == 0 ? 0 : primitive_offsets[idx - 1];
+            const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
+            const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
+
+            if (screen_bounds_height <= screen_bounds_width) {
+                for (uint tile_y = screen_bounds.z; tile_y < screen_bounds.w; tile_y++) {
+                    const float y0 = static_cast<float>(tile_y * config::tile_height) - mean2d_shifted.y;
+                    const float y1 = y0 + static_cast<float>(config::tile_height);
+                    const float2 bound = ellipse_range_bound(conic, radius_sq, y0, y1);
+                    const uint min_x = floor_tile_clamped(bound.x + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
+                    const uint max_x = ceil_tile_clamped(bound.y + mean2d_shifted.x, screen_bounds.x, screen_bounds.y, config::tile_width);
+                    for (uint tile_x = min_x; tile_x < max_x && current_write_offset < write_offset_end; tile_x++) {
+                        const uint tile_key = tile_y * grid_width + tile_x;
+                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
+                        instance_primitive_indices[current_write_offset] = primitive_idx;
+                        current_write_offset++;
+                    }
+                }
+            } else {
+                const float3 conic_transposed = make_float3(conic.z, conic.y, conic.x);
+                for (uint tile_x = screen_bounds.x; tile_x < screen_bounds.y; tile_x++) {
+                    const float x0 = static_cast<float>(tile_x * config::tile_width) - mean2d_shifted.x;
+                    const float x1 = x0 + static_cast<float>(config::tile_width);
+                    const float2 bound = ellipse_range_bound(conic_transposed, radius_sq, x0, x1);
+                    const uint min_y = floor_tile_clamped(bound.x + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
+                    const uint max_y = ceil_tile_clamped(bound.y + mean2d_shifted.y, screen_bounds.z, screen_bounds.w, config::tile_height);
+                    for (uint tile_y = min_y; tile_y < max_y && current_write_offset < write_offset_end; tile_y++) {
+                        const uint tile_key = tile_y * grid_width + tile_x;
+                        instance_keys[current_write_offset] = make_instance_key(tile_key, depth_key, depth_bits);
+                        instance_primitive_indices[current_write_offset] = primitive_idx;
+                        current_write_offset++;
+                    }
                 }
             }
-        }
-
-        const uint lane_idx = cg::this_thread_block().thread_rank() % 32u;
-        const uint warp_idx = cg::this_thread_block().thread_rank() / 32u;
-        const uint lane_mask_allprev_excl = 0xffffffffu >> (32u - lane_idx);
-        const int compute_cooperatively = active && tile_count > config::n_sequential_threshold;
-        const uint remaining_threads = __ballot_sync(0xffffffffu, compute_cooperatively);
-        if (remaining_threads == 0)
-            return;
-
-        const uint n_remaining_threads = __popc(remaining_threads);
-        for (int n = 0; n < n_remaining_threads && n < 32; n++) {
-            int current_lane = __fns(remaining_threads, 0, n + 1);
-            uint primitive_idx_coop = __shfl_sync(0xffffffffu, primitive_idx, current_lane);
-            uint current_write_offset_coop = __shfl_sync(0xffffffffu, current_write_offset, current_lane);
-
-            const ushort4 screen_bounds_coop = collected_screen_bounds[warp.meta_group_rank() * 32 + current_lane];
-            const uint screen_bounds_width_coop = static_cast<uint>(screen_bounds_coop.y - screen_bounds_coop.x);
-            const uint tile_count_coop = screen_bounds_width_coop * static_cast<uint>(screen_bounds_coop.w - screen_bounds_coop.z);
-
-            const float2 mean2d_shifted_coop = collected_mean2d_shifted[warp.meta_group_rank() * 32 + current_lane];
-            const float4 conic_opacity_coop = collected_conic_opacity[warp.meta_group_rank() * 32 + current_lane];
-            const float3 conic_coop = make_float3(conic_opacity_coop);
-            const float power_threshold_coop = logf(conic_opacity_coop.w * config::min_alpha_threshold_rcp);
-
-            const uint remaining_tile_count = tile_count_coop - config::n_sequential_threshold;
-            const int n_iterations = div_round_up(remaining_tile_count, 32u);
-            for (int i = 0; i < n_iterations; i++) {
-                const int instance_idx = i * 32 + lane_idx + config::n_sequential_threshold;
-                const int active_current = instance_idx < tile_count_coop;
-                const uint tile_y = screen_bounds_coop.z + (instance_idx / screen_bounds_width_coop);
-                const uint tile_x = screen_bounds_coop.x + (instance_idx % screen_bounds_width_coop);
-                const uint write = active_current && will_primitive_contribute(mean2d_shifted_coop, conic_coop, tile_x, tile_y, power_threshold_coop);
-                const uint write_ballot = __ballot_sync(0xffffffffu, write);
-                const uint n_writes = __popc(write_ballot);
-                const uint write_offset_current = __popc(write_ballot & lane_mask_allprev_excl);
-                const uint write_offset = current_write_offset_coop + write_offset_current;
-                if (write) {
-                    const ushort tile_key = static_cast<ushort>(tile_y * grid_width + tile_x);
-                    instance_keys[write_offset] = tile_key;
-                    instance_primitive_indices[write_offset] = primitive_idx_coop;
-                }
-                current_write_offset_coop += n_writes;
-            }
-
-            __syncwarp();
         }
     }
 
     __global__ void extract_instance_ranges_cu(
-        const ushort* instance_keys,
+        const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
+        const uint depth_bits,
         const uint n_instances) {
         auto instance_idx = cg::this_grid().thread_rank();
         if (instance_idx >= n_instances)
             return;
-        const ushort instance_tile_idx = instance_keys[instance_idx];
+        const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> depth_bits);
         if (instance_idx == 0)
             tile_instance_ranges[instance_tile_idx].x = 0;
         else {
-            const ushort previous_instance_tile_idx = instance_keys[instance_idx - 1];
+            const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> depth_bits);
             if (instance_tile_idx != previous_instance_tile_idx) {
                 tile_instance_ranges[previous_instance_tile_idx].y = instance_idx;
                 tile_instance_ranges[instance_tile_idx].x = instance_idx;
@@ -623,18 +649,6 @@ namespace lfs::rendering::kernels::forward {
         }
         if (instance_idx == n_instances - 1)
             tile_instance_ranges[instance_tile_idx].y = n_instances;
-    }
-
-    __global__ void extract_bucket_counts(
-        uint2* tile_instance_ranges,
-        uint* tile_n_buckets,
-        const uint n_tiles) {
-        auto tile_idx = cg::this_grid().thread_rank();
-        if (tile_idx >= n_tiles)
-            return;
-        const uint2 instance_range = tile_instance_ranges[tile_idx];
-        const uint n_buckets = div_round_up(instance_range.y - instance_range.x, 32u);
-        tile_n_buckets[tile_idx] = n_buckets;
     }
 
     __global__ void __launch_bounds__(config::block_size_blend) blend_cu(
@@ -693,7 +707,7 @@ namespace lfs::rendering::kernels::forward {
                 const uint primitive_idx = instance_primitive_indices[current_fetch_idx];
                 collected_mean2d[thread_rank] = primitive_mean2d[primitive_idx];
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
-                collected_color[thread_rank] = fmaxf(primitive_color[primitive_idx], 0.0f);
+                collected_color[thread_rank] = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_blend_color);
                 collected_depth[thread_rank] = primitive_depth[primitive_idx];
                 collected_outside_crop[thread_rank] = primitive_outside_crop[primitive_idx];
                 collected_selection_status[thread_rank] = primitive_selection_status[primitive_idx];
@@ -707,7 +721,7 @@ namespace lfs::rendering::kernels::forward {
                 const float2 delta = collected_mean2d[j] - pixel;
                 const float opacity = conic_opacity.w;
                 const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                if (sigma_over_2 < 0.0f)
+                if (sigma_over_2 < 0.0f || sigma_over_2 > power_threshold_for_opacity(opacity))
                     continue;
                 float gaussian = expf(-sigma_over_2);
 

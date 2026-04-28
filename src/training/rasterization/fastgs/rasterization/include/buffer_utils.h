@@ -12,6 +12,8 @@
 
 namespace fast_lfs::rasterization {
 
+    using InstanceKey = std::uint32_t;
+
     inline int extract_end_bit(uint n) {
         int leading_zeros = 0;
         if ((n & 0xffff0000u) == 0) {
@@ -34,6 +36,17 @@ namespace fast_lfs::rasterization {
             leading_zeros += 1;
         }
         return 32 - leading_zeros;
+    }
+
+    inline int packed_instance_depth_bits(uint n_tiles) {
+        const int tile_bits = n_tiles <= 1 ? 0 : extract_end_bit(n_tiles - 1);
+        const int depth_bits = 32 - tile_bits;
+        return depth_bits > 23 ? 23 : (depth_bits < 0 ? 0 : depth_bits);
+    }
+
+    inline int packed_instance_key_end_bit(uint n_tiles) {
+        const int tile_bits = n_tiles <= 1 ? 0 : extract_end_bit(n_tiles - 1);
+        return tile_bits + packed_instance_depth_bits(n_tiles);
     }
 
     struct mat3x3 {
@@ -63,48 +76,28 @@ namespace fast_lfs::rasterization {
     struct PerPrimitiveBuffers {
         size_t cub_workspace_size;
         char* cub_workspace;
-        cub::DoubleBuffer<uint> depth_keys;
-        cub::DoubleBuffer<uint> primitive_indices;
+        uint* depth_keys;
         uint* n_touched_tiles;
         uint* offset;
         ushort4* screen_bounds;
         float2* mean2d;
         float4* conic_opacity;
         float3* color;
-        uint* n_visible_primitives;
-        uint* n_instances;
 
         static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
             PerPrimitiveBuffers buffers;
-            uint* depth_keys_current;
-            obtain(blob, depth_keys_current, n_primitives, 128);
-            uint* depth_keys_alternate;
-            obtain(blob, depth_keys_alternate, n_primitives, 128);
-            buffers.depth_keys = cub::DoubleBuffer<uint>(depth_keys_current, depth_keys_alternate);
-            uint* primitive_indices_current;
-            obtain(blob, primitive_indices_current, n_primitives, 128);
-            uint* primitive_indices_alternate;
-            obtain(blob, primitive_indices_alternate, n_primitives, 128);
-            buffers.primitive_indices = cub::DoubleBuffer<uint>(primitive_indices_current, primitive_indices_alternate);
+            obtain(blob, buffers.depth_keys, n_primitives, 128);
             obtain(blob, buffers.n_touched_tiles, n_primitives, 128);
             obtain(blob, buffers.offset, n_primitives, 128);
             obtain(blob, buffers.screen_bounds, n_primitives, 128);
             obtain(blob, buffers.mean2d, n_primitives, 128);
             obtain(blob, buffers.conic_opacity, n_primitives, 128);
             obtain(blob, buffers.color, n_primitives, 128);
-            cub::DeviceScan::ExclusiveSum(
+            cub::DeviceScan::InclusiveSum(
                 nullptr, buffers.cub_workspace_size,
-                buffers.offset, buffers.offset,
+                buffers.n_touched_tiles, buffers.offset,
                 n_primitives);
-            size_t sorting_workspace_size;
-            cub::DeviceRadixSort::SortPairs(
-                nullptr, sorting_workspace_size,
-                buffers.depth_keys, buffers.primitive_indices,
-                n_primitives);
-            buffers.cub_workspace_size = max(buffers.cub_workspace_size, sorting_workspace_size);
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
-            obtain(blob, buffers.n_visible_primitives, 1, 128);
-            obtain(blob, buffers.n_instances, 1, 128);
             return buffers;
         }
     };
@@ -112,16 +105,16 @@ namespace fast_lfs::rasterization {
     struct PerInstanceBuffers {
         size_t cub_workspace_size;
         char* cub_workspace;
-        cub::DoubleBuffer<ushort> keys;
+        cub::DoubleBuffer<InstanceKey> keys;
         cub::DoubleBuffer<uint> primitive_indices;
 
         static PerInstanceBuffers from_blob(char*& blob, int n_instances, int end_bit = 16) {
             PerInstanceBuffers buffers;
-            ushort* keys_current;
+            InstanceKey* keys_current;
             obtain(blob, keys_current, n_instances, 128);
-            ushort* keys_alternate;
+            InstanceKey* keys_alternate;
             obtain(blob, keys_alternate, n_instances, 128);
-            buffers.keys = cub::DoubleBuffer<ushort>(keys_current, keys_alternate);
+            buffers.keys = cub::DoubleBuffer<InstanceKey>(keys_current, keys_alternate);
             uint* primitive_indices_current;
             obtain(blob, primitive_indices_current, n_instances, 128);
             uint* primitive_indices_alternate;
@@ -137,40 +130,17 @@ namespace fast_lfs::rasterization {
     };
 
     struct PerTileBuffers {
-        size_t cub_workspace_size;
-        char* cub_workspace;
         uint2* instance_ranges;
-        uint* n_buckets;
-        uint* bucket_offsets;
-        uint* max_n_contributions;
         uint* n_contributions;
+        float* final_transmittance;
 
         static PerTileBuffers from_blob(char*& blob, int n_tiles) {
             PerTileBuffers buffers;
             obtain(blob, buffers.instance_ranges, n_tiles, 128);
-            obtain(blob, buffers.n_buckets, n_tiles, 128);
-            obtain(blob, buffers.bucket_offsets, n_tiles, 128);
-            obtain(blob, buffers.max_n_contributions, n_tiles, 128);
             obtain(blob, buffers.n_contributions,
                    static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
-            cub::DeviceScan::InclusiveSum(
-                nullptr, buffers.cub_workspace_size,
-                buffers.n_buckets, buffers.bucket_offsets,
-                n_tiles);
-            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
-            return buffers;
-        }
-    };
-
-    struct PerBucketBuffers {
-        uint* tile_index;
-        uint* checkpoint_uint8; // packed RGBA as 4x uint8 (colors [0,4], transmittance [0,1])
-
-        static PerBucketBuffers from_blob(char*& blob, int n_buckets) {
-            PerBucketBuffers buffers;
-            obtain(blob, buffers.tile_index, n_buckets, 128);
-            obtain(blob, buffers.checkpoint_uint8,
-                   static_cast<std::size_t>(n_buckets) * static_cast<std::size_t>(config::block_size_blend), 128);
+            obtain(blob, buffers.final_transmittance,
+                   static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);
             return buffers;
         }
     };

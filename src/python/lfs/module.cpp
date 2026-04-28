@@ -782,17 +782,20 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "load_file",
         [](const std::string& path, const bool is_dataset,
-           const std::string& output_path, const std::string& init_path) {
+           const std::string& output_path, const std::string& init_path,
+           const std::string& centralize_dataset) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile{
                 .path = python_utf8_path(path),
                 .is_dataset = is_dataset,
                 .output_path = python_utf8_path(output_path),
-                .init_path = python_utf8_path(init_path)}
+                .init_path = python_utf8_path(init_path),
+                .centralize_dataset = centralize_dataset}
                 .emit();
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
         nb::arg("output_path") = "", nb::arg("init_path") = "",
+        nb::arg("centralize_dataset") = "off",
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

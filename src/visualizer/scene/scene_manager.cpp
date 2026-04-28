@@ -2217,6 +2217,8 @@ namespace lfs::vis {
             cached_params_ = checkpoint_params;
 
             // === Phase 3: Load data ===
+            // Clear init_path to prevent loading the initial PLY again - we use the checkpoint model instead
+            checkpoint_params.init_path = std::nullopt;
             const auto load_result = lfs::training::loadTrainingDataIntoScene(checkpoint_params, scene_);
             if (!load_result) {
                 throw std::runtime_error("Failed to load training data: " + load_result.error());

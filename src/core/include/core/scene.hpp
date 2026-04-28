@@ -351,6 +351,7 @@ namespace lfs::core {
         void invalidateCache() {
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
+            cached_transform_indices_.reset();
         }
         void invalidateTransformCache() { transform_cache_valid_.store(false, std::memory_order_release); }
         void markDirty() { invalidateCache(); }

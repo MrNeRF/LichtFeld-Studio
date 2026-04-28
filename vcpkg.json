@@ -2,6 +2,7 @@
   "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
   "dependencies": [
     "args",
+    "assimp",
     "boost-preprocessor",
     "boost-regex",
     {
@@ -9,14 +10,13 @@
       "features": [
         "avcodec",
         "avformat",
-        "swscale",
         "nvcodec",
+        "swscale",
         "x264"
       ]
     },
     "freetype",
     "glad",
-    "sdl3",
     "glm",
     "gtest",
     {
@@ -31,6 +31,7 @@
     "implot",
     "libarchive",
     "libwebp",
+    "nanobind",
     "nativefiledialog-extended",
     "nlohmann-json",
     {
@@ -39,22 +40,115 @@
         "webp"
       ]
     },
-    "spdlog",
-    "tbb",
-    "usd",
     {
       "name": "python3",
       "features": [
         "extensions"
       ]
     },
-    "nanobind",
-    "assimp",
     {
       "name": "rmlui",
       "features": [
         "svg"
       ]
+    },
+    "sdl3",
+    "spdlog",
+    "tbb",
+    "usd"
+  ],
+  "overrides": [
+    {
+      "name": "args",
+      "version": "6.4.8"
+    },
+    {
+      "name": "boost-preprocessor",
+      "version": "1.90.0#1"
+    },
+    {
+      "name": "boost-regex",
+      "version": "1.90.0#1"
+    },
+    {
+      "name": "ffmpeg",
+      "version": "8.0.1#2"
+    },
+    {
+      "name": "freetype",
+      "version": "2.13.3"
+    },
+    {
+      "name": "glad",
+      "version": "0.1.36"
+    },
+    {
+      "name": "sdl3",
+      "version": "3.4.2"
+    },
+    {
+      "name": "glm",
+      "version": "1.0.3"
+    },
+    {
+      "name": "gtest",
+      "version": "1.17.0#2"
+    },
+    {
+      "name": "imgui",
+      "version": "1.92.6"
+    },
+    {
+      "name": "implot",
+      "version": "0.17"
+    },
+    {
+      "name": "libarchive",
+      "version": "3.8.6"
+    },
+    {
+      "name": "libwebp",
+      "version": "1.6.0#2"
+    },
+    {
+      "name": "nativefiledialog-extended",
+      "version": "1.3.0"
+    },
+    {
+      "name": "nlohmann-json",
+      "version": "3.12.0#2"
+    },
+    {
+      "name": "openimageio",
+      "version": "3.0.9.1#3"
+    },
+    {
+      "name": "spdlog",
+      "version": "1.17.0"
+    },
+    {
+      "name": "tbb",
+      "version": "2022.3.0"
+    },
+    {
+      "name": "usd",
+      "version": "26.3"
+    },
+    {
+      "name": "python3",
+      "version": "3.12.13"
+    },
+    {
+      "name": "nanobind",
+      "version": "2.12.0"
+    },
+    {
+      "name": "assimp",
+      "version": "6.0.4"
+    },
+    {
+      "name": "rmlui",
+      "version": "6.2"
     }
   ]
 }

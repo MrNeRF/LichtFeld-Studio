@@ -449,6 +449,7 @@ namespace {
         __shared__ float sTile[SHARED_Y][SHARED_X][2];
         __shared__ float xconv[CONV_Y][CONV_X][5];
 
+        float ssim_sum = 0.0f;
         for (int c = 0; c < CH; ++c) {
             // 1) Load tile + halo into shared memory
             {
@@ -605,8 +606,7 @@ namespace {
 
                     int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
 
-                    if (ssim_map)
-                        ssim_map[global_idx] = ssim_val;
+                    ssim_sum += ssim_val;
 
                     if (dm_dmu1) {
                         float d_m_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) - (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
@@ -619,6 +619,10 @@ namespace {
                     }
                 }
             }
+        }
+
+        if (ssim_map && pix_x < W && pix_y < H) {
+            ssim_map[bIdx * num_pix + pix_id] = ssim_sum / static_cast<float>(CH);
         }
     }
 
@@ -812,6 +816,7 @@ namespace {
         __shared__ float sTile[SHARED_Y][SHARED_X][2];
         __shared__ float xconv[CONV_Y][CONV_X][5];
 
+        float ssim_sum = 0.0f;
         for (int c = 0; c < CH; ++c) {
             // 1) Load tile
             {
@@ -966,8 +971,7 @@ namespace {
 
                     int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
 
-                    if (ssim_map)
-                        ssim_map[global_idx] = ssim_val;
+                    ssim_sum += ssim_val;
 
                     if (dm_dmu1) {
                         float d_m_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) - (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
@@ -980,6 +984,10 @@ namespace {
                     }
                 }
             }
+        }
+
+        if (ssim_map && pix_x < W && pix_y < H) {
+            ssim_map[bIdx * num_pix + pix_id] = ssim_sum / static_cast<float>(CH);
         }
     }
 
@@ -1153,6 +1161,7 @@ namespace {
         // [0]=corrected, [1]=raw, [2]=raw^2, [3]=gt, [4]=gt^2, [5]=raw*gt
         __shared__ float xconv[CONV_Y][CONV_X][6];
 
+        float ssim_sum = 0.0f;
         for (int c = 0; c < CH; ++c) {
             {
                 const int tileSize = SHARED_Y * SHARED_X;
@@ -1338,7 +1347,8 @@ namespace {
                     const float contrast_structure = D_raw / B_raw;
 
                     const int global_idx = bIdx * CH * num_pix + c * num_pix + pix_id;
-                    ssim_map[global_idx] = luminance * contrast_structure;
+                    const float ssim_val = luminance * contrast_structure;
+                    ssim_sum += ssim_val;
 
                     if (app_dm_dmu1) {
                         const float dl_dmu1 =
@@ -1353,6 +1363,10 @@ namespace {
                     }
                 }
             }
+        }
+
+        if (ssim_map && pix_x < W && pix_y < H) {
+            ssim_map[bIdx * num_pix + pix_id] = ssim_sum / static_cast<float>(CH);
         }
     }
 

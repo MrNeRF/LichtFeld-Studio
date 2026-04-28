@@ -804,7 +804,11 @@
     "output_dir": "Wyjście: ",
     "init_file": "Init file (opcjonalnie, zastępuje points3D):",
     "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym.",
-    "ppisp_sidecar": "PPISP Sidecar:"
+    "ppisp_sidecar": "PPISP Sidecar:",
+    "centralize_dataset": "Wyśrodkuj zbiór danych",
+    "centralize_off": "Wyłączone",
+    "centralize_by_pointcloud": "Według chmury punktów",
+    "centralize_by_cameras": "Według kamer"
   },
   "notification": {
     "cannot_open": "Nie można otworzyć",

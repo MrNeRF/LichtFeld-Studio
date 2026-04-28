@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "fused_adam_types.h"
 #include "rasterization_config.h"
 #include <cstddef> // Added for size_t
 #include <cstdint>
@@ -25,26 +26,24 @@ namespace fast_lfs::rasterization {
     };
 
     struct ForwardContext {
-        void* per_primitive_buffers;
-        void* per_tile_buffers;
-        void* per_instance_buffers;
-        void* per_bucket_buffers;
-        size_t per_primitive_buffers_size;
-        size_t per_tile_buffers_size;
-        size_t per_instance_buffers_size;
-        size_t per_bucket_buffers_size;
-        int n_visible_primitives;
-        int n_instances;
-        int n_buckets;
-        int primitive_primitive_indices_selector;
-        int instance_primitive_indices_selector;
-        uint64_t frame_id;
+        void* per_primitive_buffers = nullptr;
+        void* per_tile_buffers = nullptr;
+        void* sorted_primitive_indices = nullptr;
+        size_t per_primitive_buffers_size = 0;
+        size_t per_tile_buffers_size = 0;
+        size_t sorted_primitive_indices_size = 0;
+        size_t per_instance_sort_scratch_size = 0;
+        size_t per_instance_sort_total_size = 0;
+        int n_instances = 0;
+        uint64_t frame_id = 0;
         // Add helper buffer pointers to avoid re-allocation in backward
-        void* grad_mean2d_helper;
-        void* grad_conic_helper;
+        void* grad_mean2d_helper = nullptr;
+        void* grad_conic_helper = nullptr;
+        void* grad_opacity_helper = nullptr;
+        void* grad_color_helper = nullptr;
         // Error handling for OOM
-        bool success;
-        const char* error_message;
+        bool success = false;
+        const char* error_message = nullptr;
     };
 
     ForwardContext forward_raw(
@@ -71,8 +70,9 @@ namespace fast_lfs::rasterization {
         float far_plane,
         bool mip_filter = false);
 
+    void release_forward_context(const ForwardContext& forward_ctx);
+
     struct BackwardOutputs {
-        // These are filled in the provided pointers, not allocated
         bool success;
         const char* error_message;
     };
@@ -92,13 +92,7 @@ namespace fast_lfs::rasterization {
         const float* w2c_ptr,                     // Device pointer [4*4]
         const float* cam_position_ptr,            // Device pointer [3]
         const ForwardContext& forward_ctx,
-        float* grad_means_ptr,                // Device pointer [N*3] - output
-        float* grad_scales_raw_ptr,           // Device pointer [N*3] - output
-        float* grad_rotations_raw_ptr,        // Device pointer [N*4] - output
-        float* grad_opacities_raw_ptr,        // Device pointer [N] - output
-        float* grad_sh_coefficients_0_ptr,    // Device pointer [N*3] - output
-        float* grad_sh_coefficients_rest_ptr, // Device pointer [N*total_bases_sh_rest*3] - output
-        float* grad_w2c_ptr,                  // Device pointer [4*4] - output or nullptr
+        float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
         int n_primitives,
         int active_sh_bases,
         int total_bases_sh_rest,
@@ -108,8 +102,9 @@ namespace fast_lfs::rasterization {
         float focal_y,
         float center_x,
         float center_y,
-        bool mip_filter = false,
-        DensificationType densification_type = DensificationType::None);
+        bool mip_filter,
+        DensificationType densification_type,
+        const FusedAdamSettings* fused_adam);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
