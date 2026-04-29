@@ -1523,23 +1523,6 @@ class AssetManagerPanel(Panel):
             return ""
         return self._format_size(asset.get("file_size_bytes", 0))
 
-    def get_selected_asset_points(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return ""
-        geom = asset.get("geometry_metadata", {}) or {}
-        # Debug: log what we have
-        asset_id = asset.get('id', 'unknown')
-        asset_type = asset.get('type', 'unknown')
-        self._log_info(f"DEBUG POINTS: asset={asset_id}, type={asset_type}, geom_keys={list(geom.keys()) if geom else 'EMPTY'}")
-        gaussian_count = geom.get("gaussian_count") or 0  # Handle None
-        self._log_info(f"DEBUG POINTS: gaussian_count={gaussian_count}")
-        if gaussian_count >= 1_000_000:
-            return f"{gaussian_count / 1_000_000:.2f}M"
-        elif gaussian_count >= 1_000:
-            return f"{gaussian_count / 1_000:.1f}K"
-        return str(gaussian_count) if gaussian_count > 0 else ""
-
     def get_selected_asset_resolution(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -1887,6 +1870,31 @@ class AssetManagerPanel(Panel):
         elif initial_points >= 1_000:
             return f"{initial_points / 1_000:.1f}K"
         return str(initial_points)
+
+    def get_selected_asset_points(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        asset_type = asset.get("type", "")
+        # For datasets, show initial points from COLMAP
+        if asset_type == "dataset":
+            dataset_meta = asset.get("dataset_metadata", {}) or {}
+            points = dataset_meta.get("initial_points")
+            if points is None:
+                return ""
+            if points >= 1_000_000:
+                return f"{points / 1_000_000:.2f}M"
+            elif points >= 1_000:
+                return f"{points / 1_000:.1f}K"
+            return str(points)
+        # For geometry files (PLY, SOG, etc.), show gaussian count
+        geom = asset.get("geometry_metadata", {}) or {}
+        gaussian_count = geom.get("gaussian_count") or 0
+        if gaussian_count >= 1_000_000:
+            return f"{gaussian_count / 1_000_000:.2f}M"
+        elif gaussian_count >= 1_000:
+            return f"{gaussian_count / 1_000:.1f}K"
+        return str(gaussian_count) if gaussian_count > 0 else ""
 
     def get_selected_asset_bounding_box(self) -> str:
         asset = self._get_selected_asset()
@@ -2327,15 +2335,19 @@ class AssetManagerPanel(Panel):
         }
 
     def _ensure_import_project(
-        self, default_name: str = "Imported Assets"
+        self, default_name: str = "Default"
     ) -> Optional[str]:
-        if self._selected_project_id:
-            return self._selected_project_id
+        # Always import to "Default" project, never create a new one automatically
         if not self._asset_index:
             return None
-        project = self._asset_index.find_or_create_project(default_name)
-        self._selected_project_id = project.id
-        return project.id
+        # Ensure Default project exists
+        self._ensure_default_project()
+        # Find the Default project
+        for pid, proj in self._asset_index.projects.items():
+            if proj.get("name") == "Default":
+                self._selected_project_id = pid
+                return pid
+        return None
 
     def _metadata_to_asset_kwargs(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         format_specific = metadata.get("format_specific", {}) or {}
@@ -2731,6 +2743,11 @@ class AssetManagerPanel(Panel):
             )
             self._import_menu_open = False
 
+            # Auto-select the newly imported asset
+            if asset:
+                self._selected_asset_ids.add(asset.id)
+                self._update_selection_type()
+
             # Refresh UI
             self.refresh_catalog()
             self._dirty_model("import_menu_open")
@@ -2775,9 +2792,12 @@ class AssetManagerPanel(Panel):
             # Link dataset to scene
             if asset:
                 # Auto-select the newly imported dataset to show its info
-                self._selected_asset_ids = {asset.id}
+                # Add to selection instead of replacing (allow multiple imports)
+                self._selected_asset_ids.add(asset.id)
                 self._selected_project_id = project_id
-                self._selected_scene_id = scene_id
+                # Don't set scene_id filter - show all assets in the project
+                # This allows seeing multiple imported datasets at once
+                self._selected_scene_id = None
                 self._update_selection_type()
             self._import_menu_open = False
 

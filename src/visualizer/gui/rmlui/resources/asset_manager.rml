@@ -209,18 +209,6 @@
                   <span class="parameter-value">{{selected_asset_run_name}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Type</span>
-                  <span class="parameter-value">{{selected_asset_type}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">Path</span>
-                  <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">Size</span>
-                  <span class="parameter-value">{{selected_asset_size}}</span>
-                </div>
-                <div class="parameter-row">
                   <span class="parameter-label">Points</span>
                   <span class="parameter-value">{{selected_asset_points}}</span>
                 </div>
@@ -228,13 +216,13 @@
                   <span class="parameter-label">SH Degree</span>
                   <span class="parameter-value">{{selected_asset_sh_degree}}</span>
                 </div>
-                <div class="parameter-row" data-if="selected_asset_resolution">
-                  <span class="parameter-label">Resolution</span>
-                  <span class="parameter-value">{{selected_asset_resolution}}</span>
+                <div class="parameter-row">
+                  <span class="parameter-label">Size</span>
+                  <span class="parameter-value">{{selected_asset_size}}</span>
                 </div>
-                <div class="parameter-row" data-if="selected_asset_duration">
-                  <span class="parameter-label">Duration</span>
-                  <span class="parameter-value">{{selected_asset_duration}}</span>
+                <div class="parameter-row">
+                  <span class="parameter-label">Path</span>
+                  <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Created</span>
@@ -243,6 +231,14 @@
                 <div class="parameter-row">
                   <span class="parameter-label">Modified</span>
                   <span class="parameter-value">{{selected_asset_modified}}</span>
+                </div>
+                <div class="parameter-row" data-if="selected_asset_resolution">
+                  <span class="parameter-label">Resolution</span>
+                  <span class="parameter-value">{{selected_asset_resolution}}</span>
+                </div>
+                <div class="parameter-row" data-if="selected_asset_duration">
+                  <span class="parameter-label">Duration</span>
+                  <span class="parameter-value">{{selected_asset_duration}}</span>
                 </div>
               </div>
 

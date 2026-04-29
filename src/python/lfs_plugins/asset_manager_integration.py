@@ -182,8 +182,10 @@ def ensure_dataset_catalog_context(
         return {"project_id": None, "scene_id": None, "asset_id": None}
 
     normalized_path = os.path.abspath(dataset_path)
-    project_name, scene_name = derive_project_scene_names(normalized_path)
-    project = index.find_or_create_project(project_name)
+    # Always use "Default" project for all imported assets
+    project = index.find_or_create_project("Default")
+    # Use derived scene name for organization within the Default project
+    _project_name, scene_name = derive_project_scene_names(normalized_path)
     scene = index.find_or_create_scene(project.id, scene_name) if project else None
     project_id = project.id if project else None
     scene_id = scene.id if scene else None
@@ -287,7 +289,8 @@ def register_catalog_asset_path(
         run_id = resolve_latest_run_id(index, scene_id)
 
     if project_id is None:
-        project = index.find_or_create_project("Imported Assets")
+        # Always use "Default" project for imported assets
+        project = index.find_or_create_project("Default")
         project_id = project.id if project else None
 
     metadata = scan.scan_file(normalized_path) if scan else {}
