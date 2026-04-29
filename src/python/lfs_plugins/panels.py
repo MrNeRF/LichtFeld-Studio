@@ -98,7 +98,8 @@ def register_builtin_panels():
         lf.register_class(PluginMarketplacePanel)
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
 
-        # Asset Manager panel
+        # Asset Manager panel - eager import to register save callbacks
+        from . import asset_manager_integration  # Registers save_asset callbacks
         from .asset_manager_panel import AssetManagerPanel
 
         lf.register_class(AssetManagerPanel)

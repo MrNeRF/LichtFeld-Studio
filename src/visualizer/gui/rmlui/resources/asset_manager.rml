@@ -302,6 +302,22 @@
                 </div>
               </div>
 
+              <div class="asset-info-section" data-if="selected_asset_has_transform_metadata">
+                <div class="asset-info-section-title">Transform Information</div>
+                <div class="parameter-row">
+                  <span class="parameter-label">Translation</span>
+                  <span class="parameter-value">{{selected_asset_transform_translation}}</span>
+                </div>
+                <div class="parameter-row">
+                  <span class="parameter-label">Rotation</span>
+                  <span class="parameter-value">{{selected_asset_transform_rotation}}</span>
+                </div>
+                <div class="parameter-row">
+                  <span class="parameter-label">Scaling</span>
+                  <span class="parameter-value">{{selected_asset_transform_scaling}}</span>
+                </div>
+              </div>
+
               <div class="asset-info-section asset-info-warning" data-if="selected_asset_file_missing">
                 <div class="asset-info-section-title">File Not Found</div>
                 <div class="parameter-row">

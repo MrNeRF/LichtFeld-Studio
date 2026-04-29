@@ -357,3 +357,256 @@ def select_asset_in_active_panel(
         panel.refresh_catalog()
     except Exception:
         _logger.debug("Failed to update active Asset Manager selection", exc_info=True)
+
+
+def _safe_node_name(node, fallback: str = "") -> str:
+    try:
+        return str(node.get("name"))
+    except Exception:
+        return fallback
+
+
+def _resolve_transform_target(scene, node_name: str) -> tuple[str, str, str] | None:
+    node = scene.get_node(node_name)
+    if node is None:
+        return None
+
+    allowed_types = {"SPLAT", "POINTCLOUD", "MESH", "DATASET", "GROUP"}
+    node_type = getattr(getattr(node, "type", None), "name", "")
+    if node_type not in allowed_types:
+        return None
+
+    if node_type in {"SPLAT", "POINTCLOUD", "MESH"}:
+        expected_transform_name = f"{node_name}_transform"
+        for child_id in getattr(node, "children", []):
+            child = scene.get_node_by_id(child_id)
+            if child is None:
+                continue
+            if getattr(getattr(child, "type", None), "name", "") != "GROUP":
+                continue
+            child_name = _safe_node_name(child)
+            if child_name == expected_transform_name:
+                return child_name, node_name, node_type
+        return node_name, node_name, node_type
+
+    # Dataset assets should be anchored on the dataset node itself.
+    # Using the helper group here can miss transforms applied on the dataset root.
+    if node_type == "DATASET":
+        return node_name, node_name, node_type
+
+    if node_type == "GROUP" and getattr(node, "parent_id", -1) != -1:
+        parent = scene.get_node_by_id(node.parent_id)
+        if parent is not None:
+            parent_name = _safe_node_name(parent)
+            parent_type = getattr(getattr(parent, "type", None), "name", "")
+            if parent_type in {"SPLAT", "POINTCLOUD", "MESH", "DATASET"}:
+                if _safe_node_name(node) == f"{parent_name}_transform":
+                    # Transform helpers are not standalone assets; save the parent asset.
+                    return parent_name, parent_name, parent_type
+
+    return node_name, node_name, node_type
+
+
+def _extract_transform_metadata(node_name: str) -> dict[str, Any] | None:
+    # Persist local transform for round-tripping via set_node_transform().
+    # World-space is stored only as auxiliary metadata.
+    local_matrix = lf.get_node_transform(node_name)
+    if local_matrix is None:
+        return None
+    world_matrix = lf.get_node_visualizer_world_transform(node_name)
+    decomp = lf.decompose_transform(local_matrix) or {}
+    return {
+        "matrix": list(local_matrix),
+        "world_matrix": list(world_matrix) if world_matrix is not None else None,
+        "translation": decomp.get("translation", [0.0, 0.0, 0.0]),
+        "rotation_euler_deg": decomp.get("rotation_euler_deg", [0.0, 0.0, 0.0]),
+        "rotation_quat": decomp.get("rotation_quat", [0.0, 0.0, 0.0, 1.0]),
+        "scale": decomp.get("scale", [1.0, 1.0, 1.0]),
+    }
+
+
+def _collect_subtree_transform_metadata(scene, root_name: str) -> dict[str, dict[str, Any]]:
+    root = scene.get_node(root_name)
+    if root is None:
+        return {}
+
+    result: dict[str, dict[str, Any]] = {}
+    stack = [root]
+
+    while stack:
+        current = stack.pop()
+        current_name = _safe_node_name(current)
+        if not current_name:
+            continue
+
+        local_matrix = lf.get_node_transform(current_name)
+        world_matrix = lf.get_node_visualizer_world_transform(current_name)
+        result[current_name] = {
+            "local_matrix": list(local_matrix) if local_matrix is not None else None,
+            "world_matrix": list(world_matrix) if world_matrix is not None else None,
+        }
+
+        for child_id in getattr(current, "children", []):
+            child = scene.get_node_by_id(child_id)
+            if child is not None:
+                stack.append(child)
+
+    return result
+
+
+def _asset_type_from_node_type(node_type: str) -> str:
+    type_mapping = {
+        "SPLAT": "ply_3dgs",
+        "POINTCLOUD": "ply_pcl",
+        "MESH": "mesh",
+        "DATASET": "dataset",
+        "GROUP": "group",
+    }
+    return type_mapping.get(node_type, "unknown")
+
+
+def _best_existing_asset_match(index: AssetIndex, transform_name: str, geometry_name: str) -> dict[str, Any] | None:
+    for asset in index.assets.values():
+        if asset.get("name") in {geometry_name, transform_name}:
+            return asset
+
+    for asset in index.assets.values():
+        geo = asset.get("geometry_metadata", {}) or {}
+        if geo.get("transform_node_name") == transform_name:
+            return asset
+        if geo.get("scene_node_name") == geometry_name:
+            return asset
+
+    return None
+
+
+def _infer_source_path(index: AssetIndex, transform_name: str, geometry_name: str) -> tuple[str, str]:
+    for candidate_name in (geometry_name, transform_name):
+        try:
+            node_path = lf.get_node_source_path(candidate_name)
+            if node_path:
+                normalized = os.path.abspath(node_path)
+                if os.path.exists(normalized):
+                    return normalized, normalized
+        except Exception:
+            pass
+
+    for asset in index.assets.values():
+        abs_path = asset.get("absolute_path") or ""
+        if not abs_path or abs_path.startswith("scene://"):
+            continue
+        stem = Path(abs_path).stem
+        if stem in {transform_name, geometry_name}:
+            return asset.get("path") or abs_path, abs_path
+    return "", ""
+
+
+def save_asset_to_catalog(node_name: str) -> bool:
+    if not ASSET_MANAGER_BACKEND_AVAILABLE:
+        return False
+
+    try:
+        scene = lf.get_scene()
+        if scene is None:
+            _logger.warning("Cannot save asset: no scene available")
+            return False
+
+        target = _resolve_transform_target(scene, node_name)
+        if target is None:
+            _logger.warning("Cannot save asset: unsupported or missing node '%s'", node_name)
+            return False
+
+        transform_name, geometry_name, geometry_type = target
+        if geometry_type not in {"SPLAT", "POINTCLOUD", "MESH", "DATASET", "GROUP"}:
+            _logger.warning("Cannot save asset: unsupported type '%s' for node '%s'", geometry_type, geometry_name)
+            return False
+        transform_metadata = _extract_transform_metadata(transform_name)
+        if transform_metadata is None:
+            _logger.warning("Cannot save asset: missing transform for '%s'", transform_name)
+            return False
+
+        index = load_asset_index()
+        if index is None:
+            _logger.warning("Cannot save asset: asset index not available")
+            return False
+
+        geometry_metadata = {
+            "transform_node_name": transform_name,
+            "scene_node_name": geometry_name,
+            "scene_node_type": geometry_type,
+        }
+        if geometry_type in {"GROUP", "DATASET"}:
+            geometry_metadata["subtree_transforms"] = _collect_subtree_transform_metadata(scene, geometry_name)
+        rel_path, abs_path = _infer_source_path(index, transform_name, geometry_name)
+
+        existing_asset = _best_existing_asset_match(index, transform_name, geometry_name)
+        if existing_asset is None and abs_path:
+            matched_by_path = index.find_asset_by_path(abs_path)
+            if matched_by_path is not None:
+                existing_asset = matched_by_path.to_dict()
+        if existing_asset is not None:
+            update_kwargs: dict[str, Any] = {
+                "name": geometry_name,
+                "transform_metadata": transform_metadata,
+                "geometry_metadata": {**(existing_asset.get("geometry_metadata", {}) or {}), **geometry_metadata},
+            }
+            if abs_path:
+                update_kwargs["path"] = rel_path
+                update_kwargs["absolute_path"] = abs_path
+            updated = index.update_asset(
+                existing_asset["id"],
+                **update_kwargs,
+            )
+            if updated is not None:
+                refresh_active_panel()
+                return True
+            return False
+
+        project = index.find_or_create_project("Default")
+        if project is None:
+            _logger.warning("Cannot save asset: failed to create project")
+            return False
+
+        if not abs_path and geometry_type in {"GROUP", "DATASET"}:
+            rel_path = f"scene://{geometry_name}"
+            abs_path = rel_path
+
+        if not abs_path:
+            _logger.warning(
+                "Cannot save asset '%s': missing source path for scene node '%s'",
+                transform_name,
+                geometry_name,
+            )
+            return False
+        created = index.create_asset(
+            project_id=project.id,
+            name=geometry_name,
+            type=_asset_type_from_node_type(geometry_type),
+            path=rel_path,
+            absolute_path=abs_path,
+            role="scene_reference",
+            geometry_metadata=geometry_metadata,
+            transform_metadata=transform_metadata,
+        )
+        if created is not None:
+            refresh_active_panel()
+            return True
+        return False
+
+    except Exception as exc:
+        _logger.error("Failed to save asset '%s': %s", node_name, exc, exc_info=True)
+        return False
+
+
+# Register callbacks with C++ runtime on module load
+def _register_save_callbacks():
+    """Register save asset callbacks with the C++ runtime."""
+    try:
+        lf.ui.set_save_asset_callback(save_asset_to_catalog)
+        _logger.info("Registered save asset callback with C++ runtime")
+    except Exception as e:
+        _logger.error(f"Failed to register save asset callback: {e}", exc_info=True)
+
+
+# Auto-register on module load
+_register_save_callbacks()

@@ -410,6 +410,8 @@
     "rename": "Rename",
     "duplicate": "Duplicate",
     "save_to_disk": "Save to Disk",
+    "save_asset": "Save Asset",
+    "save_asset_as": "Save Asset As...",
     "go_to_camera_view": "Go to Camera View",
     "go_to_cam_view": "Go to Cam View",
     "fit_to_scene": "Fit to Scene",

@@ -32,6 +32,7 @@
 #include <cmath>
 #include <format>
 #include <functional>
+#include <glm/mat4x4.hpp>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -228,6 +229,31 @@ namespace lfs::vis::gui {
                    type != core::NodeType::KEYFRAME &&
                    type != core::NodeType::KEYFRAME_GROUP &&
                    !parent_is_dataset;
+        }
+
+        [[nodiscard]] bool isTransformHelperGroupName(const std::string& name) {
+            constexpr std::string_view suffix = "_transform";
+            return name.size() > suffix.size() && name.ends_with(suffix);
+        }
+
+        [[nodiscard]] bool isTransformHelperNode(const core::SceneNode& node) {
+            return node.type == core::NodeType::GROUP && isTransformHelperGroupName(node.name);
+        }
+
+        [[nodiscard]] bool canSaveAsAsset(const core::SceneNode& node) {
+            if (isTransformHelperNode(node))
+                return false;
+
+            switch (node.type) {
+            case core::NodeType::SPLAT:
+            case core::NodeType::POINTCLOUD:
+            case core::NodeType::MESH:
+            case core::NodeType::GROUP:
+            case core::NodeType::DATASET:
+                return true;
+            default:
+                return false;
+            }
         }
 
         [[nodiscard]] bool canDrag(const core::NodeType type, const bool parent_is_dataset) {
@@ -672,6 +698,7 @@ namespace lfs::vis::gui {
             .collapsed = collapsed_ids_.contains(snapshot.id),
             .draggable = snapshot.draggable,
             .training_enabled = snapshot.training_enabled,
+            .name = snapshot.name,
             .label = snapshot.label,
             .node_id_text = std::to_string(snapshot.id),
             .encoded_label = encode(snapshot.label),
@@ -700,6 +727,7 @@ namespace lfs::vis::gui {
             .collapsed = collapsed_ids_.contains(snapshot.id),
             .draggable = snapshot.draggable,
             .training_enabled = snapshot.training_enabled,
+            .name = snapshot.name,
             .label = snapshot.label,
             .node_id_text = std::to_string(snapshot.id),
             .encoded_label = encode(snapshot.label),
@@ -975,10 +1003,15 @@ namespace lfs::vis::gui {
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.delete_icon, "display", row.deletable ? "inline" : "none");
 
-        const std::string_view icon_sprite = typeIconSprite(row.type);
+        // Check if this is a transform node (GROUP node with name ending in "_transform")
+        const bool is_transform_node = (row.type == core::NodeType::GROUP) &&
+                                       isTransformHelperGroupName(row.name);
+
+        const std::string_view icon_sprite = is_transform_node ? "icon-cropbox" : typeIconSprite(row.type);
+        const std::string_view type_class = is_transform_node ? "transform" : typeClass(row.type);
         const std::string_view unicode = unicodeIcon(row.type);
-        setCachedTypeClass(slot.type_icon, typeClass(row.type));
-        setCachedTypeClass(slot.unicode_icon, typeClass(row.type));
+        setCachedTypeClass(slot.type_icon, type_class);
+        setCachedTypeClass(slot.unicode_icon, type_class);
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
@@ -1187,8 +1220,11 @@ namespace lfs::vis::gui {
             return;
 
         const std::string next_name = rename_buffer_.empty() ? it->second.name : rename_buffer_;
-        if (next_name != it->second.name)
-            scene->renameNode(it->second.name, next_name);
+        if (next_name != it->second.name) {
+            // Emit RenamePLY event to ensure proper handling including source path tracking
+            using namespace lfs::core::events;
+            cmd::RenamePLY{.old_name = it->second.name, .new_name = next_name}.emit();
+        }
 
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
@@ -1682,6 +1718,11 @@ namespace lfs::vis::gui {
                 items.push_back(make_action(
                     tr("scene.merge_to_single_ply"),
                     prefixed(std::format("merge_group:{}", node_id))));
+                if (isTransformHelperNode(*node)) {
+                    items.push_back(make_action(
+                        tr(string_keys::Transform::RESET_TRANSFORM),
+                        prefixed(std::format("reset_transform:{}", node_id))));
+                }
             }
 
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
@@ -1695,6 +1736,14 @@ namespace lfs::vis::gui {
                 items.push_back(make_action(
                     tr("scene.save_to_disk"),
                     prefixed(std::format("save_node:{}", node_id))));
+            }
+
+            // Add Save Asset for asset-compatible node types
+            if (canSaveAsAsset(*node)) {
+                items.push_back(make_action(
+                    tr(string_keys::Scene::SAVE_ASSET),
+                    prefixed(std::format("save_asset:{}", node_id)),
+                    !items.empty()));
             }
 
             if (node_snapshots_.at(node_id).deletable) {
@@ -1836,6 +1885,15 @@ namespace lfs::vis::gui {
                 if (const auto* node = scene->getNodeById(node_id))
                     cmd::MergeGroup{.name = node->name}.emit();
             }
+        } else if (kind == "reset_transform" && parts.size() >= 2) {
+            core::NodeId node_id = core::NULL_NODE;
+            if (!parseNodeId(parts[1], node_id))
+                return;
+            if (const auto* node = scene->getNodeById(node_id)) {
+                if (isTransformHelperNode(*node)) {
+                    scene_manager->setNodeTransform(node->name, glm::mat4(1.0f));
+                }
+            }
         } else if ((kind == "add_cropbox" || kind == "add_ellipsoid" || kind == "save_node") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))
@@ -1881,6 +1939,12 @@ namespace lfs::vis::gui {
             const auto* parent = parent_id == core::NULL_NODE ? nullptr : scene->getNodeById(parent_id);
             if (node)
                 cmd::ReparentNode{.node_name = node->name, .new_parent_name = parent ? parent->name : std::string{}}.emit();
+        } else if (kind == "save_asset" && parts.size() >= 2) {
+            core::NodeId node_id = core::NULL_NODE;
+            if (parseNodeId(parts[1], node_id)) {
+                if (const auto* node = scene->getNodeById(node_id))
+                    cmd::SaveAsset{.node_name = node->name}.emit();
+            }
         }
     }
 

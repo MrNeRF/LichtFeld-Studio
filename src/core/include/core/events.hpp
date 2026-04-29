@@ -124,6 +124,8 @@ namespace lfs::core {
             EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
             EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
             EVENT(SequencerSetKeyframeEasing, size_t keyframe_index; int easing_type;);
+            EVENT(SaveAsset, std::string node_name;);
+            EVENT(SaveAssetAs, std::string node_name; std::string asset_name;);
         } // namespace cmd
 
         // ============================================================================

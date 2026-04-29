@@ -379,6 +379,9 @@ def get_num_gaussians() -> int:
 def get_node_transform(name: str) -> list[float] | None:
     """Get node transform matrix (16 floats, column-major)"""
 
+def get_node_source_path(name: str) -> str | None:
+    """Get original source path for a node if available"""
+
 def get_node_visualizer_world_transform(name: str) -> list[float] | None:
     """Get node visualizer-world transform matrix (16 floats, column-major)"""
 

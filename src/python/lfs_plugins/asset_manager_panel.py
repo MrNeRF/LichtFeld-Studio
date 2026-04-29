@@ -3,6 +3,7 @@
 """Asset Manager panel for browsing and managing Gaussian Splatting assets."""
 
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -90,6 +91,7 @@ class AssetManagerPanel(Panel):
         self._import_menu_open: bool = False
         self._library_mtime: float = 0.0
         self._updating_selection_details: bool = False
+        self._pending_transform_applications: List[Dict[str, Any]] = []
 
     # ── Initialization ────────────────────────────────────────
 
@@ -268,6 +270,19 @@ class AssetManagerPanel(Panel):
         )
         model.bind_func("selected_asset_center", self.get_selected_asset_center)
         model.bind_func("selected_asset_scale", self.get_selected_asset_scale)
+        model.bind_func(
+            "selected_asset_has_transform_metadata",
+            self.get_selected_asset_has_transform_metadata,
+        )
+        model.bind_func(
+            "selected_asset_transform_translation", self.get_selected_asset_transform_translation
+        )
+        model.bind_func(
+            "selected_asset_transform_rotation", self.get_selected_asset_transform_rotation
+        )
+        model.bind_func(
+            "selected_asset_transform_scaling", self.get_selected_asset_transform_scaling
+        )
         model.bind_func(
             "selected_asset_file_missing", self.get_selected_asset_file_missing
         )
@@ -1829,9 +1844,7 @@ class AssetManagerPanel(Panel):
             return ""
         dataset_meta = asset.get("dataset_metadata", {}) or {}
         mask_count = dataset_meta.get("mask_count", 0)
-        if mask_count:
-            return f"Yes ({mask_count})"
-        return "Yes" if dataset_meta.get("has_masks") else "No"
+        return str(mask_count)
 
     def get_selected_asset_dataset_sparse_model(self) -> str:
         asset = self._get_selected_asset()
@@ -1925,6 +1938,48 @@ class AssetManagerPanel(Panel):
         geom = asset.get("geometry_metadata", {}) or {}
         scale = geom.get("scale", 1.0)
         return f"{scale:.2f}" if scale else "1.0"
+
+    def get_selected_asset_has_transform_metadata(self) -> bool:
+        asset = self._get_selected_asset()
+        if not asset:
+            return False
+        transform_meta = asset.get("transform_metadata", {}) or {}
+        return bool(transform_meta)
+
+    def get_selected_asset_transform_translation(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        transform_meta = asset.get("transform_metadata", {}) or {}
+        translation = transform_meta.get("translation", [0.0, 0.0, 0.0])
+        if translation and len(translation) >= 3:
+            return f"{translation[0]:.3f}, {translation[1]:.3f}, {translation[2]:.3f}"
+        return "0.000, 0.000, 0.000"
+
+    def get_selected_asset_transform_rotation(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        transform_meta = asset.get("transform_metadata", {}) or {}
+        # Prefer euler degrees if available
+        euler_deg = transform_meta.get("rotation_euler_deg", [0.0, 0.0, 0.0])
+        if euler_deg and len(euler_deg) >= 3:
+            return f"{euler_deg[0]:.2f}°, {euler_deg[1]:.2f}°, {euler_deg[2]:.2f}°"
+        # Fallback to quaternion
+        quat = transform_meta.get("rotation_quat", [0.0, 0.0, 0.0, 1.0])
+        if quat and len(quat) >= 4:
+            return f"quat({quat[0]:.3f}, {quat[1]:.3f}, {quat[2]:.3f}, {quat[3]:.3f})"
+        return "0.00°, 0.00°, 0.00°"
+
+    def get_selected_asset_transform_scaling(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        transform_meta = asset.get("transform_metadata", {}) or {}
+        scale = transform_meta.get("scale", [1.0, 1.0, 1.0])
+        if scale and len(scale) >= 3:
+            return f"{scale[0]:.3f}, {scale[1]:.3f}, {scale[2]:.3f}"
+        return "1.000, 1.000, 1.000"
 
     def get_selected_asset_file_missing(self) -> bool:
         asset = self._get_selected_asset()
@@ -2468,13 +2523,7 @@ class AssetManagerPanel(Panel):
         override_role: Optional[str] = None,
     ):
         metadata = self._asset_scanner.scan_file(path) if self._asset_scanner else {}
-        self._log_info(f"DEBUG IMPORT: path={path}, metadata_type={metadata.get('type')}, has_format_specific={'format_specific' in metadata}")
-        if metadata.get('format_specific'):
-            self._log_info(f"DEBUG IMPORT: format_specific keys={list(metadata['format_specific'].keys())}")
         asset_kwargs = self._metadata_to_asset_kwargs(metadata)
-        self._log_info(f"DEBUG IMPORT: asset_kwargs has geometry_metadata={'geometry_metadata' in asset_kwargs}")
-        if 'geometry_metadata' in asset_kwargs:
-            self._log_info(f"DEBUG IMPORT: geometry_metadata={asset_kwargs['geometry_metadata']}")
         # Always pop type and role from kwargs to avoid duplicate keyword argument error
         kwargs_type = asset_kwargs.pop("type", None)
         kwargs_role = asset_kwargs.pop("role", None)
@@ -2847,7 +2896,8 @@ class AssetManagerPanel(Panel):
                     )
                 else:
                     # Regular mesh/splat file loading
-                    lf.load_file(file_path)
+                    transform_node_name = self._load_asset_with_hierarchy(file_path)
+                    self._apply_asset_transform(asset, transform_node_name)
                 _logger.info(f"Loaded asset: {asset.get('name')}")
             except Exception as e:
                 _logger.error(f"Failed to load asset {asset_id}: {e}")
@@ -3131,9 +3181,11 @@ class AssetManagerPanel(Panel):
                     is_dataset=True,
                     output_path=output_path,
                 )
+                self._queue_pending_transform_application(asset)
             else:
                 # Regular mesh/splat file loading
-                lf.load_file(file_path)
+                transform_node_name = self._load_asset_with_hierarchy(file_path)
+                self._apply_asset_transform(asset, transform_node_name)
             self._log_info("Loaded asset: %s", asset.get("name", "unknown"))
 
             # Select the loaded asset
@@ -3142,6 +3194,234 @@ class AssetManagerPanel(Panel):
             self.refresh_catalog()
         except Exception as e:
             self._log_error("Failed to load asset %s: %s", asset_id, e)
+
+    def _node_name(self, node: Any) -> str:
+        try:
+            return str(node.get("name"))
+        except Exception:
+            return ""
+
+    def _load_asset_with_hierarchy(self, file_path: str) -> Optional[str]:
+        scene = lf.get_scene()
+        before_ids = {node.id for node in scene.get_nodes()} if scene is not None else set()
+        lf.load_file(file_path)
+        scene = lf.get_scene()
+        if scene is None:
+            return None
+
+        new_nodes = [node for node in scene.get_nodes() if node.id not in before_ids]
+        by_id = {node.id: node for node in new_nodes}
+        for node in new_nodes:
+            if getattr(getattr(node, "type", None), "name", "") != "GROUP":
+                continue
+            parent = by_id.get(getattr(node, "parent_id", -1))
+            if parent is None:
+                continue
+            parent_name = self._node_name(parent)
+            if self._node_name(node) == f"{parent_name}_transform":
+                return self._node_name(node)
+        for node in new_nodes:
+            if getattr(getattr(node, "type", None), "name", "") == "GROUP" and getattr(node, "parent_id", -1) == -1:
+                return self._node_name(node)
+        for node in new_nodes:
+            if getattr(node, "parent_id", -1) == -1:
+                return self._node_name(node)
+        return None
+
+    def _quat_to_euler_deg(self, quat: Any) -> Optional[List[float]]:
+        try:
+            x, y, z, w = [float(v) for v in quat[:4]]
+            n = (x * x + y * y + z * z + w * w) ** 0.5
+            if n == 0.0:
+                return [0.0, 0.0, 0.0]
+            x, y, z, w = x / n, y / n, z / n, w / n
+
+            t0 = 2.0 * (w * x + y * z)
+            t1 = 1.0 - 2.0 * (x * x + y * y)
+            roll = math.atan2(t0, t1)
+
+            t2 = 2.0 * (w * y - z * x)
+            t2 = 1.0 if t2 > 1.0 else t2
+            t2 = -1.0 if t2 < -1.0 else t2
+            pitch = math.asin(t2)
+
+            t3 = 2.0 * (w * z + x * y)
+            t4 = 1.0 - 2.0 * (y * y + z * z)
+            yaw = math.atan2(t3, t4)
+            return [math.degrees(roll), math.degrees(pitch), math.degrees(yaw)]
+        except Exception:
+            return None
+
+    def _apply_asset_transform(self, asset: Dict[str, Any], transform_node_name: Optional[str]) -> bool:
+        try:
+            if not transform_node_name:
+                geometry_metadata = asset.get("geometry_metadata", {}) or {}
+                transform_node_name = geometry_metadata.get("transform_node_name")
+            if not transform_node_name:
+                return False
+
+            transform_metadata = asset.get("transform_metadata") or {}
+            if not transform_metadata:
+                return False
+
+            matrix = transform_metadata.get("matrix")
+            if isinstance(matrix, list) and len(matrix) == 16:
+                lf.set_node_transform(transform_node_name, matrix)
+                _logger.info("Applied saved matrix transform to '%s'", transform_node_name)
+                return True
+
+            translation = transform_metadata.get("translation", [0.0, 0.0, 0.0])
+            scale = transform_metadata.get("scale", [1.0, 1.0, 1.0])
+            euler_deg = transform_metadata.get("rotation_euler_deg")
+            if not euler_deg:
+                euler_deg = self._quat_to_euler_deg(
+                    transform_metadata.get("rotation_quat", [0.0, 0.0, 0.0, 1.0])
+                )
+            if not euler_deg:
+                euler_deg = [0.0, 0.0, 0.0]
+
+            matrix = lf.compose_transform(translation, euler_deg, scale)
+            lf.set_node_transform(transform_node_name, matrix)
+            _logger.info("Applied saved transform to '%s'", transform_node_name)
+            return True
+        except Exception as e:
+            _logger.warning(f"Failed to apply asset transform: {e}")
+            return False
+
+    def _queue_pending_transform_application(self, asset: Dict[str, Any]) -> None:
+        transform_metadata = asset.get("transform_metadata") or {}
+        geometry_metadata = asset.get("geometry_metadata", {}) or {}
+        subtree_transforms = geometry_metadata.get("subtree_transforms")
+        has_matrix = isinstance(transform_metadata.get("matrix"), list) and len(transform_metadata.get("matrix")) == 16
+        has_subtree = isinstance(subtree_transforms, dict) and bool(subtree_transforms)
+        if not has_matrix and not has_subtree:
+            return
+
+        self._pending_transform_applications.append(
+            {
+                "asset_id": str(asset.get("id", "")),
+                "asset_name": str(asset.get("name", "")),
+                "transform_metadata": transform_metadata,
+                "geometry_metadata": geometry_metadata,
+                "queued_at": time.time(),
+                "attempts": 0,
+                "root_applied": False,
+                "pending_subtree_nodes": set(),
+            }
+        )
+
+    def _resolve_loaded_asset_root_name(self, scene, pending: Dict[str, Any]) -> Optional[str]:
+        geometry_metadata = pending.get("geometry_metadata", {}) or {}
+        candidate_names: List[str] = []
+        for key in ("scene_node_name", "transform_node_name"):
+            value = geometry_metadata.get(key)
+            if isinstance(value, str) and value:
+                candidate_names.append(value)
+
+        asset_name = pending.get("asset_name")
+        if isinstance(asset_name, str) and asset_name:
+            candidate_names.append(asset_name)
+
+        seen: Set[str] = set()
+        deduped = []
+        for name in candidate_names:
+            if name in seen:
+                continue
+            seen.add(name)
+            deduped.append(name)
+
+        for name in deduped:
+            try:
+                if scene.get_node(name) is not None:
+                    return name
+            except Exception:
+                continue
+        return None
+
+    def _apply_pending_transform(self, scene, pending: Dict[str, Any]) -> bool:
+        transform_metadata = pending.get("transform_metadata", {}) or {}
+        geometry_metadata = pending.get("geometry_metadata", {}) or {}
+        root_name = self._resolve_loaded_asset_root_name(scene, pending)
+        if not root_name:
+            return False
+
+        if not pending.get("root_applied"):
+            matrix = transform_metadata.get("matrix")
+            if isinstance(matrix, list) and len(matrix) == 16:
+                lf.set_node_transform(root_name, matrix)
+            else:
+                translation = transform_metadata.get("translation", [0.0, 0.0, 0.0])
+                scale = transform_metadata.get("scale", [1.0, 1.0, 1.0])
+                euler_deg = transform_metadata.get("rotation_euler_deg")
+                if not euler_deg:
+                    euler_deg = self._quat_to_euler_deg(
+                        transform_metadata.get("rotation_quat", [0.0, 0.0, 0.0, 1.0])
+                    )
+                if not euler_deg:
+                    euler_deg = [0.0, 0.0, 0.0]
+                composed = lf.compose_transform(translation, euler_deg, scale)
+                lf.set_node_transform(root_name, composed)
+            pending["root_applied"] = True
+
+        subtree_transforms = geometry_metadata.get("subtree_transforms")
+        if not isinstance(subtree_transforms, dict) or not subtree_transforms:
+            return True
+
+        if not pending.get("pending_subtree_nodes"):
+            pending["pending_subtree_nodes"] = {
+                str(name)
+                for name in subtree_transforms.keys()
+                if str(name) and str(name) != root_name
+            }
+
+        unresolved = set(pending.get("pending_subtree_nodes", set()))
+        for node_name in list(unresolved):
+            node = scene.get_node(node_name)
+            if node is None:
+                continue
+            meta = subtree_transforms.get(node_name)
+            if not isinstance(meta, dict):
+                unresolved.discard(node_name)
+                continue
+            local_matrix = meta.get("local_matrix")
+            if isinstance(local_matrix, list) and len(local_matrix) == 16:
+                lf.set_node_transform(node_name, local_matrix)
+            unresolved.discard(node_name)
+
+        pending["pending_subtree_nodes"] = unresolved
+        return not unresolved
+
+    def _flush_pending_transform_applications(self) -> None:
+        if not self._pending_transform_applications:
+            return
+        scene = lf.get_scene()
+        if scene is None:
+            return
+
+        now = time.time()
+        next_pending: List[Dict[str, Any]] = []
+        for pending in self._pending_transform_applications:
+            try:
+                done = self._apply_pending_transform(scene, pending)
+                if done:
+                    continue
+                pending["attempts"] = int(pending.get("attempts", 0)) + 1
+                age = now - float(pending.get("queued_at", now))
+                if age > 15.0 or pending["attempts"] > 40:
+                    _logger.warning(
+                        "Timed out applying deferred transform for asset '%s' (id=%s)",
+                        pending.get("asset_name", ""),
+                        pending.get("asset_id", ""),
+                    )
+                    continue
+                next_pending.append(pending)
+            except Exception as e:
+                _logger.warning(
+                    "Deferred transform apply failed for asset '%s': %s",
+                    pending.get("asset_name", ""),
+                    e,
+                )
+        self._pending_transform_applications = next_pending
 
     def on_remove_asset(self, _handle, _ev, args):
         """Remove a specific asset from the catalog by ID."""
@@ -3673,12 +3953,21 @@ class AssetManagerPanel(Panel):
                 _logger.warning(f"Failed to load asset index: {e}")
 
         # Sync the currently loaded runtime dataset into the catalog when possible.
-        self._sync_runtime_scene_catalog(select_current=True)
+        # Only auto-select the current scene asset on first mount, not on reopen,
+        # to preserve user's previous selection and show all assets.
+        has_existing_selection = bool(self._selected_asset_ids)
+        self._sync_runtime_scene_catalog(select_current=not has_existing_selection)
+
+        # Clear scene filter on reopen to show all assets in the project
+        # (respecting active filters like Splat/PCL/Dataset/Checkpoint)
+        if has_existing_selection:
+            self._selected_scene_id = None
 
         # Initial refresh must dirty scalar bindings after catalog load.
         self.refresh_catalog()
 
     def on_scene_changed(self, doc):
+        self._flush_pending_transform_applications()
         self._sync_runtime_scene_catalog(select_current=True)
         self.refresh_catalog()
 
@@ -3686,6 +3975,7 @@ class AssetManagerPanel(Panel):
         """Periodic update - check for missing files."""
         if not self._asset_index:
             return False
+        self._flush_pending_transform_applications()
 
         try:
             library_path = self._asset_index.library_path
