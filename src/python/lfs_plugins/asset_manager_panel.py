@@ -2843,10 +2843,8 @@ class AssetManagerPanel(Panel):
                 # Auto-select the newly imported dataset to show its info
                 # Add to selection instead of replacing (allow multiple imports)
                 self._selected_asset_ids.add(asset.id)
-                self._selected_project_id = project_id
-                # Don't set scene_id filter - show all assets in the project
-                # This allows seeing multiple imported datasets at once
-                self._selected_scene_id = None
+                # Preserve user's existing project/scene filters - don't change them
+                # The dataset will appear in the catalog based on current filters
                 self._update_selection_type()
             self._import_menu_open = False
 
@@ -4413,8 +4411,7 @@ class AssetManagerPanel(Panel):
             backfill_scene_provenance(self._asset_index, context.get("scene_id"))
             if select_current and context.get("asset_id"):
                 self._selected_asset_ids = {context["asset_id"]}
-                self._selected_project_id = context.get("project_id")
-                self._selected_scene_id = context.get("scene_id")
+                # Preserve user's existing project/scene filters - don't change them
                 self._selected_run_id = None
                 self._update_selection_type()
         except Exception as exc:
