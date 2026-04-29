@@ -42,7 +42,7 @@ class AssetManagerPanel(Panel):
     """Floating Asset Manager window for browsing splats, videos, and exports."""
 
     SORT_MODES = ("recent", "name", "size", "type")
-    LOADABLE_TYPES = {"ply", "rad", "sog", "spz", "checkpoint", "dataset", "mesh", "usd"}
+    LOADABLE_TYPES = {"ply_3dgs", "ply_pcl", "rad", "sog", "spz", "checkpoint", "dataset", "mesh", "usd"}
 
     id = "lfs.asset_manager"
     label = "Asset Manager"
@@ -79,6 +79,9 @@ class AssetManagerPanel(Panel):
 
         # Track which asset has its dropdown menu open
         self._open_menu_asset_id: Optional[str] = None
+
+        # Track which project has its dropdown menu open
+        self._open_menu_project_id: Optional[str] = None
 
         # Selection type for info panel display
         self._selection_type: str = "none"  # none, asset, run, multiple
@@ -255,6 +258,10 @@ class AssetManagerPanel(Panel):
         model.bind_func(
             "selected_asset_dataset_database",
             self.get_selected_asset_dataset_database,
+        )
+        model.bind_func(
+            "selected_asset_dataset_initial_points",
+            self.get_selected_asset_dataset_initial_points,
         )
         model.bind_func(
             "selected_asset_bounding_box", self.get_selected_asset_bounding_box
@@ -566,6 +573,24 @@ class AssetManagerPanel(Panel):
             for scene_id, scene in self._asset_index.scenes.items()
         )
 
+    def _ensure_default_project(self) -> None:
+        """Ensure a 'Default' project always exists."""
+        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+            return
+
+        # Check if Default project exists
+        has_default = any(
+            proj.get("name") == "Default"
+            for proj in self._asset_index.projects.values()
+        )
+
+        if not has_default:
+            try:
+                self._asset_index.create_project(name="Default")
+                self._log_info("Created Default project")
+            except Exception as e:
+                self._log_error("Failed to create Default project: %s", e)
+
     def _get_asset_relationship_names(self, asset: Dict[str, Any]):
         project_name = ""
         scene_name = ""
@@ -666,9 +691,14 @@ class AssetManagerPanel(Panel):
             if self._active_filters:
                 matches_filter = False
 
-                # PLY filter: PLY files (Gaussian splats)
-                if "ply" in self._active_filters:
-                    if asset.get("type") == "ply":
+                # Splat filter: 3DGS PLY files, SOG files, and legacy PLY (Gaussian splats)
+                if "splat" in self._active_filters:
+                    if asset.get("type") in ("ply_3dgs", "sog", "ply"):
+                        matches_filter = True
+
+                # PCL filter: Regular point cloud PLY files
+                if "pcl" in self._active_filters:
+                    if asset.get("type") == "ply_pcl":
                         matches_filter = True
 
                 # Dataset filter: source datasets
@@ -772,6 +802,8 @@ class AssetManagerPanel(Panel):
 
         # Determine thumbnail class based on type
         thumb_classes = {
+            "ply_3dgs": "asset-thumb-splat",
+            "ply_pcl": "asset-thumb-splat",
             "ply": "asset-thumb-splat",
             "rad": "asset-thumb-splat",
             "sog": "asset-thumb-splat",
@@ -788,6 +820,23 @@ class AssetManagerPanel(Panel):
             asset, project_name, scene_name, run_name
         )
 
+        # Format type label for display
+        type_labels = {
+            "ply_3dgs": "SPLAT",
+            "ply_pcl": "PCL",
+            "ply": "SPLAT",  # Legacy PLY type
+            "rad": "RAD",
+            "sog": "SOG",
+            "spz": "SPZ",
+            "checkpoint": "CKPT",
+            "dataset": "DATASET",
+            "mesh": "MESH",
+            "usd": "USD",
+            "mp4": "VIDEO",
+            "mov": "VIDEO",
+        }
+        type_label = type_labels.get(asset_type, asset_type.upper() if asset_type else "")
+
         return {
             "id": asset_id,
             "name": asset.get("name", "Unnamed"),
@@ -796,7 +845,7 @@ class AssetManagerPanel(Panel):
             "context_label": display_fields["context_label"],
             "type": asset_type,
             "role": asset.get("role", ""),
-            "type_label": asset_type.upper() if asset_type else "",
+            "type_label": type_label,
             "role_label": asset.get("role", "").replace("_", " ").title(),
             "size_label": size_str,
             "file_size_bytes": file_size_bytes,
@@ -829,10 +878,12 @@ class AssetManagerPanel(Panel):
         if not self._asset_index or not hasattr(self._asset_index, "projects"):
             return []
 
+        # Ensure Default project always exists
+        self._ensure_default_project()
+
         projects = []
         for project_id, project in self._asset_index.projects.items():
-            if not self._project_has_content(project_id):
-                continue
+            # Show all projects, even empty ones (user must manually delete)
             asset_count = self._project_asset_count(project_id)
             projects.append(
                 {
@@ -842,6 +893,7 @@ class AssetManagerPanel(Panel):
                     "scene_count": asset_count,  # Now shows asset count instead of scene count
                     "is_selected": project_id == self._selected_project_id,
                     "thumbnail_asset_id": project.get("thumbnail_asset_id"),
+                    "menu_open": project_id == self._open_menu_project_id,
                 }
             )
 
@@ -859,9 +911,7 @@ class AssetManagerPanel(Panel):
         for scene_id, scene in self._asset_index.scenes.items():
             if scene.get("project_id") != self._selected_project_id:
                 continue
-            if not self._scene_has_content(scene_id):
-                continue
-
+            # Show all scenes, even empty ones (user must manually delete)
             run_count = self._scene_run_count(scene_id)
             asset_count = self._scene_asset_count(scene_id)
             scenes.append(
@@ -885,8 +935,11 @@ class AssetManagerPanel(Panel):
 
         assets = list(self._asset_index.assets.values())
 
-        # Count by filter (only PLY, Dataset, Checkpoint)
-        ply_count = sum(1 for a in assets if a.get("type") == "ply")
+        # Count by filter (Splat, PCL, Dataset, Checkpoint)
+        # Splat: 3DGS PLY files (ply_3dgs), SOG files, and legacy PLY
+        splat_count = sum(1 for a in assets if a.get("type") in ("ply_3dgs", "sog", "ply"))
+        # PCL: Regular point cloud PLY files (ply_pcl)
+        pcl_count = sum(1 for a in assets if a.get("type") == "ply_pcl")
         checkpoint_count = sum(1 for a in assets if a.get("type") == "checkpoint")
         dataset_count = sum(
             1
@@ -896,10 +949,16 @@ class AssetManagerPanel(Panel):
 
         filters = [
             {
-                "id": "ply",
-                "label": "PLY",
-                "count": ply_count,
-                "is_selected": "ply" in self._active_filters,
+                "id": "splat",
+                "label": "Splat",
+                "count": splat_count,
+                "is_selected": "splat" in self._active_filters,
+            },
+            {
+                "id": "pcl",
+                "label": "PCL",
+                "count": pcl_count,
+                "is_selected": "pcl" in self._active_filters,
             },
             {
                 "id": "dataset",
@@ -920,7 +979,8 @@ class AssetManagerPanel(Panel):
     def _get_default_filters(self) -> List[Dict[str, Any]]:
         """Return default filter list when backend unavailable."""
         return [
-            {"id": "ply", "label": "PLY", "count": 0, "is_selected": False},
+            {"id": "splat", "label": "Splat", "count": 0, "is_selected": False},
+            {"id": "pcl", "label": "PCL", "count": 0, "is_selected": False},
             {"id": "dataset", "label": "Dataset", "count": 0, "is_selected": False},
             {"id": "checkpoint", "label": "Checkpoint", "count": 0, "is_selected": False},
         ]
@@ -1106,6 +1166,8 @@ class AssetManagerPanel(Panel):
 
         # Preview class
         thumb_classes = {
+            "ply_3dgs": "asset-thumb-splat",
+            "ply_pcl": "asset-thumb-splat",
             "ply": "asset-thumb-splat",
             "rad": "asset-thumb-splat",
             "sog": "asset-thumb-splat",
@@ -1133,10 +1195,27 @@ class AssetManagerPanel(Panel):
                 secs = int(duration_secs % 60)
                 duration = f"{mins:02d}:{secs:02d}"
 
+        # Format type for display in info panel
+        type_display_names = {
+            "ply_3dgs": "Gaussian Splat",
+            "ply_pcl": "Point Cloud",
+            "ply": "Gaussian Splat",  # Legacy PLY type
+            "rad": "RAD",
+            "sog": "SOG",
+            "spz": "SPZ",
+            "checkpoint": "Checkpoint",
+            "dataset": "Dataset",
+            "mesh": "Mesh",
+            "usd": "USD",
+            "mp4": "Video",
+            "mov": "Video",
+        }
+        type_display = type_display_names.get(asset_type, asset_type.upper() if asset_type else "")
+
         return {
             "id": asset_id,
             "name": asset.get("name", "Unnamed"),
-            "type": asset_type.upper() if asset_type else "",
+            "type": type_display,
             "role": asset.get("role", "").replace("_", " ").title(),
             "path": file_path,
             "size": size_str,
@@ -1159,9 +1238,9 @@ class AssetManagerPanel(Panel):
             "file_missing": file_missing,
             "expected_path": file_path if file_missing else "",
             "preview_class": preview_class,
-            "preview_label": asset_type.upper() if asset_type else "Asset",
-            "pill_class": f"asset-pill-{asset_type}" if asset_type else "",
-            "type_label": asset_type.upper() if asset_type else "",
+            "preview_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else "Asset"),
+            "pill_class": f"asset-pill-{asset_type.replace('_', '-')}" if asset_type else "",
+            "type_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else ""),
         }
 
     def get_selected_run_struct(self) -> Dict[str, Any]:
@@ -1449,7 +1528,12 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         geom = asset.get("geometry_metadata", {}) or {}
-        gaussian_count = geom.get("gaussian_count", 0)
+        # Debug: log what we have
+        asset_id = asset.get('id', 'unknown')
+        asset_type = asset.get('type', 'unknown')
+        self._log_info(f"DEBUG POINTS: asset={asset_id}, type={asset_type}, geom_keys={list(geom.keys()) if geom else 'EMPTY'}")
+        gaussian_count = geom.get("gaussian_count") or 0  # Handle None
+        self._log_info(f"DEBUG POINTS: gaussian_count={gaussian_count}")
         if gaussian_count >= 1_000_000:
             return f"{gaussian_count / 1_000_000:.2f}M"
         elif gaussian_count >= 1_000:
@@ -1579,13 +1663,23 @@ class AssetManagerPanel(Panel):
     def get_selected_asset_sh_degree(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
-            return "--"
+            return ""
+        # Only show SH Degree for splat files, not regular point clouds
+        asset_type = asset.get("type", "")
+        if asset_type not in ("ply_3dgs", "sog", "spz", "rad"):
+            return ""  # Not a splat file, don't show SH Degree
+        # First check geometry metadata for Splat/PCL files
+        geom = asset.get("geometry_metadata", {}) or {}
+        sh_degree = geom.get("sh_degree")
+        if sh_degree is not None:
+            return str(sh_degree)
+        # Fall back to training run parameters
         run = self._get_training_run_for_asset(asset)
         if not run:
-            return "--"
+            return ""
         params = run.get("parameters", {})
         sh_degree = params.get("sh_degree", "")
-        return str(sh_degree) if sh_degree else "--"
+        return str(sh_degree) if sh_degree else ""
 
     def get_selected_asset_gaussian_count(self) -> str:
         asset = self._get_selected_asset()
@@ -1780,6 +1874,20 @@ class AssetManagerPanel(Panel):
         dataset_meta = asset.get("dataset_metadata", {}) or {}
         return "Yes" if dataset_meta.get("database_present") else "No"
 
+    def get_selected_asset_dataset_initial_points(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        dataset_meta = asset.get("dataset_metadata", {}) or {}
+        initial_points = dataset_meta.get("initial_points")
+        if initial_points is None:
+            return ""
+        if initial_points >= 1_000_000:
+            return f"{initial_points / 1_000_000:.2f}M"
+        elif initial_points >= 1_000:
+            return f"{initial_points / 1_000:.1f}K"
+        return str(initial_points)
+
     def get_selected_asset_bounding_box(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -1831,6 +1939,8 @@ class AssetManagerPanel(Panel):
             return "asset-thumb-default"
         asset_type = asset.get("type", "")
         thumb_classes = {
+            "ply_3dgs": "asset-thumb-splat",
+            "ply_pcl": "asset-thumb-splat",
             "ply": "asset-thumb-splat",
             "rad": "asset-thumb-splat",
             "sog": "asset-thumb-splat",
@@ -1848,21 +1958,49 @@ class AssetManagerPanel(Panel):
         if not asset:
             return "Asset"
         asset_type = asset.get("type", "")
-        return asset_type.upper() if asset_type else "Asset"
+        type_labels = {
+            "ply_3dgs": "SPLAT",
+            "ply_pcl": "PCL",
+            "ply": "SPLAT",  # Legacy PLY type
+            "rad": "RAD",
+            "sog": "SOG",
+            "spz": "SPZ",
+            "checkpoint": "CKPT",
+            "dataset": "DATASET",
+            "mesh": "MESH",
+            "usd": "USD",
+            "mp4": "VIDEO",
+            "mov": "VIDEO",
+        }
+        return type_labels.get(asset_type, asset_type.upper() if asset_type else "Asset")
 
     def get_selected_asset_pill_class(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return ""
         asset_type = asset.get("type", "")
-        return f"asset-pill-{asset_type}" if asset_type else ""
+        return f"asset-pill-{asset_type.replace('_', '-')}" if asset_type else ""
 
     def get_selected_asset_type_label(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return ""
         asset_type = asset.get("type", "")
-        return asset_type.upper() if asset_type else ""
+        type_labels = {
+            "ply_3dgs": "SPLAT",
+            "ply_pcl": "PCL",
+            "ply": "SPLAT",  # Legacy PLY type
+            "rad": "RAD",
+            "sog": "SOG",
+            "spz": "SPZ",
+            "checkpoint": "CKPT",
+            "dataset": "DATASET",
+            "mesh": "MESH",
+            "usd": "USD",
+            "mp4": "VIDEO",
+            "mov": "VIDEO",
+        }
+        return type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 
     # ── Flattened Selected Run Getters ───────────────────────
 
@@ -2204,12 +2342,13 @@ class AssetManagerPanel(Panel):
         asset_type = metadata.get("type") or "unknown"
 
         kwargs: Dict[str, Any] = {
+            "type": asset_type,
             "file_size_bytes": metadata.get("size_bytes", 0),
             "created_at": metadata.get("created"),
             "modified_at": metadata.get("modified"),
         }
 
-        if asset_type in ("ply", "rad", "sog", "spz"):
+        if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
             kwargs["geometry_metadata"] = format_specific
         elif asset_type == "checkpoint":
             kwargs["training_metadata"] = format_specific
@@ -2259,8 +2398,10 @@ class AssetManagerPanel(Panel):
                 or "image_root" not in dataset_meta
             )
 
-        if asset_type in ("ply", "rad", "sog", "spz"):
-            return not (asset.get("geometry_metadata", {}) or {})
+        if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
+            geom_meta = asset.get("geometry_metadata", {}) or {}
+            # Need sync if empty or if gaussian_count is not present
+            return not geom_meta or geom_meta.get("gaussian_count") is None
         if asset_type == "checkpoint":
             return not (asset.get("training_metadata", {}) or {})
         if asset_type in ("video", "mp4", "mov"):
@@ -2315,9 +2456,22 @@ class AssetManagerPanel(Panel):
         override_role: Optional[str] = None,
     ):
         metadata = self._asset_scanner.scan_file(path) if self._asset_scanner else {}
+        self._log_info(f"DEBUG IMPORT: path={path}, metadata_type={metadata.get('type')}, has_format_specific={'format_specific' in metadata}")
+        if metadata.get('format_specific'):
+            self._log_info(f"DEBUG IMPORT: format_specific keys={list(metadata['format_specific'].keys())}")
         asset_kwargs = self._metadata_to_asset_kwargs(metadata)
-        asset_type = override_type or asset_kwargs.pop("type", None) or "unknown"
-        role = override_role or asset_kwargs.pop("role", None) or fallback_role
+        self._log_info(f"DEBUG IMPORT: asset_kwargs has geometry_metadata={'geometry_metadata' in asset_kwargs}")
+        if 'geometry_metadata' in asset_kwargs:
+            self._log_info(f"DEBUG IMPORT: geometry_metadata={asset_kwargs['geometry_metadata']}")
+        # Always pop type and role from kwargs to avoid duplicate keyword argument error
+        kwargs_type = asset_kwargs.pop("type", None)
+        kwargs_role = asset_kwargs.pop("role", None)
+        asset_type = override_type or kwargs_type or "unknown"
+        role = override_role or kwargs_role or fallback_role
+
+        # Final safety: ensure type and role are not in kwargs (they're passed explicitly)
+        asset_kwargs.pop("type", None)
+        asset_kwargs.pop("role", None)
 
         asset = self._asset_index.create_asset(
             project_id=project_id,
@@ -2551,7 +2705,14 @@ class AssetManagerPanel(Panel):
             if path_lower.endswith(('.obj', '.fbx', '.gltf', '.glb', '.stl', '.dae', '.3ds')):
                 asset_type = "mesh"
                 fallback_role = "reference"
-            elif path_lower.endswith(('.ply', '.sog', '.spz')):
+            elif path_lower.endswith('.ply'):
+                # PLY files will be auto-detected as ply_3dgs or ply_pcl by the scanner
+                asset_type = None  # Let scanner detect
+                if 'point_cloud' in file_path.lower() or 'initial' in file_path.lower():
+                    fallback_role = "initial_point_cloud"
+                else:
+                    fallback_role = "trained_output"
+            elif path_lower.endswith(('.sog', '.spz')):
                 asset_type = path_lower.split('.')[-1].replace('sog', 'sog').replace('spz', 'spz')
                 if 'point_cloud' in file_path.lower() or 'initial' in file_path.lower():
                     fallback_role = "initial_point_cloud"
@@ -3304,6 +3465,164 @@ class AssetManagerPanel(Panel):
             _on_project_name_entered
         )
 
+    def on_toggle_project_menu(self, _handle, _ev, args):
+        """Toggle dropdown menu for a project."""
+        project_id = self._resolve_event_value(args, _ev, "data-project-id")
+        if not project_id:
+            return
+
+        # Stop event propagation to prevent row selection
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        # Toggle: if already open for this project, close it; otherwise open for this project
+        if self._open_menu_project_id == project_id:
+            self._open_menu_project_id = None
+        else:
+            self._open_menu_project_id = project_id
+
+        self._dirty_model("projects")
+
+    def on_rename_project(self, _handle, _ev, args):
+        """Open rename dialog for a project."""
+        project_id = self._resolve_event_value(args, _ev, "data-project-id")
+        if not project_id:
+            return
+
+        # Stop event propagation
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+            return
+
+        project = self._asset_index.projects.get(project_id)
+        if not project:
+            return
+
+        # Close the menu
+        self._open_menu_project_id = None
+        self._dirty_model("projects")
+
+        # Prompt for rename using input dialog
+        current_name = project.get("name", "Unnamed Project")
+
+        def _on_rename_result(new_name):
+            if new_name and new_name.strip() and new_name.strip() != current_name:
+                try:
+                    self._asset_index.update_project(project_id, name=new_name.strip())
+                    self._asset_index.save()
+                    self.refresh_catalog()
+                    self._log_info("Renamed project to: %s", new_name.strip())
+                except Exception as e:
+                    self._log_error("Failed to rename project: %s", e)
+
+        lf.ui.input_dialog(
+            "Rename Project",
+            f"Enter new name for: {current_name}",
+            current_name,
+            _on_rename_result
+        )
+
+    def on_delete_project(self, _handle, _ev, args):
+        """Delete a project after moving its assets to Default."""
+        project_id = self._resolve_event_value(args, _ev, "data-project-id")
+        if not project_id:
+            return
+
+        # Stop event propagation
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+            return
+
+        project = self._asset_index.projects.get(project_id)
+        if not project:
+            return
+
+        # Close the menu
+        self._open_menu_project_id = None
+        self._dirty_model("projects")
+
+        project_name = project.get("name", "Unnamed Project")
+
+        # Find or create Default project
+        default_project = None
+        default_project_id = None
+        for pid, proj in self._asset_index.projects.items():
+            if proj.get("name", "").lower() == "default":
+                default_project_id = pid
+                default_project = proj
+                break
+
+        # Create Default project if it doesn't exist
+        if not default_project_id:
+            try:
+                default_project = self._asset_index.create_project(name="Default")
+                if default_project:
+                    default_project_id = default_project.id
+                    self._log_info("Created Default project for asset migration")
+            except Exception as e:
+                self._log_error("Failed to create Default project: %s", e)
+                return
+
+        if not default_project_id:
+            self._log_error("Cannot delete project: Default project not available")
+            return
+
+        # Move all assets from this project to Default
+        moved_count = 0
+        if hasattr(self._asset_index, "assets"):
+            for asset_id, asset in list(self._asset_index.assets.items()):
+                if asset.get("project_id") == project_id:
+                    try:
+                        self._asset_index.update_asset(
+                            asset_id,
+                            project_id=default_project_id,
+                            scene_id=None  # Clear scene since scenes are project-specific
+                        )
+                        moved_count += 1
+                    except Exception as e:
+                        self._log_warn("Failed to move asset %s to Default: %s", asset_id, e)
+
+        # Delete the project
+        try:
+            if hasattr(self._asset_index, "delete_project"):
+                self._asset_index.delete_project(project_id)
+            elif hasattr(self._asset_index, "remove_project"):
+                self._asset_index.remove_project(project_id)
+            else:
+                # Fallback: remove from projects dict directly
+                if hasattr(self._asset_index, "projects"):
+                    del self._asset_index.projects[project_id]
+
+            self._asset_index.save()
+
+            # Clear selection if the deleted project was selected
+            if self._selected_project_id == project_id:
+                self._selected_project_id = None
+                self._selected_scene_id = None
+                self._selected_asset_ids.clear()
+                self._selection_type = "none"
+
+            self.refresh_catalog()
+            self._log_info(
+                "Deleted project '%s' and moved %d assets to Default",
+                project_name, moved_count
+            )
+        except Exception as e:
+            self._log_error("Failed to delete project: %s", e)
+
     # ── Lifecycle ─────────────────────────────────────────────
 
     def on_mount(self, doc):
@@ -3430,6 +3749,7 @@ class AssetManagerPanel(Panel):
                 self._stop_event(event)
                 return
             elif action == "rename":
+                self.on_rename_asset(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "show_in_folder":
@@ -3495,7 +3815,33 @@ class AssetManagerPanel(Panel):
             target, "data-project-id", container
         )
         if project_el is not None:
+            # Check if this is a project action (menu, rename, delete)
+            project_action_el = rml_widgets.find_ancestor_with_attribute(
+                target, "data-project-action", container
+            )
+            if project_action_el is not None:
+                action = project_action_el.get_attribute("data-project-action", "")
+                project_id = project_action_el.get_attribute("data-project-id", "")
+
+                if action == "menu":
+                    self.on_toggle_project_menu(None, event, [project_id])
+                    self._stop_event(event)
+                    return
+                elif action == "rename":
+                    self.on_rename_project(None, event, [project_id])
+                    self._stop_event(event)
+                    return
+                elif action == "delete":
+                    self.on_delete_project(None, event, [project_id])
+                    self._stop_event(event)
+                    return
+
+            # Regular project selection (not an action button)
             project_id = project_el.get_attribute("data-project-id", "")
+            # Close any open project menu when selecting a project
+            if self._open_menu_project_id:
+                self._open_menu_project_id = None
+                self._dirty_model("projects")
             if self._select_project_id(project_id):
                 self._stop_event(event)
             return
@@ -3509,12 +3855,17 @@ class AssetManagerPanel(Panel):
                 self._stop_event(event)
             return
 
-        # Close open menu when clicking elsewhere
+        # Close open asset menu when clicking elsewhere
         if self._open_menu_asset_id:
             self._open_menu_asset_id = None
             self._dirty_model("assets", "move_menu_projects")
             if self._handle:
                 self._handle.update_record_list("move_menu_projects", [])
+
+        # Close open project menu when clicking elsewhere
+        if self._open_menu_project_id:
+            self._open_menu_project_id = None
+            self._dirty_model("projects")
 
     def _event_multi_select(self, event) -> bool:
         for key in ("ctrl_key", "meta_key", "command_key"):
@@ -3907,6 +4258,7 @@ class AssetManagerPanel(Panel):
                     "selected_asset_dataset_sparse_model",
                     "selected_asset_dataset_camera_count",
                     "selected_asset_dataset_database",
+                    "selected_asset_dataset_initial_points",
                     "selected_asset_bounding_box",
                     "selected_asset_center",
                     "selected_asset_scale",

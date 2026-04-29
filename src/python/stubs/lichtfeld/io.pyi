@@ -73,6 +73,11 @@ def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans
 def is_dataset_path(path: str | os.PathLike) -> bool:
     """Check if path is a dataset directory"""
 
+def is_gaussian_splat_ply(path: str | os.PathLike) -> bool:
+    """
+    Check if PLY file is a 3D Gaussian splat (has opacity, scale_0, rot_0 properties)
+    """
+
 def get_supported_formats() -> list[str]:
     """Get list of supported file format names"""
 

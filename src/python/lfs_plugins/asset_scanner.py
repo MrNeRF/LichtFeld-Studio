@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+import lichtfeld as lf
+
 _logger = logging.getLogger(__name__)
 
 # File extension to type mapping
@@ -385,6 +387,10 @@ class AssetScanner:
         # Extract format-specific metadata
         if result["type"] in ("ply", "rad", "sog", "spz"):
             result["format_specific"] = self.extract_geometry_metadata(path) or {}
+            # For PLY files, distinguish between 3DGS and regular point cloud
+            if result["type"] == "ply" and result["format_specific"]:
+                is_3dgs = result["format_specific"].get("is_3dgs", False)
+                result["type"] = "ply_3dgs" if is_3dgs else "ply_pcl"
         elif result["type"] == "checkpoint":
             result["format_specific"] = self.extract_checkpoint_metadata(path) or {}
         elif result["type"] == "dataset":
@@ -431,6 +437,7 @@ class AssetScanner:
                     result["sh_degree"] = ply_meta.get("sh_degree")
                     result["has_normals"] = ply_meta.get("has_normals", False)
                     result["has_colors"] = ply_meta.get("has_colors", False)
+                    result["is_3dgs"] = ply_meta.get("is_3dgs", False)
 
             elif ext == ".spz":
                 spz_meta = self._parse_spz_header(path)
@@ -458,7 +465,7 @@ class AssetScanner:
             path: Path to the PLY file.
 
         Returns:
-            Dictionary with vertex_count, sh_degree, has_normals, has_colors.
+            Dictionary with vertex_count, sh_degree, has_normals, has_colors, is_3dgs.
         """
         try:
             with open(path, "rb") as f:
@@ -477,6 +484,7 @@ class AssetScanner:
                 has_normals = False
                 has_colors = False
                 sh_coeffs_count = 0
+                f_rest_count = 0
 
                 for line in header_lines:
                     if line.startswith("element vertex"):
@@ -494,13 +502,30 @@ class AssetScanner:
                     elif "f_dc" in line or "sh" in line.lower():
                         # Count SH coefficients
                         sh_coeffs_count += 1
+                    elif "f_rest" in line:
+                        # Count f_rest properties for SH degree detection
+                        f_rest_count += 1
 
-                # Infer SH degree from coefficient count
-                # SH degree 0: 1 coefficient (DC only)
-                # SH degree 1: 4 coefficients (DC + 3)
-                # SH degree 2: 9 coefficients (DC + 3 + 5)
-                # SH degree 3: 16 coefficients
-                if sh_coeffs_count > 0:
+                # Use C++ function to detect if this is a 3DGS PLY file
+                # (checks for opacity, scale_0, rot_0 properties)
+                is_3dgs = lf.io.is_gaussian_splat_ply(path)
+
+                # Infer SH degree from f_rest coefficient count
+                # SH degree 0: 0 rest coefficients (only DC)
+                # SH degree 1: 9 rest coefficients (3 channels × 3 coefficients)
+                # SH degree 2: 24 rest coefficients (3 channels × 8 coefficients)
+                # SH degree 3: 45 rest coefficients (3 channels × 15 coefficients)
+                if f_rest_count > 0:
+                    if f_rest_count >= 45:
+                        sh_degree = 3
+                    elif f_rest_count >= 24:
+                        sh_degree = 2
+                    elif f_rest_count >= 9:
+                        sh_degree = 1
+                    else:
+                        sh_degree = 0
+                elif sh_coeffs_count > 0:
+                    # Fallback to old detection method
                     if sh_coeffs_count >= 16:
                         sh_degree = 3
                     elif sh_coeffs_count >= 9:
@@ -511,10 +536,11 @@ class AssetScanner:
                         sh_degree = 0
 
                 return {
-                    "vertex_count": vertex_count if vertex_count > 0 else None,
+                    "vertex_count": vertex_count if vertex_count > 0 else 0,
                     "sh_degree": sh_degree,
                     "has_normals": has_normals,
                     "has_colors": has_colors,
+                    "is_3dgs": is_3dgs,
                 }
 
         except Exception as e:
@@ -574,6 +600,18 @@ class AssetScanner:
         Returns:
             Dictionary with vertex_count and format info.
         """
+        path_obj = Path(path)
+        ext = path_obj.suffix.lower()
+
+        # SOG files are binary bundles - can't parse as text
+        if ext == ".sog":
+            # Return empty metadata for SOG - actual loading is done by C++ loader
+            return {
+                "vertex_count": 0,  # Unknown without parsing binary
+                "format": "sog",
+            }
+
+        # RAD files are text-based
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 lines = f.readlines()
@@ -586,7 +624,7 @@ class AssetScanner:
                         vertex_count += 1
 
                 return {
-                    "vertex_count": vertex_count if vertex_count > 0 else None,
+                    "vertex_count": vertex_count if vertex_count > 0 else 0,
                     "format": "rad",
                 }
 
@@ -697,11 +735,15 @@ class AssetScanner:
             result["sparse_model"] = sparse_dir.is_dir() and any(sparse_dir.iterdir())
             result["database_present"] = (path_obj / "database.db").exists()
 
-            # Try to count cameras from COLMAP files
+            # Try to count cameras and points from COLMAP files
             if result["sparse_model"]:
                 cameras_file = next(sparse_dir.rglob("cameras.bin"), None)
                 if cameras_file and cameras_file.exists():
                     result["camera_count"] = self._count_colmap_cameras(cameras_file)
+                # Count initial points from points3D.bin
+                points_file = next(sparse_dir.rglob("points3D.bin"), None)
+                if points_file and points_file.exists():
+                    result["initial_points"] = self._count_colmap_points(points_file)
 
         except (OSError, PermissionError) as e:
             _logger.debug(f"Could not scan dataset {path}: {e}")
@@ -726,6 +768,27 @@ class AssetScanner:
                     return num_cameras
         except Exception as e:
             _logger.debug(f"Could not read COLMAP cameras file: {e}")
+
+        return None
+
+    def _count_colmap_points(self, points_file: Path) -> Optional[int]:
+        """Count points in COLMAP points3D.bin file.
+
+        Args:
+            points_file: Path to points3D.bin file.
+
+        Returns:
+            Number of points or None if cannot read.
+        """
+        try:
+            with open(points_file, "rb") as f:
+                # COLMAP binary format: uint64 num_points, then point records
+                num_points_data = f.read(8)
+                if len(num_points_data) == 8:
+                    num_points = struct.unpack("<Q", num_points_data)[0]
+                    return num_points
+        except Exception as e:
+            _logger.debug(f"Could not read COLMAP points file: {e}")
 
         return None
 

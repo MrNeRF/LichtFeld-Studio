@@ -45,7 +45,14 @@
           <div data-for="project : projects">
             <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
               <span class="asset-row-label">{{project.name}}</span>
-              <span class="asset-row-count">{{project.scene_count}}</span>
+              <div class="asset-project-row-right">
+                <span class="asset-row-count">{{project.scene_count}}</span>
+                <button class="asset-project-menu" data-attr-data-project-id="project.id" data-project-action="menu"><img src="../icon/more-horizontal.png" /></button>
+              </div>
+            </div>
+            <div class="asset-project-dropdown" data-class-is-visible="project.menu_open">
+              <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="rename">Rename Project</div>
+              <div class="asset-dropdown-item is-danger" data-attr-data-project-id="project.id" data-project-action="delete">Delete Project</div>
             </div>
           </div>
         </div>
@@ -67,7 +74,6 @@
             <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
               <input type="checkbox" data-checked="filter.is_selected" />
               <span class="asset-row-label">{{filter.label}}</span>
-              <span class="asset-row-count">{{filter.count}}</span>
             </div>
           </div>
         </div>
@@ -79,7 +85,6 @@
         <div class="asset-gallery-header">
           <span class="asset-gallery-title" data-if="is_gallery_view">Gallery</span>
           <span class="asset-gallery-title" data-if="is_list_view">List</span>
-          <span class="asset-gallery-subtitle">Cataloged assets with direct load for splats and checkpoints</span>
         </div>
 
         <div class="asset-gallery-scroll">
@@ -106,11 +111,10 @@
                     <span class="asset-card-tag">{{asset.tags_label}}</span>
                   </div>
                   <div class="asset-card-actions">
-                    <button class="asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">Load</button>
-                    <button class="asset-card-button is-danger" data-attr-data-asset-id="asset.id" data-asset-action="remove">Remove</button>
+                    <button class="asset-card-button" data-attr-data-asset-id="asset.id" data-asset-action="load">Load</button>
                   </div>
                 </div>
-                <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu">&#x22EE;</button>
+                <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
                 <div class="asset-card-dropdown" data-class-is-visible="asset.menu_open">
                   <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">Rename</div>
                   <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
@@ -209,10 +213,6 @@
                   <span class="parameter-value">{{selected_asset_type}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Role</span>
-                  <span class="parameter-value">{{selected_asset_role}}</span>
-                </div>
-                <div class="parameter-row">
                   <span class="parameter-label">Path</span>
                   <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
                 </div>
@@ -220,9 +220,13 @@
                   <span class="parameter-label">Size</span>
                   <span class="parameter-value">{{selected_asset_size}}</span>
                 </div>
-                <div class="parameter-row" data-if="selected_asset_points">
+                <div class="parameter-row">
                   <span class="parameter-label">Points</span>
                   <span class="parameter-value">{{selected_asset_points}}</span>
+                </div>
+                <div class="parameter-row">
+                  <span class="parameter-label">SH Degree</span>
+                  <span class="parameter-value">{{selected_asset_sh_degree}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_resolution">
                   <span class="parameter-label">Resolution</span>
@@ -263,6 +267,10 @@
                 <div class="parameter-row">
                   <span class="parameter-label">Cameras</span>
                   <span class="parameter-value">{{selected_asset_dataset_camera_count}}</span>
+                </div>
+                <div class="parameter-row" data-if="selected_asset_dataset_initial_points">
+                  <span class="parameter-label">Initial Points</span>
+                  <span class="parameter-value">{{selected_asset_dataset_initial_points}}</span>
                 </div>
               </div>
 
@@ -307,13 +315,6 @@
                 <button class="asset-info-button" data-event-click="on_locate_file">Locate File</button>
               </div>
 
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">Actions</div>
-                <div class="asset-info-actions">
-                  <button class="asset-info-button asset-info-button-primary" data-if="selected_asset_can_load" data-event-click="on_load_selected">Load</button>
-                  <button class="asset-info-button is-danger" data-event-click="on_remove_from_catalog">Remove</button>
-                </div>
-              </div>
             </div>
 
             <div data-if="show_parameters_tab">
