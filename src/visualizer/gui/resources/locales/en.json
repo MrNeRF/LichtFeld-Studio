@@ -93,7 +93,6 @@
     "import_menu.import_asset": "Import Asset...",
     "import_menu.import_dataset": "Import Dataset...",
     "import_menu.import_checkpoint": "Import Checkpoint...",
-    "import_menu.import_folder": "Import Folder...",
     "sidebar.projects": "PROJECTS",
     "sidebar.scenes": "SCENES",
     "sidebar.filters": "FILTERS",

@@ -27,7 +27,6 @@
           <div class="asset-import-menu-item" data-event-click="on_import_asset">Import Asset...</div>
           <div class="asset-import-menu-item" data-event-click="on_import_dataset">Import Dataset...</div>
           <div class="asset-import-menu-item" data-event-click="on_import_checkpoint">Import Checkpoint...</div>
-          <div class="asset-import-menu-item" data-event-click="on_import_folder">Import Folder...</div>
         </div>
       </div>
     </div>
@@ -63,33 +62,17 @@
 
         <div class="asset-sidebar-section">
           <div class="asset-sidebar-title">FILTERS</div>
+          <div class="asset-filter-hint">Select none to show all</div>
           <div data-for="filter : filters">
-            <div class="asset-filter-row" data-class-is-active="filter.id == active_filter" data-event-click="set_filter(filter.id)">
+            <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
+              <input type="checkbox" data-checked="filter.is_selected" />
               <span class="asset-row-label">{{filter.label}}</span>
               <span class="asset-row-count">{{filter.count}}</span>
             </div>
           </div>
         </div>
 
-        <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title">TAGS</div>
-          <div data-for="tag : tags">
-            <div class="asset-filter-row" data-class-is-active="tag.is_selected" data-event-click="set_filter(tag.id)">
-              <span class="asset-row-label">{{tag.label}}</span>
-              <span class="asset-row-count">{{tag.count}}</span>
-            </div>
-          </div>
-        </div>
 
-        <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title">COLLECTIONS</div>
-          <div data-for="collection : collections">
-            <div class="asset-filter-row" data-class-is-active="collection.is_selected" data-event-click="set_filter(collection.id)">
-              <span class="asset-row-label">{{collection.label}}</span>
-              <span class="asset-row-count">{{collection.count}}</span>
-            </div>
-          </div>
-        </div>
       </div>
 
       <div id="asset-gallery">
@@ -105,13 +88,10 @@
               <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
                 <div data-attr-class="'asset-card-thumb ' + asset.thumb_class">
                   <div class="asset-card-overlay">
-                    <div class="asset-checkbox" data-class-is-checked="asset.is_selected">v</div>
                     <span data-attr-class="'asset-pill ' + asset.pill_class">{{asset.type_label}}</span>
                   </div>
-                  <span class="asset-thumb-label">{{asset.thumb_label}}</span>
                 </div>
                 <div class="asset-card-body">
-                  <div class="asset-card-context">{{asset.context_label}}</div>
                   <div class="asset-card-title-row">
                     <span class="asset-card-title">{{asset.display_name}}</span>
                     <span class="asset-favorite" data-if="asset.is_favorite">*</span>
@@ -129,6 +109,23 @@
                     <button class="asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">Load</button>
                     <button class="asset-card-button is-danger" data-attr-data-asset-id="asset.id" data-asset-action="remove">Remove</button>
                   </div>
+                </div>
+                <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu">&#x22EE;</button>
+                <div class="asset-card-dropdown" data-class-is-visible="asset.menu_open">
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">Rename</div>
+                  <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
+                    <span>Move to Project</span>
+                    <span class="submenu-arrow">&#x203A;</span>
+                    <div class="asset-dropdown-submenu">
+                      <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="create_project">+ New project</div>
+                      <div class="asset-submenu-divider"></div>
+                      <div data-for="proj : move_menu_projects">
+                        <div class="asset-dropdown-item project-option" data-attr-data-asset-id="asset.id" data-attr-data-project-id="proj.id" data-asset-action="move_to_existing_project">{{proj.name}}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="show_in_folder">Show in Folder</div>
+                  <div class="asset-dropdown-item is-danger" data-attr-data-asset-id="asset.id" data-asset-action="remove_from_menu">Remove</div>
                 </div>
               </div>
             </div>
@@ -308,6 +305,14 @@
                   <span class="parameter-value">{{selected_asset_expected_path}}</span>
                 </div>
                 <button class="asset-info-button" data-event-click="on_locate_file">Locate File</button>
+              </div>
+
+              <div class="asset-info-section">
+                <div class="asset-info-section-title">Actions</div>
+                <div class="asset-info-actions">
+                  <button class="asset-info-button asset-info-button-primary" data-if="selected_asset_can_load" data-event-click="on_load_selected">Load</button>
+                  <button class="asset-info-button is-danger" data-event-click="on_remove_from_catalog">Remove</button>
+                </div>
               </div>
             </div>
 
@@ -493,10 +498,6 @@
         <span class="asset-batch-title">{{selected_count_text}}</span>
         <span class="asset-batch-subtitle" data-if="has_selection">{{selected_total_text}}</span>
         <span class="asset-batch-subtitle" data-if="!has_selection">Ctrl/Cmd-click cards to select multiple</span>
-      </div>
-      <div class="asset-batch-actions" data-if="has_selection">
-        <button class="asset-card-button" data-if="has_loadable_selection" data-event-click="on_load_selected">Load Selected</button>
-        <button class="asset-card-button is-danger" data-event-click="on_remove_from_catalog">Remove Selected</button>
       </div>
     </div>
   </div>
