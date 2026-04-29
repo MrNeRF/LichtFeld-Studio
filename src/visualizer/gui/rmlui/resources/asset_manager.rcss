@@ -122,6 +122,7 @@
     position: relative;
     display: flex;
     flex-direction: column;
+    z-index: 200;
 }
 
 .asset-import-button {
@@ -142,7 +143,7 @@
 .asset-import-menu {
     position: absolute;
     top: 100%;
-    left: 0;
+    right: 0;
     margin-top: 4dp;
     min-width: 160dp;
     background-color: #2b2825;
@@ -693,7 +694,39 @@
     color: #f0ebe2;
     font-size: 10dp;
     white-space: normal;
-    overflow-wrap: break-word;
+    word-break: break-word;
+}
+
+.asset-path-value {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.asset-run-row {
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    padding: 7dp 0;
+    border-bottom-width: 1dp;
+    border-bottom-color: #3c3630;
+    cursor: pointer;
+}
+
+.asset-run-row:hover {
+    color: #9be0ca;
+}
+
+.asset-run-name {
+    color: #f0ebe2;
+    font-size: 10dp;
+    font-weight: 600;
+}
+
+.asset-run-status,
+.asset-run-summary {
+    color: #a9a093;
+    font-size: 9dp;
 }
 
 .asset-info-warning {
@@ -756,12 +789,20 @@
     display: flex;
     flex-direction: row;
     align-items: center;
+    justify-content: space-between;
+    gap: 12dp;
     flex-shrink: 0;
     padding: 10dp 12dp;
     background-color: #2b2825;
     border-top-width: 1dp;
     border-top-color: #3c3630;
     min-height: 40dp;
+}
+
+.asset-batch-actions {
+    display: flex;
+    flex-direction: row;
+    gap: 8dp;
 }
 
 .asset-batch-summary {

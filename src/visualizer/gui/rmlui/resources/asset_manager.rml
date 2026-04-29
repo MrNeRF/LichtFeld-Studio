@@ -13,7 +13,7 @@
       </div>
 
       <button class="asset-sort-button" data-event-click="cycle_sort_mode">
-        <span data-value="sort_label">Sort by: Recent</span>
+        <span>{{sort_label}}</span>
       </button>
 
       <div class="asset-view-toggle">
@@ -33,10 +33,10 @@
     </div>
 
     <div id="asset-popup-summary">
-      <span><span data-value="asset_count">0</span> assets</span>
-      <span><span data-value="project_count">0</span> projects</span>
-      <span><span data-value="scene_count">0</span> scenes</span>
-      <span><span data-value="selected_count">0</span> selected</span>
+      <span><span>{{asset_count}}</span> assets</span>
+      <span><span>{{project_count}}</span> projects</span>
+      <span><span>{{scene_count}}</span> scenes</span>
+      <span><span>{{selected_count}}</span> selected</span>
     </div>
 
     <div id="asset-popup-content">
@@ -44,9 +44,9 @@
         <div class="asset-sidebar-section">
           <div class="asset-sidebar-title">PROJECTS</div>
           <div data-for="project : projects">
-            <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-event-click="select_project(project.id)">
-              <span class="asset-row-label" data-value="project.name"></span>
-              <span class="asset-row-count" data-value="project.scene_count"></span>
+            <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
+              <span class="asset-row-label">{{project.name}}</span>
+              <span class="asset-row-count">{{project.scene_count}}</span>
             </div>
           </div>
         </div>
@@ -54,9 +54,9 @@
         <div class="asset-sidebar-section" data-if="selected_project_id">
           <div class="asset-sidebar-title">SCENES</div>
           <div data-for="scene : scenes">
-            <div class="asset-filter-row" data-class-is-active="scene.id == selected_scene_id" data-event-click="select_scene(scene.id)">
-              <span class="asset-row-label" data-value="scene.name"></span>
-              <span class="asset-row-count" data-value="scene.asset_count"></span>
+            <div class="asset-filter-row" data-class-is-active="scene.id == selected_scene_id" data-attr-data-scene-id="scene.id">
+              <span class="asset-row-label">{{scene.name}}</span>
+              <span class="asset-row-count">{{scene.asset_count}}</span>
             </div>
           </div>
         </div>
@@ -65,8 +65,8 @@
           <div class="asset-sidebar-title">FILTERS</div>
           <div data-for="filter : filters">
             <div class="asset-filter-row" data-class-is-active="filter.id == active_filter" data-event-click="set_filter(filter.id)">
-              <span class="asset-row-label" data-value="filter.label"></span>
-              <span class="asset-row-count" data-value="filter.count"></span>
+              <span class="asset-row-label">{{filter.label}}</span>
+              <span class="asset-row-count">{{filter.count}}</span>
             </div>
           </div>
         </div>
@@ -75,8 +75,8 @@
           <div class="asset-sidebar-title">TAGS</div>
           <div data-for="tag : tags">
             <div class="asset-filter-row" data-class-is-active="tag.is_selected" data-event-click="set_filter(tag.id)">
-              <span class="asset-row-label" data-value="tag.label"></span>
-              <span class="asset-row-count" data-value="tag.count"></span>
+              <span class="asset-row-label">{{tag.label}}</span>
+              <span class="asset-row-count">{{tag.count}}</span>
             </div>
           </div>
         </div>
@@ -85,8 +85,8 @@
           <div class="asset-sidebar-title">COLLECTIONS</div>
           <div data-for="collection : collections">
             <div class="asset-filter-row" data-class-is-active="collection.is_selected" data-event-click="set_filter(collection.id)">
-              <span class="asset-row-label" data-value="collection.label"></span>
-              <span class="asset-row-count" data-value="collection.count"></span>
+              <span class="asset-row-label">{{collection.label}}</span>
+              <span class="asset-row-count">{{collection.count}}</span>
             </div>
           </div>
         </div>
@@ -102,34 +102,32 @@
         <div class="asset-gallery-scroll">
           <div class="asset-card-grid" data-if="is_gallery_view">
             <div data-for="asset : assets">
-              <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-event-click="toggle_asset_selection(asset.id)">
-                <div class="asset-card-thumb" data-class-attr="asset.thumb_class">
+              <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
+                <div data-attr-class="'asset-card-thumb ' + asset.thumb_class">
                   <div class="asset-card-overlay">
                     <div class="asset-checkbox" data-class-is-checked="asset.is_selected">v</div>
-                    <span class="asset-pill" data-class-attr="asset.pill_class" data-value="asset.type_label"></span>
+                    <span data-attr-class="'asset-pill ' + asset.pill_class">{{asset.type_label}}</span>
                   </div>
-                  <span class="asset-thumb-label" data-value="asset.thumb_label"></span>
+                  <span class="asset-thumb-label">{{asset.thumb_label}}</span>
                 </div>
                 <div class="asset-card-body">
-                  <div class="asset-card-context" data-value="asset.context_label"></div>
+                  <div class="asset-card-context">{{asset.context_label}}</div>
                   <div class="asset-card-title-row">
-                    <span class="asset-card-title" data-value="asset.display_name"></span>
+                    <span class="asset-card-title">{{asset.display_name}}</span>
                     <span class="asset-favorite" data-if="asset.is_favorite">*</span>
                   </div>
-                  <div class="asset-card-subtitle" data-value="asset.display_subtitle"></div>
+                  <div class="asset-card-subtitle">{{asset.display_subtitle}}</div>
                   <div class="asset-card-meta">
-                    <span data-value="asset.role_label"></span>
-                    <span data-if="asset.points_label" data-value="asset.points_label"></span>
-                    <span data-value="asset.size_label"></span>
+                    <span>{{asset.role_label}}</span>
+                    <span data-if="asset.points_label">{{asset.points_label}}</span>
+                    <span>{{asset.size_label}}</span>
                   </div>
-                  <div class="asset-card-tags">
-                    <span data-for="tag : asset.tags">
-                      <span class="asset-card-tag" data-value="tag"></span>
-                    </span>
+                  <div class="asset-card-tags" data-if="asset.tags_label">
+                    <span class="asset-card-tag">{{asset.tags_label}}</span>
                   </div>
                   <div class="asset-card-actions">
-                    <button class="asset-card-button" data-if="asset.can_load" data-event-click="on_load_asset(asset.id)">Load</button>
-                    <button class="asset-card-button is-danger" data-event-click="on_remove_asset(asset.id)">Remove</button>
+                    <button class="asset-card-button" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load">Load</button>
+                    <button class="asset-card-button is-danger" data-attr-data-asset-id="asset.id" data-asset-action="remove">Remove</button>
                   </div>
                 </div>
               </div>
@@ -149,19 +147,19 @@
               <span class="asset-col asset-col-status">Status</span>
             </div>
             <div data-for="asset : assets">
-              <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-event-click="toggle_asset_selection(asset.id)">
+              <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
                 <span class="asset-col asset-col-name">
-                  <span class="asset-list-primary" data-value="asset.display_name"></span>
-                  <span class="asset-list-secondary" data-value="asset.display_subtitle"></span>
+                  <span class="asset-list-primary">{{asset.display_name}}</span>
+                  <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                 </span>
-                <span class="asset-col asset-col-type" data-value="asset.type_label"></span>
-                <span class="asset-col asset-col-role" data-value="asset.role_label"></span>
-                <span class="asset-col asset-col-project" data-value="asset.project_name"></span>
-                <span class="asset-col asset-col-scene" data-value="asset.scene_name"></span>
-                <span class="asset-col asset-col-run" data-value="asset.run_name"></span>
-                <span class="asset-col asset-col-size" data-value="asset.size_label"></span>
-                <span class="asset-col asset-col-modified" data-value="asset.modified_label"></span>
-                <span class="asset-col asset-col-status" data-value="asset.status_label"></span>
+                <span class="asset-col asset-col-type">{{asset.type_label}}</span>
+                <span class="asset-col asset-col-role">{{asset.role_label}}</span>
+                <span class="asset-col asset-col-project">{{asset.project_name}}</span>
+                <span class="asset-col asset-col-scene">{{asset.scene_name}}</span>
+                <span class="asset-col asset-col-run">{{asset.run_name}}</span>
+                <span class="asset-col asset-col-size">{{asset.size_label}}</span>
+                <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
+                <span class="asset-col asset-col-status">{{asset.status_label}}</span>
               </div>
             </div>
           </div>
@@ -170,74 +168,80 @@
 
       <div id="asset-info-panel">
         <div class="asset-info-tabs">
-          <div class="asset-info-tab" data-class-is-active="active_tab == 'info'" data-event-click="set_tab('info')">Info</div>
-          <div class="asset-info-tab" data-class-is-active="active_tab == 'parameters'" data-event-click="set_tab('parameters')">Parameters</div>
+          <div class="asset-info-tab" data-class-is-active="show_info_tab" data-asset-tab="info">Info</div>
+          <div class="asset-info-tab" data-class-is-active="show_parameters_tab" data-asset-tab="parameters">Parameters</div>
         </div>
 
         <div class="asset-info-content">
-          <div data-if="selection_type == 'none'">
+          <div data-if="show_selection_none">
             <div class="asset-info-empty">
               <span class="asset-info-empty-text">Select an item to view details</span>
             </div>
           </div>
 
-          <div data-if="selection_type == 'asset'">
+          <div data-if="show_selection_multiple">
+            <div class="asset-info-empty">
+              <span class="asset-info-empty-text">{{selected_count_text}}</span>
+            </div>
+          </div>
+
+          <div data-if="show_selection_asset">
             <div class="asset-info-header">
-              <span class="asset-info-name" data-value="selected_asset_name"></span>
+              <span class="asset-info-name">{{selected_asset_name}}</span>
               <span class="asset-info-favorite" data-if="selected_asset_is_favorite">*</span>
-              <span class="asset-pill" data-class-attr="selected_asset_pill_class" data-value="selected_asset_type_label"></span>
+              <span data-attr-class="'asset-pill ' + selected_asset_pill_class">{{selected_asset_type_label}}</span>
             </div>
 
-            <div data-if="active_tab == 'info'">
+            <div data-if="show_info_tab">
               <div class="asset-info-section">
                 <div class="asset-info-section-title">Asset Details</div>
                 <div class="parameter-row" data-if="selected_asset_project_name">
                   <span class="parameter-label">Project</span>
-                  <span class="parameter-value" data-value="selected_asset_project_name"></span>
+                  <span class="parameter-value">{{selected_asset_project_name}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_scene_name">
                   <span class="parameter-label">Scene</span>
-                  <span class="parameter-value" data-value="selected_asset_scene_name"></span>
+                  <span class="parameter-value">{{selected_asset_scene_name}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_run_name">
                   <span class="parameter-label">Run</span>
-                  <span class="parameter-value" data-value="selected_asset_run_name"></span>
+                  <span class="parameter-value">{{selected_asset_run_name}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Type</span>
-                  <span class="parameter-value" data-value="selected_asset_type"></span>
+                  <span class="parameter-value">{{selected_asset_type}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Role</span>
-                  <span class="parameter-value" data-value="selected_asset_role"></span>
+                  <span class="parameter-value">{{selected_asset_role}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Path</span>
-                  <span class="parameter-value" data-value="selected_asset_path"></span>
+                  <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Size</span>
-                  <span class="parameter-value" data-value="selected_asset_size"></span>
+                  <span class="parameter-value">{{selected_asset_size}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_points">
                   <span class="parameter-label">Points</span>
-                  <span class="parameter-value" data-value="selected_asset_points"></span>
+                  <span class="parameter-value">{{selected_asset_points}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_resolution">
                   <span class="parameter-label">Resolution</span>
-                  <span class="parameter-value" data-value="selected_asset_resolution"></span>
+                  <span class="parameter-value">{{selected_asset_resolution}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_duration">
                   <span class="parameter-label">Duration</span>
-                  <span class="parameter-value" data-value="selected_asset_duration"></span>
+                  <span class="parameter-value">{{selected_asset_duration}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Created</span>
-                  <span class="parameter-value" data-value="selected_asset_created"></span>
+                  <span class="parameter-value">{{selected_asset_created}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Modified</span>
-                  <span class="parameter-value" data-value="selected_asset_modified"></span>
+                  <span class="parameter-value">{{selected_asset_modified}}</span>
                 </div>
               </div>
 
@@ -245,27 +249,23 @@
                 <div class="asset-info-section-title">Dataset Details</div>
                 <div class="parameter-row">
                   <span class="parameter-label">Images</span>
-                  <span class="parameter-value" data-value="selected_asset_dataset_image_count"></span>
+                  <span class="parameter-value">{{selected_asset_dataset_image_count}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Image Root</span>
-                  <span class="parameter-value" data-value="selected_asset_dataset_image_root"></span>
+                  <span class="parameter-value">{{selected_asset_dataset_image_root}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Masks</span>
-                  <span class="parameter-value" data-value="selected_asset_dataset_masks"></span>
+                  <span class="parameter-value">{{selected_asset_dataset_masks}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Sparse Model</span>
-                  <span class="parameter-value" data-value="selected_asset_dataset_sparse_model"></span>
+                  <span class="parameter-value">{{selected_asset_dataset_sparse_model}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Cameras</span>
-                  <span class="parameter-value" data-value="selected_asset_dataset_camera_count"></span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">COLMAP DB</span>
-                  <span class="parameter-value" data-value="selected_asset_dataset_database"></span>
+                  <span class="parameter-value">{{selected_asset_dataset_camera_count}}</span>
                 </div>
               </div>
 
@@ -274,7 +274,7 @@
                 <div class="asset-info-tags">
                   <div data-for="tag : selected_asset_tags">
                     <div class="asset-info-tag-row">
-                      <span class="asset-card-tag" data-value="tag.value"></span>
+                      <span class="asset-card-tag">{{tag.value}}</span>
                       <button class="asset-tag-remove" data-event-click="on_remove_tag(tag.value)">Remove</button>
                     </div>
                   </div>
@@ -289,15 +289,15 @@
                 <div class="asset-info-section-title">Geometry Metadata</div>
                 <div class="parameter-row">
                   <span class="parameter-label">Bounding Box</span>
-                  <span class="parameter-value" data-value="selected_asset_bounding_box"></span>
+                  <span class="parameter-value">{{selected_asset_bounding_box}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Center</span>
-                  <span class="parameter-value" data-value="selected_asset_center"></span>
+                  <span class="parameter-value">{{selected_asset_center}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Scale</span>
-                  <span class="parameter-value" data-value="selected_asset_scale"></span>
+                  <span class="parameter-value">{{selected_asset_scale}}</span>
                 </div>
               </div>
 
@@ -305,86 +305,92 @@
                 <div class="asset-info-section-title">File Not Found</div>
                 <div class="parameter-row">
                   <span class="parameter-label">Expected Path</span>
-                  <span class="parameter-value" data-value="selected_asset_expected_path"></span>
+                  <span class="parameter-value">{{selected_asset_expected_path}}</span>
                 </div>
                 <button class="asset-info-button" data-event-click="on_locate_file">Locate File</button>
               </div>
             </div>
 
-            <div data-if="active_tab == 'parameters'">
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">Training Provenance</div>
+            <div data-if="show_parameters_tab">
+              <div class="asset-info-section" data-if="selected_asset_has_runs">
+                <div class="asset-info-section-title">Training Runs</div>
+                <div data-for="run : selected_asset_runs">
+                  <div class="asset-run-row" data-attr-data-run-id="run.id">
+                    <span class="asset-run-name">{{run.name}}</span>
+                    <span class="asset-run-status">{{run.status}}</span>
+                    <span class="asset-run-summary">{{run.summary}}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="asset-info-section" data-if="selected_asset_has_training_provenance">
+                <div class="asset-info-section-title">Training Summary</div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Source Dataset</span>
-                  <span class="parameter-value" data-value="selected_asset_source_dataset"></span>
+                  <span class="parameter-label">Gaussians</span>
+                  <span class="parameter-value">{{selected_asset_gaussian_count}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Training Run</span>
-                  <span class="parameter-value" data-value="selected_asset_training_run_id"></span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">Iterations</span>
-                  <span class="parameter-value" data-value="selected_asset_iterations"></span>
+                  <span class="parameter-label">Images</span>
+                  <span class="parameter-value">{{selected_asset_image_count}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">SH Degree</span>
-                  <span class="parameter-value" data-value="selected_asset_sh_degree"></span>
+                  <span class="parameter-value">{{selected_asset_sh_degree}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Optimizer</span>
-                  <span class="parameter-value" data-value="selected_asset_optimizer"></span>
+                  <span class="parameter-label">Strategy</span>
+                  <span class="parameter-value">{{selected_asset_strategy}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Learning Rate</span>
-                  <span class="parameter-value" data-value="selected_asset_learning_rate"></span>
+                  <span class="parameter-label">Steps Scaler</span>
+                  <span class="parameter-value">{{selected_asset_steps_scaler}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">Batch Size</span>
-                  <span class="parameter-value" data-value="selected_asset_batch_size"></span>
+                  <span class="parameter-label">Iterations</span>
+                  <span class="parameter-value">{{selected_asset_iterations}}</span>
                 </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">Train Time</span>
-                  <span class="parameter-value" data-value="selected_asset_train_time"></span>
-                </div>
+              </div>
+              <div class="asset-info-empty" data-if="selected_asset_show_no_training">
+                <span class="asset-info-empty-text">No training provenance recorded for this asset</span>
               </div>
             </div>
           </div>
 
-          <div data-if="selection_type == 'run'">
+          <div data-if="show_selection_run">
             <div class="asset-info-header">
-              <span class="asset-info-name" data-value="selected_run_name"></span>
+              <span class="asset-info-name">{{selected_run_name}}</span>
               <span class="asset-pill asset-pill-run">RUN</span>
             </div>
 
-            <div data-if="active_tab == 'info'">
+            <div data-if="show_info_tab">
               <div class="asset-info-section">
                 <div class="asset-info-section-title">Run Details</div>
                 <div class="parameter-row">
                   <span class="parameter-label">Status</span>
-                  <span class="parameter-value" data-value="selected_run_status"></span>
+                  <span class="parameter-value">{{selected_run_status}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Started</span>
-                  <span class="parameter-value" data-value="selected_run_started"></span>
+                  <span class="parameter-value">{{selected_run_started}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Completed</span>
-                  <span class="parameter-value" data-value="selected_run_completed"></span>
+                  <span class="parameter-value">{{selected_run_completed}}</span>
                 </div>
                 <div class="parameter-row">
                   <span class="parameter-label">Duration</span>
-                  <span class="parameter-value" data-value="selected_run_duration"></span>
+                  <span class="parameter-value">{{selected_run_duration}}</span>
                 </div>
               </div>
             </div>
 
-            <div data-if="active_tab == 'parameters'">
+            <div data-if="show_parameters_tab">
               <div class="asset-info-section">
-                <div class="asset-info-section-title">Parameters</div>
+                <div class="asset-info-section-title">Training Summary</div>
                 <div data-for="param : selected_run_parameters">
                   <div class="parameter-row">
-                    <span class="parameter-label" data-value="param.name"></span>
-                    <span class="parameter-value" data-value="param.value"></span>
+                    <span class="parameter-label">{{param.name}}</span>
+                    <span class="parameter-value">{{param.value}}</span>
                   </div>
                 </div>
               </div>
@@ -392,18 +398,18 @@
               <div class="asset-info-section">
                 <div class="asset-info-section-title">Artifacts</div>
                 <div data-for="artifact : selected_run_artifacts">
-                  <div class="asset-artifact-row" data-event-click="select_artifact(artifact.id)">
-                    <span class="asset-artifact-name" data-value="artifact.name"></span>
-                    <span class="asset-artifact-type" data-value="artifact.type"></span>
+                  <div class="asset-artifact-row" data-attr-data-asset-id="artifact.id" data-asset-action="artifact">
+                    <span class="asset-artifact-name">{{artifact.name}}</span>
+                    <span class="asset-artifact-type">{{artifact.type}}</span>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          <div data-if="selection_type == 'scene'">
+          <div data-if="show_selection_scene">
             <div class="asset-info-header">
-              <span class="asset-info-name" data-value="selected_scene_name"></span>
+              <span class="asset-info-name">{{selected_scene_name}}</span>
               <span class="asset-pill asset-pill-scene">SCENE</span>
             </div>
 
@@ -411,36 +417,36 @@
               <div class="asset-info-section-title">Scene Details</div>
               <div class="parameter-row">
                 <span class="parameter-label">Project</span>
-                <span class="parameter-value" data-value="selected_scene_project_name"></span>
+                <span class="parameter-value">{{selected_scene_project_name}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Assets</span>
-                <span class="parameter-value" data-value="selected_scene_asset_count"></span>
+                <span class="parameter-value">{{selected_scene_asset_count}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Created</span>
-                <span class="parameter-value" data-value="selected_scene_created"></span>
+                <span class="parameter-value">{{selected_scene_created}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Modified</span>
-                <span class="parameter-value" data-value="selected_scene_modified"></span>
+                <span class="parameter-value">{{selected_scene_modified}}</span>
               </div>
             </div>
 
             <div class="asset-info-section">
               <div class="asset-info-section-title">Scene Assets</div>
               <div data-for="scene_asset : selected_scene_assets">
-                <div class="asset-artifact-row" data-event-click="select_asset(scene_asset.id)">
-                  <span class="asset-artifact-name" data-value="scene_asset.name"></span>
-                  <span class="asset-artifact-type" data-value="scene_asset.type"></span>
+                <div class="asset-artifact-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
+                  <span class="asset-artifact-name">{{scene_asset.name}}</span>
+                  <span class="asset-artifact-type">{{scene_asset.type}}</span>
                 </div>
               </div>
             </div>
           </div>
 
-          <div data-if="selection_type == 'project'">
+          <div data-if="show_selection_project">
             <div class="asset-info-header">
-              <span class="asset-info-name" data-value="selected_project_name"></span>
+              <span class="asset-info-name">{{selected_project_name}}</span>
               <span class="asset-pill asset-pill-project">PROJECT</span>
             </div>
 
@@ -448,32 +454,32 @@
               <div class="asset-info-section-title">Project Details</div>
               <div class="parameter-row">
                 <span class="parameter-label">Scenes</span>
-                <span class="parameter-value" data-value="selected_project_scene_count"></span>
+                <span class="parameter-value">{{selected_project_scene_count}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Total Assets</span>
-                <span class="parameter-value" data-value="selected_project_total_assets"></span>
+                <span class="parameter-value">{{selected_project_total_assets}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Path</span>
-                <span class="parameter-value" data-value="selected_project_path"></span>
+                <span class="parameter-value">{{selected_project_path}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Created</span>
-                <span class="parameter-value" data-value="selected_project_created"></span>
+                <span class="parameter-value">{{selected_project_created}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">Modified</span>
-                <span class="parameter-value" data-value="selected_project_modified"></span>
+                <span class="parameter-value">{{selected_project_modified}}</span>
               </div>
             </div>
 
             <div class="asset-info-section">
               <div class="asset-info-section-title">Scenes</div>
               <div data-for="proj_scene : selected_project_scenes">
-                <div class="asset-artifact-row" data-event-click="select_scene(proj_scene.id)">
-                  <span class="asset-artifact-name" data-value="proj_scene.name"></span>
-                  <span class="asset-artifact-type" data-value="proj_scene.asset_count"></span>
+                <div class="asset-artifact-row" data-attr-data-scene-id="proj_scene.id">
+                  <span class="asset-artifact-name">{{proj_scene.name}}</span>
+                  <span class="asset-artifact-type">{{proj_scene.asset_count}}</span>
                 </div>
               </div>
             </div>
@@ -484,8 +490,13 @@
 
     <div id="asset-popup-footer">
       <div class="asset-batch-summary">
-        <span class="asset-batch-title" data-value="selected_count_text">0 selected</span>
-        <span class="asset-batch-subtitle" data-value="selected_total_text">Total: 0 MB</span>
+        <span class="asset-batch-title">{{selected_count_text}}</span>
+        <span class="asset-batch-subtitle" data-if="has_selection">{{selected_total_text}}</span>
+        <span class="asset-batch-subtitle" data-if="!has_selection">Ctrl/Cmd-click cards to select multiple</span>
+      </div>
+      <div class="asset-batch-actions" data-if="has_selection">
+        <button class="asset-card-button" data-if="has_loadable_selection" data-event-click="on_load_selected">Load Selected</button>
+        <button class="asset-card-button is-danger" data-event-click="on_remove_from_catalog">Remove Selected</button>
       </div>
     </div>
   </div>

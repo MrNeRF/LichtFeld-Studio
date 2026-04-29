@@ -10,8 +10,16 @@ from typing import Dict, List, Optional, Set, Any
 
 import lichtfeld as lf
 
-_logger = logging.getLogger(__name__)
+from . import rml_widgets
+from .asset_manager_integration import (
+    backfill_scene_provenance,
+    clear_active_asset_manager_panel,
+    ensure_dataset_catalog_context,
+    set_active_asset_manager_panel,
+)
 from .types import Panel
+
+_logger = logging.getLogger(__name__)
 
 # Import backend components (to be implemented)
 try:
@@ -112,6 +120,9 @@ class AssetManagerPanel(Panel):
         model.bind_func("asset_count", self.get_asset_count)
         model.bind_func("selected_count", self.get_selected_count)
         model.bind_func("selected_total_size", self.get_selected_total_size)
+        model.bind_func("has_selection", lambda: self.get_selected_count() > 0)
+        model.bind_func("has_multi_selection", lambda: self.get_selected_count() > 1)
+        model.bind_func("has_loadable_selection", self.get_has_loadable_selection)
         model.bind_func("project_count", self.get_project_count)
         model.bind_func("scene_count", self.get_scene_count)
         model.bind_func("collection_count", self.get_collection_count)
@@ -136,6 +147,18 @@ class AssetManagerPanel(Panel):
         model.bind_func("active_filter", self.get_active_filter)
         model.bind_func("active_tab", self.get_active_tab)
         model.bind_func("selection_type", self.get_selection_type)
+        model.bind_func("show_selection_none", lambda: self._selection_type == "none")
+        model.bind_func("show_selection_asset", lambda: self._selection_type == "asset")
+        model.bind_func("show_selection_run", lambda: self._selection_type == "run")
+        model.bind_func("show_selection_scene", lambda: self._selection_type == "scene")
+        model.bind_func(
+            "show_selection_project", lambda: self._selection_type == "project"
+        )
+        model.bind_func(
+            "show_selection_multiple", lambda: self._selection_type == "multiple"
+        )
+        model.bind_func("show_info_tab", lambda: self._active_tab == "info")
+        model.bind_func("show_parameters_tab", lambda: self._active_tab == "parameters")
 
         # Import menu state
         model.bind_func("import_menu_open", self.get_import_menu_open)
@@ -149,7 +172,9 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_asset_name", self.get_selected_asset_name)
         model.bind_func("selected_asset_type", self.get_selected_asset_type)
         model.bind_func("selected_asset_role", self.get_selected_asset_role)
-        model.bind_func("selected_asset_project_name", self.get_selected_asset_project_name)
+        model.bind_func(
+            "selected_asset_project_name", self.get_selected_asset_project_name
+        )
         model.bind_func("selected_asset_scene_name", self.get_selected_asset_scene_name)
         model.bind_func("selected_asset_run_name", self.get_selected_asset_run_name)
         model.bind_func("selected_asset_path", self.get_selected_asset_path)
@@ -166,6 +191,10 @@ class AssetManagerPanel(Panel):
             "selected_asset_has_training_provenance",
             self.get_selected_asset_has_training_provenance,
         )
+        model.bind_func("selected_asset_has_runs", self.get_selected_asset_has_runs)
+        model.bind_func(
+            "selected_asset_show_no_training", self.get_selected_asset_show_no_training
+        )
         model.bind_func(
             "selected_asset_source_dataset", self.get_selected_asset_source_dataset
         )
@@ -174,6 +203,14 @@ class AssetManagerPanel(Panel):
         )
         model.bind_func("selected_asset_iterations", self.get_selected_asset_iterations)
         model.bind_func("selected_asset_sh_degree", self.get_selected_asset_sh_degree)
+        model.bind_func(
+            "selected_asset_gaussian_count", self.get_selected_asset_gaussian_count
+        )
+        model.bind_func("selected_asset_image_count", self.get_selected_asset_image_count)
+        model.bind_func("selected_asset_strategy", self.get_selected_asset_strategy)
+        model.bind_func(
+            "selected_asset_steps_scaler", self.get_selected_asset_steps_scaler
+        )
         model.bind_func("selected_asset_train_time", self.get_selected_asset_train_time)
         model.bind_func("selected_asset_optimizer", self.get_selected_asset_optimizer)
         model.bind_func(
@@ -270,6 +307,7 @@ class AssetManagerPanel(Panel):
         model.bind_record_list("collections")
         model.bind_record_list("assets")
         model.bind_record_list("selected_asset_tags")
+        model.bind_record_list("selected_asset_runs")
 
         # Record lists for nested struct lists
         model.bind_record_list("selected_run_parameters")
@@ -297,6 +335,7 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_toggle_favorite", self.on_toggle_favorite)
         model.bind_event("select_project", self.select_project)
         model.bind_event("select_scene", self.select_scene)
+        model.bind_event("select_run", self.select_run)
         model.bind_event("toggle_import_menu", self.toggle_import_menu)
         model.bind_event("on_import_checkpoint", self.on_import_checkpoint)
         model.bind_event("on_locate_file", self.on_locate_file)
@@ -319,20 +358,24 @@ class AssetManagerPanel(Panel):
 
     def get_project_count(self) -> int:
         if self._asset_index and hasattr(self._asset_index, "projects"):
-            return len(self._asset_index.projects)
+            return sum(
+                1
+                for project_id in self._asset_index.projects
+                if self._project_has_content(project_id)
+            )
         return 0
 
     def get_scene_count(self) -> int:
         if self._asset_index and hasattr(self._asset_index, "scenes"):
-            if self._selected_project_id:
-                return len(
-                    [
-                        s
-                        for s in self._asset_index.scenes.values()
-                        if s.get("project_id") == self._selected_project_id
-                    ]
+            return sum(
+                1
+                for scene_id, scene in self._asset_index.scenes.items()
+                if self._scene_has_content(scene_id)
+                and (
+                    not self._selected_project_id
+                    or scene.get("project_id") == self._selected_project_id
                 )
-            return len(self._asset_index.scenes)
+            )
         return 0
 
     def get_collection_count(self) -> int:
@@ -355,6 +398,20 @@ class AssetManagerPanel(Panel):
             if asset:
                 total_bytes += asset.get("file_size_bytes", 0)
         return self._format_size(total_bytes)
+
+    def get_has_loadable_selection(self) -> bool:
+        if not self._selected_asset_ids or not self._asset_index:
+            return False
+        assets = getattr(self._asset_index, "assets", {})
+        for asset_id in self._selected_asset_ids:
+            asset = assets.get(asset_id)
+            if (
+                asset
+                and asset.get("exists", True)
+                and asset.get("type") in self.LOADABLE_TYPES
+            ):
+                return True
+        return False
 
     def get_view_mode(self) -> str:
         return self._view_mode
@@ -404,15 +461,83 @@ class AssetManagerPanel(Panel):
             return f"{file_size_bytes / 1024:.1f} KB"
         return f"{file_size_bytes} B"
 
+    def _ellipsize_path(self, path: str, max_chars: int = 56) -> str:
+        if not path or len(path) <= max_chars:
+            return path
+        keep = max(8, (max_chars - 3) // 2)
+        return f"{path[:keep]}...{path[-keep:]}"
+
     def _reconcile_selection(self) -> None:
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
             self._selected_asset_ids.clear()
+            self._selected_project_id = None
+            self._selected_scene_id = None
+            self._selected_run_id = None
             self._update_selection_type()
             return
+        if (
+            self._selected_project_id
+            and self._selected_project_id
+            not in getattr(self._asset_index, "projects", {})
+        ):
+            self._selected_project_id = None
+        if (
+            self._selected_scene_id
+            and self._selected_scene_id not in getattr(self._asset_index, "scenes", {})
+        ):
+            self._selected_scene_id = None
+        if (
+            self._selected_run_id
+            and self._selected_run_id not in getattr(self._asset_index, "runs", {})
+        ):
+            self._selected_run_id = None
         valid_ids = set(self._asset_index.assets.keys())
         if not self._selected_asset_ids.issubset(valid_ids):
             self._selected_asset_ids.intersection_update(valid_ids)
             self._update_selection_type()
+        if not self._selected_asset_ids:
+            if self._selection_type == "run" and not self._selected_run_id:
+                self._selection_type = "none"
+            elif self._selection_type == "scene" and not self._selected_scene_id:
+                self._selection_type = "none"
+            elif self._selection_type == "project" and not self._selected_project_id:
+                self._selection_type = "none"
+
+    def _scene_asset_count(self, scene_id: str) -> int:
+        if not self._asset_index or not hasattr(self._asset_index, "assets"):
+            return 0
+        return sum(
+            1
+            for asset in self._asset_index.assets.values()
+            if asset.get("scene_id") == scene_id
+        )
+
+    def _scene_run_count(self, scene_id: str) -> int:
+        if not self._asset_index or not hasattr(self._asset_index, "runs"):
+            return 0
+        return sum(
+            1
+            for run in self._asset_index.runs.values()
+            if run.get("scene_id") == scene_id
+        )
+
+    def _scene_has_content(self, scene_id: str) -> bool:
+        return self._scene_asset_count(scene_id) > 0 or self._scene_run_count(scene_id) > 0
+
+    def _project_has_content(self, project_id: str) -> bool:
+        if not self._asset_index:
+            return False
+        if hasattr(self._asset_index, "assets") and any(
+            asset.get("project_id") == project_id
+            for asset in self._asset_index.assets.values()
+        ):
+            return True
+        if not hasattr(self._asset_index, "scenes"):
+            return False
+        return any(
+            scene.get("project_id") == project_id and self._scene_has_content(scene_id)
+            for scene_id, scene in self._asset_index.scenes.items()
+        )
 
     def _get_asset_relationship_names(self, asset: Dict[str, Any]):
         project_name = ""
@@ -434,6 +559,17 @@ class AssetManagerPanel(Panel):
 
         return project_name, scene_name, run_name
 
+    def _asset_display_title(self, asset: Dict[str, Any]) -> str:
+        file_path = asset.get("absolute_path") or asset.get("path") or ""
+        if file_path:
+            try:
+                leaf = Path(os.path.normpath(file_path)).name
+                if leaf:
+                    return leaf
+            except Exception:
+                pass
+        return asset.get("name", "") or "Unnamed"
+
     def _get_asset_display_fields(
         self,
         asset: Dict[str, Any],
@@ -443,14 +579,16 @@ class AssetManagerPanel(Panel):
     ) -> Dict[str, str]:
         asset_name = asset.get("name", "Unnamed")
         role_label = asset.get("role", "").replace("_", " ").title()
-        display_name = scene_name or asset_name or "Unnamed"
+        display_name = self._asset_display_title(asset)
 
-        if asset_name and asset_name != display_name:
-            display_subtitle = asset_name
+        if scene_name and scene_name != display_name:
+            display_subtitle = scene_name
         elif run_name:
             display_subtitle = run_name
         elif project_name:
             display_subtitle = project_name
+        elif asset_name and asset_name != display_name:
+            display_subtitle = asset_name
         else:
             display_subtitle = role_label
 
@@ -479,9 +617,15 @@ class AssetManagerPanel(Panel):
 
         assets = []
         for _asset_id, asset in self._asset_index.assets.items():
-            if self._selected_project_id and asset.get("project_id") != self._selected_project_id:
+            if (
+                self._selected_project_id
+                and asset.get("project_id") != self._selected_project_id
+            ):
                 continue
-            if self._selected_scene_id and asset.get("scene_id") != self._selected_scene_id:
+            if (
+                self._selected_scene_id
+                and asset.get("scene_id") != self._selected_scene_id
+            ):
                 continue
 
             if self._active_filter.startswith("tag:"):
@@ -505,7 +649,10 @@ class AssetManagerPanel(Panel):
                 if asset.get("type") != "checkpoint":
                     continue
             elif self._active_filter == "dataset":
-                if asset.get("type") != "dataset" and asset.get("role") != "source_dataset":
+                if (
+                    asset.get("type") != "dataset"
+                    and asset.get("role") != "source_dataset"
+                ):
                     continue
             elif self._active_filter == "trained":
                 if asset.get("role") != "trained_output":
@@ -517,7 +664,9 @@ class AssetManagerPanel(Panel):
                 if asset.get("exists", True):
                     continue
 
-            if self._search_query and not self._asset_matches_query(asset, self._search_query):
+            if self._search_query and not self._asset_matches_query(
+                asset, self._search_query
+            ):
                 continue
 
             assets.append(self._format_asset_for_ui(asset))
@@ -633,7 +782,8 @@ class AssetManagerPanel(Panel):
             "file_size_bytes": file_size_bytes,
             "points_label": points_str,
             "gaussian_count": gaussian_count,
-            "tags": asset.get("tags", []),
+            # Record-list rows only support scalar fields in the current RML bridge.
+            "tags_label": ", ".join(asset.get("tags", [])) if asset.get("tags") else "",
             "thumb_class": thumb_class,
             "thumb_label": asset_type.upper() if asset_type else "ASSET",
             "pill_class": f"asset-pill-{asset_type}" if asset_type else "",
@@ -660,7 +810,13 @@ class AssetManagerPanel(Panel):
 
         projects = []
         for project_id, project in self._asset_index.projects.items():
-            scene_count = len(project.get("scene_ids", []))
+            if not self._project_has_content(project_id):
+                continue
+            scene_count = sum(
+                1
+                for scene_id in project.get("scene_ids", [])
+                if self._scene_has_content(scene_id)
+            )
             projects.append(
                 {
                     "id": project_id,
@@ -686,14 +842,18 @@ class AssetManagerPanel(Panel):
         for scene_id, scene in self._asset_index.scenes.items():
             if scene.get("project_id") != self._selected_project_id:
                 continue
+            if not self._scene_has_content(scene_id):
+                continue
 
-            run_count = len(scene.get("run_ids", []))
+            run_count = self._scene_run_count(scene_id)
+            asset_count = self._scene_asset_count(scene_id)
             scenes.append(
                 {
                     "id": scene_id,
                     "name": scene.get("name", "Unnamed Scene"),
                     "description": scene.get("description", ""),
                     "run_count": run_count,
+                    "asset_count": asset_count,
                     "is_selected": scene_id == self._selected_scene_id,
                     "thumbnail_asset_id": scene.get("thumbnail_asset_id"),
                 }
@@ -1227,7 +1387,7 @@ class AssetManagerPanel(Panel):
 
     def get_selected_asset_name(self) -> str:
         asset = self._get_selected_asset()
-        return asset.get("name", "") if asset else ""
+        return self._asset_display_title(asset) if asset else ""
 
     def get_selected_asset_type(self) -> str:
         asset = self._get_selected_asset()
@@ -1264,7 +1424,8 @@ class AssetManagerPanel(Panel):
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        return asset.get("absolute_path") or asset.get("path", "")
+        path = asset.get("absolute_path") or asset.get("path", "")
+        return self._ellipsize_path(path)
 
     def get_selected_asset_size(self) -> str:
         asset = self._get_selected_asset()
@@ -1335,6 +1496,26 @@ class AssetManagerPanel(Panel):
             return False
         return bool(asset.get("run_id", ""))
 
+    def get_selected_asset_has_runs(self) -> bool:
+        return bool(self._runs_for_asset_context(self._get_selected_asset()))
+
+    def get_selected_asset_show_no_training(self) -> bool:
+        return (
+            not self.get_selected_asset_has_training_provenance()
+            and not self.get_selected_asset_has_runs()
+        )
+
+    def _get_training_run_for_asset(
+        self, asset: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        asset = asset or self._get_selected_asset()
+        if not asset or not self._asset_index:
+            return None
+        run_id = asset.get("run_id", "")
+        if not run_id:
+            return None
+        return getattr(self._asset_index, "runs", {}).get(run_id)
+
     def get_selected_asset_source_dataset(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -1368,38 +1549,100 @@ class AssetManagerPanel(Panel):
         asset = self._get_selected_asset()
         if not asset:
             return "--"
-        run_id = asset.get("run_id", "")
-        if not run_id or not self._asset_index:
-            return "--"
-        run = getattr(self._asset_index, "runs", {}).get(run_id)
+        run = self._get_training_run_for_asset(asset)
         if not run:
             return "--"
         params = run.get("parameters", {})
-        iterations = params.get("iterations", run.get("metrics", {}).get("final_iteration", ""))
+        iterations = params.get(
+            "iterations", run.get("metrics", {}).get("final_iteration", "")
+        )
         return str(iterations) if iterations else "--"
 
     def get_selected_asset_sh_degree(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return "--"
-        run_id = asset.get("run_id", "")
-        if not run_id or not self._asset_index:
-            return "--"
-        run = getattr(self._asset_index, "runs", {}).get(run_id)
+        run = self._get_training_run_for_asset(asset)
         if not run:
             return "--"
         params = run.get("parameters", {})
         sh_degree = params.get("sh_degree", "")
         return str(sh_degree) if sh_degree else "--"
 
+    def get_selected_asset_gaussian_count(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return "--"
+        geom = asset.get("geometry_metadata", {}) or {}
+        training_meta = asset.get("training_metadata", {}) or {}
+        gaussian_count = (
+            geom.get("gaussian_count")
+            or geom.get("num_gaussians")
+            or training_meta.get("num_gaussians")
+        )
+        run = self._get_training_run_for_asset(asset)
+        if not gaussian_count and run:
+            gaussian_count = run.get("metrics", {}).get("final_gaussians")
+        if not gaussian_count:
+            return "--"
+        try:
+            return f"{int(gaussian_count):,}"
+        except (TypeError, ValueError):
+            return str(gaussian_count)
+
+    def get_selected_asset_image_count(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return "--"
+        dataset_meta = asset.get("dataset_metadata", {}) or {}
+        image_count = dataset_meta.get("image_count")
+        run = self._get_training_run_for_asset(asset)
+        if not image_count and run:
+            image_count = run.get("parameters", {}).get("image_count")
+            if not image_count and self._asset_index:
+                source_id = run.get("source_dataset_id")
+                source_asset = getattr(self._asset_index, "assets", {}).get(source_id)
+                if source_asset:
+                    image_count = (
+                        source_asset.get("dataset_metadata", {}) or {}
+                    ).get("image_count")
+        if not image_count:
+            return "--"
+        try:
+            return f"{int(image_count):,}"
+        except (TypeError, ValueError):
+            return str(image_count)
+
+    def get_selected_asset_strategy(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return "--"
+        run = self._get_training_run_for_asset(asset)
+        if not run:
+            return "--"
+        strategy = run.get("parameters", {}).get("strategy", "")
+        return str(strategy) if strategy else "--"
+
+    def get_selected_asset_steps_scaler(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return "--"
+        run = self._get_training_run_for_asset(asset)
+        if not run:
+            return "--"
+        scaler = run.get("parameters", {}).get("steps_scaler", "")
+        if scaler in ("", None):
+            return "--"
+        try:
+            return f"{float(scaler):.2f}"
+        except (TypeError, ValueError):
+            return str(scaler)
+
     def get_selected_asset_train_time(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return "--"
-        run_id = asset.get("run_id", "")
-        if not run_id or not self._asset_index:
-            return "--"
-        run = getattr(self._asset_index, "runs", {}).get(run_id)
+        run = self._get_training_run_for_asset(asset)
         if not run:
             return "--"
         started = run.get("created_at", "")
@@ -1797,7 +2040,139 @@ class AssetManagerPanel(Panel):
             "total_size": self.get_selected_total_size(),
         }
 
-    def _ensure_import_project(self, default_name: str = "Imported Assets") -> Optional[str]:
+    def _runs_for_asset_context(
+        self, asset: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        if not asset or not self._asset_index or not hasattr(self._asset_index, "runs"):
+            return []
+
+        runs = list(self._asset_index.runs.values())
+        asset_id = asset.get("id")
+        scene_id = asset.get("scene_id")
+        run_id = asset.get("run_id")
+        if run_id:
+            return [run for run in runs if run.get("id") == run_id]
+
+        if asset.get("type") == "dataset" or asset.get("role") == "source_dataset":
+            return [
+                run
+                for run in runs
+                if run.get("source_dataset_id") == asset_id
+                or (scene_id and run.get("scene_id") == scene_id)
+            ]
+
+        if scene_id:
+            return [run for run in runs if run.get("scene_id") == scene_id]
+        return []
+
+    def _run_parameter_value(self, run: Dict[str, Any], key: str):
+        params = run.get("parameters", {}) or {}
+        metrics = run.get("metrics", {}) or {}
+        if key == "gaussians":
+            return (
+                metrics.get("final_gaussians")
+                or params.get("max_gaussians")
+                or params.get("max_cap")
+            )
+        if key == "images":
+            image_count = params.get("image_count")
+            if not image_count and self._asset_index:
+                source_id = run.get("source_dataset_id")
+                source_asset = getattr(self._asset_index, "assets", {}).get(source_id)
+                if source_asset:
+                    image_count = (
+                        source_asset.get("dataset_metadata", {}) or {}
+                    ).get("image_count")
+            return image_count
+        if key == "iterations":
+            return params.get("iterations") or metrics.get("final_iteration")
+        if key == "sh_degree":
+            return params.get("sh_degree")
+        if key == "strategy":
+            return (
+                params.get("strategy")
+                or params.get("optimizer")
+                or params.get("opt_type")
+            )
+        if key == "steps_scaler":
+            return params.get("steps_scaler")
+        return None
+
+    def _format_compact_value(self, value, *, decimals: Optional[int] = None) -> str:
+        if value in (None, ""):
+            return "--"
+        if decimals is not None:
+            try:
+                return f"{float(value):.{decimals}f}"
+            except (TypeError, ValueError):
+                return str(value)
+        try:
+            return f"{int(value):,}"
+        except (TypeError, ValueError):
+            return str(value)
+
+    def _format_run_parameters_for_ui(
+        self, run: Dict[str, Any]
+    ) -> List[Dict[str, str]]:
+        return [
+            {
+                "name": "Gaussians",
+                "value": self._format_compact_value(
+                    self._run_parameter_value(run, "gaussians")
+                ),
+            },
+            {
+                "name": "Images",
+                "value": self._format_compact_value(
+                    self._run_parameter_value(run, "images")
+                ),
+            },
+            {
+                "name": "SH Degree",
+                "value": self._format_compact_value(
+                    self._run_parameter_value(run, "sh_degree")
+                ),
+            },
+            {
+                "name": "Strategy",
+                "value": self._format_compact_value(
+                    self._run_parameter_value(run, "strategy")
+                ),
+            },
+            {
+                "name": "Steps Scaler",
+                "value": self._format_compact_value(
+                    self._run_parameter_value(run, "steps_scaler"), decimals=2
+                ),
+            },
+            {
+                "name": "Iterations",
+                "value": self._format_compact_value(
+                    self._run_parameter_value(run, "iterations")
+                ),
+            },
+        ]
+
+    def _format_run_for_ui(self, run: Dict[str, Any]) -> Dict[str, str]:
+        details = [
+            f"{self._format_compact_value(self._run_parameter_value(run, 'gaussians'))} gaussians",
+            f"{self._format_compact_value(self._run_parameter_value(run, 'images'))} images",
+            f"SH {self._format_compact_value(self._run_parameter_value(run, 'sh_degree'))}",
+            f"{self._format_compact_value(self._run_parameter_value(run, 'strategy'))}",
+            f"{self._format_compact_value(self._run_parameter_value(run, 'steps_scaler'), decimals=2)}x",
+            f"{self._format_compact_value(self._run_parameter_value(run, 'iterations'))} iters",
+        ]
+        return {
+            "id": run.get("id", ""),
+            "name": run.get("name", "Run"),
+            "status": run.get("status", "").capitalize(),
+            "summary": " / ".join(details),
+            "artifact_count": str(len(run.get("artifact_asset_ids", []) or [])),
+        }
+
+    def _ensure_import_project(
+        self, default_name: str = "Imported Assets"
+    ) -> Optional[str]:
         if self._selected_project_id:
             return self._selected_project_id
         if not self._asset_index:
@@ -1843,7 +2218,9 @@ class AssetManagerPanel(Panel):
         if not self._asset_thumbnails or not asset:
             return
         try:
-            thumb_path = self._asset_thumbnails.generate_placeholder(asset.type, asset.id)
+            thumb_path = self._asset_thumbnails.generate_placeholder(
+                asset.type, asset.id
+            )
             self._asset_index.update_asset(asset.id, thumbnail_path=str(thumb_path))
         except Exception as exc:
             _logger.debug(f"Failed to generate thumbnail for {asset.id}: {exc}")
@@ -1939,6 +2316,30 @@ class AssetManagerPanel(Panel):
             self._generate_asset_thumbnail(asset)
         return asset
 
+    def _log_info(self, message: str, *args) -> None:
+        if args:
+            message = message % args
+        try:
+            lf.log.info(message)
+        except Exception:
+            _logger.info(message)
+
+    def _log_warn(self, message: str, *args) -> None:
+        if args:
+            message = message % args
+        try:
+            lf.log.warn(message)
+        except Exception:
+            _logger.warning(message)
+
+    def _log_error(self, message: str, *args) -> None:
+        if args:
+            message = message % args
+        try:
+            lf.log.error(message)
+        except Exception:
+            _logger.error(message)
+
     # ── Event Handlers ────────────────────────────────────────
 
     def set_filter(self, _handle, _ev, args):
@@ -1947,15 +2348,23 @@ class AssetManagerPanel(Panel):
             return
         filter_id = str(args[0])
         self._active_filter = filter_id
-        self._dirty_model("active_filter", "assets", "asset_count", "tags", "collections")
+        self._dirty_model(
+            "active_filter", "assets", "asset_count", "tags", "collections"
+        )
 
     def set_tab(self, _handle, _ev, args):
         """Set the active info tab."""
         if not args:
             return
-        tab_id = str(args[0])
+        self._set_active_tab(str(args[0]))
+
+    def _set_active_tab(self, tab_id: str) -> None:
+        if tab_id not in ("info", "parameters"):
+            return
+        if self._active_tab == tab_id:
+            return
         self._active_tab = tab_id
-        self._dirty_model("active_tab")
+        self._dirty_model("active_tab", "show_info_tab", "show_parameters_tab")
 
     def set_view_mode(self, _handle, _ev, args):
         """Set the view mode (gallery or list)."""
@@ -1976,34 +2385,75 @@ class AssetManagerPanel(Panel):
 
     def toggle_asset_selection(self, _handle, _ev, args):
         """Toggle selection state of an asset."""
-        if not args:
-            return
-        asset_id = str(args[0])
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
 
         # Handle Ctrl/Cmd multi-select via args[1] if provided
         multi_select = len(args) > 1 and bool(args[1])
+        self._select_asset_id(
+            asset_id,
+            toggle=True,
+            multi_select=multi_select,
+        )
+
+    def _selection_visibility_fields(self):
+        return (
+            "selection_type",
+            "show_selection_none",
+            "show_selection_asset",
+            "show_selection_run",
+            "show_selection_scene",
+            "show_selection_project",
+            "show_selection_multiple",
+            "show_info_tab",
+            "show_parameters_tab",
+            "has_selection",
+            "has_multi_selection",
+            "has_loadable_selection",
+        )
+
+    def _select_asset_id(
+        self,
+        asset_id: str,
+        *,
+        toggle: bool = False,
+        multi_select: bool = False,
+    ) -> bool:
+        if not asset_id:
+            self._log_warn(
+                "Asset Manager click ignored: no asset id resolved from event/DOM"
+            )
+            return False
+
+        asset = None
+        if self._asset_index and hasattr(self._asset_index, "assets"):
+            asset = self._asset_index.assets.get(asset_id)
+        if asset is None:
+            available = []
+            if self._asset_index and hasattr(self._asset_index, "assets"):
+                available = list(self._asset_index.assets.keys())[:10]
+            self._log_warn(
+                "Asset Manager click resolved asset_id=%s but asset is missing "
+                "from index. sample_ids=%s",
+                asset_id,
+                available,
+            )
+            return False
+
+        self._selected_run_id = None
 
         if multi_select:
             if asset_id in self._selected_asset_ids:
                 self._selected_asset_ids.remove(asset_id)
             else:
                 self._selected_asset_ids.add(asset_id)
+        elif toggle and self._selected_asset_ids == {asset_id}:
+            self._selected_asset_ids.clear()
         else:
-            if self._selected_asset_ids == {asset_id}:
-                self._selected_asset_ids.clear()
-            else:
-                self._selected_asset_ids = {asset_id}
+            self._selected_asset_ids = {asset_id}
 
         self._update_selection_type()
-        self._dirty_model(
-            "assets",
-            "selected_count",
-            "selected_total_size",
-            "selection_type",
-            "selected_asset_name",
-            "selected_asset_type",
-            "selected_asset_role",
-        )
+        self.refresh_catalog()
+        return True
 
     def _update_selection_type(self):
         """Update selection type based on current selection."""
@@ -2102,35 +2552,30 @@ class AssetManagerPanel(Panel):
                 _logger.warning(f"Invalid dataset structure: {folder_path}")
                 return
 
-            # Create or select project/scene
-            project_id = self._ensure_import_project("Imported Datasets")
-            scene_id = self._selected_scene_id
-
-            if not scene_id:
-                # Create scene for dataset
-                scene = self._asset_index.create_scene(
-                    project_id=project_id, name=Path(folder_path).name
-                )
-                scene_id = scene.id
-                self._selected_scene_id = scene_id
-
-            asset = self._scan_and_register_asset(
+            context = ensure_dataset_catalog_context(
                 folder_path,
-                project_id=project_id,
-                scene_id=scene_id,
-                fallback_role="source_dataset",
-                override_type="dataset",
-                override_role="source_dataset",
+                asset_index=self._asset_index,
+                scanner=self._asset_scanner,
+                thumbnails=self._asset_thumbnails,
             )
+            project_id = context.get("project_id")
+            scene_id = context.get("scene_id")
+            asset_id = context.get("asset_id")
+            asset = self._asset_index.get_asset(asset_id) if asset_id else None
 
             # Link dataset to scene
             if asset:
-                self._asset_index.update_scene(scene_id, dataset_asset_id=asset.id)
+                # Auto-select the newly imported dataset to show its info
+                self._selected_asset_ids = {asset.id}
+                self._selected_project_id = project_id
+                self._selected_scene_id = scene_id
+                self._update_selection_type()
             self._import_menu_open = False
 
             # Refresh UI
             self.refresh_catalog()
             self._dirty_model("import_menu_open")
+            self._update_selection_details()
 
             if asset:
                 _logger.info(f"Imported dataset: {asset.name}")
@@ -2226,28 +2671,31 @@ class AssetManagerPanel(Panel):
             except Exception as e:
                 _logger.error(f"Failed to load asset {asset_id}: {e}")
 
+    def _delete_asset_from_catalog(self, asset_id: str) -> bool:
+        if not self._asset_index:
+            return False
+        if hasattr(self._asset_index, "delete_asset"):
+            return bool(self._asset_index.delete_asset(asset_id))
+        if hasattr(self._asset_index, "remove_asset"):
+            return bool(self._asset_index.remove_asset(asset_id))
+        return False
+
     def on_remove_from_catalog(self, _handle, _ev, args):
         """Remove selected assets from catalog (not from disk)."""
         if not self._selected_asset_ids:
             return
 
-        if not self._asset_index:
-            return
-
         removed_count = 0
         for asset_id in list(self._selected_asset_ids):
             try:
-                self._asset_index.remove_asset(asset_id)
-                removed_count += 1
+                if self._delete_asset_from_catalog(asset_id):
+                    removed_count += 1
             except Exception as e:
                 _logger.warning(f"Failed to remove asset {asset_id}: {e}")
 
         # Clear selection
         self._selected_asset_ids.clear()
         self._update_selection_type()
-
-        # Save catalog
-        self._asset_index.save()
 
         # Refresh UI
         self.refresh_catalog()
@@ -2279,10 +2727,12 @@ class AssetManagerPanel(Panel):
 
     def select_project(self, _handle, _ev, args):
         """Select a project to filter scenes and assets."""
-        if not args:
-            return
-        project_id = str(args[0])
+        project_id = self._resolve_event_value(args, _ev, "data-project-id")
+        self._select_project_id(project_id)
 
+    def _select_project_id(self, project_id: str) -> bool:
+        if not project_id:
+            return False
         self._selected_project_id = project_id if project_id != "all" else None
         self._selected_scene_id = None  # Clear scene selection when project changes
         self._selected_run_id = None
@@ -2306,14 +2756,18 @@ class AssetManagerPanel(Panel):
             "selected_project_created",
             "selected_project_modified",
             "selected_project_scenes",
+            *self._selection_visibility_fields(),
         )
+        return True
 
     def select_scene(self, _handle, _ev, args):
         """Select a scene to filter assets."""
-        if not args:
-            return
-        scene_id = str(args[0])
+        scene_id = self._resolve_event_value(args, _ev, "data-scene-id")
+        self._select_scene_id(scene_id)
 
+    def _select_scene_id(self, scene_id: str) -> bool:
+        if not scene_id:
+            return False
         self._selected_scene_id = scene_id if scene_id != "all" else None
         self._selected_run_id = None
         self._selected_asset_ids.clear()
@@ -2332,7 +2786,45 @@ class AssetManagerPanel(Panel):
             "selected_scene_created",
             "selected_scene_modified",
             "selected_scene_assets",
+            *self._selection_visibility_fields(),
         )
+        return True
+
+    def select_run(self, _handle, _ev, args):
+        """Select a training run to inspect its parameters and artifacts."""
+        run_id = self._resolve_event_value(args, _ev, "data-run-id")
+        self._select_run_id(run_id)
+
+    def _select_run_id(self, run_id: str) -> bool:
+        if not run_id or not self._asset_index or not hasattr(self._asset_index, "runs"):
+            return False
+        run = self._asset_index.runs.get(run_id)
+        if not run:
+            return False
+
+        self._selected_run_id = run_id
+        self._selected_project_id = run.get("project_id")
+        self._selected_scene_id = run.get("scene_id")
+        self._selected_asset_ids.clear()
+        self._selection_type = "run"
+
+        self._dirty_model(
+            "selected_run_id",
+            "selected_run_name",
+            "selected_run_status",
+            "selected_run_started",
+            "selected_run_completed",
+            "selected_run_duration",
+            "selected_run_parameters",
+            "selected_run_artifacts",
+            "assets",
+            "selected_count",
+            "selected_total_size",
+            "selected_count_text",
+            "selected_total_text",
+            *self._selection_visibility_fields(),
+        )
+        return True
 
     def toggle_import_menu(self, _handle, _ev, args):
         """Toggle the import dropdown menu."""
@@ -2406,36 +2898,13 @@ class AssetManagerPanel(Panel):
 
     def select_artifact(self, _handle, _ev, args):
         """Select an artifact from a run."""
-        if not args:
-            return
-        artifact_id = str(args[0])
-
-        # Select the artifact as an asset
-        self._selected_asset_ids = {artifact_id}
-        self._selection_type = "asset"
-        self._dirty_model(
-            "assets",
-            "selected_count",
-            "selected_total_size",
-            "selection_type",
-            "selected_asset_name",
-        )
+        artifact_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        self._select_asset_id(artifact_id)
 
     def select_asset_by_id(self, _handle, _ev, args):
         """Select an asset by ID."""
-        if not args:
-            return
-        asset_id = str(args[0])
-
-        self._selected_asset_ids = {asset_id}
-        self._selection_type = "asset"
-        self._dirty_model(
-            "assets",
-            "selected_count",
-            "selected_total_size",
-            "selection_type",
-            "selected_asset_name",
-        )
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        self._select_asset_id(asset_id)
 
     def on_export_selected(self, _handle, _ev, args):
         """Export selected assets."""
@@ -2447,25 +2916,25 @@ class AssetManagerPanel(Panel):
 
     def on_load_asset(self, _handle, _ev, args):
         """Load a specific asset by ID into the viewer."""
-        if not args:
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        if not asset_id:
             return
-        asset_id = str(args[0])
 
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
-            _logger.warning("Asset index not initialized")
+            self._log_warn("Asset index not initialized")
             return
 
         asset = self._asset_index.assets.get(asset_id)
         if not asset:
-            _logger.warning(f"Asset not found: {asset_id}")
+            self._log_warn("Asset not found: %s", asset_id)
             return
         if asset.get("type") not in self.LOADABLE_TYPES:
-            _logger.warning(f"Asset type is not loadable: {asset.get('type')}")
+            self._log_warn("Asset type is not loadable: %s", asset.get("type"))
             return
 
         file_path = asset.get("absolute_path") or asset.get("path")
         if not file_path or not os.path.exists(file_path):
-            _logger.warning(f"Asset file not found: {file_path}")
+            self._log_warn("Asset file not found: %s", file_path)
             return
 
         try:
@@ -2484,39 +2953,29 @@ class AssetManagerPanel(Panel):
             else:
                 # Regular mesh/splat file loading
                 lf.load_file(file_path)
-            _logger.info(f"Loaded asset: {asset.get('name', 'unknown')}")
+            self._log_info("Loaded asset: %s", asset.get("name", "unknown"))
 
             # Select the loaded asset
             self._selected_asset_ids = {asset_id}
             self._selection_type = "asset"
-            self._dirty_model(
-                "assets",
-                "selected_count",
-                "selected_total_size",
-                "selection_type",
-                "selected_asset_name",
-            )
+            self.refresh_catalog()
         except Exception as e:
-            _logger.error(f"Failed to load asset {asset_id}: {e}")
+            self._log_error("Failed to load asset %s: %s", asset_id, e)
 
     def on_remove_asset(self, _handle, _ev, args):
         """Remove a specific asset from the catalog by ID."""
-        if not args:
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        if not asset_id:
             return
-        asset_id = str(args[0])
 
         if not self._asset_index:
-            _logger.warning("Asset index not initialized")
+            self._log_warn("Asset index not initialized")
             return
 
         try:
             # Remove asset from catalog
-            if hasattr(self._asset_index, "delete_asset"):
-                self._asset_index.delete_asset(asset_id)
-            elif hasattr(self._asset_index, "remove_asset"):
-                self._asset_index.remove_asset(asset_id)
-            else:
-                _logger.warning("Asset index does not support asset deletion")
+            if not self._delete_asset_from_catalog(asset_id):
+                self._log_warn("Asset index does not support asset deletion")
                 return
 
             # Remove from selection if selected
@@ -2524,21 +2983,20 @@ class AssetManagerPanel(Panel):
                 self._selected_asset_ids.discard(asset_id)
                 self._update_selection_type()
 
-            # Save catalog
-            self._asset_index.save()
-
             # Refresh UI
             self.refresh_catalog()
 
-            _logger.info(f"Removed asset from catalog: {asset_id}")
+            self._log_info("Removed asset from catalog: %s", asset_id)
         except Exception as e:
-            _logger.error(f"Failed to remove asset {asset_id}: {e}")
+            self._log_error("Failed to remove asset %s: %s", asset_id, e)
 
     # ── Lifecycle ─────────────────────────────────────────────
 
     def on_mount(self, doc):
         super().on_mount(doc)
         self._doc = doc
+        set_active_asset_manager_panel(self)
+        self._bind_dom_event_listeners(doc)
 
         # Initialize backend
         backend_ok = self._initialize_backend()
@@ -2551,15 +3009,25 @@ class AssetManagerPanel(Panel):
         if self._asset_index and hasattr(self._asset_index, "load"):
             try:
                 self._asset_index.load()
-                if self._sync_existing_asset_metadata() and self._asset_index.library_path.exists():
+                if (
+                    self._sync_existing_asset_metadata()
+                    and self._asset_index.library_path.exists()
+                ):
                     self._library_mtime = self._asset_index.library_path.stat().st_mtime
                 if self._asset_index.library_path.exists():
                     self._library_mtime = self._asset_index.library_path.stat().st_mtime
             except Exception as e:
                 _logger.warning(f"Failed to load asset index: {e}")
 
-        # Initial refresh
-        self._update_all_record_lists()
+        # Sync the currently loaded runtime dataset into the catalog when possible.
+        self._sync_runtime_scene_catalog(select_current=True)
+
+        # Initial refresh must dirty scalar bindings after catalog load.
+        self.refresh_catalog()
+
+    def on_scene_changed(self, doc):
+        self._sync_runtime_scene_catalog(select_current=True)
+        self.refresh_catalog()
 
     def on_update(self, doc):
         """Periodic update - check for missing files."""
@@ -2580,7 +3048,9 @@ class AssetManagerPanel(Panel):
 
             if hasattr(self._asset_index, "mark_missing_files"):
                 previous_missing = sum(
-                    1 for asset in self._asset_index.assets.values() if not asset.get("exists", True)
+                    1
+                    for asset in self._asset_index.assets.values()
+                    if not asset.get("exists", True)
                 )
                 current_missing, _total = self._asset_index.mark_missing_files()
                 if current_missing != previous_missing:
@@ -2594,6 +3064,7 @@ class AssetManagerPanel(Panel):
 
     def on_unmount(self, doc):
         """Save index on unmount."""
+        clear_active_asset_manager_panel(self)
         if self._asset_index and hasattr(self._asset_index, "save"):
             try:
                 self._asset_index.save()
@@ -2603,6 +3074,92 @@ class AssetManagerPanel(Panel):
         doc.remove_data_model("asset_manager")
         self._handle = None
         self._doc = None
+
+    def _bind_dom_event_listeners(self, doc) -> None:
+        """Bind stable DOM listeners for dynamic Asset Manager rows.
+
+        The generated asset/project/scene rows are replaced by data-for updates.
+        Binding once to a stable parent mirrors the working popup panels and
+        avoids relying on per-row data-event callbacks for card selection.
+        """
+        content = doc.get_element_by_id("asset-popup-content")
+        if content:
+            content.add_event_listener("click", self._on_asset_manager_click)
+
+    def _on_asset_manager_click(self, event) -> None:
+        container = event.current_target()
+        target = event.target()
+        if target is None:
+            return
+
+        tab_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-asset-tab", container
+        )
+        if tab_el is not None:
+            self._set_active_tab(tab_el.get_attribute("data-asset-tab", ""))
+            self._stop_event(event)
+            return
+
+        action_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-asset-action", container
+        )
+        if action_el is not None:
+            action = action_el.get_attribute("data-asset-action", "")
+            asset_id = action_el.get_attribute("data-asset-id", "")
+
+            if action == "load":
+                self.on_load_asset(None, event, [asset_id])
+            elif action == "remove":
+                self.on_remove_asset(None, event, [asset_id])
+            elif action in ("select", "artifact", "scene_asset"):
+                self._select_asset_id(
+                    asset_id,
+                    toggle=False,
+                    multi_select=self._event_multi_select(event),
+                )
+            self._stop_event(event)
+            return
+
+        run_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-run-id", container
+        )
+        if run_el is not None:
+            run_id = run_el.get_attribute("data-run-id", "")
+            if self._select_run_id(run_id):
+                self._stop_event(event)
+            return
+
+        project_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-project-id", container
+        )
+        if project_el is not None:
+            project_id = project_el.get_attribute("data-project-id", "")
+            if self._select_project_id(project_id):
+                self._stop_event(event)
+            return
+
+        scene_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-scene-id", container
+        )
+        if scene_el is not None:
+            scene_id = scene_el.get_attribute("data-scene-id", "")
+            if self._select_scene_id(scene_id):
+                self._stop_event(event)
+
+    def _event_multi_select(self, event) -> bool:
+        for key in ("ctrl_key", "meta_key", "command_key"):
+            try:
+                if event.get_bool_parameter(key, False):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _stop_event(self, event) -> None:
+        try:
+            event.stop_propagation()
+        except Exception:
+            pass
 
     # ── Integration Hooks (Stubs) ─────────────────────────────
 
@@ -2787,10 +3344,50 @@ class AssetManagerPanel(Panel):
                 "selected_total_size",
                 "selected_count_text",
                 "selected_total_text",
+                "has_selection",
+                "has_multi_selection",
+                "has_loadable_selection",
                 "selection_type",
+                "show_selection_none",
+                "show_selection_asset",
+                "show_selection_run",
+                "show_selection_scene",
+                "show_selection_project",
+                "show_selection_multiple",
+                "show_info_tab",
+                "show_parameters_tab",
                 "sort_label",
             ):
                 self._handle.dirty(field)
+            self._handle.dirty_all()
+
+    def _sync_runtime_scene_catalog(self, select_current: bool = False) -> None:
+        if not self._asset_index:
+            return
+        try:
+            params = lf.dataset_params()
+        except Exception:
+            params = None
+
+        if not params or not params.has_params() or not params.data_path:
+            return
+
+        try:
+            context = ensure_dataset_catalog_context(
+                params.data_path,
+                asset_index=self._asset_index,
+                scanner=self._asset_scanner,
+                thumbnails=self._asset_thumbnails,
+            )
+            backfill_scene_provenance(self._asset_index, context.get("scene_id"))
+            if select_current and context.get("asset_id"):
+                self._selected_asset_ids = {context["asset_id"]}
+                self._selected_project_id = context.get("project_id")
+                self._selected_scene_id = context.get("scene_id")
+                self._selected_run_id = None
+                self._update_selection_type()
+        except Exception as exc:
+            _logger.debug("Failed to sync runtime scene catalog: %s", exc)
 
     def _update_all_record_lists(self):
         """Update all record lists in the data model."""
@@ -2816,43 +3413,9 @@ class AssetManagerPanel(Panel):
             # Update selected run parameters and artifacts
             run = self._get_selected_run()
             if run:
-                params = run.get("parameters", {})
-                parameters_list = []
-                param_order = [
-                    ("iterations", "Iterations"),
-                    ("sh_degree", "SH Degree"),
-                    ("optimizer", "Optimizer"),
-                    ("opt_type", "Optimizer Type"),
-                    ("learning_rate", "Learning Rate"),
-                    ("lr", "Learning Rate"),
-                    ("batch_size", "Batch Size"),
-                    ("bs", "Batch Size"),
-                    ("resolution", "Resolution"),
-                    ("densify_from_iter", "Densify From"),
-                    ("densify_until_iter", "Densify Until"),
-                    ("densification_interval", "Densify Interval"),
-                    ("opacity_reset_interval", "Opacity Reset"),
-                    ("lambda_dssim", "DSSIM Weight"),
-                ]
-
-                added_params = set()
-                for key, label in param_order:
-                    if key in params and key not in added_params:
-                        value = params[key]
-                        if isinstance(value, float):
-                            value_str = f"{value:.6f}" if value < 0.001 else f"{value:.4f}"
-                        else:
-                            value_str = str(value)
-                        parameters_list.append({"name": label, "value": value_str})
-                        added_params.add(key)
-
-                for k, v in params.items():
-                    if k not in added_params:
-                        parameters_list.append(
-                            {"name": k.replace("_", " ").title(), "value": str(v)}
-                        )
-
-                self._handle.update_record_list("selected_run_parameters", parameters_list)
+                self._handle.update_record_list(
+                    "selected_run_parameters", self._format_run_parameters_for_ui(run)
+                )
 
                 artifact_ids = run.get("artifact_asset_ids", [])
                 artifacts_list = []
@@ -2867,7 +3430,9 @@ class AssetManagerPanel(Panel):
                                     "type": artifact.get("type", "").upper(),
                                 }
                             )
-                self._handle.update_record_list("selected_run_artifacts", artifacts_list)
+                self._handle.update_record_list(
+                    "selected_run_artifacts", artifacts_list
+                )
             else:
                 self._handle.update_record_list("selected_run_parameters", [])
                 self._handle.update_record_list("selected_run_artifacts", [])
@@ -2910,7 +3475,9 @@ class AssetManagerPanel(Panel):
                                     "asset_count": scene_asset_count,
                                 }
                             )
-                self._handle.update_record_list("selected_project_scenes", project_scenes)
+                self._handle.update_record_list(
+                    "selected_project_scenes", project_scenes
+                )
             else:
                 self._handle.update_record_list("selected_project_scenes", [])
 
@@ -2920,8 +3487,16 @@ class AssetManagerPanel(Panel):
                     "selected_asset_tags",
                     [{"value": tag} for tag in selected_asset.get("tags", [])],
                 )
+                self._handle.update_record_list(
+                    "selected_asset_runs",
+                    [
+                        self._format_run_for_ui(run)
+                        for run in self._runs_for_asset_context(selected_asset)
+                    ],
+                )
             else:
                 self._handle.update_record_list("selected_asset_tags", [])
+                self._handle.update_record_list("selected_asset_runs", [])
 
             if self._selection_type == "asset":
                 for field in (
@@ -2943,10 +3518,18 @@ class AssetManagerPanel(Panel):
                     "selected_asset_training_run_id",
                     "selected_asset_iterations",
                     "selected_asset_sh_degree",
+                    "selected_asset_gaussian_count",
+                    "selected_asset_image_count",
+                    "selected_asset_strategy",
+                    "selected_asset_steps_scaler",
                     "selected_asset_optimizer",
                     "selected_asset_learning_rate",
                     "selected_asset_batch_size",
                     "selected_asset_train_time",
+                    "selected_asset_has_training_provenance",
+                    "selected_asset_has_runs",
+                    "selected_asset_show_no_training",
+                    "selected_asset_has_geometry_metadata",
                     "selected_asset_has_dataset_metadata",
                     "selected_asset_dataset_image_count",
                     "selected_asset_dataset_image_root",
@@ -2966,6 +3549,7 @@ class AssetManagerPanel(Panel):
                     "pending_tag_name",
                 ):
                     self._handle.dirty(field)
+            self._handle.dirty_all()
         finally:
             self._updating_selection_details = False
 
@@ -3001,6 +3585,15 @@ class AssetManagerPanel(Panel):
             "selected_project_total_assets",
             "selected_project_scenes",
             "selected_asset_tags",
+            "selected_asset_runs",
+            "show_selection_none",
+            "show_selection_asset",
+            "show_selection_run",
+            "show_selection_scene",
+            "show_selection_project",
+            "show_selection_multiple",
+            "show_info_tab",
+            "show_parameters_tab",
         }
         needs_selection_update = any(f in selection_fields for f in fields)
 
@@ -3015,6 +3608,7 @@ class AssetManagerPanel(Panel):
                 "collections",
                 "assets",
                 "selected_asset_tags",
+                "selected_asset_runs",
             ):
                 list_map = {
                     "projects": self.get_project_list,
@@ -3027,6 +3621,12 @@ class AssetManagerPanel(Panel):
                         {"value": tag}
                         for tag in (self._get_selected_asset() or {}).get("tags", [])
                     ],
+                    "selected_asset_runs": lambda: [
+                        self._format_run_for_ui(run)
+                        for run in self._runs_for_asset_context(
+                            self._get_selected_asset()
+                        )
+                    ],
                 }
                 if field in list_map:
                     self._handle.update_record_list(field, list_map[field]())
@@ -3034,3 +3634,35 @@ class AssetManagerPanel(Panel):
         # Update selection-specific record lists if needed
         if needs_selection_update and not self._updating_selection_details:
             self._update_selection_details()
+
+    def _resolve_event_value(self, args, event, attr_name: str) -> str:
+        if args:
+            value = args[0]
+            if value not in (None, ""):
+                return str(value)
+
+        if event is None:
+            return ""
+
+        for getter_name in ("current_target", "target"):
+            getter = getattr(event, getter_name, None)
+            if getter is None:
+                continue
+            try:
+                element = getter()
+            except Exception:
+                element = None
+
+            while element is not None:
+                try:
+                    value = element.get_attribute(attr_name, "")
+                except Exception:
+                    value = ""
+                if value:
+                    return str(value)
+                try:
+                    element = element.parent()
+                except Exception:
+                    element = None
+
+        return ""

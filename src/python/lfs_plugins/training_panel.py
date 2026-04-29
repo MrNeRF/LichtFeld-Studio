@@ -16,8 +16,11 @@ from .ui.state import AppState
 
 # Asset Manager integration (optional)
 try:
-    from .asset_index import AssetIndex, TrainingRun
-    from .asset_manager_panel import AssetManagerPanel
+    from .asset_index import AssetIndex
+    from .asset_manager_integration import (
+        derive_project_scene_names,
+        ensure_dataset_catalog_context,
+    )
 
     ASSET_MANAGER_AVAILABLE = True
 except ImportError:
@@ -1974,19 +1977,37 @@ class TrainingPanel(Panel):
             return None, None, None
 
         dataset_path = d.data_path
-        # Use dataset folder name as project name
-        project_name = os.path.basename(os.path.normpath(dataset_path))
-        if not project_name:
-            project_name = "Untitled Project"
-
-        # Use parent directory + timestamp as scene name
-        parent_dir = os.path.basename(os.path.dirname(os.path.normpath(dataset_path)))
-        if parent_dir and parent_dir != ".":
-            scene_name = f"{parent_dir}_{project_name}"
-        else:
-            scene_name = project_name
+        project_name, scene_name = derive_project_scene_names(dataset_path)
 
         return project_name, scene_name, dataset_path
+
+    def _training_parameter_snapshot(
+        self, dataset_asset_id: Optional[str] = None
+    ) -> dict[str, Any]:
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return {}
+
+        snapshot: dict[str, Any] = {
+            "strategy": getattr(params, "strategy", ""),
+            "iterations": int(getattr(params, "iterations", 0)),
+            "max_gaussians": int(getattr(params, "max_cap", 0)),
+            "max_cap": int(getattr(params, "max_cap", 0)),
+            "sh_degree": int(getattr(params, "sh_degree", 0)),
+            "steps_scaler": float(getattr(params, "steps_scaler", 1.0)),
+        }
+
+        image_count = self._active_camera_count()
+        if image_count is None and dataset_asset_id and self._asset_index is not None:
+            dataset_asset = self._asset_index.get_asset(dataset_asset_id)
+            if dataset_asset is not None:
+                image_count = int(
+                    (dataset_asset.dataset_metadata or {}).get("image_count", 0)
+                )
+        if image_count:
+            snapshot["image_count"] = int(image_count)
+
+        return snapshot
 
     def _register_training_start(self):
         """Register training start with Asset Manager.
@@ -2002,59 +2023,37 @@ class TrainingPanel(Panel):
             if project_name is None:
                 return
 
-            # Find or create project
-            project = None
-            for p in self._asset_index.list_projects():
-                if p.name == project_name:
-                    project = p
-                    break
+            dataset_context = ensure_dataset_catalog_context(
+                dataset_path,
+                asset_index=self._asset_index,
+            )
+            dataset_asset_id = dataset_context.get("asset_id")
+            project = self._asset_index.get_project(dataset_context.get("project_id", ""))
+            scene = self._asset_index.get_scene(dataset_context.get("scene_id", ""))
 
             if project is None:
                 project = self._asset_index.create_project(
-                    name=project_name, description=f"Auto-created from training panel"
+                    name=project_name,
+                    description="Auto-created from training panel",
                 )
-
-            # Find or create scene
-            scene = None
-            for s in self._asset_index.list_scenes(project_id=project.id):
-                if s.name == scene_name:
-                    scene = s
-                    break
-
-            if scene is None:
+            if scene is None and project is not None:
                 scene = self._asset_index.create_scene(
                     project_id=project.id,
                     name=scene_name,
                     description=f"Scene for dataset: {dataset_path}",
                 )
+            if project is None or scene is None:
+                return
 
-            # Create training run
-            params = lf.optimization_params()
-            param_snapshot = {}
-            if params and params.has_params():
-                # Capture key parameters
-                param_snapshot = {
-                    "strategy": params.strategy,
-                    "iterations": params.iterations,
-                    "max_cap": params.max_cap,
-                    "sh_degree": params.sh_degree,
-                    "means_lr": params.means_lr,
-                    "shs_lr": params.shs_lr,
-                    "opacity_lr": params.opacity_lr,
-                    "scaling_lr": params.scaling_lr,
-                    "rotation_lr": params.rotation_lr,
-                }
+            param_snapshot = self._training_parameter_snapshot(dataset_asset_id)
 
-            run_name = (
-                f"Run_{lf.get_iteration():06d}"
-                if lf.get_iteration() > 0
-                else "Run_000000"
-            )
+            run_name = f"{scene.name} run {len(scene.run_ids) + 1}"
 
             run = self._asset_index.create_run(
                 project_id=project.id,
                 scene_id=scene.id,
                 name=run_name,
+                source_dataset_id=dataset_asset_id,
                 parameters=param_snapshot,
             )
 
@@ -2095,6 +2094,13 @@ class TrainingPanel(Panel):
 
             # Create asset entry
             asset_name = os.path.basename(checkpoint_path)
+            training_metadata = self._training_parameter_snapshot(run.source_dataset_id)
+            training_metadata.update(
+                {
+                    "iteration": lf.trainer_current_iteration(),
+                    "num_gaussians": AppState.num_gaussians.value,
+                }
+            )
             asset = self._asset_index.create_asset(
                 project_id=run.project_id,
                 name=asset_name,
@@ -2105,6 +2111,7 @@ class TrainingPanel(Panel):
                 run_id=self._current_run_id,
                 role="training_checkpoint",
                 file_size_bytes=file_size,
+                training_metadata=training_metadata,
             )
 
             if asset:
@@ -2131,7 +2138,7 @@ class TrainingPanel(Panel):
         try:
             # Update run with final metrics and status
             final_metrics = metrics.copy()
-            final_metrics["final_iteration"] = lf.get_iteration()
+            final_metrics["final_iteration"] = lf.trainer_current_iteration()
             final_metrics["final_gaussians"] = AppState.num_gaussians.value
 
             self._asset_index.update_run(
@@ -2169,7 +2176,11 @@ class TrainingPanel(Panel):
             self._asset_index.update_run(
                 self._current_run_id,
                 status="failed",
-                metrics={"error": error_message, "final_iteration": lf.get_iteration()},
+                metrics={
+                    "error": error_message,
+                    "final_iteration": lf.trainer_current_iteration(),
+                    "final_gaussians": AppState.num_gaussians.value,
+                },
                 completed_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
             )
 
@@ -2201,7 +2212,8 @@ class TrainingPanel(Panel):
                 self._current_run_id,
                 status="cancelled",
                 metrics={
-                    "final_iteration": lf.get_iteration(),
+                    "final_iteration": lf.trainer_current_iteration(),
+                    "final_gaussians": AppState.num_gaussians.value,
                     "stopped_by_user": True,
                 },
                 completed_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -2232,7 +2244,7 @@ class TrainingPanel(Panel):
         if not output_path:
             return None
 
-        iteration = lf.get_iteration()
+        iteration = lf.trainer_current_iteration()
         # Checkpoint naming convention: model_iteration.pth or similar
         # This may need adjustment based on actual checkpoint naming in lichtfeld
         checkpoint_name = f"model_{iteration:06d}.pth"

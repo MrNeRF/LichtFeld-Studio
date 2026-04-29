@@ -13,10 +13,7 @@ from .types import Panel
 
 # Asset Manager integration (optional)
 try:
-    from .asset_index import AssetIndex, Asset
-    from .asset_scanner import AssetScanner
-    from .asset_thumbnails import AssetThumbnails
-    from .asset_manager_panel import get_asset_manager_panel
+    from .asset_manager_integration import register_catalog_asset_path
 
     ASSET_MANAGER_AVAILABLE = True
 except ImportError:
@@ -700,56 +697,13 @@ class ExportPanel(Panel):
             # Determine asset type from format
             asset_type = self._format_to_asset_type(fmt)
 
-            # Determine role - check if this was post-training by looking at scene state
-            role = "export"
-            try:
-                scene = lf.get_scene()
-                if scene and hasattr(scene, "was_trained") and scene.was_trained:
-                    role = "trained_output"
-            except Exception:
-                pass
-
-            # Get or create AssetIndex
-            asset_index = AssetIndex.get_instance()
-            if asset_index is None:
-                asset_index = AssetIndex()
-
-            # Check if asset already exists at this path
-            existing_asset = None
-            for asset in asset_index.assets.values():
-                if asset.path == path:
-                    existing_asset = asset
-                    break
-
-            if existing_asset:
-                # Update existing asset
-                existing_asset.type = asset_type
-                existing_asset.role = role
-                existing_asset.refresh_metadata()
-            else:
-                # Create new asset entry
-                asset = Asset(
-                    path=path,
-                    asset_type=asset_type,
-                    role=role,
-                )
-                asset_index.add_asset(asset)
-
-            # Generate placeholder thumbnail (async)
-            try:
-                thumbnails = AssetThumbnails.get_instance()
-                if thumbnails:
-                    thumbnails.generate_placeholder(path, asset_type)
-            except Exception:
-                pass  # Thumbnail generation is optional
-
-            # Refresh Asset Manager UI if open
-            try:
-                panel = get_asset_manager_panel()
-                if panel:
-                    panel.refresh_catalog()
-            except Exception:
-                pass  # UI refresh is optional
+            role = "trained_output" if lf.trainer_current_iteration() > 0 else "export"
+            register_catalog_asset_path(
+                path,
+                asset_type=asset_type,
+                role=role,
+                select=True,
+            )
 
         except Exception:
             # Asset Manager integration is non-intrusive

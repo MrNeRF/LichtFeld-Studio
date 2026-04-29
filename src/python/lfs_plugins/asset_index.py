@@ -524,7 +524,12 @@ class AssetIndex:
         self._scenes[scene.id] = scene
         self._projects[project_id].scene_ids.append(scene.id)
         self._projects[project_id].modified_at = datetime.now().isoformat()
-        self.save()
+        if not self.save():
+            _log.error("Failed to save library during scene creation for %s", scene.id)
+            # Clean up in-memory state
+            del self._scenes[scene.id]
+            self._projects[project_id].scene_ids.remove(scene.id)
+            return None
         return scene
 
     def update_scene(self, scene_id: str, **kwargs) -> Optional[Scene]:
@@ -545,7 +550,9 @@ class AssetIndex:
             if hasattr(scene, key):
                 setattr(scene, key, value)
         scene.modified_at = datetime.now().isoformat()
-        self.save()
+        if not self.save():
+            _log.error("Failed to save library during scene update for %s", scene_id)
+            return None
         return scene
 
     def delete_scene(self, scene_id: str) -> bool:
@@ -827,19 +834,26 @@ class AssetIndex:
             The created Asset instance or None if project not found
         """
         if project_id is not None and project_id not in self._projects:
+            _log.error("Cannot create asset: project_id %s not found", project_id)
             return None
         if scene_id is not None and scene_id not in self._scenes:
+            _log.error("Cannot create asset: scene_id %s not found", scene_id)
             return None
         if run_id is not None and run_id not in self._runs:
+            _log.error("Cannot create asset: run_id %s not found", run_id)
             return None
 
         normalized_abs_path = os.path.abspath(absolute_path or path)
         existing_asset = self.find_asset_by_path(normalized_abs_path)
         if existing_asset is not None:
-            merged_tags = list(dict.fromkeys((existing_asset.tags or []) + (tags or [])))
+            merged_tags = list(
+                dict.fromkeys((existing_asset.tags or []) + (tags or []))
+            )
             updated = self.update_asset(
                 existing_asset.id,
-                project_id=project_id if project_id is not None else existing_asset.project_id,
+                project_id=project_id
+                if project_id is not None
+                else existing_asset.project_id,
                 scene_id=scene_id if scene_id is not None else existing_asset.scene_id,
                 run_id=run_id if run_id is not None else existing_asset.run_id,
                 name=name or existing_asset.name,
@@ -848,15 +862,29 @@ class AssetIndex:
                 path=path,
                 absolute_path=normalized_abs_path,
                 file_size_bytes=file_size_bytes or existing_asset.file_size_bytes,
-                thumbnail_path=thumbnail_path if thumbnail_path is not None else existing_asset.thumbnail_path,
-                preview_path=preview_path if preview_path is not None else existing_asset.preview_path,
-                geometry_metadata=geometry_metadata if geometry_metadata is not None else existing_asset.geometry_metadata,
-                training_metadata=training_metadata if training_metadata is not None else existing_asset.training_metadata,
-                dataset_metadata=dataset_metadata if dataset_metadata is not None else existing_asset.dataset_metadata,
-                video_metadata=video_metadata if video_metadata is not None else existing_asset.video_metadata,
+                thumbnail_path=thumbnail_path
+                if thumbnail_path is not None
+                else existing_asset.thumbnail_path,
+                preview_path=preview_path
+                if preview_path is not None
+                else existing_asset.preview_path,
+                geometry_metadata=geometry_metadata
+                if geometry_metadata is not None
+                else existing_asset.geometry_metadata,
+                training_metadata=training_metadata
+                if training_metadata is not None
+                else existing_asset.training_metadata,
+                dataset_metadata=dataset_metadata
+                if dataset_metadata is not None
+                else existing_asset.dataset_metadata,
+                video_metadata=video_metadata
+                if video_metadata is not None
+                else existing_asset.video_metadata,
                 tags=merged_tags,
                 created_at=created_at or existing_asset.created_at,
-                exists=os.path.exists(normalized_abs_path) if exists is None else exists,
+                exists=os.path.exists(normalized_abs_path)
+                if exists is None
+                else exists,
             )
             if updated and run_id and run_id in self._runs:
                 run = self._runs[run_id]
@@ -897,7 +925,15 @@ class AssetIndex:
                 self._runs[run_id].artifact_asset_ids.append(asset.id)
 
         self.rebuild_tag_index(save=False)
-        self.save()
+        if not self.save():
+            _log.error("Failed to save library during asset creation for %s", asset.id)
+            # Clean up in-memory state to maintain consistency with disk
+            del self._assets[asset.id]
+            if asset.run_id and asset.run_id in self._runs:
+                run = self._runs[asset.run_id]
+                if asset.id in run.artifact_asset_ids:
+                    run.artifact_asset_ids.remove(asset.id)
+            return None
         return asset
 
     def update_asset(self, asset_id: str, **kwargs) -> Optional[Asset]:
@@ -920,7 +956,9 @@ class AssetIndex:
                 setattr(asset, key, value)
         asset.modified_at = explicit_modified_at or datetime.now().isoformat()
         self.rebuild_tag_index(save=False)
-        self.save()
+        if not self.save():
+            _log.error("Failed to save library during asset update for %s", asset_id)
+            return None
         return asset
 
     def delete_asset(self, asset_id: str) -> bool:
@@ -936,6 +974,9 @@ class AssetIndex:
             return False
 
         asset = self._assets[asset_id]
+        asset_scene_id = asset.scene_id
+        asset_project_id = asset.project_id
+        is_dataset = asset.type == "dataset" or asset.role == "source_dataset"
 
         # Remove from run's artifact list
         if asset.run_id and asset.run_id in self._runs:
@@ -944,14 +985,53 @@ class AssetIndex:
                 run.artifact_asset_ids.remove(asset_id)
                 run.modified_at = datetime.now().isoformat()
 
+        for run in self._runs.values():
+            touched = False
+            if run.source_dataset_id == asset_id:
+                run.source_dataset_id = None
+                touched = True
+            if run.parent_checkpoint_id == asset_id:
+                run.parent_checkpoint_id = None
+                touched = True
+            if touched:
+                run.modified_at = datetime.now().isoformat()
+
         for scene in self._scenes.values():
             if scene.dataset_asset_id == asset_id:
                 scene.dataset_asset_id = None
                 scene.modified_at = datetime.now().isoformat()
 
         del self._assets[asset_id]
+
+        if is_dataset and asset_scene_id in self._scenes:
+            scene_has_assets = any(
+                a.scene_id == asset_scene_id for a in self._assets.values()
+            )
+            scene_has_runs = any(r.scene_id == asset_scene_id for r in self._runs.values())
+            scene = self._scenes[asset_scene_id]
+            if (
+                not scene_has_assets
+                and not scene_has_runs
+                and scene.dataset_asset_id is None
+            ):
+                project = self._projects.get(scene.project_id)
+                if project and asset_scene_id in project.scene_ids:
+                    project.scene_ids.remove(asset_scene_id)
+                    project.modified_at = datetime.now().isoformat()
+                del self._scenes[asset_scene_id]
+
+        if asset_project_id in self._projects:
+            project_has_scenes = bool(self._projects[asset_project_id].scene_ids)
+            project_has_assets = any(
+                a.project_id == asset_project_id for a in self._assets.values()
+            )
+            if not project_has_scenes and not project_has_assets:
+                del self._projects[asset_project_id]
+
         self.rebuild_tag_index(save=False)
-        self.save()
+        if not self.save():
+            _log.error("Failed to save library during asset deletion for %s", asset_id)
+            return False
         return True
 
     def remove_asset(self, asset_id: str) -> bool:
@@ -1039,8 +1119,13 @@ class AssetIndex:
         if normalized in asset.tags:
             asset.tags.remove(normalized)
             asset.modified_at = datetime.now().isoformat()
-            self.rebuild_tag_index(save=False)
-            self.save()
+        self.rebuild_tag_index(save=False)
+        if not self.save():
+            _log.error("Failed to save library during tag removal for %s", asset.id)
+            # Restore the tag on failure to maintain consistency
+            if normalized not in asset.tags:
+                asset.tags.append(normalized)
+            return None
         return asset
 
     def list_assets(
