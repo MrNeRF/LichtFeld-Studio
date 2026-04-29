@@ -35,6 +35,14 @@ except ImportError:
     AssetScanner = None
     AssetThumbnails = None
 
+def tr(key):
+    result = lf.ui.tr(key)
+    if result == key:
+        # Strip prefix for fallback
+        if key.startswith("asset_manager."):
+            return key.split(".")[-1].replace("_", " ").title()
+    return result
+
 __lfs_panel_classes__ = ["AssetManagerPanel"]
 __lfs_panel_ids__ = ["lfs.asset_manager"]
 
@@ -328,6 +336,104 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_project_created", self.get_selected_project_created)
         model.bind_func("selected_project_modified", self.get_selected_project_modified)
 
+        # UI Labels (for i18n)
+        model.bind_func("search_icon_label", lambda: tr("asset_manager.toolbar.search_icon"))
+        model.bind_func("search_placeholder", lambda: tr("asset_manager.toolbar.search_placeholder"))
+        model.bind_func("gallery_label", lambda: tr("asset_manager.toolbar.view_gallery"))
+        model.bind_func("list_label", lambda: tr("asset_manager.toolbar.view_list"))
+        model.bind_func("import_label", lambda: tr("asset_manager.toolbar.import"))
+        model.bind_func("import_asset_label", lambda: tr("asset_manager.import_menu.import_asset"))
+        model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
+        model.bind_func("import_checkpoint_label", lambda: tr("asset_manager.import_menu.import_checkpoint"))
+        model.bind_func("summary_assets_label", lambda: tr("asset_manager.summary.assets"))
+        model.bind_func("summary_projects_label", lambda: tr("asset_manager.summary.projects"))
+        model.bind_func("summary_scenes_label", lambda: tr("asset_manager.summary.scenes"))
+        model.bind_func("summary_selected_label", lambda: tr("asset_manager.summary.selected"))
+        model.bind_func("projects_title", lambda: tr("asset_manager.sidebar.projects"))
+        model.bind_func("scenes_title", lambda: tr("asset_manager.sidebar.scenes"))
+        model.bind_func("filters_title", lambda: tr("asset_manager.sidebar.filters"))
+        model.bind_func("filter_hint", lambda: tr("asset_manager.sidebar.filter_hint"))
+        model.bind_func("gallery_title", lambda: tr("asset_manager.toolbar.view_gallery"))
+        model.bind_func("list_title", lambda: tr("asset_manager.toolbar.view_list"))
+        model.bind_func("rename_project_label", lambda: tr("asset_manager.action.rename_project"))
+        model.bind_func("delete_project_label", lambda: tr("asset_manager.action.delete_project"))
+        model.bind_func("load_button_label", lambda: tr("asset_manager.action.load"))
+        model.bind_func("rename_label", lambda: tr("asset_manager.action.rename"))
+        model.bind_func("move_to_project_label", lambda: tr("asset_manager.action.move_to_project"))
+        model.bind_func("new_project_label", lambda: tr("asset_manager.action.new_project"))
+        model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
+        model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
+        model.bind_func("col_name_label", lambda: tr("asset_manager.property.name"))
+        model.bind_func("col_type_label", lambda: tr("asset_manager.property.type"))
+        model.bind_func("col_role_label", lambda: tr("asset_manager.property.role"))
+        model.bind_func("col_project_label", lambda: tr("asset_manager.property.project"))
+        model.bind_func("col_scene_label", lambda: tr("asset_manager.property.scene"))
+        model.bind_func("col_run_label", lambda: tr("asset_manager.property.run"))
+        model.bind_func("col_size_label", lambda: tr("asset_manager.property.size"))
+        model.bind_func("col_modified_label", lambda: tr("asset_manager.property.modified"))
+        model.bind_func("col_status_label", lambda: tr("asset_manager.property.status"))
+        model.bind_func("info_tab_label", lambda: tr("asset_manager.info_panel.info"))
+        model.bind_func("parameters_tab_label", lambda: tr("asset_manager.info_panel.parameters"))
+        model.bind_func("select_item_hint", lambda: tr("asset_manager.status.select_item"))
+        model.bind_func("asset_details_title", lambda: tr("asset_manager.info_panel.asset_details"))
+        model.bind_func("prop_project_label", lambda: tr("asset_manager.property.project"))
+        model.bind_func("prop_scene_label", lambda: tr("asset_manager.property.scene"))
+        model.bind_func("prop_run_label", lambda: tr("asset_manager.property.run"))
+        model.bind_func("prop_points_label", lambda: tr("asset_manager.property.points"))
+        model.bind_func("prop_sh_degree_label", lambda: tr("asset_manager.property.sh_degree"))
+        model.bind_func("prop_size_label", lambda: tr("asset_manager.property.size"))
+        model.bind_func("prop_path_label", lambda: tr("asset_manager.property.path"))
+        model.bind_func("prop_created_label", lambda: tr("asset_manager.property.created"))
+        model.bind_func("prop_modified_label", lambda: tr("asset_manager.property.modified"))
+        model.bind_func("prop_resolution_label", lambda: tr("asset_manager.property.resolution"))
+        model.bind_func("prop_duration_label", lambda: tr("asset_manager.property.duration"))
+        model.bind_func("dataset_details_title", lambda: tr("asset_manager.info_panel.dataset_details"))
+        model.bind_func("prop_images_label", lambda: tr("asset_manager.property.images"))
+        model.bind_func("prop_image_root_label", lambda: tr("asset_manager.property.image_root"))
+        model.bind_func("prop_masks_label", lambda: tr("asset_manager.property.masks"))
+        model.bind_func("prop_sparse_model_label", lambda: tr("asset_manager.property.sparse_model"))
+        model.bind_func("prop_cameras_label", lambda: tr("asset_manager.property.cameras"))
+        model.bind_func("prop_initial_points_label", lambda: tr("asset_manager.property.initial_points"))
+        model.bind_func("tags_title", lambda: tr("asset_manager.sidebar.tags"))
+        model.bind_func("remove_tag_label", lambda: tr("asset_manager.action.remove"))
+        model.bind_func("add_tag_placeholder", lambda: tr("asset_manager.action.add_tag"))
+        model.bind_func("add_tag_button_label", lambda: tr("asset_manager.action.add_tag"))
+        model.bind_func("geometry_metadata_title", lambda: tr("asset_manager.info_panel.geometry_metadata"))
+        model.bind_func("prop_bounding_box_label", lambda: tr("asset_manager.geometry.bounding_box"))
+        model.bind_func("prop_center_label", lambda: tr("asset_manager.geometry.center"))
+        model.bind_func("prop_scale_label", lambda: tr("asset_manager.geometry.scale"))
+        model.bind_func("transform_info_title", lambda: tr("asset_manager.info_panel.transform_information"))
+        model.bind_func("prop_translation_label", lambda: tr("asset_manager.property.translation"))
+        model.bind_func("prop_rotation_label", lambda: tr("asset_manager.property.rotation"))
+        model.bind_func("prop_scaling_label", lambda: tr("asset_manager.property.scaling"))
+        model.bind_func("file_not_found_title", lambda: tr("asset_manager.info_panel.file_not_found"))
+        model.bind_func("prop_expected_path_label", lambda: tr("asset_manager.property.expected_path"))
+        model.bind_func("locate_file_button_label", lambda: tr("asset_manager.action.locate_file"))
+        model.bind_func("training_runs_title", lambda: tr("asset_manager.info_panel.training_runs"))
+        model.bind_func("training_summary_title", lambda: tr("asset_manager.info_panel.training_summary"))
+        model.bind_func("prop_gaussians_label", lambda: tr("asset_manager.property.gaussians"))
+        model.bind_func("prop_strategy_label", lambda: tr("asset_manager.property.strategy"))
+        model.bind_func("prop_steps_scaler_label", lambda: tr("asset_manager.property.steps_scaler"))
+        model.bind_func("prop_iterations_label", lambda: tr("asset_manager.training.iterations"))
+        model.bind_func("no_training_provenance_msg", lambda: tr("asset_manager.info_panel.no_training_provenance"))
+        model.bind_func("run_pill_label", lambda: tr("asset_manager.type.run"))
+        model.bind_func("run_details_title", lambda: tr("asset_manager.info_panel.run_details"))
+        model.bind_func("prop_status_label", lambda: tr("asset_manager.property.status"))
+        model.bind_func("prop_started_label", lambda: tr("asset_manager.property.started"))
+        model.bind_func("prop_completed_label", lambda: tr("asset_manager.property.completed"))
+        model.bind_func("prop_duration_label", lambda: tr("asset_manager.property.duration"))
+        model.bind_func("artifacts_title", lambda: tr("asset_manager.info_panel.artifacts"))
+        model.bind_func("scene_pill_label", lambda: tr("asset_manager.type.scene"))
+        model.bind_func("scene_details_title", lambda: tr("asset_manager.info_panel.scene_details"))
+        model.bind_func("prop_assets_label", lambda: tr("asset_manager.property.assets"))
+        model.bind_func("scene_assets_title", lambda: tr("asset_manager.info_panel.scenes"))
+        model.bind_func("project_pill_label", lambda: tr("asset_manager.type.project"))
+        model.bind_func("project_details_title", lambda: tr("asset_manager.info_panel.project_details"))
+        model.bind_func("prop_scenes_label", lambda: tr("asset_manager.property.scenes"))
+        model.bind_func("prop_total_assets_label", lambda: tr("asset_manager.summary.total"))
+        model.bind_func("scenes_list_title", lambda: tr("asset_manager.sidebar.scenes"))
+        model.bind_func("multi_select_hint", lambda: tr("asset_manager.hint.multi_select"))
+
         # Record lists for data-for loops (main lists)
         model.bind_record_list("projects")
         model.bind_record_list("scenes")
@@ -449,12 +555,12 @@ class AssetManagerPanel(Panel):
 
     def get_sort_label(self) -> str:
         labels = {
-            "recent": "Sort by: Recent",
-            "name": "Sort by: Name",
-            "size": "Sort by: File Size",
-            "type": "Sort by: Type",
+            "recent": tr("asset_manager.toolbar.sort_by_recent"),
+            "name": tr("asset_manager.toolbar.sort_by_name"),
+            "size": tr("asset_manager.toolbar.sort_by_size"),
+            "type": tr("asset_manager.toolbar.sort_by_type"),
         }
-        return labels.get(self._sort_mode, "Sort by: Recent")
+        return labels.get(self._sort_mode, tr("asset_manager.toolbar.sort_by_recent"))
 
     def get_active_filters(self) -> Set[str]:
         return self._active_filters
@@ -493,12 +599,12 @@ class AssetManagerPanel(Panel):
 
     def _format_size(self, file_size_bytes: int) -> str:
         if file_size_bytes >= 1024**3:
-            return f"{file_size_bytes / (1024**3):.2f} GB"
+            return f"{file_size_bytes / (1024**3):.2f} {tr('asset_manager.unit.gb')}"
         if file_size_bytes >= 1024**2:
-            return f"{file_size_bytes / (1024**2):.1f} MB"
+            return f"{file_size_bytes / (1024**2):.1f} {tr('asset_manager.unit.mb')}"
         if file_size_bytes >= 1024:
-            return f"{file_size_bytes / 1024:.1f} KB"
-        return f"{file_size_bytes} B"
+            return f"{file_size_bytes / 1024:.1f} {tr('asset_manager.unit.kb')}"
+        return f"{file_size_bytes} {tr('asset_manager.unit.b')}"
 
     def _ellipsize_path(self, path: str, max_chars: int = 56) -> str:
         if not path or len(path) <= max_chars:
@@ -594,17 +700,18 @@ class AssetManagerPanel(Panel):
             return
 
         # Check if Default project exists
+        default_project_name = tr("asset_manager.default_project_name")
         has_default = any(
-            proj.get("name") == "Default"
+            proj.get("name") == default_project_name
             for proj in self._asset_index.projects.values()
         )
 
         if not has_default:
             try:
-                self._asset_index.create_project(name="Default")
-                self._log_info("Created Default project")
+                self._asset_index.create_project(name=default_project_name)
+                self._log_info(tr("asset_manager.msg.created_default"))
             except Exception as e:
-                self._log_error("Failed to create Default project: %s", e)
+                self._log_error(tr("asset_manager.msg.failed_create_default"), e)
 
     def _get_asset_relationship_names(self, asset: Dict[str, Any]):
         project_name = ""
@@ -642,7 +749,7 @@ class AssetManagerPanel(Panel):
             except Exception:
                 pass
 
-        return "Unnamed"
+        return tr("asset_manager.unnamed")
 
     def _get_asset_display_fields(
         self,
@@ -837,18 +944,18 @@ class AssetManagerPanel(Panel):
 
         # Format type label for display
         type_labels = {
-            "ply_3dgs": "SPLAT",
-            "ply_pcl": "PCL",
-            "ply": "SPLAT",  # Legacy PLY type
-            "rad": "RAD",
-            "sog": "SOG",
-            "spz": "SPZ",
-            "checkpoint": "CKPT",
-            "dataset": "DATASET",
-            "mesh": "MESH",
-            "usd": "USD",
-            "mp4": "VIDEO",
-            "mov": "VIDEO",
+            "ply_3dgs": tr("asset_manager.type.splat"),
+            "ply_pcl": tr("asset_manager.type.pcl"),
+            "ply": tr("asset_manager.type.splat"),  # Legacy PLY type
+            "rad": tr("asset_manager.type.rad"),
+            "sog": tr("asset_manager.type.sog"),
+            "spz": tr("asset_manager.type.spz"),
+            "checkpoint": tr("asset_manager.type.checkpoint"),
+            "dataset": tr("asset_manager.type.dataset"),
+            "mesh": tr("asset_manager.type.mesh"),
+            "usd": tr("asset_manager.type.usd"),
+            "mp4": tr("asset_manager.type.video"),
+            "mov": tr("asset_manager.type.video"),
         }
         type_label = type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 
@@ -869,12 +976,12 @@ class AssetManagerPanel(Panel):
             # Record-list rows only support scalar fields in the current RML bridge.
             "tags_label": ", ".join(asset.get("tags", [])) if asset.get("tags") else "",
             "thumb_class": thumb_class,
-            "thumb_label": asset_type.upper() if asset_type else "ASSET",
+            "thumb_label": asset_type.upper() if asset_type else tr("asset_manager.type.asset"),
             "pill_class": f"asset-pill-{asset_type}" if asset_type else "",
             "is_favorite": asset.get("is_favorite", False),
             "is_selected": asset_id in self._selected_asset_ids,
             "exists": asset.get("exists", True),
-            "status_label": "Missing" if not asset.get("exists", True) else "Available",
+            "status_label": tr("asset_manager.status.missing") if not asset.get("exists", True) else tr("asset_manager.status.available"),
             "can_load": asset_type in self.LOADABLE_TYPES and asset.get("exists", True),
             "project_id": asset.get("project_id"),
             "scene_id": asset.get("scene_id"),
@@ -903,7 +1010,7 @@ class AssetManagerPanel(Panel):
             projects.append(
                 {
                     "id": project_id,
-                    "name": project.get("name", "Unnamed Project"),
+                    "name": project.get("name", tr("asset_manager.unnamed_project")),
                     "description": project.get("description", ""),
                     "scene_count": asset_count,  # Now shows asset count instead of scene count
                     "is_selected": project_id == self._selected_project_id,
@@ -932,7 +1039,7 @@ class AssetManagerPanel(Panel):
             scenes.append(
                 {
                     "id": scene_id,
-                    "name": scene.get("name", "Unnamed Scene"),
+                    "name": scene.get("name", tr("asset_manager.unnamed_scene")),
                     "description": scene.get("description", ""),
                     "run_count": run_count,
                     "asset_count": asset_count,
@@ -994,10 +1101,10 @@ class AssetManagerPanel(Panel):
     def _get_default_filters(self) -> List[Dict[str, Any]]:
         """Return default filter list when backend unavailable."""
         return [
-            {"id": "splat", "label": "Splat", "count": 0, "is_selected": False},
-            {"id": "pcl", "label": "PCL", "count": 0, "is_selected": False},
-            {"id": "dataset", "label": "Dataset", "count": 0, "is_selected": False},
-            {"id": "checkpoint", "label": "Checkpoint", "count": 0, "is_selected": False},
+            {"id": "splat", "label": tr("asset_manager.filter.splat"), "count": 0, "is_selected": False},
+            {"id": "pcl", "label": tr("asset_manager.filter.pcl"), "count": 0, "is_selected": False},
+            {"id": "dataset", "label": tr("asset_manager.filter.dataset"), "count": 0, "is_selected": False},
+            {"id": "checkpoint", "label": tr("asset_manager.filter.checkpoint"), "count": 0, "is_selected": False},
         ]
 
     def get_tag_list(self) -> List[Dict[str, Any]]:
@@ -1028,7 +1135,7 @@ class AssetManagerPanel(Panel):
             collections.append(
                 {
                     "id": f"collection:{coll_id}",
-                    "label": coll_data.get("name", "Unnamed"),
+                    "label": coll_data.get("name", tr("asset_manager.unnamed")),
                     "count": len(coll_data.get("asset_ids", [])),
                     "is_selected": f"collection:{coll_id}" in self._active_filters,
                 }
@@ -1079,7 +1186,7 @@ class AssetManagerPanel(Panel):
             "file_missing": False,
             "expected_path": "",
             "preview_class": "asset-thumb-default",
-            "preview_label": "Preview",
+            "preview_label": tr("asset_manager.preview"),
             "pill_class": "",
             "type_label": "",
         }
@@ -1212,18 +1319,18 @@ class AssetManagerPanel(Panel):
 
         # Format type for display in info panel
         type_display_names = {
-            "ply_3dgs": "Gaussian Splat",
-            "ply_pcl": "Point Cloud",
-            "ply": "Gaussian Splat",  # Legacy PLY type
-            "rad": "RAD",
-            "sog": "SOG",
-            "spz": "SPZ",
-            "checkpoint": "Checkpoint",
-            "dataset": "Dataset",
-            "mesh": "Mesh",
-            "usd": "USD",
-            "mp4": "Video",
-            "mov": "Video",
+            "ply_3dgs": tr("asset_manager.type.gaussian_splat"),
+            "ply_pcl": tr("asset_manager.type.point_cloud"),
+            "ply": tr("asset_manager.type.gaussian_splat"),  # Legacy PLY type
+            "rad": tr("asset_manager.type.rad"),
+            "sog": tr("asset_manager.type.sog"),
+            "spz": tr("asset_manager.type.spz"),
+            "checkpoint": tr("asset_manager.type.checkpoint"),
+            "dataset": tr("asset_manager.type.dataset"),
+            "mesh": tr("asset_manager.type.mesh"),
+            "usd": tr("asset_manager.type.usd"),
+            "mp4": tr("asset_manager.type.video"),
+            "mov": tr("asset_manager.type.video"),
         }
         type_display = type_display_names.get(asset_type, asset_type.upper() if asset_type else "")
 
@@ -1253,7 +1360,7 @@ class AssetManagerPanel(Panel):
             "file_missing": file_missing,
             "expected_path": file_path if file_missing else "",
             "preview_class": preview_class,
-            "preview_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else "Asset"),
+            "preview_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else tr("asset_manager.type.asset")),
             "pill_class": f"asset-pill-{asset_type.replace('_', '-')}" if asset_type else "",
             "type_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else ""),
         }
@@ -1322,7 +1429,7 @@ class AssetManagerPanel(Panel):
 
         return {
             "id": run.get("id", ""),
-            "name": run.get("name", "Unnamed Run"),
+            "name": run.get("name", tr("asset_manager.unnamed_run")),
             "status": run.get("status", "").capitalize(),
             "started": started_str,
             "completed": completed_str,
@@ -1392,7 +1499,7 @@ class AssetManagerPanel(Panel):
 
         return {
             "id": scene_id,
-            "name": scene.get("name", "Unnamed Scene"),
+            "name": scene.get("name", tr("asset_manager.unnamed_scene")),
             "project_name": project_name,
             "asset_count": asset_count,
             "created": created_str,
@@ -1454,7 +1561,7 @@ class AssetManagerPanel(Panel):
                         project_scenes.append(
                             {
                                 "id": scene_id,
-                                "name": scene.get("name", "Unnamed Scene"),
+                                "name": scene.get("name", tr("asset_manager.unnamed_scene")),
                                 "asset_count": scene_asset_count,
                             }
                         )
@@ -1470,7 +1577,7 @@ class AssetManagerPanel(Panel):
 
         return {
             "id": project_id,
-            "name": project.get("name", "Unnamed Project"),
+            "name": project.get("name", tr("asset_manager.unnamed_project")),
             "scene_count": scene_count,
             "total_assets": total_assets,
             "path": project_path,
@@ -3461,7 +3568,7 @@ class AssetManagerPanel(Panel):
             if proj_id != current_project_id:
                 projects.append({
                     "id": proj_id,
-                    "name": proj.get("name", "Unnamed Project"),
+                    "name": proj.get("name", tr("asset_manager.unnamed_project")),
                 })
 
         # Sort by name
@@ -4496,13 +4603,13 @@ class AssetManagerPanel(Panel):
                                 for asset in self._asset_index.assets.values():
                                     if asset.get("scene_id") == scene_id:
                                         scene_asset_count += 1
-                            project_scenes.append(
-                                {
-                                    "id": scene_id,
-                                    "name": scene_data.get("name", "Unnamed Scene"),
-                                    "asset_count": scene_asset_count,
-                                }
-                            )
+                        project_scenes.append(
+                            {
+                                "id": scene_id,
+                                "name": scene.get("name", tr("asset_manager.unnamed_scene")),
+                                "asset_count": scene_asset_count,
+                            }
+                        )
                 self._handle.update_record_list(
                     "selected_project_scenes", project_scenes
                 )

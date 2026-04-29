@@ -978,7 +978,7 @@
 }
 
 
-0.asset-info-button-primary {
+.asset-info-button-primary {
     background-color: #3a5f4a;
     border-color: #4a7a5a;
     color: #d8f0e3;
