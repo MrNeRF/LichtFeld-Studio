@@ -230,7 +230,7 @@ namespace lfs::training {
             auto& cam = cameras_[camera_idx];
 
             // Load image using the new LibTorch-free Camera
-            lfs::core::Tensor image = cam->load_and_get_image(config_.resize_factor, config_.max_width);
+            lfs::core::Tensor image = cam->load_and_get_image(config_.resize_factor, config_.max_width, true);
 
             return {
                 {cam.get(), std::move(image)},
@@ -620,6 +620,7 @@ namespace lfs::training {
                 request.path = cam->image_path();
                 request.params.resize_factor = dataset_->get_resize_factor();
                 request.params.max_width = dataset_->get_max_width();
+                request.params.output_uint8 = true;
                 if (cam->is_undistort_prepared()) {
                     request.undistort = &cam->undistort_params();
                     request.params.undistort = request.undistort;

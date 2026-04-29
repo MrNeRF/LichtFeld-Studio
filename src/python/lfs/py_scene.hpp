@@ -250,7 +250,7 @@ namespace lfs::python {
                 return false;
             return node_->camera->has_mask();
         }
-        std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 3840,
+        std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 0,
                                           bool invert = false, float threshold = 0.5f) {
             if (!node_->camera || !node_->camera->has_mask())
                 return std::nullopt;

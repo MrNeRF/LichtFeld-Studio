@@ -131,10 +131,12 @@ namespace lfs::training {
         [[nodiscard]] lfs::io::LoadParams make_metrics_load_params(
             const Trainer::GTLoadConfigSnapshot& gt_config,
             const lfs::core::Camera& camera,
-            const bool apply_undistort) {
+            const bool apply_undistort,
+            const bool output_uint8 = false) {
             lfs::io::LoadParams params;
             params.resize_factor = gt_config.resize_factor;
             params.max_width = gt_config.max_width;
+            params.output_uint8 = output_uint8;
             if (apply_undistort && camera.is_undistort_prepared()) {
                 params.undistort = &camera.undistort_params();
             }
@@ -170,7 +172,7 @@ namespace lfs::training {
             try {
                 auto mask = image_loader.load_image_immediate(
                     camera.mask_path(),
-                    make_metrics_load_params(gt_config, camera, false));
+                    make_metrics_load_params(gt_config, camera, false, false));
                 mask = normalize_mask_tensor(std::move(mask));
                 if (!mask.is_valid()) {
                     return std::unexpected("failed to decode mask");
@@ -194,7 +196,7 @@ namespace lfs::training {
                     mask = lfs::core::undistort_mask(mask, scaled, nullptr);
                 }
 
-                return mask;
+                return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
             } catch (const std::exception& e) {
                 return std::unexpected(e.what());
             }
@@ -226,13 +228,13 @@ namespace lfs::training {
 
                 auto rgb = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({3, H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
                 auto mask = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-                lfs::io::cuda::launch_uint8_rgba_split_to_float32_rgb_and_alpha(
-                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<float>(), mask.ptr<float>(), H, W, nullptr);
+                lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
+                    gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(), H, W, nullptr);
 
                 if (opt_params.invert_masks) {
                     lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
@@ -246,10 +248,22 @@ namespace lfs::training {
                         camera.undistort_params(),
                         static_cast<int>(W),
                         static_cast<int>(H));
-                    rgb = lfs::core::undistort_image(rgb, scaled, nullptr);
+                    auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
+                    rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
+                    auto rgb_uint8 = lfs::core::Tensor::empty(
+                        rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                        rgb_float.ptr<float>(),
+                        rgb_uint8.ptr<uint8_t>(),
+                        rgb_float.shape()[1],
+                        rgb_float.shape()[2],
+                        rgb_float.shape()[0],
+                        nullptr);
+                    rgb = std::move(rgb_uint8);
                     mask = lfs::core::undistort_mask(mask, scaled, nullptr);
                 }
 
+                mask = mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
                 return LoadedCameraMetricsInputs{.gt_image = std::move(rgb), .mask = std::move(mask)};
             } catch (const std::exception& e) {
                 return std::unexpected(e.what());
@@ -282,7 +296,7 @@ namespace lfs::training {
             try {
                 inputs.gt_image = loader->load_image_immediate(
                     camera.image_path(),
-                    make_metrics_load_params(gt_config, camera, true));
+                    make_metrics_load_params(gt_config, camera, true, true));
             } catch (const std::exception& e) {
                 return std::unexpected(e.what());
             }
@@ -541,7 +555,7 @@ namespace lfs::training {
                 if (width > 0 && height > 0) {
                     estimate.max_image_bytes = std::max(
                         estimate.max_image_bytes,
-                        width * height * size_t{3} * sizeof(float));
+                        width * height * size_t{3} * sizeof(uint8_t));
                 }
 
                 estimate.masks_possible = estimate.masks_possible || cam->has_mask() || cam->has_alpha();
@@ -1175,11 +1189,15 @@ namespace lfs::training {
         const lfs::core::Tensor& raw_rendered) {
 
         using namespace lfs::core;
-        constexpr float EPSILON = 1e-8f;
         constexpr float ALPHA_CONSISTENCY_WEIGHT = 10.0f;
 
         const auto mode = opt_params.mask_mode;
         const Tensor mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
+        const auto mask_as_float = [&]() -> Tensor {
+            return (mask_2d.dtype() == DataType::UInt8 || mask_2d.dtype() == DataType::Bool)
+                       ? mask_2d.to(DataType::Float32)
+                       : mask_2d;
+        };
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
         const bool use_decoupled_appearance_loss =
@@ -1205,33 +1223,23 @@ namespace lfs::training {
                 if (grad_raw.ndim() == 4 && corrected.ndim() == 3) {
                     grad_raw = grad_raw.squeeze(0);
                 }
-            } else if (opt_params.lambda_dssim > 0.0f) {
-                // Use FUSED masked L1+SSIM kernel
+            } else {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
                     corrected, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
 
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
                 loss = loss_tensor;
 
-                // Squeeze gradient to match input dimensions (loss is scalar, no adjustment needed)
                 if (grad_corrected.ndim() == 4 && corrected.ndim() == 3) {
                     grad_corrected = grad_corrected.squeeze(0);
                 }
-            } else {
-                // Pure L1 with mask (no SSIM)
-                const Tensor mask_3d = mask_2d.unsqueeze(0);
-                const Tensor mask_sum = mask_2d.sum() * static_cast<float>(corrected.shape()[0]) + EPSILON;
-                const Tensor diff = corrected - gt_image;
-                const Tensor masked_l1 = (diff.abs() * mask_3d).sum() / mask_sum;
-                const Tensor sign_diff = diff.sign();
-                grad_corrected = sign_diff * mask_3d / mask_sum;
-                loss = masked_l1;
             }
 
             // Segment: opacity penalty for background
             if (mode == param::MaskMode::Segment && alpha.is_valid()) {
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor bg_mask = Tensor::full(mask_2d.shape(), 1.0f, mask_2d.device()) - mask_2d;
+                const Tensor mask_f = mask_as_float();
+                const Tensor bg_mask = Tensor::full(mask_f.shape(), 1.0f, mask_f.device()) - mask_f;
                 const Tensor penalty_weights = bg_mask.pow(opt_params.mask_opacity_penalty_power);
                 const Tensor penalty = (alpha_2d * penalty_weights).mean() * opt_params.mask_opacity_penalty_weight;
 
@@ -1253,9 +1261,10 @@ namespace lfs::training {
             // Alpha should match mask
             if (alpha.is_valid()) {
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor alpha_loss = (alpha_2d - mask_2d).abs().mean() * ALPHA_CONSISTENCY_WEIGHT;
+                const Tensor mask_f = mask_as_float();
+                const Tensor alpha_loss = (alpha_2d - mask_f).abs().mean() * ALPHA_CONSISTENCY_WEIGHT;
                 loss = loss + alpha_loss;
-                grad_alpha = (alpha_2d - mask_2d).sign() * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
+                grad_alpha = (alpha_2d - mask_f).sign() * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
             }
         } else {
             auto fallback = compute_photometric_loss_with_gradient(corrected, gt_image, opt_params, raw_rendered);
@@ -2577,6 +2586,8 @@ namespace lfs::training {
             }
             auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;
+            r_output.camera = cam;
+            r_output.target_image = gt_image;
             int tiles_processed = 0;
             const bool in_sparsification = get_active_sparsify_steps() > 0 &&
                                            iter > get_sparsity_boundary_iteration();
@@ -2783,6 +2794,8 @@ namespace lfs::training {
                 }
 
                 r_output = output; // Save last tile for densification
+                r_output.camera = cam;
+                r_output.target_image = gt_image;
                 nvtxRangePop();
 
                 bool tile_context_cleaned = false;
@@ -3019,7 +3032,10 @@ namespace lfs::training {
                                 pred_chw, gt_chw, densification_ssim_workspace_, densification_error_map_);
                             tile_error_map = densification_error_map_;
                         } else {
-                            const lfs::core::Tensor abs_diff = (corrected_image - gt_tile).abs();
+                            const auto gt_for_error = gt_tile.dtype() == lfs::core::DataType::UInt8
+                                                          ? gt_tile.to(lfs::core::DataType::Float32) / 255.0f
+                                                          : gt_tile;
+                            const lfs::core::Tensor abs_diff = (corrected_image - gt_for_error).abs();
                             if (abs_diff.ndim() == 3 && abs_diff.shape()[0] == 3) {
                                 tile_error_map = abs_diff.mean({0}, false);
                             } else if (abs_diff.ndim() == 3 && abs_diff.shape()[2] == 3) {
@@ -3033,7 +3049,12 @@ namespace lfs::training {
                         if (use_mask &&
                             (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
                              params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
-                            tile_error_map.mul_(mask_tile);
+                            const auto mask_for_error =
+                                (mask_tile.dtype() == lfs::core::DataType::UInt8 ||
+                                 mask_tile.dtype() == lfs::core::DataType::Bool)
+                                    ? mask_tile.to(lfs::core::DataType::Float32)
+                                    : mask_tile;
+                            tile_error_map.mul_(mask_for_error);
                         }
                     }
 
@@ -3417,8 +3438,9 @@ namespace lfs::training {
                             // Image size isn't correct until the image has been loaded once
                             // If we use the camera before it's loaded, it will render images at the non-scaled size
                             if ((cam_to_use->camera_height() == cam_to_use->image_height() && params_.dataset.resize_factor != 1) ||
-                                cam_to_use->image_height() > params_.dataset.max_width ||
-                                cam_to_use->image_width() > params_.dataset.max_width) {
+                                (params_.dataset.max_width > 0 &&
+                                 (cam_to_use->image_height() > params_.dataset.max_width ||
+                                  cam_to_use->image_width() > params_.dataset.max_width))) {
                                 cam_to_use->load_image_size(params_.dataset.resize_factor, params_.dataset.max_width);
                             }
 

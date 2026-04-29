@@ -16,6 +16,7 @@ namespace lfs::core {
         int resize_factor = 1;
         int max_width = 0;
         void* stream = nullptr;
+        bool output_uint8 = false;
     };
 
     using ImageLoadFunc = std::function<Tensor(const ImageLoadParams&)>;

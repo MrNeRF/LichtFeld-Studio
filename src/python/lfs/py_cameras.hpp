@@ -58,8 +58,8 @@ namespace lfs::python {
         PyTensor cam_position() const;
 
         // Load image/mask
-        PyTensor load_image(int resize_factor = 1, int max_width = 3840);
-        PyTensor load_mask(int resize_factor = 1, int max_width = 3840,
+        PyTensor load_image(int resize_factor = 1, int max_width = 0, bool output_uint8 = false);
+        PyTensor load_mask(int resize_factor = 1, int max_width = 0,
                            bool invert = false, float threshold = 0.5f);
 
         // Access underlying camera

@@ -79,6 +79,10 @@ namespace lfs::training {
         void ensure_densification_info_shape();
         void enforce_max_cap();
         void refresh_decay_schedule_from_current_state();
+        void accumulate_edge_sample(int iter, const RenderOutput& render_output);
+        [[nodiscard]] bool should_accumulate_edge_sample(int iter) const;
+        [[nodiscard]] int edge_target_samples_per_refine_window() const;
+        void reset_edge_accumulator();
         size_t active_count() const;
         size_t free_count() const;
         [[nodiscard]] lfs::core::Tensor get_active_indices() const;
@@ -106,6 +110,10 @@ namespace lfs::training {
         lfs::core::Tensor _vis_count;
         lfs::core::Tensor _precomputed_edge_scores;
         bool _edge_precompute_valid = false;
+        lfs::core::Tensor _edge_score_sum;
+        lfs::core::Tensor _edge_canny_nms_output;
+        int _edge_sample_count = 0;
+        int _edge_last_sample_iter = -1;
         lfs::core::Tensor _free_mask;
 
         mrnf_strategy::MRNFBounds _bounds = {};

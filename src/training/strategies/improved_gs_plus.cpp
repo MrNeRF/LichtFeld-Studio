@@ -18,7 +18,9 @@
 #include "kernels/mcmc_kernels.hpp"
 #include "optimizer/adam_optimizer.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numeric>
 #include <random>
 
@@ -55,44 +57,40 @@ namespace lfs::training {
         }
 
         struct CannyWorkspace {
-            lfs::core::Tensor grayscale;
-            lfs::core::Tensor blurred;
-            lfs::core::Tensor magnitude;
-            lfs::core::Tensor angle;
             lfs::core::Tensor nms_output;
         };
 
         CannyWorkspace create_canny_workspace(int height, int width) {
-            const size_t hw = static_cast<size_t>(height) * static_cast<size_t>(width);
             const auto dev = lfs::core::Device::CUDA;
             const auto dt = lfs::core::DataType::Float32;
             return {
-                lfs::core::Tensor::zeros({hw}, dev, dt),
-                lfs::core::Tensor::zeros({hw}, dev, dt),
-                lfs::core::Tensor::zeros({hw}, dev, dt),
-                lfs::core::Tensor::zeros({hw}, dev, dt),
                 lfs::core::Tensor::zeros({static_cast<size_t>(height), static_cast<size_t>(width)}, dev, dt)};
         }
 
         void apply_canny_filter(const lfs::core::Tensor& input_data, CannyWorkspace& ws) {
-            assert(input_data.dtype() == lfs::core::DataType::Float32);
+            assert(input_data.dtype() == lfs::core::DataType::Float32 ||
+                   input_data.dtype() == lfs::core::DataType::UInt8);
             assert(input_data.device() == lfs::core::Device::CUDA);
             assert(input_data.ndim() == 3);
+            assert(input_data.shape()[0] >= 3);
 
             const int width = input_data.shape()[2];
             const int height = input_data.shape()[1];
 
-            ws.grayscale.zero_();
-            ws.blurred.zero_();
-            ws.magnitude.zero_();
-            ws.angle.zero_();
-            ws.nms_output.zero_();
-
             auto input_contig = input_data.contiguous();
-            kernels::launch_grayscale_filter(input_contig.ptr<float>(), ws.grayscale.ptr<float>(), height, width);
-            kernels::launch_gausssian_blur(ws.grayscale.ptr<float>(), ws.blurred.ptr<float>(), 3, height, width);
-            kernels::launch_sobel_gradient_filter(ws.blurred.ptr<float>(), ws.magnitude.ptr<float>(), ws.angle.ptr<float>(), height, width);
-            kernels::launch_nms_kernel(ws.magnitude.ptr<float>(), ws.angle.ptr<float>(), ws.nms_output.ptr<float>(), height, width);
+            if (input_contig.dtype() == lfs::core::DataType::UInt8) {
+                kernels::launch_fused_canny_edge_filter_chw(
+                    input_contig.ptr<uint8_t>(),
+                    ws.nms_output.ptr<float>(),
+                    height,
+                    width);
+            } else {
+                kernels::launch_fused_canny_edge_filter_chw(
+                    input_contig.ptr<float>(),
+                    ws.nms_output.ptr<float>(),
+                    height,
+                    width);
+            }
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
@@ -103,8 +101,15 @@ namespace lfs::training {
                 return;
             }
             auto [sorted, _] = valid.sort();
-            float median = sorted[valid.numel() / 2].item_as<float>();
-            tensor.div_(std::max(median, 1e-9f));
+            if (tensor.device() == lfs::core::Device::CUDA) {
+                kernels::launch_normalize_by_device_scalar(
+                    tensor.ptr<float>(),
+                    tensor.numel(),
+                    sorted.ptr<float>() + valid.numel() / 2);
+            } else {
+                float median = sorted[valid.numel() / 2].item_as<float>();
+                tensor.div_(std::max(median, 1e-9f));
+            }
         }
 
         lfs::core::Tensor normalized_by_positive_median(const lfs::core::Tensor& tensor) {
@@ -280,6 +285,7 @@ namespace lfs::training {
             lfs::io::LoadParams params;
             params.resize_factor = _views->get_resize_factor();
             params.max_width = _views->get_max_width();
+            params.output_uint8 = true;
             if (cam->is_undistort_prepared()) {
                 params.undistort = &cam->undistort_params();
             }

@@ -231,7 +231,7 @@ namespace lfs::core {
             int test_every = 8;
             std::vector<std::string> timelapse_images = {};
             int timelapse_every = 50;
-            int max_width = 3840;
+            int max_width = 0;
             LoadingParams loading_params;
 
             // Mask loading parameters (copied from optimization params)

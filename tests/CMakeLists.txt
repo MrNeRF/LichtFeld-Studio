@@ -204,6 +204,7 @@ set(TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
+    test_argument_parser.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_app_utils.cpp
@@ -225,6 +226,7 @@ set(TEST_FILES
     test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
+    test_image_kernels.cpp
     test_add_new_gs_tensor_ops.cpp
     test_cpu_dtype_conversions.cpp
     test_cpu_large_tensor_bugs.cpp

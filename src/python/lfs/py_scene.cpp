@@ -1110,7 +1110,7 @@ namespace lfs::python {
             .def_prop_ro("has_camera", &PySceneNode::has_camera, "Whether this node has camera data")
             .def_prop_ro("has_mask", &PySceneNode::has_mask, "Whether this camera node has a mask file")
             .def("load_mask", &PySceneNode::load_mask,
-                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 3840,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
                  nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
                  "Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)")
             .def_prop_ro("camera_R", &PySceneNode::camera_R, "Camera rotation matrix [3, 3]")

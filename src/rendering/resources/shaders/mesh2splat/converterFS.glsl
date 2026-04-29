@@ -50,30 +50,6 @@ flat in vec4 Quaternion;
 
 const float PI = 3.14159265359;
 
-float distribution_ggx(vec3 N, vec3 H, float roughness) {
-    float a = roughness * roughness;
-    float a2 = a * a;
-    float NdotH = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH * NdotH;
-    float denom = NdotH2 * (a2 - 1.0) + 1.0;
-    return a2 / (PI * denom * denom);
-}
-
-float geometry_schlick_ggx(float NdotV, float roughness) {
-    float r = roughness + 1.0;
-    float k = (r * r) / 8.0;
-    return NdotV / (NdotV * (1.0 - k) + k);
-}
-
-float geometry_smith(vec3 N, vec3 V, vec3 L, float roughness) {
-    float NdotV = max(dot(N, V), 0.0);
-    float NdotL = max(dot(N, L), 0.0);
-    return geometry_schlick_ggx(NdotV, roughness) * geometry_schlick_ggx(NdotL, roughness);
-}
-
-vec3 fresnel_schlick(float cos_theta, vec3 F0) {
-    return F0 + (1.0 - F0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
-}
 
 void main() {
     uint index = atomicCounterIncrement(g_validCounter);
@@ -107,34 +83,8 @@ void main() {
     roughness = max(roughness, 0.04);
 
     vec3 albedo = (out_Color * u_materialFactor).rgb;
-    vec3 N = out_Normal;
 
-    vec3 V = u_lightDir;
-    vec3 L = u_lightDir;
-
-    if (dot(N, L) < 0.0)
-        N = -N;
-
-    vec3 H = normalize(V + L);
-
-    float NdotL = max(dot(N, L), 0.0);
-
-    vec3 F0 = mix(vec3(0.04), albedo, metallic);
-    float NDF = distribution_ggx(N, H, roughness);
-    float G = geometry_smith(N, V, L, roughness);
-    vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
-
-    vec3 kS = F;
-    vec3 kD = (1.0 - kS) * (1.0 - metallic);
-
-    vec3 diffuse = kD * albedo / PI;
-    vec3 spec = (NDF * G * F) / (4.0 * max(dot(N, V), 0.0) * NdotL + 0.0001);
-
-    vec3 Lo = (diffuse + spec) * NdotL * u_lightIntensity;
-    vec3 ambient_color = albedo * u_ambient * ao;
-    vec3 color = ambient_color + Lo;
-
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+    vec3 color = pow(clamp(albedo, 0.0, 1.0), vec3(1.0 / 2.2));
 
     gaussianBuffer.vertices[index].position = vec4(Position.xyz, 1);
     gaussianBuffer.vertices[index].color = vec4(color, out_Color.a);

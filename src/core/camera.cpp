@@ -257,12 +257,13 @@ namespace lfs::core {
         return {_focal_x * x_scale, _focal_y * y_scale, _center_x * x_scale, _center_y * y_scale};
     }
 
-    Tensor Camera::load_and_get_image(int resize_factor, int max_width) {
+    Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8) {
         const ImageLoadParams params{
             .path = _image_path,
             .resize_factor = resize_factor,
             .max_width = max_width,
-            .stream = _stream};
+            .stream = _stream,
+            .output_uint8 = output_uint8};
 
         auto image = load_image_cached(params);
 
@@ -349,13 +350,13 @@ namespace lfs::core {
             }
         }
 
-        size_t num_bytes = w * h * c * sizeof(float);
+        size_t num_bytes = w * h * c * sizeof(uint8_t);
         return num_bytes;
     }
 
     size_t Camera::get_num_bytes_from_file() const {
         auto [w, h, c] = get_image_info(_image_path);
-        size_t num_bytes = w * h * c * sizeof(float);
+        size_t num_bytes = w * h * c * sizeof(uint8_t);
         return num_bytes;
     }
 
@@ -398,11 +399,9 @@ namespace lfs::core {
             mask = Tensor::full(mask.shape(), 1.0f, mask.device()) - mask;
         }
 
-        // Threshold: values >= threshold become 1.0
+        // Threshold before undistort; final binarization happens after geometric resampling.
         if (mask_threshold > 0.0f && mask_threshold < 1.0f) {
-            const auto ones = Tensor::full(mask.shape(), 1.0f, mask.device());
-            const auto threshold_mask = mask.ge(mask_threshold);
-            mask = ones.where(threshold_mask, mask);
+            mask = mask.ge(mask_threshold).to(DataType::Float32);
         }
 
         if (_undistort_prepared) {
@@ -413,6 +412,7 @@ namespace lfs::core {
             mask = undistort_mask(mask, scaled, _stream);
         }
 
+        mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
         _cached_mask = mask;
         _mask_loaded = true;
 

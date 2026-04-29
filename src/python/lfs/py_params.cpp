@@ -403,7 +403,7 @@ namespace lfs::python {
             [](const DatasetConfig& c) { return c.test_every; });
 
         add_int(
-            "max_width", "Max Width", 3840, 640, 4096, "Maximum image width", false,
+            "max_width", "Max Width", 0, 0, 65535, "Maximum image width; 0 disables the cap", false,
             [](const DatasetConfig& c) { return c.max_width; },
             [](DatasetConfig& c, int v) { c.max_width = v; });
 
@@ -1366,11 +1366,11 @@ namespace lfs::python {
                 [](PyDatasetConfig& self, int v) {
                     if (!self.can_edit())
                         throw std::runtime_error("Cannot edit dataset params during training");
-                    if (v <= 0 || v > 4096)
-                        throw std::invalid_argument("max_width must be between 1 and 4096");
+                    if (v < 0)
+                        throw std::invalid_argument("max_width must be non-negative; 0 disables the cap");
                     self.params().max_width = v;
                 },
-                "Maximum image width in pixels")
+                "Maximum image width in pixels; 0 disables the cap")
             .def_prop_rw(
                 "use_cpu_cache",
                 [](const PyDatasetConfig& self) { return self.params().loading_params.use_cpu_memory; },

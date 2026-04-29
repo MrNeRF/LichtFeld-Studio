@@ -13,14 +13,17 @@
 namespace lfs::rendering {
 
     namespace {
-        Texture create_gl_texture(const lfs::core::TextureImage& img) {
+        Texture create_gl_texture(const lfs::core::TextureImage& img, bool is_srgb = false) {
             assert(!img.pixels.empty());
             assert(img.width > 0 && img.height > 0);
 
             GLuint tex;
             glGenTextures(1, &tex);
             glBindTexture(GL_TEXTURE_2D, tex);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.width, img.height, 0,
+
+            GLint internal_format = is_srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+
+            glTexImage2D(GL_TEXTURE_2D, 0, internal_format, img.width, img.height, 0,
                          GL_RGBA, GL_UNSIGNED_BYTE, img.pixels.data());
             glGenerateMipmap(GL_TEXTURE_2D);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
@@ -298,13 +301,13 @@ namespace lfs::rendering {
             GLMaterialTextures gl_tex;
 
             if (mat.albedo_tex > 0 && mat.albedo_tex <= mesh.texture_images.size()) {
-                gl_tex.albedo = create_gl_texture(mesh.texture_images[mat.albedo_tex - 1]);
+                gl_tex.albedo = create_gl_texture(mesh.texture_images[mat.albedo_tex - 1], true);
             }
             if (mat.normal_tex > 0 && mat.normal_tex <= mesh.texture_images.size()) {
-                gl_tex.normal = create_gl_texture(mesh.texture_images[mat.normal_tex - 1]);
+                gl_tex.normal = create_gl_texture(mesh.texture_images[mat.normal_tex - 1], false);
             }
             if (mat.metallic_roughness_tex > 0 && mat.metallic_roughness_tex <= mesh.texture_images.size()) {
-                gl_tex.metallic_roughness = create_gl_texture(mesh.texture_images[mat.metallic_roughness_tex - 1]);
+                gl_tex.metallic_roughness = create_gl_texture(mesh.texture_images[mat.metallic_roughness_tex - 1], false);
             }
 
             if (gl_tex.albedo.get() || gl_tex.normal.get() || gl_tex.metallic_roughness.get()) {

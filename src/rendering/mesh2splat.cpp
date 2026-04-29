@@ -414,7 +414,7 @@ namespace lfs::rendering {
         // Texture upload
         // ========================================================================
 
-        GLuint upload_texture(const TextureImage& img) {
+        GLuint upload_texture(const TextureImage& img, bool is_srgb = false) {
             assert(img.width > 0 && img.height > 0);
             assert(!img.pixels.empty());
 
@@ -431,11 +431,11 @@ namespace lfs::rendering {
                 break;
             case 3:
                 format = GL_RGB;
-                internal_format = GL_RGB8;
+                internal_format = is_srgb ? GL_SRGB8 : GL_RGB8;
                 break;
             case 4:
                 format = GL_RGBA;
-                internal_format = GL_RGBA8;
+                internal_format = is_srgb ? GL_SRGB8_ALPHA8 : GL_RGBA8;
                 break;
             default: return 0;
             }
@@ -584,7 +584,7 @@ namespace lfs::rendering {
                 if (!img.pixels.empty()) {
                     LOG_DEBUG("mesh2splat: uploading albedo texture {}x{} ({} ch, {} bytes)",
                               img.width, img.height, img.channels, img.pixels.size());
-                    albedo_gl = upload_texture(img);
+                    albedo_gl = upload_texture(img, true);
                     if (albedo_gl)
                         cleanup.textures.push_back(albedo_gl);
                 }
@@ -812,9 +812,6 @@ namespace lfs::rendering {
             GLint loc_material = glGetUniformLocation(cleanup.program, "u_materialFactor");
             GLint loc_metallic = glGetUniformLocation(cleanup.program, "u_metallicFactor");
             GLint loc_roughness = glGetUniformLocation(cleanup.program, "u_roughnessFactor");
-            GLint loc_light_dir = glGetUniformLocation(cleanup.program, "u_lightDir");
-            GLint loc_light_int = glGetUniformLocation(cleanup.program, "u_lightIntensity");
-            GLint loc_ambient = glGetUniformLocation(cleanup.program, "u_ambient");
             GLint loc_bbox_min = glGetUniformLocation(cleanup.program, "u_bboxMin");
             GLint loc_bbox_max = glGetUniformLocation(cleanup.program, "u_bboxMax");
             GLint loc_has_vtx_colors = glGetUniformLocation(cleanup.program, "hasVertexColors");
@@ -825,12 +822,6 @@ namespace lfs::rendering {
                 glUniform1f(loc_metallic, metallic_factor);
             if (loc_roughness >= 0)
                 glUniform1f(loc_roughness, roughness_factor);
-            if (loc_light_dir >= 0)
-                glUniform3fv(loc_light_dir, 1, glm::value_ptr(options.light_dir));
-            if (loc_light_int >= 0)
-                glUniform1f(loc_light_int, options.light_intensity);
-            if (loc_ambient >= 0)
-                glUniform1f(loc_ambient, options.ambient);
             if (loc_has_vtx_colors >= 0)
                 glUniform1i(loc_has_vtx_colors, mesh.has_colors() ? 1 : 0);
             // Use GLOBAL bbox so all submeshes share the same orthogonal UV space.

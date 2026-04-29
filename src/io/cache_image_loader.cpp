@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "io/cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 
 #include <algorithm>
@@ -298,18 +299,50 @@ namespace lfs::io {
         return total;
     }
 
-    std::string CacheLoader::generate_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
+    std::string CacheLoader::generate_cache_key(
+        const std::filesystem::path& path,
+        const LoadParams& params,
+        const bool include_output_format) const {
         auto key = std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
         if (params.undistort)
             key += "_ud";
+        if (include_output_format)
+            key += params.output_uint8 ? "_u8" : "_f32";
         return key;
     }
+
+    namespace {
+
+        lfs::core::Tensor preprocess_loaded_rgb_image(
+            unsigned char* data,
+            const int width,
+            const int height,
+            const int channels,
+            const bool output_uint8) {
+            using namespace lfs::core;
+
+            auto tensor = Tensor::from_blob(
+                data,
+                TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
+                Device::CPU,
+                DataType::UInt8);
+
+            if (output_uint8) {
+                tensor = tensor.permute({2, 0, 1}).contiguous();
+            } else {
+                tensor = (tensor.to(DataType::Float32) / 255.0f).permute({2, 0, 1}).contiguous();
+            }
+            free_image(data);
+            return tensor;
+        }
+
+    } // namespace
 
     lfs::core::Tensor CacheLoader::load_cached_image_from_cpu(
         const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        const std::string cache_key = generate_cache_key(path, params);
+        const std::string cache_key = generate_cache_key(path, params, true);
 
         // Check cache
         {
@@ -318,7 +351,7 @@ namespace lfs::io {
                 it->second.last_access = std::chrono::steady_clock::now();
                 const auto& cached = *it->second.tensor;
                 auto pinned = Tensor::empty(cached.shape(), Device::CPU, cached.dtype(), true);
-                std::memcpy(pinned.ptr<float>(), cached.ptr<float>(), cached.bytes());
+                std::memcpy(pinned.data_ptr(), cached.data_ptr(), cached.bytes());
                 return pinned;
             }
         }
@@ -336,13 +369,7 @@ namespace lfs::io {
         // Concurrent load - skip caching
         if (is_being_loaded) {
             auto [img_data, width, height, channels] = load_image(path, params.resize_factor, params.max_width);
-            auto tensor = Tensor::from_blob(img_data,
-                                            TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
-                                            Device::CPU, DataType::UInt8);
-            tensor = tensor.to(DataType::Float32) / 255.0f;
-            tensor = tensor.permute({2, 0, 1}).contiguous();
-            free_image(img_data);
-            return tensor;
+            return preprocess_loaded_rgb_image(img_data, width, height, channels, params.output_uint8);
         }
 
         // Load image
@@ -353,22 +380,17 @@ namespace lfs::io {
             throw std::runtime_error("Failed to load: " + lfs::core::path_to_utf8(path));
         }
 
-        auto tensor = Tensor::from_blob(img_data,
-                                        TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
-                                        Device::CPU, DataType::UInt8);
-        tensor = tensor.to(DataType::Float32) / 255.0f;
-        tensor = tensor.permute({2, 0, 1}).contiguous();
-        free_image(img_data);
+        auto tensor = preprocess_loaded_rgb_image(img_data, width, height, channels, params.output_uint8);
 
-        const std::size_t tensor_bytes = tensor.numel() * sizeof(float);
+        const std::size_t tensor_bytes = tensor.bytes();
 
         // Cache if memory available
         {
             std::lock_guard lock(cpu_cache_mutex_);
             if (has_sufficient_memory(tensor_bytes)) {
                 evict_if_needed(tensor_bytes);
-                auto unpinned = Tensor::empty_unpinned(tensor.shape(), DataType::Float32);
-                std::memcpy(unpinned.ptr<float>(), tensor.ptr<float>(), tensor_bytes);
+                auto unpinned = Tensor::empty_unpinned(tensor.shape(), tensor.dtype());
+                std::memcpy(unpinned.data_ptr(), tensor.data_ptr(), tensor_bytes);
 
                 cpu_cache_[cache_key] = CachedImageData{
                     .tensor = std::make_shared<Tensor>(std::move(unpinned)),
@@ -389,14 +411,8 @@ namespace lfs::io {
         const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        auto load_and_preprocess = [](unsigned char* data, int width, int height, int channels) {
-            auto tensor = Tensor::from_blob(data,
-                                            TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
-                                            Device::CPU, DataType::UInt8);
-            tensor = tensor.to(DataType::Float32) / 255.0f;
-            tensor = tensor.permute({2, 0, 1}).contiguous();
-            free_image(data);
-            return tensor;
+        auto load_and_preprocess = [&params](unsigned char* data, int width, int height, int channels) {
+            return preprocess_loaded_rgb_image(data, width, height, channels, params.output_uint8);
         };
 
         if (cache_folder_.empty()) {
@@ -405,7 +421,7 @@ namespace lfs::io {
         }
 
         // Hash avoids Unicode path issues on Windows (operator/ interprets std::string as ANSI)
-        const std::string cache_key = std::format("rf{}_mw{}_{}", params.resize_factor, params.max_width, lfs::core::path_to_utf8(path));
+        const std::string cache_key = generate_cache_key(path, params, false);
         const auto cache_img_path = cache_folder_ / (std::to_string(std::hash<std::string>{}(cache_key)) + ".jpg");
 
         std::tuple<unsigned char*, int, int, int> result;
@@ -463,7 +479,8 @@ namespace lfs::io {
         auto [img_data, width, height, channels] = lfs::core::load_image(path, params.resize_factor, params.max_width);
         lfs::core::free_image(img_data);
 
-        const std::size_t img_size = static_cast<std::size_t>(width) * height * channels * sizeof(float);
+        const std::size_t bytes_per_channel = params.output_uint8 ? sizeof(uint8_t) : sizeof(float);
+        const std::size_t img_size = static_cast<std::size_t>(width) * height * channels * bytes_per_channel;
         const std::size_t required_bytes = img_size * num_expected_images_;
 
         if (use_cpu_memory_ && has_sufficient_memory(required_bytes)) {
@@ -505,13 +522,7 @@ namespace lfs::io {
         }
 
         auto [data, width, height, channels] = load_image(path, params.resize_factor, params.max_width);
-        auto tensor = Tensor::from_blob(data,
-                                        TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)}),
-                                        Device::CPU, DataType::UInt8);
-        tensor = tensor.to(DataType::Float32) / 255.0f;
-        tensor = tensor.permute({2, 0, 1}).contiguous();
-        free_image(data);
-        return tensor;
+        return preprocess_loaded_rgb_image(data, width, height, channels, params.output_uint8);
     }
 
     void CacheLoader::print_cache_status() const {
@@ -559,14 +570,16 @@ namespace lfs::io {
 
         NvCodecImageLoader& get_nvcodec_loader() {
             static std::once_flag init_flag;
-            static std::unique_ptr<NvCodecImageLoader> instance;
+            // nvImageCodec can throw during process shutdown after CUDA/nvJPEG teardown.
+            // Keep this singleton alive for process lifetime; pipeline loaders still own their normal instances.
+            static NvCodecImageLoader* instance = nullptr;
 
             std::call_once(init_flag, [] {
                 NvCodecImageLoader::Options opts;
                 opts.device_id = 0;
                 opts.decoder_pool_size = DEFAULT_DECODER_POOL_SIZE;
                 opts.enable_fallback = true;
-                instance = std::make_unique<NvCodecImageLoader>(opts);
+                instance = new NvCodecImageLoader(opts);
             });
             return *instance;
         }
@@ -585,8 +598,24 @@ namespace lfs::io {
             std::memcpy(cpu_tensor.data_ptr(), img_data, static_cast<size_t>(height) * width * channels);
             free_image(img_data);
 
-            auto gpu_tensor = cpu_tensor.cuda().to(DataType::Float32) / 255.0f;
-            return gpu_tensor.permute({2, 0, 1}).contiguous();
+            auto gpu_uint8 = cpu_tensor.cuda();
+            const auto H = static_cast<size_t>(height);
+            const auto W = static_cast<size_t>(width);
+            const auto C = static_cast<size_t>(channels);
+
+            if (params.output_uint8) {
+                auto output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
+                lfs::io::cuda::launch_uint8_hwc_to_uint8_chw(
+                    gpu_uint8.ptr<uint8_t>(), output.ptr<uint8_t>(), H, W, C,
+                    static_cast<cudaStream_t>(params.cuda_stream));
+                return output;
+            }
+
+            auto output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
+            lfs::io::cuda::launch_uint8_hwc_to_float32_chw(
+                gpu_uint8.ptr<uint8_t>(), output.ptr<float>(), H, W, C,
+                static_cast<cudaStream_t>(params.cuda_stream));
+            return output;
         }
 
     } // anonymous namespace
@@ -599,7 +628,7 @@ namespace lfs::io {
         const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
-        const std::string cache_key = generate_cache_key(path, params);
+        const std::string cache_key = generate_cache_key(path, params, false);
         std::vector<uint8_t> jpeg_bytes;
         bool from_cache = false;
 
@@ -632,20 +661,37 @@ namespace lfs::io {
                 auto& nvcodec = get_nvcodec_loader();
 
                 if (from_cache) {
-                    return nvcodec.load_image_from_memory_gpu(jpeg_bytes, 1, 0, params.cuda_stream);
+                    return nvcodec.load_image_from_memory_gpu(
+                        jpeg_bytes, 1, 0, params.cuda_stream, DecodeFormat::RGB, params.output_uint8);
                 }
 
                 const bool needs_resize = (params.resize_factor > 1 || params.max_width > 0);
                 auto tensor = nvcodec.load_image_from_memory_gpu(
-                    jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream);
+                    jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream,
+                    DecodeFormat::RGB, params.output_uint8);
 
                 if (params.undistort) {
+                    const bool restore_uint8 = params.output_uint8 && tensor.dtype() == DataType::UInt8;
+                    if (restore_uint8) {
+                        tensor = tensor.to(DataType::Float32) / 255.0f;
+                    }
                     const auto scaled = lfs::core::scale_undistort_params(
                         *params.undistort,
                         static_cast<int>(tensor.shape()[2]),
                         static_cast<int>(tensor.shape()[1]));
                     tensor = lfs::core::undistort_image(
                         tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
+                    if (restore_uint8) {
+                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::CUDA, DataType::UInt8);
+                        lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                            tensor.ptr<float>(),
+                            uint8_tensor.ptr<uint8_t>(),
+                            tensor.shape()[1],
+                            tensor.shape()[2],
+                            tensor.shape()[0],
+                            static_cast<cudaStream_t>(params.cuda_stream));
+                        tensor = std::move(uint8_tensor);
+                    }
                 }
 
                 bool should_cache = false;

@@ -141,8 +141,8 @@ namespace lfs::python {
         return PyTensor(cam_->cam_position(), false);
     }
 
-    PyTensor PyCamera::load_image(int resize_factor, int max_width) {
-        return PyTensor(cam_->load_and_get_image(resize_factor, max_width), true);
+    PyTensor PyCamera::load_image(int resize_factor, int max_width, const bool output_uint8) {
+        return PyTensor(cam_->load_and_get_image(resize_factor, max_width, output_uint8), true);
     }
 
     PyTensor PyCamera::load_mask(int resize_factor, int max_width, bool invert, float threshold) {
@@ -190,10 +190,11 @@ namespace lfs::python {
                          "Deprecated raw dataset-world camera position [3]")
             // Load methods
             .def("load_image", &PyCamera::load_image,
-                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 3840,
-                 "Load image as tensor [C, H, W] on CUDA")
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
+                 nb::arg("output_uint8") = false,
+                 "Load image as tensor [C, H, W] on CUDA. Set output_uint8=True to return uint8 [0,255] instead of float32 [0,1].")
             .def("load_mask", &PyCamera::load_mask,
-                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 3840,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
                  nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
                  "Load mask as tensor [1, H, W] on CUDA");
 

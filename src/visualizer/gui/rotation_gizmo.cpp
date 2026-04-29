@@ -299,7 +299,7 @@ namespace lfs::vis::gui {
             const glm::vec2 b = safeNormalize(current - center, glm::vec2(1.0f, 0.0f));
             const float cross = a.x * b.y - a.y * b.x;
             const float dot = glm::dot(a, b);
-            return -std::atan2(cross, dot);
+            return std::atan2(cross, dot);
         }
 
         [[nodiscard]] bool unprojectRay(const RotationGizmoConfig& config,

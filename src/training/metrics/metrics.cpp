@@ -83,6 +83,18 @@ namespace lfs::training {
             }
             return mask.unsqueeze(0).unsqueeze(0).expand({layout.n, layout.c, layout.h, layout.w});
         }
+
+        lfs::core::Tensor image_as_float01(const lfs::core::Tensor& image) {
+            return image.dtype() == lfs::core::DataType::UInt8
+                       ? image.to(lfs::core::DataType::Float32) / 255.0f
+                       : image;
+        }
+
+        lfs::core::Tensor mask_as_float01(const lfs::core::Tensor& mask) {
+            return (mask.dtype() == lfs::core::DataType::UInt8 || mask.dtype() == lfs::core::DataType::Bool)
+                       ? mask.to(lfs::core::DataType::Float32)
+                       : mask;
+        }
     } // namespace
 
     float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
@@ -92,15 +104,17 @@ namespace lfs::training {
         }
 
         const auto layout = get_layout_info(pred, "PSNR");
+        const auto target_float = image_as_float01(target);
 
-        auto squared_diff = (pred - target).square();
+        auto squared_diff = (pred - target_float).square();
 
         float mse;
         if (mask.is_valid()) {
-            validate_mask_shape_or_throw(mask, layout, "PSNR");
-            const float mask_sum = get_non_empty_mask_sum_or_throw(mask, "PSNR");
+            const auto mask_f = mask_as_float01(mask);
+            validate_mask_shape_or_throw(mask_f, layout, "PSNR");
+            const float mask_sum = get_non_empty_mask_sum_or_throw(mask_f, "PSNR");
 
-            const auto expanded = expand_mask(mask, layout, pred.ndim());
+            const auto expanded = expand_mask(mask_f, layout, pred.ndim());
             const auto weighted_sum = (squared_diff * expanded).sum();
 
             const float denom = mask_sum * static_cast<float>(layout.c * layout.n);
@@ -133,8 +147,9 @@ namespace lfs::training {
         if (mask.is_valid()) {
             // Match masked training semantics: no valid-padding crop, masked mean over all pixels.
             const auto layout = get_layout_info(pred, "SSIM");
-            validate_mask_shape_or_throw(mask, layout, "SSIM");
-            const float mask_sum = get_non_empty_mask_sum_or_throw(mask, "SSIM");
+            const auto mask_f = mask_as_float01(mask);
+            validate_mask_shape_or_throw(mask_f, layout, "SSIM");
+            const float mask_sum = get_non_empty_mask_sum_or_throw(mask_f, "SSIM");
 
             auto map_result = kernels::ssim_forward_map(pred, target, false);
             auto ssim_map = map_result.ssim_map;
@@ -142,7 +157,7 @@ namespace lfs::training {
             assert(static_cast<int>(ssim_map.shape()[2]) == layout.h);
             assert(static_cast<int>(ssim_map.shape()[3]) == layout.w);
 
-            const auto expanded = expand_mask(mask, layout, 4);
+            const auto expanded = expand_mask(mask_f, layout, 4);
             const auto weighted_sum = (ssim_map * expanded).sum();
 
             const float denom = mask_sum * static_cast<float>(layout.c * layout.n);
@@ -373,13 +388,13 @@ namespace lfs::training {
 
         auto rgb = lfs::core::Tensor::zeros(
             lfs::core::TensorShape({3, H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
         auto mask = lfs::core::Tensor::zeros(
             lfs::core::TensorShape({H, W}),
             lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        lfs::io::cuda::launch_uint8_rgba_split_to_float32_rgb_and_alpha(
-            gpu_uint8.ptr<uint8_t>(), rgb.ptr<float>(), mask.ptr<float>(),
+        lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
+            gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
             H, W, nullptr);
         gpu_uint8 = lfs::core::Tensor();
 
@@ -393,12 +408,23 @@ namespace lfs::training {
             const auto scaled = lfs::core::scale_undistort_params(
                 cam->undistort_params(),
                 static_cast<int>(W), static_cast<int>(H));
-            rgb = lfs::core::undistort_image(rgb, scaled, nullptr);
+            auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
+            rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
+            auto rgb_uint8 = lfs::core::Tensor::empty(
+                rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            lfs::io::cuda::launch_float32_chw_to_uint8_chw(
+                rgb_float.ptr<float>(),
+                rgb_uint8.ptr<uint8_t>(),
+                rgb_float.shape()[1],
+                rgb_float.shape()[2],
+                rgb_float.shape()[0],
+                nullptr);
+            rgb = std::move(rgb_uint8);
             mask = lfs::core::undistort_mask(mask, scaled, nullptr);
         }
 
         gt_image = std::move(rgb);
-        return mask;
+        return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
     }
 
     auto MetricsEvaluator::make_dataloader(std::shared_ptr<CameraDataset> dataset, const int workers) const {
@@ -497,14 +523,15 @@ namespace lfs::training {
             evaluated_images++;
 
             if (_params.optimization.enable_save_eval_images) {
-                auto gt_vis = gt_image;
+                auto gt_vis = image_as_float01(gt_image);
                 auto render_vis = r_output.image;
                 if (mask.is_valid()) {
+                    auto mask_f = mask_as_float01(mask);
                     const int C = static_cast<int>(gt_image.shape()[0]);
-                    const int H = static_cast<int>(mask.shape()[0]);
-                    const int W = static_cast<int>(mask.shape()[1]);
-                    auto mask_3d = mask.unsqueeze(0).expand({C, H, W});
-                    gt_vis = gt_image * mask_3d;
+                    const int H = static_cast<int>(mask_f.shape()[0]);
+                    const int W = static_cast<int>(mask_f.shape()[1]);
+                    auto mask_3d = mask_f.unsqueeze(0).expand({C, H, W});
+                    gt_vis = gt_vis * mask_3d;
                     render_vis = r_output.image * mask_3d;
                 }
                 const std::vector<lfs::core::Tensor> rgb_images = {gt_vis, render_vis};

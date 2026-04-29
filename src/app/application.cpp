@@ -341,7 +341,11 @@ namespace lfs::app {
 
         lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
             return lfs::io::CacheLoader::getInstance().load_cached_image(
-                p.path, {.resize_factor = p.resize_factor, .max_width = p.max_width, .cuda_stream = p.stream});
+                p.path,
+                {.resize_factor = p.resize_factor,
+                 .max_width = p.max_width,
+                 .cuda_stream = p.stream,
+                 .output_uint8 = p.output_uint8});
         });
 
         if (params->optimization.headless) {

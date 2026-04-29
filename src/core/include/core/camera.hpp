@@ -54,17 +54,17 @@ namespace lfs::core {
         void initialize_cuda_tensors();
 
         // Load image from disk and return it
-        Tensor load_and_get_image(int resize_factor = -1, int max_width = 3840);
+        Tensor load_and_get_image(int resize_factor = -1, int max_width = 0, bool output_uint8 = false);
 
         // Load mask from disk, process it, and return it (cached)
-        Tensor load_and_get_mask(int resize_factor = -1, int max_width = 3840,
+        Tensor load_and_get_mask(int resize_factor = -1, int max_width = 0,
                                  bool invert_mask = false, float mask_threshold = 0.5f);
 
         // Load image from disk just to populate _image_width/_image_height
-        void load_image_size(int resize_factor = -1, int max_width = 3840);
+        void load_image_size(int resize_factor = -1, int max_width = 0);
 
         // Get number of bytes in the image file
-        size_t get_num_bytes_from_file(int resize_factor = -1, int max_width = 3840) const;
+        size_t get_num_bytes_from_file(int resize_factor = -1, int max_width = 0) const;
         size_t get_num_bytes_from_file() const;
 
         // Accessors - now return const references to avoid copies

@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstddef>
+#include <cstdint>
 #include <cuda_runtime.h>
 
 namespace lfs::training::kernels {
@@ -26,6 +27,15 @@ namespace lfs::training::kernels {
     void launch_fused_l1_loss(
         const float* img1,
         const float* img2,
+        float* grad_out,
+        float* loss_out,
+        float* temp_buffer,
+        size_t N,
+        cudaStream_t stream = nullptr);
+
+    void launch_fused_l1_loss(
+        const float* img1,
+        const uint8_t* img2,
         float* grad_out,
         float* loss_out,
         float* temp_buffer,

@@ -999,6 +999,7 @@ namespace lfs::rendering {
 
                 lfs::io::LoadParams params;
                 params.max_width = THUMBNAIL_SIZE;
+                params.output_uint8 = true;
 
                 auto tensor = loader->load_image_immediate(request.image_path, params);
                 if (request.generation != thumbnail_generation_.load(std::memory_order_acquire)) {
@@ -1006,9 +1007,11 @@ namespace lfs::rendering {
                 }
                 assert(tensor.ndim() == 3);
 
-                // float32 [C,H,W] on GPU → uint8 [H,W,C] on CPU with Y-flip
+                // [C,H,W] on GPU -> uint8 [H,W,C] on CPU with Y-flip.
                 auto hwc = tensor.permute({1, 2, 0}).contiguous();
-                hwc = (hwc.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8).contiguous();
+                if (hwc.dtype() != lfs::core::DataType::UInt8) {
+                    hwc = (hwc.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8).contiguous();
+                }
                 hwc = hwc.cpu().contiguous();
 
                 const int h = static_cast<int>(hwc.shape()[0]);

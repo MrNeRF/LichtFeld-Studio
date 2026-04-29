@@ -54,7 +54,7 @@ namespace lfs::io {
     // Public types that clients need
     struct LoadOptions {
         int resize_factor = -1;
-        int max_width = 3840;
+        int max_width = 0;
         std::string images_folder = "images";
         bool validate_only = false;
         CentralizeDataset centralize = CentralizeDataset::Off;

@@ -98,6 +98,7 @@ namespace {
         checkpoint_params.dataset.images = "images_4";
         checkpoint_params.dataset.data_path = "/tmp/checkpoint_dataset";
         checkpoint_params.dataset.output_path = "/tmp/checkpoint_output";
+        checkpoint_params.dataset.max_width = 1536;
 
         manager.importTrainingParams(checkpoint_params);
 
@@ -107,6 +108,7 @@ namespace {
         dataset_params.optimization.iterations = 900;
         dataset_params.dataset.images = "images_8";
         dataset_params.dataset.resize_factor = 4;
+        dataset_params.dataset.max_width = 0;
         dataset_params.dataset.data_path = "/tmp/new_dataset";
         dataset_params.dataset.output_path = "/tmp/new_output";
 
@@ -119,6 +121,7 @@ namespace {
         const auto& dataset = manager.getDatasetConfig();
         EXPECT_EQ(dataset.images, "images_8");
         EXPECT_EQ(dataset.resize_factor, 4);
+        EXPECT_EQ(dataset.max_width, 0);
         const auto recreated = manager.createForDataset("/tmp/override_dataset", "/tmp/override_output");
         EXPECT_EQ(recreated.optimization.strategy, "mcmc");
         EXPECT_EQ(recreated.optimization.iterations, 900u);
@@ -155,7 +158,7 @@ namespace {
         EXPECT_TRUE(dataset.output_path.empty());
         EXPECT_EQ(dataset.images, "images");
         EXPECT_EQ(dataset.resize_factor, -1);
-        EXPECT_EQ(dataset.max_width, 3840);
+        EXPECT_EQ(dataset.max_width, 0);
         EXPECT_TRUE(dataset.loading_params.use_cpu_memory);
     }
 

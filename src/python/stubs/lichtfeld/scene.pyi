@@ -374,7 +374,7 @@ class SceneNode:
     def has_mask(self) -> bool:
         """Whether this camera node has a mask file"""
 
-    def load_mask(self, resize_factor: int = 1, max_width: int = 3840, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
+    def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
         """
         Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)
         """
@@ -783,10 +783,12 @@ class Camera:
     def cam_position(self) -> lichtfeld.Tensor:
         """Deprecated raw dataset-world camera position [3]"""
 
-    def load_image(self, resize_factor: int = 1, max_width: int = 3840) -> lichtfeld.Tensor:
-        """Load image as tensor [C, H, W] on CUDA"""
+    def load_image(self, resize_factor: int = 1, max_width: int = 0, output_uint8: bool = False) -> lichtfeld.Tensor:
+        """
+        Load image as tensor [C, H, W] on CUDA. Set output_uint8=True to return uint8 [0,255] instead of float32 [0,1].
+        """
 
-    def load_mask(self, resize_factor: int = 1, max_width: int = 3840, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor:
+    def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor:
         """Load mask as tensor [1, H, W] on CUDA"""
 
 class CameraDataset:

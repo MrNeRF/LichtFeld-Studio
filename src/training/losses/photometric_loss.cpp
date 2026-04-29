@@ -5,9 +5,20 @@
 #include "photometric_loss.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
+#include <cstdint>
 #include <format>
 
 namespace lfs::training::losses {
+    namespace {
+        template <typename Fn>
+        void dispatch_target_ptr(const lfs::core::Tensor& target, Fn&& fn) {
+            if (target.dtype() == lfs::core::DataType::UInt8) {
+                fn(target.ptr<uint8_t>());
+            } else {
+                fn(target.ptr<float>());
+            }
+        }
+    } // namespace
 
     void PhotometricLoss::ensure_buffers(const std::vector<size_t>& shape, size_t num_blocks) {
         // Only reallocate if shape or num_blocks changed
@@ -52,14 +63,16 @@ namespace lfs::training::losses {
                 // Ensure buffers are sized correctly
                 ensure_buffers(rendered_4d.shape().dims(), num_blocks);
 
-                lfs::training::kernels::launch_fused_l1_loss(
-                    rendered_4d.ptr<float>(),
-                    gt_4d.ptr<float>(),
-                    grad_buffer_.ptr<float>(),
-                    loss_scalar_.ptr<float>(),
-                    l1_reduction_buffer_.ptr<float>(),
-                    N,
-                    nullptr);
+                dispatch_target_ptr(gt_4d, [&](auto* gt_ptr) {
+                    lfs::training::kernels::launch_fused_l1_loss(
+                        rendered_4d.ptr<float>(),
+                        gt_ptr,
+                        grad_buffer_.ptr<float>(),
+                        loss_scalar_.ptr<float>(),
+                        l1_reduction_buffer_.ptr<float>(),
+                        N,
+                        nullptr);
+                });
 
                 grad_combined = grad_buffer_;
                 loss_tensor_gpu = loss_scalar_;
