@@ -145,6 +145,7 @@ namespace lfs::vis::gui {
         void toggleModelsSection();
         bool setDropTarget(core::NodeId node_id);
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
+        void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         std::vector<std::string> deletableSelectedNodeNames() const;
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);

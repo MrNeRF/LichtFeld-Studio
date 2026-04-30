@@ -1751,6 +1751,37 @@ namespace lfs::vis::gui {
                                          panel_screen_y_ + mouse_y);
     }
 
+    void SceneGraphElement::showModelsHeaderContextMenu(const float mouse_x,
+                                                          const float mouse_y) {
+        auto* gui = services().guiOrNull();
+        if (!gui)
+            return;
+
+        const auto make_action = [](std::string label, std::string action,
+                                    const bool separator_before = false) {
+            return ContextMenuItem{
+                .label = std::move(label),
+                .action = std::move(action),
+                .separator_before = separator_before,
+                .is_label = false,
+                .is_submenu_item = false,
+                .is_active = false,
+            };
+        };
+
+        auto prefixed = [](const std::string& payload) {
+            return std::string(kContextActionPrefix) + payload;
+        };
+
+        std::vector<ContextMenuItem> items;
+        items.push_back(make_action(tr(string_keys::Scene::ADD_PLY), prefixed("add_ply_root")));
+        items.push_back(make_action(tr(string_keys::Scene::ADD_GROUP_ELLIPSIS), prefixed("add_group_root")));
+
+        gui->globalContextMenu().request(std::move(items),
+                                         panel_screen_x_ + mouse_x,
+                                         panel_screen_y_ + mouse_y);
+    }
+
     void SceneGraphElement::executeAction(const std::string& action) {
         auto* scene_manager = services().sceneOrNull();
         auto* scene = scene_manager ? &scene_manager->getScene() : nullptr;
@@ -1836,6 +1867,13 @@ namespace lfs::vis::gui {
                 if (const auto* node = scene->getNodeById(node_id))
                     cmd::MergeGroup{.name = node->name}.emit();
             }
+        } else if (kind == "add_ply_root") {
+            const auto path = OpenPointCloudFileDialog();
+            if (!path.empty()) {
+                cmd::LoadFile{.path = path, .is_dataset = false}.emit();
+            }
+        } else if (kind == "add_group_root") {
+            cmd::AddGroup{.name = tr("scene.new_group_name"), .parent_name = ""}.emit();
         } else if ((kind == "add_cropbox" || kind == "add_ellipsoid" || kind == "save_node") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))
@@ -1905,6 +1943,7 @@ namespace lfs::vis::gui {
             focusTree();
 
             if (target == header_el_ || target == header_arrow_el_ ||
+                target == header_label_el_ ||
                 target->GetAttribute<Rml::String>("data-role", "") == "models-header") {
                 toggleModelsSection();
                 event.StopPropagation();
@@ -1952,6 +1991,13 @@ namespace lfs::vis::gui {
                     handleSecondaryClick(node_id,
                                          event.GetParameter("mouse_x", 0.0f),
                                          event.GetParameter("mouse_y", 0.0f));
+                    event.StopPropagation();
+                } else if (target == header_el_ || target == header_arrow_el_ ||
+                           target == header_label_el_ ||
+                           target->GetAttribute<Rml::String>("data-role", "") == "models-header") {
+                    // Right-click on Models header - show header context menu
+                    showModelsHeaderContextMenu(event.GetParameter("mouse_x", 0.0f),
+                                                  event.GetParameter("mouse_y", 0.0f));
                     event.StopPropagation();
                 }
             }
