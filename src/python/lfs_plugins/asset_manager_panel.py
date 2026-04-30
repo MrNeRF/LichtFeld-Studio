@@ -421,7 +421,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("prop_status_label", lambda: tr("asset_manager.property.status"))
         model.bind_func("prop_started_label", lambda: tr("asset_manager.property.started"))
         model.bind_func("prop_completed_label", lambda: tr("asset_manager.property.completed"))
-        model.bind_func("prop_duration_label", lambda: tr("asset_manager.property.duration"))
         model.bind_func("artifacts_title", lambda: tr("asset_manager.info_panel.artifacts"))
         model.bind_func("scene_pill_label", lambda: tr("asset_manager.type.scene"))
         model.bind_func("scene_details_title", lambda: tr("asset_manager.info_panel.scene_details"))
@@ -4598,19 +4597,23 @@ class AssetManagerPanel(Panel):
                 if self._asset_index and hasattr(self._asset_index, "scenes"):
                     for scene_id in scene_ids:
                         scene_data = self._asset_index.scenes.get(scene_id)
-                        if scene_data:
-                            scene_asset_count = 0
-                            if hasattr(self._asset_index, "assets"):
-                                for asset in self._asset_index.assets.values():
-                                    if asset.get("scene_id") == scene_id:
-                                        scene_asset_count += 1
-                            project_scenes.append(
-                                {
-                                    "id": scene_id,
-                                    "name": scene_data.get("name", tr("asset_manager.unnamed_scene")),
-                                    "asset_count": scene_asset_count,
-                                }
-                            )
+                        if not scene_data:
+                            continue
+
+                        scene_asset_count = 0
+                        if hasattr(self._asset_index, "assets"):
+                            for asset in self._asset_index.assets.values():
+                                if asset.get("scene_id") == scene_id:
+                                    scene_asset_count += 1
+                        project_scenes.append(
+                            {
+                                "id": scene_id,
+                                "name": scene_data.get(
+                                    "name", tr("asset_manager.unnamed_scene")
+                                ),
+                                "asset_count": scene_asset_count,
+                            }
+                        )
                 self._handle.update_record_list(
                     "selected_project_scenes", project_scenes
                 )
