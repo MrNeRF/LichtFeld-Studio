@@ -27,7 +27,8 @@ namespace lfs::event {
     bool LocalizationManager::initialize(const std::string& locales_dir) {
         locales_dir_ = locales_dir;
 
-        if (!fs::exists(locales_dir_) || !fs::is_directory(locales_dir_)) {
+        std::error_code ec;
+        if (!fs::exists(locales_dir_, ec) || ec || !fs::is_directory(locales_dir_, ec) || ec) {
             LOG_ERROR("Locales directory not found: {}", locales_dir_);
             return false;
         }
@@ -35,8 +36,11 @@ namespace lfs::event {
         available_languages_.clear();
         language_names_.clear();
 
-        for (const auto& entry : fs::directory_iterator(locales_dir_)) {
-            if (!entry.is_regular_file() || entry.path().extension() != ".json")
+        for (fs::directory_iterator it(locales_dir_, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code entry_ec;
+            const auto& entry = *it;
+            if (!entry.is_regular_file(entry_ec) || entry_ec || entry.path().extension() != ".json")
                 continue;
 
             const std::string lang_code = entry.path().stem().string();
@@ -47,8 +51,12 @@ namespace lfs::event {
 
             available_languages_.push_back(lang_code);
 
-            const auto it = test_strings.find(LANGUAGE_NAME_KEY);
-            language_names_[lang_code] = (it != test_strings.end()) ? it->second : lang_code;
+            const auto name_it = test_strings.find(LANGUAGE_NAME_KEY);
+            language_names_[lang_code] = (name_it != test_strings.end()) ? name_it->second : lang_code;
+        }
+        if (ec) {
+            LOG_ERROR("Failed to scan locales directory '{}': {}", locales_dir_, ec.message());
+            return false;
         }
 
         if (available_languages_.empty()) {
@@ -139,7 +147,8 @@ namespace lfs::event {
     bool LocalizationManager::loadLanguage(const std::string& language_code) {
         const std::string filepath = locales_dir_ + "/" + language_code + ".json";
 
-        if (!fs::exists(filepath)) {
+        std::error_code ec;
+        if (!fs::exists(filepath, ec) || ec) {
             LOG_ERROR("Locale file not found: {}", filepath);
             return false;
         }

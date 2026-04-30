@@ -32,6 +32,11 @@ endif()
 
 project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
 
+# The application ships CUDA DLLs and links CUDA::cudart throughout the target graph.
+# Keep CUDA language targets on the shared runtime as well; MSVC otherwise adds
+# cudart_static.lib implicitly, which collides with cudart.lib when linking DLLs.
+set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING "CUDA runtime linkage" FORCE)
+
 # On Windows with a multi-config generator (MSVC/Visual Studio, Ninja Multi-Config),
 # route all build outputs to build/<Config>/ so Debug and Release binaries are
 # separated. Single-config generators (Ninja, NMake) use a flat binary dir —
