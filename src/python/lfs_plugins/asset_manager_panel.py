@@ -2373,6 +2373,7 @@ class AssetManagerPanel(Panel):
             return []
 
         runs = list(self._asset_index.runs.values())
+        runs = [r for r in runs if r is not None]  # Filter out None values
         asset_id = asset.get("id")
         scene_id = asset.get("scene_id")
         run_id = asset.get("run_id")
@@ -4603,13 +4604,13 @@ class AssetManagerPanel(Panel):
                                 for asset in self._asset_index.assets.values():
                                     if asset.get("scene_id") == scene_id:
                                         scene_asset_count += 1
-                        project_scenes.append(
-                            {
-                                "id": scene_id,
-                                "name": scene.get("name", tr("asset_manager.unnamed_scene")),
-                                "asset_count": scene_asset_count,
-                            }
-                        )
+                            project_scenes.append(
+                                {
+                                    "id": scene_id,
+                                    "name": scene_data.get("name", tr("asset_manager.unnamed_scene")),
+                                    "asset_count": scene_asset_count,
+                                }
+                            )
                 self._handle.update_record_list(
                     "selected_project_scenes", project_scenes
                 )
