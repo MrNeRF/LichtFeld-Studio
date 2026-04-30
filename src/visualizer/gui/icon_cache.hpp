@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "gui/vulkan_ui_texture.hpp"
 
+#include <cstdint>
 #include <mutex>
 #include <memory>
 #include <string>
@@ -18,7 +19,7 @@ namespace lfs::vis::gui {
     public:
         static IconCache& instance();
 
-        ImTextureID getIcon(const std::string& name);
+        std::uintptr_t getIcon(const std::string& name);
         void clear();
 
     private:

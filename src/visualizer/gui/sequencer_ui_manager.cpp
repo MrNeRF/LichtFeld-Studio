@@ -30,7 +30,6 @@
 #include <format>
 #include <string_view>
 #include <vector>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -980,10 +979,17 @@ namespace lfs::vis::gui {
 
         const bool rotate_mode = viewport_edit_mode_ == SequencerViewportEditMode::Rotate;
 
-        ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
-        const ImVec2 clip_min(rect_pos.x, rect_pos.y);
-        const ImVec2 clip_max(rect_pos.x + rect_size.x, rect_pos.y + rect_size.y);
-        draw_list->PushClipRect(clip_min, clip_max, true);
+        NativeOverlayDrawList draw_list;
+        const glm::vec2 clip_min(rect_pos.x, rect_pos.y);
+        const glm::vec2 clip_max(rect_pos.x + rect_size.x, rect_pos.y + rect_size.y);
+        draw_list.PushClipRect(clip_min, clip_max, true);
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const NativeGizmoInput gizmo_input{
+            .mouse_pos = {frame_input.mouse_x, frame_input.mouse_y},
+            .mouse_left_down = frame_input.mouse_down[0],
+            .mouse_left_clicked = frame_input.mouse_clicked[0],
+        };
+        const bool snap_modifier = (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
 
         bool changed = false;
         bool is_using = false;
@@ -998,8 +1004,9 @@ namespace lfs::vis::gui {
             rotation_config.projection = projection;
             rotation_config.pivot_world = kf->position;
             rotation_config.orientation_world = rot_mat;
-            rotation_config.draw_list = draw_list;
-            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.draw_list = &draw_list;
+            rotation_config.input = gizmo_input;
+            rotation_config.snap = snap_modifier;
             rotation_config.snap_degrees = 5.0f;
 
             const auto rotation_result = drawRotationGizmo(rotation_config);
@@ -1017,8 +1024,9 @@ namespace lfs::vis::gui {
             translation_config.projection = projection;
             translation_config.pivot_world = kf->position;
             translation_config.orientation_world = glm::mat3(1.0f);
-            translation_config.draw_list = draw_list;
-            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.draw_list = &draw_list;
+            translation_config.input = gizmo_input;
+            translation_config.snap = snap_modifier;
             translation_config.snap_units = 0.1f;
 
             const auto translation_result = drawTranslationGizmo(translation_config);
@@ -1060,7 +1068,7 @@ namespace lfs::vis::gui {
                 .emit();
         }
 
-        draw_list->PopClipRect();
+        draw_list.PopClipRect();
     }
 
     void SequencerUIManager::handleOverlayActions() {

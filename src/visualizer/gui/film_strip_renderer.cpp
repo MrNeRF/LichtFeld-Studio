@@ -308,7 +308,7 @@ namespace lfs::vis::gui {
         }
     }
 
-    ImTextureID FilmStripRenderer::textureIdForSlot(const int slot_idx) const {
+    std::uintptr_t FilmStripRenderer::textureIdForSlot(const int slot_idx) const {
         if (slot_idx < 0 || slot_idx >= MAX_SLOTS)
             return 0;
         const auto& slot = slots_[slot_idx];

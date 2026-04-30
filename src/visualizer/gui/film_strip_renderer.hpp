@@ -92,7 +92,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] const std::optional<HoverState>& hoverState() const { return hover_state_; }
         [[nodiscard]] const std::vector<ThumbInfo>& thumbs() const { return thumbs_; }
         [[nodiscard]] const std::vector<ExactMarkerInfo>& markers() const { return exact_markers_; }
-        [[nodiscard]] ImTextureID textureIdForSlot(const int slot_idx) const;
+        [[nodiscard]] std::uintptr_t textureIdForSlot(const int slot_idx) const;
         [[nodiscard]] bool slotIsCurrentGeneration(const int slot_idx) const;
 
         void invalidateAll();

@@ -19,10 +19,10 @@ namespace lfs::vis::gui {
         constexpr float DASH_DUTY = 0.55f;
         constexpr int MAX_DASHES_PER_EDGE = 160;
         constexpr float DELTA_EPSILON = 0.000001f;
-        constexpr ImU32 BOUNDS_LINE_COLOR = IM_COL32(0xAA, 0xAA, 0xAA, 255);
-        constexpr ImU32 BOUNDS_LINE_SHADOW = IM_COL32(0, 0, 0, 130);
-        constexpr ImU32 ANCHOR_COLOR = IM_COL32(0xAA, 0xAA, 0xAA, 255);
-        constexpr ImU32 SELECTION_COLOR = IM_COL32(255, 128, 16, 210);
+        constexpr OverlayColor BOUNDS_LINE_COLOR = overlayColor(0xAA, 0xAA, 0xAA, 255);
+        constexpr OverlayColor BOUNDS_LINE_SHADOW = overlayColor(0, 0, 0, 130);
+        constexpr OverlayColor ANCHOR_COLOR = overlayColor(0xAA, 0xAA, 0xAA, 255);
+        constexpr OverlayColor SELECTION_COLOR = overlayColor(255, 128, 16, 210);
 
         struct AxisVisual {
             glm::vec3 direction{0.0f};
@@ -246,7 +246,7 @@ namespace lfs::vis::gui {
             return projected;
         }
 
-        void drawDashedLine(ImDrawList& draw_list, const glm::vec2& a, const glm::vec2& b) {
+        void drawDashedLine(NativeOverlayDrawList& draw_list, const glm::vec2& a, const glm::vec2& b) {
             const float distance = glm::length(b - a);
             const int step_count = std::clamp(static_cast<int>(distance / DASH_PERIOD_PX), 1, MAX_DASHES_PER_EDGE);
             for (int step = 0; step < step_count; ++step) {
@@ -254,12 +254,12 @@ namespace lfs::vis::gui {
                 const float t1 = t0 + DASH_DUTY / static_cast<float>(step_count);
                 const glm::vec2 p0 = glm::mix(a, b, t0);
                 const glm::vec2 p1 = glm::mix(a, b, t1);
-                draw_list.AddLine(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), BOUNDS_LINE_SHADOW, 3.4f);
-                draw_list.AddLine(ImVec2(p0.x, p0.y), ImVec2(p1.x, p1.y), BOUNDS_LINE_COLOR, 2.0f);
+                draw_list.AddLine(glm::vec2(p0.x, p0.y), glm::vec2(p1.x, p1.y), BOUNDS_LINE_SHADOW, 3.4f);
+                draw_list.AddLine(glm::vec2(p0.x, p0.y), glm::vec2(p1.x, p1.y), BOUNDS_LINE_COLOR, 2.0f);
             }
         }
 
-        void drawBoundsRects(ImDrawList& draw_list,
+        void drawBoundsRects(NativeOverlayDrawList& draw_list,
                              const std::array<ProjectedRect, 3>& rects,
                              const int rect_count) {
             for (int rect_index = 0; rect_index < rect_count; ++rect_index) {
@@ -296,12 +296,12 @@ namespace lfs::vis::gui {
                        : -1;
         }
 
-        void drawAnchor(ImDrawList& draw_list,
+        void drawAnchor(NativeOverlayDrawList& draw_list,
                         const glm::vec2& screen,
                         const float radius,
                         const bool hot) {
-            draw_list.AddCircleFilled(ImVec2(screen.x, screen.y), radius, IM_COL32_BLACK, 24);
-            draw_list.AddCircleFilled(ImVec2(screen.x, screen.y), radius - 1.2f, hot ? SELECTION_COLOR : ANCHOR_COLOR, 24);
+            draw_list.AddCircleFilled(glm::vec2(screen.x, screen.y), radius, OVERLAY_COL32_BLACK, 24);
+            draw_list.AddCircleFilled(glm::vec2(screen.x, screen.y), radius - 1.2f, hot ? SELECTION_COLOR : ANCHOR_COLOR, 24);
         }
 
         [[nodiscard]] HandleHit edgeHandle(const glm::ivec3& a, const glm::ivec3& b, const int plane_axis) {
@@ -319,7 +319,7 @@ namespace lfs::vis::gui {
             return {};
         }
 
-        void drawBoundsAnchors(ImDrawList& draw_list,
+        void drawBoundsAnchors(NativeOverlayDrawList& draw_list,
                                const std::array<ProjectedRect, 3>& rects,
                                const int rect_count,
                                const HandleHit& highlighted) {
@@ -545,7 +545,7 @@ namespace lfs::vis::gui {
         glm::vec2 center_screen;
         if (!projectPoint(view_projection, draw_config.viewport_pos, draw_config.viewport_size,
                           draw_config.center_world, center_screen)) {
-            if (g_active.active && g_active.id == config.id && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (g_active.active && g_active.id == config.id && !config.input.mouse_left_down) {
                 g_active = ActiveState{};
             }
             return result;
@@ -561,15 +561,14 @@ namespace lfs::vis::gui {
         }
         const auto projected_rects = projectRects(draw_config, view_projection, axes, rects, rect_count);
 
-        const ImGuiIO& io = ImGui::GetIO();
-        const glm::vec2 mouse(io.MousePos.x, io.MousePos.y);
+        const glm::vec2 mouse = config.input.mouse_pos;
         HandleHit hovered_hit;
         if (isInViewport(draw_config, mouse) && (!g_active.active || g_active.id == config.id)) {
             hovered_hit = nearestHandle(projected_rects, rect_count, mouse);
         }
 
         if (g_active.active && g_active.id == config.id) {
-            result.active = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            result.active = config.input.mouse_left_down;
             if (!result.active) {
                 g_active = ActiveState{};
             }
@@ -577,14 +576,13 @@ namespace lfs::vis::gui {
 
         if (!g_active.active && config.input_enabled &&
             hovered_hit.handle != BoundsGizmoHandle::None &&
-            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            config.input.mouse_left_clicked) {
             beginDrag(draw_config, view_projection, axes, hovered_hit, mouse, center_screen);
             result.active = true;
         }
 
         if (g_active.active && g_active.id == config.id) {
             result = transformForMouse(mouse, config);
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         }
 
         result.hovered_handle = hovered_hit.handle;
@@ -599,8 +597,8 @@ namespace lfs::vis::gui {
                                                       g_active.corner_signs}
                                           : hovered_hit;
         draw_config.draw_list->PushClipRect(
-            ImVec2(draw_config.viewport_pos.x, draw_config.viewport_pos.y),
-            ImVec2(draw_config.viewport_pos.x + draw_config.viewport_size.x,
+            glm::vec2(draw_config.viewport_pos.x, draw_config.viewport_pos.y),
+            glm::vec2(draw_config.viewport_pos.x + draw_config.viewport_size.x,
                    draw_config.viewport_pos.y + draw_config.viewport_size.y),
             true);
         drawBoundsRects(*draw_config.draw_list, projected_rects, rect_count);

@@ -23,7 +23,7 @@ namespace lfs::vis::gui {
 
     IconCache::~IconCache() { clear(); }
 
-    ImTextureID IconCache::getIcon(const std::string& name) {
+    std::uintptr_t IconCache::getIcon(const std::string& name) {
         if (name.empty()) {
             return 0;
         }
@@ -40,7 +40,7 @@ namespace lfs::vis::gui {
         if ((!texture || !texture->valid()) && name != DEFAULT_ICON) {
             texture = loadTexture(DEFAULT_ICON);
         }
-        const ImTextureID texture_id = texture ? texture->textureId() : 0;
+        const std::uintptr_t texture_id = texture ? texture->textureId() : 0;
 
         {
             std::lock_guard lock(mutex_);

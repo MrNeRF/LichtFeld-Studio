@@ -697,9 +697,9 @@ namespace lfs::vis::gui {
 #endif
     }
 
-    ImTextureID VulkanUiTexture::textureId() const {
+    std::uintptr_t VulkanUiTexture::textureId() const {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        return impl_ ? reinterpret_cast<ImTextureID>(impl_->descriptor_set) : 0;
+        return impl_ ? reinterpret_cast<std::uintptr_t>(impl_->descriptor_set) : 0;
 #else
         return 0;
 #endif

@@ -433,6 +433,11 @@ namespace lfs::vis {
         const bool has_renderable_model = hasRenderableGaussians(model);
         const bool has_point_cloud =
             scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
+        const bool has_meshes = std::any_of(scene_state.meshes.begin(),
+                                            scene_state.meshes.end(),
+                                            [](const auto& mesh) { return mesh.mesh != nullptr; });
+        const bool has_environment = environmentBackgroundEnabled(settings_);
+        const bool has_render_content = has_renderable_model || has_point_cloud || has_meshes || has_environment;
         const size_t model_ptr = reinterpret_cast<size_t>(model);
 
         if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
@@ -456,14 +461,14 @@ namespace lfs::vis {
 
         if (const DirtyMask required_dirty = frame_lifecycle_service_.requiredDirtyMask(
                 vulkan_viewport_image_ != nullptr,
-                has_renderable_model || has_point_cloud,
+                has_render_content,
                 settings_.split_view_mode);
             required_dirty) {
             dirty_mask_.fetch_or(required_dirty, std::memory_order_relaxed);
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
-        if (!has_renderable_model && !has_point_cloud) {
+        if (!has_render_content) {
             vulkan_viewport_image_.reset();
             vulkan_viewport_image_size_ = {0, 0};
             vulkan_viewport_image_flip_y_ = false;
@@ -814,7 +819,7 @@ namespace lfs::vis {
             } else {
                 render_error = render_result.error();
             }
-        } else {
+        } else if (has_renderable_model) {
             auto request = buildViewportRenderRequest(frame_ctx, render_size);
             auto render_result = engine_->renderGaussiansImage(*model, request);
             if (render_result) {
@@ -833,7 +838,8 @@ namespace lfs::vis {
                 frame_ctx.current_camera_id);
         }
 
-        if (rendered_image && (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty())) {
+        if ((rendered_image || render_error.empty()) &&
+            (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty())) {
             const bool any_selected_mesh = std::any_of(
                 frame_ctx.scene_state.meshes.begin(),
                 frame_ctx.scene_state.meshes.end(),
@@ -872,9 +878,19 @@ namespace lfs::vis {
                 });
             }
 
-            if (!mesh_items.empty()) {
-                auto tensor_frame = engine_->materializeGpuFrame(rendered_image, rendered_metadata, render_size);
-                if (tensor_frame) {
+            if (environmentBackgroundEnabled(settings_) || !mesh_items.empty()) {
+                std::optional<lfs::rendering::GpuFrame> primary_frame;
+                bool can_composite = true;
+                if (rendered_image) {
+                    auto tensor_frame = engine_->materializeGpuFrame(rendered_image, rendered_metadata, render_size);
+                    if (tensor_frame) {
+                        primary_frame = std::move(*tensor_frame);
+                    } else {
+                        can_composite = false;
+                        LOG_ERROR("Failed to prepare tensor frame for Vulkan compositing: {}", tensor_frame.error());
+                    }
+                }
+                if (can_composite) {
                     lfs::rendering::VideoCompositeFrameRequest composite_request{
                         .viewport = frame_ctx.makeViewportData(),
                         .frame_view = frame_ctx.makeFrameView(),
@@ -887,14 +903,12 @@ namespace lfs::vis {
                              .equirectangular = settings_.equirectangular},
                         .meshes = std::move(mesh_items),
                     };
-                    auto composite = engine_->renderVideoCompositeFrame(*tensor_frame, composite_request);
+                    auto composite = engine_->renderVideoCompositeFrame(primary_frame, composite_request);
                     if (composite) {
                         rendered_image = std::make_shared<lfs::core::Tensor>(std::move(*composite));
                     } else {
-                        LOG_ERROR("Failed to composite Vulkan mesh frame: {}", composite.error());
+                        LOG_ERROR("Failed to composite Vulkan frame: {}", composite.error());
                     }
-                } else {
-                    LOG_ERROR("Failed to prepare tensor frame for mesh compositing: {}", tensor_frame.error());
                 }
             }
         }

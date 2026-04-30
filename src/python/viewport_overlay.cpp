@@ -5,6 +5,7 @@
 #include "viewport_overlay.hpp"
 #include "core/logger.hpp"
 #include "gil.hpp"
+#include "gui/line_renderer.hpp"
 #include "lfs/py_gizmo.hpp"
 #include "lfs/py_viewport.hpp"
 #include "python_runtime.hpp"
@@ -14,7 +15,6 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui.h>
 
 namespace lfs::python {
 
@@ -52,7 +52,7 @@ namespace lfs::python {
             registry.invoke_handlers(DrawHandlerTiming::PostView, draw_ctx);
             registry.invoke_handlers(DrawHandlerTiming::PostUI, draw_ctx);
 
-            auto* dl = static_cast<ImDrawList*>(draw_list_ptr);
+            auto* dl = static_cast<vis::gui::NativeOverlayDrawList*>(draw_list_ptr);
             PyTransformGizmoRegistry::instance().draw_all(view, proj, vp_p, vp_s, dl);
 
             const float ox = vp_p.x;
@@ -64,29 +64,25 @@ namespace lfs::python {
                 const auto to_u8 = [](float v) -> int {
                     return static_cast<int>(std::clamp(v * 255.0f + 0.5f, 0.0f, 255.0f));
                 };
-                const ImU32 color = IM_COL32(to_u8(cmd.r), to_u8(cmd.g), to_u8(cmd.b), to_u8(cmd.a));
+                const auto color = vis::gui::overlayColor(to_u8(cmd.r), to_u8(cmd.g), to_u8(cmd.b), to_u8(cmd.a));
 
                 switch (cmd.type) {
                 case PyViewportDrawContext::DrawCommand::LINE_2D:
                     dl->AddLine({cmd.x1, cmd.y1}, {cmd.x2, cmd.y2}, color, cmd.thickness);
                     break;
                 case PyViewportDrawContext::DrawCommand::CIRCLE_2D:
-                    dl->AddCircle({cmd.x1, cmd.y1}, cmd.radius, color, 0, cmd.thickness);
+                    dl->AddCircle({cmd.x1, cmd.y1}, cmd.radius, color, 32, cmd.thickness);
                     break;
                 case PyViewportDrawContext::DrawCommand::RECT_2D:
-                    dl->AddRect({cmd.x1, cmd.y1}, {cmd.x2, cmd.y2}, color, 0.0f, 0, cmd.thickness);
+                    dl->AddRect({cmd.x1, cmd.y1}, {cmd.x2, cmd.y2}, color, 0.0f, cmd.thickness);
                     break;
                 case PyViewportDrawContext::DrawCommand::FILLED_RECT_2D:
                     dl->AddRectFilled({cmd.x1, cmd.y1}, {cmd.x2, cmd.y2}, color);
                     break;
                 case PyViewportDrawContext::DrawCommand::FILLED_CIRCLE_2D:
-                    dl->AddCircleFilled({cmd.x1, cmd.y1}, cmd.radius, color);
+                    dl->AddCircleFilled({cmd.x1, cmd.y1}, cmd.radius, color, 32);
                     break;
                 case PyViewportDrawContext::DrawCommand::TEXT_2D:
-                    if (cmd.font_size > 0.0f)
-                        dl->AddText(ImGui::GetFont(), cmd.font_size, {cmd.x1, cmd.y1}, color, cmd.text.c_str());
-                    else
-                        dl->AddText({cmd.x1, cmd.y1}, color, cmd.text.c_str());
                     break;
                 case PyViewportDrawContext::DrawCommand::LINE_3D: {
                     auto s = draw_ctx.world_to_screen({cmd.x1, cmd.y1, cmd.z1});
@@ -102,19 +98,11 @@ namespace lfs::python {
                     auto p = draw_ctx.world_to_screen({cmd.x1, cmd.y1, cmd.z1});
                     if (p) {
                         auto [px, py] = *p;
-                        dl->AddCircleFilled({px, py}, cmd.radius, color);
+                        dl->AddCircleFilled({px, py}, cmd.radius, color, 32);
                     }
                     break;
                 }
                 case PyViewportDrawContext::DrawCommand::TEXT_3D: {
-                    auto p = draw_ctx.world_to_screen({cmd.x1, cmd.y1, cmd.z1});
-                    if (p) {
-                        auto [px, py] = *p;
-                        if (cmd.font_size > 0.0f)
-                            dl->AddText(ImGui::GetFont(), cmd.font_size, {px, py}, color, cmd.text.c_str());
-                        else
-                            dl->AddText({px, py}, color, cmd.text.c_str());
-                    }
                     break;
                 }
                 default:

@@ -4,15 +4,7 @@
 
 #pragma once
 
-#include "gui/line_renderer.hpp"
 #include "gui/panel_registry.hpp"
-
-#include <future>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -22,7 +14,6 @@ namespace lfs::vis::gui {
     class SequencerUIManager;
     class PanelLayoutManager;
     class RmlStatusBar;
-    class VulkanUiTexture;
 
 } // namespace lfs::vis::gui
 
@@ -68,31 +59,6 @@ namespace lfs::vis::gui::native_panels {
 
     private:
         GuiManager* gui_;
-    };
-
-    struct DecodedThumbnail {
-        std::vector<unsigned char> pixels;
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-    };
-
-    struct ThumbnailEntry {
-        std::shared_ptr<VulkanUiTexture> texture;
-        std::future<DecodedThumbnail> decode;
-        bool decode_started = false;
-    };
-
-    class ViewportSceneGuidesPanel : public IPanel {
-    public:
-        ~ViewportSceneGuidesPanel() override;
-        void draw(const PanelDrawContext& ctx) override;
-        bool poll(const PanelDrawContext& ctx) override;
-
-    private:
-        LineRenderer line_renderer_;
-        std::unordered_map<std::string, std::shared_ptr<ThumbnailEntry>> camera_thumbnail_entries_;
-        std::unordered_set<std::string> camera_thumbnail_failed_;
     };
 
     class SequencerPanel : public IPanel {

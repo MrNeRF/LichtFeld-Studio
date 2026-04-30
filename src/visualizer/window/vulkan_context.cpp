@@ -36,6 +36,8 @@ namespace lfs::vis {
                 extensions.push_back(extension_name);
             }
         }
+
+        constexpr std::uint64_t kFrameWaitTimeoutNs = 16'000'000;
 #endif
     } // namespace
 
@@ -152,8 +154,10 @@ namespace lfs::vis {
         if (frame_active_) {
             return fail("beginFrame called while another Vulkan frame is active");
         }
+        frame = {};
         if (device_ == VK_NULL_HANDLE || swapchain_ == VK_NULL_HANDLE || framebuffer_width_ <= 0 || framebuffer_height_ <= 0) {
-            return true;
+            last_error_.clear();
+            return false;
         }
 
         if (framebuffer_resized_) {
@@ -163,13 +167,27 @@ namespace lfs::vis {
             }
         }
 
-        vkWaitForFences(device_, 1, &in_flight_, VK_TRUE, std::numeric_limits<uint64_t>::max());
+        VkResult result = vkWaitForFences(device_, 1, &in_flight_, VK_TRUE, kFrameWaitTimeoutNs);
+        if (result == VK_TIMEOUT) {
+            last_error_.clear();
+            return false;
+        }
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkWaitForFences failed: {}", static_cast<int>(result)));
+        }
 
         uint32_t image_index = 0;
-        VkResult result = vkAcquireNextImageKHR(device_, swapchain_, std::numeric_limits<uint64_t>::max(),
-                                                image_available_, VK_NULL_HANDLE, &image_index);
+        result = vkAcquireNextImageKHR(device_, swapchain_, kFrameWaitTimeoutNs, image_available_,
+                                       VK_NULL_HANDLE, &image_index);
+        if (result == VK_NOT_READY || result == VK_TIMEOUT) {
+            last_error_.clear();
+            return false;
+        }
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
-            return recreateSwapchain();
+            if (recreateSwapchain()) {
+                last_error_.clear();
+            }
+            return false;
         }
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
             return fail(std::format("vkAcquireNextImageKHR failed: {}", static_cast<int>(result)));
@@ -210,6 +228,7 @@ namespace lfs::vis {
                                     : VK_NULL_HANDLE;
         frame.extent = swapchain_extent_;
         frame_active_ = true;
+        last_error_.clear();
         return true;
     }
 

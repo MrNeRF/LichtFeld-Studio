@@ -23,7 +23,6 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "theme/theme.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
@@ -75,6 +74,18 @@ namespace lfs::vis::gui {
             return base + (panel == SplitViewPanelId::Right ? 1 : 0);
         }
 
+        [[nodiscard]] NativeGizmoInput nativeGizmoInputFromFrame(const lfs::vis::FrameInputBuffer& frame_input) {
+            return {
+                .mouse_pos = {frame_input.mouse_x, frame_input.mouse_y},
+                .mouse_left_down = frame_input.mouse_down[0],
+                .mouse_left_clicked = frame_input.mouse_clicked[0],
+            };
+        }
+
+        [[nodiscard]] bool nativeControlModifierDown(const lfs::vis::FrameInputBuffer& frame_input) {
+            return (frame_input.key_mods & SDL_KMOD_CTRL) != 0;
+        }
+
         struct ViewportGizmoMarker {
             int encoded_axis = -1;
             int axis = 0;
@@ -92,24 +103,11 @@ namespace lfs::vis::gui {
             std::array<ViewportGizmoMarker, 6> markers{};
         };
 
-        constexpr std::array<glm::vec3, 3> VIEWPORT_GIZMO_AXIS_COLORS = {
-            glm::vec3{0.89f, 0.15f, 0.21f},
-            glm::vec3{0.54f, 0.86f, 0.20f},
-            glm::vec3{0.17f, 0.48f, 0.87f}};
+        constexpr float VIEWPORT_GIZMO_DISTANCE = 2.8f;
+        constexpr float VIEWPORT_GIZMO_FOV_DEGREES = 38.0f;
         constexpr float VIEWPORT_GIZMO_SPHERE_RADIUS = 0.198f;
         constexpr float VIEWPORT_GIZMO_LABEL_DISTANCE = 0.63f;
-        constexpr float VIEWPORT_GIZMO_HOVER_SCALE = 1.2f;
-        constexpr float VIEWPORT_GIZMO_HOVER_BRIGHTNESS = 1.3f;
         constexpr float VIEWPORT_GIZMO_HIT_RADIUS_SCALE = 2.5f;
-
-        [[nodiscard]] ImU32 viewportGizmoAxisColor(const int axis, const float alpha, const float brightness = 1.0f) {
-            const glm::vec3 c = glm::clamp(VIEWPORT_GIZMO_AXIS_COLORS[static_cast<size_t>(axis)] * brightness,
-                                           glm::vec3(0.0f), glm::vec3(1.0f));
-            return IM_COL32(static_cast<int>(c.r * 255.0f),
-                            static_cast<int>(c.g * 255.0f),
-                            static_cast<int>(c.b * 255.0f),
-                            static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f));
-        }
 
         [[nodiscard]] std::optional<ViewportGizmoLayoutData> buildViewportGizmoLayout(
             const ViewportGizmoPanelTarget& panel,
@@ -128,13 +126,15 @@ namespace lfs::vis::gui {
             };
             layout.center = layout.top_left + glm::vec2(size * 0.5f);
 
-            constexpr float GIZMO_DISTANCE = 2.8f;
-            constexpr float GIZMO_FOV = 38.0f;
             glm::mat4 view = lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(), glm::vec3(0.0f));
-            view[3][2] = -GIZMO_DISTANCE;
-            const glm::mat4 proj = glm::perspective(glm::radians(GIZMO_FOV), 1.0f, 0.1f, 10.0f);
-            const glm::vec3 origin_cam_space = glm::vec3(view * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-            const float ref_dist = std::max(glm::length(origin_cam_space), 0.001f);
+            view[3][2] = -VIEWPORT_GIZMO_DISTANCE;
+            const glm::mat4 proj =
+                glm::perspective(glm::radians(VIEWPORT_GIZMO_FOV_DEGREES), 1.0f, 0.1f, 10.0f);
+            const float projected_marker_radius =
+                VIEWPORT_GIZMO_SPHERE_RADIUS *
+                (1.0f / std::tan(glm::radians(VIEWPORT_GIZMO_FOV_DEGREES) * 0.5f)) /
+                VIEWPORT_GIZMO_DISTANCE *
+                size * 0.5f;
 
             const auto project_marker = [&](const int axis, const bool negative) {
                 ViewportGizmoMarker marker;
@@ -153,11 +153,8 @@ namespace lfs::vis::gui {
                 const glm::vec3 ndc = glm::vec3(clip) / clip.w;
                 const float local_x = (ndc.x * 0.5f + 0.5f) * size;
                 const float local_y = (1.0f - (ndc.y * 0.5f + 0.5f)) * size;
-                const glm::vec3 cam_space = glm::vec3(view * glm::vec4(position, 1.0f));
-                const float scale_factor = glm::length(cam_space) / ref_dist;
-
                 marker.screen_pos = layout.top_left + glm::vec2(local_x, local_y);
-                marker.radius = VIEWPORT_GIZMO_SPHERE_RADIUS * scale_factor * size * 0.5f;
+                marker.radius = projected_marker_radius;
                 marker.depth = clip.z / clip.w;
                 marker.visible = true;
                 return marker;
@@ -184,71 +181,6 @@ namespace lfs::vis::gui {
                 }
             }
             return -1;
-        }
-
-        void drawViewportGizmoOverlay(
-            const ViewportGizmoLayoutData& layout,
-            ImDrawList* const draw_list,
-            const int hovered_axis) {
-            if (!draw_list) {
-                return;
-            }
-
-            const auto& t = theme();
-            const ImVec2 top_left(layout.top_left.x, layout.top_left.y);
-            const ImVec2 bottom_right(layout.top_left.x + layout.size, layout.top_left.y + layout.size);
-            draw_list->PushClipRect(top_left, bottom_right, true);
-
-            const ImVec2 center(layout.center.x, layout.center.y);
-            draw_list->AddCircleFilled(center, layout.size * 0.46f,
-                                       toU32WithAlpha(t.overlay.background, 0.24f), 40);
-            draw_list->AddCircle(center, layout.size * 0.46f,
-                                 toU32WithAlpha(t.overlay.text_dim, 0.30f), 40, 1.0f);
-
-            std::vector<const ViewportGizmoMarker*> draw_order;
-            draw_order.reserve(layout.markers.size());
-            for (const auto& marker : layout.markers) {
-                if (marker.visible) {
-                    draw_order.push_back(&marker);
-                }
-            }
-            std::sort(draw_order.begin(), draw_order.end(),
-                      [](const auto* a, const auto* b) {
-                          return a->depth > b->depth;
-                      });
-
-            for (const auto& marker : layout.markers) {
-                if (!marker.visible || marker.negative) {
-                    continue;
-                }
-                const ImVec2 p(marker.screen_pos.x, marker.screen_pos.y);
-                draw_list->AddLine(center, p, viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f);
-            }
-
-            for (const auto* const marker_ptr : draw_order) {
-                const auto& marker = *marker_ptr;
-                const bool hovered = hovered_axis == marker.encoded_axis;
-                const float radius = marker.radius * (hovered ? VIEWPORT_GIZMO_HOVER_SCALE : 1.0f);
-                const float brightness = hovered ? VIEWPORT_GIZMO_HOVER_BRIGHTNESS : 1.0f;
-                const ImU32 color = viewportGizmoAxisColor(marker.axis, marker.negative ? 0.88f : 1.0f, brightness);
-                const ImVec2 p(marker.screen_pos.x, marker.screen_pos.y);
-
-                if (marker.negative) {
-                    draw_list->AddCircle(p, radius, color, 24, hovered ? 3.0f : 2.0f);
-                    draw_list->AddCircleFilled(p, std::max(radius - 5.0f, 2.0f),
-                                               viewportGizmoAxisColor(marker.axis, 0.18f, brightness), 20);
-                } else {
-                    draw_list->AddCircleFilled(p, radius, color, 24);
-                    draw_list->AddCircle(p, radius, toU32WithAlpha(t.palette.background, 0.55f), 24, 1.0f);
-
-                    const char label[2] = {static_cast<char>('X' + marker.axis), '\0'};
-                    const ImVec2 text_size = ImGui::CalcTextSize(label);
-                    draw_list->AddText(ImVec2(p.x - text_size.x * 0.5f, p.y - text_size.y * 0.5f),
-                                       IM_COL32(255, 255, 255, 245), label);
-                }
-            }
-
-            draw_list->PopClipRect();
         }
 
         [[nodiscard]] std::vector<ViewportGizmoPanelTarget> collectViewportGizmoPanels(
@@ -762,11 +694,13 @@ namespace lfs::vis::gui {
             gizmo_matrix = transform_gizmo_matrix;
         }
 
-        auto* const main_viewport = ImGui::GetMainViewport();
-        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
-        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
-        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
-        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
+        NativeOverlayDrawList overlay_drawlist;
+        const glm::vec2 clip_min(active_panel->pos.x, active_panel->pos.y);
+        const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
+        overlay_drawlist.PushClipRect(clip_min, clip_max, true);
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         const bool gizmo_uses_local_axes = actually_using_bounds || !use_world_space;
 
@@ -797,9 +731,10 @@ namespace lfs::vis::gui {
             bounds_config.orientation_world = userFacingLocalRotation(gizmo_matrix);
             bounds_config.half_extents_world = extractScale(gizmo_matrix) * 0.5f;
             bounds_config.min_half_extents_world = safe_world_scale * (MIN_GIZMO_SCALE * 0.5f);
-            bounds_config.draw_list = overlay_drawlist;
+            bounds_config.draw_list = &overlay_drawlist;
+            bounds_config.input = gizmo_input;
             bounds_config.input_enabled = !scale_gizmo_has_priority;
-            bounds_config.snap = ImGui::GetIO().KeyCtrl;
+            bounds_config.snap = snap_modifier;
             bounds_config.snap_ratio = SCALE_SNAP_RATIO;
 
             const auto bounds_result = drawBoundsGizmo(bounds_config);
@@ -834,8 +769,9 @@ namespace lfs::vis::gui {
             translation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             translation_config.orientation_world =
                 gizmo_uses_local_axes ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
-            translation_config.draw_list = overlay_drawlist;
-            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.draw_list = &overlay_drawlist;
+            translation_config.input = gizmo_input;
+            translation_config.snap = snap_modifier;
             translation_config.snap_units = TRANSLATE_SNAP_UNITS;
 
             const auto translation_result = drawTranslationGizmo(translation_config);
@@ -859,8 +795,9 @@ namespace lfs::vis::gui {
             rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             rotation_config.orientation_world =
                 gizmo_uses_local_axes ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
-            rotation_config.draw_list = overlay_drawlist;
-            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.draw_list = &overlay_drawlist;
+            rotation_config.input = gizmo_input;
+            rotation_config.snap = snap_modifier;
             rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
 
             const auto rotation_result = drawRotationGizmo(rotation_config);
@@ -882,9 +819,10 @@ namespace lfs::vis::gui {
             scale_config.pivot_world = glm::vec3(transform_gizmo_matrix[3]);
             scale_config.orientation_world =
                 gizmo_uses_local_axes ? userFacingLocalRotation(transform_gizmo_matrix) : glm::mat3(1.0f);
-            scale_config.draw_list = overlay_drawlist;
+            scale_config.draw_list = &overlay_drawlist;
+            scale_config.input = gizmo_input;
             scale_config.input_enabled = !isBoundsGizmoActive();
-            scale_config.snap = ImGui::GetIO().KeyCtrl;
+            scale_config.snap = snap_modifier;
             scale_config.snap_ratio = SCALE_SNAP_RATIO;
 
             scale_result = drawScaleGizmo(scale_config);
@@ -1128,7 +1066,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        overlay_drawlist->PopClipRect();
+        overlay_drawlist.PopClipRect();
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
@@ -1207,11 +1145,13 @@ namespace lfs::vis::gui {
 
         const bool use_bounds = (gizmo_op == GizmoOperation::Scale);
 
-        auto* const main_viewport = ImGui::GetMainViewport();
-        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
-        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
-        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
-        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
+        NativeOverlayDrawList overlay_drawlist;
+        const glm::vec2 clip_min(active_panel->pos.x, active_panel->pos.y);
+        const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
+        overlay_drawlist.PushClipRect(clip_min, clip_max, true);
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool gizmo_changed = false;
         bool is_using = false;
@@ -1234,9 +1174,10 @@ namespace lfs::vis::gui {
             bounds_config.orientation_world = userFacingLocalRotation(gizmo_matrix);
             bounds_config.half_extents_world = gizmo_ops::extractScale(gizmo_matrix) * 0.5f;
             bounds_config.min_half_extents_world = safe_world_scale * (MIN_GIZMO_SCALE * 0.5f);
-            bounds_config.draw_list = overlay_drawlist;
+            bounds_config.draw_list = &overlay_drawlist;
+            bounds_config.input = gizmo_input;
             bounds_config.input_enabled = !scale_gizmo_has_priority;
-            bounds_config.snap = ImGui::GetIO().KeyCtrl;
+            bounds_config.snap = snap_modifier;
             bounds_config.snap_ratio = SCALE_SNAP_RATIO;
 
             const auto bounds_result = drawBoundsGizmo(bounds_config);
@@ -1270,8 +1211,9 @@ namespace lfs::vis::gui {
             translation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             translation_config.orientation_world =
                 gizmo_local_aligned ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
-            translation_config.draw_list = overlay_drawlist;
-            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.draw_list = &overlay_drawlist;
+            translation_config.input = gizmo_input;
+            translation_config.snap = snap_modifier;
             translation_config.snap_units = TRANSLATE_SNAP_UNITS;
 
             const auto translation_result = drawTranslationGizmo(translation_config);
@@ -1295,8 +1237,9 @@ namespace lfs::vis::gui {
             rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             rotation_config.orientation_world =
                 gizmo_local_aligned ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
-            rotation_config.draw_list = overlay_drawlist;
-            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.draw_list = &overlay_drawlist;
+            rotation_config.input = gizmo_input;
+            rotation_config.snap = snap_modifier;
             rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
 
             const auto rotation_result = drawRotationGizmo(rotation_config);
@@ -1317,9 +1260,10 @@ namespace lfs::vis::gui {
             scale_config.projection = projection;
             scale_config.pivot_world = transform_gizmo_pivot_world;
             scale_config.orientation_world = userFacingLocalRotation(gizmo_matrix);
-            scale_config.draw_list = overlay_drawlist;
+            scale_config.draw_list = &overlay_drawlist;
+            scale_config.input = gizmo_input;
             scale_config.input_enabled = !isBoundsGizmoActive();
-            scale_config.snap = ImGui::GetIO().KeyCtrl;
+            scale_config.snap = snap_modifier;
             scale_config.snap_ratio = SCALE_SNAP_RATIO;
 
             scale_result = drawScaleGizmo(scale_config);
@@ -1414,7 +1358,7 @@ namespace lfs::vis::gui {
             render_manager->setCropboxGizmoActive(false);
         }
 
-        overlay_drawlist->PopClipRect();
+        overlay_drawlist.PopClipRect();
     }
 
     void GizmoManager::renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
@@ -1490,11 +1434,13 @@ namespace lfs::vis::gui {
 
         const bool use_bounds = (gizmo_op == GizmoOperation::Scale);
 
-        auto* const main_viewport = ImGui::GetMainViewport();
-        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
-        const ImVec2 clip_min(active_panel->pos.x, active_panel->pos.y);
-        const ImVec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
-        overlay_drawlist->PushClipRect(clip_min, clip_max, true);
+        NativeOverlayDrawList overlay_drawlist;
+        const glm::vec2 clip_min(active_panel->pos.x, active_panel->pos.y);
+        const glm::vec2 clip_max(clip_min.x + active_panel->size.x, clip_min.y + active_panel->size.y);
+        overlay_drawlist.PushClipRect(clip_min, clip_max, true);
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const NativeGizmoInput gizmo_input = nativeGizmoInputFromFrame(frame_input);
+        const bool snap_modifier = nativeControlModifierDown(frame_input);
 
         bool gizmo_changed = false;
         bool is_using = false;
@@ -1517,9 +1463,10 @@ namespace lfs::vis::gui {
             bounds_config.orientation_world = userFacingLocalRotation(gizmo_matrix);
             bounds_config.half_extents_world = gizmo_ops::extractScale(gizmo_matrix);
             bounds_config.min_half_extents_world = safe_world_scale * MIN_GIZMO_SCALE;
-            bounds_config.draw_list = overlay_drawlist;
+            bounds_config.draw_list = &overlay_drawlist;
+            bounds_config.input = gizmo_input;
             bounds_config.input_enabled = !scale_gizmo_has_priority;
-            bounds_config.snap = ImGui::GetIO().KeyCtrl;
+            bounds_config.snap = snap_modifier;
             bounds_config.snap_ratio = SCALE_SNAP_RATIO;
 
             const auto bounds_result = drawBoundsGizmo(bounds_config);
@@ -1551,8 +1498,9 @@ namespace lfs::vis::gui {
             translation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             translation_config.orientation_world =
                 gizmo_local_aligned ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
-            translation_config.draw_list = overlay_drawlist;
-            translation_config.snap = ImGui::GetIO().KeyCtrl;
+            translation_config.draw_list = &overlay_drawlist;
+            translation_config.input = gizmo_input;
+            translation_config.snap = snap_modifier;
             translation_config.snap_units = TRANSLATE_SNAP_UNITS;
 
             const auto translation_result = drawTranslationGizmo(translation_config);
@@ -1576,8 +1524,9 @@ namespace lfs::vis::gui {
             rotation_config.pivot_world = glm::vec3(gizmo_matrix[3]);
             rotation_config.orientation_world =
                 gizmo_local_aligned ? userFacingLocalRotation(gizmo_matrix) : glm::mat3(1.0f);
-            rotation_config.draw_list = overlay_drawlist;
-            rotation_config.snap = ImGui::GetIO().KeyCtrl;
+            rotation_config.draw_list = &overlay_drawlist;
+            rotation_config.input = gizmo_input;
+            rotation_config.snap = snap_modifier;
             rotation_config.snap_degrees = ROTATION_SNAP_DEGREES;
 
             const auto rotation_result = drawRotationGizmo(rotation_config);
@@ -1598,9 +1547,10 @@ namespace lfs::vis::gui {
             scale_config.projection = projection;
             scale_config.pivot_world = transform_gizmo_pivot_world;
             scale_config.orientation_world = userFacingLocalRotation(gizmo_matrix);
-            scale_config.draw_list = overlay_drawlist;
+            scale_config.draw_list = &overlay_drawlist;
+            scale_config.input = gizmo_input;
             scale_config.input_enabled = !isBoundsGizmoActive();
-            scale_config.snap = ImGui::GetIO().KeyCtrl;
+            scale_config.snap = snap_modifier;
             scale_config.snap_ratio = SCALE_SNAP_RATIO;
 
             scale_result = drawScaleGizmo(scale_config);
@@ -1695,7 +1645,7 @@ namespace lfs::vis::gui {
             render_manager->setEllipsoidGizmoActive(false);
         }
 
-        overlay_drawlist->PopClipRect();
+        overlay_drawlist.PopClipRect();
     }
 
     void GizmoManager::renderViewportGizmo(const ViewportLayout& viewport) {
@@ -1815,32 +1765,6 @@ namespace lfs::vis::gui {
                                               static_cast<float>(gizmo_drag_start_cursor_.y));
                     }
                 }
-            }
-        }
-
-        for (const auto& panel : panels) {
-            const int panel_hover_axis =
-                hovered_panel && hovered_panel->panel == panel.panel ? hovered_axis : -1;
-            if (const auto layout = buildViewportGizmoLayout(
-                    panel, VIEWPORT_GIZMO_SIZE, VIEWPORT_GIZMO_MARGIN_X, VIEWPORT_GIZMO_MARGIN_Y)) {
-                drawViewportGizmoOverlay(
-                    *layout,
-                    ImGui::GetBackgroundDrawList(ImGui::GetMainViewport()),
-                    panel_hover_axis);
-            }
-        }
-
-        if (viewport_gizmo_dragging_) {
-            if (const auto* const active_panel = find_panel(viewport_gizmo_active_panel_)) {
-                const float gizmo_x = active_panel->pos.x + active_panel->size.x -
-                                      VIEWPORT_GIZMO_SIZE - VIEWPORT_GIZMO_MARGIN_X;
-                const float gizmo_y = active_panel->pos.y + VIEWPORT_GIZMO_MARGIN_Y;
-                const float center_x = gizmo_x + VIEWPORT_GIZMO_SIZE * 0.5f;
-                const float center_y = gizmo_y + VIEWPORT_GIZMO_SIZE * 0.5f;
-                constexpr float OVERLAY_RADIUS = VIEWPORT_GIZMO_SIZE * 0.46f;
-                ImGui::GetBackgroundDrawList()->AddCircleFilled(
-                    ImVec2(center_x, center_y), OVERLAY_RADIUS,
-                    toU32WithAlpha(theme().overlay.text_dim, 0.2f), 32);
             }
         }
     }

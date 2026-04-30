@@ -58,6 +58,10 @@ namespace lfs::vis {
             glm::vec4 far_y{0.0f};
         };
 
+        struct GridPush {
+            std::int32_t grid_index = 0;
+        };
+
         struct OverlayPush {
             glm::vec4 padding{0.0f};
         };
@@ -66,6 +70,15 @@ namespace lfs::vis {
             glm::vec4 center_size{0.0f};
             glm::vec4 color_opacity{0.26f, 0.59f, 0.98f, 1.0f};
         };
+
+        struct TexturedOverlayPush {
+            glm::vec4 tint_opacity{1.0f, 1.0f, 1.0f, 0.8f};
+            glm::vec4 effects{0.0f};
+        };
+
+        [[nodiscard]] VkDescriptorSet descriptorSetFromId(const std::uintptr_t texture_id) {
+            return reinterpret_cast<VkDescriptorSet>(texture_id);
+        }
 
         constexpr const char* kScreenQuadVert = R"GLSL(
 #version 450
@@ -139,6 +152,97 @@ layout(location = 0) in vec4 Color;
 layout(location = 0) out vec4 FragColor;
 void main() {
     FragColor = Color;
+}
+)GLSL";
+
+        constexpr const char* kShapeOverlayVert = R"GLSL(
+#version 450
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aScreenPos;
+layout(location = 2) in vec2 aP0;
+layout(location = 3) in vec2 aP1;
+layout(location = 4) in vec4 aColor;
+layout(location = 5) in vec4 aParams;
+layout(location = 0) out vec2 ScreenPos;
+layout(location = 1) out vec2 P0;
+layout(location = 2) out vec2 P1;
+layout(location = 3) out vec4 Color;
+layout(location = 4) out vec4 Params;
+void main() {
+    gl_Position = vec4(aPos.xy, 0.0, 1.0);
+    ScreenPos = aScreenPos;
+    P0 = aP0;
+    P1 = aP1;
+    Color = aColor;
+    Params = aParams;
+}
+)GLSL";
+
+        constexpr const char* kShapeOverlayFrag = R"GLSL(
+#version 450
+layout(location = 0) in vec2 ScreenPos;
+layout(location = 1) in vec2 P0;
+layout(location = 2) in vec2 P1;
+layout(location = 3) in vec4 Color;
+layout(location = 4) in vec4 Params;
+layout(location = 0) out vec4 FragColor;
+
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+void main() {
+    float shape = Params.x;
+    float thickness = max(Params.y, 1.0);
+    float radius = max(Params.z, 0.0);
+    float aa = max(Params.w, 0.75);
+    float signed_dist = 1e6;
+
+    if (shape < 0.5) {
+        signed_dist = sdSegment(ScreenPos, P0, P1) - thickness * 0.5;
+    } else if (shape < 1.5) {
+        signed_dist = length(ScreenPos - P0) - radius;
+    } else {
+        signed_dist = abs(length(ScreenPos - P0) - radius) - thickness * 0.5;
+    }
+
+    float alpha = Color.a * smoothstep(aa, -aa, signed_dist);
+    if (alpha <= 0.001) {
+        discard;
+    }
+    FragColor = vec4(Color.rgb, alpha);
+}
+)GLSL";
+
+        constexpr const char* kTexturedOverlayVert = R"GLSL(
+#version 450
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
+layout(location = 0) out vec2 TexCoord;
+void main() {
+    gl_Position = vec4(aPos.xy, 0.0, 1.0);
+    TexCoord = aTexCoord;
+}
+)GLSL";
+
+        constexpr const char* kTexturedOverlayFrag = R"GLSL(
+#version 450
+layout(set = 0, binding = 0) uniform sampler2D overlayTexture;
+layout(location = 0) in vec2 TexCoord;
+layout(location = 0) out vec4 FragColor;
+layout(push_constant) uniform TexturedOverlayPush {
+    vec4 tint_opacity;
+    vec4 effects;
+} u;
+
+void main() {
+    vec4 sampled = texture(overlayTexture, TexCoord);
+    vec3 rgb = mix(sampled.rgb, u.tint_opacity.rgb, clamp(u.effects.x, 0.0, 1.0));
+    rgb = mix(rgb, vec3(0.5), clamp(u.effects.y, 0.0, 1.0));
+    FragColor = vec4(rgb, sampled.a * clamp(u.tint_opacity.a, 0.0, 1.0));
 }
 )GLSL";
 
@@ -220,7 +324,7 @@ void main() {
 layout(location = 0) in vec2 vertex_position;
 layout(location = 0) out vec3 worldFar;
 layout(location = 1) out vec3 worldNear;
-layout(set = 0, binding = 0) uniform GridUniform {
+struct GridUniform {
     mat4 view_projection;
     vec4 view_position_plane;
     vec4 opacity_padding;
@@ -230,9 +334,16 @@ layout(set = 0, binding = 0) uniform GridUniform {
     vec4 far_origin;
     vec4 far_x;
     vec4 far_y;
-} u;
+};
+layout(std430, set = 0, binding = 0) readonly buffer GridUniforms {
+    GridUniform grids[];
+} grid_buffer;
+layout(push_constant) uniform GridPush {
+    int grid_index;
+} push;
 
 void main() {
+    GridUniform u = grid_buffer.grids[push.grid_index];
     gl_Position = vec4(vertex_position, 0.0, 1.0);
     vec2 p = vec2(vertex_position.x * 0.5 + 0.5, -vertex_position.y * 0.5 + 0.5);
     worldNear = (u.near_origin + u.near_x * p.x + u.near_y * p.y).xyz;
@@ -245,7 +356,7 @@ void main() {
 layout(location = 0) in vec3 worldFar;
 layout(location = 1) in vec3 worldNear;
 layout(location = 0) out vec4 FragColor;
-layout(set = 0, binding = 0) uniform GridUniform {
+struct GridUniform {
     mat4 view_projection;
     vec4 view_position_plane;
     vec4 opacity_padding;
@@ -255,7 +366,13 @@ layout(set = 0, binding = 0) uniform GridUniform {
     vec4 far_origin;
     vec4 far_x;
     vec4 far_y;
-} u;
+};
+layout(std430, set = 0, binding = 0) readonly buffer GridUniforms {
+    GridUniform grids[];
+} grid_buffer;
+layout(push_constant) uniform GridPush {
+    int grid_index;
+} push;
 
 const vec4 planes[3] = vec4[3](
     vec4(1.0, 0.0, 0.0, 0.0),
@@ -310,11 +427,13 @@ float pristineGrid(in vec2 uv, in vec2 ddx, in vec2 ddy, vec2 lineWidth) {
 }
 
 float calcDepth(vec3 p) {
+    GridUniform u = grid_buffer.grids[push.grid_index];
     vec4 v = u.view_projection * vec4(p, 1.0);
     return (v.z / v.w) * 0.5 + 0.5;
 }
 
 void main() {
+    GridUniform u = grid_buffer.grids[push.grid_index];
     int plane = clamp(int(u.view_position_plane.w), 0, 2);
     vec3 p = worldNear;
     vec3 v = normalize(worldFar - worldNear);
@@ -502,6 +621,28 @@ void main() {
                 .height = static_cast<std::uint32_t>(std::max(y1 - y0, 0)),
             };
         }
+
+        [[nodiscard]] FramebufferRect toFramebufferRect(
+            const VulkanViewportPassParams& params,
+            const VulkanViewportGridOverlay& grid,
+            const VkExtent2D extent) {
+            const float sx = params.framebuffer_scale.x > 0.0f ? params.framebuffer_scale.x : 1.0f;
+            const float sy = params.framebuffer_scale.y > 0.0f ? params.framebuffer_scale.y : 1.0f;
+            const int x0 = std::clamp(static_cast<int>(std::lround(grid.viewport_pos.x * sx)),
+                                      0, static_cast<int>(extent.width));
+            const int y0 = std::clamp(static_cast<int>(std::lround(grid.viewport_pos.y * sy)),
+                                      0, static_cast<int>(extent.height));
+            const int x1 = std::clamp(static_cast<int>(std::lround((grid.viewport_pos.x + grid.viewport_size.x) * sx)),
+                                      0, static_cast<int>(extent.width));
+            const int y1 = std::clamp(static_cast<int>(std::lround((grid.viewport_pos.y + grid.viewport_size.y) * sy)),
+                                      0, static_cast<int>(extent.height));
+            return {
+                .x = x0,
+                .y = y0,
+                .width = static_cast<std::uint32_t>(std::max(x1 - x0, 0)),
+                .height = static_cast<std::uint32_t>(std::max(y1 - y0, 0)),
+            };
+        }
     } // namespace
 #endif
 
@@ -524,6 +665,21 @@ void main() {
         std::size_t overlay_capacity = 0;
         std::uint32_t overlay_vertex_count = 0;
 
+        VkBuffer shape_overlay_buffer = VK_NULL_HANDLE;
+        VkDeviceMemory shape_overlay_memory = VK_NULL_HANDLE;
+        std::size_t shape_overlay_capacity = 0;
+        std::uint32_t shape_overlay_vertex_count = 0;
+
+        VkBuffer ui_shape_overlay_buffer = VK_NULL_HANDLE;
+        VkDeviceMemory ui_shape_overlay_memory = VK_NULL_HANDLE;
+        std::size_t ui_shape_overlay_capacity = 0;
+        std::uint32_t ui_shape_overlay_vertex_count = 0;
+
+        VkBuffer textured_overlay_buffer = VK_NULL_HANDLE;
+        VkDeviceMemory textured_overlay_memory = VK_NULL_HANDLE;
+        std::size_t textured_overlay_capacity = 0;
+        std::uint32_t textured_overlay_vertex_count = 0;
+
         VkSampler scene_sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout scene_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
@@ -540,6 +696,8 @@ void main() {
         VkDescriptorSet grid_descriptor_set = VK_NULL_HANDLE;
         VkBuffer grid_uniform_buffer = VK_NULL_HANDLE;
         VkDeviceMemory grid_uniform_memory = VK_NULL_HANDLE;
+        std::size_t grid_uniform_capacity = 0;
+        std::uint32_t grid_uniform_count = 0;
 
         VkPipelineLayout scene_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
@@ -549,6 +707,10 @@ void main() {
         VkPipeline grid_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout overlay_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline overlay_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout shape_overlay_pipeline_layout = VK_NULL_HANDLE;
+        VkPipeline shape_overlay_pipeline = VK_NULL_HANDLE;
+        VkPipelineLayout textured_overlay_pipeline_layout = VK_NULL_HANDLE;
+        VkPipeline textured_overlay_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout pivot_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pivot_pipeline = VK_NULL_HANDLE;
 
@@ -683,7 +845,7 @@ void main() {
         [[nodiscard]] bool createGridResources() {
             VkDescriptorSetLayoutBinding binding{};
             binding.binding = 0;
-            binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             binding.descriptorCount = 1;
             binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             VkDescriptorSetLayoutCreateInfo layout_info{};
@@ -694,7 +856,7 @@ void main() {
                 return false;
             }
 
-            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1};
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
             VkDescriptorPoolCreateInfo pool_info{};
             pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             pool_info.maxSets = 1;
@@ -713,25 +875,6 @@ void main() {
                 return false;
             }
 
-            if (!createBuffer(sizeof(GridUniform),
-                              VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              grid_uniform_buffer,
-                              grid_uniform_memory)) {
-                return false;
-            }
-            VkDescriptorBufferInfo buffer_info{};
-            buffer_info.buffer = grid_uniform_buffer;
-            buffer_info.offset = 0;
-            buffer_info.range = sizeof(GridUniform);
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = grid_descriptor_set;
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            write.pBufferInfo = &buffer_info;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
             return true;
         }
 
@@ -755,13 +898,20 @@ void main() {
             return module;
         }
 
+        enum class PipelineVertexLayout {
+            ScreenQuad,
+            ColorOverlay,
+            TexturedOverlay,
+            ShapeOverlay
+        };
+
         [[nodiscard]] bool createPipeline(const char* vertex_source,
                                           const char* fragment_source,
                                           const char* label,
                                           VkDescriptorSetLayout descriptor_layout,
                                           const VkPushConstantRange* push_constant,
                                           bool enable_blend,
-                                          bool overlay_vertices,
+                                          PipelineVertexLayout vertex_layout,
                                           VkPipelineLayout& pipeline_layout,
                                           VkPipeline& pipeline) {
             const auto vertex_spv = compileGlsl(vertex_source, EShLangVertex, label);
@@ -792,27 +942,67 @@ void main() {
 
             VkVertexInputBindingDescription binding{};
             binding.binding = 0;
-            binding.stride = overlay_vertices ? sizeof(VulkanViewportOverlayVertex) : sizeof(Vertex);
+            binding.stride = sizeof(Vertex);
+            if (vertex_layout == PipelineVertexLayout::ColorOverlay) {
+                binding.stride = sizeof(VulkanViewportOverlayVertex);
+            } else if (vertex_layout == PipelineVertexLayout::TexturedOverlay) {
+                binding.stride = sizeof(VulkanViewportTexturedOverlayVertex);
+            } else if (vertex_layout == PipelineVertexLayout::ShapeOverlay) {
+                binding.stride = sizeof(VulkanViewportShapeOverlayVertex);
+            }
             binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            std::array<VkVertexInputAttributeDescription, 2> attributes{};
+            std::array<VkVertexInputAttributeDescription, 6> attributes{};
             attributes[0].location = 0;
             attributes[0].binding = 0;
             attributes[0].format = VK_FORMAT_R32G32_SFLOAT;
-            attributes[0].offset = overlay_vertices
-                                       ? offsetof(VulkanViewportOverlayVertex, position)
-                                       : offsetof(Vertex, position);
+            if (vertex_layout == PipelineVertexLayout::ColorOverlay) {
+                attributes[0].offset = offsetof(VulkanViewportOverlayVertex, position);
+            } else if (vertex_layout == PipelineVertexLayout::TexturedOverlay) {
+                attributes[0].offset = offsetof(VulkanViewportTexturedOverlayVertex, position);
+            } else if (vertex_layout == PipelineVertexLayout::ShapeOverlay) {
+                attributes[0].offset = offsetof(VulkanViewportShapeOverlayVertex, position);
+            } else {
+                attributes[0].offset = offsetof(Vertex, position);
+            }
             attributes[1].location = 1;
             attributes[1].binding = 0;
-            attributes[1].format = overlay_vertices ? VK_FORMAT_R32G32B32A32_SFLOAT : VK_FORMAT_R32G32_SFLOAT;
-            attributes[1].offset = overlay_vertices
-                                       ? offsetof(VulkanViewportOverlayVertex, color)
-                                       : offsetof(Vertex, uv);
+            attributes[1].format = vertex_layout == PipelineVertexLayout::ColorOverlay
+                                       ? VK_FORMAT_R32G32B32A32_SFLOAT
+                                       : VK_FORMAT_R32G32_SFLOAT;
+            if (vertex_layout == PipelineVertexLayout::ColorOverlay) {
+                attributes[1].offset = offsetof(VulkanViewportOverlayVertex, color);
+            } else if (vertex_layout == PipelineVertexLayout::TexturedOverlay) {
+                attributes[1].offset = offsetof(VulkanViewportTexturedOverlayVertex, uv);
+            } else if (vertex_layout == PipelineVertexLayout::ShapeOverlay) {
+                attributes[1].offset = offsetof(VulkanViewportShapeOverlayVertex, screen_position);
+            } else {
+                attributes[1].offset = offsetof(Vertex, uv);
+            }
+            if (vertex_layout == PipelineVertexLayout::ShapeOverlay) {
+                attributes[2].location = 2;
+                attributes[2].binding = 0;
+                attributes[2].format = VK_FORMAT_R32G32_SFLOAT;
+                attributes[2].offset = offsetof(VulkanViewportShapeOverlayVertex, p0);
+                attributes[3].location = 3;
+                attributes[3].binding = 0;
+                attributes[3].format = VK_FORMAT_R32G32_SFLOAT;
+                attributes[3].offset = offsetof(VulkanViewportShapeOverlayVertex, p1);
+                attributes[4].location = 4;
+                attributes[4].binding = 0;
+                attributes[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+                attributes[4].offset = offsetof(VulkanViewportShapeOverlayVertex, color);
+                attributes[5].location = 5;
+                attributes[5].binding = 0;
+                attributes[5].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+                attributes[5].offset = offsetof(VulkanViewportShapeOverlayVertex, params);
+            }
 
             VkPipelineVertexInputStateCreateInfo vertex_input{};
             vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
             vertex_input.vertexBindingDescriptionCount = 1;
             vertex_input.pVertexBindingDescriptions = &binding;
-            vertex_input.vertexAttributeDescriptionCount = static_cast<std::uint32_t>(attributes.size());
+            vertex_input.vertexAttributeDescriptionCount =
+                vertex_layout == PipelineVertexLayout::ShapeOverlay ? 6u : 2u;
             vertex_input.pVertexAttributeDescriptions = attributes.data();
 
             VkPipelineInputAssemblyStateCreateInfo input_assembly{};
@@ -904,6 +1094,10 @@ void main() {
         }
 
         [[nodiscard]] bool createPipelines() {
+            VkPushConstantRange grid_push{};
+            grid_push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+            grid_push.offset = 0;
+            grid_push.size = sizeof(GridPush);
             VkPushConstantRange vignette_push{};
             vignette_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             vignette_push.offset = 0;
@@ -912,20 +1106,31 @@ void main() {
             pivot_push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             pivot_push.offset = 0;
             pivot_push.size = sizeof(PivotPush);
+            VkPushConstantRange textured_overlay_push{};
+            textured_overlay_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            textured_overlay_push.offset = 0;
+            textured_overlay_push.size = sizeof(TexturedOverlayPush);
             return createPipeline(kScreenQuadVert, kSceneFrag, "scene",
-                                  scene_descriptor_layout, nullptr, false, false,
+                                  scene_descriptor_layout, nullptr, false, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
                    createPipeline(kScreenQuadVert, kVignetteFrag, "vignette",
-                                  VK_NULL_HANDLE, &vignette_push, true, false,
+                                  VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
                                   vignette_pipeline_layout, vignette_pipeline) &&
                    createPipeline(kGridVert, kGridFrag, "grid",
-                                  grid_descriptor_layout, nullptr, true, false,
+                                  grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::ScreenQuad,
                                   grid_pipeline_layout, grid_pipeline) &&
                    createPipeline(kOverlayVert, kOverlayFrag, "overlay",
-                                  VK_NULL_HANDLE, nullptr, true, true,
+                                  VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ColorOverlay,
                                   overlay_pipeline_layout, overlay_pipeline) &&
+                   createPipeline(kShapeOverlayVert, kShapeOverlayFrag, "shape_overlay",
+                                  VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ShapeOverlay,
+                                  shape_overlay_pipeline_layout, shape_overlay_pipeline) &&
+                   createPipeline(kTexturedOverlayVert, kTexturedOverlayFrag, "textured_overlay",
+                                  scene_descriptor_layout, &textured_overlay_push, true,
+                                  PipelineVertexLayout::TexturedOverlay,
+                                  textured_overlay_pipeline_layout, textured_overlay_pipeline) &&
                    createPipeline(kPivotVert, kPivotFrag, "pivot",
-                                  VK_NULL_HANDLE, &pivot_push, true, false,
+                                  VK_NULL_HANDLE, &pivot_push, true, PipelineVertexLayout::ScreenQuad,
                                   pivot_pipeline_layout, pivot_pipeline);
         }
 
@@ -1170,11 +1375,186 @@ void main() {
                 std::min<std::size_t>(params.overlay_triangles.size(), std::numeric_limits<std::uint32_t>::max()));
         }
 
-        void updateGridUniform(const VulkanViewportPassParams& params) {
-            if (grid_uniform_memory == VK_NULL_HANDLE) {
+        bool ensureShapeOverlayBuffer(const std::size_t vertex_count,
+                                      VkBuffer& buffer,
+                                      VkDeviceMemory& memory,
+                                      std::size_t& capacity,
+                                      std::uint32_t& out_count) {
+            if (vertex_count == 0) {
+                out_count = 0;
+                return true;
+            }
+            if (buffer != VK_NULL_HANDLE && capacity >= vertex_count) {
+                return true;
+            }
+            if (buffer != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device, buffer, nullptr);
+                buffer = VK_NULL_HANDLE;
+            }
+            if (memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device, memory, nullptr);
+                memory = VK_NULL_HANDLE;
+            }
+
+            std::size_t new_capacity = 256;
+            while (new_capacity < vertex_count) {
+                new_capacity *= 2;
+            }
+            if (!createBuffer(sizeof(VulkanViewportShapeOverlayVertex) * new_capacity,
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              buffer,
+                              memory)) {
+                capacity = 0;
+                out_count = 0;
+                return false;
+            }
+            capacity = new_capacity;
+            return true;
+        }
+
+        void updateShapeOverlayBuffer(const std::vector<VulkanViewportShapeOverlayVertex>& vertices,
+                                      VkBuffer& buffer,
+                                      VkDeviceMemory& memory,
+                                      std::size_t& capacity,
+                                      std::uint32_t& out_count) {
+            out_count = 0;
+            if (vertices.empty()) {
                 return;
             }
-            const glm::mat4 view_inv = glm::inverse(params.grid_view);
+            if (!ensureShapeOverlayBuffer(vertices.size(), buffer, memory, capacity, out_count)) {
+                return;
+            }
+            void* mapped = nullptr;
+            const VkDeviceSize bytes =
+                static_cast<VkDeviceSize>(sizeof(VulkanViewportShapeOverlayVertex) * vertices.size());
+            if (vkMapMemory(device, memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
+                return;
+            }
+            std::memcpy(mapped, vertices.data(), static_cast<std::size_t>(bytes));
+            vkUnmapMemory(device, memory);
+            out_count = static_cast<std::uint32_t>(
+                std::min<std::size_t>(vertices.size(), std::numeric_limits<std::uint32_t>::max()));
+        }
+
+        bool ensureTexturedOverlayBuffer(const std::size_t vertex_count) {
+            if (vertex_count == 0) {
+                textured_overlay_vertex_count = 0;
+                return true;
+            }
+            if (textured_overlay_buffer != VK_NULL_HANDLE && textured_overlay_capacity >= vertex_count) {
+                return true;
+            }
+            if (textured_overlay_buffer != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device, textured_overlay_buffer, nullptr);
+                textured_overlay_buffer = VK_NULL_HANDLE;
+            }
+            if (textured_overlay_memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device, textured_overlay_memory, nullptr);
+                textured_overlay_memory = VK_NULL_HANDLE;
+            }
+
+            std::size_t capacity = 64;
+            while (capacity < vertex_count) {
+                capacity *= 2;
+            }
+            if (!createBuffer(sizeof(VulkanViewportTexturedOverlayVertex) * capacity,
+                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              textured_overlay_buffer,
+                              textured_overlay_memory)) {
+                textured_overlay_capacity = 0;
+                textured_overlay_vertex_count = 0;
+                return false;
+            }
+            textured_overlay_capacity = capacity;
+            return true;
+        }
+
+        void updateTexturedOverlayBuffer(const VulkanViewportPassParams& params) {
+            textured_overlay_vertex_count = 0;
+            if (params.textured_overlays.empty()) {
+                return;
+            }
+            const std::size_t vertex_count = params.textured_overlays.size() * 6u;
+            if (!ensureTexturedOverlayBuffer(vertex_count)) {
+                return;
+            }
+
+            std::vector<VulkanViewportTexturedOverlayVertex> vertices;
+            vertices.reserve(vertex_count);
+            for (const auto& overlay : params.textured_overlays) {
+                vertices.insert(vertices.end(), overlay.vertices.begin(), overlay.vertices.end());
+            }
+
+            void* mapped = nullptr;
+            const VkDeviceSize bytes =
+                static_cast<VkDeviceSize>(sizeof(VulkanViewportTexturedOverlayVertex) * vertices.size());
+            if (vkMapMemory(device, textured_overlay_memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
+                return;
+            }
+            std::memcpy(mapped, vertices.data(), static_cast<std::size_t>(bytes));
+            vkUnmapMemory(device, textured_overlay_memory);
+            textured_overlay_vertex_count = static_cast<std::uint32_t>(
+                std::min<std::size_t>(vertices.size(), std::numeric_limits<std::uint32_t>::max()));
+        }
+
+        void updateGridDescriptor(const VkDeviceSize range) const {
+            if (grid_descriptor_set == VK_NULL_HANDLE || grid_uniform_buffer == VK_NULL_HANDLE) {
+                return;
+            }
+            VkDescriptorBufferInfo buffer_info{};
+            buffer_info.buffer = grid_uniform_buffer;
+            buffer_info.offset = 0;
+            buffer_info.range = range;
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = grid_descriptor_set;
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            write.pBufferInfo = &buffer_info;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+
+        [[nodiscard]] bool ensureGridUniformBuffer(const std::size_t grid_count) {
+            if (grid_count == 0) {
+                grid_uniform_count = 0;
+                return true;
+            }
+            if (grid_uniform_buffer != VK_NULL_HANDLE && grid_uniform_capacity >= grid_count) {
+                return true;
+            }
+            if (grid_uniform_buffer != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device, grid_uniform_buffer, nullptr);
+                grid_uniform_buffer = VK_NULL_HANDLE;
+            }
+            if (grid_uniform_memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device, grid_uniform_memory, nullptr);
+                grid_uniform_memory = VK_NULL_HANDLE;
+            }
+
+            std::size_t capacity = 1;
+            while (capacity < grid_count) {
+                capacity *= 2;
+            }
+            const VkDeviceSize bytes = static_cast<VkDeviceSize>(sizeof(GridUniform) * capacity);
+            if (!createBuffer(bytes,
+                              VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              grid_uniform_buffer,
+                              grid_uniform_memory)) {
+                grid_uniform_capacity = 0;
+                grid_uniform_count = 0;
+                return false;
+            }
+            grid_uniform_capacity = capacity;
+            updateGridDescriptor(bytes);
+            return true;
+        }
+
+        [[nodiscard]] static GridUniform makeGridUniform(const VulkanViewportGridOverlay& grid) {
+            const glm::mat4 view_inv = glm::inverse(grid.view);
             const glm::vec3 cam_pos = glm::vec3(view_inv[3]);
             const glm::vec3 cam_right = glm::vec3(view_inv[0]);
             const glm::vec3 cam_up = glm::vec3(view_inv[1]);
@@ -1186,9 +1566,9 @@ void main() {
             glm::vec3 far_origin{0.0f};
             glm::vec3 far_x{0.0f};
             glm::vec3 far_y{0.0f};
-            if (params.grid_orthographic) {
-                const float half_width = 1.0f / params.grid_projection[0][0];
-                const float half_height = 1.0f / std::abs(params.grid_projection[1][1]);
+            if (grid.orthographic) {
+                const float half_width = 1.0f / grid.projection[0][0];
+                const float half_height = 1.0f / std::abs(grid.projection[1][1]);
                 const glm::vec3 right_offset = cam_right * half_width;
                 const glm::vec3 up_offset = cam_up * half_height;
                 constexpr float kRayNear = -1000.0f;
@@ -1204,8 +1584,8 @@ void main() {
                 far_x = right_offset * 2.0f;
                 far_y = up_offset * 2.0f;
             } else {
-                const float fov_y = 2.0f * std::atan(1.0f / std::abs(params.grid_projection[1][1]));
-                const float aspect = std::abs(params.grid_projection[1][1] / params.grid_projection[0][0]);
+                const float fov_y = 2.0f * std::atan(1.0f / std::abs(grid.projection[1][1]));
+                const float aspect = std::abs(grid.projection[1][1] / grid.projection[0][0]);
                 const float half_height = std::tan(fov_y * 0.5f);
                 const float half_width = half_height * aspect;
                 const glm::vec3 far_center = cam_pos + cam_forward;
@@ -1222,20 +1602,71 @@ void main() {
             }
 
             GridUniform uniform{};
-            uniform.view_projection = params.grid_view_projection;
-            uniform.view_position_plane = glm::vec4(params.grid_view_position,
-                                                    static_cast<float>(std::clamp(params.grid_plane, 0, 2)));
-            uniform.opacity_padding = glm::vec4(std::clamp(params.grid_opacity, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
+            uniform.view_projection = grid.view_projection;
+            uniform.view_position_plane = glm::vec4(grid.view_position,
+                                                    static_cast<float>(std::clamp(grid.plane, 0, 2)));
+            uniform.opacity_padding = glm::vec4(std::clamp(grid.opacity, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
             uniform.near_origin = glm::vec4(near_origin, 0.0f);
             uniform.near_x = glm::vec4(near_x, 0.0f);
             uniform.near_y = glm::vec4(near_y, 0.0f);
             uniform.far_origin = glm::vec4(far_origin, 0.0f);
             uniform.far_x = glm::vec4(far_x, 0.0f);
             uniform.far_y = glm::vec4(far_y, 0.0f);
+            return uniform;
+        }
+
+        [[nodiscard]] static std::vector<VulkanViewportGridOverlay> collectGridOverlays(
+            const VulkanViewportPassParams& params) {
+            if (!params.grid_overlays.empty()) {
+                return params.grid_overlays;
+            }
+            if (!params.grid_enabled) {
+                return {};
+            }
+            return {VulkanViewportGridOverlay{
+                .viewport_pos = params.viewport_pos,
+                .viewport_size = params.viewport_size,
+                .render_size = {
+                    std::max(static_cast<int>(std::lround(params.viewport_size.x)), 1),
+                    std::max(static_cast<int>(std::lround(params.viewport_size.y)), 1)},
+                .view = params.grid_view,
+                .projection = params.grid_projection,
+                .view_projection = params.grid_view_projection,
+                .view_position = params.grid_view_position,
+                .plane = params.grid_plane,
+                .opacity = params.grid_opacity,
+                .orthographic = params.grid_orthographic,
+            }};
+        }
+
+        void updateGridUniforms(const VulkanViewportPassParams& params) {
+            const auto grids = collectGridOverlays(params);
+            if (grids.empty()) {
+                grid_uniform_count = 0;
+                return;
+            }
+            if (!ensureGridUniformBuffer(grids.size())) {
+                return;
+            }
+
+            std::vector<GridUniform> uniforms;
+            uniforms.reserve(grids.size());
+            for (const auto& grid : grids) {
+                uniforms.push_back(makeGridUniform(grid));
+            }
+            if (uniforms.empty()) {
+                grid_uniform_count = 0;
+                return;
+            }
+
             void* mapped = nullptr;
-            if (vkMapMemory(device, grid_uniform_memory, 0, sizeof(uniform), 0, &mapped) == VK_SUCCESS && mapped) {
-                std::memcpy(mapped, &uniform, sizeof(uniform));
+            const VkDeviceSize bytes =
+                static_cast<VkDeviceSize>(sizeof(GridUniform) * uniforms.size());
+            if (vkMapMemory(device, grid_uniform_memory, 0, bytes, 0, &mapped) == VK_SUCCESS && mapped) {
+                std::memcpy(mapped, uniforms.data(), static_cast<std::size_t>(bytes));
                 vkUnmapMemory(device, grid_uniform_memory);
+                grid_uniform_count = static_cast<std::uint32_t>(
+                    std::min<std::size_t>(uniforms.size(), std::numeric_limits<std::uint32_t>::max()));
             }
         }
 
@@ -1309,10 +1740,19 @@ void main() {
 
         void prepare(const VulkanViewportPassParams& params) {
             updateQuadBuffer(params.scene_image_flip_y);
-            if (params.grid_enabled) {
-                updateGridUniform(params);
-            }
+            updateGridUniforms(params);
+            updateTexturedOverlayBuffer(params);
             updateOverlayBuffer(params);
+            updateShapeOverlayBuffer(params.shape_overlay_triangles,
+                                     shape_overlay_buffer,
+                                     shape_overlay_memory,
+                                     shape_overlay_capacity,
+                                     shape_overlay_vertex_count);
+            updateShapeOverlayBuffer(params.ui_shape_overlay_triangles,
+                                     ui_shape_overlay_buffer,
+                                     ui_shape_overlay_memory,
+                                     ui_shape_overlay_capacity,
+                                     ui_shape_overlay_vertex_count);
             uploadSceneImage(params);
         }
 
@@ -1349,6 +1789,69 @@ void main() {
             vkCmdClearAttachments(command_buffer, 1, &attachment, 1, &clear_rect);
         }
 
+        void recordGridOverlays(VkCommandBuffer command_buffer,
+                                const VkExtent2D extent,
+                                const VulkanViewportPassParams& params,
+                                const FramebufferRect& main_rect) const {
+            if (grid_uniform_count == 0 ||
+                grid_pipeline == VK_NULL_HANDLE ||
+                grid_descriptor_set == VK_NULL_HANDLE ||
+                grid_uniform_buffer == VK_NULL_HANDLE) {
+                return;
+            }
+
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
+            vkCmdBindDescriptorSets(command_buffer,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    grid_pipeline_layout,
+                                    0,
+                                    1,
+                                    &grid_descriptor_set,
+                                    0,
+                                    nullptr);
+            const auto grids = collectGridOverlays(params);
+            for (std::uint32_t i = 0;
+                 i < std::min<std::uint32_t>(grid_uniform_count, static_cast<std::uint32_t>(grids.size()));
+                 ++i) {
+                const auto& grid = grids[i];
+                if (grid.viewport_size.x <= 0.0f || grid.viewport_size.y <= 0.0f ||
+                    grid.render_size.x <= 0 || grid.render_size.y <= 0 ||
+                    grid.opacity <= 0.0f) {
+                    continue;
+                }
+                const FramebufferRect grid_rect = toFramebufferRect(params, grid, extent);
+                if (grid_rect.width == 0 || grid_rect.height == 0) {
+                    continue;
+                }
+                bindViewport(command_buffer, grid_rect);
+                GridPush push{};
+                push.grid_index = static_cast<std::int32_t>(i);
+                vkCmdPushConstants(command_buffer,
+                                   grid_pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0,
+                                   sizeof(push),
+                                   &push);
+                vkCmdDraw(command_buffer, 6, 1, 0, 0);
+            }
+            bindViewport(command_buffer, main_rect);
+        }
+
+        void recordShapeOverlays(VkCommandBuffer command_buffer,
+                                 const VkBuffer buffer,
+                                 const std::uint32_t vertex_count) const {
+            if (vertex_count == 0 ||
+                buffer == VK_NULL_HANDLE ||
+                shape_overlay_pipeline == VK_NULL_HANDLE) {
+                return;
+            }
+            const VkDeviceSize offset = 0;
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shape_overlay_pipeline);
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &buffer, &offset);
+            vkCmdDraw(command_buffer, vertex_count, 1, 0, 0);
+            bindQuad(command_buffer);
+        }
+
         void record(VkCommandBuffer command_buffer,
                     const VkExtent2D extent,
                     const VulkanViewportPassParams& params) {
@@ -1375,17 +1878,43 @@ void main() {
                                         nullptr);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
-            if (params.grid_enabled && grid_pipeline != VK_NULL_HANDLE && grid_descriptor_set != VK_NULL_HANDLE) {
-                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
-                vkCmdBindDescriptorSets(command_buffer,
-                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        grid_pipeline_layout,
-                                        0,
-                                        1,
-                                        &grid_descriptor_set,
-                                        0,
-                                        nullptr);
-                vkCmdDraw(command_buffer, 6, 1, 0, 0);
+            if (textured_overlay_vertex_count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
+                textured_overlay_buffer != VK_NULL_HANDLE && !params.textured_overlays.empty()) {
+                const VkDeviceSize offset = 0;
+                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textured_overlay_pipeline);
+                vkCmdBindVertexBuffers(command_buffer, 0, 1, &textured_overlay_buffer, &offset);
+                std::uint32_t first_vertex = 0;
+                for (const auto& overlay : params.textured_overlays) {
+                    if (overlay.texture_id == 0 || first_vertex + 6u > textured_overlay_vertex_count) {
+                        first_vertex += 6u;
+                        continue;
+                    }
+                    const VkDescriptorSet descriptor_set = descriptorSetFromId(overlay.texture_id);
+                    if (descriptor_set == VK_NULL_HANDLE) {
+                        first_vertex += 6u;
+                        continue;
+                    }
+                    TexturedOverlayPush push{};
+                    push.tint_opacity = overlay.tint_opacity;
+                    push.effects = overlay.effects;
+                    vkCmdBindDescriptorSets(command_buffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            textured_overlay_pipeline_layout,
+                                            0,
+                                            1,
+                                            &descriptor_set,
+                                            0,
+                                            nullptr);
+                    vkCmdPushConstants(command_buffer,
+                                       textured_overlay_pipeline_layout,
+                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0,
+                                       sizeof(push),
+                                       &push);
+                    vkCmdDraw(command_buffer, 6, 1, first_vertex, 0);
+                    first_vertex += 6u;
+                }
+                bindQuad(command_buffer);
             }
 
             if (overlay_vertex_count > 0 && overlay_pipeline != VK_NULL_HANDLE &&
@@ -1396,6 +1925,8 @@ void main() {
                 vkCmdDraw(command_buffer, overlay_vertex_count, 1, 0, 0);
                 bindQuad(command_buffer);
             }
+
+            recordShapeOverlays(command_buffer, shape_overlay_buffer, shape_overlay_vertex_count);
 
             if (!params.pivot_overlays.empty() && pivot_pipeline != VK_NULL_HANDLE) {
                 bindQuad(command_buffer);
@@ -1424,6 +1955,8 @@ void main() {
                 }
             }
 
+            recordGridOverlays(command_buffer, extent, params, rect);
+
             if (params.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE) {
                 VignettePush push{};
                 push.viewport_intensity_radius = {
@@ -1442,6 +1975,8 @@ void main() {
                                    &push);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
+
+            recordShapeOverlays(command_buffer, ui_shape_overlay_buffer, ui_shape_overlay_vertex_count);
         }
 
         void reset() {
@@ -1456,6 +1991,10 @@ void main() {
                     vkDestroyPipeline(device, grid_pipeline, nullptr);
                 if (overlay_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, overlay_pipeline, nullptr);
+                if (shape_overlay_pipeline != VK_NULL_HANDLE)
+                    vkDestroyPipeline(device, shape_overlay_pipeline, nullptr);
+                if (textured_overlay_pipeline != VK_NULL_HANDLE)
+                    vkDestroyPipeline(device, textured_overlay_pipeline, nullptr);
                 if (pivot_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, pivot_pipeline, nullptr);
                 if (scene_pipeline_layout != VK_NULL_HANDLE)
@@ -1466,6 +2005,10 @@ void main() {
                     vkDestroyPipelineLayout(device, grid_pipeline_layout, nullptr);
                 if (overlay_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, overlay_pipeline_layout, nullptr);
+                if (shape_overlay_pipeline_layout != VK_NULL_HANDLE)
+                    vkDestroyPipelineLayout(device, shape_overlay_pipeline_layout, nullptr);
+                if (textured_overlay_pipeline_layout != VK_NULL_HANDLE)
+                    vkDestroyPipelineLayout(device, textured_overlay_pipeline_layout, nullptr);
                 if (pivot_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, pivot_pipeline_layout, nullptr);
                 if (grid_uniform_buffer != VK_NULL_HANDLE)
@@ -1480,6 +2023,18 @@ void main() {
                     vkDestroyBuffer(device, overlay_buffer, nullptr);
                 if (overlay_memory != VK_NULL_HANDLE)
                     vkFreeMemory(device, overlay_memory, nullptr);
+                if (shape_overlay_buffer != VK_NULL_HANDLE)
+                    vkDestroyBuffer(device, shape_overlay_buffer, nullptr);
+                if (shape_overlay_memory != VK_NULL_HANDLE)
+                    vkFreeMemory(device, shape_overlay_memory, nullptr);
+                if (ui_shape_overlay_buffer != VK_NULL_HANDLE)
+                    vkDestroyBuffer(device, ui_shape_overlay_buffer, nullptr);
+                if (ui_shape_overlay_memory != VK_NULL_HANDLE)
+                    vkFreeMemory(device, ui_shape_overlay_memory, nullptr);
+                if (textured_overlay_buffer != VK_NULL_HANDLE)
+                    vkDestroyBuffer(device, textured_overlay_buffer, nullptr);
+                if (textured_overlay_memory != VK_NULL_HANDLE)
+                    vkFreeMemory(device, textured_overlay_memory, nullptr);
                 if (scene_sampler != VK_NULL_HANDLE)
                     vkDestroySampler(device, scene_sampler, nullptr);
                 if (scene_descriptor_pool != VK_NULL_HANDLE)

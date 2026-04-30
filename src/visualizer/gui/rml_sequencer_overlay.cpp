@@ -488,7 +488,7 @@ namespace lfs::vis::gui {
     void RmlSequencerOverlay::showPreviewWindow(const float left, const float top,
                                                 const float width, const float height,
                                                 const std::string& title, const bool playing,
-                                                const ImTextureID texture_id) {
+                                                const std::uintptr_t texture_id) {
         if (!ensureContextReady() || texture_id == 0)
             return;
 

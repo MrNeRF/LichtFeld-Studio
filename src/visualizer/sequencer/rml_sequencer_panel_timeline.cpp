@@ -343,7 +343,7 @@ namespace lfs::vis {
             }
 
             const auto& thumb = film_strip.thumbs()[i];
-            const ImTextureID texture_id = film_strip.textureIdForSlot(thumb.slot_idx);
+            const std::uintptr_t texture_id = film_strip.textureIdForSlot(thumb.slot_idx);
             if (texture_id == 0) {
                 thumb_el->SetProperty("display", "none");
                 image_el->SetAttribute("src", "");

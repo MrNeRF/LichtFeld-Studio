@@ -15,6 +15,7 @@
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/layout_state.hpp"
+#include "gui/line_renderer.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_registry.hpp"
@@ -50,9 +51,12 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/scene_render_state.hpp"
 #include "theme/theme.hpp"
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
+#include "training/trainer.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
@@ -76,6 +80,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace lfs::vis::gui {
@@ -107,10 +112,6 @@ namespace lfs::vis::gui {
             }
         };
 
-        [[nodiscard]] glm::vec4 guideColor(const glm::vec3& color, const float alpha) {
-            return {color.r, color.g, color.b, std::clamp(alpha, 0.0f, 1.0f)};
-        }
-
         [[nodiscard]] glm::vec4 guideColor(const ImVec4& color, const float alpha) {
             return {color.x, color.y, color.z, std::clamp(alpha, 0.0f, 1.0f)};
         }
@@ -127,29 +128,53 @@ namespace lfs::vis::gui {
             return {x * 2.0f - 1.0f, y * 2.0f - 1.0f};
         }
 
-        void appendOverlayTriangle(std::vector<VulkanViewportOverlayVertex>& out,
-                                   const glm::vec2& viewport_pos,
-                                   const glm::vec2& viewport_size,
-                                   const glm::vec2& p0,
-                                   const glm::vec2& p1,
-                                   const glm::vec2& p2,
-                                   const glm::vec4& color) {
+        void appendShapeOverlayTriangle(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                        const glm::vec2& viewport_pos,
+                                        const glm::vec2& viewport_size,
+                                        const glm::vec2& point,
+                                        const glm::vec2& p0,
+                                        const glm::vec2& p1,
+                                        const glm::vec4& color,
+                                        const glm::vec4& shape_params) {
+            out.push_back({
+                .position = screenToViewportNdc(point, viewport_pos, viewport_size),
+                .screen_position = point,
+                .p0 = p0,
+                .p1 = p1,
+                .color = color,
+                .params = shape_params,
+            });
+        }
+
+        void appendShapeOverlayQuad(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                    const glm::vec2& viewport_pos,
+                                    const glm::vec2& viewport_size,
+                                    const glm::vec2& a,
+                                    const glm::vec2& b,
+                                    const glm::vec2& c,
+                                    const glm::vec2& d,
+                                    const glm::vec2& p0,
+                                    const glm::vec2& p1,
+                                    const glm::vec4& color,
+                                    const glm::vec4& shape_params) {
             if (color.a <= 0.0f || viewport_size.x <= 0.0f || viewport_size.y <= 0.0f) {
                 return;
             }
-            out.push_back({.position = screenToViewportNdc(p0, viewport_pos, viewport_size), .color = color});
-            out.push_back({.position = screenToViewportNdc(p1, viewport_pos, viewport_size), .color = color});
-            out.push_back({.position = screenToViewportNdc(p2, viewport_pos, viewport_size), .color = color});
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, b, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, d, p0, p1, color, shape_params);
         }
 
-        void appendOverlayLine(std::vector<VulkanViewportOverlayVertex>& out,
-                               const glm::vec2& viewport_pos,
-                               const glm::vec2& viewport_size,
-                               const glm::vec2& p0,
-                               const glm::vec2& p1,
-                               const glm::vec4& color,
-                               const float thickness) {
-            if (color.a <= 0.0f || viewport_size.x <= 0.0f || viewport_size.y <= 0.0f) {
+        void appendShapeOverlayLine(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                    const VulkanViewportPassParams& params,
+                                    const glm::vec2& p0,
+                                    const glm::vec2& p1,
+                                    const glm::vec4& color,
+                                    const float thickness) {
+            if (color.a <= 0.0f) {
                 return;
             }
             const glm::vec2 delta = p1 - p0;
@@ -157,54 +182,120 @@ namespace lfs::vis::gui {
             if (!std::isfinite(len) || len <= 1e-4f) {
                 return;
             }
-            const glm::vec2 normal = glm::vec2(-delta.y, delta.x) / len *
-                                     (std::max(thickness, 1.0f) * 0.5f);
-            const glm::vec2 a = p0 + normal;
-            const glm::vec2 b = p1 + normal;
-            const glm::vec2 c = p1 - normal;
-            const glm::vec2 d = p0 - normal;
-            appendOverlayTriangle(out, viewport_pos, viewport_size, a, b, c, color);
-            appendOverlayTriangle(out, viewport_pos, viewport_size, a, c, d, color);
+            const glm::vec2 dir = delta / len;
+            const glm::vec2 normal(-dir.y, dir.x);
+            const float extent = std::max(thickness, 1.0f) * 0.5f + 2.0f;
+            appendShapeOverlayQuad(out,
+                                   params.viewport_pos,
+                                   params.viewport_size,
+                                   p0 - dir * extent + normal * extent,
+                                   p1 + dir * extent + normal * extent,
+                                   p1 + dir * extent - normal * extent,
+                                   p0 - dir * extent - normal * extent,
+                                   p0,
+                                   p1,
+                                   color,
+                                   {0.0f, std::max(thickness, 1.0f), 0.0f, 1.0f});
         }
 
-        void appendOverlayCircle(std::vector<VulkanViewportOverlayVertex>& out,
-                                 const glm::vec2& viewport_pos,
-                                 const glm::vec2& viewport_size,
-                                 const glm::vec2& center,
-                                 const float radius,
-                                 const glm::vec4& color,
-                                 const int segments = 24) {
+        void appendShapeOverlayCircle(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                      const VulkanViewportPassParams& params,
+                                      const glm::vec2& center,
+                                      const float radius,
+                                      const glm::vec4& color) {
             if (radius <= 0.0f || color.a <= 0.0f) {
                 return;
             }
-            const int count = std::max(segments, 8);
-            for (int i = 0; i < count; ++i) {
-                const float a0 = static_cast<float>(i) / static_cast<float>(count) * 2.0f * glm::pi<float>();
-                const float a1 = static_cast<float>(i + 1) / static_cast<float>(count) * 2.0f * glm::pi<float>();
-                const glm::vec2 p0 = center + glm::vec2(std::cos(a0), std::sin(a0)) * radius;
-                const glm::vec2 p1 = center + glm::vec2(std::cos(a1), std::sin(a1)) * radius;
-                appendOverlayTriangle(out, viewport_pos, viewport_size, center, p0, p1, color);
-            }
+            const float extent = radius + 2.0f;
+            appendShapeOverlayQuad(out,
+                                   params.viewport_pos,
+                                   params.viewport_size,
+                                   center + glm::vec2(-extent, -extent),
+                                   center + glm::vec2(extent, -extent),
+                                   center + glm::vec2(extent, extent),
+                                   center + glm::vec2(-extent, extent),
+                                   center,
+                                   center,
+                                   color,
+                                   {1.0f, 0.0f, radius, 1.0f});
         }
 
-        void appendOverlayCircleOutline(std::vector<VulkanViewportOverlayVertex>& out,
-                                        const glm::vec2& viewport_pos,
-                                        const glm::vec2& viewport_size,
-                                        const glm::vec2& center,
-                                        const float radius,
-                                        const glm::vec4& color,
-                                        const float thickness,
-                                        const int segments = 32) {
+        void appendShapeOverlayCircleOutline(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                             const VulkanViewportPassParams& params,
+                                             const glm::vec2& center,
+                                             const float radius,
+                                             const glm::vec4& color,
+                                             const float thickness) {
             if (radius <= 0.0f || color.a <= 0.0f) {
                 return;
             }
-            const int count = std::max(segments, 8);
-            for (int i = 0; i < count; ++i) {
-                const float a0 = static_cast<float>(i) / static_cast<float>(count) * 2.0f * glm::pi<float>();
-                const float a1 = static_cast<float>(i + 1) / static_cast<float>(count) * 2.0f * glm::pi<float>();
-                const glm::vec2 p0 = center + glm::vec2(std::cos(a0), std::sin(a0)) * radius;
-                const glm::vec2 p1 = center + glm::vec2(std::cos(a1), std::sin(a1)) * radius;
-                appendOverlayLine(out, viewport_pos, viewport_size, p0, p1, color, thickness);
+            const float extent = radius + std::max(thickness, 1.0f) * 0.5f + 2.0f;
+            appendShapeOverlayQuad(out,
+                                   params.viewport_pos,
+                                   params.viewport_size,
+                                   center + glm::vec2(-extent, -extent),
+                                   center + glm::vec2(extent, -extent),
+                                   center + glm::vec2(extent, extent),
+                                   center + glm::vec2(-extent, extent),
+                                   center,
+                                   center,
+                                   color,
+                                   {2.0f, std::max(thickness, 1.0f), radius, 1.0f});
+        }
+
+        void appendScreenOverlayTriangle(std::vector<VulkanViewportOverlayVertex>& out,
+                                         const VulkanViewportPassParams& params,
+                                         const glm::vec2& p0,
+                                         const glm::vec2& p1,
+                                         const glm::vec2& p2,
+                                         const glm::vec4& color) {
+            if (color.a <= 0.0f || params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+            out.push_back({.position = screenToViewportNdc(p0, params.viewport_pos, params.viewport_size),
+                           .color = color});
+            out.push_back({.position = screenToViewportNdc(p1, params.viewport_pos, params.viewport_size),
+                           .color = color});
+            out.push_back({.position = screenToViewportNdc(p2, params.viewport_pos, params.viewport_size),
+                           .color = color});
+        }
+
+        void appendLineRendererCommandOverlays(VulkanViewportPassParams& params) {
+            const auto commands = consumeLineRendererCommands();
+            for (const auto& command : commands) {
+                switch (command.type) {
+                case LineRendererCommandType::Line:
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles,
+                                           params,
+                                           command.p0,
+                                           command.p1,
+                                           command.color,
+                                           command.thickness);
+                    break;
+                case LineRendererCommandType::Triangle:
+                    appendScreenOverlayTriangle(params.overlay_triangles,
+                                                params,
+                                                command.p0,
+                                                command.p1,
+                                                command.p2,
+                                                command.color);
+                    break;
+                case LineRendererCommandType::Circle:
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                             params,
+                                             command.p0,
+                                             command.thickness,
+                                             command.color);
+                    break;
+                case LineRendererCommandType::CircleOutline:
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
+                                                    params,
+                                                    command.p0,
+                                                    command.radius,
+                                                    command.color,
+                                                    command.thickness);
+                    break;
+                }
             }
         }
 
@@ -325,6 +416,71 @@ namespace lfs::vis::gui {
             return std::pair(renderToPanelScreen(panel, *pa), renderToPanelScreen(panel, *pb));
         }
 
+        [[nodiscard]] std::optional<glm::vec2> projectPointToScreen(
+            const VulkanGuidePanelTarget& panel,
+            const RenderSettings& settings,
+            const glm::vec3& world) {
+            constexpr float kMinViewZ = -1e-4f;
+            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
+            const glm::vec3 translation = panel.viewport->getTranslation();
+            const glm::vec3 view = glm::transpose(rotation) * (world - translation);
+            if (view.z >= kMinViewZ) {
+                return std::nullopt;
+            }
+
+            const float width = static_cast<float>(std::max(panel.render_size.x, 1));
+            const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+            const float cx = width * 0.5f;
+            const float cy = height * 0.5f;
+            std::optional<glm::vec2> projected;
+            if (settings.orthographic) {
+                if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f) {
+                    return std::nullopt;
+                }
+                projected = glm::vec2(cx + view.x * settings.ortho_scale,
+                                      cy - view.y * settings.ortho_scale);
+            } else {
+                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                    panel.render_size, settings.focal_length_mm);
+                const float depth = -view.z;
+                if (depth <= 0.0f) {
+                    return std::nullopt;
+                }
+                projected = glm::vec2(cx + view.x * fx / depth,
+                                      cy - view.y * fy / depth);
+            }
+            return renderToPanelScreen(panel, *projected);
+        }
+
+        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+                                       const std::uintptr_t texture_id,
+                                       const std::array<glm::vec2, 4>& screen_points,
+                                       const glm::vec4& tint_opacity,
+                                       const glm::vec4& effects) {
+            if (texture_id == 0 || tint_opacity.a <= 0.0f ||
+                params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+
+            const auto ndc = [&](const glm::vec2& screen) {
+                return screenToViewportNdc(screen, params.viewport_pos, params.viewport_size);
+            };
+
+            VulkanViewportTexturedOverlay overlay{};
+            overlay.texture_id = texture_id;
+            overlay.tint_opacity = tint_opacity;
+            overlay.effects = effects;
+            overlay.vertices = {{
+                {.position = ndc(screen_points[0]), .uv = {0.0f, 0.0f}},
+                {.position = ndc(screen_points[1]), .uv = {1.0f, 0.0f}},
+                {.position = ndc(screen_points[2]), .uv = {1.0f, 1.0f}},
+                {.position = ndc(screen_points[0]), .uv = {0.0f, 0.0f}},
+                {.position = ndc(screen_points[2]), .uv = {1.0f, 1.0f}},
+                {.position = ndc(screen_points[3]), .uv = {0.0f, 1.0f}},
+            }};
+            params.textured_overlays.push_back(overlay);
+        }
+
         struct VulkanViewportGizmoMarker {
             int encoded_axis = -1;
             int axis = 0;
@@ -349,11 +505,14 @@ namespace lfs::vis::gui {
         constexpr float kViewportGizmoSize = 95.0f;
         constexpr float kViewportGizmoMarginX = 10.0f;
         constexpr float kViewportGizmoMarginY = 10.0f;
+        constexpr float kViewportGizmoDistance = 2.8f;
+        constexpr float kViewportGizmoFovDegrees = 38.0f;
         constexpr float kViewportGizmoSphereRadius = 0.198f;
         constexpr float kViewportGizmoLabelDistance = 0.63f;
         constexpr float kViewportGizmoHoverScale = 1.2f;
         constexpr float kViewportGizmoHoverBrightness = 1.3f;
         constexpr float kViewportGizmoHitRadiusScale = 2.5f;
+        constexpr float kViewportGizmoRingInnerRadius = 0.55f;
 
         [[nodiscard]] glm::vec4 viewportGizmoAxisColor(const int axis,
                                                        const float alpha,
@@ -380,13 +539,15 @@ namespace lfs::vis::gui {
             };
             layout.center = layout.top_left + glm::vec2(size * 0.5f);
 
-            constexpr float kGizmoDistance = 2.8f;
-            constexpr float kGizmoFov = 38.0f;
             glm::mat4 view = lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(), glm::vec3(0.0f));
-            view[3][2] = -kGizmoDistance;
-            const glm::mat4 proj = glm::perspective(glm::radians(kGizmoFov), 1.0f, 0.1f, 10.0f);
-            const glm::vec3 origin_cam_space = glm::vec3(view * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
-            const float ref_dist = std::max(glm::length(origin_cam_space), 0.001f);
+            view[3][2] = -kViewportGizmoDistance;
+            const glm::mat4 proj =
+                glm::perspective(glm::radians(kViewportGizmoFovDegrees), 1.0f, 0.1f, 10.0f);
+            const float projected_marker_radius =
+                kViewportGizmoSphereRadius *
+                (1.0f / std::tan(glm::radians(kViewportGizmoFovDegrees) * 0.5f)) /
+                kViewportGizmoDistance *
+                size * 0.5f;
 
             const auto project_marker = [&](const int axis, const bool negative) {
                 VulkanViewportGizmoMarker marker;
@@ -405,11 +566,8 @@ namespace lfs::vis::gui {
                 const glm::vec3 ndc = glm::vec3(clip) / clip.w;
                 const float local_x = (ndc.x * 0.5f + 0.5f) * size;
                 const float local_y = (1.0f - (ndc.y * 0.5f + 0.5f)) * size;
-                const glm::vec3 cam_space = glm::vec3(view * glm::vec4(position, 1.0f));
-                const float scale_factor = glm::length(cam_space) / ref_dist;
-
                 marker.screen_pos = layout.top_left + glm::vec2(local_x, local_y);
-                marker.radius = kViewportGizmoSphereRadius * scale_factor * size * 0.5f;
+                marker.radius = projected_marker_radius;
                 marker.depth = clip.z / clip.w;
                 marker.visible = true;
                 return marker;
@@ -437,7 +595,7 @@ namespace lfs::vis::gui {
             return -1;
         }
 
-        void appendViewportGizmoLabel(std::vector<VulkanViewportOverlayVertex>& out,
+        void appendViewportGizmoLabel(std::vector<VulkanViewportShapeOverlayVertex>& out,
                                       const VulkanViewportPassParams& params,
                                       const glm::vec2& center,
                                       const int axis,
@@ -446,54 +604,29 @@ namespace lfs::vis::gui {
             const float s = std::max(radius * 0.42f, 3.0f);
             const float thickness = std::max(radius * 0.16f, 1.25f);
             if (axis == 0) {
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(-s, -s),
-                                  center + glm::vec2(s, s),
-                                  white, thickness);
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(-s, s),
-                                  center + glm::vec2(s, -s),
-                                  white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center + glm::vec2(s, s),
+                                       white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, s), center + glm::vec2(s, -s),
+                                       white, thickness);
             } else if (axis == 1) {
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(-s, -s),
-                                  center,
-                                  white, thickness);
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(s, -s),
-                                  center,
-                                  white, thickness);
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center,
-                                  center + glm::vec2(0.0f, s),
-                                  white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center, white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(s, -s), center, white, thickness);
+                appendShapeOverlayLine(out, params, center, center + glm::vec2(0.0f, s), white, thickness);
             } else {
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(-s, -s),
-                                  center + glm::vec2(s, -s),
-                                  white, thickness);
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(s, -s),
-                                  center + glm::vec2(-s, s),
-                                  white, thickness);
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  center + glm::vec2(-s, s),
-                                  center + glm::vec2(s, s),
-                                  white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center + glm::vec2(s, -s),
+                                       white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(s, -s), center + glm::vec2(-s, s),
+                                       white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, s), center + glm::vec2(s, s),
+                                       white, thickness);
             }
         }
 
-        void appendViewportGizmoLayout(std::vector<VulkanViewportOverlayVertex>& out,
+        void appendViewportGizmoLayout(std::vector<VulkanViewportShapeOverlayVertex>& out,
                                        const VulkanViewportPassParams& params,
                                        const VulkanViewportGizmoLayout& layout,
                                        const int hovered_axis) {
             const auto& t = theme();
-            appendOverlayCircle(out, params.viewport_pos, params.viewport_size,
-                                layout.center, layout.size * 0.46f,
-                                guideColor(t.overlay.background, 0.24f), 40);
-            appendOverlayCircleOutline(out, params.viewport_pos, params.viewport_size,
-                                       layout.center, layout.size * 0.46f,
-                                       guideColor(t.overlay.text_dim, 0.30f), 1.0f, 40);
 
             std::vector<const VulkanViewportGizmoMarker*> draw_order;
             draw_order.reserve(layout.markers.size());
@@ -511,9 +644,8 @@ namespace lfs::vis::gui {
                 if (!marker.visible || marker.negative) {
                     continue;
                 }
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  layout.center, marker.screen_pos,
-                                  viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f);
+                appendShapeOverlayLine(out, params, layout.center, marker.screen_pos,
+                                       viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f);
             }
 
             for (const auto* const marker_ptr : draw_order) {
@@ -525,18 +657,16 @@ namespace lfs::vis::gui {
                                                                marker.negative ? 0.88f : 1.0f,
                                                                brightness);
                 if (marker.negative) {
-                    appendOverlayCircleOutline(out, params.viewport_pos, params.viewport_size,
-                                               marker.screen_pos, radius, color,
-                                               hovered ? 3.0f : 2.0f, 24);
-                    appendOverlayCircle(out, params.viewport_pos, params.viewport_size,
-                                        marker.screen_pos, std::max(radius - 5.0f, 2.0f),
-                                        viewportGizmoAxisColor(marker.axis, 0.18f, brightness), 20);
+                    const float ring_center_radius =
+                        radius * (1.0f + kViewportGizmoRingInnerRadius) * 0.5f;
+                    const float ring_thickness =
+                        radius * (1.0f - kViewportGizmoRingInnerRadius);
+                    appendShapeOverlayCircleOutline(out, params, marker.screen_pos, ring_center_radius,
+                                                    color, ring_thickness);
                 } else {
-                    appendOverlayCircle(out, params.viewport_pos, params.viewport_size,
-                                        marker.screen_pos, radius, color, 24);
-                    appendOverlayCircleOutline(out, params.viewport_pos, params.viewport_size,
-                                               marker.screen_pos, radius,
-                                               guideColor(t.palette.background, 0.55f), 1.0f, 24);
+                    appendShapeOverlayCircle(out, params, marker.screen_pos, radius, color);
+                    appendShapeOverlayCircleOutline(out, params, marker.screen_pos, radius,
+                                                    guideColor(t.palette.background, 0.55f), 1.0f);
                     appendViewportGizmoLabel(out, params, marker.screen_pos, marker.axis, radius);
                 }
             }
@@ -589,30 +719,215 @@ namespace lfs::vis::gui {
             for (const auto& panel : panels) {
                 if (const auto layout = buildViewportGizmoLayout(
                         panel, kViewportGizmoSize, kViewportGizmoMarginX, kViewportGizmoMarginY)) {
-                    appendViewportGizmoLayout(params.overlay_triangles,
+                    appendViewportGizmoLayout(params.ui_shape_overlay_triangles,
                                               params,
                                               *layout,
                                               has_hovered_panel && hovered_panel == panel.panel ? hovered_axis : -1);
                     if (dragging && (!has_hovered_panel || hovered_panel == panel.panel)) {
-                        appendOverlayCircle(params.overlay_triangles, params.viewport_pos, params.viewport_size,
-                                            layout->center, layout->size * 0.46f,
-                                            guideColor(theme().overlay.text_dim, 0.20f), 32);
+                        appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                                 params,
+                                                 layout->center,
+                                                 layout->size * 0.46f,
+                                                 guideColor(theme().overlay.text_dim, 0.20f));
                     }
                 }
             }
         }
 
         void addProjectedOverlayLine(std::vector<VulkanViewportOverlayVertex>& out,
-                                     const VulkanViewportPassParams& params,
+                                     VulkanViewportPassParams& params,
                                      const VulkanGuidePanelTarget& panel,
                                      const RenderSettings& settings,
                                      const glm::vec3& a,
                                      const glm::vec3& b,
                                      const glm::vec4& color,
                                      const float thickness) {
+            (void)out;
             if (const auto projected = projectSegmentToScreenClipped(panel, settings, a, b)) {
-                appendOverlayLine(out, params.viewport_pos, params.viewport_size,
-                                  projected->first, projected->second, color, thickness);
+                appendShapeOverlayLine(params.shape_overlay_triangles,
+                                       params,
+                                       projected->first,
+                                       projected->second,
+                                       color,
+                                       thickness);
+            }
+        }
+
+        [[nodiscard]] std::array<glm::vec3, 8> boxCorners(const glm::vec3& min,
+                                                          const glm::vec3& max,
+                                                          const glm::mat4& box_to_world) {
+            const std::array local{
+                glm::vec3(min.x, min.y, min.z),
+                glm::vec3(max.x, min.y, min.z),
+                glm::vec3(max.x, max.y, min.z),
+                glm::vec3(min.x, max.y, min.z),
+                glm::vec3(min.x, min.y, max.z),
+                glm::vec3(max.x, min.y, max.z),
+                glm::vec3(max.x, max.y, max.z),
+                glm::vec3(min.x, max.y, max.z),
+            };
+            std::array<glm::vec3, 8> world{};
+            for (size_t i = 0; i < local.size(); ++i) {
+                world[i] = glm::vec3(box_to_world * glm::vec4(local[i], 1.0f));
+            }
+            return world;
+        }
+
+        void appendProjectedBox(std::vector<VulkanViewportOverlayVertex>& out,
+                                VulkanViewportPassParams& params,
+                                const VulkanGuidePanelTarget& panel,
+                                const RenderSettings& settings,
+                                const glm::vec3& min,
+                                const glm::vec3& max,
+                                const glm::mat4& box_to_world,
+                                const glm::vec4& color,
+                                const float thickness) {
+            constexpr std::array<std::pair<int, int>, 12> edges{{
+                {0, 1},
+                {1, 2},
+                {2, 3},
+                {3, 0},
+                {4, 5},
+                {5, 6},
+                {6, 7},
+                {7, 4},
+                {0, 4},
+                {1, 5},
+                {2, 6},
+                {3, 7},
+            }};
+
+            const auto corners = boxCorners(min, max, box_to_world);
+            for (const auto& [a, b] : edges) {
+                addProjectedOverlayLine(out, params, panel, settings,
+                                        corners[static_cast<size_t>(a)],
+                                        corners[static_cast<size_t>(b)],
+                                        color, thickness);
+            }
+        }
+
+        [[nodiscard]] glm::vec4 cropGuideColor(const glm::vec3& base_color,
+                                               const bool inverse,
+                                               const float flash) {
+            const glm::vec3 inverse_color(1.0f, 0.2f, 0.2f);
+            const glm::vec3 color = glm::mix(inverse ? inverse_color : base_color,
+                                             glm::vec3(1.0f),
+                                             std::clamp(flash, 0.0f, 1.0f));
+            return glm::vec4(color, 0.95f);
+        }
+
+        void appendProjectedEllipsoid(std::vector<VulkanViewportOverlayVertex>& out,
+                                      VulkanViewportPassParams& params,
+                                      const VulkanGuidePanelTarget& panel,
+                                      const RenderSettings& settings,
+                                      const glm::vec3& radii,
+                                      const glm::mat4& ellipsoid_to_world,
+                                      const glm::vec4& color,
+                                      const float thickness) {
+            constexpr int lat_segments = 24;
+            constexpr int lon_segments = 32;
+
+            const auto point = [&](const int lat, const int lon) {
+                const float theta = static_cast<float>(lat) /
+                                    static_cast<float>(lat_segments) * glm::pi<float>();
+                const float phi = static_cast<float>(lon) /
+                                  static_cast<float>(lon_segments) * 2.0f * glm::pi<float>();
+                const float sin_theta = std::sin(theta);
+                const glm::vec3 local(
+                    sin_theta * std::cos(phi) * radii.x,
+                    std::cos(theta) * radii.y,
+                    sin_theta * std::sin(phi) * radii.z);
+                return glm::vec3(ellipsoid_to_world * glm::vec4(local, 1.0f));
+            };
+
+            for (int lat = 0; lat < lat_segments; lat += 2) {
+                glm::vec3 previous = point(lat, 0);
+                for (int lon = 1; lon <= lon_segments; ++lon) {
+                    const glm::vec3 current = point(lat, lon % lon_segments);
+                    addProjectedOverlayLine(out, params, panel, settings, previous, current, color, thickness);
+                    previous = current;
+                }
+            }
+            for (int lon = 0; lon < lon_segments; lon += 2) {
+                glm::vec3 previous = point(0, lon);
+                for (int lat = 1; lat <= lat_segments; ++lat) {
+                    const glm::vec3 current = point(lat, lon);
+                    addProjectedOverlayLine(out, params, panel, settings, previous, current, color, thickness);
+                    previous = current;
+                }
+            }
+        }
+
+        void appendCropAndFilterOverlays(VulkanViewportPassParams& params,
+                                         const VulkanGuidePanelTarget& panel,
+                                         const RenderSettings& settings,
+                                         const SceneRenderState* scene_state,
+                                         const SceneManager* scene_manager,
+                                         const GizmoState& gizmo) {
+            if (settings.depth_filter_enabled) {
+                const glm::mat4 filter_to_world = settings.depth_filter_transform.toMat4();
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   settings.depth_filter_min,
+                                   settings.depth_filter_max,
+                                   filter_to_world,
+                                   glm::vec4(0.0f, 0.0f, 0.0f, 0.85f),
+                                   9.0f);
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   settings.depth_filter_min,
+                                   settings.depth_filter_max,
+                                   filter_to_world,
+                                   glm::vec4(1.0f, 1.0f, 1.0f, 0.90f),
+                                   6.0f);
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   settings.depth_filter_min,
+                                   settings.depth_filter_max,
+                                   filter_to_world,
+                                   glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
+                                   4.5f);
+            }
+
+            if (!scene_state || !scene_manager) {
+                return;
+            }
+
+            if (settings.show_crop_box) {
+                const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
+                for (const auto& cb : scene_state->cropboxes) {
+                    if (!cb.data) {
+                        continue;
+                    }
+                    const bool selected = cb.node_id == selected_id;
+                    const bool use_pending = selected && gizmo.cropbox_active;
+                    const glm::vec3 box_min = use_pending ? gizmo.cropbox_min : cb.data->min;
+                    const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
+                    const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
+                    const float flash = selected ? std::clamp(cb.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
+                    appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                       box_min,
+                                       box_max,
+                                       world_transform,
+                                       cropGuideColor(cb.data->color, cb.data->inverse, flash),
+                                       cb.data->line_width + flash * 4.0f);
+                }
+            }
+
+            if (settings.show_ellipsoid) {
+                const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
+                for (const auto& el : scene_state->ellipsoids) {
+                    if (!el.data) {
+                        continue;
+                    }
+                    const bool selected = el.node_id == selected_id;
+                    const bool use_pending = selected && gizmo.ellipsoid_active;
+                    const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
+                    const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
+                    const float flash = selected ? std::clamp(el.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
+                    appendProjectedEllipsoid(params.overlay_triangles, params, panel, settings,
+                                             radii,
+                                             world_transform,
+                                             cropGuideColor(el.data->color, el.data->inverse, flash),
+                                             el.data->line_width + flash * 4.0f);
+                }
             }
         }
 
@@ -656,6 +971,77 @@ namespace lfs::vis::gui {
             });
         }
 
+        [[nodiscard]] std::string vulkanCameraThumbnailKey(const lfs::core::Camera& camera) {
+            return std::to_string(camera.uid()) + ":" + lfs::core::path_to_utf8(camera.image_path());
+        }
+
+        [[nodiscard]] std::uintptr_t getOrLoadVulkanCameraThumbnail(const lfs::core::Camera& camera,
+                                                                    int& decode_budget,
+                                                                    bool& deferred_by_budget) {
+            static std::unordered_map<std::string, std::shared_ptr<VulkanUiTexture>> texture_cache;
+            static std::unordered_set<std::string> failed_cache;
+
+            const std::string key = vulkanCameraThumbnailKey(camera);
+            if (failed_cache.contains(key)) {
+                return 0;
+            }
+            if (const auto it = texture_cache.find(key); it != texture_cache.end()) {
+                return it->second && it->second->valid()
+                           ? it->second->textureId()
+                           : 0;
+            }
+            if (decode_budget <= 0) {
+                deferred_by_budget = true;
+                return 0;
+            }
+            --decode_budget;
+
+            const auto path = camera.image_path();
+            if (path.empty() || !std::filesystem::exists(path)) {
+                failed_cache.insert(key);
+                return 0;
+            }
+
+            unsigned char* pixels = nullptr;
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            try {
+                auto loaded = lfs::core::load_image(path, 1, 128);
+                pixels = std::get<0>(loaded);
+                width = std::get<1>(loaded);
+                height = std::get<2>(loaded);
+                channels = std::get<3>(loaded);
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to decode camera thumbnail '{}': {}",
+                         lfs::core::path_to_utf8(path), e.what());
+                failed_cache.insert(key);
+                return 0;
+            }
+
+            if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
+                if (pixels) {
+                    lfs::core::free_image(pixels);
+                }
+                failed_cache.insert(key);
+                return 0;
+            }
+
+            auto texture = std::make_shared<VulkanUiTexture>();
+            const bool uploaded = texture->upload(pixels, width, height, channels);
+            lfs::core::free_image(pixels);
+            if (!uploaded) {
+                LOG_WARN("Failed to upload camera thumbnail texture '{}'",
+                         lfs::core::path_to_utf8(path));
+                failed_cache.insert(key);
+                return 0;
+            }
+
+            const std::uintptr_t texture_id = texture->textureId();
+            texture_cache.emplace(key, std::move(texture));
+            return texture_id;
+        }
+
         [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
             const lfs::core::Camera& camera,
             const glm::mat4& scene_transform) {
@@ -692,12 +1078,104 @@ namespace lfs::vis::gui {
                    lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
         }
 
+        [[nodiscard]] std::unordered_set<int> collectSelectedCameraUids(
+            const SceneManager* scene_manager,
+            const lfs::core::Scene& scene) {
+            std::unordered_set<int> uids;
+            if (!scene_manager) {
+                return uids;
+            }
+            for (const auto& node_name : scene_manager->getSelectedNodeNames()) {
+                const auto* const node = scene.getNode(node_name);
+                if (!node || node->type != lfs::core::NodeType::CAMERA) {
+                    continue;
+                }
+                if (node->camera) {
+                    uids.insert(node->camera->uid());
+                } else if (node->camera_uid >= 0) {
+                    uids.insert(node->camera_uid);
+                }
+            }
+            return uids;
+        }
+
+        [[nodiscard]] float cameraFrustumVisibilityAlpha(const glm::vec3& camera_position,
+                                                         const glm::vec3& view_position,
+                                                         const float scale) {
+            constexpr float fade_start_multiplier = 5.0f;
+            constexpr float fade_end_multiplier = 0.2f;
+            constexpr float min_visible_multiplier = 0.1f;
+            constexpr float min_visible_alpha = 0.05f;
+
+            const float fade_start = fade_start_multiplier * scale;
+            const float fade_end = fade_end_multiplier * scale;
+            const float min_visible = min_visible_multiplier * scale;
+            const float distance = glm::length(camera_position - view_position);
+            if (distance < min_visible) {
+                return 0.0f;
+            }
+            if (distance < fade_end) {
+                return min_visible_alpha;
+            }
+            if (distance < fade_start) {
+                const float t = (distance - fade_end) / std::max(fade_start - fade_end, 1e-6f);
+                return min_visible_alpha + (1.0f - min_visible_alpha) *
+                                               (t * t * (3.0f - 2.0f * t));
+            }
+            return 1.0f;
+        }
+
+        [[nodiscard]] glm::vec4 cameraFrustumColor(const lfs::core::Camera& camera,
+                                                   const size_t camera_index,
+                                                   const std::vector<glm::vec3>& per_camera_colors,
+                                                   const std::unordered_set<int>& disabled_uids,
+                                                   const std::unordered_set<int>& emphasized_uids,
+                                                   const int focused_camera_uid,
+                                                   const RenderSettings& settings,
+                                                   const float visibility_alpha) {
+            const bool is_validation = camera.image_name().find("test") != std::string::npos;
+            const bool disabled = disabled_uids.count(camera.uid()) > 0;
+            const bool emphasized = emphasized_uids.count(camera.uid()) > 0;
+            const bool focused = camera.uid() == focused_camera_uid;
+
+            glm::vec3 color = is_validation ? settings.eval_camera_color : settings.train_camera_color;
+            if (per_camera_colors.size() == camera_index + 1 || per_camera_colors.size() > camera_index) {
+                const glm::vec3 override_color = per_camera_colors[camera_index];
+                if (std::isfinite(override_color.x) &&
+                    std::isfinite(override_color.y) &&
+                    std::isfinite(override_color.z)) {
+                    color = override_color;
+                }
+            }
+
+            float alpha = visibility_alpha;
+            if (disabled) {
+                alpha *= 0.4f;
+            }
+            if (emphasized) {
+                color = glm::vec3(1.0f, 0.55f, 0.0f);
+                alpha = std::min(1.0f, alpha + 0.4f);
+            }
+            if (focused) {
+                color = is_validation ? glm::vec3(0.9f, 0.75f, 0.0f)
+                                      : glm::vec3(1.0f, 0.55f, 0.0f);
+                alpha = std::min(1.0f, alpha + 0.3f);
+            }
+            if (disabled) {
+                color = glm::mix(color, glm::vec3(0.5f), 0.5f);
+                alpha *= 0.5f;
+            }
+            return glm::vec4(color, std::clamp(alpha, 0.0f, 1.0f));
+        }
+
         void appendVulkanSceneGuideOverlays(VulkanViewportPassParams& params,
                                             const VisualizerImpl& viewer,
                                             const ViewportLayout& viewport_layout,
                                             const RenderSettings& settings,
                                             RenderingManager& rendering_manager,
-                                            SceneManager* scene_manager) {
+                                            SceneManager* scene_manager,
+                                            const SceneRenderState* scene_state,
+                                            const GizmoState& gizmo) {
             if (params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
                 return;
             }
@@ -708,9 +1186,9 @@ namespace lfs::vis::gui {
             }
 
             constexpr std::array axis_colors{
-                glm::vec4(0.95f, 0.18f, 0.18f, 0.9f),
-                glm::vec4(0.25f, 0.82f, 0.25f, 0.9f),
-                glm::vec4(0.30f, 0.50f, 1.0f, 0.9f),
+                glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
+                glm::vec4(0.0f, 1.0f, 0.0f, 1.0f),
+                glm::vec4(0.0f, 0.0f, 1.0f, 1.0f),
             };
             constexpr std::array axes{
                 glm::vec3(1.0f, 0.0f, 0.0f),
@@ -723,13 +1201,15 @@ namespace lfs::vis::gui {
                     continue;
                 }
 
+                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo);
+
                 if (settings.show_coord_axes) {
                     for (size_t axis = 0; axis < axes.size(); ++axis) {
                         if (settings.axes_visibility[axis]) {
                             addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
                                                     glm::vec3(0.0f),
                                                     axes[axis] * settings.axes_size,
-                                                    axis_colors[axis], 2.0f);
+                                                    axis_colors[axis], 3.0f);
                         }
                     }
                 }
@@ -759,13 +1239,37 @@ namespace lfs::vis::gui {
                 if (cameras.empty()) {
                     continue;
                 }
-                auto scene_transforms = scene_manager->getScene().getVisibleCameraSceneTransforms();
-                for (auto& transform : scene_transforms) {
-                    transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+
+                std::vector<glm::mat4> scene_transforms;
+                if (scene_state && scene_state->camera_scene_transforms.size() == cameras.size()) {
+                    scene_transforms = scene_state->camera_scene_transforms;
+                } else {
+                    scene_transforms = scene_manager->getScene().getVisibleCameraSceneTransforms();
+                    for (auto& transform : scene_transforms) {
+                        transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+                    }
                 }
                 const auto disabled_uids = scene_manager->getScene().getTrainingDisabledCameraUids();
-                const int current_camera_uid = rendering_manager.getCurrentCameraId();
                 const int hovered_camera_uid = rendering_manager.getHoveredCameraId();
+                const auto emphasized_uids = collectSelectedCameraUids(scene_manager, scene_manager->getScene());
+                std::vector<glm::vec3> per_camera_colors;
+                if (const auto* trainer_manager = scene_manager->getTrainerManager()) {
+                    if (const auto* trainer = trainer_manager->getTrainer()) {
+                        std::vector<std::array<float, 3>> loss_colors;
+                        if (trainer->fillCameraLossColors(cameras, loss_colors) &&
+                            loss_colors.size() == cameras.size()) {
+                            per_camera_colors.reserve(loss_colors.size());
+                            for (const auto& color : loss_colors) {
+                                per_camera_colors.emplace_back(color[0], color[1], color[2]);
+                            }
+                        }
+                    }
+                }
+
+                constexpr float wireframe_width = 1.5f;
+                constexpr float min_render_alpha = 0.01f;
+                int thumbnail_decode_budget = 4;
+                bool thumbnails_deferred_by_budget = false;
                 constexpr std::array<std::pair<int, int>, 8> edges{{
                     {0, 1},
                     {0, 2},
@@ -791,58 +1295,87 @@ namespace lfs::vis::gui {
                         continue;
                     }
 
-                    const bool disabled = disabled_uids.count(camera->uid()) > 0;
-                    const bool current = camera->uid() == current_camera_uid;
-                    const bool hovered = camera->uid() == hovered_camera_uid;
-                    glm::vec4 color = guideColor(
-                        camera->split() == lfs::core::CameraSplit::Eval ||
-                                camera->image_name().find("test") != std::string::npos
-                            ? settings.eval_camera_color
-                            : settings.train_camera_color,
-                        disabled ? 0.28f : 0.72f);
-                    float thickness = 1.4f;
-                    if (current) {
-                        color.a = 0.95f;
-                        thickness = 2.4f;
-                    }
-                    if (hovered) {
-                        color = guideColor(theme().palette.warning, disabled ? 0.70f : 1.0f);
-                        thickness = std::max(thickness, 3.4f);
-                    }
-
-                    if (camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
-                        constexpr int segments = 48;
-                        for (int circle = 0; circle < 3; ++circle) {
-                            std::optional<glm::vec3> previous_world;
-                            for (int segment = 0; segment <= segments; ++segment) {
-                                const float a = static_cast<float>(segment % segments) /
-                                                static_cast<float>(segments) * 2.0f * glm::pi<float>();
-                                glm::vec3 local(0.0f);
-                                if (circle == 0) {
-                                    local = {std::cos(a), std::sin(a), 0.0f};
-                                } else if (circle == 1) {
-                                    local = {std::cos(a), 0.0f, std::sin(a)};
-                                } else {
-                                    local = {0.0f, std::cos(a), std::sin(a)};
-                                }
-                                const glm::vec3 world = glm::vec3(
-                                    *visualizer_c2w * glm::vec4(local * settings.camera_frustum_scale, 1.0f));
-                                if (previous_world) {
-                                    addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
-                                                            *previous_world, world, color, thickness);
-                                }
-                                previous_world = world;
-                            }
-                        }
+                    const float visibility_alpha = cameraFrustumVisibilityAlpha(
+                        glm::vec3((*visualizer_c2w)[3]),
+                        panel.viewport->getTranslation(),
+                        settings.camera_frustum_scale);
+                    glm::vec4 color = cameraFrustumColor(*camera,
+                                                         i,
+                                                         per_camera_colors,
+                                                         disabled_uids,
+                                                         emphasized_uids,
+                                                         hovered_camera_uid,
+                                                         settings,
+                                                         visibility_alpha);
+                    if (color.a <= min_render_alpha) {
                         continue;
                     }
 
                     const int image_width = camera->image_width() > 0 ? camera->image_width() : camera->camera_width();
                     const int image_height = camera->image_height() > 0 ? camera->image_height() : camera->camera_height();
-                    if (image_width <= 0 || image_height <= 0 || camera->focal_y() <= 0.0f) {
+                    if (image_width <= 0 || image_height <= 0) {
                         continue;
                     }
                     const float aspect = static_cast<float>(image_width) / static_cast<float>(image_height);
+                    const bool equirectangular =
+                        camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+                    if (equirectangular) {
+                        constexpr int lat_segments = 16;
+                        constexpr int lon_segments = 24;
+                        constexpr float radius = 0.5f;
+                        constexpr float equirectangular_display_fov = 1.0472f;
+                        const float half_height = std::tan(equirectangular_display_fov * 0.5f);
+                        const float half_width = half_height * aspect;
+                        const glm::mat4 model =
+                            *visualizer_c2w *
+                            glm::scale(glm::mat4(1.0f),
+                                       glm::vec3(half_width * 2.0f * settings.camera_frustum_scale,
+                                                 half_height * 2.0f * settings.camera_frustum_scale,
+                                                 settings.camera_frustum_scale));
+                        const auto sphere_point = [&](const int lat, const int lon) {
+                            const float theta = static_cast<float>(lat) /
+                                                static_cast<float>(lat_segments) * glm::pi<float>();
+                            const float phi = static_cast<float>(lon) /
+                                              static_cast<float>(lon_segments) * 2.0f * glm::pi<float>();
+                            const float sin_theta = std::sin(theta);
+                            const float cos_theta = std::cos(theta);
+                            const glm::vec3 local(radius * sin_theta * std::sin(phi),
+                                                  radius * cos_theta,
+                                                  -radius * sin_theta * std::cos(phi));
+                            return glm::vec3(model * glm::vec4(local, 1.0f));
+                        };
+                        for (int lat = 0; lat <= lat_segments; lat += 4) {
+                            glm::vec3 previous = sphere_point(lat, 0);
+                            for (int lon = 1; lon <= lon_segments; ++lon) {
+                                const glm::vec3 current = sphere_point(lat, lon % lon_segments);
+                                addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                                                        previous, current, color, wireframe_width);
+                                previous = current;
+                            }
+                        }
+                        for (int lon = 0; lon < lon_segments; lon += 4) {
+                            glm::vec3 previous = sphere_point(0, lon);
+                            for (int lat = 1; lat <= lat_segments; ++lat) {
+                                const glm::vec3 current = sphere_point(lat, lon);
+                                addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                                                        previous, current, color, wireframe_width);
+                                previous = current;
+                            }
+                        }
+                        const glm::vec3 apex = glm::vec3(*visualizer_c2w * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+                        for (int lon = 0; lon < lon_segments; lon += lon_segments / 4) {
+                            addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                                                    apex,
+                                                    sphere_point(lat_segments / 2, lon),
+                                                    color,
+                                                    wireframe_width);
+                        }
+                        continue;
+                    }
+
+                    if (camera->focal_y() <= 0.0f) {
+                        continue;
+                    }
                     const float fov_y = lfs::core::focal2fov(camera->focal_y(), image_height);
                     const float depth = settings.camera_frustum_scale;
                     const float half_height = std::tan(fov_y * 0.5f) * depth;
@@ -858,12 +1391,56 @@ namespace lfs::vis::gui {
                     for (size_t p = 0; p < local_points.size(); ++p) {
                         world_points[p] = glm::vec3(*visualizer_c2w * glm::vec4(local_points[p], 1.0f));
                     }
+                    std::array<std::optional<glm::vec2>, 5> screen_points{};
+                    for (size_t p = 0; p < world_points.size(); ++p) {
+                        screen_points[p] = projectPointToScreen(panel, settings, world_points[p]);
+                    }
+                    if (screen_points[1] && screen_points[2] && screen_points[3] && screen_points[4]) {
+                        const std::uintptr_t texture_id =
+                            getOrLoadVulkanCameraThumbnail(*camera,
+                                                          thumbnail_decode_budget,
+                                                          thumbnails_deferred_by_budget);
+                        if (texture_id != 0) {
+                            const bool is_validation = camera->image_name().find("test") != std::string::npos;
+                            const bool disabled = disabled_uids.count(camera->uid()) > 0;
+                            const bool emphasized = emphasized_uids.count(camera->uid()) > 0;
+                            const bool focused = camera->uid() == hovered_camera_uid;
+                            glm::vec4 tint_opacity(1.0f, 1.0f, 1.0f, 0.8f);
+                            glm::vec4 effects(0.0f);
+                            if (emphasized) {
+                                tint_opacity = glm::vec4(1.0f, 0.55f, 0.0f, tint_opacity.a);
+                                effects.x = 0.4f;
+                            }
+                            if (focused) {
+                                const glm::vec3 highlight =
+                                    is_validation ? glm::vec3(0.9f, 0.75f, 0.0f)
+                                                  : glm::vec3(1.0f, 0.55f, 0.0f);
+                                tint_opacity = glm::vec4(highlight, tint_opacity.a);
+                                effects.x = 0.3f;
+                            }
+                            if (disabled) {
+                                effects.y = 0.5f;
+                                tint_opacity.a *= 0.5f;
+                            }
+                            appendTexturedOverlayQuad(params,
+                                                      texture_id,
+                                                      {*screen_points[1],
+                                                       *screen_points[2],
+                                                       *screen_points[3],
+                                                       *screen_points[4]},
+                                                      tint_opacity,
+                                                      effects);
+                        }
+                    }
                     for (const auto& [a, b] : edges) {
                         addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
                                                 world_points[static_cast<size_t>(a)],
                                                 world_points[static_cast<size_t>(b)],
-                                                color, thickness);
+                                                color, wireframe_width);
                     }
+                }
+                if (thumbnails_deferred_by_budget) {
+                    rendering_manager.markDirty(DirtyFlag::OVERLAY);
                 }
             }
         }
@@ -2015,10 +2592,6 @@ namespace lfs::vis::gui {
                   make_panel(SelectionOverlayPanel(this)),
                   PanelSpace::ViewportOverlay, 200);
 
-        reg_panel("native.viewport_scene_guides", "Viewport Scene Guides",
-                  make_panel(ViewportSceneGuidesPanel()),
-                  PanelSpace::ViewportOverlay, 250);
-
         reg_panel("native.node_transform_gizmo", "Node Transform",
                   make_panel(NodeTransformGizmoPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 300);
@@ -2086,39 +2659,70 @@ namespace lfs::vis::gui {
             const auto settings = rendering_manager->getSettings();
             params.background_color = settings.background_color;
             params.grid_enabled =
-                settings.show_grid && !settings.equirectangular && settings.grid_opacity > 0.0f;
+                settings.show_grid &&
+                !splitViewUsesComparisonPanels(settings.split_view_mode) &&
+                !settings.equirectangular &&
+                settings.grid_opacity > 0.0f;
             params.grid_plane = std::clamp(settings.grid_plane, 0, 2);
             params.grid_opacity = std::clamp(settings.grid_opacity, 0.0f, 1.0f);
 
             if (params.grid_enabled && viewer_) {
-                const auto& vp = viewer_->getViewport();
-                const glm::ivec2 grid_size{
-                    std::max(static_cast<int>(std::lround(params.viewport_size.x)), 1),
-                    std::max(static_cast<int>(std::lround(params.viewport_size.y)), 1),
-                };
-                const glm::mat4 view =
-                    lfs::rendering::makeViewMatrix(vp.getRotationMatrix(), vp.getTranslation());
-                const glm::mat4 proj = lfs::rendering::createProjectionMatrixFromFocal(
-                    grid_size,
-                    settings.focal_length_mm,
-                    settings.orthographic,
-                    settings.ortho_scale,
-                    lfs::rendering::DEFAULT_NEAR_PLANE,
-                    settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
-                params.grid_view = view;
-                params.grid_projection = proj;
-                params.grid_view_projection = proj * view;
-                params.grid_view_position = vp.getTranslation();
-                params.grid_orthographic = settings.orthographic;
+                const auto panels = collectVulkanGuidePanels(*viewer_, viewport_layout_, *rendering_manager);
+                params.grid_overlays.reserve(panels.size());
+                for (const auto& panel : panels) {
+                    if (!panel.valid()) {
+                        continue;
+                    }
+                    const glm::mat4 view =
+                        lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(),
+                                                       panel.viewport->getTranslation());
+                    const glm::mat4 proj = lfs::rendering::createProjectionMatrixFromFocal(
+                        panel.render_size,
+                        settings.focal_length_mm,
+                        settings.orthographic,
+                        settings.ortho_scale,
+                        lfs::rendering::DEFAULT_NEAR_PLANE,
+                        settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
+                    VulkanViewportGridOverlay grid{};
+                    grid.viewport_pos = panel.pos;
+                    grid.viewport_size = panel.size;
+                    grid.render_size = panel.render_size;
+                    grid.view = view;
+                    grid.projection = proj;
+                    grid.view_projection = proj * view;
+                    grid.view_position = panel.viewport->getTranslation();
+                    grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
+                    grid.opacity = params.grid_opacity;
+                    grid.orthographic = settings.orthographic;
+                    params.grid_overlays.push_back(grid);
+                }
+                if (!params.grid_overlays.empty()) {
+                    const auto& first_grid = params.grid_overlays.front();
+                    params.grid_plane = first_grid.plane;
+                    params.grid_view = first_grid.view;
+                    params.grid_projection = first_grid.projection;
+                    params.grid_view_projection = first_grid.view_projection;
+                    params.grid_view_position = first_grid.view_position;
+                    params.grid_orthographic = first_grid.orthographic;
+                }
             }
 
             if (viewer_) {
+                SceneManager* const scene_manager = viewer_->getSceneManager();
+                std::optional<SceneRenderState> overlay_scene_state;
+                if (scene_manager &&
+                    (settings.show_camera_frustums || settings.show_crop_box || settings.show_ellipsoid)) {
+                    overlay_scene_state = scene_manager->buildRenderState();
+                }
+                const GizmoState gizmo_state = rendering_manager->getGizmoState();
                 appendVulkanSceneGuideOverlays(params,
                                                *viewer_,
                                                viewport_layout_,
                                                settings,
                                                *rendering_manager,
-                                               viewer_->getSceneManager());
+                                               scene_manager,
+                                               overlay_scene_state ? &*overlay_scene_state : nullptr,
+                                               gizmo_state);
                 appendVulkanViewportGizmoOverlay(params,
                                                  *viewer_,
                                                  viewport_layout_,
@@ -2127,6 +2731,8 @@ namespace lfs::vis::gui {
                                                  gizmo_manager_.isViewportGizmoDragging());
             }
         }
+
+        appendLineRendererCommandOverlays(params);
 
         const auto& vignette = lfs::vis::theme().vignette;
         params.vignette_enabled = vignette.enabled && vignette.intensity > 0.0f;
@@ -2671,22 +3277,16 @@ namespace lfs::vis::gui {
             VkClearValue clear_value{};
             clear_value.color = VkClearColorValue{{bg.x, bg.y, bg.z, 1.0f}};
 
-            const VulkanViewportPassParams viewport_params =
-                buildVulkanViewportParams(vulkan_context ? vulkan_context->swapchainExtent() : VkExtent2D{});
-            bool viewport_pass_ready = false;
-            if (vulkan_context) {
+            VulkanContext::Frame frame{};
+            if (vulkan_context && vulkan_context->beginFrame(clear_value, frame)) {
+                const VulkanViewportPassParams viewport_params = buildVulkanViewportParams(frame.extent);
+                bool viewport_pass_ready = false;
                 if (!vulkan_viewport_pass_) {
                     vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();
                 }
                 viewport_pass_ready = vulkan_viewport_pass_->init(*vulkan_context);
                 if (viewport_pass_ready) {
                     vulkan_viewport_pass_->prepare(*vulkan_context, viewport_params);
-                }
-            }
-
-            VulkanContext::Frame frame{};
-            if (vulkan_context && vulkan_context->beginFrame(clear_value, frame)) {
-                if (viewport_pass_ready) {
                     recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
                 }
                 if (rmlui_manager_.beginVulkanFrame(frame.command_buffer, frame.extent, frame.framebuffer, frame.swapchain_image)) {
@@ -2701,7 +3301,10 @@ namespace lfs::vis::gui {
                 }
             } else if (vulkan_context) {
                 rmlui_manager_.clearVulkanQueue();
-                LOG_WARN("Vulkan GUI frame begin failed: {}", vulkan_context->lastError());
+                clearLineRendererCommands();
+                if (!vulkan_context->lastError().empty()) {
+                    LOG_WARN("Vulkan GUI frame begin failed: {}", vulkan_context->lastError());
+                }
             }
 
             if (!ui_layout_changed && ui_layout_settle_frames_ > 0)

@@ -8,7 +8,7 @@
 #include "sequencer/rml_sequencer_panel.hpp"
 #include <RmlUi/Core/EventListener.h>
 #include <cstddef>
-#include <imgui.h>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -76,7 +76,7 @@ namespace lfs::vis::gui {
         void hideEditOverlay();
         void showPreviewWindow(float left, float top, float width, float height,
                                const std::string& title, bool playing,
-                               ImTextureID texture_id);
+                               std::uintptr_t texture_id);
         void hidePreviewWindow();
 
         void processInput(const lfs::vis::PanelInputState& input);

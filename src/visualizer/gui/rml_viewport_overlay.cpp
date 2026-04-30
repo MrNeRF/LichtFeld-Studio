@@ -23,7 +23,6 @@
 #include <cassert>
 #include <format>
 #include <vector>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 

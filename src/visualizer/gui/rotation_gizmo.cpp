@@ -25,7 +25,7 @@ namespace lfs::vis::gui {
         struct AxisVisual {
             RotationGizmoAxis axis = RotationGizmoAxis::None;
             glm::vec3 direction{0.0f};
-            ImU32 color = IM_COL32_WHITE;
+            OverlayColor color = OVERLAY_COL32_WHITE;
         };
 
         struct RingCache {
@@ -166,12 +166,12 @@ namespace lfs::vis::gui {
             return emphasized ? 1.0f : alpha;
         }
 
-        [[nodiscard]] ImU32 withAlpha(const ImU32 color, const float alpha) {
+        [[nodiscard]] OverlayColor withAlpha(const OverlayColor color, const float alpha) {
             const int r = static_cast<int>(color & 0xFF);
             const int g = static_cast<int>((color >> 8) & 0xFF);
             const int b = static_cast<int>((color >> 16) & 0xFF);
             const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-            return IM_COL32(r, g, b, a);
+            return overlayColor(r, g, b, a);
         }
 
         void planeBasis(const glm::vec3& normal, glm::vec3& u, glm::vec3& v) {
@@ -249,7 +249,7 @@ namespace lfs::vis::gui {
             return std::sqrt(distanceToPolylineSquared(p, ring));
         }
 
-        void drawRing(ImDrawList& draw_list,
+        void drawRing(NativeOverlayDrawList& draw_list,
                       const RingCache& ring,
                       const glm::vec3& camera_forward,
                       const bool hovered,
@@ -265,29 +265,29 @@ namespace lfs::vis::gui {
                     const float alpha = colorAlpha((ring.radials[a] + ring.radials[b]) * 0.5f,
                                                    camera_forward, hovered || active);
                     draw_list.AddLine(
-                        ImVec2(prev_screen.x, prev_screen.y),
-                        ImVec2(screen.x, screen.y),
-                        IM_COL32(0, 0, 0, active ? 180 : 115),
+                        glm::vec2(prev_screen.x, prev_screen.y),
+                        glm::vec2(screen.x, screen.y),
+                        overlayColor(0, 0, 0, active ? 180 : 115),
                         line_width + 3.2f);
                     draw_list.AddLine(
-                        ImVec2(prev_screen.x, prev_screen.y),
-                        ImVec2(screen.x, screen.y),
+                        glm::vec2(prev_screen.x, prev_screen.y),
+                        glm::vec2(screen.x, screen.y),
                         withAlpha(ring.axis.color, alpha),
                         line_width);
                 }
             }
         }
 
-        void drawScreenRing(ImDrawList& draw_list,
+        void drawScreenRing(NativeOverlayDrawList& draw_list,
                             const glm::vec2& center,
                             const float radius,
                             const bool hovered,
                             const bool active) {
-            constexpr ImU32 VIEW_COLOR = IM_COL32(245, 222, 141, 255);
+            constexpr OverlayColor VIEW_COLOR = overlayColor(245, 222, 141, 255);
             const float line_width = active ? 3.8f : (hovered ? 3.0f : 1.8f);
-            draw_list.AddCircle(ImVec2(center.x, center.y), radius, IM_COL32(0, 0, 0, active ? 175 : 95),
+            draw_list.AddCircle(glm::vec2(center.x, center.y), radius, overlayColor(0, 0, 0, active ? 175 : 95),
                                 RING_SEGMENTS, line_width + 3.0f);
-            draw_list.AddCircle(ImVec2(center.x, center.y), radius,
+            draw_list.AddCircle(glm::vec2(center.x, center.y), radius,
                                 withAlpha(VIEW_COLOR, hovered || active ? 0.95f : 0.52f),
                                 RING_SEGMENTS, line_width);
         }
@@ -567,7 +567,7 @@ namespace lfs::vis::gui {
         glm::vec2 pivot_screen;
         if (!projectPoint(view_projection, drag_config.viewport_pos, drag_config.viewport_size,
                           drag_config.pivot_world, pivot_screen)) {
-            if (g_active.active && g_active.id == config.id && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (g_active.active && g_active.id == config.id && !config.input.mouse_left_down) {
                 g_active = ActiveState{};
             }
             return result;
@@ -582,11 +582,11 @@ namespace lfs::vis::gui {
 
         const std::array<AxisVisual, 3> axes = {
             AxisVisual{RotationGizmoAxis::X, axisFromConfig(drag_config.orientation_world, 0),
-                       IM_COL32(245, 82, 96, 255)},
+                       overlayColor(245, 82, 96, 255)},
             AxisVisual{RotationGizmoAxis::Y, axisFromConfig(drag_config.orientation_world, 1),
-                       IM_COL32(74, 208, 119, 255)},
+                       overlayColor(74, 208, 119, 255)},
             AxisVisual{RotationGizmoAxis::Z, axisFromConfig(drag_config.orientation_world, 2),
-                       IM_COL32(80, 151, 255, 255)},
+                       overlayColor(80, 151, 255, 255)},
         };
         const glm::vec3 view_axis = cameraForward(drag_config.view);
         const std::array<RingCache, 3> rings = {
@@ -595,8 +595,7 @@ namespace lfs::vis::gui {
             buildRingCache(drag_config, view_projection, axes[2], ring_radius_world),
         };
 
-        const ImGuiIO& io = ImGui::GetIO();
-        const glm::vec2 mouse(io.MousePos.x, io.MousePos.y);
+        const glm::vec2 mouse = config.input.mouse_pos;
         const bool mouse_in_viewport = isInViewport(drag_config, mouse);
         RotationGizmoAxis hovered_axis = RotationGizmoAxis::None;
         if (mouse_in_viewport && (!g_active.active || g_active.id == config.id)) {
@@ -604,7 +603,7 @@ namespace lfs::vis::gui {
         }
 
         if (g_active.active && g_active.id == config.id) {
-            result.active = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            result.active = config.input.mouse_left_down;
             if (!result.active) {
                 g_active = ActiveState{};
             }
@@ -612,7 +611,7 @@ namespace lfs::vis::gui {
 
         if (!g_active.active && config.input_enabled &&
             hovered_axis != RotationGizmoAxis::None &&
-            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            config.input.mouse_left_clicked) {
             g_active.active = true;
             g_active.id = config.id;
             g_active.axis = hovered_axis;
@@ -664,7 +663,6 @@ namespace lfs::vis::gui {
                     }
                 }
             }
-            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
         }
 
         result.hovered_axis = hovered_axis;
@@ -682,10 +680,10 @@ namespace lfs::vis::gui {
                        emphasized_axis == RotationGizmoAxis::View && !result.active,
                        emphasized_axis == RotationGizmoAxis::View && result.active);
 
-        drag_config.draw_list->AddCircleFilled(ImVec2(pivot_screen.x, pivot_screen.y), 5.0f,
-                                               IM_COL32(0, 0, 0, 155), 24);
-        drag_config.draw_list->AddCircleFilled(ImVec2(pivot_screen.x, pivot_screen.y), 3.5f,
-                                               IM_COL32(250, 250, 255, 230), 24);
+        drag_config.draw_list->AddCircleFilled(glm::vec2(pivot_screen.x, pivot_screen.y), 5.0f,
+                                               overlayColor(0, 0, 0, 155), 24);
+        drag_config.draw_list->AddCircleFilled(glm::vec2(pivot_screen.x, pivot_screen.y), 3.5f,
+                                               overlayColor(250, 250, 255, 230), 24);
 
         return result;
     }

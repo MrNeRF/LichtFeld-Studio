@@ -324,13 +324,14 @@ namespace lfs::vis::gui {
                                    ? toU32WithAlpha(t.palette.text, 1.0f)
                                    : toU32WithAlpha(t.palette.text_dim, 0.40f);
 
-        const ImTextureID icon_tex = IconCache::instance().getIcon(item.icon_name);
+        const unsigned int icon_tex = static_cast<unsigned int>(IconCache::instance().getIcon(item.icon_name));
         const float icon_sz = ICON_SIZE * scale;
 
         if (icon_tex != 0) {
             const ImVec2 icon_min = {icon_center.x - icon_sz * 0.5f, icon_center.y - icon_sz * 0.5f};
             const ImVec2 icon_max = {icon_min.x + icon_sz, icon_min.y + icon_sz};
-            drawlist->AddImage(icon_tex, icon_min, icon_max, {0, 0}, {1, 1}, text_col);
+            drawlist->AddImage(static_cast<ImTextureID>(icon_tex),
+                               icon_min, icon_max, {0, 0}, {1, 1}, text_col);
         } else {
             char initial[2] = {item.label[0], '\0'};
             const ImVec2 char_sz = ImGui::CalcTextSize(initial);
@@ -400,14 +401,15 @@ namespace lfs::vis::gui {
             const ImU32 sm_text_col = toU32WithAlpha(t.palette.text, 1.0f);
             const auto& submode = item.submodes[si];
 
-            const ImTextureID sm_icon =
-                submode.icon_name.empty() ? 0 : IconCache::instance().getIcon(submode.icon_name);
+            const unsigned int sm_icon =
+                submode.icon_name.empty() ? 0 : static_cast<unsigned int>(IconCache::instance().getIcon(submode.icon_name));
             if (sm_icon != 0) {
                 const float sm_icon_sz = (sm_outer - sm_inner) * 0.65f;
                 const ImVec2 icon_min = {sm_center.x - sm_icon_sz * 0.5f,
                                          sm_center.y - sm_icon_sz * 0.5f};
                 const ImVec2 icon_max = {icon_min.x + sm_icon_sz, icon_min.y + sm_icon_sz};
-                drawlist->AddImage(sm_icon, icon_min, icon_max, {0, 0}, {1, 1}, sm_text_col);
+                drawlist->AddImage(static_cast<ImTextureID>(sm_icon),
+                                   icon_min, icon_max, {0, 0}, {1, 1}, sm_text_col);
             } else {
                 const char* label = submode.label.c_str();
                 const ImVec2 sm_label_sz = ImGui::CalcTextSize(label);

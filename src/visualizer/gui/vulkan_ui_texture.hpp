@@ -7,7 +7,6 @@
 #include "core/export.hpp"
 
 #include <cstdint>
-#include <imgui.h>
 
 namespace lfs::core {
     class Tensor;
@@ -35,7 +34,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] bool upload(const std::uint8_t* pixels, int width, int height, int channels);
         [[nodiscard]] bool upload(const lfs::core::Tensor& image, int expected_width, int expected_height);
-        [[nodiscard]] ImTextureID textureId() const;
+        [[nodiscard]] std::uintptr_t textureId() const;
         [[nodiscard]] bool valid() const;
         void reset();
 

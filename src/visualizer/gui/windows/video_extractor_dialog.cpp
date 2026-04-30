@@ -277,7 +277,8 @@ namespace lfs::gui {
 
             ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + offset_x,
                                        ImGui::GetCursorPosY() + offset_y));
-            ImGui::Image(preview_texture_->textureId(), ImVec2(display_width, display_height));
+            ImGui::Image(static_cast<ImTextureID>(preview_texture_->textureId()),
+                         ImVec2(display_width, display_height));
         } else {
             const char* hint = LOC(VideoExtractor::SELECT_PREVIEW);
             const ImVec2 text_size = ImGui::CalcTextSize(hint);

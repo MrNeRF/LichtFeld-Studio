@@ -422,7 +422,7 @@ namespace lfs::vis::gui::widgets {
         const float btn_size = ImGui::GetFrameHeight();
         const ImVec2 icon_size(btn_size - 4, btn_size - 4);
         const ImVec4 icon_tint = getIconTint();
-        const ImTextureID reset_icon = IconCache::instance().getIcon("reset");
+        const ImTextureID reset_icon = static_cast<ImTextureID>(IconCache::instance().getIcon("reset"));
 
         if (reset_icon) {
             if (ImGui::ImageButton("##reset", reset_icon, icon_size,
@@ -460,7 +460,7 @@ namespace lfs::vis::gui::widgets {
         const float btn_size = ImGui::GetFrameHeight();
         const ImVec2 icon_size(btn_size - 4, btn_size - 4);
         const ImVec4 icon_tint = getIconTint();
-        const ImTextureID reset_icon = IconCache::instance().getIcon("reset");
+        const ImTextureID reset_icon = static_cast<ImTextureID>(IconCache::instance().getIcon("reset"));
 
         if (reset_icon) {
             if (ImGui::ImageButton("##reset", reset_icon, icon_size,

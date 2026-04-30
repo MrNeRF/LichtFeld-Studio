@@ -6,6 +6,8 @@
 
 #include "core/export.hpp"
 
+#include <array>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <vector>
@@ -23,11 +25,45 @@ namespace lfs::vis {
         glm::vec4 color{1.0f};
     };
 
+    struct VulkanViewportShapeOverlayVertex {
+        glm::vec2 position{0.0f};
+        glm::vec2 screen_position{0.0f};
+        glm::vec2 p0{0.0f};
+        glm::vec2 p1{0.0f};
+        glm::vec4 color{1.0f};
+        glm::vec4 params{0.0f};
+    };
+
     struct VulkanViewportPivotOverlay {
         glm::vec2 center_ndc{0.0f};
         glm::vec2 size_ndc{0.0f};
         glm::vec3 color{0.26f, 0.59f, 0.98f};
         float opacity = 1.0f;
+    };
+
+    struct VulkanViewportTexturedOverlayVertex {
+        glm::vec2 position{0.0f};
+        glm::vec2 uv{0.0f};
+    };
+
+    struct VulkanViewportTexturedOverlay {
+        std::uintptr_t texture_id = 0;
+        glm::vec4 tint_opacity{1.0f, 1.0f, 1.0f, 0.8f};
+        glm::vec4 effects{0.0f};
+        std::array<VulkanViewportTexturedOverlayVertex, 6> vertices{};
+    };
+
+    struct VulkanViewportGridOverlay {
+        glm::vec2 viewport_pos{0.0f, 0.0f};
+        glm::vec2 viewport_size{0.0f, 0.0f};
+        glm::ivec2 render_size{0, 0};
+        glm::mat4 view{1.0f};
+        glm::mat4 projection{1.0f};
+        glm::mat4 view_projection{1.0f};
+        glm::vec3 view_position{0.0f, 0.0f, 0.0f};
+        int plane = 2;
+        float opacity = 1.0f;
+        bool orthographic = false;
     };
 
     struct VulkanViewportPassParams {
@@ -48,6 +84,7 @@ namespace lfs::vis {
         int grid_plane = 2;
         float grid_opacity = 1.0f;
         bool grid_orthographic = false;
+        std::vector<VulkanViewportGridOverlay> grid_overlays;
 
         bool vignette_enabled = false;
         float vignette_intensity = 0.0f;
@@ -55,7 +92,10 @@ namespace lfs::vis {
         float vignette_softness = 0.5f;
 
         std::vector<VulkanViewportOverlayVertex> overlay_triangles;
+        std::vector<VulkanViewportShapeOverlayVertex> shape_overlay_triangles;
+        std::vector<VulkanViewportShapeOverlayVertex> ui_shape_overlay_triangles;
         std::vector<VulkanViewportPivotOverlay> pivot_overlays;
+        std::vector<VulkanViewportTexturedOverlay> textured_overlays;
     };
 
     class LFS_VIS_API VulkanViewportPass {
