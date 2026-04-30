@@ -33,6 +33,14 @@ namespace lfs::vis::gui {
         VulkanUiTexture& operator=(VulkanUiTexture&& other) noexcept;
 
         [[nodiscard]] bool upload(const std::uint8_t* pixels, int width, int height, int channels);
+        [[nodiscard]] bool uploadRegion(const std::uint8_t* pixels,
+                                         int texture_width,
+                                         int texture_height,
+                                         int x,
+                                         int y,
+                                         int width,
+                                         int height,
+                                         int channels);
         [[nodiscard]] bool upload(const lfs::core::Tensor& image, int expected_width, int expected_height);
         [[nodiscard]] std::uintptr_t textureId() const;
         [[nodiscard]] bool valid() const;

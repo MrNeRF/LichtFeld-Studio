@@ -1080,9 +1080,7 @@ namespace lfs::vis {
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
-        const auto _ta = std::chrono::steady_clock::now();
         const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
-        const auto _tb = std::chrono::steady_clock::now();
         if (gui_manager_) {
             gui_manager_->setVulkanSceneImage(
                 vulkan_frame.image,
@@ -1091,29 +1089,10 @@ namespace lfs::vis {
         }
         if (gui_manager_)
             gui_manager_->render();
-        const auto _tc = std::chrono::steady_clock::now();
 
         processRenderWorkQueue();
         python::flush_signals();
         gui_frame_rendered_ = true;
-        {
-            using ms = std::chrono::duration<double, std::milli>;
-            const double rv = ms(_tb - _ta).count();
-            const double gui = ms(_tc - _tb).count();
-            static double accum_rv = 0;
-            static double accum_gui = 0;
-            static int n = 0;
-            accum_rv += rv;
-            accum_gui += gui;
-            ++n;
-            if (n >= 60) {
-                LOG_INFO("FRAME avg over {} frames: renderVulkanFrame {:.1f} ms | gui.render {:.1f} ms (total {:.1f} ms)",
-                         n, accum_rv / n, accum_gui / n, (accum_rv + accum_gui) / n);
-                accum_rv = 0;
-                accum_gui = 0;
-                n = 0;
-            }
-        }
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();

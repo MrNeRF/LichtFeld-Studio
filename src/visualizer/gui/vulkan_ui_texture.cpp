@@ -135,12 +135,7 @@ namespace lfs::vis::gui {
         int width = 0;
         int height = 0;
 
-        void waitAndReleasePendingUpload() {
-            if (upload_fence == VK_NULL_HANDLE) {
-                return;
-            }
-            vkWaitForFences(device, 1, &upload_fence, VK_TRUE,
-                            std::numeric_limits<std::uint64_t>::max());
+        void releasePendingUpload() {
             if (pending_command_buffer != VK_NULL_HANDLE && command_pool != VK_NULL_HANDLE) {
                 vkFreeCommandBuffers(device, command_pool, 1, &pending_command_buffer);
                 pending_command_buffer = VK_NULL_HANDLE;
@@ -153,8 +148,29 @@ namespace lfs::vis::gui {
                 vkFreeMemory(device, pending_staging_memory, nullptr);
                 pending_staging_memory = VK_NULL_HANDLE;
             }
+            if (upload_fence == VK_NULL_HANDLE) {
+                return;
+            }
             vkDestroyFence(device, upload_fence, nullptr);
             upload_fence = VK_NULL_HANDLE;
+        }
+
+        void tryReleasePendingUpload() {
+            if (upload_fence == VK_NULL_HANDLE) {
+                return;
+            }
+            if (vkGetFenceStatus(device, upload_fence) == VK_SUCCESS) {
+                releasePendingUpload();
+            }
+        }
+
+        void waitAndReleasePendingUpload() {
+            if (upload_fence == VK_NULL_HANDLE) {
+                return;
+            }
+            vkWaitForFences(device, 1, &upload_fence, VK_TRUE,
+                            std::numeric_limits<std::uint64_t>::max());
+            releasePendingUpload();
         }
 
         [[nodiscard]] bool init(VulkanContext& context) {
@@ -477,12 +493,19 @@ namespace lfs::vis::gui {
             return descriptor_set != VK_NULL_HANDLE;
         }
 
-        [[nodiscard]] bool uploadRgba(const std::vector<std::uint8_t>& rgba,
-                                      const int new_width,
-                                      const int new_height) {
-            if (rgba.empty() || new_width <= 0 || new_height <= 0 ||
-                rgba.size() != static_cast<std::size_t>(new_width) *
-                                   static_cast<std::size_t>(new_height) * 4u) {
+        [[nodiscard]] bool uploadRgbaRegion(const std::vector<std::uint8_t>& rgba,
+                                            const int texture_width,
+                                            const int texture_height,
+                                            const int offset_x,
+                                            const int offset_y,
+                                            const int region_width,
+                                            const int region_height) {
+            if (rgba.empty() || texture_width <= 0 || texture_height <= 0 ||
+                offset_x < 0 || offset_y < 0 || region_width <= 0 || region_height <= 0 ||
+                offset_x + region_width > texture_width ||
+                offset_y + region_height > texture_height ||
+                rgba.size() != static_cast<std::size_t>(region_width) *
+                                   static_cast<std::size_t>(region_height) * 4u) {
                 return false;
             }
             VulkanContext* const context = getVulkanUiTextureContext();
@@ -490,7 +513,7 @@ namespace lfs::vis::gui {
                 return false;
             }
 
-            if (!ensureImage(new_width, new_height)) {
+            if (!ensureImage(texture_width, texture_height)) {
                 return false;
             }
 
@@ -533,8 +556,9 @@ namespace lfs::vis::gui {
             copy_region.imageSubresource.mipLevel = 0;
             copy_region.imageSubresource.baseArrayLayer = 0;
             copy_region.imageSubresource.layerCount = 1;
-            copy_region.imageExtent = {static_cast<std::uint32_t>(new_width),
-                                       static_cast<std::uint32_t>(new_height),
+            copy_region.imageOffset = {offset_x, offset_y, 0};
+            copy_region.imageExtent = {static_cast<std::uint32_t>(region_width),
+                                       static_cast<std::uint32_t>(region_height),
                                        1};
             vkCmdCopyBufferToImage(command_buffer,
                                    staging_buffer,
@@ -589,6 +613,32 @@ namespace lfs::vis::gui {
             pending_staging_buffer = staging_buffer;
             pending_staging_memory = staging_memory;
             return true;
+        }
+
+        [[nodiscard]] bool uploadRgba(const std::vector<std::uint8_t>& rgba,
+                                      const int new_width,
+                                      const int new_height) {
+            return uploadRgbaRegion(rgba, new_width, new_height, 0, 0, new_width, new_height);
+        }
+
+        [[nodiscard]] bool uploadRegion(const std::uint8_t* pixels,
+                                        const int texture_width,
+                                        const int texture_height,
+                                        const int x,
+                                        const int y,
+                                        const int region_width,
+                                        const int region_height,
+                                        const int channels) {
+            if (!pixels || region_width <= 0 || region_height <= 0 || channels <= 0 || channels > 4) {
+                return false;
+            }
+            return uploadRgbaRegion(toRgba(pixels, region_width, region_height, channels),
+                                    texture_width,
+                                    texture_height,
+                                    x,
+                                    y,
+                                    region_width,
+                                    region_height);
         }
 
         [[nodiscard]] bool upload(const std::uint8_t* pixels,
@@ -649,6 +699,7 @@ namespace lfs::vis::gui {
         }
 #else
         [[nodiscard]] bool upload(const std::uint8_t*, int, int, int) { return false; }
+        [[nodiscard]] bool uploadRegion(const std::uint8_t*, int, int, int, int, int, int, int) { return false; }
         void reset() {}
 #endif
     };
@@ -680,6 +731,20 @@ namespace lfs::vis::gui {
         return impl_->upload(pixels, width, height, channels);
     }
 
+    bool VulkanUiTexture::uploadRegion(const std::uint8_t* const pixels,
+                                       const int texture_width,
+                                       const int texture_height,
+                                       const int x,
+                                       const int y,
+                                       const int width,
+                                       const int height,
+                                       const int channels) {
+        if (!impl_) {
+            impl_ = new Impl();
+        }
+        return impl_->uploadRegion(pixels, texture_width, texture_height, x, y, width, height, channels);
+    }
+
     bool VulkanUiTexture::upload(const lfs::core::Tensor& image,
                                     const int expected_width,
                                     const int expected_height) {
@@ -699,7 +764,11 @@ namespace lfs::vis::gui {
 
     std::uintptr_t VulkanUiTexture::textureId() const {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        return impl_ ? reinterpret_cast<std::uintptr_t>(impl_->descriptor_set) : 0;
+        if (!impl_) {
+            return 0;
+        }
+        impl_->tryReleasePendingUpload();
+        return reinterpret_cast<std::uintptr_t>(impl_->descriptor_set);
 #else
         return 0;
 #endif
@@ -707,7 +776,11 @@ namespace lfs::vis::gui {
 
     bool VulkanUiTexture::valid() const {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        return impl_ && impl_->descriptor_set != VK_NULL_HANDLE && impl_->image_view != VK_NULL_HANDLE;
+        if (!impl_) {
+            return false;
+        }
+        impl_->tryReleasePendingUpload();
+        return impl_->descriptor_set != VK_NULL_HANDLE && impl_->image_view != VK_NULL_HANDLE;
 #else
         return false;
 #endif

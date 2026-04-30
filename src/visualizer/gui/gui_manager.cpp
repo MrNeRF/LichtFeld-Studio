@@ -67,8 +67,10 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <fstream>
 #include <imgui_impl_sdl3.h>
@@ -77,9 +79,12 @@
 #include <limits>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <memory>
+#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <unordered_map>
 #include <unordered_set>
@@ -447,6 +452,118 @@ namespace lfs::vis::gui {
             return std::pair(renderToPanelScreen(panel, *pa), renderToPanelScreen(panel, *pb));
         }
 
+        [[nodiscard]] std::optional<glm::vec2> projectPointToPanelScreen(
+            const VulkanGuidePanelTarget& panel,
+            const RenderSettings& settings,
+            const glm::vec3& world) {
+            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
+            const glm::vec3 translation = panel.viewport->getTranslation();
+            const glm::vec3 view = glm::transpose(rotation) * (world - translation);
+
+            if (settings.equirectangular) {
+                const float len = glm::length(view);
+                if (!std::isfinite(len) || len <= 1e-6f) {
+                    return std::nullopt;
+                }
+                const glm::vec3 dir = view / len;
+                const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
+                const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
+                                    (glm::pi<float>() * 0.5f);
+                if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
+                    return std::nullopt;
+                }
+                return panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
+                                             (ndc_y * 0.5f + 0.5f) * panel.size.y);
+            }
+
+            constexpr float kMinViewZ = -1e-4f;
+            if (view.z >= kMinViewZ) {
+                return std::nullopt;
+            }
+
+            const float width = static_cast<float>(std::max(panel.render_size.x, 1));
+            const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+            const float cx = width * 0.5f;
+            const float cy = height * 0.5f;
+            if (settings.orthographic) {
+                if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f) {
+                    return std::nullopt;
+                }
+                return renderToPanelScreen(panel, glm::vec2(cx + view.x * settings.ortho_scale,
+                                                            cy - view.y * settings.ortho_scale));
+            }
+
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                panel.render_size, settings.focal_length_mm);
+            const float depth = -view.z;
+            if (depth <= 0.0f) {
+                return std::nullopt;
+            }
+            return renderToPanelScreen(panel, glm::vec2(cx + view.x * fx / depth,
+                                                        cy - view.y * fy / depth));
+        }
+
+        [[nodiscard]] bool projectedQuadVisible(const std::array<glm::vec2, 4>& points,
+                                                const VulkanGuidePanelTarget& panel) {
+            glm::vec2 min_point(std::numeric_limits<float>::max());
+            glm::vec2 max_point(-std::numeric_limits<float>::max());
+            float area_twice = 0.0f;
+            for (size_t i = 0; i < points.size(); ++i) {
+                const glm::vec2& p = points[i];
+                if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+                    return false;
+                }
+                min_point = glm::min(min_point, p);
+                max_point = glm::max(max_point, p);
+                const glm::vec2& q = points[(i + 1) % points.size()];
+                area_twice += p.x * q.y - q.x * p.y;
+            }
+
+            const glm::vec2 panel_min = panel.pos;
+            const glm::vec2 panel_max = panel.pos + panel.size;
+            if (max_point.x < panel_min.x || max_point.y < panel_min.y ||
+                min_point.x > panel_max.x || min_point.y > panel_max.y) {
+                return false;
+            }
+
+            const glm::vec2 extent = max_point - min_point;
+            const float panel_limit = std::max(panel.size.x, panel.size.y) * 8.0f;
+            return std::abs(area_twice) >= 2.0f &&
+                   extent.x <= panel_limit &&
+                   extent.y <= panel_limit;
+        }
+
+        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+                                       const std::uintptr_t texture_id,
+                                       const std::array<glm::vec2, 4>& screen_points,
+                                       const glm::vec2& uv_min,
+                                       const glm::vec2& uv_max,
+                                       const glm::vec4& tint_opacity,
+                                       const glm::vec4& effects) {
+            if (texture_id == 0 || tint_opacity.a <= 0.0f ||
+                params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+
+            const auto ndc = [&](const glm::vec2& screen) {
+                return screenToViewportNdc(screen, params.viewport_pos, params.viewport_size);
+            };
+
+            VulkanViewportTexturedOverlay overlay{};
+            overlay.texture_id = texture_id;
+            overlay.tint_opacity = tint_opacity;
+            overlay.effects = effects;
+            overlay.vertices = {{
+                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}},
+                {.position = ndc(screen_points[1]), .uv = {uv_max.x, uv_min.y}},
+                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}},
+                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}},
+                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}},
+                {.position = ndc(screen_points[3]), .uv = {uv_min.x, uv_max.y}},
+            }};
+            params.textured_overlays.push_back(overlay);
+        }
+
         struct VulkanViewportGizmoMarker {
             int encoded_axis = -1;
             int axis = 0;
@@ -782,6 +899,493 @@ namespace lfs::vis::gui {
             return glm::vec4(color, 0.95f);
         }
 
+        struct ThumbnailPlacement {
+            std::uintptr_t texture_id = 0;
+            glm::vec2 uv_min{0.0f};
+            glm::vec2 uv_max{1.0f};
+        };
+
+        class CameraThumbnailCache {
+        public:
+            static constexpr int kThumbnailSize = 128;
+
+            void beginFrame() {
+                std::lock_guard lock(mutex_);
+                ++frame_counter_;
+            }
+
+            void clear() {
+                std::lock_guard lock(mutex_);
+                load_queue_.clear();
+                ready_queue_.clear();
+                entries_.clear();
+                pages_.clear();
+                cv_.notify_all();
+            }
+
+            bool request(const lfs::core::Camera& camera) {
+                const int uid = camera.uid();
+                if (uid < 0) {
+                    return false;
+                }
+
+                const std::filesystem::path path = camera.image_path();
+                const std::string path_key = lfs::core::path_to_utf8(path);
+                if (path_key.empty()) {
+                    markFailed(uid, path_key, std::numeric_limits<uint64_t>::max());
+                    return false;
+                }
+
+                {
+                    std::lock_guard lock(mutex_);
+                    ensureWorkersLocked();
+
+                    Entry& entry = entries_[uid];
+                    if (entry.path_key != path_key) {
+                        releaseSlotLocked(entry);
+                        entry = Entry{};
+                        entry.path_key = path_key;
+                    }
+                    entry.last_touched_frame = frame_counter_;
+
+                    const bool waiting = entry.state == State::Queued ||
+                                         entry.state == State::Loading ||
+                                         entry.state == State::UploadReady;
+                    if (entry.state == State::Ready || waiting) {
+                        return false;
+                    }
+                    if (entry.state == State::Failed &&
+                        entry.retry_frame > frame_counter_) {
+                        return false;
+                    }
+                }
+
+                std::error_code ec;
+                if (!std::filesystem::is_regular_file(path, ec)) {
+                    const bool path_is_missing =
+                        !ec || ec == std::errc::no_such_file_or_directory ||
+                        ec == std::errc::not_a_directory;
+                    markFailed(uid, path_key, path_is_missing ? kMissingRetryFrames
+                                                              : kDecodeRetryFrames);
+                    return false;
+                }
+
+                std::lock_guard lock(mutex_);
+                Entry& entry = entries_[uid];
+                if (entry.path_key != path_key) {
+                    releaseSlotLocked(entry);
+                    entry = Entry{};
+                    entry.path_key = path_key;
+                }
+                const bool waiting = entry.state == State::Queued ||
+                                     entry.state == State::Loading ||
+                                     entry.state == State::UploadReady;
+                if (entry.state == State::Ready || waiting ||
+                    (entry.state == State::Failed && entry.retry_frame > frame_counter_)) {
+                    return false;
+                }
+                entry.state = State::Queued;
+                entry.generation += 1;
+                load_queue_.push_back(Task{
+                    .uid = uid,
+                    .path = path,
+                    .path_key = path_key,
+                    .generation = entry.generation,
+                });
+                cv_.notify_one();
+                return true;
+            }
+
+            std::optional<ThumbnailPlacement> placement(const int uid) {
+                std::lock_guard lock(mutex_);
+                const auto it = entries_.find(uid);
+                if (it == entries_.end() ||
+                    it->second.state != State::Ready ||
+                    it->second.page_index < 0 ||
+                    it->second.slot < 0 ||
+                    static_cast<size_t>(it->second.page_index) >= pages_.size()) {
+                    return std::nullopt;
+                }
+                const AtlasPage& page = pages_[static_cast<size_t>(it->second.page_index)];
+                const std::uintptr_t texture_id = page.texture.textureId();
+                if (texture_id == 0) {
+                    return std::nullopt;
+                }
+                auto [uv_min, uv_max] = slotUv(it->second.slot);
+                return ThumbnailPlacement{
+                    .texture_id = texture_id,
+                    .uv_min = uv_min,
+                    .uv_max = uv_max,
+                };
+            }
+
+            bool processReadyUploads(const size_t max_uploads) {
+                bool progressed = false;
+                for (size_t upload_index = 0; upload_index < max_uploads; ++upload_index) {
+                    Decoded decoded;
+                    int page_index = -1;
+                    int slot = -1;
+                    {
+                        std::lock_guard lock(mutex_);
+                        if (ready_queue_.empty()) {
+                            break;
+                        }
+                        decoded = std::move(ready_queue_.front());
+                        ready_queue_.pop_front();
+                        cv_.notify_all();
+                        const auto it = entries_.find(decoded.uid);
+                        if (it == entries_.end() ||
+                            it->second.path_key != decoded.path_key ||
+                            it->second.generation != decoded.generation ||
+                            it->second.state != State::UploadReady) {
+                            progressed = true;
+                            continue;
+                        }
+                        Entry& entry = it->second;
+                        if (!allocateSlotLocked(entry)) {
+                            entry.state = State::Failed;
+                            entry.retry_frame = frame_counter_ + kUploadRetryFrames;
+                            progressed = true;
+                            continue;
+                        }
+                        page_index = entry.page_index;
+                        slot = entry.slot;
+                    }
+
+                    const int slot_x = (slot % kAtlasSlotsPerAxis) * kThumbnailSize;
+                    const int slot_y = (slot / kAtlasSlotsPerAxis) * kThumbnailSize;
+                    const bool uploaded =
+                        pages_[static_cast<size_t>(page_index)].texture.uploadRegion(decoded.pixels.data(),
+                                                                                     kAtlasTextureSize,
+                                                                                     kAtlasTextureSize,
+                                                                                     slot_x,
+                                                                                     slot_y,
+                                                                                     decoded.width,
+                                                                                     decoded.height,
+                                                                                     decoded.channels);
+
+                    {
+                        std::lock_guard lock(mutex_);
+                        const auto it = entries_.find(decoded.uid);
+                        if (it == entries_.end() ||
+                            it->second.path_key != decoded.path_key ||
+                            it->second.generation != decoded.generation) {
+                            progressed = true;
+                            continue;
+                        }
+
+                        if (uploaded) {
+                            it->second.state = State::Ready;
+                            it->second.retry_frame = 0;
+                        } else {
+                            releaseSlotLocked(it->second);
+                            it->second.state = State::Failed;
+                            it->second.retry_frame = frame_counter_ + kUploadRetryFrames;
+                        }
+                    }
+                    progressed = true;
+                }
+                return progressed;
+            }
+
+            bool hasPendingWork() const {
+                std::lock_guard lock(mutex_);
+                if (!load_queue_.empty() || !ready_queue_.empty()) {
+                    return true;
+                }
+                for (const auto& [_, entry] : entries_) {
+                    if (entry.state == State::Queued ||
+                        entry.state == State::Loading ||
+                        entry.state == State::UploadReady) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            void pruneTo(const std::unordered_set<int>& active_uids) {
+                {
+                    std::lock_guard lock(mutex_);
+                    for (auto it = entries_.begin(); it != entries_.end();) {
+                        if (active_uids.contains(it->first)) {
+                            ++it;
+                            continue;
+                        }
+                        releaseSlotLocked(it->second);
+                        it = entries_.erase(it);
+                    }
+                    while (!pages_.empty() && pages_.back().live_slots == 0) {
+                        pages_.pop_back();
+                    }
+                    cv_.notify_all();
+                }
+            }
+
+        private:
+            enum class State {
+                Empty,
+                Queued,
+                Loading,
+                UploadReady,
+                Ready,
+                Failed,
+            };
+
+            struct Entry {
+                std::string path_key;
+                State state = State::Empty;
+                uint64_t generation = 0;
+                uint64_t retry_frame = 0;
+                uint64_t last_touched_frame = 0;
+                int page_index = -1;
+                int slot = -1;
+            };
+
+            struct AtlasPage {
+                VulkanUiTexture texture;
+                std::vector<int> free_slots;
+                int next_slot = 0;
+                int live_slots = 0;
+            };
+
+            struct Task {
+                int uid = -1;
+                std::filesystem::path path;
+                std::string path_key;
+                uint64_t generation = 0;
+            };
+
+            struct Decoded {
+                int uid = -1;
+                std::string path_key;
+                uint64_t generation = 0;
+                std::vector<std::uint8_t> pixels;
+                int width = 0;
+                int height = 0;
+                int channels = 0;
+            };
+
+            static constexpr size_t kWorkerCount = 2;
+            static constexpr uint64_t kDecodeRetryFrames = 180;
+            static constexpr uint64_t kMissingRetryFrames = 1800;
+            static constexpr uint64_t kUploadRetryFrames = 60;
+            static constexpr size_t kMaxPendingUploads = 32;
+            static constexpr int kAtlasSlotsPerAxis = 8;
+            static constexpr int kAtlasSlotsPerPage = kAtlasSlotsPerAxis * kAtlasSlotsPerAxis;
+            static constexpr int kAtlasTextureSize = kThumbnailSize * kAtlasSlotsPerAxis;
+
+            void ensureWorkersLocked() {
+                if (workers_started_) {
+                    return;
+                }
+                workers_started_ = true;
+                for (size_t i = 0; i < kWorkerCount; ++i) {
+                    std::thread([this] {
+                        workerLoop();
+                    }).detach();
+                }
+            }
+
+            void markFailed(const int uid, const std::string& path_key, const uint64_t retry_frames) {
+                std::lock_guard lock(mutex_);
+                Entry& entry = entries_[uid];
+                if (entry.path_key != path_key) {
+                    releaseSlotLocked(entry);
+                    entry = Entry{};
+                    entry.path_key = path_key;
+                }
+                entry.state = State::Failed;
+                entry.retry_frame = retry_frames == std::numeric_limits<uint64_t>::max()
+                                        ? std::numeric_limits<uint64_t>::max()
+                                        : frame_counter_ + retry_frames;
+            }
+
+            [[nodiscard]] bool allocateSlotLocked(Entry& entry) {
+                if (entry.page_index >= 0 && entry.slot >= 0) {
+                    return true;
+                }
+
+                for (size_t i = 0; i < pages_.size(); ++i) {
+                    AtlasPage& page = pages_[i];
+                    if (!page.free_slots.empty()) {
+                        entry.page_index = static_cast<int>(i);
+                        entry.slot = page.free_slots.back();
+                        page.free_slots.pop_back();
+                        ++page.live_slots;
+                        return true;
+                    }
+                    if (page.next_slot < kAtlasSlotsPerPage) {
+                        entry.page_index = static_cast<int>(i);
+                        entry.slot = page.next_slot++;
+                        ++page.live_slots;
+                        return true;
+                    }
+                }
+
+                pages_.emplace_back();
+                AtlasPage& page = pages_.back();
+                entry.page_index = static_cast<int>(pages_.size() - 1);
+                entry.slot = page.next_slot++;
+                page.live_slots = 1;
+                return true;
+            }
+
+            void releaseSlotLocked(Entry& entry) {
+                if (entry.page_index < 0 ||
+                    entry.slot < 0 ||
+                    static_cast<size_t>(entry.page_index) >= pages_.size()) {
+                    entry.page_index = -1;
+                    entry.slot = -1;
+                    return;
+                }
+                AtlasPage& page = pages_[static_cast<size_t>(entry.page_index)];
+                page.free_slots.push_back(entry.slot);
+                page.live_slots = std::max(0, page.live_slots - 1);
+                entry.page_index = -1;
+                entry.slot = -1;
+            }
+
+            [[nodiscard]] static std::pair<glm::vec2, glm::vec2> slotUv(const int slot) {
+                const int slot_x = (slot % kAtlasSlotsPerAxis) * kThumbnailSize;
+                const int slot_y = (slot / kAtlasSlotsPerAxis) * kThumbnailSize;
+                constexpr float kInset = 0.5f;
+                const float atlas = static_cast<float>(kAtlasTextureSize);
+                return {
+                    glm::vec2((static_cast<float>(slot_x) + kInset) / atlas,
+                              (static_cast<float>(slot_y) + kInset) / atlas),
+                    glm::vec2((static_cast<float>(slot_x + kThumbnailSize) - kInset) / atlas,
+                              (static_cast<float>(slot_y + kThumbnailSize) - kInset) / atlas),
+                };
+            }
+
+            [[nodiscard]] static std::vector<std::uint8_t> resizeToThumbnail(
+                const unsigned char* pixels,
+                const int width,
+                const int height,
+                const int channels) {
+                std::vector<std::uint8_t> resized(kThumbnailSize * kThumbnailSize * 3u);
+                if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
+                    return {};
+                }
+                for (int y = 0; y < kThumbnailSize; ++y) {
+                    const int src_y_unflipped =
+                        std::min(static_cast<int>((static_cast<int64_t>(y) * height) / kThumbnailSize),
+                                 height - 1);
+                    const int src_y = height - 1 - src_y_unflipped;
+                    for (int x = 0; x < kThumbnailSize; ++x) {
+                        const int src_x =
+                            std::min(static_cast<int>((static_cast<int64_t>(x) * width) / kThumbnailSize),
+                                     width - 1);
+                        const size_t src = (static_cast<size_t>(src_y) * static_cast<size_t>(width) +
+                                            static_cast<size_t>(src_x)) *
+                                           static_cast<size_t>(channels);
+                        const size_t dst = (static_cast<size_t>(y) * kThumbnailSize +
+                                            static_cast<size_t>(x)) *
+                                           3u;
+                        if (channels == 1) {
+                            resized[dst + 0] = pixels[src];
+                            resized[dst + 1] = pixels[src];
+                            resized[dst + 2] = pixels[src];
+                        } else {
+                            resized[dst + 0] = pixels[src + 0];
+                            resized[dst + 1] = pixels[src + 1];
+                            resized[dst + 2] = pixels[src + 2];
+                        }
+                    }
+                }
+                return resized;
+            }
+
+            bool claimTask(Task& task) {
+                std::unique_lock lock(mutex_);
+                ensureWorkersLocked();
+                cv_.wait(lock, [&] {
+                    return !load_queue_.empty();
+                });
+                task = std::move(load_queue_.front());
+                load_queue_.pop_front();
+
+                const auto it = entries_.find(task.uid);
+                if (it == entries_.end() ||
+                    it->second.path_key != task.path_key ||
+                    it->second.generation != task.generation ||
+                    it->second.state != State::Queued) {
+                    return false;
+                }
+                it->second.state = State::Loading;
+                return true;
+            }
+
+            void workerLoop() {
+                while (true) {
+                    Task task;
+                    if (!claimTask(task)) {
+                        continue;
+                    }
+
+                    Decoded decoded;
+                    decoded.uid = task.uid;
+                    decoded.path_key = task.path_key;
+                    decoded.generation = task.generation;
+
+                    try {
+                        auto [raw_pixels, width, height, channels] =
+                            lfs::core::load_image(task.path, -1, kThumbnailSize);
+                        std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> pixels(
+                            raw_pixels, &lfs::core::free_image);
+                        if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
+                            throw std::runtime_error("decoded empty image");
+                        }
+
+                        decoded.pixels = resizeToThumbnail(pixels.get(), width, height, channels);
+                        if (decoded.pixels.empty()) {
+                            throw std::runtime_error("thumbnail resize failed");
+                        }
+                        decoded.width = kThumbnailSize;
+                        decoded.height = kThumbnailSize;
+                        decoded.channels = 3;
+
+                        std::unique_lock lock(mutex_);
+                        cv_.wait(lock, [&] {
+                            return ready_queue_.size() < kMaxPendingUploads;
+                        });
+                        const auto it = entries_.find(task.uid);
+                        if (it == entries_.end() ||
+                            it->second.path_key != task.path_key ||
+                            it->second.generation != task.generation) {
+                            continue;
+                        }
+                        it->second.state = State::UploadReady;
+                        ready_queue_.push_back(std::move(decoded));
+                    } catch (const std::exception& e) {
+                        std::lock_guard lock(mutex_);
+                        const auto it = entries_.find(task.uid);
+                        if (it != entries_.end() &&
+                            it->second.path_key == task.path_key &&
+                            it->second.generation == task.generation) {
+                            it->second.state = State::Failed;
+                            it->second.retry_frame = frame_counter_ + kDecodeRetryFrames;
+                            LOG_DEBUG("Camera thumbnail load failed for '{}': {}", task.path_key, e.what());
+                        }
+                    }
+                }
+            }
+
+            mutable std::mutex mutex_;
+            std::condition_variable cv_;
+            std::deque<Task> load_queue_;
+            std::deque<Decoded> ready_queue_;
+            std::unordered_map<int, Entry> entries_;
+            std::vector<AtlasPage> pages_;
+            uint64_t frame_counter_ = 0;
+            bool workers_started_ = false;
+        };
+
+        CameraThumbnailCache& cameraThumbnailCache() {
+            static auto* const cache = new CameraThumbnailCache();
+            return *cache;
+        }
+
         [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
             const lfs::core::Camera& camera,
             const glm::mat4& scene_transform) {
@@ -1031,7 +1635,7 @@ namespace lfs::vis::gui {
         void appendCameraFrustumOverlays(VulkanViewportPassParams& params,
                                          const VulkanGuidePanelTarget& panel,
                                          const RenderSettings& settings,
-                                         const RenderingManager& rendering_manager,
+                                         RenderingManager& rendering_manager,
                                          const SceneManager& scene_manager,
                                          const SceneRenderState* scene_state) {
             if (!settings.show_camera_frustums || settings.camera_frustum_scale <= 0.0f) {
@@ -1040,6 +1644,7 @@ namespace lfs::vis::gui {
 
             const auto cameras = scene_manager.getScene().getVisibleCameras();
             if (cameras.empty()) {
+                cameraThumbnailCache().clear();
                 return;
             }
 
@@ -1047,14 +1652,25 @@ namespace lfs::vis::gui {
                 resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
             const auto disabled_uids = scene_manager.getScene().getTrainingDisabledCameraUids();
             const int hovered_camera_id = rendering_manager.getHoveredCameraId();
+            auto& thumbnail_cache = cameraThumbnailCache();
+            thumbnail_cache.beginFrame();
 
             std::unordered_set<int> emphasized_uids;
+            std::unordered_set<int> active_camera_uids;
+            active_camera_uids.reserve(cameras.size());
             for (const auto& name : scene_manager.getSelectedNodeNames()) {
                 const auto* node = scene_manager.getScene().getNode(name);
                 if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0) {
                     emphasized_uids.insert(node->camera_uid);
                 }
             }
+            for (const auto& camera : cameras) {
+                if (camera && camera->uid() >= 0) {
+                    active_camera_uids.insert(camera->uid());
+                }
+            }
+            thumbnail_cache.pruneTo(active_camera_uids);
+            thumbnail_cache.processReadyUploads(4);
 
             std::vector<glm::vec3> per_camera_colors;
             if (const auto* trainer_manager = scene_manager.getTrainerManager()) {
@@ -1072,6 +1688,8 @@ namespace lfs::vis::gui {
 
             constexpr float kMinRenderAlpha = 0.01f;
             const glm::vec3 view_position = panel.viewport->getTranslation();
+            size_t background_thumbnail_requests = 0;
+            constexpr size_t kBackgroundThumbnailRequestsPerFrame = 16;
             for (size_t i = 0; i < cameras.size(); ++i) {
                 const auto& camera = cameras[i];
                 if (!camera) {
@@ -1116,8 +1734,51 @@ namespace lfs::vis::gui {
                 if (camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
                     appendEquirectangularCameraFrustum(params, panel, settings, *model, color);
                 } else {
+                    constexpr std::array image_corners{
+                        glm::vec3(-0.5f, -0.5f, -1.0f),
+                        glm::vec3(0.5f, -0.5f, -1.0f),
+                        glm::vec3(0.5f, 0.5f, -1.0f),
+                        glm::vec3(-0.5f, 0.5f, -1.0f),
+                    };
+                    std::array<glm::vec2, image_corners.size()> screen_points{};
+                    bool quad_visible = true;
+                    for (size_t corner = 0; corner < image_corners.size(); ++corner) {
+                        const glm::vec3 world_point =
+                            glm::vec3((*model) * glm::vec4(image_corners[corner], 1.0f));
+                        const auto projected = projectPointToPanelScreen(panel, settings, world_point);
+                        if (!projected) {
+                            quad_visible = false;
+                            break;
+                        }
+                        screen_points[corner] = *projected;
+                    }
+                    quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
+                    if (quad_visible) {
+                        thumbnail_cache.request(*camera);
+                    } else if (background_thumbnail_requests < kBackgroundThumbnailRequestsPerFrame &&
+                               thumbnail_cache.request(*camera)) {
+                        ++background_thumbnail_requests;
+                    }
+
+                    const auto placement = thumbnail_cache.placement(camera->uid());
+                    if (placement && quad_visible) {
+                        const float opacity = std::clamp(color.a * 0.8f, 0.0f, 0.8f);
+                        const float disabled_mix = disabled ? 0.5f : 0.0f;
+                        const float emphasis_mix = emphasized_uids.count(camera->uid()) > 0 ? 0.18f : 0.0f;
+                        appendTexturedOverlayQuad(params,
+                                                  placement->texture_id,
+                                                  screen_points,
+                                                  placement->uv_min,
+                                                  placement->uv_max,
+                                                  {color.r, color.g, color.b, opacity},
+                                                  {emphasis_mix, disabled_mix, 0.0f, 0.0f});
+                    }
                     appendPerspectiveCameraFrustum(params, panel, settings, *model, color);
                 }
+            }
+
+            if (thumbnail_cache.hasPendingWork()) {
+                rendering_manager.markDirty(DirtyFlag::OVERLAY);
             }
         }
 
@@ -2895,10 +3556,8 @@ namespace lfs::vis::gui {
         if (auto* cc = lfs::event::command_center())
             draw_ctx.is_training = cc->snapshot().is_running;
 
-        const auto _t_preload_a = std::chrono::steady_clock::now();
         reg.preload_panels(PanelSpace::SceneHeader, draw_ctx);
         reg.preload_panels(PanelSpace::SidePanel, draw_ctx);
-        const auto _t_preload_b = std::chrono::steady_clock::now();
 
         auto* mvp_input = ImGui::GetMainViewport();
         s_frame_input = &sdl_input;
@@ -3005,14 +3664,10 @@ namespace lfs::vis::gui {
                                     panel_input.screen_x, panel_input.screen_y,
                                     panel_input.screen_w, panel_input.screen_h);
         }
-        const auto _t_rmlrp_a = std::chrono::steady_clock::now();
-
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
                                        window_states_, focus_panel_name_, panel_input, screen);
-        const auto _t_pl_right_b = std::chrono::steady_clock::now();
         panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
                                        panel_input, screen);
-        const auto _t_pl_bottom_b = std::chrono::steady_clock::now();
 
         applyFrameInputCapture(&rml_right_panel_);
 
@@ -3028,9 +3683,7 @@ namespace lfs::vis::gui {
 
         PanelInputState floating_input = panel_input;
         floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
-        const auto _t_floating_a = std::chrono::steady_clock::now();
         reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
-        const auto _t_floating_b = std::chrono::steady_clock::now();
 
         applyFrameInputCapture(&rml_right_panel_);
 
@@ -3124,25 +3777,6 @@ namespace lfs::vis::gui {
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
         }
         reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
-        const auto _t_overlay_b = std::chrono::steady_clock::now();
-        {
-            using ms = std::chrono::duration<double, std::milli>;
-            static double a_preload = 0, a_floating = 0, a_pl_right = 0, a_pl_bottom = 0,
-                          a_overlay = 0;
-            static int n = 0;
-            a_preload += ms(_t_preload_b - _t_preload_a).count();
-            a_floating += ms(_t_floating_b - _t_floating_a).count();
-            a_pl_right += ms(_t_pl_right_b - _t_rmlrp_a).count();
-            a_pl_bottom += ms(_t_pl_bottom_b - _t_pl_right_b).count();
-            a_overlay += ms(_t_overlay_b - _t_pl_bottom_b).count();
-            ++n;
-            if (n >= 60) {
-                LOG_INFO("PHASE avg over {} frames: preload {:.1f} | pl_right {:.1f} | pl_bottom {:.1f} | floating {:.1f} | overlay_panels {:.1f}",
-                         n, a_preload / n, a_pl_right / n, a_pl_bottom / n, a_floating / n, a_overlay / n);
-                a_preload = a_floating = a_pl_right = a_pl_bottom = a_overlay = 0;
-                n = 0;
-            }
-        }
 
         rml_viewport_overlay_.render();
 
