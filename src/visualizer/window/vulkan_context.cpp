@@ -20,11 +20,28 @@
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <SDL3/SDL_vulkan.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 #endif
 
 namespace lfs::vis {
     namespace {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+#ifdef _WIN32
+        constexpr VkExternalMemoryHandleTypeFlagBits kExternalMemoryHandleType =
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        constexpr VkExternalSemaphoreHandleTypeFlagBits kExternalSemaphoreHandleType =
+            VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+#else
+        constexpr VkExternalMemoryHandleTypeFlagBits kExternalMemoryHandleType =
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+        constexpr VkExternalSemaphoreHandleTypeFlagBits kExternalSemaphoreHandleType =
+            VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
+#endif
+
         [[nodiscard]] bool extensionAvailable(const std::vector<VkExtensionProperties>& extensions,
                                               const char* const extension_name) {
             return std::ranges::any_of(extensions, [extension_name](const VkExtensionProperties& extension) {
@@ -470,6 +487,11 @@ namespace lfs::vis {
         if (instance_external_memory_capabilities_enabled_) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         }
+        instance_external_semaphore_capabilities_enabled_ =
+            extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
+        if (instance_external_semaphore_capabilities_enabled_) {
+            appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
+        }
 
         debug_utils_enabled_ = extensionAvailable(available_extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         if (debug_utils_enabled_) {
@@ -709,6 +731,26 @@ namespace lfs::vis {
 #endif
         }
 
+        const bool has_external_semaphore =
+            instance_external_semaphore_capabilities_enabled_ &&
+            extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
+#ifdef _WIN32
+        const bool has_platform_external_semaphore =
+            extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
+#else
+        const bool has_platform_external_semaphore =
+            extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+#endif
+        const bool enable_external_semaphore = has_external_semaphore && has_platform_external_semaphore;
+        if (enable_external_semaphore) {
+            appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME);
+#ifdef _WIN32
+            appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME);
+#else
+            appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+#endif
+        }
+
         const bool enable_dedicated_allocation =
             enable_external_memory &&
             extensionAvailable(available_extensions, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME) &&
@@ -758,12 +800,18 @@ namespace lfs::vis {
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
         setDebugObjectName(VK_OBJECT_TYPE_DEVICE, device_, "LichtFeld Vulkan device");
         external_memory_interop_enabled_ = enable_external_memory;
+        external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         if (external_memory_interop_enabled_) {
             LOG_INFO("Vulkan external memory interop enabled{}",
                      external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
         } else {
             LOG_INFO("Vulkan external memory interop unavailable; CUDA viewport upload will use fallback staging");
+        }
+        if (external_semaphore_interop_enabled_) {
+            LOG_INFO("Vulkan external timeline semaphore interop enabled");
+        } else {
+            LOG_INFO("Vulkan external timeline semaphore interop unavailable");
         }
         return true;
     }
@@ -845,6 +893,319 @@ namespace lfs::vis {
             }
         }
         return std::numeric_limits<uint32_t>::max();
+    }
+
+    bool VulkanContext::externalNativeHandleValid(const ExternalNativeHandle handle) {
+#ifdef _WIN32
+        return handle != nullptr;
+#else
+        return handle >= 0;
+#endif
+    }
+
+    void VulkanContext::closeExternalNativeHandle(ExternalNativeHandle& handle) const {
+        if (!externalNativeHandleValid(handle)) {
+            return;
+        }
+#ifdef _WIN32
+        if (handle != nullptr) {
+            CloseHandle(static_cast<HANDLE>(handle));
+            handle = nullptr;
+        }
+#else
+        if (handle >= 0) {
+            ::close(handle);
+            handle = -1;
+        }
+#endif
+    }
+
+    bool VulkanContext::createExternalImage(const VkExtent2D extent, const VkFormat format, ExternalImage& out) {
+        out = {};
+
+        if (!device_ || !physical_device_) {
+            return fail("Cannot create external Vulkan image before device initialization");
+        }
+        if (!external_memory_interop_enabled_) {
+            return fail("Vulkan external memory interop is not enabled on this device");
+        }
+        if (extent.width == 0 || extent.height == 0 || format == VK_FORMAT_UNDEFINED) {
+            return fail("External Vulkan image requires a non-zero extent and defined format");
+        }
+
+        constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                                            VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                                            VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+        VkPhysicalDeviceExternalImageFormatInfo external_format_info{};
+        external_format_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO;
+        external_format_info.handleType = kExternalMemoryHandleType;
+
+        VkPhysicalDeviceImageFormatInfo2 format_info{};
+        format_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2;
+        format_info.pNext = &external_format_info;
+        format_info.format = format;
+        format_info.type = VK_IMAGE_TYPE_2D;
+        format_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        format_info.usage = usage;
+
+        VkExternalImageFormatProperties external_format_properties{};
+        external_format_properties.sType = VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES;
+
+        VkImageFormatProperties2 format_properties{};
+        format_properties.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2;
+        format_properties.pNext = &external_format_properties;
+
+        VkResult result = vkGetPhysicalDeviceImageFormatProperties2(physical_device_, &format_info, &format_properties);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("External Vulkan image format is unsupported: {}", static_cast<int>(result)));
+        }
+        if ((external_format_properties.externalMemoryProperties.externalMemoryFeatures &
+             VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT) == 0) {
+            return fail("External Vulkan image format is not exportable");
+        }
+        if ((external_format_properties.externalMemoryProperties.externalMemoryFeatures &
+             VK_EXTERNAL_MEMORY_FEATURE_DEDICATED_ONLY_BIT) != 0 &&
+            !external_memory_dedicated_allocation_enabled_) {
+            return fail("External Vulkan image format requires dedicated allocation support");
+        }
+
+        out.extent = extent;
+        out.format = format;
+
+        VkExternalMemoryImageCreateInfo external_image_info{};
+        external_image_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+        external_image_info.handleTypes = kExternalMemoryHandleType;
+
+        VkImageCreateInfo image_info{};
+        image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image_info.pNext = &external_image_info;
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.extent.width = extent.width;
+        image_info.extent.height = extent.height;
+        image_info.extent.depth = 1;
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.format = format;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        image_info.usage = usage;
+        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        result = vkCreateImage(device_, &image_info, nullptr, &out.image);
+        if (result != VK_SUCCESS) {
+            out = {};
+            return fail(std::format("vkCreateImage(external) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_IMAGE, out.image,
+                           std::format("External image {}x{}", extent.width, extent.height));
+
+        VkMemoryRequirements memory_requirements{};
+        vkGetImageMemoryRequirements(device_, out.image, &memory_requirements);
+        out.allocation_size = memory_requirements.size;
+
+        VkMemoryDedicatedAllocateInfo dedicated_info{};
+        dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedicated_info.image = out.image;
+
+        VkExportMemoryAllocateInfo export_info{};
+        export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+        export_info.handleTypes = kExternalMemoryHandleType;
+        if (external_memory_dedicated_allocation_enabled_) {
+            export_info.pNext = &dedicated_info;
+        }
+
+        VkMemoryAllocateInfo allocate_info{};
+        allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocate_info.pNext = &export_info;
+        allocate_info.allocationSize = memory_requirements.size;
+        allocate_info.memoryTypeIndex = findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
+            destroyExternalImage(out);
+            return fail("Could not find Vulkan device-local memory for external image");
+        }
+
+        result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
+        if (result != VK_SUCCESS) {
+            destroyExternalImage(out);
+            return fail(std::format("vkAllocateMemory(external image) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "External image memory");
+
+        result = vkBindImageMemory(device_, out.image, out.memory, 0);
+        if (result != VK_SUCCESS) {
+            destroyExternalImage(out);
+            return fail(std::format("vkBindImageMemory(external image) failed: {}", static_cast<int>(result)));
+        }
+
+#ifdef _WIN32
+        auto get_memory_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(
+            vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandleKHR"));
+        if (get_memory_handle == nullptr) {
+            destroyExternalImage(out);
+            return fail("vkGetMemoryWin32HandleKHR is unavailable");
+        }
+        VkMemoryGetWin32HandleInfoKHR handle_info{};
+        handle_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
+        handle_info.memory = out.memory;
+        handle_info.handleType = kExternalMemoryHandleType;
+        HANDLE native_handle = nullptr;
+        result = get_memory_handle(device_, &handle_info, &native_handle);
+        out.native_handle = native_handle;
+#else
+        auto get_memory_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+            vkGetDeviceProcAddr(device_, "vkGetMemoryFdKHR"));
+        if (get_memory_fd == nullptr) {
+            destroyExternalImage(out);
+            return fail("vkGetMemoryFdKHR is unavailable");
+        }
+        VkMemoryGetFdInfoKHR fd_info{};
+        fd_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+        fd_info.memory = out.memory;
+        fd_info.handleType = kExternalMemoryHandleType;
+        int native_handle = -1;
+        result = get_memory_fd(device_, &fd_info, &native_handle);
+        out.native_handle = native_handle;
+#endif
+        if (result != VK_SUCCESS) {
+            destroyExternalImage(out);
+            return fail(std::format("Exporting external image memory handle failed: {}", static_cast<int>(result)));
+        }
+
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = out.image;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.layerCount = 1;
+
+        result = vkCreateImageView(device_, &view_info, nullptr, &out.view);
+        if (result != VK_SUCCESS) {
+            destroyExternalImage(out);
+            return fail(std::format("vkCreateImageView(external image) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, out.view, "External image view");
+        return true;
+    }
+
+    void VulkanContext::destroyExternalImage(ExternalImage& image) {
+        if (device_) {
+            if (image.view != VK_NULL_HANDLE) {
+                vkDestroyImageView(device_, image.view, nullptr);
+            }
+            if (image.image != VK_NULL_HANDLE) {
+                vkDestroyImage(device_, image.image, nullptr);
+            }
+            if (image.memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device_, image.memory, nullptr);
+            }
+        }
+        closeExternalNativeHandle(image.native_handle);
+        image = {};
+    }
+
+    VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalImageNativeHandle(ExternalImage& image) const {
+        const ExternalNativeHandle handle = image.native_handle;
+        image.native_handle = kInvalidExternalNativeHandle;
+        return handle;
+    }
+
+    bool VulkanContext::createExternalTimelineSemaphore(const std::uint64_t initial_value, ExternalSemaphore& out) {
+        out = {};
+
+        if (!device_ || !physical_device_) {
+            return fail("Cannot create external Vulkan semaphore before device initialization");
+        }
+        if (!external_semaphore_interop_enabled_) {
+            return fail("Vulkan external semaphore interop is not enabled on this device");
+        }
+
+        VkPhysicalDeviceExternalSemaphoreInfo semaphore_info{};
+        semaphore_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO;
+        semaphore_info.handleType = kExternalSemaphoreHandleType;
+
+        VkExternalSemaphoreProperties semaphore_properties{};
+        semaphore_properties.sType = VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES;
+        vkGetPhysicalDeviceExternalSemaphoreProperties(physical_device_, &semaphore_info, &semaphore_properties);
+        if ((semaphore_properties.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) == 0) {
+            return fail("External Vulkan timeline semaphore handle is not exportable");
+        }
+
+        out.initial_value = initial_value;
+
+        VkExportSemaphoreCreateInfo export_info{};
+        export_info.sType = VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO;
+        export_info.handleTypes = kExternalSemaphoreHandleType;
+
+        VkSemaphoreTypeCreateInfo type_info{};
+        type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+        type_info.pNext = &export_info;
+        type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        type_info.initialValue = initial_value;
+
+        VkSemaphoreCreateInfo create_info{};
+        create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+        create_info.pNext = &type_info;
+
+        VkResult result = vkCreateSemaphore(device_, &create_info, nullptr, &out.semaphore);
+        if (result != VK_SUCCESS) {
+            out = {};
+            return fail(std::format("vkCreateSemaphore(external timeline) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, out.semaphore, "External timeline semaphore");
+
+#ifdef _WIN32
+        auto get_semaphore_handle = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
+            vkGetDeviceProcAddr(device_, "vkGetSemaphoreWin32HandleKHR"));
+        if (get_semaphore_handle == nullptr) {
+            destroyExternalSemaphore(out);
+            return fail("vkGetSemaphoreWin32HandleKHR is unavailable");
+        }
+        VkSemaphoreGetWin32HandleInfoKHR handle_info{};
+        handle_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_WIN32_HANDLE_INFO_KHR;
+        handle_info.semaphore = out.semaphore;
+        handle_info.handleType = kExternalSemaphoreHandleType;
+        HANDLE native_handle = nullptr;
+        result = get_semaphore_handle(device_, &handle_info, &native_handle);
+        out.native_handle = native_handle;
+#else
+        auto get_semaphore_fd = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(
+            vkGetDeviceProcAddr(device_, "vkGetSemaphoreFdKHR"));
+        if (get_semaphore_fd == nullptr) {
+            destroyExternalSemaphore(out);
+            return fail("vkGetSemaphoreFdKHR is unavailable");
+        }
+        VkSemaphoreGetFdInfoKHR fd_info{};
+        fd_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR;
+        fd_info.semaphore = out.semaphore;
+        fd_info.handleType = kExternalSemaphoreHandleType;
+        int native_handle = -1;
+        result = get_semaphore_fd(device_, &fd_info, &native_handle);
+        out.native_handle = native_handle;
+#endif
+        if (result != VK_SUCCESS) {
+            destroyExternalSemaphore(out);
+            return fail(std::format("Exporting external timeline semaphore handle failed: {}", static_cast<int>(result)));
+        }
+        return true;
+    }
+
+    void VulkanContext::destroyExternalSemaphore(ExternalSemaphore& semaphore) {
+        if (device_ && semaphore.semaphore != VK_NULL_HANDLE) {
+            vkDestroySemaphore(device_, semaphore.semaphore, nullptr);
+        }
+        closeExternalNativeHandle(semaphore.native_handle);
+        semaphore = {};
+    }
+
+    VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalSemaphoreNativeHandle(
+        ExternalSemaphore& semaphore) const {
+        const ExternalNativeHandle handle = semaphore.native_handle;
+        semaphore.native_handle = kInvalidExternalNativeHandle;
+        return handle;
     }
 
     bool VulkanContext::createSwapchain(const int framebuffer_width, const int framebuffer_height) {

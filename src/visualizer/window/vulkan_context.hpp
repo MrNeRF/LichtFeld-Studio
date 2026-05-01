@@ -45,6 +45,30 @@ namespace lfs::vis {
             VkExtent2D extent{};
         };
 
+#ifdef _WIN32
+        using ExternalNativeHandle = void*;
+        static constexpr ExternalNativeHandle kInvalidExternalNativeHandle = nullptr;
+#else
+        using ExternalNativeHandle = int;
+        static constexpr ExternalNativeHandle kInvalidExternalNativeHandle = -1;
+#endif
+
+        struct ExternalImage {
+            VkImage image = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
+            VkExtent2D extent{};
+            VkFormat format = VK_FORMAT_UNDEFINED;
+            VkDeviceSize allocation_size = 0;
+            ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+        };
+
+        struct ExternalSemaphore {
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            std::uint64_t initial_value = 0;
+            ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+        };
+
         [[nodiscard]] VkInstance instance() const { return instance_; }
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
@@ -61,6 +85,7 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
         [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
+        [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
         }
@@ -73,6 +98,15 @@ namespace lfs::vis {
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
+
+        [[nodiscard]] bool createExternalImage(VkExtent2D extent, VkFormat format, ExternalImage& out);
+        void destroyExternalImage(ExternalImage& image);
+        [[nodiscard]] ExternalNativeHandle releaseExternalImageNativeHandle(ExternalImage& image) const;
+        [[nodiscard]] bool createExternalTimelineSemaphore(std::uint64_t initial_value, ExternalSemaphore& out);
+        void destroyExternalSemaphore(ExternalSemaphore& semaphore);
+        [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;
+        [[nodiscard]] static bool externalNativeHandleValid(ExternalNativeHandle handle);
+        void closeExternalNativeHandle(ExternalNativeHandle& handle) const;
 #endif
 
     private:
@@ -168,7 +202,9 @@ namespace lfs::vis {
         bool debug_utils_enabled_ = false;
         bool validation_enabled_ = false;
         bool instance_external_memory_capabilities_enabled_ = false;
+        bool instance_external_semaphore_capabilities_enabled_ = false;
         bool external_memory_interop_enabled_ = false;
+        bool external_semaphore_interop_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
         PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
         uint32_t active_image_index_ = 0;
