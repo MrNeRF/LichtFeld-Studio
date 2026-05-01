@@ -53,6 +53,7 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue presentQueue() const { return present_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
+        [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkRenderPass renderPass() const { return render_pass_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
@@ -103,9 +104,11 @@ namespace lfs::vis {
         bool createCommandBuffers();
         bool createSyncObjects();
         bool createDebugMessenger();
+        bool createPipelineCache();
         bool recreateSwapchain();
 
         void destroyDebugMessenger();
+        void saveAndDestroyPipelineCache();
         void destroySwapchain();
 
         template <typename VkHandle>
@@ -133,6 +136,7 @@ namespace lfs::vis {
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;
+        VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
         VkQueue graphics_queue_ = VK_NULL_HANDLE;
         VkQueue present_queue_ = VK_NULL_HANDLE;
         uint32_t graphics_queue_family_ = 0;

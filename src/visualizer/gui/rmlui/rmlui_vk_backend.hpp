@@ -56,6 +56,7 @@ public:
 		VkInstance instance = VK_NULL_HANDLE;
 		VkPhysicalDevice physical_device = VK_NULL_HANDLE;
 		VkDevice device = VK_NULL_HANDLE;
+		VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
 		VkQueue graphics_queue = VK_NULL_HANDLE;
 		uint32_t graphics_queue_family = 0;
 		VkRenderPass render_pass = VK_NULL_HANDLE;
@@ -622,6 +623,7 @@ private:
 	VkPhysicalDevice m_p_physical_device;
 	VkSurfaceKHR m_p_surface;
 	VkSwapchainKHR m_p_swapchain;
+	VkPipelineCache m_p_pipeline_cache;
 	VmaAllocator m_p_allocator;
 	// @ obtained from command list see PrepareRenderBuffer method
 	VkCommandBuffer m_p_current_command_buffer;

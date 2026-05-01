@@ -5,10 +5,14 @@
 #include "vulkan_context.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <format>
 #include <limits>
 #include <set>
@@ -141,6 +145,58 @@ namespace lfs::vis {
             create_info.pfnUserCallback = vulkanDebugCallback;
         }
 
+        [[nodiscard]] std::filesystem::path defaultPipelineCachePath() {
+#ifdef _WIN32
+            if (const char* local_app_data = std::getenv("LOCALAPPDATA"); local_app_data && local_app_data[0] != '\0') {
+                return std::filesystem::path(local_app_data) / "LichtFeld" / "pipeline_cache.bin";
+            }
+            return std::filesystem::current_path() / "LichtFeld" / "pipeline_cache.bin";
+#else
+            if (const char* xdg_cache_home = std::getenv("XDG_CACHE_HOME"); xdg_cache_home && xdg_cache_home[0] != '\0') {
+                return std::filesystem::path(xdg_cache_home) / "lichtfeld" / "pipeline_cache.bin";
+            }
+            if (const char* home = std::getenv("HOME"); home && home[0] != '\0') {
+                return std::filesystem::path(home) / ".cache" / "lichtfeld" / "pipeline_cache.bin";
+            }
+            return std::filesystem::current_path() / ".cache" / "lichtfeld" / "pipeline_cache.bin";
+#endif
+        }
+
+        [[nodiscard]] bool readFile(const std::filesystem::path& path, std::vector<char>& data) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file)) {
+                return false;
+            }
+
+            const std::streamoff size = file.tellg();
+            if (size <= 0) {
+                return false;
+            }
+
+            data.resize(static_cast<std::size_t>(size));
+            file.seekg(0, std::ios::beg);
+            return static_cast<bool>(file.read(data.data(), size));
+        }
+
+        [[nodiscard]] bool validPipelineCacheHeader(const std::vector<char>& data,
+                                                    const VkPhysicalDeviceProperties& device_props) {
+            if (data.size() < sizeof(VkPipelineCacheHeaderVersionOne)) {
+                return false;
+            }
+
+            VkPipelineCacheHeaderVersionOne header{};
+            std::memcpy(&header, data.data(), sizeof(header));
+            if (header.headerSize < sizeof(VkPipelineCacheHeaderVersionOne) ||
+                header.headerSize > data.size() ||
+                header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE ||
+                header.vendorID != device_props.vendorID ||
+                header.deviceID != device_props.deviceID) {
+                return false;
+            }
+
+            return std::memcmp(header.pipelineCacheUUID, device_props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+        }
+
         constexpr std::uint64_t kFrameWaitTimeoutNs = 16'000'000;
 #endif
     } // namespace
@@ -164,6 +220,7 @@ namespace lfs::vis {
                createSurface(window) &&
                pickPhysicalDevice() &&
                createDevice() &&
+               createPipelineCache() &&
                createSwapchain(framebuffer_width, framebuffer_height) &&
                createImageViews() &&
                createRenderPass() &&
@@ -205,6 +262,7 @@ namespace lfs::vis {
             vkDestroyCommandPool(device_, command_pool_, nullptr);
             command_pool_ = VK_NULL_HANDLE;
         }
+        saveAndDestroyPipelineCache();
         if (device_ != VK_NULL_HANDLE) {
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
@@ -1187,6 +1245,81 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             LOG_WARN("vkSetDebugUtilsObjectNameEXT failed for '{}': {}", owned_name, static_cast<int>(result));
         }
+    }
+
+    bool VulkanContext::createPipelineCache() {
+        if (device_ == VK_NULL_HANDLE || physical_device_ == VK_NULL_HANDLE) {
+            return fail("Pipeline cache requires an initialized Vulkan device");
+        }
+
+        const std::filesystem::path path = defaultPipelineCachePath();
+        std::vector<char> cache_data;
+        if (readFile(path, cache_data)) {
+            VkPhysicalDeviceProperties device_props{};
+            vkGetPhysicalDeviceProperties(physical_device_, &device_props);
+            if (!validPipelineCacheHeader(cache_data, device_props)) {
+                cache_data.clear();
+            }
+        }
+
+        VkPipelineCacheCreateInfo create_info{};
+        create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        create_info.initialDataSize = cache_data.size();
+        create_info.pInitialData = cache_data.empty() ? nullptr : cache_data.data();
+
+        VkResult result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
+        if (result != VK_SUCCESS && !cache_data.empty()) {
+            cache_data.clear();
+            create_info.initialDataSize = 0;
+            create_info.pInitialData = nullptr;
+            result = vkCreatePipelineCache(device_, &create_info, nullptr, &pipeline_cache_);
+        }
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkCreatePipelineCache failed: {}", static_cast<int>(result)));
+        }
+
+        setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_CACHE, pipeline_cache_, "On-disk pipeline cache");
+        if (!cache_data.empty()) {
+            LOG_INFO("Loaded Vulkan pipeline cache: {} ({} bytes)",
+                     lfs::core::path_to_utf8(path),
+                     cache_data.size());
+        }
+        return true;
+    }
+
+    void VulkanContext::saveAndDestroyPipelineCache() {
+        if (device_ == VK_NULL_HANDLE || pipeline_cache_ == VK_NULL_HANDLE) {
+            return;
+        }
+
+        const std::filesystem::path path = defaultPipelineCachePath();
+        std::size_t cache_size = 0;
+        VkResult result = vkGetPipelineCacheData(device_, pipeline_cache_, &cache_size, nullptr);
+        if (result == VK_SUCCESS && cache_size > 0) {
+            std::vector<char> cache_data(cache_size);
+            result = vkGetPipelineCacheData(device_, pipeline_cache_, &cache_size, cache_data.data());
+            if (result == VK_SUCCESS && cache_size > 0) {
+                cache_data.resize(cache_size);
+                std::error_code ec;
+                std::filesystem::create_directories(path.parent_path(), ec);
+                if (!ec) {
+                    std::ofstream file;
+                    if (lfs::core::open_file_for_write(path,
+                                                       std::ios::binary | std::ios::trunc,
+                                                       file)) {
+                        file.write(cache_data.data(), static_cast<std::streamsize>(cache_data.size()));
+                        if (file) {
+                            LOG_INFO("Saved Vulkan pipeline cache: {} ({} bytes)",
+                                     lfs::core::path_to_utf8(path),
+                                     cache_data.size());
+                        }
+                    }
+                }
+            }
+        }
+
+        vkDestroyPipelineCache(device_, pipeline_cache_, nullptr);
+        pipeline_cache_ = VK_NULL_HANDLE;
     }
 
     void VulkanContext::destroySwapchain() {

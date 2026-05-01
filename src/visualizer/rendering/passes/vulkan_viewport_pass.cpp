@@ -650,6 +650,7 @@ void main() {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         VkDevice device = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device = VK_NULL_HANDLE;
+        VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
         VkQueue graphics_queue = VK_NULL_HANDLE;
         std::uint32_t graphics_queue_family = 0;
         VkRenderPass render_pass = VK_NULL_HANDLE;
@@ -720,6 +721,7 @@ void main() {
             }
             device = context.device();
             physical_device = context.physicalDevice();
+            pipeline_cache = context.pipelineCache();
             graphics_queue = context.graphicsQueue();
             graphics_queue_family = context.graphicsQueueFamily();
             render_pass = context.renderPass();
@@ -1087,7 +1089,7 @@ void main() {
             pipeline_info.subpass = 0;
 
             const bool ok =
-                vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline) == VK_SUCCESS;
+                vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline) == VK_SUCCESS;
             vkDestroyShaderModule(device, vertex_module, nullptr);
             vkDestroyShaderModule(device, fragment_module, nullptr);
             return ok;

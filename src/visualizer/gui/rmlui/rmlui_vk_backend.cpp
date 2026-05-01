@@ -193,6 +193,7 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_p_physical_device{},
                                            m_p_surface{},
                                            m_p_swapchain{},
+                                           m_p_pipeline_cache{},
                                            m_p_allocator{},
                                            m_p_current_command_buffer{},
                                            m_p_descriptor_set_layout_vertex_transform{},
@@ -1402,6 +1403,7 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_p_instance = context.instance;
     m_p_physical_device = context.physical_device;
     m_p_device = context.device;
+    m_p_pipeline_cache = context.pipeline_cache;
     m_p_queue_graphics = context.graphics_queue;
     m_p_queue_present = context.graphics_queue;
     m_p_queue_compute = context.graphics_queue;
@@ -2663,7 +2665,7 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info.renderPass = m_p_render_pass;
     info.subpass = 0;
 
-    auto status = vkCreateGraphicsPipelines(m_p_device, nullptr, 1, &info, nullptr, &m_p_pipeline_with_textures);
+    auto status = vkCreateGraphicsPipelines(m_p_device, m_p_pipeline_cache, 1, &info, nullptr, &m_p_pipeline_with_textures);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
     info_depth.back.passOp = VK_STENCIL_OP_KEEP;
@@ -2675,7 +2677,7 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info_depth.back.reference = 1;
     info_depth.front = info_depth.back;
 
-    status = vkCreateGraphicsPipelines(m_p_device, nullptr, 1, &info, nullptr,
+    status = vkCreateGraphicsPipelines(m_p_device, m_p_pipeline_cache, 1, &info, nullptr,
                                        &m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
@@ -2690,7 +2692,7 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info_depth.back.reference = 1;
     info_depth.front = info_depth.back;
 
-    status = vkCreateGraphicsPipelines(m_p_device, nullptr, 1, &info, nullptr, &m_p_pipeline_without_textures);
+    status = vkCreateGraphicsPipelines(m_p_device, m_p_pipeline_cache, 1, &info, nullptr, &m_p_pipeline_without_textures);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
     info_depth.back.passOp = VK_STENCIL_OP_KEEP;
@@ -2702,7 +2704,7 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info_depth.back.reference = 1;
     info_depth.front = info_depth.back;
 
-    status = vkCreateGraphicsPipelines(m_p_device, nullptr, 1, &info, nullptr,
+    status = vkCreateGraphicsPipelines(m_p_device, m_p_pipeline_cache, 1, &info, nullptr,
                                        &m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
@@ -2716,7 +2718,7 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info_depth.back.reference = 1;
     info_depth.front = info_depth.back;
 
-    status = vkCreateGraphicsPipelines(m_p_device, nullptr, 1, &info, nullptr, &m_p_pipeline_stencil_for_region_where_geometry_will_be_drawn);
+    status = vkCreateGraphicsPipelines(m_p_device, m_p_pipeline_cache, 1, &info, nullptr, &m_p_pipeline_stencil_for_region_where_geometry_will_be_drawn);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
 #ifdef RMLUI_VK_DEBUG

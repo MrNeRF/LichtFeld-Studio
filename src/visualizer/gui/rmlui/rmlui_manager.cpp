@@ -57,6 +57,7 @@ namespace lfs::vis::gui {
         context.instance = vulkan_context.instance();
         context.physical_device = vulkan_context.physicalDevice();
         context.device = vulkan_context.device();
+        context.pipeline_cache = vulkan_context.pipelineCache();
         context.graphics_queue = vulkan_context.graphicsQueue();
         context.graphics_queue_family = vulkan_context.graphicsQueueFamily();
         context.render_pass = vulkan_context.renderPass();
