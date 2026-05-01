@@ -113,7 +113,10 @@ namespace lfs::vis {
         [[nodiscard]] bool transitionImageLayoutImmediate(VkImage image,
                                                           VkImageLayout old_layout,
                                                           VkImageLayout new_layout,
-                                                          VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT);
+                                                          VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                                          VkSemaphore wait_semaphore = VK_NULL_HANDLE,
+                                                          std::uint64_t wait_value = 0,
+                                                          VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 #endif
 
     private:

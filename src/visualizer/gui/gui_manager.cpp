@@ -47,6 +47,7 @@
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -88,6 +89,32 @@
 #include <utility>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace lfs::vis {
+    struct VulkanSceneInteropTarget {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        VulkanContext::ExternalImage image;
+        VulkanContext::ExternalSemaphore semaphore;
+        lfs::rendering::CudaVulkanInterop interop;
+        glm::ivec2 size{0, 0};
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::uint64_t timeline_value = 0;
+        std::uint64_t generation = 0;
+        const lfs::core::Tensor* uploaded_tensor = nullptr;
+
+        void destroy(VulkanContext& context) {
+            interop.reset();
+            context.destroyExternalSemaphore(semaphore);
+            context.destroyExternalImage(image);
+            size = {0, 0};
+            layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            timeline_value = 0;
+            uploaded_tensor = nullptr;
+            ++generation;
+        }
+#endif
+    };
+} // namespace lfs::vis
 
 namespace lfs::vis::gui {
 
@@ -3119,6 +3146,7 @@ namespace lfs::vis::gui {
         drag_drop_.shutdown();
         destroyCustomCursors();
         setVulkanUiTextureContext(nullptr);
+        resetVulkanSceneInterop();
         vulkan_scene_image_.reset();
         vulkan_viewport_pass_.reset();
 
@@ -3223,6 +3251,144 @@ namespace lfs::vis::gui {
         vulkan_scene_image_flip_y_ = flip_y;
     }
 
+    void GuiManager::resetVulkanSceneInterop() {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (!vulkan_scene_interop_) {
+            return;
+        }
+        auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+        auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        if (vulkan_context) {
+            vulkan_scene_interop_->destroy(*vulkan_context);
+        } else {
+            vulkan_scene_interop_->interop.reset();
+        }
+        vulkan_scene_interop_.reset();
+#else
+        vulkan_scene_interop_.reset();
+#endif
+    }
+
+    void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (const char* disabled = std::getenv("LFS_NO_VK_CUDA_INTEROP");
+            disabled != nullptr && std::string_view(disabled) != "0") {
+            return;
+        }
+        if (!vulkan_scene_image_ ||
+            !vulkan_scene_image_->is_valid() ||
+            vulkan_scene_image_->device() != lfs::core::Device::CUDA ||
+            vulkan_scene_image_size_.x <= 0 ||
+            vulkan_scene_image_size_.y <= 0 ||
+            !context.externalMemoryInteropEnabled() ||
+            !context.externalSemaphoreInteropEnabled()) {
+            if (vulkan_scene_interop_) {
+                resetVulkanSceneInterop();
+            }
+            return;
+        }
+
+        const glm::ivec2 target_size = vulkan_scene_image_size_;
+        const bool recreate =
+            !vulkan_scene_interop_ ||
+            vulkan_scene_interop_->size != target_size ||
+            !vulkan_scene_interop_->interop.valid();
+        if (recreate) {
+            resetVulkanSceneInterop();
+            auto target = std::make_unique<VulkanSceneInteropTarget>();
+            const VkExtent2D extent{
+                static_cast<std::uint32_t>(target_size.x),
+                static_cast<std::uint32_t>(target_size.y),
+            };
+            if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, target->image) ||
+                !context.createExternalTimelineSemaphore(0, target->semaphore)) {
+                LOG_WARN("Vulkan/CUDA interop target creation failed: {}", context.lastError());
+                if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
+                    target->destroy(context);
+                }
+                return;
+            }
+            if (!context.transitionImageLayoutImmediate(target->image.image,
+                                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                LOG_WARN("Vulkan/CUDA interop image initialization failed: {}", context.lastError());
+                target->destroy(context);
+                return;
+            }
+
+            const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
+            const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
+            lfs::rendering::CudaVulkanExternalImageImport image_import{
+                .memory_handle = memory_handle,
+                .allocation_size = static_cast<std::size_t>(target->image.allocation_size),
+                .extent = {.width = extent.width, .height = extent.height},
+                .format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
+                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+            };
+            lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
+                .semaphore_handle = semaphore_handle,
+                .initial_value = 0,
+            };
+            if (!target->interop.init(image_import, semaphore_import)) {
+                LOG_WARN("CUDA import of Vulkan viewport target failed: {}", target->interop.lastError());
+                target->destroy(context);
+                return;
+            }
+            target->size = target_size;
+            target->layout = VK_IMAGE_LAYOUT_GENERAL;
+            vulkan_scene_interop_ = std::move(target);
+            LOG_INFO("Vulkan/CUDA viewport interop target initialized: {}x{}",
+                     target_size.x,
+                     target_size.y);
+        }
+
+        auto& target = *vulkan_scene_interop_;
+        if (target.uploaded_tensor == vulkan_scene_image_.get() &&
+            target.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            return;
+        }
+
+        if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        target.layout,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                LOG_WARN("Vulkan/CUDA interop image transition to GENERAL failed: {}", context.lastError());
+                resetVulkanSceneInterop();
+                return;
+            }
+            target.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
+            LOG_WARN("CUDA copy into Vulkan viewport target failed: {}", target.interop.lastError());
+            resetVulkanSceneInterop();
+            return;
+        }
+        const std::uint64_t signal_value = ++target.timeline_value;
+        if (!target.interop.signal(signal_value)) {
+            LOG_WARN("CUDA signal for Vulkan viewport target failed: {}", target.interop.lastError());
+            resetVulkanSceneInterop();
+            return;
+        }
+        if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                    VK_IMAGE_LAYOUT_GENERAL,
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    target.semaphore.semaphore,
+                                                    signal_value,
+                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+            LOG_WARN("Vulkan wait for CUDA viewport target failed: {}", context.lastError());
+            resetVulkanSceneInterop();
+            return;
+        }
+        target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        target.uploaded_tensor = vulkan_scene_image_.get();
+        ++target.generation;
+#else
+        (void)context;
+#endif
+    }
+
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent) const {
         const bool has_viewport_layout =
             viewport_layout_.size.x > 0.0f && viewport_layout_.size.y > 0.0f;
@@ -3239,6 +3405,16 @@ namespace lfs::vis::gui {
         params.scene_image = vulkan_scene_image_;
         params.scene_image_size = vulkan_scene_image_size_;
         params.scene_image_flip_y = vulkan_scene_image_flip_y_;
+        if (vulkan_scene_interop_ &&
+            vulkan_scene_interop_->interop.valid() &&
+            vulkan_scene_interop_->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+            vulkan_scene_interop_->size == params.scene_image_size &&
+            vulkan_scene_interop_->uploaded_tensor == vulkan_scene_image_.get()) {
+            params.external_scene_image = vulkan_scene_interop_->image.image;
+            params.external_scene_image_view = vulkan_scene_interop_->image.view;
+            params.external_scene_image_layout = vulkan_scene_interop_->layout;
+            params.external_scene_image_generation = vulkan_scene_interop_->generation;
+        }
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->getSettings();
@@ -3834,6 +4010,10 @@ namespace lfs::vis::gui {
             const auto& bg = lfs::vis::theme().menu_background();
             VkClearValue clear_value{};
             clear_value.color = VkClearColorValue{{bg.x, bg.y, bg.z, 1.0f}};
+
+            if (vulkan_context) {
+                prepareVulkanSceneInterop(*vulkan_context);
+            }
 
             VulkanContext::Frame frame{};
             if (vulkan_context && vulkan_context->beginFrame(clear_value, frame)) {

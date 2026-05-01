@@ -49,6 +49,7 @@ namespace lfs::core {
 namespace lfs::vis {
     class VisualizerImpl;
     class VulkanContext;
+    struct VulkanSceneInteropTarget;
 
     namespace gui {
         struct GuiHitTestResult {
@@ -142,6 +143,8 @@ namespace lfs::vis {
             void recordVulkanViewport(VkCommandBuffer command_buffer,
                                       VkExtent2D extent,
                                       const VulkanViewportPassParams& params);
+            void prepareVulkanSceneInterop(VulkanContext& context);
+            void resetVulkanSceneInterop();
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();
@@ -229,6 +232,7 @@ namespace lfs::vis {
             // RmlUI integration
             RmlUIManager rmlui_manager_;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            std::unique_ptr<VulkanSceneInteropTarget> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             glm::ivec2 vulkan_scene_image_size_{0, 0};
             bool vulkan_scene_image_flip_y_ = false;

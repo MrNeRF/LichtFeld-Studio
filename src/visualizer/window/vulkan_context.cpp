@@ -1256,7 +1256,10 @@ namespace lfs::vis {
     bool VulkanContext::transitionImageLayoutImmediate(const VkImage image,
                                                        const VkImageLayout old_layout,
                                                        const VkImageLayout new_layout,
-                                                       const VkImageAspectFlags aspect_mask) {
+                                                       const VkImageAspectFlags aspect_mask,
+                                                       const VkSemaphore wait_semaphore,
+                                                       const std::uint64_t wait_value,
+                                                       const VkPipelineStageFlags wait_stage) {
         if (device_ == VK_NULL_HANDLE || command_pool_ == VK_NULL_HANDLE ||
             graphics_queue_ == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
             return fail("Cannot transition Vulkan image layout before graphics resources are initialized");
@@ -1368,6 +1371,19 @@ namespace lfs::vis {
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
+        VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
+        VkPipelineStageFlags resolved_wait_stage = wait_stage == 0
+                                                       ? static_cast<VkPipelineStageFlags>(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
+                                                       : wait_stage;
+        if (wait_semaphore != VK_NULL_HANDLE) {
+            timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+            timeline_submit_info.waitSemaphoreValueCount = 1;
+            timeline_submit_info.pWaitSemaphoreValues = &wait_value;
+            submit_info.pNext = &timeline_submit_info;
+            submit_info.waitSemaphoreCount = 1;
+            submit_info.pWaitSemaphores = &wait_semaphore;
+            submit_info.pWaitDstStageMask = &resolved_wait_stage;
+        }
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, VK_NULL_HANDLE);
         if (result == VK_SUCCESS) {
             result = vkQueueWaitIdle(graphics_queue_);
