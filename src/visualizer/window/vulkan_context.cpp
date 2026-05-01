@@ -1349,10 +1349,10 @@ namespace lfs::vis {
             return fail(std::format("vkBeginCommandBuffer(layout transition) failed: {}", static_cast<int>(result)));
         }
 
-        VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-        VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-        VkImageMemoryBarrier barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        VkPipelineStageFlags2 src_stage = VK_PIPELINE_STAGE_2_NONE;
+        VkPipelineStageFlags2 dst_stage = VK_PIPELINE_STAGE_2_NONE;
+        VkImageMemoryBarrier2 barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         barrier.oldLayout = old_layout;
         barrier.newLayout = new_layout;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -1366,56 +1366,53 @@ namespace lfs::vis {
 
         switch (old_layout) {
         case VK_IMAGE_LAYOUT_UNDEFINED:
-            barrier.srcAccessMask = 0;
-            src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_NONE;
+            src_stage = VK_PIPELINE_STAGE_2_NONE;
             break;
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             break;
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            src_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
             break;
         case VK_IMAGE_LAYOUT_GENERAL:
-            barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-            src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             break;
         default:
-            barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-            src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             break;
         }
 
         switch (new_layout) {
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
             break;
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+            dst_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
             break;
         case VK_IMAGE_LAYOUT_GENERAL:
-            barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-            dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             break;
         default:
-            barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-            dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
             break;
         }
+        barrier.srcStageMask = src_stage;
+        barrier.dstStageMask = dst_stage;
 
-        vkCmdPipelineBarrier(command_buffer,
-                             src_stage,
-                             dst_stage,
-                             0,
-                             0,
-                             nullptr,
-                             0,
-                             nullptr,
-                             1,
-                             &barrier);
+        VkDependencyInfo dependency{};
+        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependency.imageMemoryBarrierCount = 1;
+        dependency.pImageMemoryBarriers = &barrier;
+        vkCmdPipelineBarrier2(command_buffer, &dependency);
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {

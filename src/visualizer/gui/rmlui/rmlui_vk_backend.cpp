@@ -1100,16 +1100,22 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         range.levelCount = 1;
         range.layerCount = 1;
 
-        VkImageMemoryBarrier info_barrier = {};
-        info_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        VkImageMemoryBarrier2 info_barrier = {};
+        info_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         info_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         info_barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         info_barrier.image = p_image;
         info_barrier.subresourceRange = range;
-        info_barrier.srcAccessMask = 0;
-        info_barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        info_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        info_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+        info_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        info_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
 
-        vkCmdPipelineBarrier(p_cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &info_barrier);
+        VkDependencyInfo transfer_dependency = {};
+        transfer_dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        transfer_dependency.imageMemoryBarrierCount = 1;
+        transfer_dependency.pImageMemoryBarriers = &info_barrier;
+        vkCmdPipelineBarrier2(p_cmd, &transfer_dependency);
 
         VkBufferImageCopy region = {};
         region.bufferOffset = 0;
@@ -1124,18 +1130,23 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
         vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-        VkImageMemoryBarrier info_barrier_shader_read = {};
-        info_barrier_shader_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        VkImageMemoryBarrier2 info_barrier_shader_read = {};
+        info_barrier_shader_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
         info_barrier_shader_read.pNext = nullptr;
         info_barrier_shader_read.image = p_image;
         info_barrier_shader_read.subresourceRange = range;
         info_barrier_shader_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         info_barrier_shader_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        info_barrier_shader_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        info_barrier_shader_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        info_barrier_shader_read.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        info_barrier_shader_read.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        info_barrier_shader_read.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        info_barrier_shader_read.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
 
-        vkCmdPipelineBarrier(p_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                             &info_barrier_shader_read);
+        VkDependencyInfo shader_read_dependency = {};
+        shader_read_dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        shader_read_dependency.imageMemoryBarrierCount = 1;
+        shader_read_dependency.pImageMemoryBarriers = &info_barrier_shader_read;
+        vkCmdPipelineBarrier2(p_cmd, &shader_read_dependency);
     });
 
     DestroyResource_StagingBuffer(cpu_buffer);
@@ -3368,38 +3379,37 @@ void RenderInterface_VK::TransitionImageLayout(VkImage image, VkImageAspectFlags
 
     auto stage_and_access = [](VkImageLayout layout, bool source) {
         struct Result {
-            VkPipelineStageFlags stage;
-            VkAccessFlags access;
+            VkPipelineStageFlags2 stage;
+            VkAccessFlags2 access;
         };
         switch (layout) {
         case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-            return Result{VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                          source ? VkAccessFlags(VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
-                                 : VkAccessFlags(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)};
+            return Result{VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                          source ? VkAccessFlags2(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
+                                 : VkAccessFlags2(VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)};
         case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-            return Result{VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                          source ? VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-                                 : VkAccessFlags(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)};
+            return Result{VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                          source ? VkAccessFlags2(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
+                                 : VkAccessFlags2(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)};
         case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-            return Result{VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          source ? VkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT) : VkAccessFlags(VK_ACCESS_TRANSFER_READ_BIT)};
+            return Result{VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          source ? VkAccessFlags2(VK_ACCESS_2_TRANSFER_READ_BIT) : VkAccessFlags2(VK_ACCESS_2_TRANSFER_READ_BIT)};
         case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            return Result{VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          source ? VkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT) : VkAccessFlags(VK_ACCESS_TRANSFER_WRITE_BIT)};
+            return Result{VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                          source ? VkAccessFlags2(VK_ACCESS_2_TRANSFER_WRITE_BIT) : VkAccessFlags2(VK_ACCESS_2_TRANSFER_WRITE_BIT)};
         case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            return Result{VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                          source ? VkAccessFlags(VK_ACCESS_SHADER_READ_BIT) : VkAccessFlags(VK_ACCESS_SHADER_READ_BIT)};
+            return Result{VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                          source ? VkAccessFlags2(VK_ACCESS_2_SHADER_READ_BIT) : VkAccessFlags2(VK_ACCESS_2_SHADER_READ_BIT)};
         default:
-            return Result{source ? VkPipelineStageFlags(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT) : VkPipelineStageFlags(VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT),
-                          VkAccessFlags(0)};
+            return Result{VK_PIPELINE_STAGE_2_NONE, VkAccessFlags2(VK_ACCESS_2_NONE)};
         }
     };
 
     const auto src = stage_and_access(old_layout, true);
     const auto dst = stage_and_access(new_layout, false);
 
-    VkImageMemoryBarrier barrier{};
-    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    VkImageMemoryBarrier2 barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
     barrier.oldLayout = old_layout;
     barrier.newLayout = new_layout;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -3410,10 +3420,16 @@ void RenderInterface_VK::TransitionImageLayout(VkImage image, VkImageAspectFlags
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
+    barrier.srcStageMask = src.stage;
     barrier.srcAccessMask = src.access;
+    barrier.dstStageMask = dst.stage;
     barrier.dstAccessMask = dst.access;
 
-    vkCmdPipelineBarrier(m_p_current_command_buffer, src.stage, dst.stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    VkDependencyInfo dependency{};
+    dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+    dependency.imageMemoryBarrierCount = 1;
+    dependency.pImageMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(m_p_current_command_buffer, &dependency);
 }
 
 void RenderInterface_VK::ResetDynamicRenderState() {
