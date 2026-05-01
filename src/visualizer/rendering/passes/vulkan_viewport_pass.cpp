@@ -242,6 +242,8 @@ namespace lfs::vis {
         VkImageLayout scene_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         glm::ivec2 scene_image_size{0, 0};
         const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
+        bool scene_image_external = false;
+        std::uint64_t scene_image_external_generation = 0;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -738,18 +740,26 @@ namespace lfs::vis {
             barrier.subresourceRange.layerCount = 1;
 
             VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
             if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
                 barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
                 src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            } else if (old_layout == VK_IMAGE_LAYOUT_GENERAL) {
+                barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
+                src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
             }
             if (new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
                 barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
                 dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            } else {
+            } else if (new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
                 barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            } else if (new_layout == VK_IMAGE_LAYOUT_GENERAL) {
+                barrier.dstAccessMask = VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_MEMORY_READ_BIT;
+                dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
             }
 
             vkCmdPipelineBarrier(command_buffer,
@@ -764,22 +774,48 @@ namespace lfs::vis {
                                  &barrier);
         }
 
-        void destroySceneImage() {
-            if (scene_image_view != VK_NULL_HANDLE) {
-                vkDestroyImageView(device, scene_image_view, nullptr);
-                scene_image_view = VK_NULL_HANDLE;
-            }
-            if (scene_image != VK_NULL_HANDLE) {
-                vkDestroyImage(device, scene_image, nullptr);
-                scene_image = VK_NULL_HANDLE;
-            }
-            if (scene_image_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, scene_image_memory, nullptr);
-                scene_image_memory = VK_NULL_HANDLE;
-            }
+        void clearSceneImageBinding() {
+            scene_image = VK_NULL_HANDLE;
+            scene_image_memory = VK_NULL_HANDLE;
+            scene_image_view = VK_NULL_HANDLE;
             scene_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             scene_image_size = {0, 0};
             uploaded_scene_tensor = nullptr;
+            scene_image_external = false;
+            scene_image_external_generation = 0;
+        }
+
+        void updateSceneDescriptor(const VkImageView image_view,
+                                   const VkImageLayout image_layout) const {
+            VkDescriptorImageInfo descriptor_info{};
+            descriptor_info.sampler = scene_sampler;
+            descriptor_info.imageView = image_view;
+            descriptor_info.imageLayout = image_layout;
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = scene_descriptor_set;
+            write.dstBinding = 0;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.descriptorCount = 1;
+            write.pImageInfo = &descriptor_info;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+        }
+
+        void destroySceneImage() {
+            if (scene_image_external) {
+                clearSceneImageBinding();
+                return;
+            }
+            if (scene_image_view != VK_NULL_HANDLE) {
+                vkDestroyImageView(device, scene_image_view, nullptr);
+            }
+            if (scene_image != VK_NULL_HANDLE) {
+                vkDestroyImage(device, scene_image, nullptr);
+            }
+            if (scene_image_memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device, scene_image_memory, nullptr);
+            }
+            clearSceneImageBinding();
         }
 
         [[nodiscard]] bool ensureSceneImage(const glm::ivec2 size) {
@@ -833,18 +869,35 @@ namespace lfs::vis {
             }
 
             scene_image_size = size;
-            VkDescriptorImageInfo descriptor_info{};
-            descriptor_info.sampler = scene_sampler;
-            descriptor_info.imageView = scene_image_view;
-            descriptor_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = scene_descriptor_set;
-            write.dstBinding = 0;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &descriptor_info;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            updateSceneDescriptor(scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            return true;
+        }
+
+        [[nodiscard]] bool bindExternalSceneImage(const VulkanViewportPassParams& params) {
+            if (params.external_scene_image == VK_NULL_HANDLE ||
+                params.external_scene_image_view == VK_NULL_HANDLE ||
+                params.scene_image_size.x <= 0 ||
+                params.scene_image_size.y <= 0) {
+                return false;
+            }
+            if (scene_image_external &&
+                scene_image == params.external_scene_image &&
+                scene_image_view == params.external_scene_image_view &&
+                scene_image_size == params.scene_image_size &&
+                scene_image_layout == params.external_scene_image_layout &&
+                scene_image_external_generation == params.external_scene_image_generation) {
+                return true;
+            }
+
+            destroySceneImage();
+            scene_image = params.external_scene_image;
+            scene_image_view = params.external_scene_image_view;
+            scene_image_layout = params.external_scene_image_layout;
+            scene_image_size = params.scene_image_size;
+            uploaded_scene_tensor = params.scene_image.get();
+            scene_image_external = true;
+            scene_image_external_generation = params.external_scene_image_generation;
+            updateSceneDescriptor(scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
 
@@ -1225,6 +1278,16 @@ namespace lfs::vis {
                 uploaded_scene_tensor = nullptr;
                 return;
             }
+            if (params.external_scene_image != VK_NULL_HANDLE &&
+                params.external_scene_image_view != VK_NULL_HANDLE) {
+                if (!bindExternalSceneImage(params)) {
+                    LOG_ERROR("Failed to bind external Vulkan viewport scene image");
+                }
+                return;
+            }
+            if (scene_image_external) {
+                destroySceneImage();
+            }
             if (uploaded_scene_tensor == params.scene_image.get() && scene_image_size == params.scene_image_size &&
                 scene_image_view != VK_NULL_HANDLE) {
                 return;
@@ -1414,7 +1477,7 @@ namespace lfs::vis {
             clearViewport(command_buffer, rect, params.background_color);
 
             const bool has_scene =
-                params.scene_image && scene_image_view != VK_NULL_HANDLE &&
+                (params.scene_image || scene_image_external) && scene_image_view != VK_NULL_HANDLE &&
                 scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
             if (has_scene) {
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);

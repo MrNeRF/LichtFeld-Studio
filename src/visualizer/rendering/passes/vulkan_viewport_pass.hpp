@@ -75,6 +75,10 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> scene_image;
         glm::ivec2 scene_image_size{0, 0};
         bool scene_image_flip_y = false;
+        VkImage external_scene_image = VK_NULL_HANDLE;
+        VkImageView external_scene_image_view = VK_NULL_HANDLE;
+        VkImageLayout external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        std::uint64_t external_scene_image_generation = 0;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
