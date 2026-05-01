@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <glm/glm.hpp>
 #include <imgui.h>
 
@@ -40,7 +42,7 @@ namespace lfs::vis::gui {
         glm::mat3 delta_rotation{1.0f};
     };
 
-    RotationGizmoResult drawRotationGizmo(const RotationGizmoConfig& config);
+    LFS_VIS_API RotationGizmoResult drawRotationGizmo(const RotationGizmoConfig& config);
 
     [[nodiscard]] bool isRotationGizmoHovered();
     [[nodiscard]] bool isRotationGizmoActive();

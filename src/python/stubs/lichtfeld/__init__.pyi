@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Sequence
 import enum
-from typing import overload
+from typing import TypeAlias, overload
 
 from numpy.typing import NDArray
 import typing_extensions
@@ -378,6 +378,9 @@ def get_num_gaussians() -> int:
 
 def get_node_transform(name: str) -> list[float] | None:
     """Get node transform matrix (16 floats, column-major)"""
+
+def get_node_source_path(name: str) -> str | None:
+    """Get original source path for a node if available"""
 
 def get_node_visualizer_world_transform(name: str) -> list[float] | None:
     """Get node visualizer-world transform matrix (16 floats, column-major)"""
@@ -1306,6 +1309,18 @@ class GizmoResult(enum.Enum):
 
     CANCELLED = 3
 
+class TransformGizmoOperation(enum.Enum):
+    TRANSLATE = 0
+
+    ROTATE = 1
+
+    SCALE = 2
+
+class TransformGizmoSpace(enum.Enum):
+    LOCAL = 0
+
+    WORLD = 1
+
 class GizmoContext:
     def __init__(self) -> None: ...
 
@@ -1352,6 +1367,148 @@ class GizmoContext:
 
     def draw_line_3d(self, start: tuple[float, float, float], end: tuple[float, float, float], color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
         """Draw a 3D line"""
+
+class TransformGizmo:
+    def __init__(self, operation: str = 'translate', matrix: Sequence[float] = [], id: str = '') -> None:
+        """Create a reusable native TRS viewport gizmo"""
+
+    @property
+    def id(self) -> str:
+        """Stable gizmo id"""
+
+    @property
+    def operation(self) -> str:
+        """Gizmo operation: 'translate', 'rotate', or 'scale'"""
+
+    @operation.setter
+    def operation(self, arg: str, /) -> None: ...
+
+    @property
+    def space(self) -> str:
+        """Axis space: 'local' or 'world'"""
+
+    @space.setter
+    def space(self, arg: str, /) -> None: ...
+
+    @property
+    def matrix(self) -> list[float]:
+        """4x4 transform matrix as 16 column-major floats"""
+
+    @matrix.setter
+    def matrix(self, arg: Sequence[float], /) -> None: ...
+
+    @property
+    def translation(self) -> list[float]:
+        """Translation component as (x, y, z)"""
+
+    @translation.setter
+    def translation(self, arg: Sequence[float], /) -> None: ...
+
+    @property
+    def attached(self) -> bool:
+        """Whether the gizmo is registered for viewport drawing"""
+
+    @property
+    def visible(self) -> bool:
+        """Whether the gizmo is drawn"""
+
+    @visible.setter
+    def visible(self, arg: bool, /) -> None: ...
+
+    @property
+    def enabled(self) -> bool:
+        """Whether the gizmo updates and handles lifecycle state"""
+
+    @enabled.setter
+    def enabled(self, arg: bool, /) -> None: ...
+
+    @property
+    def input_enabled(self) -> bool:
+        """Whether the gizmo accepts mouse input"""
+
+    @input_enabled.setter
+    def input_enabled(self, arg: bool, /) -> None: ...
+
+    @property
+    def active(self) -> bool:
+        """Whether the gizmo is currently being dragged"""
+
+    @property
+    def hovered(self) -> bool:
+        """Whether a gizmo handle was hovered last frame"""
+
+    @property
+    def changed(self) -> bool:
+        """Whether the gizmo changed its matrix last frame"""
+
+    @property
+    def snap(self) -> bool:
+        """Enable operation snapping"""
+
+    @snap.setter
+    def snap(self, arg: bool, /) -> None: ...
+
+    @property
+    def translate_snap(self) -> float:
+        """Translate snap step in world units"""
+
+    @translate_snap.setter
+    def translate_snap(self, arg: float, /) -> None: ...
+
+    @property
+    def rotate_snap_degrees(self) -> float:
+        """Rotation snap step in degrees"""
+
+    @rotate_snap_degrees.setter
+    def rotate_snap_degrees(self, arg: float, /) -> None: ...
+
+    @property
+    def scale_snap_ratio(self) -> float:
+        """Scale snap step as a ratio"""
+
+    @scale_snap_ratio.setter
+    def scale_snap_ratio(self, arg: float, /) -> None: ...
+
+    def attach(self) -> None:
+        """Attach the gizmo to the viewport overlay without an automatic target"""
+
+    def attach_to_callbacks(self, getter: object, setter: object) -> None:
+        """Attach to arbitrary Python get/set transform callbacks"""
+
+    def attach_to_node(self, node_name: str, visualizer_world: bool = True) -> None:
+        """Attach to a scene node transform"""
+
+    def detach(self) -> None:
+        """Detach the gizmo from the viewport overlay"""
+
+    def set_on_begin(self, callback: object) -> None:
+        """Set a callback called with this gizmo when dragging begins"""
+
+    def set_on_change(self, callback: object) -> None:
+        """Set a callback called with this gizmo after its matrix changes"""
+
+    def set_on_end(self, callback: object) -> None:
+        """Set a callback called with this gizmo when dragging ends"""
+
+TRSGizmo: TypeAlias = TransformGizmo
+
+def TranslationGizmo(matrix: Sequence[float] = [], id: str = '') -> TransformGizmo:
+    """Create a TransformGizmo configured for translation"""
+
+def RotationGizmo(matrix: Sequence[float] = [], id: str = '') -> TransformGizmo:
+    """Create a TransformGizmo configured for rotation"""
+
+def ScaleGizmo(matrix: Sequence[float] = [], id: str = '') -> TransformGizmo:
+    """Create a TransformGizmo configured for scale"""
+
+def clear_transform_gizmos() -> None:
+    """Detach all native transform gizmos"""
+
+def get_transform_gizmo_ids() -> list[str]:
+    """Get ids of attached native transform gizmos"""
+
+def has_transform_gizmos() -> bool:
+    """Check whether native transform gizmos are attached"""
 
 def register_gizmo(gizmo_class: object) -> None:
     """Register a gizmo class for viewport overlay drawing"""

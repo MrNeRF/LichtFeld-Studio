@@ -243,6 +243,7 @@ namespace lfs::python {
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
         nb::object g_open_camera_preview_callback;
+        nb::object g_save_asset_callback;
 
         constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
         constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
@@ -4874,6 +4875,21 @@ namespace lfs::python {
 
         m.def("free_plugin_textures", &free_plugin_textures, nb::arg("plugin_name"),
               "Free all dynamic textures associated with a plugin");
+
+        // Asset Manager save callback
+        m.def("set_save_asset_callback", [](nb::callable save_cb) {
+                  g_save_asset_callback = std::move(save_cb);
+                  set_save_asset_callback(
+                      [](const char* node_name) {
+                          if (g_save_asset_callback) {
+                              try {
+                                  nb::gil_scoped_acquire gil;
+                                  g_save_asset_callback(node_name);
+                              } catch (const std::exception& e) {
+                                  LOG_ERROR("Save asset callback failed: {}", e.what());
+                              }
+                          }
+                      }); }, nb::arg("save_cb"), "Set callback for Save Asset operation from scene graph");
 
         nb::class_<PyDynamicTexture>(m, "DynamicTexture")
             .def(nb::init<>())

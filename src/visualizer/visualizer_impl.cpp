@@ -543,6 +543,9 @@ namespace lfs::vis {
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
+
+        // Asset Manager save callback - implementation handled by Python runtime
+        callback_cleanup_.add([] { python::set_save_asset_callback(nullptr); });
     }
 
     void VisualizerImpl::setupViewContextBridge() {
@@ -823,6 +826,11 @@ namespace lfs::vis {
 
         state::SceneCleared::when([](const auto&) {
             python::update_scene(false, "");
+        });
+
+        // Asset Manager save event handler
+        cmd::SaveAsset::when([this](const auto& cmd) {
+            python::invoke_save_asset(cmd.node_name);
         });
     }
 

@@ -331,6 +331,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* KEYFRAME_EASING_EASE_IN = "scene.keyframe_easing.ease_in";
         inline constexpr const char* KEYFRAME_EASING_EASE_OUT = "scene.keyframe_easing.ease_out";
         inline constexpr const char* KEYFRAME_EASING_EASE_IN_OUT = "scene.keyframe_easing.ease_in_out";
+        inline constexpr const char* SAVE_ASSET = "scene.save_asset";
+        inline constexpr const char* SAVE_ASSET_AS = "scene.save_asset_as";
+        inline constexpr const char* SAVE_TO_DISK = "scene.save_to_disk";
     } // namespace Scene
 
     namespace Export {

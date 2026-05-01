@@ -5,6 +5,7 @@
 #include "viewport_overlay.hpp"
 #include "core/logger.hpp"
 #include "gil.hpp"
+#include "lfs/py_gizmo.hpp"
 #include "lfs/py_viewport.hpp"
 #include "python_runtime.hpp"
 
@@ -20,7 +21,8 @@ namespace lfs::python {
     namespace {
 
         bool has_handlers_impl() {
-            return PyViewportDrawRegistry::instance().has_handlers();
+            return PyViewportDrawRegistry::instance().has_handlers() ||
+                   PyTransformGizmoRegistry::instance().has_attached();
         }
 
         void invoke_overlay_impl(const float* view_matrix, const float* proj_matrix,
@@ -51,6 +53,8 @@ namespace lfs::python {
             registry.invoke_handlers(DrawHandlerTiming::PostUI, draw_ctx);
 
             auto* dl = static_cast<ImDrawList*>(draw_list_ptr);
+            PyTransformGizmoRegistry::instance().draw_all(view, proj, vp_p, vp_s, dl);
+
             const float ox = vp_p.x;
             const float oy = vp_p.y;
 

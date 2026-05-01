@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <glm/glm.hpp>
 #include <imgui.h>
 
@@ -44,7 +46,7 @@ namespace lfs::vis::gui {
         glm::vec3 total_scale{1.0f};
     };
 
-    ScaleGizmoResult drawScaleGizmo(const ScaleGizmoConfig& config);
+    LFS_VIS_API ScaleGizmoResult drawScaleGizmo(const ScaleGizmoConfig& config);
 
     [[nodiscard]] bool isScaleGizmoHovered();
     [[nodiscard]] bool isScaleGizmoActive();

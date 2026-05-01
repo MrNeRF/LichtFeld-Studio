@@ -370,6 +370,12 @@ namespace lfs::python {
             "Check if path is a dataset directory");
 
         m.def(
+            "is_gaussian_splat_ply",
+            [](const std::filesystem::path& path) { return io::is_gaussian_splat_ply(path); },
+            nb::arg("path"),
+            "Check if PLY file is a 3D Gaussian splat (has opacity, scale_0, rot_0 properties)");
+
+        m.def(
             "get_supported_formats", []() {
                 auto loader = io::Loader::create();
                 return loader->getSupportedFormats();

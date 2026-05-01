@@ -15,6 +15,7 @@
 #include <RmlUi/Core/Tween.h>
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
 #include <unordered_set>
@@ -252,8 +253,35 @@ namespace lfs::python {
             return {};
         if (nb::isinstance<nb::bool_>(obj))
             return Rml::Variant(nb::cast<bool>(obj));
-        if (nb::isinstance<nb::int_>(obj))
-            return Rml::Variant(nb::cast<int>(obj));
+        if (nb::isinstance<nb::int_>(obj)) {
+            int overflow = 0;
+            const long long signed_value = PyLong_AsLongLongAndOverflow(obj.ptr(), &overflow);
+            if (overflow == 0 && !PyErr_Occurred()) {
+                if (signed_value >= std::numeric_limits<int>::min() &&
+                    signed_value <= std::numeric_limits<int>::max()) {
+                    return Rml::Variant(static_cast<int>(signed_value));
+                }
+                return Rml::Variant(static_cast<int64_t>(signed_value));
+            }
+            PyErr_Clear();
+
+            if (overflow > 0) {
+                const unsigned long long unsigned_value = PyLong_AsUnsignedLongLong(obj.ptr());
+                if (!PyErr_Occurred()) {
+                    if (unsigned_value <= std::numeric_limits<unsigned int>::max()) {
+                        return Rml::Variant(static_cast<unsigned int>(unsigned_value));
+                    }
+                    return Rml::Variant(static_cast<uint64_t>(unsigned_value));
+                }
+                PyErr_Clear();
+            }
+
+            const double double_value = PyLong_AsDouble(obj.ptr());
+            if (!PyErr_Occurred())
+                return Rml::Variant(double_value);
+            PyErr_Clear();
+            return {};
+        }
         if (nb::isinstance<nb::float_>(obj))
             return Rml::Variant(nb::cast<double>(obj));
         if (nb::isinstance<nb::str>(obj))

@@ -498,6 +498,11 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_scene_manager(vis::SceneManager* sm);
     LFS_PYTHON_RUNTIME_API vis::SceneManager* get_scene_manager();
 
+    // Asset Manager save callback
+    using SaveAssetCallback = void (*)(const char* node_name);
+    LFS_PYTHON_RUNTIME_API void set_save_asset_callback(SaveAssetCallback save_cb);
+    LFS_PYTHON_RUNTIME_API void invoke_save_asset(const std::string& node_name);
+
     LFS_PYTHON_RUNTIME_API void set_selection_service(vis::SelectionService* ss);
     LFS_PYTHON_RUNTIME_API vis::SelectionService* get_selection_service();
 

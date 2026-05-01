@@ -2408,6 +2408,9 @@ def free_plugin_icons(plugin_name: str) -> None:
 def free_plugin_textures(plugin_name: str) -> None:
     """Free all dynamic textures associated with a plugin"""
 
+def set_save_asset_callback(save_cb: Callable) -> None:
+    """Set callback for Save Asset operation from scene graph"""
+
 class DynamicTexture:
     @overload
     def __init__(self) -> None: ...

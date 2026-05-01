@@ -464,6 +464,42 @@ from lfs_plugins.tools import ToolRegistry
 
 ---
 
+## Native Transform Gizmos
+
+| API | Returns | Description |
+|-----|---------|-------------|
+| `lf.TransformGizmo(operation="translate", matrix=[], id="")` | `TransformGizmo` | Reusable native TRS gizmo |
+| `lf.TranslationGizmo(matrix=[], id="")` | `TransformGizmo` | Translate handle |
+| `lf.RotationGizmo(matrix=[], id="")` | `TransformGizmo` | Rotate handle |
+| `lf.ScaleGizmo(matrix=[], id="")` | `TransformGizmo` | Scale handle |
+| `lf.get_transform_gizmo_ids()` | `list[str]` | Attached transform gizmo IDs |
+| `lf.has_transform_gizmos()` | `bool` | Whether any native TRS gizmos are attached |
+| `lf.clear_transform_gizmos()` | `None` | Detach all native TRS gizmos |
+
+`TransformGizmo` properties:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `str` | Stable ID |
+| `operation` | `str` | `"translate"`, `"rotate"`, or `"scale"` |
+| `space` | `str` | `"local"` or `"world"` |
+| `matrix` | `list[float]` | 16 floats, column-major |
+| `translation` | `list[float]` | Translation component |
+| `visible`, `enabled`, `input_enabled` | `bool` | Runtime draw/input controls |
+| `active`, `hovered`, `changed` | `bool` | Last-frame interaction state |
+| `snap` | `bool` | Enable snapping |
+| `translate_snap`, `rotate_snap_degrees`, `scale_snap_ratio` | `float` | Per-operation snap settings |
+
+| Method | Description |
+|--------|-------------|
+| `attach()` | Draw without an automatic target |
+| `attach_to_callbacks(getter, setter)` | Bind to arbitrary Python transform callbacks |
+| `attach_to_node(node_name, visualizer_world=True)` | Bind to a scene node |
+| `detach()` | Remove from viewport drawing |
+| `set_on_begin(callback)`, `set_on_change(callback)`, `set_on_end(callback)` | Drag lifecycle callbacks |
+
+---
+
 ## Signals
 
 ```python
