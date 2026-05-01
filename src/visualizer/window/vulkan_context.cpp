@@ -238,6 +238,7 @@ namespace lfs::vis {
                createSurface(window) &&
                pickPhysicalDevice() &&
                createDevice() &&
+               createAllocator() &&
                createPipelineCache() &&
                createSwapchain(framebuffer_width, framebuffer_height) &&
                createImageViews() &&
@@ -293,6 +294,7 @@ namespace lfs::vis {
             }
         }
         saveAndDestroyPipelineCache();
+        destroyAllocator();
         if (device_ != VK_NULL_HANDLE) {
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
@@ -954,6 +956,26 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::createAllocator() {
+        if (instance_ == VK_NULL_HANDLE || physical_device_ == VK_NULL_HANDLE || device_ == VK_NULL_HANDLE) {
+            return fail("VMA allocator requires an initialized Vulkan instance, physical device, and device");
+        }
+
+        VmaAllocatorCreateInfo create_info{};
+        create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        create_info.physicalDevice = physical_device_;
+        create_info.device = device_;
+        create_info.instance = instance_;
+        create_info.vulkanApiVersion = VK_API_VERSION_1_3;
+
+        const VkResult result = vmaCreateAllocator(&create_info, &allocator_);
+        if (result != VK_SUCCESS) {
+            allocator_ = VK_NULL_HANDLE;
+            return fail(std::format("vmaCreateAllocator failed: {}", static_cast<int>(result)));
+        }
+        return true;
+    }
+
     VkSurfaceFormatKHR VulkanContext::chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const {
         constexpr std::array preferred_formats{
             VK_FORMAT_B8G8R8A8_UNORM,
@@ -1175,6 +1197,8 @@ namespace lfs::vis {
             return fail("Could not find Vulkan device-local memory for external image");
         }
 
+        // Keep this allocation manual: CUDA interop needs exportable VkDeviceMemory with
+        // the external-memory pNext chain intact so we can export an OS handle below.
         result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
         if (result != VK_SUCCESS) {
             destroyExternalImage(out);
@@ -1609,6 +1633,9 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::createDepthStencilResources() {
+        if (allocator_ == VK_NULL_HANDLE) {
+            return fail("Cannot create depth/stencil resources before VMA allocator initialization");
+        }
         if (depth_stencil_format_ == VK_FORMAT_UNDEFINED) {
             depth_stencil_format_ = chooseDepthStencilFormat();
             if (depth_stencil_format_ == VK_FORMAT_UNDEFINED) {
@@ -1652,51 +1679,32 @@ namespace lfs::vis {
                     resource.view = VK_NULL_HANDLE;
                 }
                 if (resource.image != VK_NULL_HANDLE) {
-                    vkDestroyImage(device_, resource.image, nullptr);
+                    vmaDestroyImage(allocator_, resource.image, resource.allocation);
                     resource.image = VK_NULL_HANDLE;
                 }
-                if (resource.memory != VK_NULL_HANDLE) {
-                    vkFreeMemory(device_, resource.memory, nullptr);
-                    resource.memory = VK_NULL_HANDLE;
-                }
+                resource.allocation = VK_NULL_HANDLE;
             }
             depth_stencil_resources_.clear();
         };
 
+        VmaAllocationCreateInfo allocation_info{};
+        allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+
         for (std::size_t i = 0; i < depth_stencil_resources_.size(); ++i) {
             DepthStencilResource& resource = depth_stencil_resources_[i];
-            VkResult result = vkCreateImage(device_, &image_info, nullptr, &resource.image);
+            VkResult result = vmaCreateImage(allocator_,
+                                             &image_info,
+                                             &allocation_info,
+                                             &resource.image,
+                                             &resource.allocation,
+                                             nullptr);
             if (result != VK_SUCCESS) {
                 destroy_created();
-                return fail(std::format("vkCreateImage(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
+                return fail(std::format("vmaCreateImage(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
             }
             setDebugObjectName(VK_OBJECT_TYPE_IMAGE, resource.image, std::format("Depth/stencil image {}", i));
-
-            VkMemoryRequirements memory_requirements{};
-            vkGetImageMemoryRequirements(device_, resource.image, &memory_requirements);
-
-            VkMemoryAllocateInfo allocate_info{};
-            allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            allocate_info.allocationSize = memory_requirements.size;
-            allocate_info.memoryTypeIndex = findMemoryType(memory_requirements.memoryTypeBits,
-                                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
-                destroy_created();
-                return fail("Could not find Vulkan device-local memory for depth/stencil image");
-            }
-
-            result = vkAllocateMemory(device_, &allocate_info, nullptr, &resource.memory);
-            if (result != VK_SUCCESS) {
-                destroy_created();
-                return fail(std::format("vkAllocateMemory(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
-            }
-            setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, resource.memory, std::format("Depth/stencil memory {}", i));
-
-            result = vkBindImageMemory(device_, resource.image, resource.memory, 0);
-            if (result != VK_SUCCESS) {
-                destroy_created();
-                return fail(std::format("vkBindImageMemory(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
-            }
+            const std::string allocation_name = std::format("Depth/stencil allocation {}", i);
+            vmaSetAllocationName(allocator_, resource.allocation, allocation_name.c_str());
 
             view_info.image = resource.image;
             result = vkCreateImageView(device_, &view_info, nullptr, &resource.view);
@@ -1927,6 +1935,13 @@ namespace lfs::vis {
         pipeline_cache_ = VK_NULL_HANDLE;
     }
 
+    void VulkanContext::destroyAllocator() {
+        if (allocator_ != VK_NULL_HANDLE) {
+            vmaDestroyAllocator(allocator_);
+            allocator_ = VK_NULL_HANDLE;
+        }
+    }
+
     void VulkanContext::destroySwapchain() {
         if (device_ == VK_NULL_HANDLE) {
             return;
@@ -1938,13 +1953,10 @@ namespace lfs::vis {
                 resource.view = VK_NULL_HANDLE;
             }
             if (resource.image != VK_NULL_HANDLE) {
-                vkDestroyImage(device_, resource.image, nullptr);
+                vmaDestroyImage(allocator_, resource.image, resource.allocation);
                 resource.image = VK_NULL_HANDLE;
             }
-            if (resource.memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device_, resource.memory, nullptr);
-                resource.memory = VK_NULL_HANDLE;
-            }
+            resource.allocation = VK_NULL_HANDLE;
         }
         depth_stencil_resources_.clear();
         depth_stencil_format_ = VK_FORMAT_UNDEFINED;

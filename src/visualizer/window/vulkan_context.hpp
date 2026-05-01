@@ -18,6 +18,13 @@
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "vulkan_frame_graph.hpp"
 #include <vulkan/vulkan.h>
+#ifndef VMA_STATIC_VULKAN_FUNCTIONS
+#define VMA_STATIC_VULKAN_FUNCTIONS 1
+#endif
+#ifndef VMA_DYNAMIC_VULKAN_FUNCTIONS
+#define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
+#endif
+#include <vk_mem_alloc.h>
 #endif
 
 struct SDL_Window;
@@ -82,6 +89,7 @@ namespace lfs::vis {
         [[nodiscard]] VkQueue presentQueue() const { return present_queue_; }
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
+        [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
@@ -155,7 +163,7 @@ namespace lfs::vis {
 
         struct DepthStencilResource {
             VkImage image = VK_NULL_HANDLE;
-            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
             VkImageView view = VK_NULL_HANDLE;
         };
 
@@ -163,6 +171,7 @@ namespace lfs::vis {
         bool createSurface(SDL_Window* window);
         bool pickPhysicalDevice();
         bool createDevice();
+        bool createAllocator();
         bool createSwapchain(int framebuffer_width, int framebuffer_height);
         bool createImageViews();
         bool createDepthStencilResources();
@@ -174,6 +183,7 @@ namespace lfs::vis {
         bool recreateSwapchain();
 
         void destroyDebugMessenger();
+        void destroyAllocator();
         void saveAndDestroyPipelineCache();
         void destroySwapchain();
         [[nodiscard]] bool waitForFrameFences();
@@ -203,6 +213,7 @@ namespace lfs::vis {
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;
+        VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
         VkQueue graphics_queue_ = VK_NULL_HANDLE;
         VkQueue present_queue_ = VK_NULL_HANDLE;

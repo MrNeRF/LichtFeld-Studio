@@ -117,7 +117,7 @@ namespace lfs::vis::gui {
     struct VulkanUiTexture::Impl {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         VkDevice device = VK_NULL_HANDLE;
-        VkPhysicalDevice physical_device = VK_NULL_HANDLE;
+        VmaAllocator allocator = VK_NULL_HANDLE;
         VkQueue graphics_queue = VK_NULL_HANDLE;
         std::uint32_t graphics_queue_family = 0;
         VkCommandPool command_pool = VK_NULL_HANDLE;
@@ -125,14 +125,14 @@ namespace lfs::vis::gui {
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
         VkImage image = VK_NULL_HANDLE;
-        VkDeviceMemory image_memory = VK_NULL_HANDLE;
+        VmaAllocation image_allocation = VK_NULL_HANDLE;
         VkImageView image_view = VK_NULL_HANDLE;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VulkanFrameGraph image_graph;
         VkFence upload_fence = VK_NULL_HANDLE;
         VkBuffer pending_staging_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory pending_staging_memory = VK_NULL_HANDLE;
+        VmaAllocation pending_staging_allocation = VK_NULL_HANDLE;
         VkCommandBuffer pending_command_buffer = VK_NULL_HANDLE;
         int width = 0;
         int height = 0;
@@ -143,12 +143,9 @@ namespace lfs::vis::gui {
                 pending_command_buffer = VK_NULL_HANDLE;
             }
             if (pending_staging_buffer != VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, pending_staging_buffer, nullptr);
+                vmaDestroyBuffer(allocator, pending_staging_buffer, pending_staging_allocation);
                 pending_staging_buffer = VK_NULL_HANDLE;
-            }
-            if (pending_staging_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, pending_staging_memory, nullptr);
-                pending_staging_memory = VK_NULL_HANDLE;
+                pending_staging_allocation = VK_NULL_HANDLE;
             }
             if (upload_fence == VK_NULL_HANDLE) {
                 return;
@@ -180,10 +177,10 @@ namespace lfs::vis::gui {
                 return true;
             }
             device = context.device();
-            physical_device = context.physicalDevice();
+            allocator = context.allocator();
             graphics_queue = context.graphicsQueue();
             graphics_queue_family = context.graphicsQueueFamily();
-            if (device == VK_NULL_HANDLE || physical_device == VK_NULL_HANDLE ||
+            if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
                 LOG_ERROR("Vulkan UI texture requires an initialized Vulkan context");
                 device = VK_NULL_HANDLE;
@@ -248,63 +245,42 @@ namespace lfs::vis::gui {
             return true;
         }
 
-        [[nodiscard]] std::uint32_t findMemoryType(const std::uint32_t type_filter,
-                                                   const VkMemoryPropertyFlags properties) const {
-            VkPhysicalDeviceMemoryProperties memory_properties{};
-            vkGetPhysicalDeviceMemoryProperties(physical_device, &memory_properties);
-            for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-                const bool supported = (type_filter & (1u << i)) != 0;
-                const bool matches =
-                    (memory_properties.memoryTypes[i].propertyFlags & properties) == properties;
-                if (supported && matches) {
-                    return i;
-                }
-            }
-            return std::numeric_limits<std::uint32_t>::max();
-        }
-
         [[nodiscard]] bool createBuffer(const VkDeviceSize size,
                                         const VkBufferUsageFlags usage,
-                                        const VkMemoryPropertyFlags properties,
                                         VkBuffer& buffer,
-                                        VkDeviceMemory& memory) const {
+                                        VmaAllocation& allocation) const {
             VkBufferCreateInfo buffer_info{};
             buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             buffer_info.size = size;
             buffer_info.usage = usage;
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            if (vkCreateBuffer(device, &buffer_info, nullptr, &buffer) != VK_SUCCESS) {
+
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+
+            if (vmaCreateBuffer(allocator, &buffer_info, &allocation_info, &buffer, &allocation, nullptr) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture staging buffer");
+                buffer = VK_NULL_HANDLE;
+                allocation = VK_NULL_HANDLE;
                 return false;
             }
+            return true;
+        }
 
-            VkMemoryRequirements requirements{};
-            vkGetBufferMemoryRequirements(device, buffer, &requirements);
-
-            VkMemoryAllocateInfo alloc_info{};
-            alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            alloc_info.allocationSize = requirements.size;
-            alloc_info.memoryTypeIndex = findMemoryType(requirements.memoryTypeBits, properties);
-            if (alloc_info.memoryTypeIndex == std::numeric_limits<std::uint32_t>::max()) {
-                LOG_ERROR("No suitable memory type for Vulkan UI texture staging buffer");
-                vkDestroyBuffer(device, buffer, nullptr);
-                buffer = VK_NULL_HANDLE;
+        [[nodiscard]] bool writeAllocation(const VmaAllocation allocation,
+                                           const void* const source,
+                                           const VkDeviceSize size) const {
+            if (allocation == VK_NULL_HANDLE || !source || size == 0) {
                 return false;
             }
-            if (vkAllocateMemory(device, &alloc_info, nullptr, &memory) != VK_SUCCESS) {
-                LOG_ERROR("Failed to allocate Vulkan UI texture staging memory");
-                vkDestroyBuffer(device, buffer, nullptr);
-                buffer = VK_NULL_HANDLE;
+            void* mapped = nullptr;
+            if (vmaMapMemory(allocator, allocation, &mapped) != VK_SUCCESS || !mapped) {
                 return false;
             }
-            if (vkBindBufferMemory(device, buffer, memory, 0) != VK_SUCCESS) {
-                LOG_ERROR("Failed to bind Vulkan UI texture staging memory");
-                vkDestroyBuffer(device, buffer, nullptr);
-                vkFreeMemory(device, memory, nullptr);
-                buffer = VK_NULL_HANDLE;
-                memory = VK_NULL_HANDLE;
-                return false;
-            }
+            std::memcpy(mapped, source, static_cast<std::size_t>(size));
+            vmaFlushAllocation(allocator, allocation, 0, size);
+            vmaUnmapMemory(allocator, allocation);
             return true;
         }
 
@@ -386,34 +362,15 @@ namespace lfs::vis::gui {
             image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
             image_info.samples = VK_SAMPLE_COUNT_1_BIT;
             image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            if (vkCreateImage(device, &image_info, nullptr, &image) != VK_SUCCESS) {
+
+            VmaAllocationCreateInfo allocation_info{};
+            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator, &image_info, &allocation_info, &image, &image_allocation, nullptr) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture image");
-                return false;
-            }
-
-            VkMemoryRequirements requirements{};
-            vkGetImageMemoryRequirements(device, image, &requirements);
-
-            VkMemoryAllocateInfo alloc_info{};
-            alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-            alloc_info.allocationSize = requirements.size;
-            alloc_info.memoryTypeIndex = findMemoryType(requirements.memoryTypeBits,
-                                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-            if (alloc_info.memoryTypeIndex == std::numeric_limits<std::uint32_t>::max()) {
-                LOG_ERROR("No suitable memory type for Vulkan UI texture image");
                 destroyImage();
                 return false;
             }
-            if (vkAllocateMemory(device, &alloc_info, nullptr, &image_memory) != VK_SUCCESS) {
-                LOG_ERROR("Failed to allocate Vulkan UI texture image memory");
-                destroyImage();
-                return false;
-            }
-            if (vkBindImageMemory(device, image, image_memory, 0) != VK_SUCCESS) {
-                LOG_ERROR("Failed to bind Vulkan UI texture image memory");
-                destroyImage();
-                return false;
-            }
+            vmaSetAllocationName(allocator, image_allocation, "Vulkan UI texture");
 
             VkImageViewCreateInfo view_info{};
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -491,30 +448,23 @@ namespace lfs::vis::gui {
 
             const VkDeviceSize upload_size = static_cast<VkDeviceSize>(rgba.size());
             VkBuffer staging_buffer = VK_NULL_HANDLE;
-            VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+            VmaAllocation staging_allocation = VK_NULL_HANDLE;
             if (!createBuffer(upload_size,
                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                               staging_buffer,
-                              staging_memory)) {
+                              staging_allocation)) {
                 return false;
             }
 
-            void* mapped = nullptr;
-            const VkResult map_status = vkMapMemory(device, staging_memory, 0, upload_size, 0, &mapped);
-            if (map_status != VK_SUCCESS || !mapped) {
+            if (!writeAllocation(staging_allocation, rgba.data(), upload_size)) {
                 LOG_ERROR("Failed to map Vulkan UI texture staging memory");
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                vkFreeMemory(device, staging_memory, nullptr);
+                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
             }
-            std::memcpy(mapped, rgba.data(), rgba.size());
-            vkUnmapMemory(device, staging_memory);
 
             VkCommandBuffer command_buffer = beginSingleTimeCommands();
             if (command_buffer == VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                vkFreeMemory(device, staging_memory, nullptr);
+                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
             }
 
@@ -543,8 +493,7 @@ namespace lfs::vis::gui {
             if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
                 LOG_ERROR("Failed to end Vulkan UI texture command buffer");
                 vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                vkFreeMemory(device, staging_memory, nullptr);
+                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
             }
 
@@ -554,8 +503,7 @@ namespace lfs::vis::gui {
             if (vkCreateFence(device, &fence_info, nullptr, &fence) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture upload fence");
                 vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                vkFreeMemory(device, staging_memory, nullptr);
+                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
             }
 
@@ -569,8 +517,7 @@ namespace lfs::vis::gui {
                           static_cast<int>(submit_status));
                 vkDestroyFence(device, fence, nullptr);
                 vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-                vkDestroyBuffer(device, staging_buffer, nullptr);
-                vkFreeMemory(device, staging_memory, nullptr);
+                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return false;
             }
 
@@ -580,7 +527,7 @@ namespace lfs::vis::gui {
             upload_fence = fence;
             pending_command_buffer = command_buffer;
             pending_staging_buffer = staging_buffer;
-            pending_staging_memory = staging_memory;
+            pending_staging_allocation = staging_allocation;
             return true;
         }
 
@@ -628,12 +575,9 @@ namespace lfs::vis::gui {
             }
             if (image != VK_NULL_HANDLE) {
                 image_graph.forgetImage(image);
-                vkDestroyImage(device, image, nullptr);
+                vmaDestroyImage(allocator, image, image_allocation);
                 image = VK_NULL_HANDLE;
-            }
-            if (image_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, image_memory, nullptr);
-                image_memory = VK_NULL_HANDLE;
+                image_allocation = VK_NULL_HANDLE;
             }
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             width = 0;
@@ -663,7 +607,7 @@ namespace lfs::vis::gui {
                 }
             }
             device = VK_NULL_HANDLE;
-            physical_device = VK_NULL_HANDLE;
+            allocator = VK_NULL_HANDLE;
             graphics_queue = VK_NULL_HANDLE;
             graphics_queue_family = 0;
         }
