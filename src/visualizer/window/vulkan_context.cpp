@@ -41,6 +41,7 @@ namespace lfs::vis {
         constexpr VkExternalSemaphoreHandleTypeFlagBits kExternalSemaphoreHandleType =
             VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
+        constexpr std::uint64_t kExternalTimelineWaitTimeoutNs = 2'000'000'000ull;
 
         [[nodiscard]] bool extensionAvailable(const std::vector<VkExtensionProperties>& extensions,
                                               const char* const extension_name) {
@@ -1383,6 +1384,21 @@ namespace lfs::vis {
             submit_info.waitSemaphoreCount = 1;
             submit_info.pWaitSemaphores = &wait_semaphore;
             submit_info.pWaitDstStageMask = &resolved_wait_stage;
+
+            VkSemaphoreWaitInfo wait_info{};
+            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+            wait_info.semaphoreCount = 1;
+            wait_info.pSemaphores = &wait_semaphore;
+            wait_info.pValues = &wait_value;
+            result = vkWaitSemaphores(device_, &wait_info, kExternalTimelineWaitTimeoutNs);
+            if (result == VK_TIMEOUT) {
+                vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+                return fail(std::format("Timed out waiting for external timeline semaphore value {}", wait_value));
+            }
+            if (result != VK_SUCCESS) {
+                vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+                return fail(std::format("vkWaitSemaphores(external timeline) failed: {}", static_cast<int>(result)));
+            }
         }
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, VK_NULL_HANDLE);
         if (result == VK_SUCCESS) {

@@ -236,6 +236,7 @@ namespace lfs::vis {
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             glm::ivec2 vulkan_scene_image_size_{0, 0};
             bool vulkan_scene_image_flip_y_ = false;
+            bool vulkan_scene_interop_disabled_ = false;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
 

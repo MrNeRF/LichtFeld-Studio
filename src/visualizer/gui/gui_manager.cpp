@@ -2069,6 +2069,15 @@ namespace lfs::vis::gui {
         }
 #endif
 
+        [[nodiscard]] bool vulkanSceneInteropEnvironmentEnabled() {
+            if (const char* disabled = std::getenv("LFS_NO_VK_CUDA_INTEROP");
+                disabled != nullptr && std::string_view(disabled) != "0") {
+                return false;
+            }
+            const char* enabled = std::getenv("LFS_VK_CUDA_INTEROP");
+            return enabled == nullptr || std::string_view(enabled) != "0";
+        }
+
         std::string makeRmlTabDomId(const std::string& id) {
             std::string result = "rp-tab-";
             result.reserve(result.size() + id.size());
@@ -3246,6 +3255,12 @@ namespace lfs::vis::gui {
     void GuiManager::setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
                                          const glm::ivec2 size,
                                          const bool flip_y) {
+        const bool target_changed =
+            vulkan_scene_image_.get() != image.get() ||
+            vulkan_scene_image_size_ != size;
+        if (target_changed) {
+            vulkan_scene_interop_disabled_ = false;
+        }
         vulkan_scene_image_ = std::move(image);
         vulkan_scene_image_size_ = size;
         vulkan_scene_image_flip_y_ = flip_y;
@@ -3271,20 +3286,21 @@ namespace lfs::vis::gui {
 
     void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        const char* enabled = std::getenv("LFS_VK_CUDA_INTEROP");
-        if (enabled == nullptr || std::string_view(enabled) != "1") {
+        if (!vulkanSceneInteropEnvironmentEnabled()) {
             if (vulkan_scene_interop_) {
                 resetVulkanSceneInterop();
             }
             return;
         }
-        if (const char* disabled = std::getenv("LFS_NO_VK_CUDA_INTEROP");
-            disabled != nullptr && std::string_view(disabled) != "0") {
-            if (vulkan_scene_interop_) {
-                resetVulkanSceneInterop();
-            }
+        if (vulkan_scene_interop_disabled_) {
             return;
         }
+
+        const auto disable_after_failure = [this]() {
+            vulkan_scene_interop_disabled_ = true;
+            resetVulkanSceneInterop();
+        };
+
         if (!vulkan_scene_image_ ||
             !vulkan_scene_image_->is_valid() ||
             vulkan_scene_image_->device() != lfs::core::Device::CUDA ||
@@ -3316,6 +3332,7 @@ namespace lfs::vis::gui {
                 if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
                     target->destroy(context);
                 }
+                vulkan_scene_interop_disabled_ = true;
                 return;
             }
             if (!context.transitionImageLayoutImmediate(target->image.image,
@@ -3323,6 +3340,7 @@ namespace lfs::vis::gui {
                                                         VK_IMAGE_LAYOUT_GENERAL)) {
                 LOG_WARN("Vulkan/CUDA interop image initialization failed: {}", context.lastError());
                 target->destroy(context);
+                vulkan_scene_interop_disabled_ = true;
                 return;
             }
 
@@ -3342,6 +3360,7 @@ namespace lfs::vis::gui {
             if (!target->interop.init(image_import, semaphore_import)) {
                 LOG_WARN("CUDA import of Vulkan viewport target failed: {}", target->interop.lastError());
                 target->destroy(context);
+                vulkan_scene_interop_disabled_ = true;
                 return;
             }
             target->size = target_size;
@@ -3363,7 +3382,7 @@ namespace lfs::vis::gui {
                                                         target.layout,
                                                         VK_IMAGE_LAYOUT_GENERAL)) {
                 LOG_WARN("Vulkan/CUDA interop image transition to GENERAL failed: {}", context.lastError());
-                resetVulkanSceneInterop();
+                disable_after_failure();
                 return;
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -3371,13 +3390,13 @@ namespace lfs::vis::gui {
 
         if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
             LOG_WARN("CUDA copy into Vulkan viewport target failed: {}", target.interop.lastError());
-            resetVulkanSceneInterop();
+            disable_after_failure();
             return;
         }
         const std::uint64_t signal_value = ++target.timeline_value;
         if (!target.interop.signal(signal_value)) {
             LOG_WARN("CUDA signal for Vulkan viewport target failed: {}", target.interop.lastError());
-            resetVulkanSceneInterop();
+            disable_after_failure();
             return;
         }
         if (!context.transitionImageLayoutImmediate(target.image.image,
@@ -3388,7 +3407,7 @@ namespace lfs::vis::gui {
                                                     signal_value,
                                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
             LOG_WARN("Vulkan wait for CUDA viewport target failed: {}", context.lastError());
-            resetVulkanSceneInterop();
+            disable_after_failure();
             return;
         }
         target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

@@ -27,12 +27,12 @@ namespace lfs::rendering {
         constexpr cudaExternalMemoryHandleType kCudaExternalMemoryHandleType =
             cudaExternalMemoryHandleTypeOpaqueWin32;
         constexpr cudaExternalSemaphoreHandleType kCudaExternalSemaphoreHandleType =
-            cudaExternalSemaphoreHandleTypeOpaqueWin32;
+            cudaExternalSemaphoreHandleTypeTimelineSemaphoreWin32;
 #else
         constexpr cudaExternalMemoryHandleType kCudaExternalMemoryHandleType =
             cudaExternalMemoryHandleTypeOpaqueFd;
         constexpr cudaExternalSemaphoreHandleType kCudaExternalSemaphoreHandleType =
-            cudaExternalSemaphoreHandleTypeOpaqueFd;
+            cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
 #endif
 
         [[nodiscard]] bool nativeHandleValid(const CudaVulkanExternalHandle handle) {
@@ -163,6 +163,21 @@ namespace lfs::rendering {
             return fail(std::format("CUDA/Vulkan external image format {} is unsupported",
                                     formatName(image.format)));
         }
+        int cuda_device = 0;
+        cudaError_t status = cudaGetDevice(&cuda_device);
+        if (status != cudaSuccess) {
+            return failCuda("cudaGetDevice", status);
+        }
+        int timeline_interop_supported = 0;
+        status = cudaDeviceGetAttribute(&timeline_interop_supported,
+                                        cudaDevAttrTimelineSemaphoreInteropSupported,
+                                        cuda_device);
+        if (status != cudaSuccess) {
+            return failCuda("cudaDeviceGetAttribute(cudaDevAttrTimelineSemaphoreInteropSupported)", status);
+        }
+        if (timeline_interop_supported == 0) {
+            return fail("CUDA device does not support external timeline semaphore interop");
+        }
 
         NativeHandleOwner memory_handle(image.memory_handle);
         NativeHandleOwner semaphore_handle(semaphore.semaphore_handle);
@@ -179,7 +194,7 @@ namespace lfs::rendering {
         memory_desc.handle.fd = memory_handle.get();
 #endif
 
-        cudaError_t status = cudaImportExternalMemory(&cuda_mem_, &memory_desc);
+        status = cudaImportExternalMemory(&cuda_mem_, &memory_desc);
         if (status != cudaSuccess) {
             reset();
             return failCuda("cudaImportExternalMemory", status);
