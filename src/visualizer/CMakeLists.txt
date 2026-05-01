@@ -4,6 +4,7 @@
 
 # Fetch libvterm for terminal emulation
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
+include(${CMAKE_SOURCE_DIR}/cmake/CompileShaders.cmake)
 
 # SHARED on Windows to avoid singleton duplication across .exe/.pyd boundary
 if(WIN32)
@@ -237,14 +238,38 @@ if(ENABLE_VULKAN_VIEWER)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
         CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
     find_package(glslang CONFIG REQUIRED)
+
+    add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL
+            tools/shader_compiler.cpp)
+    target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
+    target_link_libraries(lfs_shader_compiler
+            PRIVATE
+            glslang::glslang
+            glslang::SPIRV
+            glslang::glslang-default-resource-limits)
+
+    set(LFS_VIEWPORT_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rendering/resources/viewport")
+    set(LFS_VIEWPORT_SHADER_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders/viewport")
+    target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/screen_quad.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/screen_quad.vert.spv.h" kScreenQuadVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene.frag.spv.h" kSceneFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vignette.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vignette.frag.spv.h" kVignetteFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.vert.spv.h" kGridVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.frag.spv.h" kGridFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.vert.spv.h" kOverlayVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.frag.spv.h" kOverlayFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/shape_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/shape_overlay.vert.spv.h" kShapeOverlayVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/shape_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/shape_overlay.frag.spv.h" kShapeOverlayFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.vert.spv.h" kTexturedOverlayVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.frag.spv.h" kTexturedOverlayFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.vert.spv.h" kPivotVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.frag.spv.h" kPivotFragSpv)
+
     target_link_libraries(lfs_visualizer
             PRIVATE
             Vulkan::Vulkan
             GPUOpen::VulkanMemoryAllocator
-            volk::volk_headers
-            glslang::glslang
-            glslang::SPIRV
-            glslang::glslang-default-resource-limits)
+            volk::volk_headers)
     if(WIN32)
         target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)
     endif()

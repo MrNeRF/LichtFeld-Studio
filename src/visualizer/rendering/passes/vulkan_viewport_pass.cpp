@@ -11,9 +11,19 @@
 #include "window/vulkan_context.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-#include <glslang/Public/ResourceLimits.h>
-#include <glslang/Public/ShaderLang.h>
-#include <glslang/SPIRV/GlslangToSpv.h>
+#include "viewport/grid.frag.spv.h"
+#include "viewport/grid.vert.spv.h"
+#include "viewport/overlay.frag.spv.h"
+#include "viewport/overlay.vert.spv.h"
+#include "viewport/pivot.frag.spv.h"
+#include "viewport/pivot.vert.spv.h"
+#include "viewport/scene.frag.spv.h"
+#include "viewport/screen_quad.vert.spv.h"
+#include "viewport/shape_overlay.frag.spv.h"
+#include "viewport/shape_overlay.vert.spv.h"
+#include "viewport/textured_overlay.frag.spv.h"
+#include "viewport/textured_overlay.vert.spv.h"
+#include "viewport/vignette.frag.spv.h"
 #endif
 
 #include <algorithm>
@@ -21,8 +31,8 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <mutex>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace lfs::vis {
@@ -78,465 +88,6 @@ namespace lfs::vis {
 
         [[nodiscard]] VkDescriptorSet descriptorSetFromId(const std::uintptr_t texture_id) {
             return reinterpret_cast<VkDescriptorSet>(texture_id);
-        }
-
-        constexpr const char* kScreenQuadVert = R"GLSL(
-#version 450
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aTexCoord;
-layout(location = 0) out vec2 TexCoord;
-void main() {
-    gl_Position = vec4(aPos.xy, 0.0, 1.0);
-    TexCoord = aTexCoord;
-}
-)GLSL";
-
-        constexpr const char* kSceneFrag = R"GLSL(
-#version 450
-layout(set = 0, binding = 0) uniform sampler2D sceneTexture;
-layout(location = 0) in vec2 TexCoord;
-layout(location = 0) out vec4 FragColor;
-void main() {
-    FragColor = texture(sceneTexture, TexCoord);
-}
-)GLSL";
-
-        constexpr const char* kVignetteFrag = R"GLSL(
-#version 450
-layout(location = 0) in vec2 TexCoord;
-layout(location = 0) out vec4 FragColor;
-layout(push_constant) uniform VignettePush {
-    vec4 viewport_intensity_radius;
-    vec4 softness_padding;
-} u;
-
-float vignette_alpha(vec2 screen_uv) {
-    vec2 viewport = max(u.viewport_intensity_radius.xy, vec2(1.0, 1.0));
-    float intensity = u.viewport_intensity_radius.z;
-    float radius = u.viewport_intensity_radius.w;
-    float softness = u.softness_padding.x;
-    float min_dim = min(viewport.x, viewport.y);
-    float fade_width = (1.0 - clamp(radius, 0.0, 1.0)) * 0.5 * min_dim;
-    if (fade_width <= 0.0) {
-        return 0.0;
-    }
-
-    vec2 half_extent = 0.5 * viewport;
-    vec2 inner_half = max(half_extent - vec2(fade_width), vec2(0.0, 0.0));
-    vec2 p = abs(screen_uv * viewport - half_extent) - inner_half;
-    float dist = length(max(p, vec2(0.0, 0.0)));
-    float visible = clamp(1.0 - dist / fade_width, 0.0, 1.0);
-    visible = mix(visible, smoothstep(0.0, 1.0, visible), clamp(softness, 0.0, 1.0));
-    return clamp(intensity, 0.0, 1.0) * (1.0 - visible);
-}
-
-void main() {
-    FragColor = vec4(0.0, 0.0, 0.0, vignette_alpha(TexCoord));
-}
-)GLSL";
-
-        constexpr const char* kOverlayVert = R"GLSL(
-#version 450
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec4 aColor;
-layout(location = 0) out vec4 Color;
-void main() {
-    gl_Position = vec4(aPos.xy, 0.0, 1.0);
-    Color = aColor;
-}
-)GLSL";
-
-        constexpr const char* kOverlayFrag = R"GLSL(
-#version 450
-layout(location = 0) in vec4 Color;
-layout(location = 0) out vec4 FragColor;
-void main() {
-    FragColor = Color;
-}
-)GLSL";
-
-        constexpr const char* kShapeOverlayVert = R"GLSL(
-#version 450
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aScreenPos;
-layout(location = 2) in vec2 aP0;
-layout(location = 3) in vec2 aP1;
-layout(location = 4) in vec4 aColor;
-layout(location = 5) in vec4 aParams;
-layout(location = 0) out vec2 ScreenPos;
-layout(location = 1) out vec2 P0;
-layout(location = 2) out vec2 P1;
-layout(location = 3) out vec4 Color;
-layout(location = 4) out vec4 Params;
-void main() {
-    gl_Position = vec4(aPos.xy, 0.0, 1.0);
-    ScreenPos = aScreenPos;
-    P0 = aP0;
-    P1 = aP1;
-    Color = aColor;
-    Params = aParams;
-}
-)GLSL";
-
-        constexpr const char* kShapeOverlayFrag = R"GLSL(
-#version 450
-layout(location = 0) in vec2 ScreenPos;
-layout(location = 1) in vec2 P0;
-layout(location = 2) in vec2 P1;
-layout(location = 3) in vec4 Color;
-layout(location = 4) in vec4 Params;
-layout(location = 0) out vec4 FragColor;
-
-float sdSegment(vec2 p, vec2 a, vec2 b) {
-    vec2 pa = p - a;
-    vec2 ba = b - a;
-    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-6), 0.0, 1.0);
-    return length(pa - ba * h);
-}
-
-void main() {
-    float shape = Params.x;
-    float thickness = max(Params.y, 1.0);
-    float radius = max(Params.z, 0.0);
-    float aa = max(Params.w, 0.75);
-    float signed_dist = 1e6;
-
-    if (shape < 0.5) {
-        signed_dist = sdSegment(ScreenPos, P0, P1) - thickness * 0.5;
-    } else if (shape < 1.5) {
-        signed_dist = length(ScreenPos - P0) - radius;
-    } else {
-        signed_dist = abs(length(ScreenPos - P0) - radius) - thickness * 0.5;
-    }
-
-    float alpha = Color.a * smoothstep(aa, -aa, signed_dist);
-    if (alpha <= 0.001) {
-        discard;
-    }
-    FragColor = vec4(Color.rgb, alpha);
-}
-)GLSL";
-
-        constexpr const char* kTexturedOverlayVert = R"GLSL(
-#version 450
-layout(location = 0) in vec2 aPos;
-layout(location = 1) in vec2 aTexCoord;
-layout(location = 0) out vec2 TexCoord;
-void main() {
-    gl_Position = vec4(aPos.xy, 0.0, 1.0);
-    TexCoord = aTexCoord;
-}
-)GLSL";
-
-        constexpr const char* kTexturedOverlayFrag = R"GLSL(
-#version 450
-layout(set = 0, binding = 0) uniform sampler2D overlayTexture;
-layout(location = 0) in vec2 TexCoord;
-layout(location = 0) out vec4 FragColor;
-layout(push_constant) uniform TexturedOverlayPush {
-    vec4 tint_opacity;
-    vec4 effects;
-} u;
-
-void main() {
-    vec4 sampled = texture(overlayTexture, TexCoord);
-    vec3 rgb = mix(sampled.rgb, u.tint_opacity.rgb, clamp(u.effects.x, 0.0, 1.0));
-    rgb = mix(rgb, vec3(0.5), clamp(u.effects.y, 0.0, 1.0));
-    FragColor = vec4(rgb, sampled.a * clamp(u.tint_opacity.a, 0.0, 1.0));
-}
-)GLSL";
-
-        constexpr const char* kPivotVert = R"GLSL(
-#version 450
-layout(location = 0) out vec2 v_uv;
-layout(push_constant) uniform PivotPush {
-    vec4 center_size;
-    vec4 color_opacity;
-} u;
-
-const vec2 CORNERS[4] = vec2[4](
-    vec2(-1.0, -1.0), vec2(1.0, -1.0),
-    vec2(1.0, 1.0), vec2(-1.0, 1.0)
-);
-const int INDICES[6] = int[6](0, 1, 2, 0, 2, 3);
-
-void main() {
-    vec2 corner = CORNERS[INDICES[gl_VertexIndex]];
-    v_uv = corner;
-    gl_Position = vec4(u.center_size.xy + corner * u.center_size.zw, 0.0, 1.0);
-}
-)GLSL";
-
-        constexpr const char* kPivotFrag = R"GLSL(
-#version 450
-layout(location = 0) in vec2 v_uv;
-layout(location = 0) out vec4 FragColor;
-layout(push_constant) uniform PivotPush {
-    vec4 center_size;
-    vec4 color_opacity;
-} u;
-
-const float DOT_RADIUS = 0.06;
-const float RING_WIDTH = 0.045;
-const float MAX_RADIUS = 0.92;
-const float EDGE_AA = 0.015;
-
-float ring(float dist, float radius, float width) {
-    float inner = radius - width * 0.5;
-    float outer = radius + width * 0.5;
-    return smoothstep(inner - EDGE_AA, inner + EDGE_AA, dist) *
-           (1.0 - smoothstep(outer - EDGE_AA, outer + EDGE_AA, dist));
-}
-
-void main() {
-    float dist = length(v_uv);
-    float u_opacity = u.color_opacity.w;
-    float progress = 1.0 - u_opacity;
-
-    float flash_intensity = pow(max(0.0, 1.0 - progress * 4.0), 2.0);
-    float flash = (1.0 - smoothstep(0.0, 0.25, dist)) * flash_intensity;
-
-    float dot_scale = 1.0 + 0.3 * sin(progress * 6.28) * (1.0 - progress);
-    float dot_radius = DOT_RADIUS * dot_scale;
-    float dot_alpha = (1.0 - smoothstep(dot_radius - EDGE_AA, dot_radius + EDGE_AA, dist));
-    dot_alpha *= pow(u_opacity, 0.5);
-
-    float r1_prog = clamp(progress * 1.5, 0.0, 1.0);
-    float r1_radius = DOT_RADIUS + r1_prog * (MAX_RADIUS - DOT_RADIUS);
-    float r1_alpha = ring(dist, r1_radius, RING_WIDTH) * pow(1.0 - r1_prog, 1.5);
-
-    float r2_prog = clamp((progress - 0.15) * 1.5, 0.0, 1.0);
-    float r2_radius = DOT_RADIUS + r2_prog * (MAX_RADIUS * 0.85 - DOT_RADIUS);
-    float r2_alpha = ring(dist, r2_radius, RING_WIDTH * 0.7) * pow(1.0 - r2_prog, 1.5) * 0.6;
-
-    float glow = exp(-pow((dist - r1_radius * 0.95) * 4.0, 2.0)) * (1.0 - r1_prog) * 0.3;
-
-    float alpha = max(max(dot_alpha, flash), max(r1_alpha + r2_alpha, glow));
-    if (alpha < 0.01) discard;
-
-    vec3 color = u.color_opacity.rgb + vec3(0.4) * (flash + dot_alpha * 0.3);
-    FragColor = vec4(color, alpha);
-}
-)GLSL";
-
-        constexpr const char* kGridVert = R"GLSL(
-#version 450
-layout(location = 0) in vec2 vertex_position;
-layout(location = 0) out vec3 worldFar;
-layout(location = 1) out vec3 worldNear;
-struct GridUniform {
-    mat4 view_projection;
-    vec4 view_position_plane;
-    vec4 opacity_padding;
-    vec4 near_origin;
-    vec4 near_x;
-    vec4 near_y;
-    vec4 far_origin;
-    vec4 far_x;
-    vec4 far_y;
-};
-layout(std430, set = 0, binding = 0) readonly buffer GridUniforms {
-    GridUniform grids[];
-} grid_buffer;
-layout(push_constant) uniform GridPush {
-    int grid_index;
-} push;
-
-void main() {
-    GridUniform u = grid_buffer.grids[push.grid_index];
-    gl_Position = vec4(vertex_position, 0.0, 1.0);
-    vec2 p = vec2(vertex_position.x * 0.5 + 0.5, -vertex_position.y * 0.5 + 0.5);
-    worldNear = (u.near_origin + u.near_x * p.x + u.near_y * p.y).xyz;
-    worldFar = (u.far_origin + u.far_x * p.x + u.far_y * p.y).xyz;
-}
-)GLSL";
-
-        constexpr const char* kGridFrag = R"GLSL(
-#version 450
-layout(location = 0) in vec3 worldFar;
-layout(location = 1) in vec3 worldNear;
-layout(location = 0) out vec4 FragColor;
-struct GridUniform {
-    mat4 view_projection;
-    vec4 view_position_plane;
-    vec4 opacity_padding;
-    vec4 near_origin;
-    vec4 near_x;
-    vec4 near_y;
-    vec4 far_origin;
-    vec4 far_x;
-    vec4 far_y;
-};
-layout(std430, set = 0, binding = 0) readonly buffer GridUniforms {
-    GridUniform grids[];
-} grid_buffer;
-layout(push_constant) uniform GridPush {
-    int grid_index;
-} push;
-
-const vec4 planes[3] = vec4[3](
-    vec4(1.0, 0.0, 0.0, 0.0),
-    vec4(0.0, 1.0, 0.0, 0.0),
-    vec4(0.0, 0.0, 1.0, 0.0)
-);
-
-const vec3 colors[3] = vec3[3](
-    vec3(1.0, 0.2, 0.2),
-    vec3(0.2, 1.0, 0.2),
-    vec3(0.2, 0.2, 1.0)
-);
-
-const int axis0[3] = int[3](1, 0, 0);
-const int axis1[3] = int[3](2, 2, 1);
-
-bool intersectPlane(inout float t, vec3 pos, vec3 dir, vec4 plane) {
-    float d = dot(dir, plane.xyz);
-    if (abs(d) < 1e-06) {
-        return false;
-    }
-
-    float n = -(dot(pos, plane.xyz) + plane.w) / d;
-    if (n < 0.0) {
-        return false;
-    }
-
-    t = n;
-    return true;
-}
-
-float pristineGrid(in vec2 uv, in vec2 ddx, in vec2 ddy, vec2 lineWidth) {
-    vec2 uvDeriv = vec2(length(vec2(ddx.x, ddy.x)), length(vec2(ddx.y, ddy.y)));
-    bvec2 invertLine = bvec2(lineWidth.x > 0.5, lineWidth.y > 0.5);
-    vec2 targetWidth = vec2(
-        invertLine.x ? 1.0 - lineWidth.x : lineWidth.x,
-        invertLine.y ? 1.0 - lineWidth.y : lineWidth.y
-    );
-    vec2 drawWidth = clamp(targetWidth, uvDeriv, vec2(0.5));
-    vec2 lineAA = uvDeriv * 1.5;
-    vec2 gridUV = abs(fract(uv) * 2.0 - 1.0);
-    gridUV.x = invertLine.x ? gridUV.x : 1.0 - gridUV.x;
-    gridUV.y = invertLine.y ? gridUV.y : 1.0 - gridUV.y;
-    vec2 grid2 = smoothstep(drawWidth + lineAA, drawWidth - lineAA, gridUV);
-
-    grid2 *= clamp(targetWidth / drawWidth, 0.0, 1.0);
-    grid2 = mix(grid2, targetWidth, clamp(uvDeriv * 2.0 - 1.0, 0.0, 1.0));
-    grid2.x = invertLine.x ? 1.0 - grid2.x : grid2.x;
-    grid2.y = invertLine.y ? 1.0 - grid2.y : grid2.y;
-
-    return mix(grid2.x, 1.0, grid2.y);
-}
-
-float calcDepth(vec3 p) {
-    GridUniform u = grid_buffer.grids[push.grid_index];
-    vec4 v = u.view_projection * vec4(p, 1.0);
-    return (v.z / v.w) * 0.5 + 0.5;
-}
-
-void main() {
-    GridUniform u = grid_buffer.grids[push.grid_index];
-    int plane = clamp(int(u.view_position_plane.w), 0, 2);
-    vec3 p = worldNear;
-    vec3 v = normalize(worldFar - worldNear);
-
-    float t;
-    if (!intersectPlane(t, p, v, planes[plane])) {
-        discard;
-    }
-
-    vec3 worldPos = p + v * t;
-    vec2 pos = plane == 0 ? worldPos.yz : (plane == 1 ? worldPos.xz : worldPos.xy);
-    vec2 ddx = dFdx(pos);
-    vec2 ddy = dFdy(pos);
-    float fade = (1.0 - smoothstep(400.0, 1000.0, length(worldPos - u.view_position_plane.xyz))) *
-                 clamp(u.opacity_padding.x, 0.0, 1.0);
-    float epsilon = 1.0 / 255.0;
-    if (fade < epsilon) {
-        discard;
-    }
-
-    vec2 levelPos = pos * 0.1;
-    float levelSize = 2.0 / 1000.0;
-    float levelAlpha = pristineGrid(levelPos, ddx * 0.1, ddy * 0.1, vec2(levelSize)) * fade;
-    if (levelAlpha > epsilon) {
-        vec3 color;
-        vec2 loc = abs(levelPos);
-        vec2 axisDeriv = vec2(length(vec2(ddx.x, ddy.x)), length(vec2(ddx.y, ddy.y))) * 0.1;
-        float axisWidth = levelSize * 1.5;
-        float axisX = 1.0 - smoothstep(axisWidth - axisDeriv.x, axisWidth + axisDeriv.x, loc.x);
-        float axisY = 1.0 - smoothstep(axisWidth - axisDeriv.y, axisWidth + axisDeriv.y, loc.y);
-        bool isAxisX = axisX > 0.01;
-        bool isAxisY = axisY > 0.01;
-        bool isAxis = isAxisX || isAxisY;
-        if (isAxisX && isAxisY) {
-            color = vec3(1.0);
-        } else if (isAxisX) {
-            color = colors[axis1[plane]];
-        } else if (isAxisY) {
-            color = colors[axis0[plane]];
-        } else {
-            color = vec3(0.4);
-        }
-        float axisAlpha = max(axisX, axisY);
-        float finalAlpha = isAxis ? axisAlpha * fade : levelAlpha;
-        FragColor = vec4(color, finalAlpha);
-        gl_FragDepth = calcDepth(worldPos);
-        return;
-    }
-
-    levelPos = pos;
-    levelSize = 1.0 / 100.0;
-    levelAlpha = pristineGrid(levelPos, ddx, ddy, vec2(levelSize)) * fade;
-    if (levelAlpha > epsilon) {
-        FragColor = vec4(vec3(0.3), levelAlpha);
-        gl_FragDepth = calcDepth(worldPos);
-        return;
-    }
-
-    levelPos = pos * 10.0;
-    levelSize = 1.0 / 100.0;
-    levelAlpha = pristineGrid(levelPos, ddx * 10.0, ddy * 10.0, vec2(levelSize)) * fade;
-    if (levelAlpha > epsilon) {
-        FragColor = vec4(vec3(0.3), levelAlpha);
-        gl_FragDepth = calcDepth(worldPos);
-        return;
-    }
-
-    discard;
-}
-)GLSL";
-
-        void ensureGlslangInitialized() {
-            static std::once_flag flag;
-            std::call_once(flag, [] {
-                glslang::InitializeProcess();
-            });
-        }
-
-        [[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(
-            const char* source,
-            const EShLanguage stage,
-            const char* label) {
-            ensureGlslangInitialized();
-            const char* sources[] = {source};
-            glslang::TShader shader(stage);
-            shader.setStrings(sources, 1);
-            shader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
-            shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_0);
-            shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
-            constexpr EShMessages messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-            if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
-                LOG_ERROR("Failed to compile Vulkan viewport shader {}: {}", label, shader.getInfoLog());
-                return std::nullopt;
-            }
-            glslang::TProgram program;
-            program.addShader(&shader);
-            if (!program.link(messages)) {
-                LOG_ERROR("Failed to link Vulkan viewport shader {}: {}", label, program.getInfoLog());
-                return std::nullopt;
-            }
-            std::vector<std::uint32_t> spirv;
-            glslang::GlslangToSpv(*program.getIntermediate(stage), spirv);
-            return spirv;
         }
 
         [[nodiscard]] std::optional<std::vector<std::uint8_t>> tensorToRgba8(
@@ -888,7 +439,7 @@ void main() {
                                 quad_memory);
         }
 
-        [[nodiscard]] VkShaderModule createShaderModule(const std::vector<std::uint32_t>& spirv) const {
+        [[nodiscard]] VkShaderModule createShaderModule(const std::span<const std::uint32_t> spirv) const {
             VkShaderModuleCreateInfo create_info{};
             create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             create_info.codeSize = spirv.size() * sizeof(std::uint32_t);
@@ -907,8 +458,8 @@ void main() {
             ShapeOverlay
         };
 
-        [[nodiscard]] bool createPipeline(const char* vertex_source,
-                                          const char* fragment_source,
+        [[nodiscard]] bool createPipeline(const std::span<const std::uint32_t> vertex_spv,
+                                          const std::span<const std::uint32_t> fragment_spv,
                                           const char* label,
                                           VkDescriptorSetLayout descriptor_layout,
                                           const VkPushConstantRange* push_constant,
@@ -916,19 +467,14 @@ void main() {
                                           PipelineVertexLayout vertex_layout,
                                           VkPipelineLayout& pipeline_layout,
                                           VkPipeline& pipeline) {
-            const auto vertex_spv = compileGlsl(vertex_source, EShLangVertex, label);
-            const auto fragment_spv = compileGlsl(fragment_source, EShLangFragment, label);
-            if (!vertex_spv || !fragment_spv) {
-                return false;
-            }
-
-            VkShaderModule vertex_module = createShaderModule(*vertex_spv);
-            VkShaderModule fragment_module = createShaderModule(*fragment_spv);
+            VkShaderModule vertex_module = createShaderModule(vertex_spv);
+            VkShaderModule fragment_module = createShaderModule(fragment_spv);
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
                 if (vertex_module != VK_NULL_HANDLE)
                     vkDestroyShaderModule(device, vertex_module, nullptr);
                 if (fragment_module != VK_NULL_HANDLE)
                     vkDestroyShaderModule(device, fragment_module, nullptr);
+                LOG_ERROR("Failed to create Vulkan viewport shader modules for {}", label);
                 return false;
             }
 
@@ -1112,26 +658,28 @@ void main() {
             textured_overlay_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             textured_overlay_push.offset = 0;
             textured_overlay_push.size = sizeof(TexturedOverlayPush);
-            return createPipeline(kScreenQuadVert, kSceneFrag, "scene",
+            using namespace viewport_shaders;
+
+            return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
                                   scene_descriptor_layout, nullptr, false, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
-                   createPipeline(kScreenQuadVert, kVignetteFrag, "vignette",
+                   createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
                                   VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
                                   vignette_pipeline_layout, vignette_pipeline) &&
-                   createPipeline(kGridVert, kGridFrag, "grid",
+                   createPipeline(kGridVertSpv, kGridFragSpv, "grid",
                                   grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::ScreenQuad,
                                   grid_pipeline_layout, grid_pipeline) &&
-                   createPipeline(kOverlayVert, kOverlayFrag, "overlay",
+                   createPipeline(kOverlayVertSpv, kOverlayFragSpv, "overlay",
                                   VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ColorOverlay,
                                   overlay_pipeline_layout, overlay_pipeline) &&
-                   createPipeline(kShapeOverlayVert, kShapeOverlayFrag, "shape_overlay",
+                   createPipeline(kShapeOverlayVertSpv, kShapeOverlayFragSpv, "shape_overlay",
                                   VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ShapeOverlay,
                                   shape_overlay_pipeline_layout, shape_overlay_pipeline) &&
-                   createPipeline(kTexturedOverlayVert, kTexturedOverlayFrag, "textured_overlay",
+                   createPipeline(kTexturedOverlayVertSpv, kTexturedOverlayFragSpv, "textured_overlay",
                                   scene_descriptor_layout, &textured_overlay_push, true,
                                   PipelineVertexLayout::TexturedOverlay,
                                   textured_overlay_pipeline_layout, textured_overlay_pipeline) &&
-                   createPipeline(kPivotVert, kPivotFrag, "pivot",
+                   createPipeline(kPivotVertSpv, kPivotFragSpv, "pivot",
                                   VK_NULL_HANDLE, &pivot_push, true, PipelineVertexLayout::ScreenQuad,
                                   pivot_pipeline_layout, pivot_pipeline);
         }
