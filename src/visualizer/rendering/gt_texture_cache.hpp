@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "rendering/cuda_gl_interop.hpp"
 #include "rendering/frame_contract.hpp"
 #include <chrono>
 #include <filesystem>
@@ -47,7 +46,6 @@ namespace lfs::vis {
 
     private:
         struct CacheEntry {
-            std::unique_ptr<lfs::rendering::CudaGLInteropTexture> interop_texture;
             unsigned int texture_id = 0;
             int width = 0;
             int height = 0;

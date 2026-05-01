@@ -215,7 +215,7 @@ namespace lfs::vis {
             return std::memcmp(header.pipelineCacheUUID, device_props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
         }
 
-        constexpr std::uint64_t kFrameWaitTimeoutNs = 16'000'000;
+        constexpr std::uint64_t kWaitForeverNs = std::numeric_limits<std::uint64_t>::max();
 #endif
     } // namespace
 
@@ -258,27 +258,41 @@ namespace lfs::vis {
     void VulkanContext::shutdown() {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         if (device_ != VK_NULL_HANDLE) {
+            // Shutdown is the one place where a whole-device wait is intentional:
+            // all swapchain, UI, and external interop resources are about to be destroyed.
             vkDeviceWaitIdle(device_);
         }
 
-        if (render_finished_ != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device_, render_finished_, nullptr);
-            render_finished_ = VK_NULL_HANDLE;
+        for (VkSemaphore& semaphore : render_finished_) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device_, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+            }
         }
-        if (image_available_ != VK_NULL_HANDLE) {
-            vkDestroySemaphore(device_, image_available_, nullptr);
-            image_available_ = VK_NULL_HANDLE;
+        for (VkSemaphore& semaphore : image_available_) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device_, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+            }
         }
-        if (in_flight_ != VK_NULL_HANDLE) {
-            vkDestroyFence(device_, in_flight_, nullptr);
-            in_flight_ = VK_NULL_HANDLE;
+        for (VkFence& fence : in_flight_) {
+            if (fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device_, fence, nullptr);
+                fence = VK_NULL_HANDLE;
+            }
         }
 
         destroySwapchain();
 
-        if (command_pool_ != VK_NULL_HANDLE) {
-            vkDestroyCommandPool(device_, command_pool_, nullptr);
-            command_pool_ = VK_NULL_HANDLE;
+        if (immediate_command_pool_ != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(device_, immediate_command_pool_, nullptr);
+            immediate_command_pool_ = VK_NULL_HANDLE;
+        }
+        for (VkCommandPool& command_pool : command_pools_) {
+            if (command_pool != VK_NULL_HANDLE) {
+                vkDestroyCommandPool(device_, command_pool, nullptr);
+                command_pool = VK_NULL_HANDLE;
+            }
         }
         saveAndDestroyPipelineCache();
         if (device_ != VK_NULL_HANDLE) {
@@ -352,22 +366,16 @@ namespace lfs::vis {
             }
         }
 
-        VkResult result = vkWaitForFences(device_, 1, &in_flight_, VK_TRUE, kFrameWaitTimeoutNs);
-        if (result == VK_TIMEOUT) {
-            last_error_.clear();
-            return false;
-        }
+        const std::size_t current_frame = frame_index_;
+        VkFence frame_fence = in_flight_[current_frame];
+        VkResult result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
         if (result != VK_SUCCESS) {
             return fail(std::format("vkWaitForFences failed: {}", static_cast<int>(result)));
         }
 
         uint32_t image_index = 0;
-        result = vkAcquireNextImageKHR(device_, swapchain_, kFrameWaitTimeoutNs, image_available_,
+        result = vkAcquireNextImageKHR(device_, swapchain_, kWaitForeverNs, image_available_[current_frame],
                                        VK_NULL_HANDLE, &image_index);
-        if (result == VK_NOT_READY || result == VK_TIMEOUT) {
-            last_error_.clear();
-            return false;
-        }
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             if (recreateSwapchain()) {
                 last_error_.clear();
@@ -377,17 +385,32 @@ namespace lfs::vis {
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
             return fail(std::format("vkAcquireNextImageKHR failed: {}", static_cast<int>(result)));
         }
+        if (image_index >= swapchain_images_in_flight_.size()) {
+            return fail(std::format("vkAcquireNextImageKHR returned invalid image index {}", image_index));
+        }
+        if (swapchain_images_in_flight_[image_index] != VK_NULL_HANDLE) {
+            VkFence image_fence = swapchain_images_in_flight_[image_index];
+            result = vkWaitForFences(device_, 1, &image_fence, VK_TRUE, kWaitForeverNs);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkWaitForFences(swapchain image {}) failed: {}",
+                                        image_index,
+                                        static_cast<int>(result)));
+            }
+        }
 
         frame_suboptimal_ = (result == VK_SUBOPTIMAL_KHR);
         active_image_index_ = image_index;
+        active_frame_index_ = current_frame;
 
-        vkResetFences(device_, 1, &in_flight_);
-        vkResetCommandBuffer(command_buffers_[image_index], 0);
+        result = vkResetCommandPool(device_, command_pools_[current_frame], 0);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkResetCommandPool failed: {}", static_cast<int>(result)));
+        }
 
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        result = vkBeginCommandBuffer(command_buffers_[image_index], &begin_info);
+        result = vkBeginCommandBuffer(command_buffers_[current_frame], &begin_info);
         if (result != VK_SUCCESS) {
             return fail(std::format("vkBeginCommandBuffer failed: {}", static_cast<int>(result)));
         }
@@ -403,10 +426,11 @@ namespace lfs::vis {
         clear_values[1].depthStencil = {1.0f, 0};
         render_pass_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
         render_pass_info.pClearValues = clear_values.data();
-        vkCmdBeginRenderPass(command_buffers_[image_index], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBeginRenderPass(command_buffers_[current_frame], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
         frame.image_index = image_index;
-        frame.command_buffer = command_buffers_[image_index];
+        frame.frame_slot = current_frame;
+        frame.command_buffer = command_buffers_[current_frame];
         frame.framebuffer = swapchain_framebuffers_[image_index];
         frame.swapchain_image = (swapchain_image_usage_ & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0
                                     ? swapchain_images_[image_index]
@@ -422,7 +446,8 @@ namespace lfs::vis {
             return true;
         }
 
-        VkCommandBuffer command_buffer = command_buffers_[active_image_index_];
+        const std::size_t current_frame = active_frame_index_;
+        VkCommandBuffer command_buffer = command_buffers_[current_frame];
         vkCmdEndRenderPass(command_buffer);
 
         VkResult result = vkEndCommandBuffer(command_buffer);
@@ -433,7 +458,7 @@ namespace lfs::vis {
 
         std::vector<VkSemaphore> wait_semaphores;
         wait_semaphores.reserve(1 + frame_timeline_waits_.size());
-        wait_semaphores.push_back(image_available_);
+        wait_semaphores.push_back(image_available_[current_frame]);
 
         std::vector<VkPipelineStageFlags> wait_stages;
         wait_stages.reserve(1 + frame_timeline_waits_.size());
@@ -468,24 +493,35 @@ namespace lfs::vis {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
         submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &render_finished_;
-        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, in_flight_);
+        submit_info.pSignalSemaphores = &render_finished_[current_frame];
+
+        VkFence frame_fence = in_flight_[current_frame];
+        result = vkResetFences(device_, 1, &frame_fence);
+        if (result != VK_SUCCESS) {
+            frame_active_ = false;
+            return fail(std::format("vkResetFences failed: {}", static_cast<int>(result)));
+        }
+        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, frame_fence);
         frame_timeline_waits_.clear();
         if (result != VK_SUCCESS) {
             frame_active_ = false;
             return fail(std::format("vkQueueSubmit failed: {}", static_cast<int>(result)));
         }
+        if (active_image_index_ < swapchain_images_in_flight_.size()) {
+            swapchain_images_in_flight_[active_image_index_] = frame_fence;
+        }
 
         VkPresentInfoKHR present_info{};
         present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &render_finished_;
+        present_info.pWaitSemaphores = &render_finished_[current_frame];
         present_info.swapchainCount = 1;
         present_info.pSwapchains = &swapchain_;
         present_info.pImageIndices = &active_image_index_;
         result = vkQueuePresentKHR(present_queue_, &present_info);
 
         frame_active_ = false;
+        frame_index_ = (frame_index_ + 1) % kFramesInFlight;
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || frame_suboptimal_) {
             frame_suboptimal_ = false;
             return recreateSwapchain();
@@ -495,6 +531,25 @@ namespace lfs::vis {
             return fail(std::format("vkQueuePresentKHR failed: {}", static_cast<int>(result)));
         }
 
+        return true;
+    }
+
+    bool VulkanContext::waitForCurrentFrameSlot() {
+        if (device_ == VK_NULL_HANDLE) {
+            return fail("Cannot wait for Vulkan frame slot before device initialization");
+        }
+        const std::size_t current_frame = frame_index_;
+        VkFence frame_fence = in_flight_[current_frame];
+        if (frame_fence == VK_NULL_HANDLE) {
+            return fail("Cannot wait for Vulkan frame slot before sync objects are initialized");
+        }
+        const VkResult result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkWaitForFences(frame slot {}) failed: {}",
+                                    current_frame,
+                                    static_cast<int>(result)));
+        }
+        last_error_.clear();
         return true;
     }
 
@@ -1261,7 +1316,7 @@ namespace lfs::vis {
                                                        const VkSemaphore wait_semaphore,
                                                        const std::uint64_t wait_value,
                                                        const VkPipelineStageFlags wait_stage) {
-        if (device_ == VK_NULL_HANDLE || command_pool_ == VK_NULL_HANDLE ||
+        if (device_ == VK_NULL_HANDLE || immediate_command_pool_ == VK_NULL_HANDLE ||
             graphics_queue_ == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
             return fail("Cannot transition Vulkan image layout before graphics resources are initialized");
         }
@@ -1275,7 +1330,7 @@ namespace lfs::vis {
 
         VkCommandBufferAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocate_info.commandPool = command_pool_;
+        allocate_info.commandPool = immediate_command_pool_;
         allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         allocate_info.commandBufferCount = 1;
 
@@ -1290,7 +1345,7 @@ namespace lfs::vis {
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         result = vkBeginCommandBuffer(command_buffer, &begin_info);
         if (result != VK_SUCCESS) {
-            vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+            vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
             return fail(std::format("vkBeginCommandBuffer(layout transition) failed: {}", static_cast<int>(result)));
         }
 
@@ -1364,7 +1419,7 @@ namespace lfs::vis {
 
         result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
-            vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+            vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
             return fail(std::format("vkEndCommandBuffer(layout transition) failed: {}", static_cast<int>(result)));
         }
 
@@ -1392,11 +1447,11 @@ namespace lfs::vis {
             wait_info.pValues = &wait_value;
             result = vkWaitSemaphores(device_, &wait_info, kExternalTimelineWaitTimeoutNs);
             if (result == VK_TIMEOUT) {
-                vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+                vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
                 return fail(std::format("Timed out waiting for external timeline semaphore value {}", wait_value));
             }
             if (result != VK_SUCCESS) {
-                vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+                vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
                 return fail(std::format("vkWaitSemaphores(external timeline) failed: {}", static_cast<int>(result)));
             }
         }
@@ -1404,7 +1459,7 @@ namespace lfs::vis {
         if (result == VK_SUCCESS) {
             result = vkQueueWaitIdle(graphics_queue_);
         }
-        vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+        vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
         if (result != VK_SUCCESS) {
             return fail(std::format("Immediate Vulkan image layout transition failed: {}", static_cast<int>(result)));
         }
@@ -1464,6 +1519,7 @@ namespace lfs::vis {
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
         swapchain_images_.resize(image_count);
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
+        swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_extent_ = extent;
         swapchain_image_usage_ = create_info.imageUsage;
@@ -1699,33 +1755,46 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::createCommandPool() {
-        VkCommandPoolCreateInfo create_info{};
-        create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        create_info.queueFamilyIndex = graphics_queue_family_;
-        const VkResult result = vkCreateCommandPool(device_, &create_info, nullptr, &command_pool_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkCreateCommandPool failed: {}", static_cast<int>(result)));
+        for (std::size_t i = 0; i < kFramesInFlight; ++i) {
+            VkCommandPoolCreateInfo create_info{};
+            create_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            create_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+            create_info.queueFamilyIndex = graphics_queue_family_;
+            const VkResult result = vkCreateCommandPool(device_, &create_info, nullptr, &command_pools_[i]);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkCreateCommandPool(frame {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
+                               command_pools_[i],
+                               std::format("Frame {} graphics command pool", i));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, command_pool_, "Main graphics command pool");
+
+        VkCommandPoolCreateInfo immediate_info{};
+        immediate_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        immediate_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        immediate_info.queueFamilyIndex = graphics_queue_family_;
+        const VkResult result = vkCreateCommandPool(device_, &immediate_info, nullptr, &immediate_command_pool_);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkCreateCommandPool(immediate) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, immediate_command_pool_, "Immediate graphics command pool");
         return true;
     }
 
     bool VulkanContext::createCommandBuffers() {
-        command_buffers_.resize(swapchain_images_.size());
-        VkCommandBufferAllocateInfo allocate_info{};
-        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        allocate_info.commandPool = command_pool_;
-        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocate_info.commandBufferCount = static_cast<uint32_t>(command_buffers_.size());
-        const VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, command_buffers_.data());
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkAllocateCommandBuffers failed: {}", static_cast<int>(result)));
-        }
-        for (size_t i = 0; i < command_buffers_.size(); ++i) {
+        for (std::size_t i = 0; i < kFramesInFlight; ++i) {
+            VkCommandBufferAllocateInfo allocate_info{};
+            allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocate_info.commandPool = command_pools_[i];
+            allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocate_info.commandBufferCount = 1;
+            const VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, &command_buffers_[i]);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkAllocateCommandBuffers(frame {}) failed: {}", i, static_cast<int>(result)));
+            }
             setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
                                command_buffers_[i],
-                               std::format("Swapchain command buffer {}", i));
+                               std::format("Frame {} command buffer", i));
         }
         return true;
     }
@@ -1738,21 +1807,31 @@ namespace lfs::vis {
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-        VkResult result = vkCreateSemaphore(device_, &semaphore_info, nullptr, &image_available_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkCreateSemaphore(image_available) failed: {}", static_cast<int>(result)));
+        for (std::size_t i = 0; i < kFramesInFlight; ++i) {
+            VkResult result = vkCreateSemaphore(device_, &semaphore_info, nullptr, &image_available_[i]);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkCreateSemaphore(image_available {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                               image_available_[i],
+                               std::format("Frame {} image available semaphore", i));
+
+            result = vkCreateSemaphore(device_, &semaphore_info, nullptr, &render_finished_[i]);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkCreateSemaphore(render_finished {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                               render_finished_[i],
+                               std::format("Frame {} render finished semaphore", i));
+
+            result = vkCreateFence(device_, &fence_info, nullptr, &in_flight_[i]);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkCreateFence(frame {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_FENCE,
+                               in_flight_[i],
+                               std::format("Frame {} in-flight fence", i));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, image_available_, "Image available semaphore");
-        result = vkCreateSemaphore(device_, &semaphore_info, nullptr, &render_finished_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkCreateSemaphore(render_finished) failed: {}", static_cast<int>(result)));
-        }
-        setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, render_finished_, "Render finished semaphore");
-        result = vkCreateFence(device_, &fence_info, nullptr, &in_flight_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkCreateFence failed: {}", static_cast<int>(result)));
-        }
-        setDebugObjectName(VK_OBJECT_TYPE_FENCE, in_flight_, "Frame in-flight fence");
         return true;
     }
 
@@ -1892,10 +1971,6 @@ namespace lfs::vis {
             return;
         }
 
-        if (!command_buffers_.empty() && command_pool_ != VK_NULL_HANDLE) {
-            vkFreeCommandBuffers(device_, command_pool_, static_cast<uint32_t>(command_buffers_.size()), command_buffers_.data());
-            command_buffers_.clear();
-        }
         for (const VkFramebuffer framebuffer : swapchain_framebuffers_) {
             vkDestroyFramebuffer(device_, framebuffer, nullptr);
         }
@@ -1922,6 +1997,7 @@ namespace lfs::vis {
         }
         swapchain_image_views_.clear();
         swapchain_images_.clear();
+        swapchain_images_in_flight_.clear();
 
         if (swapchain_ != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device_, swapchain_, nullptr);
@@ -1930,19 +2006,47 @@ namespace lfs::vis {
         swapchain_image_usage_ = 0;
     }
 
+    bool VulkanContext::waitForFrameFences() {
+        std::vector<VkFence> fences;
+        fences.reserve(kFramesInFlight);
+        for (const VkFence fence : in_flight_) {
+            if (fence != VK_NULL_HANDLE) {
+                fences.push_back(fence);
+            }
+        }
+        if (fences.empty()) {
+            return true;
+        }
+        const VkResult result = vkWaitForFences(device_,
+                                                static_cast<std::uint32_t>(fences.size()),
+                                                fences.data(),
+                                                VK_TRUE,
+                                                kWaitForeverNs);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkWaitForFences(swapchain recreate) failed: {}", static_cast<int>(result)));
+        }
+        return true;
+    }
+
     bool VulkanContext::recreateSwapchain() {
         if (framebuffer_width_ <= 0 || framebuffer_height_ <= 0) {
             return true;
         }
 
-        vkDeviceWaitIdle(device_);
+        if (!waitForFrameFences()) {
+            return false;
+        }
+        const VkResult present_wait = vkQueueWaitIdle(present_queue_);
+        if (present_wait != VK_SUCCESS) {
+            return fail(std::format("vkQueueWaitIdle(present) failed during swapchain recreate: {}",
+                                    static_cast<int>(present_wait)));
+        }
         destroySwapchain();
         return createSwapchain(framebuffer_width_, framebuffer_height_) &&
                createImageViews() &&
                createRenderPass() &&
                createDepthStencilResources() &&
-               createFramebuffers() &&
-               createCommandBuffers();
+               createFramebuffers();
     }
 #endif
 

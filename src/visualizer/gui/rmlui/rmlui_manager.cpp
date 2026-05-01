@@ -330,10 +330,11 @@ namespace lfs::vis::gui {
     bool RmlUIManager::beginVulkanFrame(const VkCommandBuffer command_buffer,
                                         const VkExtent2D extent,
                                         const VkFramebuffer framebuffer,
-                                        const VkImage swapchain_image) {
+                                        const VkImage swapchain_image,
+                                        const std::size_t frame_slot) {
         if (!vulkan_render_interface_ || command_buffer == VK_NULL_HANDLE || framebuffer == VK_NULL_HANDLE)
             return false;
-        vulkan_render_interface_->BeginExternalFrame(command_buffer, extent, framebuffer, swapchain_image);
+        vulkan_render_interface_->BeginExternalFrame(command_buffer, extent, framebuffer, swapchain_image, frame_slot);
         vulkan_frame_active_ = true;
         return true;
     }

@@ -58,7 +58,7 @@ namespace lfs::vis {
 
     void GTTextureCache::clear() {
         for (const auto& [id, entry] : texture_cache_) {
-            if (!entry.interop_texture && entry.texture_id > 0) {
+            if (entry.texture_id > 0) {
                 glDeleteTextures(1, &entry.texture_id);
             }
         }
@@ -82,16 +82,11 @@ namespace lfs::vis {
             it != texture_cache_.end() && it->second.load_signature == requested_signature) {
             it->second.last_access = std::chrono::steady_clock::now();
             const auto& entry = it->second;
-            const unsigned int tex_id = entry.interop_texture ? entry.interop_texture->getTextureID() : entry.texture_id;
-            const glm::vec2 tex_scale = entry.interop_texture
-                                            ? glm::vec2(entry.interop_texture->getTexcoordScaleX(),
-                                                        entry.interop_texture->getTexcoordScaleY())
-                                            : glm::vec2(1.0f);
-            return {tex_id, entry.width, entry.height, entry.origin, tex_scale};
+            return {entry.texture_id, entry.width, entry.height, entry.origin, glm::vec2(1.0f)};
         }
 
         if (const auto it = texture_cache_.find(cam_id); it != texture_cache_.end()) {
-            if (!it->second.interop_texture && it->second.texture_id > 0) {
+            if (it->second.texture_id > 0) {
                 glDeleteTextures(1, &it->second.texture_id);
             }
             texture_cache_.erase(it);
@@ -151,7 +146,7 @@ namespace lfs::vis {
         const auto oldest = std::min_element(texture_cache_.begin(), texture_cache_.end(),
                                              [](const auto& a, const auto& b) { return a.second.last_access < b.second.last_access; });
 
-        if (!oldest->second.interop_texture && oldest->second.texture_id != 0) {
+        if (oldest->second.texture_id != 0) {
             glDeleteTextures(1, &oldest->second.texture_id);
         }
         texture_cache_.erase(oldest);
@@ -244,43 +239,9 @@ namespace lfs::vis {
                 return {};
             }
 
-            const auto& shape = tensor.shape();
-            const int height = static_cast<int>(shape[1]);
-            const int width = static_cast<int>(shape[2]);
-            const auto hwc = tensor.permute({1, 2, 0}).contiguous();
-
-            entry.interop_texture = std::make_unique<lfs::rendering::CudaGLInteropTexture>();
-            if (auto result = entry.interop_texture->init(width, height); !result) {
-                LOG_WARN("Failed to init GT interop texture from loader: {}", result.error());
-                entry.interop_texture.reset();
-                return loadTextureFromTensor(tensor, entry);
-            }
-
-            if (auto result = entry.interop_texture->updateFromTensor(hwc); !result) {
-                LOG_WARN("Failed to upload GT texture from loader: {}", result.error());
-                entry.interop_texture.reset();
-                return loadTextureFromTensor(tensor, entry);
-            }
-
-            entry.width = width;
-            entry.height = height;
-            // CUDA/CPU tensor uploads preserve the conventional top-left image origin,
-            // so split-view must flip Y when sampling them as OpenGL textures.
-            entry.origin = kTensorTextureOrigin;
-
-            const glm::vec2 tex_scale(
-                entry.interop_texture->getTexcoordScaleX(),
-                entry.interop_texture->getTexcoordScaleY());
-
-            return {
-                entry.interop_texture->getTextureID(),
-                width,
-                height,
-                kTensorTextureOrigin,
-                tex_scale};
+            return loadTextureFromTensor(tensor, entry);
         } catch (const std::exception& e) {
             LOG_WARN("GT loader path failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
-            entry.interop_texture.reset();
             return {};
         }
     }
@@ -350,7 +311,6 @@ namespace lfs::vis {
             }
             glBindTexture(GL_TEXTURE_2D, 0);
 
-            entry.interop_texture.reset();
             entry.texture_id = texture;
             entry.width = width;
             entry.height = height;
@@ -374,42 +334,9 @@ namespace lfs::vis {
                 return {};
             }
 
-            const auto& shape = tensor.shape();
-            const int height = static_cast<int>(shape[1]);
-            const int width = static_cast<int>(shape[2]);
-
-            const auto hwc = tensor.permute({1, 2, 0}).contiguous();
-
-            entry.interop_texture = std::make_unique<lfs::rendering::CudaGLInteropTexture>();
-            if (auto result = entry.interop_texture->init(width, height); !result) {
-                LOG_WARN("Failed to init interop texture: {}", result.error());
-                entry.interop_texture.reset();
-                return {};
-            }
-
-            if (auto result = entry.interop_texture->updateFromTensor(hwc); !result) {
-                LOG_WARN("Failed to upload to interop texture: {}", result.error());
-                entry.interop_texture.reset();
-                return {};
-            }
-
-            entry.width = width;
-            entry.height = height;
-            entry.origin = kTensorTextureOrigin;
-
-            const glm::vec2 tex_scale(
-                entry.interop_texture->getTexcoordScaleX(),
-                entry.interop_texture->getTexcoordScaleY());
-
-            return {
-                entry.interop_texture->getTextureID(),
-                width,
-                height,
-                kTensorTextureOrigin,
-                tex_scale};
+            return loadTextureFromTensor(tensor, entry);
         } catch (const std::exception& e) {
             LOG_WARN("GPU texture load failed: {}", e.what());
-            entry.interop_texture.reset();
             return {};
         }
     }

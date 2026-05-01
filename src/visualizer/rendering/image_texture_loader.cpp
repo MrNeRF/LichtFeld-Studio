@@ -118,27 +118,6 @@ namespace lfs::vis::image_texture {
             return std::nullopt;
         }
 
-        if (formatted->tensor.device() == lfs::core::Device::CUDA &&
-            formatted->tensor.dtype() == lfs::core::DataType::Float32) {
-            auto interop_texture = std::make_unique<lfs::rendering::CudaGLInteropTexture>();
-            if (auto result = interop_texture->init(formatted->width, formatted->height); result) {
-                if (auto upload_result = interop_texture->updateFromTensor(formatted->tensor); upload_result) {
-                    LoadedTexture loaded;
-                    loaded.texture_id = interop_texture->getTextureID();
-                    loaded.width = formatted->width;
-                    loaded.height = formatted->height;
-                    loaded.texcoord_scale = glm::vec2(interop_texture->getTexcoordScaleX(),
-                                                      interop_texture->getTexcoordScaleY());
-                    loaded.interop_texture = std::move(interop_texture);
-                    return loaded;
-                } else {
-                    LOG_WARN("Failed interop upload for {}: {}", log_context, upload_result.error());
-                }
-            } else {
-                LOG_WARN("Failed interop init for {}: {}", log_context, result.error());
-            }
-        }
-
         return upload_texture_cpu_fallback(std::move(*formatted), log_context);
     }
 

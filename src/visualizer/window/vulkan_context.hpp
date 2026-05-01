@@ -6,6 +6,8 @@
 
 #include "config.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -39,6 +41,7 @@ namespace lfs::vis {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         struct Frame {
             uint32_t image_index = 0;
+            std::size_t frame_slot = 0;
             VkCommandBuffer command_buffer = VK_NULL_HANDLE;
             VkFramebuffer framebuffer = VK_NULL_HANDLE;
             VkImage swapchain_image = VK_NULL_HANDLE;
@@ -84,6 +87,8 @@ namespace lfs::vis {
         [[nodiscard]] VkExtent2D swapchainExtent() const { return swapchain_extent_; }
         [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
         [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
+        [[nodiscard]] std::size_t framesInFlight() const { return kFramesInFlight; }
+        [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
@@ -98,6 +103,7 @@ namespace lfs::vis {
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
+        [[nodiscard]] bool waitForCurrentFrameSlot();
         void addFrameTimelineWait(VkSemaphore semaphore,
                                   std::uint64_t value,
                                   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
@@ -160,6 +166,7 @@ namespace lfs::vis {
         void destroyDebugMessenger();
         void saveAndDestroyPipelineCache();
         void destroySwapchain();
+        [[nodiscard]] bool waitForFrameFences();
 
         template <typename VkHandle>
         [[nodiscard]] static std::uint64_t vulkanObjectHandle(VkHandle object) {
@@ -206,12 +213,15 @@ namespace lfs::vis {
         VkImageView depth_stencil_image_view_ = VK_NULL_HANDLE;
         std::vector<VkFramebuffer> swapchain_framebuffers_;
 
-        VkCommandPool command_pool_ = VK_NULL_HANDLE;
-        std::vector<VkCommandBuffer> command_buffers_;
+        static constexpr std::size_t kFramesInFlight = 2;
+        std::array<VkCommandPool, kFramesInFlight> command_pools_{};
+        std::array<VkCommandBuffer, kFramesInFlight> command_buffers_{};
+        VkCommandPool immediate_command_pool_ = VK_NULL_HANDLE;
         std::vector<FrameTimelineWait> frame_timeline_waits_;
-        VkSemaphore image_available_ = VK_NULL_HANDLE;
-        VkSemaphore render_finished_ = VK_NULL_HANDLE;
-        VkFence in_flight_ = VK_NULL_HANDLE;
+        std::array<VkSemaphore, kFramesInFlight> image_available_{};
+        std::array<VkSemaphore, kFramesInFlight> render_finished_{};
+        std::array<VkFence, kFramesInFlight> in_flight_{};
+        std::vector<VkFence> swapchain_images_in_flight_;
 
         bool framebuffer_resized_ = false;
         bool frame_active_ = false;
@@ -225,6 +235,8 @@ namespace lfs::vis {
         bool external_memory_dedicated_allocation_enabled_ = false;
         PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
         uint32_t active_image_index_ = 0;
+        std::size_t frame_index_ = 0;
+        std::size_t active_frame_index_ = 0;
         int framebuffer_width_ = 0;
         int framebuffer_height_ = 0;
 #endif

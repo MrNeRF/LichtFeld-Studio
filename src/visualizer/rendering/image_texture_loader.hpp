@@ -4,12 +4,9 @@
 
 #pragma once
 
-#include "rendering/cuda_gl_interop.hpp"
-
 #include <glm/vec2.hpp>
 
 #include <filesystem>
-#include <memory>
 #include <optional>
 #include <string_view>
 
@@ -25,7 +22,6 @@ namespace lfs::io {
 namespace lfs::vis::image_texture {
 
     struct LoadedTexture {
-        std::unique_ptr<lfs::rendering::CudaGLInteropTexture> interop_texture;
         unsigned int texture_id = 0;
         int width = 0;
         int height = 0;

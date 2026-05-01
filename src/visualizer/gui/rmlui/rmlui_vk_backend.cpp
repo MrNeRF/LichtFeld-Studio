@@ -314,11 +314,11 @@ void RenderInterface_VK::RenderGeometry(Rml::CompiledGeometryHandle geometry, Rm
     VkDescriptorBufferInfo shader_buffer = {};
     VmaVirtualAllocation shader_allocation = {};
     // Dynamic uniform offsets are consumed when the recorded command buffer executes, so keep
-    // per-draw transform data alive until the next frame instead of reusing it immediately.
+    // per-draw transform data alive until the owning frame slot's fence has completed.
     bool status = m_memory_pool.Alloc_GeneralBuffer(sizeof(m_user_data_for_vertex_shader), reinterpret_cast<void**>(&p_data),
                                                     &shader_buffer, &shader_allocation);
     RMLUI_VK_ASSERTMSG(status, "failed to allocate VkDescriptorBufferInfo for uniform data to shaders");
-    m_transient_shader_allocations.push_back(shader_allocation);
+    m_transient_shader_allocations_by_frame[ActiveResourceSlot()].push_back(shader_allocation);
 
     if (p_data) {
         p_data->m_transform = m_user_data_for_vertex_shader.m_transform;
@@ -378,7 +378,7 @@ void RenderInterface_VK::ReleaseGeometry(Rml::CompiledGeometryHandle geometry) {
 
     geometry_handle_t* p_casted_geometry = reinterpret_cast<geometry_handle_t*>(geometry);
 
-    m_pending_for_deletion_geometries.push_back(p_casted_geometry);
+    m_pending_for_deletion_geometries_by_frame[ActiveResourceSlot()].push_back(p_casted_geometry);
 }
 
 void RenderInterface_VK::EnableScissorRegion(bool enable) {
@@ -942,7 +942,7 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
 
 void RenderInterface_VK::QueueTextureForDeferredDeletion(texture_data_t* texture) {
     if (texture)
-        m_pending_for_deletion_textures_by_frames[m_semaphore_index_previous].push_back(texture);
+        m_pending_for_deletion_textures_by_frames[ActiveResourceSlot()].push_back(texture);
 }
 
 void RenderInterface_VK::DropAsyncPreviewTexture(texture_data_t* texture) {
@@ -1235,9 +1235,11 @@ VkRect2D RenderInterface_VK::IntersectContextClip(VkRect2D scissor) const noexce
 void RenderInterface_VK::BeginFrame() {
     Wait();
 
-    FreeTransientShaderAllocations();
-    Update_PendingForDeletion_Textures_By_Frames();
-    Update_PendingForDeletion_Geometries();
+    m_reclaim_resource_slot = m_semaphore_index_previous;
+    m_resource_slot = m_semaphore_index;
+    FreeTransientShaderAllocations(m_reclaim_resource_slot);
+    Update_PendingForDeletion_Textures_By_Frame(m_reclaim_resource_slot);
+    Update_PendingForDeletion_Geometries(m_reclaim_resource_slot);
     ProcessAsyncPreviewUploads();
 
     m_command_buffer_ring.OnBeginFrame();
@@ -1455,7 +1457,11 @@ void RenderInterface_VK::ShutdownExternal() {
     m_external_context = false;
 }
 
-void RenderInterface_VK::BeginExternalFrame(VkCommandBuffer command_buffer, VkExtent2D extent, VkFramebuffer framebuffer, VkImage swapchain_image) {
+void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer,
+                                            const VkExtent2D extent,
+                                            const VkFramebuffer framebuffer,
+                                            const VkImage swapchain_image,
+                                            const std::size_t frame_slot) {
     if (!m_external_context || command_buffer == VK_NULL_HANDLE || framebuffer == VK_NULL_HANDLE)
         return;
 
@@ -1468,9 +1474,11 @@ void RenderInterface_VK::BeginExternalFrame(VkCommandBuffer command_buffer, VkEx
     m_semaphore_index_previous = m_semaphore_index;
     m_semaphore_index = ((m_semaphore_index + 1) % kSwapchainBackBufferCount);
 
-    FreeTransientShaderAllocations();
-    Update_PendingForDeletion_Textures_By_Frames();
-    Update_PendingForDeletion_Geometries();
+    m_resource_slot = static_cast<uint32_t>(frame_slot % kSwapchainBackBufferCount);
+    m_reclaim_resource_slot = m_resource_slot;
+    FreeTransientShaderAllocations(m_reclaim_resource_slot);
+    Update_PendingForDeletion_Textures_By_Frame(m_reclaim_resource_slot);
+    Update_PendingForDeletion_Geometries(m_reclaim_resource_slot);
     ProcessAsyncPreviewUploads();
 
     m_p_current_command_buffer = command_buffer;
@@ -2987,15 +2995,26 @@ void RenderInterface_VK::Destroy_Textures() noexcept {
     }
 }
 
-void RenderInterface_VK::FreeTransientShaderAllocations() noexcept {
-    for (VmaVirtualAllocation allocation : m_transient_shader_allocations)
+uint32_t RenderInterface_VK::ActiveResourceSlot() const noexcept {
+    return m_resource_slot % kSwapchainBackBufferCount;
+}
+
+void RenderInterface_VK::FreeTransientShaderAllocations(const uint32_t resource_slot) noexcept {
+    auto& allocations = m_transient_shader_allocations_by_frame[resource_slot % kSwapchainBackBufferCount];
+    for (VmaVirtualAllocation allocation : allocations)
         m_memory_pool.Free_Allocation(allocation);
-    m_transient_shader_allocations.clear();
+    allocations.clear();
+}
+
+void RenderInterface_VK::FreeAllTransientShaderAllocations() noexcept {
+    for (uint32_t slot = 0; slot < kSwapchainBackBufferCount; ++slot)
+        FreeTransientShaderAllocations(slot);
 }
 
 void RenderInterface_VK::Destroy_Geometries() noexcept {
-    FreeTransientShaderAllocations();
-    Update_PendingForDeletion_Geometries();
+    FreeAllTransientShaderAllocations();
+    for (uint32_t slot = 0; slot < kSwapchainBackBufferCount; ++slot)
+        Update_PendingForDeletion_Geometries(slot);
     m_memory_pool.Shutdown();
 }
 
@@ -3578,8 +3597,8 @@ void RenderInterface_VK::Wait() noexcept {
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkResetFences (see status)");
 }
 
-void RenderInterface_VK::Update_PendingForDeletion_Textures_By_Frames() noexcept {
-    auto& textures_for_previous_frame = m_pending_for_deletion_textures_by_frames[m_semaphore_index_previous];
+void RenderInterface_VK::Update_PendingForDeletion_Textures_By_Frame(const uint32_t resource_slot) noexcept {
+    auto& textures_for_previous_frame = m_pending_for_deletion_textures_by_frames[resource_slot % kSwapchainBackBufferCount];
 
     for (texture_data_t* p_data : textures_for_previous_frame) {
         Destroy_Texture(*p_data);
@@ -3589,13 +3608,14 @@ void RenderInterface_VK::Update_PendingForDeletion_Textures_By_Frames() noexcept
     textures_for_previous_frame.clear();
 }
 
-void RenderInterface_VK::Update_PendingForDeletion_Geometries() noexcept {
-    for (geometry_handle_t* p_geometry_handle : m_pending_for_deletion_geometries) {
+void RenderInterface_VK::Update_PendingForDeletion_Geometries(const uint32_t resource_slot) noexcept {
+    auto& geometries = m_pending_for_deletion_geometries_by_frame[resource_slot % kSwapchainBackBufferCount];
+    for (geometry_handle_t* p_geometry_handle : geometries) {
         m_memory_pool.Free_GeometryHandle(p_geometry_handle);
         delete p_geometry_handle;
     }
 
-    m_pending_for_deletion_geometries.clear();
+    geometries.clear();
 }
 
 void RenderInterface_VK::Submit() noexcept {

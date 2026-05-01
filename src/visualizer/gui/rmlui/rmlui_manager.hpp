@@ -6,6 +6,7 @@
 
 #include "config.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -71,7 +72,11 @@ namespace lfs::vis::gui {
                                 float clip_y2 = 0.0f);
         void clearVulkanQueue();
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer, VkExtent2D extent, VkFramebuffer framebuffer, VkImage swapchain_image);
+        [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
+                                            VkExtent2D extent,
+                                            VkFramebuffer framebuffer,
+                                            VkImage swapchain_image,
+                                            std::size_t frame_slot);
         void renderQueuedVulkanContexts(bool foreground);
         void endVulkanFrame();
 #endif

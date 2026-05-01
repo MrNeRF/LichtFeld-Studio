@@ -25,6 +25,7 @@
 #include <vk_mem_alloc.h>
 
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -70,7 +71,11 @@ public:
 
 	bool InitializeExternal(const ExternalContext& context);
 	void ShutdownExternal();
-	void BeginExternalFrame(VkCommandBuffer command_buffer, VkExtent2D extent, VkFramebuffer framebuffer, VkImage swapchain_image);
+	void BeginExternalFrame(VkCommandBuffer command_buffer,
+		VkExtent2D extent,
+		VkFramebuffer framebuffer,
+		VkImage swapchain_image,
+		std::size_t frame_slot);
 	void EndExternalFrame();
 	void ResetContextRenderState();
 	void SetContextOffset(float offset_x, float offset_y);
@@ -572,7 +577,8 @@ private:
 	void DestroyDescriptorSets() noexcept;
 	void DestroyPipelineLayout() noexcept;
 	void DestroySamplers() noexcept;
-	void FreeTransientShaderAllocations() noexcept;
+	void FreeTransientShaderAllocations(uint32_t resource_slot) noexcept;
+	void FreeAllTransientShaderAllocations() noexcept;
 
 	void EnsureRenderLayer(Rml::LayerHandle layer_handle);
 	render_layer_t* GetRenderLayer(Rml::LayerHandle layer_handle);
@@ -591,8 +597,9 @@ private:
 
 	void Wait() noexcept;
 
-	void Update_PendingForDeletion_Textures_By_Frames() noexcept;
-	void Update_PendingForDeletion_Geometries() noexcept;
+	void Update_PendingForDeletion_Textures_By_Frame(uint32_t resource_slot) noexcept;
+	void Update_PendingForDeletion_Geometries(uint32_t resource_slot) noexcept;
+	uint32_t ActiveResourceSlot() const noexcept;
 
 	void Submit() noexcept;
 	void Present() noexcept;
@@ -616,6 +623,8 @@ private:
 	uint32_t m_queue_index_compute;
 	uint32_t m_semaphore_index;
 	uint32_t m_semaphore_index_previous;
+	uint32_t m_resource_slot = 0;
+	uint32_t m_reclaim_resource_slot = 0;
 	uint32_t m_image_index;
 
 	VkInstance m_p_instance;
@@ -677,7 +686,7 @@ private:
 	Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
 	std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
 	Rml::Vector<render_layer_t> m_render_layers;
-	Rml::Vector<VmaVirtualAllocation> m_transient_shader_allocations;
+	Rml::Array<Rml::Vector<VmaVirtualAllocation>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
 	VkFramebuffer m_external_framebuffer = VK_NULL_HANDLE;
 	VkImage m_external_swapchain_image = VK_NULL_HANDLE;
 	active_render_target_t m_active_render_target = active_render_target_t::None;
@@ -685,7 +694,7 @@ private:
 	int m_render_layer_stack_size = 0;
 
 	// vma handles that thing, so there's no need for frame splitting
-	Rml::Vector<geometry_handle_t*> m_pending_for_deletion_geometries;
+	Rml::Array<Rml::Vector<geometry_handle_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_geometries_by_frame;
 
 	CommandBufferRing m_command_buffer_ring;
 	MemoryPool m_memory_pool;

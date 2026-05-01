@@ -30,6 +30,7 @@
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -37,6 +38,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 #include <imgui.h>
 #include <vulkan/vulkan.h>
 
@@ -139,7 +141,8 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
-            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent) const;
+            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
+                                                                             std::size_t frame_slot) const;
             void recordVulkanViewport(VkCommandBuffer command_buffer,
                                       VkExtent2D extent,
                                       const VulkanViewportPassParams& params);
@@ -232,7 +235,7 @@ namespace lfs::vis {
             // RmlUI integration
             RmlUIManager rmlui_manager_;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
-            std::unique_ptr<VulkanSceneInteropTarget> vulkan_scene_interop_;
+            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             glm::ivec2 vulkan_scene_image_size_{0, 0};
             bool vulkan_scene_image_flip_y_ = false;
