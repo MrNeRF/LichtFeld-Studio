@@ -98,6 +98,9 @@ namespace lfs::vis {
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
+        void addFrameTimelineWait(VkSemaphore semaphore,
+                                  std::uint64_t value,
+                                  VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
         [[nodiscard]] bool createExternalImage(VkExtent2D extent, VkFormat format, ExternalImage& out);
         void destroyExternalImage(ExternalImage& image);
@@ -107,6 +110,10 @@ namespace lfs::vis {
         [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;
         [[nodiscard]] static bool externalNativeHandleValid(ExternalNativeHandle handle);
         void closeExternalNativeHandle(ExternalNativeHandle& handle) const;
+        [[nodiscard]] bool transitionImageLayoutImmediate(VkImage image,
+                                                          VkImageLayout old_layout,
+                                                          VkImageLayout new_layout,
+                                                          VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT);
 #endif
 
     private:
@@ -123,6 +130,12 @@ namespace lfs::vis {
             VkSurfaceCapabilitiesKHR capabilities{};
             std::vector<VkSurfaceFormatKHR> formats;
             std::vector<VkPresentModeKHR> present_modes;
+        };
+
+        struct FrameTimelineWait {
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            std::uint64_t value = 0;
+            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         };
 
         bool createInstance();
@@ -192,6 +205,7 @@ namespace lfs::vis {
 
         VkCommandPool command_pool_ = VK_NULL_HANDLE;
         std::vector<VkCommandBuffer> command_buffers_;
+        std::vector<FrameTimelineWait> frame_timeline_waits_;
         VkSemaphore image_available_ = VK_NULL_HANDLE;
         VkSemaphore render_finished_ = VK_NULL_HANDLE;
         VkFence in_flight_ = VK_NULL_HANDLE;

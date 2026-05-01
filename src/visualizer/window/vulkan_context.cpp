@@ -337,6 +337,7 @@ namespace lfs::vis {
         if (frame_active_) {
             return fail("beginFrame called while another Vulkan frame is active");
         }
+        frame_timeline_waits_.clear();
         frame = {};
         if (device_ == VK_NULL_HANDLE || swapchain_ == VK_NULL_HANDLE || framebuffer_width_ <= 0 || framebuffer_height_ <= 0) {
             last_error_.clear();
@@ -429,17 +430,46 @@ namespace lfs::vis {
             return fail(std::format("vkEndCommandBuffer failed: {}", static_cast<int>(result)));
         }
 
-        const VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        std::vector<VkSemaphore> wait_semaphores;
+        wait_semaphores.reserve(1 + frame_timeline_waits_.size());
+        wait_semaphores.push_back(image_available_);
+
+        std::vector<VkPipelineStageFlags> wait_stages;
+        wait_stages.reserve(1 + frame_timeline_waits_.size());
+        wait_stages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+
+        std::vector<std::uint64_t> wait_values;
+        wait_values.reserve(1 + frame_timeline_waits_.size());
+        wait_values.push_back(0);
+        for (const auto& wait : frame_timeline_waits_) {
+            if (wait.semaphore == VK_NULL_HANDLE) {
+                continue;
+            }
+            wait_semaphores.push_back(wait.semaphore);
+            wait_stages.push_back(wait.wait_stage);
+            wait_values.push_back(wait.value);
+        }
+
+        const std::uint64_t signal_value = 0;
+        VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
+        timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        timeline_submit_info.waitSemaphoreValueCount = static_cast<std::uint32_t>(wait_values.size());
+        timeline_submit_info.pWaitSemaphoreValues = wait_values.data();
+        timeline_submit_info.signalSemaphoreValueCount = 1;
+        timeline_submit_info.pSignalSemaphoreValues = &signal_value;
+
         VkSubmitInfo submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.waitSemaphoreCount = 1;
-        submit_info.pWaitSemaphores = &image_available_;
-        submit_info.pWaitDstStageMask = &wait_stage;
+        submit_info.pNext = wait_values.size() > 1 ? &timeline_submit_info : nullptr;
+        submit_info.waitSemaphoreCount = static_cast<std::uint32_t>(wait_semaphores.size());
+        submit_info.pWaitSemaphores = wait_semaphores.data();
+        submit_info.pWaitDstStageMask = wait_stages.data();
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
         submit_info.signalSemaphoreCount = 1;
         submit_info.pSignalSemaphores = &render_finished_;
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, in_flight_);
+        frame_timeline_waits_.clear();
         if (result != VK_SUCCESS) {
             frame_active_ = false;
             return fail(std::format("vkQueueSubmit failed: {}", static_cast<int>(result)));
@@ -465,6 +495,21 @@ namespace lfs::vis {
         }
 
         return true;
+    }
+
+    void VulkanContext::addFrameTimelineWait(const VkSemaphore semaphore,
+                                             const std::uint64_t value,
+                                             const VkPipelineStageFlags wait_stage) {
+        if (semaphore == VK_NULL_HANDLE) {
+            return;
+        }
+        const VkPipelineStageFlags resolved_wait_stage =
+            wait_stage == 0 ? static_cast<VkPipelineStageFlags>(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT) : wait_stage;
+        frame_timeline_waits_.push_back(FrameTimelineWait{
+            .semaphore = semaphore,
+            .value = value,
+            .wait_stage = resolved_wait_stage,
+        });
     }
 
     bool VulkanContext::createInstance() {
@@ -1206,6 +1251,133 @@ namespace lfs::vis {
         const ExternalNativeHandle handle = semaphore.native_handle;
         semaphore.native_handle = kInvalidExternalNativeHandle;
         return handle;
+    }
+
+    bool VulkanContext::transitionImageLayoutImmediate(const VkImage image,
+                                                       const VkImageLayout old_layout,
+                                                       const VkImageLayout new_layout,
+                                                       const VkImageAspectFlags aspect_mask) {
+        if (device_ == VK_NULL_HANDLE || command_pool_ == VK_NULL_HANDLE ||
+            graphics_queue_ == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
+            return fail("Cannot transition Vulkan image layout before graphics resources are initialized");
+        }
+        if (frame_active_) {
+            return fail("Immediate Vulkan image layout transitions cannot run during an active frame");
+        }
+        if (old_layout == new_layout) {
+            last_error_.clear();
+            return true;
+        }
+
+        VkCommandBufferAllocateInfo allocate_info{};
+        allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        allocate_info.commandPool = command_pool_;
+        allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocate_info.commandBufferCount = 1;
+
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, &command_buffer);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkAllocateCommandBuffers(layout transition) failed: {}", static_cast<int>(result)));
+        }
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        result = vkBeginCommandBuffer(command_buffer, &begin_info);
+        if (result != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+            return fail(std::format("vkBeginCommandBuffer(layout transition) failed: {}", static_cast<int>(result)));
+        }
+
+        VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+        VkImageMemoryBarrier barrier{};
+        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        barrier.oldLayout = old_layout;
+        barrier.newLayout = new_layout;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = image;
+        barrier.subresourceRange.aspectMask = aspect_mask;
+        barrier.subresourceRange.baseMipLevel = 0;
+        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.baseArrayLayer = 0;
+        barrier.subresourceRange.layerCount = 1;
+
+        switch (old_layout) {
+        case VK_IMAGE_LAYOUT_UNDEFINED:
+            barrier.srcAccessMask = 0;
+            src_stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_GENERAL:
+            barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            break;
+        default:
+            barrier.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            break;
+        }
+
+        switch (new_layout) {
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            break;
+        case VK_IMAGE_LAYOUT_GENERAL:
+            barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            break;
+        default:
+            barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            break;
+        }
+
+        vkCmdPipelineBarrier(command_buffer,
+                             src_stage,
+                             dst_stage,
+                             0,
+                             0,
+                             nullptr,
+                             0,
+                             nullptr,
+                             1,
+                             &barrier);
+
+        result = vkEndCommandBuffer(command_buffer);
+        if (result != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+            return fail(std::format("vkEndCommandBuffer(layout transition) failed: {}", static_cast<int>(result)));
+        }
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, VK_NULL_HANDLE);
+        if (result == VK_SUCCESS) {
+            result = vkQueueWaitIdle(graphics_queue_);
+        }
+        vkFreeCommandBuffers(device_, command_pool_, 1, &command_buffer);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("Immediate Vulkan image layout transition failed: {}", static_cast<int>(result)));
+        }
+        last_error_.clear();
+        return true;
     }
 
     bool VulkanContext::createSwapchain(const int framebuffer_width, const int framebuffer_height) {
