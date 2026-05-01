@@ -3847,6 +3847,14 @@ namespace lfs::python {
             "Open a file dialog to select a JSON config file. Returns empty string if cancelled.");
 
         m.def(
+            "open_csv_file_dialog",
+            []() -> std::string {
+                auto result = lfs::vis::gui::OpenCsvFileDialog();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            "Open a file dialog to select a CSV file. Returns empty string if cancelled.");
+
+        m.def(
             "save_json_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
