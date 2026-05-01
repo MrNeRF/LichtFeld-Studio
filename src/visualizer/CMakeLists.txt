@@ -16,6 +16,9 @@ endif()
 option(LFS_DEV_IMPORT_SOURCE_RESOURCES
         "Load RmlUI resources and locales from source in non-portable builds"
         ON)
+option(LFS_VULKAN_NO_INTEROP_FALLBACK
+        "Disable the Vulkan viewport CPU/staging fallback when CUDA/Vulkan interop is unavailable"
+        OFF)
 
 add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Core
@@ -30,7 +33,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Window management
         window/window_manager.cpp
         window/vulkan_context.cpp
-        window/vulkan_frame_graph.cpp
+        window/vulkan_image_barrier_tracker.cpp
         window/vulkan_loader_probe.cpp
 
         # Rendering
@@ -273,6 +276,9 @@ if(ENABLE_VULKAN_VIEWER)
             volk::volk_headers)
     if(WIN32)
         target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)
+    endif()
+    if(LFS_VULKAN_NO_INTEROP_FALLBACK)
+        target_compile_definitions(lfs_visualizer PRIVATE LFS_VULKAN_NO_INTEROP_FALLBACK=1)
     endif()
 endif()
 

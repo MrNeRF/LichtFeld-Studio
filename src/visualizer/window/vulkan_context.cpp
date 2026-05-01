@@ -416,7 +416,7 @@ namespace lfs::vis {
         }
 
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
-        frame_graph_.transitionImage(command_buffer,
+        image_barriers_.transitionImage(command_buffer,
                                      swapchain_images_[image_index],
                                      VK_IMAGE_ASPECT_COLOR_BIT,
                                      VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -427,7 +427,7 @@ namespace lfs::vis {
             return fail(std::format("Missing depth/stencil resource for swapchain image {}", image_index));
         }
         const DepthStencilResource& depth_stencil = depth_stencil_resources_[image_index];
-        frame_graph_.transitionImage(command_buffer,
+        image_barriers_.transitionImage(command_buffer,
                                      depth_stencil.image,
                                      depthStencilAspectMask(),
                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
@@ -484,7 +484,7 @@ namespace lfs::vis {
         const std::size_t current_frame = active_frame_index_;
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
         vkCmdEndRendering(command_buffer);
-        frame_graph_.transitionImage(command_buffer,
+        image_barriers_.transitionImage(command_buffer,
                                      swapchain_images_[active_image_index_],
                                      VK_IMAGE_ASPECT_COLOR_BIT,
                                      VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
@@ -590,6 +590,10 @@ namespace lfs::vis {
         }
         last_error_.clear();
         return true;
+    }
+
+    bool VulkanContext::waitForSubmittedFrames() {
+        return waitForFrameFences();
     }
 
     void VulkanContext::addFrameTimelineWait(const VkSemaphore semaphore,
@@ -1593,7 +1597,7 @@ namespace lfs::vis {
         swapchain_extent_ = extent;
         swapchain_image_usage_ = create_info.imageUsage;
         for (size_t i = 0; i < swapchain_images_.size(); ++i) {
-            frame_graph_.registerImage(swapchain_images_[i],
+            image_barriers_.registerImage(swapchain_images_[i],
                                        VK_IMAGE_ASPECT_COLOR_BIT,
                                        VK_IMAGE_LAYOUT_UNDEFINED);
             setDebugObjectName(VK_OBJECT_TYPE_IMAGE,
@@ -1716,7 +1720,7 @@ namespace lfs::vis {
                                resource.view,
                                std::format("Depth/stencil image view {}", i));
 
-            frame_graph_.registerImage(resource.image,
+            image_barriers_.registerImage(resource.image,
                                        depthStencilAspectMask(),
                                        VK_IMAGE_LAYOUT_UNDEFINED);
         }
@@ -1966,7 +1970,7 @@ namespace lfs::vis {
         swapchain_image_views_.clear();
         swapchain_images_.clear();
         swapchain_images_in_flight_.clear();
-        frame_graph_.reset();
+        image_barriers_.reset();
 
         if (swapchain_ != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device_, swapchain_, nullptr);

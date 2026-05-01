@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "vulkan_frame_graph.hpp"
+#include "vulkan_image_barrier_tracker.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 namespace lfs::vis {
@@ -49,19 +49,19 @@ namespace lfs::vis {
         }
     } // namespace
 
-    void VulkanFrameGraph::reset() {
+    void VulkanImageBarrierTracker::reset() {
         images_.clear();
     }
 
-    void VulkanFrameGraph::forgetImage(const VkImage image) {
+    void VulkanImageBarrierTracker::forgetImage(const VkImage image) {
         if (image != VK_NULL_HANDLE) {
             images_.erase(image);
         }
     }
 
-    void VulkanFrameGraph::registerImage(const VkImage image,
-                                         const VkImageAspectFlags aspect_mask,
-                                         const VkImageLayout layout) {
+    void VulkanImageBarrierTracker::registerImage(const VkImage image,
+                                                  const VkImageAspectFlags aspect_mask,
+                                                  const VkImageLayout layout) {
         if (image == VK_NULL_HANDLE) {
             return;
         }
@@ -74,15 +74,15 @@ namespace lfs::vis {
         };
     }
 
-    VkImageLayout VulkanFrameGraph::imageLayout(const VkImage image, const VkImageLayout fallback) const {
+    VkImageLayout VulkanImageBarrierTracker::imageLayout(const VkImage image, const VkImageLayout fallback) const {
         const auto it = images_.find(image);
         return it != images_.end() ? it->second.layout : fallback;
     }
 
-    void VulkanFrameGraph::transitionImage(const VkCommandBuffer command_buffer,
-                                           const VkImage image,
-                                           const VkImageAspectFlags aspect_mask,
-                                           const VkImageLayout new_layout) {
+    void VulkanImageBarrierTracker::transitionImage(const VkCommandBuffer command_buffer,
+                                                    const VkImage image,
+                                                    const VkImageAspectFlags aspect_mask,
+                                                    const VkImageLayout new_layout) {
         if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
             return;
         }

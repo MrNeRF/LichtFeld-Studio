@@ -6,7 +6,7 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
-#include "window/vulkan_frame_graph.hpp"
+#include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef _WIN32
     #ifndef NOMINMAX
@@ -592,6 +592,7 @@ private:
 	void Update_PendingForDeletion_Textures_By_Frame(uint32_t resource_slot) noexcept;
 	void Update_PendingForDeletion_Geometries(uint32_t resource_slot) noexcept;
 	uint32_t ActiveResourceSlot() const noexcept;
+	void WaitForSubmittedFrames() noexcept;
 
 	void Submit() noexcept;
 	void Present() noexcept;
@@ -680,7 +681,7 @@ private:
 	VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
 	VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-	lfs::vis::VulkanFrameGraph m_frame_graph;
+	lfs::vis::VulkanImageBarrierTracker m_image_barriers;
 	active_render_target_t m_active_render_target = active_render_target_t::None;
 	Rml::LayerHandle m_active_layer = 0;
 	int m_render_layer_stack_size = 0;

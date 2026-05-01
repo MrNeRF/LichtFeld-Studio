@@ -1087,9 +1087,9 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 #endif
 
     m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
-        lfs::vis::VulkanFrameGraph upload_graph;
-        upload_graph.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-        upload_graph.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        lfs::vis::VulkanImageBarrierTracker upload_barriers;
+        upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+        upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
         VkBufferImageCopy region = {};
         region.bufferOffset = 0;
@@ -1104,7 +1104,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
         vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-        upload_graph.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     });
 
     DestroyResource_StagingBuffer(cpu_buffer);
@@ -1264,8 +1264,7 @@ void RenderInterface_VK::EndFrame() {
 }
 
 void RenderInterface_VK::SetViewport(int width, int height) {
-    auto status = vkDeviceWaitIdle(m_p_device);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkDeviceWaitIdle");
+    WaitForSubmittedFrames();
 
     if (width > 0 && height > 0) {
         m_width = width;
@@ -2928,6 +2927,24 @@ uint32_t RenderInterface_VK::ActiveResourceSlot() const noexcept {
     return m_resource_slot % kSwapchainBackBufferCount;
 }
 
+void RenderInterface_VK::WaitForSubmittedFrames() noexcept {
+    if (!m_p_device || m_executed_fences.empty())
+        return;
+
+    Rml::Vector<VkFence> fences;
+    fences.reserve(m_executed_fences.size());
+    for (const VkFence fence : m_executed_fences) {
+        if (fence)
+            fences.push_back(fence);
+    }
+    if (fences.empty())
+        return;
+
+    const VkResult status = vkWaitForFences(
+        m_p_device, static_cast<uint32_t>(fences.size()), fences.data(), VK_TRUE, std::numeric_limits<uint64_t>::max());
+    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to wait for submitted RmlUi Vulkan frames");
+}
+
 void RenderInterface_VK::FreeTransientShaderAllocations(const uint32_t resource_slot) noexcept {
     auto& allocations = m_transient_shader_allocations_by_frame[resource_slot % kSwapchainBackBufferCount];
     for (VmaVirtualAllocation allocation : allocations)
@@ -2952,7 +2969,7 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
     RMLUI_VK_ASSERTMSG(m_p_device, "you must have initialized VkDevice");
 
     if (texture.m_p_vma_allocation) {
-        m_frame_graph.forgetImage(texture.m_p_vk_image);
+        m_image_barriers.forgetImage(texture.m_p_vk_image);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
         vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
 
@@ -2973,7 +2990,7 @@ void RenderInterface_VK::DestroyResourcesDependentOnSize() noexcept {
     m_texture_depthstencil.m_p_vk_image = nullptr;
     m_texture_depthstencil.m_p_vk_image_view = nullptr;
     m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    m_frame_graph.reset();
+    m_image_barriers.reset();
 }
 
 void RenderInterface_VK::DestroySwapchainImageViews() noexcept {
@@ -3118,8 +3135,8 @@ void RenderInterface_VK::TransitionImageLayout(VkImage image, VkImageAspectFlags
     if (!m_p_current_command_buffer || !image || old_layout == new_layout)
         return;
 
-    m_frame_graph.registerImage(image, aspect_mask, old_layout);
-    m_frame_graph.transitionImage(m_p_current_command_buffer, image, aspect_mask, new_layout);
+    m_image_barriers.registerImage(image, aspect_mask, old_layout);
+    m_image_barriers.transitionImage(m_p_current_command_buffer, image, aspect_mask, new_layout);
 }
 
 void RenderInterface_VK::ResetDynamicRenderState() {

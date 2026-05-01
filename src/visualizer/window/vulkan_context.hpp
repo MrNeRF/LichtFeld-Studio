@@ -16,7 +16,7 @@
 #include <vector>
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-#include "vulkan_frame_graph.hpp"
+#include "vulkan_image_barrier_tracker.hpp"
 #include <vulkan/vulkan.h>
 #ifndef VMA_STATIC_VULKAN_FUNCTIONS
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
@@ -118,6 +118,7 @@ namespace lfs::vis {
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool waitForCurrentFrameSlot();
+        [[nodiscard]] bool waitForSubmittedFrames();
         void addFrameTimelineWait(VkSemaphore semaphore,
                                   std::uint64_t value,
                                   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
@@ -227,7 +228,7 @@ namespace lfs::vis {
         uint32_t min_image_count_ = 2;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
-        VulkanFrameGraph frame_graph_;
+        VulkanImageBarrierTracker image_barriers_;
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
         std::vector<DepthStencilResource> depth_stencil_resources_;
 

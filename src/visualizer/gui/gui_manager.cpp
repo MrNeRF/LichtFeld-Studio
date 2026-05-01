@@ -65,6 +65,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -3291,7 +3292,10 @@ namespace lfs::vis::gui {
 
     void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        if (!vulkanSceneInteropEnvironmentEnabled()) {
+        const bool interop_explicitly_disabled =
+            (viewer_ && !viewer_->options_.enable_cuda_interop) ||
+            !vulkanSceneInteropEnvironmentEnabled();
+        if (interop_explicitly_disabled) {
             if (!vulkan_scene_interop_.empty()) {
                 resetVulkanSceneInterop();
             }
@@ -3301,18 +3305,32 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const auto disable_after_failure = [this]() {
+        const auto fail_required_interop = [this](std::string message) -> void {
             vulkan_scene_interop_disabled_ = true;
             resetVulkanSceneInterop();
+            LOG_ERROR("Required Vulkan/CUDA viewport interop failed: {}", message);
+#ifndef NDEBUG
+            assert(false && "Required Vulkan/CUDA viewport interop failed");
+#endif
+            throw std::runtime_error(std::move(message));
         };
 
         if (!vulkan_scene_image_ ||
             !vulkan_scene_image_->is_valid() ||
             vulkan_scene_image_->device() != lfs::core::Device::CUDA ||
             vulkan_scene_image_size_.x <= 0 ||
-            vulkan_scene_image_size_.y <= 0 ||
-            !context.externalMemoryInteropEnabled() ||
-            !context.externalSemaphoreInteropEnabled()) {
+            vulkan_scene_image_size_.y <= 0) {
+            if (!vulkan_scene_interop_.empty()) {
+                resetVulkanSceneInterop();
+            }
+            return;
+        }
+
+        if (!context.externalMemoryInteropEnabled() || !context.externalSemaphoreInteropEnabled()) {
+            if (!vulkan_scene_interop_unavailable_logged_) {
+                LOG_WARN("Vulkan/CUDA viewport interop unavailable on this device; using staging fallback");
+                vulkan_scene_interop_unavailable_logged_ = true;
+            }
             if (!vulkan_scene_interop_.empty()) {
                 resetVulkanSceneInterop();
             }
@@ -3320,9 +3338,7 @@ namespace lfs::vis::gui {
         }
 
         if (!context.waitForCurrentFrameSlot()) {
-            LOG_WARN("Vulkan/CUDA interop skipped; frame slot wait failed: {}", context.lastError());
-            disable_after_failure();
-            return;
+            fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
         }
 
         const std::size_t frame_slot = context.currentFrameSlot();
@@ -3331,9 +3347,7 @@ namespace lfs::vis::gui {
             vulkan_scene_interop_.resize(context.framesInFlight());
         }
         if (frame_slot >= vulkan_scene_interop_.size()) {
-            LOG_WARN("Vulkan/CUDA interop skipped; invalid frame slot {}", frame_slot);
-            disable_after_failure();
-            return;
+            fail_required_interop(std::format("invalid frame slot {}", frame_slot));
         }
         auto& target_ptr = vulkan_scene_interop_[frame_slot];
         const auto reset_frame_target = [&]() {
@@ -3357,20 +3371,18 @@ namespace lfs::vis::gui {
             };
             if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, target->image) ||
                 !context.createExternalTimelineSemaphore(0, target->semaphore)) {
-                LOG_WARN("Vulkan/CUDA interop target creation failed: {}", context.lastError());
+                const std::string error = std::format("target creation failed: {}", context.lastError());
                 if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
                     target->destroy(context);
                 }
-                vulkan_scene_interop_disabled_ = true;
-                return;
+                fail_required_interop(error);
             }
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
                                                         VK_IMAGE_LAYOUT_GENERAL)) {
-                LOG_WARN("Vulkan/CUDA interop image initialization failed: {}", context.lastError());
+                const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
-                vulkan_scene_interop_disabled_ = true;
-                return;
+                fail_required_interop(error);
             }
 
             const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
@@ -3387,10 +3399,9 @@ namespace lfs::vis::gui {
                 .initial_value = 0,
             };
             if (!target->interop.init(image_import, semaphore_import)) {
-                LOG_WARN("CUDA import of Vulkan viewport target failed: {}", target->interop.lastError());
+                const std::string error = std::format("CUDA import failed: {}", target->interop.lastError());
                 target->destroy(context);
-                vulkan_scene_interop_disabled_ = true;
-                return;
+                fail_required_interop(error);
             }
             target->size = target_size;
             target->layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -3411,23 +3422,17 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
                                                         VK_IMAGE_LAYOUT_GENERAL)) {
-                LOG_WARN("Vulkan/CUDA interop image transition to GENERAL failed: {}", context.lastError());
-                disable_after_failure();
-                return;
+                fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
         }
 
         if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
-            LOG_WARN("CUDA copy into Vulkan viewport target failed: {}", target.interop.lastError());
-            disable_after_failure();
-            return;
+            fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
         }
         const std::uint64_t signal_value = ++target.timeline_value;
         if (!target.interop.signal(signal_value)) {
-            LOG_WARN("CUDA signal for Vulkan viewport target failed: {}", target.interop.lastError());
-            disable_after_failure();
-            return;
+            fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
         }
         if (!context.transitionImageLayoutImmediate(target.image.image,
                                                     VK_IMAGE_LAYOUT_GENERAL,
@@ -3436,9 +3441,7 @@ namespace lfs::vis::gui {
                                                     target.semaphore.semaphore,
                                                     signal_value,
                                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
-            LOG_WARN("Vulkan wait for CUDA viewport target failed: {}", context.lastError());
-            disable_after_failure();
-            return;
+            fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
         }
         target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         target.uploaded_tensor = vulkan_scene_image_.get();

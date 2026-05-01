@@ -214,7 +214,10 @@ namespace {
 #ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
 #endif
-            ::args::Flag no_interop(ui_group, "no_interop", "Disable GPU display interop (use staging/CPU fallback for display)", {"no-interop"});
+            ::args::Flag no_interop(ui_group,
+                                     "no_interop",
+                                     "Disable GPU display interop (use staging/CPU fallback for display)",
+                                     {"no-interop", "no-vk-cuda-interop"});
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
 

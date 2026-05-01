@@ -9,7 +9,7 @@
 #include "core/tensor.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
-#include "window/vulkan_frame_graph.hpp"
+#include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "viewport/grid.frag.spv.h"
@@ -91,6 +91,7 @@ namespace lfs::vis {
             return reinterpret_cast<VkDescriptorSet>(texture_id);
         }
 
+#ifndef LFS_VULKAN_NO_INTEROP_FALLBACK
         [[nodiscard]] std::optional<std::vector<std::uint8_t>> tensorToRgba8(
             const lfs::core::Tensor& image,
             const glm::ivec2 expected_size) {
@@ -152,6 +153,7 @@ namespace lfs::vis {
             }
             return rgba;
         }
+#endif
 
         [[nodiscard]] FramebufferRect toFramebufferRect(
             const VulkanViewportPassParams& params,
@@ -201,6 +203,7 @@ namespace lfs::vis {
     struct VulkanViewportPass::Impl {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         VkDevice device = VK_NULL_HANDLE;
+        VulkanContext* context = nullptr;
         VmaAllocator allocator = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
         VkQueue graphics_queue = VK_NULL_HANDLE;
@@ -239,7 +242,7 @@ namespace lfs::vis {
         VkImage scene_image = VK_NULL_HANDLE;
         VmaAllocation scene_image_allocation = VK_NULL_HANDLE;
         VkImageView scene_image_view = VK_NULL_HANDLE;
-        VulkanFrameGraph scene_image_graph;
+        VulkanImageBarrierTracker scene_image_barriers;
         glm::ivec2 scene_image_size{0, 0};
         const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
         bool scene_image_external = false;
@@ -267,6 +270,7 @@ namespace lfs::vis {
             if (device != VK_NULL_HANDLE) {
                 return true;
             }
+            this->context = &context;
             device = context.device();
             allocator = context.allocator();
             pipeline_cache = context.pipelineCache();
@@ -778,7 +782,7 @@ namespace lfs::vis {
         }
 
         void clearSceneImageBinding() {
-            scene_image_graph.forgetImage(scene_image);
+            scene_image_barriers.forgetImage(scene_image);
             scene_image = VK_NULL_HANDLE;
             scene_image_allocation = VK_NULL_HANDLE;
             scene_image_view = VK_NULL_HANDLE;
@@ -871,7 +875,7 @@ namespace lfs::vis {
             }
 
             scene_image_size = size;
-            scene_image_graph.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
             updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
@@ -887,7 +891,7 @@ namespace lfs::vis {
                 scene_image == params.external_scene_image &&
                 scene_image_view == params.external_scene_image_view &&
                 scene_image_size == params.scene_image_size &&
-                scene_image_graph.imageLayout(scene_image, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
+                scene_image_barriers.imageLayout(scene_image, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
                 scene_image_external_generation == params.external_scene_image_generation) {
                 updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return true;
@@ -900,7 +904,7 @@ namespace lfs::vis {
             uploaded_scene_tensor = params.scene_image.get();
             scene_image_external = true;
             scene_image_external_generation = params.external_scene_image_generation;
-            scene_image_graph.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
+            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
             updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
@@ -1178,6 +1182,14 @@ namespace lfs::vis {
                 updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return;
             }
+#ifdef LFS_VULKAN_NO_INTEROP_FALLBACK
+            static bool logged_fallback_disabled = false;
+            if (!logged_fallback_disabled) {
+                LOG_ERROR("Vulkan viewport staging fallback is disabled at build time; no external scene image was supplied");
+                logged_fallback_disabled = true;
+            }
+            uploaded_scene_tensor = nullptr;
+#else
             const auto rgba = tensorToRgba8(*params.scene_image, params.scene_image_size);
             if (!rgba || rgba->empty() || !ensureSceneImage(params.scene_image_size, frame)) {
                 return;
@@ -1203,7 +1215,7 @@ namespace lfs::vis {
                 vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
                 return;
             }
-            scene_image_graph.transitionImage(command_buffer,
+            scene_image_barriers.transitionImage(command_buffer,
                                               scene_image,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
                                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -1223,7 +1235,7 @@ namespace lfs::vis {
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    1,
                                    &copy);
-            scene_image_graph.transitionImage(command_buffer,
+            scene_image_barriers.transitionImage(command_buffer,
                                               scene_image,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -1231,6 +1243,7 @@ namespace lfs::vis {
                 uploaded_scene_tensor = params.scene_image.get();
             }
             vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
+#endif
         }
 
         void prepare(const VulkanViewportPassParams& params) {
@@ -1470,7 +1483,10 @@ namespace lfs::vis {
 
         void reset() {
             if (device != VK_NULL_HANDLE) {
-                vkDeviceWaitIdle(device);
+                if (context != nullptr && !context->waitForSubmittedFrames()) {
+                    LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
+                             context->lastError());
+                }
                 destroySceneImage();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);

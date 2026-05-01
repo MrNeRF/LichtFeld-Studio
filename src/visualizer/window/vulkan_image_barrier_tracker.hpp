@@ -12,7 +12,7 @@
 
 namespace lfs::vis {
 
-    class VulkanFrameGraph {
+    class VulkanImageBarrierTracker {
     public:
         struct ImageState {
             VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;

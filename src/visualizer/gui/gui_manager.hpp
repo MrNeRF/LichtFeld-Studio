@@ -240,6 +240,7 @@ namespace lfs::vis {
             glm::ivec2 vulkan_scene_image_size_{0, 0};
             bool vulkan_scene_image_flip_y_ = false;
             bool vulkan_scene_interop_disabled_ = false;
+            bool vulkan_scene_interop_unavailable_logged_ = false;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
 

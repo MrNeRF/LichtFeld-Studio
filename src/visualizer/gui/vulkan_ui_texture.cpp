@@ -9,7 +9,7 @@
 #include "core/tensor.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
-#include "window/vulkan_frame_graph.hpp"
+#include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <vulkan/vulkan.h>
@@ -117,6 +117,7 @@ namespace lfs::vis::gui {
     struct VulkanUiTexture::Impl {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         VkDevice device = VK_NULL_HANDLE;
+        VulkanContext* context = nullptr;
         VmaAllocator allocator = VK_NULL_HANDLE;
         VkQueue graphics_queue = VK_NULL_HANDLE;
         std::uint32_t graphics_queue_family = 0;
@@ -129,7 +130,7 @@ namespace lfs::vis::gui {
         VkImageView image_view = VK_NULL_HANDLE;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-        VulkanFrameGraph image_graph;
+        VulkanImageBarrierTracker image_barriers;
         VkFence upload_fence = VK_NULL_HANDLE;
         VkBuffer pending_staging_buffer = VK_NULL_HANDLE;
         VmaAllocation pending_staging_allocation = VK_NULL_HANDLE;
@@ -176,6 +177,7 @@ namespace lfs::vis::gui {
             if (device != VK_NULL_HANDLE) {
                 return true;
             }
+            this->context = &context;
             device = context.device();
             allocator = context.allocator();
             graphics_queue = context.graphicsQueue();
@@ -335,8 +337,8 @@ namespace lfs::vis::gui {
             if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE || old_layout == new_layout) {
                 return;
             }
-            image_graph.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, old_layout);
-            image_graph.transitionImage(command_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT, new_layout);
+            image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, old_layout);
+            image_barriers.transitionImage(command_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT, new_layout);
         }
 
         [[nodiscard]] bool ensureImage(const int new_width, const int new_height) {
@@ -387,7 +389,7 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
-            image_graph.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
                 VkDescriptorSetAllocateInfo alloc_info{};
@@ -574,7 +576,7 @@ namespace lfs::vis::gui {
                 image_view = VK_NULL_HANDLE;
             }
             if (image != VK_NULL_HANDLE) {
-                image_graph.forgetImage(image);
+                image_barriers.forgetImage(image);
                 vmaDestroyImage(allocator, image, image_allocation);
                 image = VK_NULL_HANDLE;
                 image_allocation = VK_NULL_HANDLE;
@@ -586,7 +588,10 @@ namespace lfs::vis::gui {
 
         void reset() {
             if (device != VK_NULL_HANDLE) {
-                vkDeviceWaitIdle(device);
+                if (context != nullptr && !context->waitForSubmittedFrames()) {
+                    LOG_WARN("Vulkan UI texture shutdown could not wait for submitted frames: {}",
+                             context->lastError());
+                }
                 destroyImage();
                 if (sampler != VK_NULL_HANDLE) {
                     vkDestroySampler(device, sampler, nullptr);
@@ -607,6 +612,7 @@ namespace lfs::vis::gui {
                 }
             }
             device = VK_NULL_HANDLE;
+            context = nullptr;
             allocator = VK_NULL_HANDLE;
             graphics_queue = VK_NULL_HANDLE;
             graphics_queue_family = 0;
