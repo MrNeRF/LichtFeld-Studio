@@ -5,6 +5,8 @@
 add_subdirectory(rasterizer)
 
 set(RENDERING_TENSOR_SOURCES
+        cuda_vulkan_interop.cpp
+        cuda_vulkan_interop.cu
         gs_rasterizer_tensor.cpp
         raster_rendering_engine.cpp
         cuda_interaction_kernels.cu
