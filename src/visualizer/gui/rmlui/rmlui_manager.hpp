@@ -74,8 +74,9 @@ namespace lfs::vis::gui {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
                                             VkExtent2D extent,
-                                            VkFramebuffer framebuffer,
                                             VkImage swapchain_image,
+                                            VkImageView swapchain_image_view,
+                                            VkImageView depth_stencil_image_view,
                                             std::size_t frame_slot);
         void renderQueuedVulkanContexts(bool foreground);
         void endVulkanFrame();

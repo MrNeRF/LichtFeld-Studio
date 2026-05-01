@@ -60,7 +60,6 @@ public:
 		VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
 		VkQueue graphics_queue = VK_NULL_HANDLE;
 		uint32_t graphics_queue_family = 0;
-		VkRenderPass render_pass = VK_NULL_HANDLE;
 		VkFormat color_format = VK_FORMAT_UNDEFINED;
 		VkFormat depth_stencil_format = VK_FORMAT_UNDEFINED;
 		VkExtent2D extent{};
@@ -73,8 +72,9 @@ public:
 	void ShutdownExternal();
 	void BeginExternalFrame(VkCommandBuffer command_buffer,
 		VkExtent2D extent,
-		VkFramebuffer framebuffer,
 		VkImage swapchain_image,
+		VkImageView swapchain_image_view,
+		VkImageView depth_stencil_image_view,
 		std::size_t frame_slot);
 	void EndExternalFrame();
 	void ResetContextRenderState();
@@ -181,7 +181,6 @@ private:
 	struct render_layer_t {
 		texture_data_t m_color{};
 		texture_data_t m_depth_stencil{};
-		VkFramebuffer m_p_framebuffer = VK_NULL_HANDLE;
 		VkImageLayout m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	};
@@ -541,12 +540,6 @@ private:
 	void CreateDescriptorSets() noexcept;
 	void CreateSamplers() noexcept;
 	void Create_Pipelines() noexcept;
-	void CreateRenderPass() noexcept;
-	void CreateAuxiliaryRenderPasses() noexcept;
-	VkRenderPass CreateRenderPassWithOps(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op, VkImageLayout color_initial_layout,
-		VkImageLayout color_final_layout, VkImageLayout depth_initial_layout, VkImageLayout depth_final_layout) noexcept;
-
-	void CreateSwapchainFrameBuffers(const VkExtent2D& real_render_image_size) noexcept;
 
 	// This method is called in Views, so don't call it manually
 	void CreateSwapchainImages() noexcept;
@@ -568,9 +561,6 @@ private:
 
 	void DestroyResourcesDependentOnSize() noexcept;
 	void DestroySwapchainImageViews() noexcept;
-	void DestroySwapchainFrameBuffers() noexcept;
-	void DestroyRenderPass() noexcept;
-	void DestroyAuxiliaryRenderPasses() noexcept;
 	void DestroyRenderLayers() noexcept;
 	void DestroyRenderLayer(render_layer_t& layer) noexcept;
 	void Destroy_Pipelines() noexcept;
@@ -583,9 +573,9 @@ private:
 	void EnsureRenderLayer(Rml::LayerHandle layer_handle);
 	render_layer_t* GetRenderLayer(Rml::LayerHandle layer_handle);
 	const render_layer_t* GetRenderLayer(Rml::LayerHandle layer_handle) const;
-	void BeginLayerRenderPass(Rml::LayerHandle layer_handle, bool clear);
-	void BeginSwapchainLoadRenderPass();
-	void EndActiveRenderPass();
+	void BeginLayerRendering(Rml::LayerHandle layer_handle, bool clear);
+	void BeginSwapchainRendering(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op);
+	void EndActiveRendering();
 	bool CopySwapchainToLayer(Rml::LayerHandle destination);
 	void TransitionImageLayout(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout);
 	VkImageAspectFlags DepthStencilAspectMask() const noexcept;
@@ -646,10 +636,6 @@ private:
 	VkPipeline m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures;
 	VkPipeline m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures;
 	VkDescriptorSet m_p_descriptor_set;
-	VkRenderPass m_p_render_pass;
-	VkRenderPass m_p_swapchain_load_render_pass;
-	VkRenderPass m_p_layer_clear_render_pass;
-	VkRenderPass m_p_layer_load_render_pass;
 	VkSampler m_p_sampler_linear;
 	VkRect2D m_scissor;
 
@@ -679,16 +665,19 @@ private:
 	Rml::Vector<VkFence> m_executed_fences;
 	Rml::Vector<VkSemaphore> m_semaphores_image_available;
 	Rml::Vector<VkSemaphore> m_semaphores_finished_render;
-	Rml::Vector<VkFramebuffer> m_swapchain_frame_buffers;
 	Rml::Vector<VkImage> m_swapchain_images;
 	Rml::Vector<VkImageView> m_swapchain_image_views;
+	Rml::Vector<VkImageLayout> m_swapchain_image_layouts;
 	Rml::Vector<VkShaderModule> m_shaders;
 	Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
 	std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
 	Rml::Vector<render_layer_t> m_render_layers;
 	Rml::Array<Rml::Vector<VmaVirtualAllocation>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
-	VkFramebuffer m_external_framebuffer = VK_NULL_HANDLE;
 	VkImage m_external_swapchain_image = VK_NULL_HANDLE;
+	VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;
+	VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
+	VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+	VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	active_render_target_t m_active_render_target = active_render_target_t::None;
 	Rml::LayerHandle m_active_layer = 0;
 	int m_render_layer_stack_size = 0;

@@ -204,7 +204,8 @@ namespace lfs::vis {
         VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
         VkQueue graphics_queue = VK_NULL_HANDLE;
         std::uint32_t graphics_queue_family = 0;
-        VkRenderPass render_pass = VK_NULL_HANDLE;
+        VkFormat color_format = VK_FORMAT_UNDEFINED;
+        VkFormat depth_stencil_format = VK_FORMAT_UNDEFINED;
 
         VkCommandPool upload_command_pool = VK_NULL_HANDLE;
         VkBuffer quad_buffer = VK_NULL_HANDLE;
@@ -277,9 +278,11 @@ namespace lfs::vis {
             pipeline_cache = context.pipelineCache();
             graphics_queue = context.graphicsQueue();
             graphics_queue_family = context.graphicsQueueFamily();
-            render_pass = context.renderPass();
+            color_format = context.swapchainFormat();
+            depth_stencil_format = context.depthStencilFormat();
             if (device == VK_NULL_HANDLE || physical_device == VK_NULL_HANDLE ||
-                graphics_queue == VK_NULL_HANDLE || render_pass == VK_NULL_HANDLE) {
+                graphics_queue == VK_NULL_HANDLE || color_format == VK_FORMAT_UNDEFINED ||
+                depth_stencil_format == VK_FORMAT_UNDEFINED) {
                 LOG_ERROR("Vulkan viewport pass requires an initialized Vulkan context");
                 device = VK_NULL_HANDLE;
                 return false;
@@ -620,8 +623,16 @@ namespace lfs::vis {
                 return false;
             }
 
+            VkPipelineRenderingCreateInfo rendering_info{};
+            rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+            rendering_info.colorAttachmentCount = 1;
+            rendering_info.pColorAttachmentFormats = &color_format;
+            rendering_info.depthAttachmentFormat = depth_stencil_format;
+            rendering_info.stencilAttachmentFormat = depth_stencil_format;
+
             VkGraphicsPipelineCreateInfo pipeline_info{};
             pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+            pipeline_info.pNext = &rendering_info;
             pipeline_info.stageCount = 2;
             pipeline_info.pStages = stages;
             pipeline_info.pVertexInputState = &vertex_input;
@@ -633,7 +644,7 @@ namespace lfs::vis {
             pipeline_info.pColorBlendState = &blend;
             pipeline_info.pDynamicState = &dynamic;
             pipeline_info.layout = pipeline_layout;
-            pipeline_info.renderPass = render_pass;
+            pipeline_info.renderPass = VK_NULL_HANDLE;
             pipeline_info.subpass = 0;
 
             const bool ok =

@@ -4093,8 +4093,9 @@ namespace lfs::vis::gui {
                 }
                 if (rmlui_manager_.beginVulkanFrame(frame.command_buffer,
                                                     frame.extent,
-                                                    frame.framebuffer,
                                                     frame.swapchain_image,
+                                                    frame.swapchain_image_view,
+                                                    frame.depth_stencil_image_view,
                                                     frame.frame_slot)) {
                     rmlui_manager_.renderQueuedVulkanContexts(false);
                     rmlui_manager_.renderQueuedVulkanContexts(true);

@@ -60,7 +60,6 @@ namespace lfs::vis::gui {
         context.pipeline_cache = vulkan_context.pipelineCache();
         context.graphics_queue = vulkan_context.graphicsQueue();
         context.graphics_queue_family = vulkan_context.graphicsQueueFamily();
-        context.render_pass = vulkan_context.renderPass();
         context.color_format = vulkan_context.swapchainFormat();
         context.depth_stencil_format = vulkan_context.depthStencilFormat();
         context.extent = vulkan_context.swapchainExtent();
@@ -329,12 +328,19 @@ namespace lfs::vis::gui {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
     bool RmlUIManager::beginVulkanFrame(const VkCommandBuffer command_buffer,
                                         const VkExtent2D extent,
-                                        const VkFramebuffer framebuffer,
                                         const VkImage swapchain_image,
+                                        const VkImageView swapchain_image_view,
+                                        const VkImageView depth_stencil_image_view,
                                         const std::size_t frame_slot) {
-        if (!vulkan_render_interface_ || command_buffer == VK_NULL_HANDLE || framebuffer == VK_NULL_HANDLE)
+        if (!vulkan_render_interface_ || command_buffer == VK_NULL_HANDLE || swapchain_image_view == VK_NULL_HANDLE ||
+            depth_stencil_image_view == VK_NULL_HANDLE)
             return false;
-        vulkan_render_interface_->BeginExternalFrame(command_buffer, extent, framebuffer, swapchain_image, frame_slot);
+        vulkan_render_interface_->BeginExternalFrame(command_buffer,
+                                                     extent,
+                                                     swapchain_image,
+                                                     swapchain_image_view,
+                                                     depth_stencil_image_view,
+                                                     frame_slot);
         vulkan_frame_active_ = true;
         return true;
     }

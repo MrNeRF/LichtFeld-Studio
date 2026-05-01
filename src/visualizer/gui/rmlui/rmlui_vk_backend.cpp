@@ -205,10 +205,6 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures{},
                                            m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures{},
                                            m_p_descriptor_set{},
-                                           m_p_render_pass{},
-                                           m_p_swapchain_load_render_pass{},
-                                           m_p_layer_clear_render_pass{},
-                                           m_p_layer_load_render_pass{},
                                            m_p_sampler_linear{},
                                            m_scissor{},
                                            m_scissor_original{},
@@ -224,8 +220,11 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_texture_depthstencil{},
                                            m_pending_for_deletion_textures_by_frames{},
                                            m_render_layers{},
-                                           m_external_framebuffer{},
                                            m_external_swapchain_image{},
+                                           m_external_swapchain_image_view{},
+                                           m_external_depth_stencil_image_view{},
+                                           m_external_swapchain_layout{VK_IMAGE_LAYOUT_UNDEFINED},
+                                           m_depth_stencil_layout{VK_IMAGE_LAYOUT_UNDEFINED},
                                            m_active_render_target{active_render_target_t::None},
                                            m_active_layer{},
                                            m_render_layer_stack_size{} {
@@ -527,8 +526,8 @@ Rml::LayerHandle RenderInterface_VK::PushLayer() {
     const Rml::LayerHandle layer_handle = static_cast<Rml::LayerHandle>(m_render_layer_stack_size + 1);
     EnsureRenderLayer(layer_handle);
 
-    EndActiveRenderPass();
-    BeginLayerRenderPass(layer_handle, true);
+    EndActiveRendering();
+    BeginLayerRendering(layer_handle, true);
 
     m_render_layer_stack_size += 1;
     m_active_layer = layer_handle;
@@ -552,8 +551,8 @@ void RenderInterface_VK::CompositeLayers(Rml::LayerHandle source, Rml::LayerHand
             const Rml::LayerHandle top_layer =
                 m_render_layer_stack_size > 0 ? static_cast<Rml::LayerHandle>(m_render_layer_stack_size) : Rml::LayerHandle{};
             if (top_layer != 0 && destination != top_layer) {
-                EndActiveRenderPass();
-                BeginLayerRenderPass(top_layer, false);
+                EndActiveRendering();
+                BeginLayerRendering(top_layer, false);
             }
             return;
         }
@@ -566,22 +565,22 @@ void RenderInterface_VK::CompositeLayers(Rml::LayerHandle source, Rml::LayerHand
         return;
     }
 
-    EndActiveRenderPass();
+    EndActiveRendering();
     TransitionImageLayout(source_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     source_layer->m_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     if (destination == 0)
-        BeginSwapchainLoadRenderPass();
+        BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD);
     else
-        BeginLayerRenderPass(destination, false);
+        BeginLayerRendering(destination, false);
 
     RenderFullscreenTexture(source_layer->m_color, blend_mode);
 
     const Rml::LayerHandle top_layer = m_render_layer_stack_size > 0 ? static_cast<Rml::LayerHandle>(m_render_layer_stack_size) : Rml::LayerHandle{};
     if (top_layer != 0 && destination != top_layer) {
-        EndActiveRenderPass();
-        BeginLayerRenderPass(top_layer, false);
+        EndActiveRendering();
+        BeginLayerRendering(top_layer, false);
     }
 }
 
@@ -589,16 +588,16 @@ void RenderInterface_VK::PopLayer() {
     if (m_render_layer_stack_size <= 0)
         return;
 
-    EndActiveRenderPass();
+    EndActiveRendering();
     m_render_layer_stack_size -= 1;
     m_active_layer = {};
 
     if (m_render_layer_stack_size > 0) {
         const Rml::LayerHandle layer_handle = static_cast<Rml::LayerHandle>(m_render_layer_stack_size);
-        BeginLayerRenderPass(layer_handle, false);
+        BeginLayerRendering(layer_handle, false);
         m_active_layer = layer_handle;
     } else {
-        BeginSwapchainLoadRenderPass();
+        BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD);
     }
 }
 
@@ -621,7 +620,7 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     if (bounds.extent.width == 0 || bounds.extent.height == 0)
         return {};
 
-    EndActiveRenderPass();
+    EndActiveRendering();
 
     auto* texture = new texture_data_t{};
     const VkFormat format = m_swapchain_format.format;
@@ -693,7 +692,7 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     TransitionImageLayout(texture->m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    BeginLayerRenderPass(static_cast<Rml::LayerHandle>(m_render_layer_stack_size), false);
+    BeginLayerRendering(static_cast<Rml::LayerHandle>(m_render_layer_stack_size), false);
 
     return reinterpret_cast<Rml::TextureHandle>(texture);
 }
@@ -1267,31 +1266,7 @@ void RenderInterface_VK::BeginFrame() {
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkBeginCommandBuffer");
 
-    VkClearValue for_filling_back_buffer_color;
-    VkClearValue for_stencil_depth;
-
-    for_stencil_depth.depthStencil = {1.0f, 0};
-    for_filling_back_buffer_color.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-
-    const VkClearValue p_color_rt[] = {for_filling_back_buffer_color, for_stencil_depth};
-
-    VkRenderPassBeginInfo info_pass = {};
-
-    info_pass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    info_pass.pNext = nullptr;
-    info_pass.renderPass = m_p_render_pass;
-    info_pass.framebuffer = m_swapchain_frame_buffers[m_image_index];
-    info_pass.pClearValues = p_color_rt;
-    info_pass.clearValueCount = 2;
-    info_pass.renderArea.offset.x = 0;
-    info_pass.renderArea.offset.y = 0;
-    info_pass.renderArea.extent.width = m_width;
-    info_pass.renderArea.extent.height = m_height;
-
-    vkCmdBeginRenderPass(m_p_current_command_buffer, &info_pass, VkSubpassContents::VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
-    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor_original);
-    vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
+    BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_CLEAR);
 
     m_active_render_target = active_render_target_t::Swapchain;
     m_active_layer = {};
@@ -1310,7 +1285,14 @@ void RenderInterface_VK::EndFrame() {
     if (m_p_current_command_buffer == nullptr)
         return;
 
-    EndActiveRenderPass();
+    EndActiveRendering();
+    if (!m_external_context && m_image_index < m_swapchain_images.size()) {
+        TransitionImageLayout(m_swapchain_images[m_image_index],
+                              VK_IMAGE_ASPECT_COLOR_BIT,
+                              m_swapchain_image_layouts[m_image_index],
+                              VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        m_swapchain_image_layouts[m_image_index] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    }
 
     auto status = vkEndCommandBuffer(m_p_current_command_buffer);
 
@@ -1405,7 +1387,7 @@ void RenderInterface_VK::Shutdown() {
 bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     RMLUI_ZoneScopedN("Vulkan - InitializeExternal");
 
-    if (!context.instance || !context.physical_device || !context.device || !context.graphics_queue || !context.render_pass ||
+    if (!context.instance || !context.physical_device || !context.device || !context.graphics_queue ||
         context.color_format == VK_FORMAT_UNDEFINED || context.depth_stencil_format == VK_FORMAT_UNDEFINED ||
         context.extent.width == 0 || context.extent.height == 0) {
         Rml::Log::Message(Rml::Log::LT_ERROR, "[Vulkan] Invalid external context for RmlUi renderer.");
@@ -1423,7 +1405,6 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_queue_index_graphics = context.graphics_queue_family;
     m_queue_index_present = context.graphics_queue_family;
     m_queue_index_compute = context.graphics_queue_family;
-    m_p_render_pass = context.render_pass;
     m_swapchain_format.format = context.color_format;
     m_depth_stencil_format = context.depth_stencil_format;
     m_width = static_cast<int>(context.extent.width);
@@ -1435,7 +1416,6 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     Initialize_Allocator();
     Initialize_Resources(physical_device_properties);
     UpdateViewportState(context.extent);
-    CreateAuxiliaryRenderPasses();
     Create_Pipelines();
     return true;
 }
@@ -1452,28 +1432,30 @@ void RenderInterface_VK::ShutdownExternal() {
     m_async_preview_textures.clear();
     DestroyRenderLayers();
     Destroy_Pipelines();
-    DestroyAuxiliaryRenderPasses();
     Destroy_Resources();
     Destroy_Allocator();
 
-    m_p_render_pass = VK_NULL_HANDLE;
     m_p_instance = VK_NULL_HANDLE;
     m_p_physical_device = VK_NULL_HANDLE;
     m_p_device = VK_NULL_HANDLE;
     m_p_queue_graphics = VK_NULL_HANDLE;
     m_p_queue_present = VK_NULL_HANDLE;
     m_p_queue_compute = VK_NULL_HANDLE;
-    m_external_framebuffer = VK_NULL_HANDLE;
     m_external_swapchain_image = VK_NULL_HANDLE;
+    m_external_swapchain_image_view = VK_NULL_HANDLE;
+    m_external_depth_stencil_image_view = VK_NULL_HANDLE;
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     m_external_context = false;
 }
 
 void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer,
                                             const VkExtent2D extent,
-                                            const VkFramebuffer framebuffer,
                                             const VkImage swapchain_image,
+                                            const VkImageView swapchain_image_view,
+                                            const VkImageView depth_stencil_image_view,
                                             const std::size_t frame_slot) {
-    if (!m_external_context || command_buffer == VK_NULL_HANDLE || framebuffer == VK_NULL_HANDLE)
+    if (!m_external_context || command_buffer == VK_NULL_HANDLE || swapchain_image_view == VK_NULL_HANDLE ||
+        depth_stencil_image_view == VK_NULL_HANDLE)
         return;
 
     if (extent.width != static_cast<uint32_t>(m_width) || extent.height != static_cast<uint32_t>(m_height)) {
@@ -1493,8 +1475,10 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     ProcessAsyncPreviewUploads();
 
     m_p_current_command_buffer = command_buffer;
-    m_external_framebuffer = framebuffer;
     m_external_swapchain_image = swapchain_image;
+    m_external_swapchain_image_view = swapchain_image_view;
+    m_external_depth_stencil_image_view = depth_stencil_image_view;
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor_original);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
@@ -1515,11 +1499,13 @@ void RenderInterface_VK::EndExternalFrame() {
     if (!m_external_context)
         return;
     if (m_active_render_target != active_render_target_t::Swapchain) {
-        EndActiveRenderPass();
-        BeginSwapchainLoadRenderPass();
+        EndActiveRendering();
+        BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD);
     }
-    m_external_framebuffer = VK_NULL_HANDLE;
     m_external_swapchain_image = VK_NULL_HANDLE;
+    m_external_swapchain_image_view = VK_NULL_HANDLE;
+    m_external_depth_stencil_image_view = VK_NULL_HANDLE;
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     m_active_render_target = active_render_target_t::None;
     m_p_current_command_buffer = nullptr;
 }
@@ -2537,7 +2523,8 @@ void RenderInterface_VK::CreateSamplers() noexcept {
 
 void RenderInterface_VK::Create_Pipelines() noexcept {
     RMLUI_VK_ASSERTMSG(m_p_pipeline_layout, "must be initialized");
-    RMLUI_VK_ASSERTMSG(m_p_render_pass, "must be initialized");
+    RMLUI_VK_ASSERTMSG(m_swapchain_format.format != VK_FORMAT_UNDEFINED, "must have a color format");
+    RMLUI_VK_ASSERTMSG(m_depth_stencil_format != VK_FORMAT_UNDEFINED, "must have a depth/stencil format");
 
     VkPipelineInputAssemblyStateCreateInfo info_assembly_state = {};
     info_assembly_state.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -2667,9 +2654,16 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info_vertex.pVertexBindingDescriptions = &info_vertex_input_binding;
     info_vertex.vertexBindingDescriptionCount = 1;
 
+    VkPipelineRenderingCreateInfo rendering_info{};
+    rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachmentFormats = &m_swapchain_format.format;
+    rendering_info.depthAttachmentFormat = m_depth_stencil_format;
+    rendering_info.stencilAttachmentFormat = (DepthStencilAspectMask() & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 ? m_depth_stencil_format : VK_FORMAT_UNDEFINED;
+
     VkGraphicsPipelineCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    info.pNext = nullptr;
+    info.pNext = &rendering_info;
     info.pInputAssemblyState = &info_assembly_state;
     info.pRasterizationState = &info_raster_state;
     info.pColorBlendState = &info_color_blend_state;
@@ -2681,7 +2675,7 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     info.pStages = shaders_that_will_be_used_in_pipeline.data();
     info.pVertexInputState = &info_vertex;
     info.layout = m_p_pipeline_layout;
-    info.renderPass = m_p_render_pass;
+    info.renderPass = VK_NULL_HANDLE;
     info.subpass = 0;
 
     auto status = vkCreateGraphicsPipelines(m_p_device, m_p_pipeline_cache, 1, &info, nullptr, &m_p_pipeline_with_textures);
@@ -2772,44 +2766,6 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
 #endif
 }
 
-void RenderInterface_VK::CreateSwapchainFrameBuffers(const VkExtent2D& real_render_image_size) noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_render_pass, "you must create a VkRenderPass before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must have a valid VkDevice here");
-
-    CreateSwapchainImageViews();
-    Create_DepthStencilImage();
-    Create_DepthStencilImageViews();
-
-    m_swapchain_frame_buffers.resize(m_swapchain_image_views.size());
-
-    Rml::Array<VkImageView, 2> attachments;
-
-    VkFramebufferCreateInfo info = {};
-    info.sType = VkStructureType::VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    info.pNext = nullptr;
-    info.renderPass = m_p_render_pass;
-    info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    info.pAttachments = attachments.data();
-    info.width = real_render_image_size.width;
-    info.height = real_render_image_size.height;
-    info.layers = 1;
-
-    int index = 0;
-    VkResult status = VkResult::VK_SUCCESS;
-
-    attachments[1] = m_texture_depthstencil.m_p_vk_image_view;
-
-    for (auto p_view : m_swapchain_image_views) {
-        attachments[0] = p_view;
-
-        status = vkCreateFramebuffer(m_p_device, &info, nullptr, &m_swapchain_frame_buffers[index]);
-
-        RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateFramebuffer");
-
-        ++index;
-    }
-}
-
 void RenderInterface_VK::CreateSwapchainImages() noexcept {
     RMLUI_VK_ASSERTMSG(m_p_device, "[Vulkan] you must initialize VkDevice before calling this method");
     RMLUI_VK_ASSERTMSG(m_p_swapchain, "[Vulkan] you must initialize VkSwapchainKHR before calling this method");
@@ -2824,6 +2780,7 @@ void RenderInterface_VK::CreateSwapchainImages() noexcept {
     status = vkGetSwapchainImagesKHR(m_p_device, m_p_swapchain, &count, m_swapchain_images.data());
 
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkGetSwapchainImagesKHR (filling vector)");
+    m_swapchain_image_layouts.assign(count, VK_IMAGE_LAYOUT_UNDEFINED);
 }
 
 void RenderInterface_VK::CreateSwapchainImageViews() noexcept {
@@ -2894,6 +2851,7 @@ void RenderInterface_VK::Create_DepthStencilImage() noexcept {
 
     m_texture_depthstencil.m_p_vk_image = p_image;
     m_texture_depthstencil.m_p_vma_allocation = p_allocation;
+    m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 void RenderInterface_VK::Create_DepthStencilImageViews() noexcept {
@@ -2954,8 +2912,9 @@ void RenderInterface_VK::UpdateViewportState(const VkExtent2D& real_render_image
 void RenderInterface_VK::CreateResourcesDependentOnSize(const VkExtent2D& real_render_image_size) noexcept {
     UpdateViewportState(real_render_image_size);
 
-    CreateRenderPass();
-    CreateSwapchainFrameBuffers(real_render_image_size);
+    CreateSwapchainImageViews();
+    Create_DepthStencilImage();
+    Create_DepthStencilImageViews();
     Create_Pipelines();
 }
 
@@ -3048,61 +3007,25 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
 void RenderInterface_VK::DestroyResourcesDependentOnSize() noexcept {
     DestroyRenderLayers();
     Destroy_Pipelines();
-    DestroySwapchainFrameBuffers();
-    DestroyRenderPass();
+    DestroySwapchainImageViews();
+
+    Destroy_Texture(m_texture_depthstencil);
+    m_texture_depthstencil.m_p_vk_image = nullptr;
+    m_texture_depthstencil.m_p_vk_image_view = nullptr;
+    m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
 void RenderInterface_VK::DestroySwapchainImageViews() noexcept {
     RMLUI_VK_ASSERTMSG(m_p_device, "[Vulkan] you must initialize VkDevice before calling this method");
 
     m_swapchain_images.clear();
+    m_swapchain_image_layouts.clear();
 
     for (auto p_view : m_swapchain_image_views) {
         vkDestroyImageView(m_p_device, p_view, nullptr);
     }
 
     m_swapchain_image_views.clear();
-}
-
-void RenderInterface_VK::DestroySwapchainFrameBuffers() noexcept {
-    DestroySwapchainImageViews();
-
-    Destroy_Texture(m_texture_depthstencil);
-    m_texture_depthstencil.m_p_vk_image = nullptr;
-    m_texture_depthstencil.m_p_vk_image_view = nullptr;
-
-    for (auto p_frame_buffer : m_swapchain_frame_buffers) {
-        vkDestroyFramebuffer(m_p_device, p_frame_buffer, nullptr);
-    }
-
-    m_swapchain_frame_buffers.clear();
-}
-
-void RenderInterface_VK::DestroyRenderPass() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must have a valid VkDevice here");
-
-    DestroyAuxiliaryRenderPasses();
-    if (m_p_render_pass) {
-        vkDestroyRenderPass(m_p_device, m_p_render_pass, nullptr);
-        m_p_render_pass = nullptr;
-    }
-}
-
-void RenderInterface_VK::DestroyAuxiliaryRenderPasses() noexcept {
-    if (!m_p_device)
-        return;
-    if (m_p_swapchain_load_render_pass) {
-        vkDestroyRenderPass(m_p_device, m_p_swapchain_load_render_pass, nullptr);
-        m_p_swapchain_load_render_pass = VK_NULL_HANDLE;
-    }
-    if (m_p_layer_clear_render_pass) {
-        vkDestroyRenderPass(m_p_device, m_p_layer_clear_render_pass, nullptr);
-        m_p_layer_clear_render_pass = VK_NULL_HANDLE;
-    }
-    if (m_p_layer_load_render_pass) {
-        vkDestroyRenderPass(m_p_device, m_p_layer_load_render_pass, nullptr);
-        m_p_layer_load_render_pass = VK_NULL_HANDLE;
-    }
 }
 
 void RenderInterface_VK::Destroy_Pipelines() noexcept {
@@ -3133,137 +3056,6 @@ VkImageAspectFlags RenderInterface_VK::DepthStencilAspectMask() const noexcept {
     }
 }
 
-VkRenderPass RenderInterface_VK::CreateRenderPassWithOps(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op,
-                                                         VkImageLayout color_initial_layout, VkImageLayout color_final_layout, VkImageLayout depth_initial_layout,
-                                                         VkImageLayout depth_final_layout) noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must have a valid VkDevice here");
-    if (m_depth_stencil_format == VK_FORMAT_UNDEFINED)
-        m_depth_stencil_format = Get_SupportedDepthFormat();
-
-    Rml::Array<VkAttachmentDescription, 2> attachments = {};
-
-    attachments[0].format = m_swapchain_format.format;
-    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[0].loadOp = color_load_op;
-    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout = color_initial_layout;
-    attachments[0].finalLayout = color_final_layout;
-
-    attachments[1].format = m_depth_stencil_format;
-    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[1].loadOp = depth_load_op;
-    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[1].stencilLoadOp = depth_load_op;
-    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[1].initialLayout = depth_initial_layout;
-    attachments[1].finalLayout = depth_final_layout;
-
-    RMLUI_VK_ASSERTMSG(attachments[1].format != VkFormat::VK_FORMAT_UNDEFINED,
-                       "can't obtain depth format, your device doesn't support depth/stencil operations");
-
-    Rml::Array<VkAttachmentReference, 2> color_references;
-
-    // swapchain
-    color_references[0].attachment = 0;
-    color_references[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    // depth stencil
-    color_references[1].attachment = 1;
-    color_references[1].layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass = {};
-
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.flags = 0;
-    subpass.inputAttachmentCount = 0;
-    subpass.pInputAttachments = nullptr;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_references[0];
-    subpass.pResolveAttachments = nullptr;
-    subpass.pDepthStencilAttachment = &color_references[1];
-    subpass.preserveAttachmentCount = 0;
-    subpass.pPreserveAttachments = nullptr;
-
-    Rml::Array<VkSubpassDependency, 4> dependencies = {};
-
-    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[0].dstSubpass = 0;
-    dependencies[0].srcAccessMask = 0;
-    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    dependencies[1].srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[1].dstSubpass = 0;
-    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[1].srcAccessMask = 0;
-    dependencies[1].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[1].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    dependencies[2].srcSubpass = 0;
-    dependencies[2].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[2].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependencies[2].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-    dependencies[2].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependencies[2].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT |
-                                   VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    dependencies[2].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    dependencies[3].srcSubpass = 0;
-    dependencies[3].dstSubpass = VK_SUBPASS_EXTERNAL;
-    dependencies[3].srcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[3].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependencies[3].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[3].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    dependencies[3].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
-
-    VkRenderPassCreateInfo info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    info.pNext = nullptr;
-    info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    info.pAttachments = attachments.data();
-    info.subpassCount = 1;
-    info.pSubpasses = &subpass;
-    info.dependencyCount = static_cast<uint32_t>(dependencies.size());
-    info.pDependencies = dependencies.data();
-
-    VkRenderPass render_pass = VK_NULL_HANDLE;
-    VkResult status = vkCreateRenderPass(m_p_device, &info, nullptr, &render_pass);
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateRenderPass");
-    return status == VK_SUCCESS ? render_pass : VK_NULL_HANDLE;
-}
-
-void RenderInterface_VK::CreateAuxiliaryRenderPasses() noexcept {
-    if (m_p_swapchain_load_render_pass || m_p_layer_clear_render_pass || m_p_layer_load_render_pass)
-        return;
-
-    m_p_swapchain_load_render_pass = CreateRenderPassWithOps(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD,
-                                                             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-
-    m_p_layer_clear_render_pass = CreateRenderPassWithOps(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_CLEAR,
-                                                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-
-    m_p_layer_load_render_pass = CreateRenderPassWithOps(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD,
-                                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-}
-
-void RenderInterface_VK::CreateRenderPass() noexcept {
-    if (m_depth_stencil_format == VK_FORMAT_UNDEFINED)
-        m_depth_stencil_format = Get_SupportedDepthFormat();
-    m_p_render_pass = CreateRenderPassWithOps(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_IMAGE_LAYOUT_UNDEFINED,
-                                              VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-    CreateAuxiliaryRenderPasses();
-}
-
 void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     if (layer_handle == 0)
         return;
@@ -3273,7 +3065,7 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
         m_render_layers.resize(index + 1);
 
     render_layer_t& layer = m_render_layers[index];
-    if (layer.m_p_framebuffer)
+    if (layer.m_color.m_p_vk_image_view && layer.m_depth_stencil.m_p_vk_image_view)
         return;
 
     VkExtent3D extent{};
@@ -3345,18 +3137,6 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     status = vkCreateImageView(m_p_device, &depth_view_info, nullptr, &layer.m_depth_stencil.m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image view");
     layer.m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-
-    Rml::Array<VkImageView, 2> attachments = {layer.m_color.m_p_vk_image_view, layer.m_depth_stencil.m_p_vk_image_view};
-    VkFramebufferCreateInfo framebuffer_info{};
-    framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-    framebuffer_info.renderPass = m_p_layer_clear_render_pass;
-    framebuffer_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-    framebuffer_info.pAttachments = attachments.data();
-    framebuffer_info.width = static_cast<uint32_t>(m_width);
-    framebuffer_info.height = static_cast<uint32_t>(m_height);
-    framebuffer_info.layers = 1;
-    status = vkCreateFramebuffer(m_p_device, &framebuffer_info, nullptr, &layer.m_p_framebuffer);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer framebuffer");
 }
 
 RenderInterface_VK::render_layer_t* RenderInterface_VK::GetRenderLayer(Rml::LayerHandle layer_handle) {
@@ -3442,9 +3222,9 @@ void RenderInterface_VK::ResetDynamicRenderState() {
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
 }
 
-void RenderInterface_VK::BeginLayerRenderPass(Rml::LayerHandle layer_handle, bool clear) {
+void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool clear) {
     render_layer_t* layer = GetRenderLayer(layer_handle);
-    if (!layer || !layer->m_p_framebuffer)
+    if (!layer || !layer->m_color.m_p_vk_image_view || !layer->m_depth_stencil.m_p_vk_image_view)
         return;
 
     TransitionImageLayout(layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, layer->m_color_layout,
@@ -3454,56 +3234,122 @@ void RenderInterface_VK::BeginLayerRenderPass(Rml::LayerHandle layer_handle, boo
                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
     layer->m_depth_stencil_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-    VkClearValue clear_values[2]{};
-    clear_values[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    clear_values[1].depthStencil = {1.0f, 0};
+    VkClearValue color_clear{};
+    color_clear.color = {{0.0f, 0.0f, 0.0f, 0.0f}};
+    VkClearValue depth_clear{};
+    depth_clear.depthStencil = {1.0f, 0};
 
-    VkRenderPassBeginInfo pass_info{};
-    pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    pass_info.renderPass = clear ? m_p_layer_clear_render_pass : m_p_layer_load_render_pass;
-    pass_info.framebuffer = layer->m_p_framebuffer;
-    pass_info.renderArea.offset = {0, 0};
-    pass_info.renderArea.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)};
-    pass_info.clearValueCount = 2;
-    pass_info.pClearValues = clear_values;
-    vkCmdBeginRenderPass(m_p_current_command_buffer, &pass_info, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo color_attachment{};
+    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color_attachment.imageView = layer->m_color.m_p_vk_image_view;
+    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color_attachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.clearValue = color_clear;
+
+    VkRenderingAttachmentInfo depth_attachment{};
+    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment.imageView = layer->m_depth_stencil.m_p_vk_image_view;
+    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth_attachment.loadOp = clear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth_attachment.clearValue = depth_clear;
+
+    VkRenderingInfo rendering_info{};
+    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering_info.renderArea.offset = {0, 0};
+    rendering_info.renderArea.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)};
+    rendering_info.layerCount = 1;
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachments = &color_attachment;
+    rendering_info.pDepthAttachment = &depth_attachment;
+    rendering_info.pStencilAttachment = (DepthStencilAspectMask() & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 ? &depth_attachment : nullptr;
+    vkCmdBeginRendering(m_p_current_command_buffer, &rendering_info);
 
     m_active_render_target = active_render_target_t::Layer;
     m_active_layer = layer_handle;
     ResetDynamicRenderState();
 }
 
-void RenderInterface_VK::BeginSwapchainLoadRenderPass() {
-    if (!m_p_current_command_buffer || !m_p_swapchain_load_render_pass)
+void RenderInterface_VK::BeginSwapchainRendering(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op) {
+    if (!m_p_current_command_buffer)
         return;
 
-    VkFramebuffer framebuffer = m_external_context ? m_external_framebuffer : m_swapchain_frame_buffers[m_image_index];
-    if (!framebuffer)
+    VkImageView color_view = VK_NULL_HANDLE;
+    VkImageView depth_view = VK_NULL_HANDLE;
+    if (m_external_context) {
+        color_view = m_external_swapchain_image_view;
+        depth_view = m_external_depth_stencil_image_view;
+        if (m_external_swapchain_image != VK_NULL_HANDLE && m_external_swapchain_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
+            TransitionImageLayout(m_external_swapchain_image,
+                                  VK_IMAGE_ASPECT_COLOR_BIT,
+                                  m_external_swapchain_layout,
+                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+            m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+    } else {
+        if (m_image_index >= m_swapchain_image_views.size() || m_image_index >= m_swapchain_images.size() ||
+            m_image_index >= m_swapchain_image_layouts.size()) {
+            return;
+        }
+        color_view = m_swapchain_image_views[m_image_index];
+        depth_view = m_texture_depthstencil.m_p_vk_image_view;
+        TransitionImageLayout(m_swapchain_images[m_image_index],
+                              VK_IMAGE_ASPECT_COLOR_BIT,
+                              m_swapchain_image_layouts[m_image_index],
+                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        m_swapchain_image_layouts[m_image_index] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        TransitionImageLayout(m_texture_depthstencil.m_p_vk_image,
+                              DepthStencilAspectMask(),
+                              m_depth_stencil_layout,
+                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        m_depth_stencil_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    }
+
+    if (!color_view || !depth_view)
         return;
 
-    VkClearValue clear_values[2]{};
-    clear_values[0].color = {{0.0f, 0.0f, 0.0f, 0.0f}};
-    clear_values[1].depthStencil = {1.0f, 0};
+    VkClearValue color_clear{};
+    color_clear.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    VkClearValue depth_clear{};
+    depth_clear.depthStencil = {1.0f, 0};
 
-    VkRenderPassBeginInfo pass_info{};
-    pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    pass_info.renderPass = m_p_swapchain_load_render_pass;
-    pass_info.framebuffer = framebuffer;
-    pass_info.renderArea.offset = {0, 0};
-    pass_info.renderArea.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)};
-    pass_info.clearValueCount = 2;
-    pass_info.pClearValues = clear_values;
-    vkCmdBeginRenderPass(m_p_current_command_buffer, &pass_info, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderingAttachmentInfo color_attachment{};
+    color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    color_attachment.imageView = color_view;
+    color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    color_attachment.loadOp = color_load_op;
+    color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color_attachment.clearValue = color_clear;
+
+    VkRenderingAttachmentInfo depth_attachment{};
+    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment.imageView = depth_view;
+    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth_attachment.loadOp = depth_load_op;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth_attachment.clearValue = depth_clear;
+
+    VkRenderingInfo rendering_info{};
+    rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    rendering_info.renderArea.offset = {0, 0};
+    rendering_info.renderArea.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)};
+    rendering_info.layerCount = 1;
+    rendering_info.colorAttachmentCount = 1;
+    rendering_info.pColorAttachments = &color_attachment;
+    rendering_info.pDepthAttachment = &depth_attachment;
+    rendering_info.pStencilAttachment = (DepthStencilAspectMask() & VK_IMAGE_ASPECT_STENCIL_BIT) != 0 ? &depth_attachment : nullptr;
+    vkCmdBeginRendering(m_p_current_command_buffer, &rendering_info);
 
     m_active_render_target = active_render_target_t::Swapchain;
     m_active_layer = {};
     ResetDynamicRenderState();
 }
 
-void RenderInterface_VK::EndActiveRenderPass() {
+void RenderInterface_VK::EndActiveRendering() {
     if (!m_p_current_command_buffer || m_active_render_target == active_render_target_t::None)
         return;
-    vkCmdEndRenderPass(m_p_current_command_buffer);
+    vkCmdEndRendering(m_p_current_command_buffer);
     m_active_render_target = active_render_target_t::None;
     m_active_layer = {};
 }
@@ -3513,13 +3359,14 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
         return false;
 
     render_layer_t* destination_layer = GetRenderLayer(destination);
-    if (!destination_layer || !destination_layer->m_p_framebuffer)
+    if (!destination_layer || !destination_layer->m_color.m_p_vk_image)
         return false;
 
-    EndActiveRenderPass();
+    EndActiveRendering();
 
-    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     TransitionImageLayout(destination_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, destination_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     destination_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
@@ -3535,13 +3382,14 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
     vkCmdCopyImage(m_p_current_command_buffer, m_external_swapchain_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    destination_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                          VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     TransitionImageLayout(destination_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     destination_layer->m_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    BeginLayerRenderPass(destination, false);
+    BeginLayerRendering(destination, false);
     return true;
 }
 
@@ -3574,10 +3422,6 @@ void RenderInterface_VK::RenderFullscreenTexture(texture_data_t& texture, Rml::B
 }
 
 void RenderInterface_VK::DestroyRenderLayer(render_layer_t& layer) noexcept {
-    if (m_p_device && layer.m_p_framebuffer)
-        vkDestroyFramebuffer(m_p_device, layer.m_p_framebuffer, nullptr);
-    layer.m_p_framebuffer = VK_NULL_HANDLE;
-
     if (layer.m_color.m_p_vma_allocation)
         Destroy_Texture(layer.m_color);
     if (layer.m_depth_stencil.m_p_vma_allocation)

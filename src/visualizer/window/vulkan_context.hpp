@@ -43,8 +43,9 @@ namespace lfs::vis {
             uint32_t image_index = 0;
             std::size_t frame_slot = 0;
             VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-            VkFramebuffer framebuffer = VK_NULL_HANDLE;
             VkImage swapchain_image = VK_NULL_HANDLE;
+            VkImageView swapchain_image_view = VK_NULL_HANDLE;
+            VkImageView depth_stencil_image_view = VK_NULL_HANDLE;
             VkExtent2D extent{};
         };
 
@@ -81,9 +82,9 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
-        [[nodiscard]] VkRenderPass renderPass() const { return render_pass_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
+        [[nodiscard]] VkImageView depthStencilImageView() const { return depth_stencil_image_view_; }
         [[nodiscard]] VkExtent2D swapchainExtent() const { return swapchain_extent_; }
         [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
         [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
@@ -153,9 +154,7 @@ namespace lfs::vis {
         bool createDevice();
         bool createSwapchain(int framebuffer_width, int framebuffer_height);
         bool createImageViews();
-        bool createRenderPass();
         bool createDepthStencilResources();
-        bool createFramebuffers();
         bool createCommandPool();
         bool createCommandBuffers();
         bool createSyncObjects();
@@ -187,6 +186,12 @@ namespace lfs::vis {
                                                        int framebuffer_height) const;
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
+        [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
+        void transitionImageLayout(VkCommandBuffer command_buffer,
+                                   VkImage image,
+                                   VkImageAspectFlags aspect_mask,
+                                   VkImageLayout old_layout,
+                                   VkImageLayout new_layout) const;
 
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
@@ -206,12 +211,12 @@ namespace lfs::vis {
         uint32_t min_image_count_ = 2;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
-        VkRenderPass render_pass_ = VK_NULL_HANDLE;
+        std::vector<VkImageLayout> swapchain_image_layouts_;
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
         VkImage depth_stencil_image_ = VK_NULL_HANDLE;
         VkDeviceMemory depth_stencil_memory_ = VK_NULL_HANDLE;
         VkImageView depth_stencil_image_view_ = VK_NULL_HANDLE;
-        std::vector<VkFramebuffer> swapchain_framebuffers_;
+        VkImageLayout depth_stencil_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
 
         static constexpr std::size_t kFramesInFlight = 2;
         std::array<VkCommandPool, kFramesInFlight> command_pools_{};
