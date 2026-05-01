@@ -3271,8 +3271,18 @@ namespace lfs::vis::gui {
 
     void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+        const char* enabled = std::getenv("LFS_VK_CUDA_INTEROP");
+        if (enabled == nullptr || std::string_view(enabled) != "1") {
+            if (vulkan_scene_interop_) {
+                resetVulkanSceneInterop();
+            }
+            return;
+        }
         if (const char* disabled = std::getenv("LFS_NO_VK_CUDA_INTEROP");
             disabled != nullptr && std::string_view(disabled) != "0") {
+            if (vulkan_scene_interop_) {
+                resetVulkanSceneInterop();
+            }
             return;
         }
         if (!vulkan_scene_image_ ||
