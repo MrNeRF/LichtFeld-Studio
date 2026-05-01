@@ -321,11 +321,21 @@ namespace lfs::vis::gui {
             submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit_info.commandBufferCount = 1;
             submit_info.pCommandBuffers = &command_buffer;
-            const VkResult submit_status = vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
+            VkFenceCreateInfo fence_info{};
+            fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            VkFence submit_fence = VK_NULL_HANDLE;
+            VkResult submit_status = vkCreateFence(device, &fence_info, nullptr, &submit_fence);
             if (submit_status == VK_SUCCESS) {
-                vkQueueWaitIdle(graphics_queue);
-            } else {
+                submit_status = vkQueueSubmit(graphics_queue, 1, &submit_info, submit_fence);
+            }
+            if (submit_status == VK_SUCCESS) {
+                submit_status = vkWaitForFences(device, 1, &submit_fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
+            }
+            if (submit_status != VK_SUCCESS) {
                 LOG_ERROR("Failed to submit Vulkan UI texture upload: {}", static_cast<int>(submit_status));
+            }
+            if (submit_fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, submit_fence, nullptr);
             }
             vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
             return submit_status == VK_SUCCESS;

@@ -49,6 +49,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/viewport_frame_lifecycle_service.cpp
         rendering/viewport_appearance_correction.cpp
         rendering/viewport_request_builder.cpp
+        rendering/passes/vulkan_scene_image_uploader.cpp
         rendering/passes/vulkan_viewport_pass.cpp
         rendering/framerate_controller.cpp
 

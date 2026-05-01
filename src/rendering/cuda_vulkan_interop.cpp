@@ -97,6 +97,74 @@ namespace lfs::rendering {
         [[nodiscard]] bool formatSupported(const CudaVulkanImageFormat format) {
             return format == CudaVulkanImageFormat::Rgba8Unorm;
         }
+
+        struct PreparedCudaImageTensor {
+            lfs::core::Tensor tensor;
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+            detail::CudaVulkanTensorLayout layout = detail::CudaVulkanTensorLayout::Hwc;
+            detail::CudaVulkanTensorElementType element_type = detail::CudaVulkanTensorElementType::UInt8;
+        };
+
+        [[nodiscard]] bool prepareCudaImageTensor(const lfs::core::Tensor& tensor,
+                                                  const CudaVulkanExtent2D extent,
+                                                  const cudaStream_t stream,
+                                                  PreparedCudaImageTensor& out,
+                                                  std::string& error) {
+            if (!tensor.is_valid() || tensor.ndim() != 3) {
+                error = "CUDA/Vulkan image copy requires a valid 3D tensor";
+                return false;
+            }
+
+            const ImageLayout layout = detectImageLayout(tensor);
+            if (layout == ImageLayout::Unknown) {
+                error = "CUDA/Vulkan image copy received an unsupported tensor layout";
+                return false;
+            }
+
+            const int width = imageWidth(tensor, layout);
+            const int height = imageHeight(tensor, layout);
+            const int channels = imageChannels(tensor, layout);
+            if (width != static_cast<int>(extent.width) || height != static_cast<int>(extent.height)) {
+                error = std::format("CUDA/Vulkan image copy size mismatch: tensor {}x{}, target {}x{}",
+                                    width,
+                                    height,
+                                    extent.width,
+                                    extent.height);
+                return false;
+            }
+            if (channels != 1 && channels != 3 && channels != 4) {
+                error = std::format("CUDA/Vulkan image copy requires 1, 3, or 4 channels, got {}",
+                                    channels);
+                return false;
+            }
+
+            lfs::core::Tensor prepared = tensor;
+            if (prepared.dtype() != lfs::core::DataType::UInt8 &&
+                prepared.dtype() != lfs::core::DataType::Float32) {
+                prepared = prepared.to(lfs::core::DataType::Float32);
+            }
+            if (prepared.device() != lfs::core::Device::CUDA) {
+                prepared = prepared.to(lfs::core::Device::CUDA, stream);
+            }
+            if (!prepared.is_contiguous()) {
+                prepared = prepared.contiguous();
+            }
+
+            out.tensor = std::move(prepared);
+            out.width = width;
+            out.height = height;
+            out.channels = channels;
+            out.layout = layout == ImageLayout::HWC
+                             ? detail::CudaVulkanTensorLayout::Hwc
+                             : detail::CudaVulkanTensorLayout::Chw;
+            out.element_type = out.tensor.dtype() == lfs::core::DataType::UInt8
+                                   ? detail::CudaVulkanTensorElementType::UInt8
+                                   : detail::CudaVulkanTensorElementType::Float32;
+            error.clear();
+            return true;
+        }
     } // namespace
 
     namespace detail {
@@ -109,7 +177,74 @@ namespace lfs::rendering {
             CudaVulkanTensorLayout layout,
             CudaVulkanTensorElementType element_type,
             cudaStream_t stream);
+
+        [[nodiscard]] cudaError_t launchCudaVulkanPackTensorToRgba8(
+            unsigned char* destination,
+            const void* source,
+            std::uint32_t width,
+            std::uint32_t height,
+            int channels,
+            CudaVulkanTensorLayout layout,
+            CudaVulkanTensorElementType element_type,
+            cudaStream_t stream);
     } // namespace detail
+
+    CudaVulkanRgba8HostBuffer packTensorToRgba8Host(const lfs::core::Tensor& tensor,
+                                                    const CudaVulkanExtent2D extent,
+                                                    const cudaStream_t stream) {
+        CudaVulkanRgba8HostBuffer result{};
+        if (extent.width == 0 || extent.height == 0) {
+            result.error = "CUDA/Vulkan RGBA8 packing requires a non-zero extent";
+            return result;
+        }
+
+        PreparedCudaImageTensor prepared{};
+        if (!prepareCudaImageTensor(tensor, extent, stream, prepared, result.error)) {
+            return result;
+        }
+
+        lfs::core::Tensor packed = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(extent.height), static_cast<std::size_t>(extent.width), std::size_t{4}},
+            lfs::core::Device::CUDA,
+            lfs::core::DataType::UInt8);
+        if (stream != nullptr) {
+            packed.set_stream(stream);
+        }
+
+        lfs::core::waitForCUDAStream(stream, prepared.tensor.stream());
+        const cudaError_t launch_status = detail::launchCudaVulkanPackTensorToRgba8(
+            packed.ptr<std::uint8_t>(),
+            prepared.tensor.data_ptr(),
+            extent.width,
+            extent.height,
+            prepared.channels,
+            prepared.layout,
+            prepared.element_type,
+            stream);
+        if (launch_status != cudaSuccess) {
+            result.error = std::format("pack tensor to RGBA8 failed: {} ({})",
+                                       cudaGetErrorName(launch_status),
+                                       cudaGetErrorString(launch_status));
+            return result;
+        }
+
+        const cudaError_t sync_status = stream != nullptr ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+        if (sync_status != cudaSuccess) {
+            result.error = std::format("synchronize packed RGBA8 tensor failed: {} ({})",
+                                       cudaGetErrorName(sync_status),
+                                       cudaGetErrorString(sync_status));
+            return result;
+        }
+
+        const lfs::core::Tensor cpu = packed.to(lfs::core::Device::CPU);
+        const auto* pixels = cpu.ptr<std::uint8_t>();
+        if (pixels == nullptr) {
+            result.error = "packed RGBA8 tensor returned null host data";
+            return result;
+        }
+        result.pixels.assign(pixels, pixels + cpu.numel());
+        return result;
+    }
 
     CudaVulkanInterop::CudaVulkanInterop(CudaVulkanExternalImageImport image,
                                          CudaVulkanExternalSemaphoreImport semaphore) {
@@ -320,73 +455,26 @@ namespace lfs::rendering {
         if (!valid()) {
             return fail("CUDA/Vulkan interop target is not initialized");
         }
-        if (!tensor.is_valid() || tensor.ndim() != 3) {
-            return fail("CUDA/Vulkan interop copy requires a valid 3D tensor");
+        PreparedCudaImageTensor prepared{};
+        if (!prepareCudaImageTensor(tensor, extent_, stream, prepared, last_error_)) {
+            return false;
         }
+        upload_source_ = std::move(prepared.tensor);
 
-        const ImageLayout layout = detectImageLayout(tensor);
-        if (layout == ImageLayout::Unknown) {
-            return fail("CUDA/Vulkan interop copy received an unsupported tensor layout");
-        }
-
-        const int width = imageWidth(tensor, layout);
-        const int height = imageHeight(tensor, layout);
-        const int channels = imageChannels(tensor, layout);
-        if (width != static_cast<int>(extent_.width) || height != static_cast<int>(extent_.height)) {
-            return fail(std::format("CUDA/Vulkan interop copy size mismatch: tensor {}x{}, target {}x{}",
-                                    width,
-                                    height,
-                                    extent_.width,
-                                    extent_.height));
-        }
-        if (channels != 1 && channels != 3 && channels != 4) {
-            return fail(std::format("CUDA/Vulkan interop copy requires 1, 3, or 4 channels, got {}",
-                                    channels));
-        }
-
-        bool owns_prepared_source = false;
-        lfs::core::Tensor prepared = tensor;
-        if (prepared.dtype() != lfs::core::DataType::UInt8 &&
-            prepared.dtype() != lfs::core::DataType::Float32) {
-            prepared = prepared.to(lfs::core::DataType::Float32);
-            owns_prepared_source = true;
-        }
-        if (prepared.device() != lfs::core::Device::CUDA) {
-            prepared = prepared.to(lfs::core::Device::CUDA, stream);
-            owns_prepared_source = true;
-        }
-        if (!prepared.is_contiguous()) {
-            prepared = prepared.contiguous();
-            owns_prepared_source = true;
-        }
-        if (owns_prepared_source) {
-            upload_source_ = std::move(prepared);
-        } else {
-            upload_source_ = prepared;
-        }
-        prepared = upload_source_;
-
-        const void* data = prepared.data_ptr();
+        const void* data = upload_source_.data_ptr();
         if (data == nullptr) {
             return fail("CUDA/Vulkan interop copy received a tensor with null data");
         }
 
-        const auto tensor_layout = layout == ImageLayout::HWC
-                                       ? detail::CudaVulkanTensorLayout::Hwc
-                                       : detail::CudaVulkanTensorLayout::Chw;
-        const auto element_type = prepared.dtype() == lfs::core::DataType::UInt8
-                                      ? detail::CudaVulkanTensorElementType::UInt8
-                                      : detail::CudaVulkanTensorElementType::Float32;
-
-        lfs::core::waitForCUDAStream(stream, prepared.stream());
+        lfs::core::waitForCUDAStream(stream, upload_source_.stream());
         const cudaError_t status = detail::launchCudaVulkanCopyTensorToSurface(
             surface_,
             data,
             extent_.width,
             extent_.height,
-            channels,
-            tensor_layout,
-            element_type,
+            prepared.channels,
+            prepared.layout,
+            prepared.element_type,
             stream);
         return failCuda("copy tensor to CUDA surface", status);
     }

@@ -6,10 +6,8 @@
 
 #include "config.h"
 #include "core/logger.hpp"
-#include "core/tensor.hpp"
-#include "rendering/image_layout.hpp"
+#include "vulkan_scene_image_uploader.hpp"
 #include "window/vulkan_context.hpp"
-#include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "viewport/grid.frag.spv.h"
@@ -32,7 +30,6 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <optional>
 #include <span>
 #include <vector>
 
@@ -91,70 +88,6 @@ namespace lfs::vis {
             return reinterpret_cast<VkDescriptorSet>(texture_id);
         }
 
-#ifndef LFS_VULKAN_NO_INTEROP_FALLBACK
-        [[nodiscard]] std::optional<std::vector<std::uint8_t>> tensorToRgba8(
-            const lfs::core::Tensor& image,
-            const glm::ivec2 expected_size) {
-            if (!image.is_valid() || image.ndim() != 3 || expected_size.x <= 0 || expected_size.y <= 0) {
-                return std::nullopt;
-            }
-
-            const auto layout = lfs::rendering::detectImageLayout(image);
-            if (layout == lfs::rendering::ImageLayout::Unknown) {
-                LOG_ERROR("Vulkan viewport pass received unsupported tensor shape [{}, {}, {}]",
-                          image.size(0), image.size(1), image.size(2));
-                return std::nullopt;
-            }
-
-            lfs::core::Tensor formatted = (layout == lfs::rendering::ImageLayout::HWC)
-                                              ? image
-                                              : image.permute({1, 2, 0}).contiguous();
-            if (formatted.device() == lfs::core::Device::CUDA) {
-                formatted = formatted.cpu();
-            }
-            if (formatted.dtype() != lfs::core::DataType::UInt8) {
-                formatted = (formatted.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8);
-            }
-            formatted = formatted.contiguous();
-
-            const int height = static_cast<int>(formatted.size(0));
-            const int width = static_cast<int>(formatted.size(1));
-            const int channels = static_cast<int>(formatted.size(2));
-            if (width != expected_size.x || height != expected_size.y || !formatted.ptr<std::uint8_t>()) {
-                LOG_ERROR("Vulkan viewport pass dimension mismatch: {}x{} vs {}x{}",
-                          width, height, expected_size.x, expected_size.y);
-                return std::nullopt;
-            }
-            if (channels != 1 && channels != 3 && channels != 4) {
-                LOG_ERROR("Vulkan viewport pass received unsupported channel count {}", channels);
-                return std::nullopt;
-            }
-
-            const std::uint8_t* const src = formatted.ptr<std::uint8_t>();
-            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) *
-                                           static_cast<std::size_t>(height) * 4u);
-            for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    const std::size_t src_offset =
-                        (static_cast<std::size_t>(y) * width + x) * static_cast<std::size_t>(channels);
-                    const std::size_t dst_offset = (static_cast<std::size_t>(y) * width + x) * 4u;
-                    if (channels == 1) {
-                        rgba[dst_offset + 0] = src[src_offset];
-                        rgba[dst_offset + 1] = src[src_offset];
-                        rgba[dst_offset + 2] = src[src_offset];
-                        rgba[dst_offset + 3] = 255;
-                    } else {
-                        rgba[dst_offset + 0] = src[src_offset + 0];
-                        rgba[dst_offset + 1] = src[src_offset + 1];
-                        rgba[dst_offset + 2] = src[src_offset + 2];
-                        rgba[dst_offset + 3] = channels >= 4 ? src[src_offset + 3] : 255;
-                    }
-                }
-            }
-            return rgba;
-        }
-#endif
-
         [[nodiscard]] FramebufferRect toFramebufferRect(
             const VulkanViewportPassParams& params,
             const VkExtent2D extent) {
@@ -212,7 +145,6 @@ namespace lfs::vis {
         VkFormat depth_stencil_format = VK_FORMAT_UNDEFINED;
         std::size_t frames_in_flight = 1;
 
-        VkCommandPool upload_command_pool = VK_NULL_HANDLE;
         VkBuffer quad_buffer = VK_NULL_HANDLE;
         VmaAllocation quad_allocation = VK_NULL_HANDLE;
         bool quad_flip_y = false;
@@ -239,14 +171,7 @@ namespace lfs::vis {
         VkSampler scene_sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout scene_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
-        VkImage scene_image = VK_NULL_HANDLE;
-        VmaAllocation scene_image_allocation = VK_NULL_HANDLE;
-        VkImageView scene_image_view = VK_NULL_HANDLE;
-        VulkanImageBarrierTracker scene_image_barriers;
-        glm::ivec2 scene_image_size{0, 0};
-        const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
-        bool scene_image_external = false;
-        std::uint64_t scene_image_external_generation = 0;
+        VulkanSceneImageUploader scene_image_uploader;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -288,17 +213,8 @@ namespace lfs::vis {
                 return false;
             }
 
-            VkCommandPoolCreateInfo command_pool_info{};
-            command_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            command_pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-            command_pool_info.queueFamilyIndex = graphics_queue_family;
-            if (vkCreateCommandPool(device, &command_pool_info, nullptr, &upload_command_pool) != VK_SUCCESS) {
-                LOG_ERROR("Failed to create Vulkan viewport upload command pool");
-                reset();
-                return false;
-            }
-
-            if (!createSampler() || !createSceneDescriptors() || !createGridResources() ||
+            if (!createSampler() || !scene_image_uploader.init(context, scene_sampler) ||
+                !createSceneDescriptors() || !createGridResources() ||
                 !createQuadBuffer() || !createPipelines()) {
                 reset();
                 return false;
@@ -744,171 +660,6 @@ namespace lfs::vis {
                                   pivot_pipeline_layout, pivot_pipeline);
         }
 
-        [[nodiscard]] VkCommandBuffer beginUploadCommands() const {
-            VkCommandBufferAllocateInfo alloc_info{};
-            alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            alloc_info.commandPool = upload_command_pool;
-            alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            alloc_info.commandBufferCount = 1;
-            VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-            if (vkAllocateCommandBuffers(device, &alloc_info, &command_buffer) != VK_SUCCESS) {
-                return VK_NULL_HANDLE;
-            }
-            VkCommandBufferBeginInfo begin_info{};
-            begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, upload_command_pool, 1, &command_buffer);
-                return VK_NULL_HANDLE;
-            }
-            return command_buffer;
-        }
-
-        [[nodiscard]] bool endUploadCommands(const VkCommandBuffer command_buffer) const {
-            if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, upload_command_pool, 1, &command_buffer);
-                return false;
-            }
-            VkSubmitInfo submit_info{};
-            submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit_info.commandBufferCount = 1;
-            submit_info.pCommandBuffers = &command_buffer;
-            const VkResult result = vkQueueSubmit(graphics_queue, 1, &submit_info, VK_NULL_HANDLE);
-            if (result == VK_SUCCESS) {
-                vkQueueWaitIdle(graphics_queue);
-            }
-            vkFreeCommandBuffers(device, upload_command_pool, 1, &command_buffer);
-            return result == VK_SUCCESS;
-        }
-
-        void clearSceneImageBinding() {
-            scene_image_barriers.forgetImage(scene_image);
-            scene_image = VK_NULL_HANDLE;
-            scene_image_allocation = VK_NULL_HANDLE;
-            scene_image_view = VK_NULL_HANDLE;
-            scene_image_size = {0, 0};
-            uploaded_scene_tensor = nullptr;
-            scene_image_external = false;
-            scene_image_external_generation = 0;
-        }
-
-        void updateSceneDescriptor(FrameResources& frame,
-                                   const VkImageView image_view,
-                                   const VkImageLayout image_layout) const {
-            if (frame.scene_descriptor_set == VK_NULL_HANDLE) {
-                return;
-            }
-            VkDescriptorImageInfo descriptor_info{};
-            descriptor_info.sampler = scene_sampler;
-            descriptor_info.imageView = image_view;
-            descriptor_info.imageLayout = image_layout;
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = frame.scene_descriptor_set;
-            write.dstBinding = 0;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.descriptorCount = 1;
-            write.pImageInfo = &descriptor_info;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-        }
-
-        void destroySceneImage() {
-            if (scene_image_external) {
-                clearSceneImageBinding();
-                return;
-            }
-            if (scene_image_view != VK_NULL_HANDLE) {
-                vkDestroyImageView(device, scene_image_view, nullptr);
-            }
-            if (scene_image != VK_NULL_HANDLE) {
-                vmaDestroyImage(allocator, scene_image, scene_image_allocation);
-            }
-            clearSceneImageBinding();
-        }
-
-        [[nodiscard]] bool ensureSceneImage(const glm::ivec2 size, FrameResources& frame) {
-            if (scene_image != VK_NULL_HANDLE && scene_image_size == size) {
-                updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                return true;
-            }
-            destroySceneImage();
-
-            VkImageCreateInfo image_info{};
-            image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            image_info.imageType = VK_IMAGE_TYPE_2D;
-            image_info.extent = {static_cast<std::uint32_t>(size.x), static_cast<std::uint32_t>(size.y), 1};
-            image_info.mipLevels = 1;
-            image_info.arrayLayers = 1;
-            image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-            image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-            image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-            image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-            VmaAllocationCreateInfo allocation_info{};
-            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator,
-                               &image_info,
-                               &allocation_info,
-                               &scene_image,
-                               &scene_image_allocation,
-                               nullptr) != VK_SUCCESS) {
-                destroySceneImage();
-                return false;
-            }
-            vmaSetAllocationName(allocator, scene_image_allocation, "Viewport scene image");
-
-            VkImageViewCreateInfo view_info{};
-            view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            view_info.image = scene_image;
-            view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-            view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            view_info.subresourceRange.baseMipLevel = 0;
-            view_info.subresourceRange.levelCount = 1;
-            view_info.subresourceRange.baseArrayLayer = 0;
-            view_info.subresourceRange.layerCount = 1;
-            if (vkCreateImageView(device, &view_info, nullptr, &scene_image_view) != VK_SUCCESS) {
-                destroySceneImage();
-                return false;
-            }
-
-            scene_image_size = size;
-            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-            updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            return true;
-        }
-
-        [[nodiscard]] bool bindExternalSceneImage(const VulkanViewportPassParams& params, FrameResources& frame) {
-            if (params.external_scene_image == VK_NULL_HANDLE ||
-                params.external_scene_image_view == VK_NULL_HANDLE ||
-                params.scene_image_size.x <= 0 ||
-                params.scene_image_size.y <= 0) {
-                return false;
-            }
-            if (scene_image_external &&
-                scene_image == params.external_scene_image &&
-                scene_image_view == params.external_scene_image_view &&
-                scene_image_size == params.scene_image_size &&
-                scene_image_barriers.imageLayout(scene_image, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
-                scene_image_external_generation == params.external_scene_image_generation) {
-                updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                return true;
-            }
-
-            destroySceneImage();
-            scene_image = params.external_scene_image;
-            scene_image_view = params.external_scene_image_view;
-            scene_image_size = params.scene_image_size;
-            uploaded_scene_tensor = params.scene_image.get();
-            scene_image_external = true;
-            scene_image_external_generation = params.external_scene_image_generation;
-            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
-            updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            return true;
-        }
-
         void updateQuadBuffer(const bool flip_y) {
             if (quad_initialized && quad_flip_y == flip_y) {
                 return;
@@ -1163,87 +914,7 @@ namespace lfs::vis {
 
         void uploadSceneImage(const VulkanViewportPassParams& params) {
             auto& frame = resourcesForFrame(params.frame_slot);
-            if (!params.scene_image || params.scene_image_size.x <= 0 || params.scene_image_size.y <= 0) {
-                uploaded_scene_tensor = nullptr;
-                return;
-            }
-            if (params.external_scene_image != VK_NULL_HANDLE &&
-                params.external_scene_image_view != VK_NULL_HANDLE) {
-                if (!bindExternalSceneImage(params, frame)) {
-                    LOG_ERROR("Failed to bind external Vulkan viewport scene image");
-                }
-                return;
-            }
-            if (scene_image_external) {
-                destroySceneImage();
-            }
-            if (uploaded_scene_tensor == params.scene_image.get() && scene_image_size == params.scene_image_size &&
-                scene_image_view != VK_NULL_HANDLE) {
-                updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                return;
-            }
-#ifdef LFS_VULKAN_NO_INTEROP_FALLBACK
-            static bool logged_fallback_disabled = false;
-            if (!logged_fallback_disabled) {
-                LOG_ERROR("Vulkan viewport staging fallback is disabled at build time; no external scene image was supplied");
-                logged_fallback_disabled = true;
-            }
-            uploaded_scene_tensor = nullptr;
-#else
-            const auto rgba = tensorToRgba8(*params.scene_image, params.scene_image_size);
-            if (!rgba || rgba->empty() || !ensureSceneImage(params.scene_image_size, frame)) {
-                return;
-            }
-
-            VkBuffer staging_buffer = VK_NULL_HANDLE;
-            VmaAllocation staging_allocation = VK_NULL_HANDLE;
-            const VkDeviceSize upload_size = static_cast<VkDeviceSize>(rgba->size());
-            if (!createBuffer(upload_size,
-                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                              staging_buffer,
-                              staging_allocation)) {
-                return;
-            }
-
-            if (!writeAllocation(staging_allocation, rgba->data(), upload_size)) {
-                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
-                return;
-            }
-
-            VkCommandBuffer command_buffer = beginUploadCommands();
-            if (command_buffer == VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
-                return;
-            }
-            scene_image_barriers.transitionImage(command_buffer,
-                                              scene_image,
-                                              VK_IMAGE_ASPECT_COLOR_BIT,
-                                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkBufferImageCopy copy{};
-            copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            copy.imageSubresource.mipLevel = 0;
-            copy.imageSubresource.baseArrayLayer = 0;
-            copy.imageSubresource.layerCount = 1;
-            copy.imageExtent = {
-                static_cast<std::uint32_t>(params.scene_image_size.x),
-                static_cast<std::uint32_t>(params.scene_image_size.y),
-                1,
-            };
-            vkCmdCopyBufferToImage(command_buffer,
-                                   staging_buffer,
-                                   scene_image,
-                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                   1,
-                                   &copy);
-            scene_image_barriers.transitionImage(command_buffer,
-                                              scene_image,
-                                              VK_IMAGE_ASPECT_COLOR_BIT,
-                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            if (endUploadCommands(command_buffer)) {
-                uploaded_scene_tensor = params.scene_image.get();
-            }
-            vmaDestroyBuffer(allocator, staging_buffer, staging_allocation);
-#endif
+            scene_image_uploader.upload(params, frame.scene_descriptor_set);
         }
 
         void prepare(const VulkanViewportPassParams& params) {
@@ -1366,7 +1037,7 @@ namespace lfs::vis {
             clearViewport(command_buffer, rect, params.background_color);
 
             const bool has_scene =
-                (params.scene_image || scene_image_external) && scene_image_view != VK_NULL_HANDLE &&
+                scene_image_uploader.hasImage() &&
                 frame.scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
             if (has_scene) {
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
@@ -1487,7 +1158,7 @@ namespace lfs::vis {
                     LOG_WARN("Vulkan viewport pass shutdown could not wait for submitted frames: {}",
                              context->lastError());
                 }
-                destroySceneImage();
+                scene_image_uploader.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)
@@ -1535,8 +1206,6 @@ namespace lfs::vis {
                     vkDestroyDescriptorPool(device, grid_descriptor_pool, nullptr);
                 if (grid_descriptor_layout != VK_NULL_HANDLE)
                     vkDestroyDescriptorSetLayout(device, grid_descriptor_layout, nullptr);
-                if (upload_command_pool != VK_NULL_HANDLE)
-                    vkDestroyCommandPool(device, upload_command_pool, nullptr);
             }
             *this = {};
         }

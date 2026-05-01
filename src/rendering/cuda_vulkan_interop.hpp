@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace lfs::rendering {
 
@@ -41,6 +42,20 @@ namespace lfs::rendering {
         CudaVulkanExternalHandle semaphore_handle = kInvalidCudaVulkanExternalHandle;
         std::uint64_t initial_value = 0;
     };
+
+    struct CudaVulkanRgba8HostBuffer {
+        std::vector<std::uint8_t> pixels;
+        std::string error;
+
+        [[nodiscard]] explicit operator bool() const {
+            return error.empty() && !pixels.empty();
+        }
+    };
+
+    [[nodiscard]] CudaVulkanRgba8HostBuffer packTensorToRgba8Host(
+        const lfs::core::Tensor& tensor,
+        CudaVulkanExtent2D extent,
+        cudaStream_t stream = nullptr);
 
     namespace detail {
         enum class CudaVulkanTensorLayout : std::uint8_t {

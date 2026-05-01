@@ -1528,10 +1528,20 @@ namespace lfs::vis {
                 return fail(std::format("vkWaitSemaphores(external timeline) failed: {}", static_cast<int>(result)));
             }
         }
-        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, VK_NULL_HANDLE);
-        if (result == VK_SUCCESS) {
-            result = vkQueueWaitIdle(graphics_queue_);
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence submit_fence = VK_NULL_HANDLE;
+        result = vkCreateFence(device_, &fence_info, nullptr, &submit_fence);
+        if (result != VK_SUCCESS) {
+            vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
+            return fail(std::format("vkCreateFence(layout transition) failed: {}", static_cast<int>(result)));
         }
+
+        result = vkQueueSubmit(graphics_queue_, 1, &submit_info, submit_fence);
+        if (result == VK_SUCCESS) {
+            result = vkWaitForFences(device_, 1, &submit_fence, VK_TRUE, kWaitForeverNs);
+        }
+        vkDestroyFence(device_, submit_fence, nullptr);
         vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
         if (result != VK_SUCCESS) {
             return fail(std::format("Immediate Vulkan image layout transition failed: {}", static_cast<int>(result)));
@@ -2009,6 +2019,8 @@ namespace lfs::vis {
         if (!waitForFrameFences()) {
             return false;
         }
+        // Presentation is not fence-signaled in this path; keep the wait scoped to the
+        // present queue before destroying swapchain-owned images.
         const VkResult present_wait = vkQueueWaitIdle(present_queue_);
         if (present_wait != VK_SUCCESS) {
             return fail(std::format("vkQueueWaitIdle(present) failed during swapchain recreate: {}",
