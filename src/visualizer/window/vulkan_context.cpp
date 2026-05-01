@@ -414,19 +414,21 @@ namespace lfs::vis {
         }
 
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
-        transitionImageLayout(command_buffer,
-                              swapchain_images_[image_index],
-                              VK_IMAGE_ASPECT_COLOR_BIT,
-                              swapchain_image_layouts_[image_index],
-                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        swapchain_image_layouts_[image_index] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        frame_graph_.transitionImage(command_buffer,
+                                     swapchain_images_[image_index],
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        transitionImageLayout(command_buffer,
-                              depth_stencil_image_,
-                              depthStencilAspectMask(),
-                              depth_stencil_layout_,
-                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-        depth_stencil_layout_ = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        if (image_index >= depth_stencil_resources_.size() ||
+            depth_stencil_resources_[image_index].image == VK_NULL_HANDLE ||
+            depth_stencil_resources_[image_index].view == VK_NULL_HANDLE) {
+            return fail(std::format("Missing depth/stencil resource for swapchain image {}", image_index));
+        }
+        const DepthStencilResource& depth_stencil = depth_stencil_resources_[image_index];
+        frame_graph_.transitionImage(command_buffer,
+                                     depth_stencil.image,
+                                     depthStencilAspectMask(),
+                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
         VkRenderingAttachmentInfo color_attachment{};
         color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -441,7 +443,7 @@ namespace lfs::vis {
 
         VkRenderingAttachmentInfo depth_attachment{};
         depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        depth_attachment.imageView = depth_stencil_image_view_;
+        depth_attachment.imageView = depth_stencil.view;
         depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -465,7 +467,7 @@ namespace lfs::vis {
                                     ? swapchain_images_[image_index]
                                     : VK_NULL_HANDLE;
         frame.swapchain_image_view = swapchain_image_views_[image_index];
-        frame.depth_stencil_image_view = depth_stencil_image_view_;
+        frame.depth_stencil_image_view = depth_stencil.view;
         frame.extent = swapchain_extent_;
         frame_active_ = true;
         last_error_.clear();
@@ -480,12 +482,10 @@ namespace lfs::vis {
         const std::size_t current_frame = active_frame_index_;
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
         vkCmdEndRendering(command_buffer);
-        transitionImageLayout(command_buffer,
-                              swapchain_images_[active_image_index_],
-                              VK_IMAGE_ASPECT_COLOR_BIT,
-                              swapchain_image_layouts_[active_image_index_],
-                              VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        swapchain_image_layouts_[active_image_index_] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        frame_graph_.transitionImage(command_buffer,
+                                     swapchain_images_[active_image_index_],
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         VkResult result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
@@ -1044,65 +1044,6 @@ namespace lfs::vis {
         }
     }
 
-    void VulkanContext::transitionImageLayout(const VkCommandBuffer command_buffer,
-                                              const VkImage image,
-                                              const VkImageAspectFlags aspect_mask,
-                                              const VkImageLayout old_layout,
-                                              const VkImageLayout new_layout) const {
-        if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE || old_layout == new_layout) {
-            return;
-        }
-
-        auto stage_and_access = [](const VkImageLayout layout, const bool source) {
-            struct Result {
-                VkPipelineStageFlags2 stage;
-                VkAccessFlags2 access;
-            };
-            switch (layout) {
-            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-                return Result{VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                              source ? VkAccessFlags2(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
-                                     : VkAccessFlags2(VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
-                                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)};
-            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-                return Result{VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                              source ? VkAccessFlags2(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)
-                                     : VkAccessFlags2(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                                      VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)};
-            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-                return Result{VK_PIPELINE_STAGE_2_NONE, VkAccessFlags2(VK_ACCESS_2_NONE)};
-            default:
-                return Result{VK_PIPELINE_STAGE_2_NONE, VkAccessFlags2(VK_ACCESS_2_NONE)};
-            }
-        };
-
-        const auto src = stage_and_access(old_layout, true);
-        const auto dst = stage_and_access(new_layout, false);
-
-        VkImageMemoryBarrier2 barrier{};
-        barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier.srcStageMask = src.stage;
-        barrier.srcAccessMask = src.access;
-        barrier.dstStageMask = dst.stage;
-        barrier.dstAccessMask = dst.access;
-        barrier.oldLayout = old_layout;
-        barrier.newLayout = new_layout;
-        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        barrier.image = image;
-        barrier.subresourceRange.aspectMask = aspect_mask;
-        barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
-        barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
-
-        VkDependencyInfo dependency{};
-        dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        dependency.imageMemoryBarrierCount = 1;
-        dependency.pImageMemoryBarriers = &barrier;
-        vkCmdPipelineBarrier2(command_buffer, &dependency);
-    }
-
     bool VulkanContext::externalNativeHandleValid(const ExternalNativeHandle handle) {
 #ifdef _WIN32
         return handle != nullptr;
@@ -1623,12 +1564,14 @@ namespace lfs::vis {
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
         swapchain_images_.resize(image_count);
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
-        swapchain_image_layouts_.assign(image_count, VK_IMAGE_LAYOUT_UNDEFINED);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_extent_ = extent;
         swapchain_image_usage_ = create_info.imageUsage;
         for (size_t i = 0; i < swapchain_images_.size(); ++i) {
+            frame_graph_.registerImage(swapchain_images_[i],
+                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                       VK_IMAGE_LAYOUT_UNDEFINED);
             setDebugObjectName(VK_OBJECT_TYPE_IMAGE,
                                swapchain_images_[i],
                                std::format("Swapchain image {}", i));
@@ -1672,6 +1615,9 @@ namespace lfs::vis {
                 return fail("No supported Vulkan depth/stencil format found");
             }
         }
+        if (swapchain_images_.empty()) {
+            return fail("Cannot create depth/stencil resources before swapchain images");
+        }
 
         VkImageCreateInfo image_info{};
         image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1688,37 +1634,8 @@ namespace lfs::vis {
         image_info.samples = VK_SAMPLE_COUNT_1_BIT;
         image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        VkResult result = vkCreateImage(device_, &image_info, nullptr, &depth_stencil_image_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkCreateImage(depth/stencil) failed: {}", static_cast<int>(result)));
-        }
-        setDebugObjectName(VK_OBJECT_TYPE_IMAGE, depth_stencil_image_, "Depth/stencil image");
-
-        VkMemoryRequirements memory_requirements{};
-        vkGetImageMemoryRequirements(device_, depth_stencil_image_, &memory_requirements);
-
-        VkMemoryAllocateInfo allocate_info{};
-        allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocate_info.allocationSize = memory_requirements.size;
-        allocate_info.memoryTypeIndex = findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-        if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
-            return fail("Could not find Vulkan device-local memory for depth/stencil image");
-        }
-
-        result = vkAllocateMemory(device_, &allocate_info, nullptr, &depth_stencil_memory_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkAllocateMemory(depth/stencil) failed: {}", static_cast<int>(result)));
-        }
-        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, depth_stencil_memory_, "Depth/stencil memory");
-
-        result = vkBindImageMemory(device_, depth_stencil_image_, depth_stencil_memory_, 0);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkBindImageMemory(depth/stencil) failed: {}", static_cast<int>(result)));
-        }
-
         VkImageViewCreateInfo view_info{};
         view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        view_info.image = depth_stencil_image_;
         view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
         view_info.format = depth_stencil_format_;
         view_info.subresourceRange.aspectMask = depthStencilAspectMask();
@@ -1727,13 +1644,74 @@ namespace lfs::vis {
         view_info.subresourceRange.baseArrayLayer = 0;
         view_info.subresourceRange.layerCount = 1;
 
-        result = vkCreateImageView(device_, &view_info, nullptr, &depth_stencil_image_view_);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkCreateImageView(depth/stencil) failed: {}", static_cast<int>(result)));
-        }
-        setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, depth_stencil_image_view_, "Depth/stencil image view");
+        depth_stencil_resources_.assign(swapchain_images_.size(), {});
+        const auto destroy_created = [&]() {
+            for (DepthStencilResource& resource : depth_stencil_resources_) {
+                if (resource.view != VK_NULL_HANDLE) {
+                    vkDestroyImageView(device_, resource.view, nullptr);
+                    resource.view = VK_NULL_HANDLE;
+                }
+                if (resource.image != VK_NULL_HANDLE) {
+                    vkDestroyImage(device_, resource.image, nullptr);
+                    resource.image = VK_NULL_HANDLE;
+                }
+                if (resource.memory != VK_NULL_HANDLE) {
+                    vkFreeMemory(device_, resource.memory, nullptr);
+                    resource.memory = VK_NULL_HANDLE;
+                }
+            }
+            depth_stencil_resources_.clear();
+        };
 
-        depth_stencil_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        for (std::size_t i = 0; i < depth_stencil_resources_.size(); ++i) {
+            DepthStencilResource& resource = depth_stencil_resources_[i];
+            VkResult result = vkCreateImage(device_, &image_info, nullptr, &resource.image);
+            if (result != VK_SUCCESS) {
+                destroy_created();
+                return fail(std::format("vkCreateImage(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_IMAGE, resource.image, std::format("Depth/stencil image {}", i));
+
+            VkMemoryRequirements memory_requirements{};
+            vkGetImageMemoryRequirements(device_, resource.image, &memory_requirements);
+
+            VkMemoryAllocateInfo allocate_info{};
+            allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocate_info.allocationSize = memory_requirements.size;
+            allocate_info.memoryTypeIndex = findMemoryType(memory_requirements.memoryTypeBits,
+                                                           VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
+                destroy_created();
+                return fail("Could not find Vulkan device-local memory for depth/stencil image");
+            }
+
+            result = vkAllocateMemory(device_, &allocate_info, nullptr, &resource.memory);
+            if (result != VK_SUCCESS) {
+                destroy_created();
+                return fail(std::format("vkAllocateMemory(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, resource.memory, std::format("Depth/stencil memory {}", i));
+
+            result = vkBindImageMemory(device_, resource.image, resource.memory, 0);
+            if (result != VK_SUCCESS) {
+                destroy_created();
+                return fail(std::format("vkBindImageMemory(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
+            }
+
+            view_info.image = resource.image;
+            result = vkCreateImageView(device_, &view_info, nullptr, &resource.view);
+            if (result != VK_SUCCESS) {
+                destroy_created();
+                return fail(std::format("vkCreateImageView(depth/stencil {}) failed: {}", i, static_cast<int>(result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW,
+                               resource.view,
+                               std::format("Depth/stencil image view {}", i));
+
+            frame_graph_.registerImage(resource.image,
+                                       depthStencilAspectMask(),
+                                       VK_IMAGE_LAYOUT_UNDEFINED);
+        }
         return true;
     }
 
@@ -1954,27 +1932,29 @@ namespace lfs::vis {
             return;
         }
 
-        if (depth_stencil_image_view_ != VK_NULL_HANDLE) {
-            vkDestroyImageView(device_, depth_stencil_image_view_, nullptr);
-            depth_stencil_image_view_ = VK_NULL_HANDLE;
+        for (DepthStencilResource& resource : depth_stencil_resources_) {
+            if (resource.view != VK_NULL_HANDLE) {
+                vkDestroyImageView(device_, resource.view, nullptr);
+                resource.view = VK_NULL_HANDLE;
+            }
+            if (resource.image != VK_NULL_HANDLE) {
+                vkDestroyImage(device_, resource.image, nullptr);
+                resource.image = VK_NULL_HANDLE;
+            }
+            if (resource.memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device_, resource.memory, nullptr);
+                resource.memory = VK_NULL_HANDLE;
+            }
         }
-        if (depth_stencil_image_ != VK_NULL_HANDLE) {
-            vkDestroyImage(device_, depth_stencil_image_, nullptr);
-            depth_stencil_image_ = VK_NULL_HANDLE;
-        }
-        if (depth_stencil_memory_ != VK_NULL_HANDLE) {
-            vkFreeMemory(device_, depth_stencil_memory_, nullptr);
-            depth_stencil_memory_ = VK_NULL_HANDLE;
-        }
+        depth_stencil_resources_.clear();
         depth_stencil_format_ = VK_FORMAT_UNDEFINED;
-        depth_stencil_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         for (const VkImageView view : swapchain_image_views_) {
             vkDestroyImageView(device_, view, nullptr);
         }
         swapchain_image_views_.clear();
         swapchain_images_.clear();
-        swapchain_image_layouts_.clear();
         swapchain_images_in_flight_.clear();
+        frame_graph_.reset();
 
         if (swapchain_ != VK_NULL_HANDLE) {
             vkDestroySwapchainKHR(device_, swapchain_, nullptr);

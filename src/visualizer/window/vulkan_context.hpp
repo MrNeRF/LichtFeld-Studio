@@ -16,6 +16,7 @@
 #include <vector>
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+#include "vulkan_frame_graph.hpp"
 #include <vulkan/vulkan.h>
 #endif
 
@@ -84,7 +85,11 @@ namespace lfs::vis {
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
-        [[nodiscard]] VkImageView depthStencilImageView() const { return depth_stencil_image_view_; }
+        [[nodiscard]] VkImageView depthStencilImageView() const {
+            return active_image_index_ < depth_stencil_resources_.size()
+                       ? depth_stencil_resources_[active_image_index_].view
+                       : VK_NULL_HANDLE;
+        }
         [[nodiscard]] VkExtent2D swapchainExtent() const { return swapchain_extent_; }
         [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
         [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
@@ -148,6 +153,12 @@ namespace lfs::vis {
             VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
         };
 
+        struct DepthStencilResource {
+            VkImage image = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkImageView view = VK_NULL_HANDLE;
+        };
+
         bool createInstance();
         bool createSurface(SDL_Window* window);
         bool pickPhysicalDevice();
@@ -187,12 +198,6 @@ namespace lfs::vis {
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
-        void transitionImageLayout(VkCommandBuffer command_buffer,
-                                   VkImage image,
-                                   VkImageAspectFlags aspect_mask,
-                                   VkImageLayout old_layout,
-                                   VkImageLayout new_layout) const;
-
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -211,12 +216,9 @@ namespace lfs::vis {
         uint32_t min_image_count_ = 2;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
-        std::vector<VkImageLayout> swapchain_image_layouts_;
+        VulkanFrameGraph frame_graph_;
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
-        VkImage depth_stencil_image_ = VK_NULL_HANDLE;
-        VkDeviceMemory depth_stencil_memory_ = VK_NULL_HANDLE;
-        VkImageView depth_stencil_image_view_ = VK_NULL_HANDLE;
-        VkImageLayout depth_stencil_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::vector<DepthStencilResource> depth_stencil_resources_;
 
         static constexpr std::size_t kFramesInFlight = 2;
         std::array<VkCommandPool, kFramesInFlight> command_pools_{};
