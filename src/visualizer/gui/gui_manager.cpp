@@ -3454,6 +3454,7 @@ namespace lfs::vis::gui {
             viewport_layout_.size.x > 0.0f && viewport_layout_.size.y > 0.0f;
 
         VulkanViewportPassParams params{};
+        params.frame_slot = frame_slot;
         params.viewport_pos = has_viewport_layout ? viewport_layout_.pos : glm::vec2(0.0f, 0.0f);
         params.viewport_size = has_viewport_layout
                                    ? viewport_layout_.size

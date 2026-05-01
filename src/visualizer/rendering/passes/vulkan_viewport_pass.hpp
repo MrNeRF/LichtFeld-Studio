@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
@@ -67,6 +68,7 @@ namespace lfs::vis {
     };
 
     struct VulkanViewportPassParams {
+        std::size_t frame_slot = 0;
         glm::vec2 viewport_pos{0.0f, 0.0f};
         glm::vec2 viewport_size{0.0f, 0.0f};
         glm::vec2 framebuffer_scale{1.0f, 1.0f};

@@ -206,6 +206,7 @@ namespace lfs::vis {
         std::uint32_t graphics_queue_family = 0;
         VkFormat color_format = VK_FORMAT_UNDEFINED;
         VkFormat depth_stencil_format = VK_FORMAT_UNDEFINED;
+        std::size_t frames_in_flight = 1;
 
         VkCommandPool upload_command_pool = VK_NULL_HANDLE;
         VkBuffer quad_buffer = VK_NULL_HANDLE;
@@ -213,30 +214,27 @@ namespace lfs::vis {
         bool quad_flip_y = false;
         bool quad_initialized = false;
 
-        VkBuffer overlay_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory overlay_memory = VK_NULL_HANDLE;
-        std::size_t overlay_capacity = 0;
-        std::uint32_t overlay_vertex_count = 0;
+        struct DynamicBuffer {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            std::size_t capacity = 0;
+            std::uint32_t count = 0;
+        };
 
-        VkBuffer shape_overlay_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory shape_overlay_memory = VK_NULL_HANDLE;
-        std::size_t shape_overlay_capacity = 0;
-        std::uint32_t shape_overlay_vertex_count = 0;
-
-        VkBuffer ui_shape_overlay_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory ui_shape_overlay_memory = VK_NULL_HANDLE;
-        std::size_t ui_shape_overlay_capacity = 0;
-        std::uint32_t ui_shape_overlay_vertex_count = 0;
-
-        VkBuffer textured_overlay_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory textured_overlay_memory = VK_NULL_HANDLE;
-        std::size_t textured_overlay_capacity = 0;
-        std::uint32_t textured_overlay_vertex_count = 0;
+        struct FrameResources {
+            DynamicBuffer overlay;
+            DynamicBuffer shape_overlay;
+            DynamicBuffer ui_shape_overlay;
+            DynamicBuffer textured_overlay;
+            DynamicBuffer grid_uniform;
+            VkDescriptorSet scene_descriptor_set = VK_NULL_HANDLE;
+            VkDescriptorSet grid_descriptor_set = VK_NULL_HANDLE;
+        };
+        std::vector<FrameResources> frame_resources;
 
         VkSampler scene_sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout scene_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
-        VkDescriptorSet scene_descriptor_set = VK_NULL_HANDLE;
         VkImage scene_image = VK_NULL_HANDLE;
         VkDeviceMemory scene_image_memory = VK_NULL_HANDLE;
         VkImageView scene_image_view = VK_NULL_HANDLE;
@@ -248,11 +246,6 @@ namespace lfs::vis {
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
-        VkDescriptorSet grid_descriptor_set = VK_NULL_HANDLE;
-        VkBuffer grid_uniform_buffer = VK_NULL_HANDLE;
-        VkDeviceMemory grid_uniform_memory = VK_NULL_HANDLE;
-        std::size_t grid_uniform_capacity = 0;
-        std::uint32_t grid_uniform_count = 0;
 
         VkPipelineLayout scene_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
@@ -280,6 +273,8 @@ namespace lfs::vis {
             graphics_queue_family = context.graphicsQueueFamily();
             color_format = context.swapchainFormat();
             depth_stencil_format = context.depthStencilFormat();
+            frames_in_flight = std::max<std::size_t>(1, context.framesInFlight());
+            frame_resources.resize(frames_in_flight);
             if (device == VK_NULL_HANDLE || physical_device == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE || color_format == VK_FORMAT_UNDEFINED ||
                 depth_stencil_format == VK_FORMAT_UNDEFINED) {
@@ -355,6 +350,54 @@ namespace lfs::vis {
             return true;
         }
 
+        [[nodiscard]] FrameResources& resourcesForFrame(const std::size_t frame_slot) {
+            return frame_resources[frame_slot % frame_resources.size()];
+        }
+
+        [[nodiscard]] const FrameResources& resourcesForFrame(const std::size_t frame_slot) const {
+            return frame_resources[frame_slot % frame_resources.size()];
+        }
+
+        void destroyDynamicBuffer(DynamicBuffer& resource) const {
+            if (resource.buffer != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device, resource.buffer, nullptr);
+            }
+            if (resource.memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device, resource.memory, nullptr);
+            }
+            resource = {};
+        }
+
+        [[nodiscard]] bool ensureDynamicBuffer(DynamicBuffer& resource,
+                                               const std::size_t element_count,
+                                               const std::size_t element_size,
+                                               const std::size_t initial_capacity,
+                                               const VkBufferUsageFlags usage) const {
+            if (element_count == 0) {
+                resource.count = 0;
+                return true;
+            }
+            if (resource.buffer != VK_NULL_HANDLE && resource.capacity >= element_count) {
+                return true;
+            }
+
+            destroyDynamicBuffer(resource);
+            std::size_t capacity = initial_capacity;
+            while (capacity < element_count) {
+                capacity *= 2;
+            }
+            if (!createBuffer(static_cast<VkDeviceSize>(element_size * capacity),
+                              usage,
+                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                              resource.buffer,
+                              resource.memory)) {
+                resource = {};
+                return false;
+            }
+            resource.capacity = capacity;
+            return true;
+        }
+
         [[nodiscard]] bool createSampler() {
             VkSamplerCreateInfo sampler_info{};
             sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -382,22 +425,31 @@ namespace lfs::vis {
                 return false;
             }
 
-            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+            const auto descriptor_count = static_cast<std::uint32_t>(frame_resources.size());
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descriptor_count};
             VkDescriptorPoolCreateInfo pool_info{};
             pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pool_info.maxSets = 1;
+            pool_info.maxSets = descriptor_count;
             pool_info.poolSizeCount = 1;
             pool_info.pPoolSizes = &pool_size;
             if (vkCreateDescriptorPool(device, &pool_info, nullptr, &scene_descriptor_pool) != VK_SUCCESS) {
                 return false;
             }
 
+            std::vector<VkDescriptorSetLayout> layouts(frame_resources.size(), scene_descriptor_layout);
+            std::vector<VkDescriptorSet> sets(frame_resources.size(), VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo alloc_info{};
             alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             alloc_info.descriptorPool = scene_descriptor_pool;
-            alloc_info.descriptorSetCount = 1;
-            alloc_info.pSetLayouts = &scene_descriptor_layout;
-            return vkAllocateDescriptorSets(device, &alloc_info, &scene_descriptor_set) == VK_SUCCESS;
+            alloc_info.descriptorSetCount = descriptor_count;
+            alloc_info.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &alloc_info, sets.data()) != VK_SUCCESS) {
+                return false;
+            }
+            for (std::size_t i = 0; i < frame_resources.size(); ++i) {
+                frame_resources[i].scene_descriptor_set = sets[i];
+            }
+            return true;
         }
 
         [[nodiscard]] bool createGridResources() {
@@ -414,23 +466,29 @@ namespace lfs::vis {
                 return false;
             }
 
-            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1};
+            const auto descriptor_count = static_cast<std::uint32_t>(frame_resources.size());
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, descriptor_count};
             VkDescriptorPoolCreateInfo pool_info{};
             pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pool_info.maxSets = 1;
+            pool_info.maxSets = descriptor_count;
             pool_info.poolSizeCount = 1;
             pool_info.pPoolSizes = &pool_size;
             if (vkCreateDescriptorPool(device, &pool_info, nullptr, &grid_descriptor_pool) != VK_SUCCESS) {
                 return false;
             }
 
+            std::vector<VkDescriptorSetLayout> layouts(frame_resources.size(), grid_descriptor_layout);
+            std::vector<VkDescriptorSet> sets(frame_resources.size(), VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo alloc_info{};
             alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             alloc_info.descriptorPool = grid_descriptor_pool;
-            alloc_info.descriptorSetCount = 1;
-            alloc_info.pSetLayouts = &grid_descriptor_layout;
-            if (vkAllocateDescriptorSets(device, &alloc_info, &grid_descriptor_set) != VK_SUCCESS) {
+            alloc_info.descriptorSetCount = descriptor_count;
+            alloc_info.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &alloc_info, sets.data()) != VK_SUCCESS) {
                 return false;
+            }
+            for (std::size_t i = 0; i < frame_resources.size(); ++i) {
+                frame_resources[i].grid_descriptor_set = sets[i];
             }
 
             return true;
@@ -793,15 +851,19 @@ namespace lfs::vis {
             scene_image_external_generation = 0;
         }
 
-        void updateSceneDescriptor(const VkImageView image_view,
+        void updateSceneDescriptor(FrameResources& frame,
+                                   const VkImageView image_view,
                                    const VkImageLayout image_layout) const {
+            if (frame.scene_descriptor_set == VK_NULL_HANDLE) {
+                return;
+            }
             VkDescriptorImageInfo descriptor_info{};
             descriptor_info.sampler = scene_sampler;
             descriptor_info.imageView = image_view;
             descriptor_info.imageLayout = image_layout;
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = scene_descriptor_set;
+            write.dstSet = frame.scene_descriptor_set;
             write.dstBinding = 0;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.descriptorCount = 1;
@@ -826,8 +888,9 @@ namespace lfs::vis {
             clearSceneImageBinding();
         }
 
-        [[nodiscard]] bool ensureSceneImage(const glm::ivec2 size) {
+        [[nodiscard]] bool ensureSceneImage(const glm::ivec2 size, FrameResources& frame) {
             if (scene_image != VK_NULL_HANDLE && scene_image_size == size) {
+                updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return true;
             }
             destroySceneImage();
@@ -877,11 +940,11 @@ namespace lfs::vis {
             }
 
             scene_image_size = size;
-            updateSceneDescriptor(scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
 
-        [[nodiscard]] bool bindExternalSceneImage(const VulkanViewportPassParams& params) {
+        [[nodiscard]] bool bindExternalSceneImage(const VulkanViewportPassParams& params, FrameResources& frame) {
             if (params.external_scene_image == VK_NULL_HANDLE ||
                 params.external_scene_image_view == VK_NULL_HANDLE ||
                 params.scene_image_size.x <= 0 ||
@@ -894,6 +957,7 @@ namespace lfs::vis {
                 scene_image_size == params.scene_image_size &&
                 scene_image_layout == params.external_scene_image_layout &&
                 scene_image_external_generation == params.external_scene_image_generation) {
+                updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return true;
             }
 
@@ -905,7 +969,7 @@ namespace lfs::vis {
             uploaded_scene_tensor = params.scene_image.get();
             scene_image_external = true;
             scene_image_external_generation = params.external_scene_image_generation;
-            updateSceneDescriptor(scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
 
@@ -932,163 +996,66 @@ namespace lfs::vis {
             }
         }
 
-        bool ensureOverlayBuffer(const std::size_t vertex_count) {
-            if (vertex_count == 0) {
-                overlay_vertex_count = 0;
-                return true;
-            }
-            if (overlay_buffer != VK_NULL_HANDLE && overlay_capacity >= vertex_count) {
-                return true;
-            }
-            if (overlay_buffer != VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, overlay_buffer, nullptr);
-                overlay_buffer = VK_NULL_HANDLE;
-            }
-            if (overlay_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, overlay_memory, nullptr);
-                overlay_memory = VK_NULL_HANDLE;
-            }
-
-            std::size_t capacity = 256;
-            while (capacity < vertex_count) {
-                capacity *= 2;
-            }
-            if (!createBuffer(sizeof(VulkanViewportOverlayVertex) * capacity,
-                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              overlay_buffer,
-                              overlay_memory)) {
-                overlay_capacity = 0;
-                overlay_vertex_count = 0;
-                return false;
-            }
-            overlay_capacity = capacity;
-            return true;
-        }
-
-        void updateOverlayBuffer(const VulkanViewportPassParams& params) {
-            overlay_vertex_count = 0;
+        void updateOverlayBuffer(FrameResources& frame, const VulkanViewportPassParams& params) {
+            frame.overlay.count = 0;
             if (params.overlay_triangles.empty()) {
                 return;
             }
-            if (!ensureOverlayBuffer(params.overlay_triangles.size())) {
+            if (!ensureDynamicBuffer(frame.overlay,
+                                     params.overlay_triangles.size(),
+                                     sizeof(VulkanViewportOverlayVertex),
+                                     256,
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
                 return;
             }
             void* mapped = nullptr;
             const VkDeviceSize bytes =
                 static_cast<VkDeviceSize>(sizeof(VulkanViewportOverlayVertex) * params.overlay_triangles.size());
-            if (vkMapMemory(device, overlay_memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
+            if (vkMapMemory(device, frame.overlay.memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
                 return;
             }
             std::memcpy(mapped, params.overlay_triangles.data(), static_cast<std::size_t>(bytes));
-            vkUnmapMemory(device, overlay_memory);
-            overlay_vertex_count = static_cast<std::uint32_t>(
+            vkUnmapMemory(device, frame.overlay.memory);
+            frame.overlay.count = static_cast<std::uint32_t>(
                 std::min<std::size_t>(params.overlay_triangles.size(), std::numeric_limits<std::uint32_t>::max()));
         }
 
-        bool ensureShapeOverlayBuffer(const std::size_t vertex_count,
-                                      VkBuffer& buffer,
-                                      VkDeviceMemory& memory,
-                                      std::size_t& capacity,
-                                      std::uint32_t& out_count) {
-            if (vertex_count == 0) {
-                out_count = 0;
-                return true;
-            }
-            if (buffer != VK_NULL_HANDLE && capacity >= vertex_count) {
-                return true;
-            }
-            if (buffer != VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, buffer, nullptr);
-                buffer = VK_NULL_HANDLE;
-            }
-            if (memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, memory, nullptr);
-                memory = VK_NULL_HANDLE;
-            }
-
-            std::size_t new_capacity = 256;
-            while (new_capacity < vertex_count) {
-                new_capacity *= 2;
-            }
-            if (!createBuffer(sizeof(VulkanViewportShapeOverlayVertex) * new_capacity,
-                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              buffer,
-                              memory)) {
-                capacity = 0;
-                out_count = 0;
-                return false;
-            }
-            capacity = new_capacity;
-            return true;
-        }
-
         void updateShapeOverlayBuffer(const std::vector<VulkanViewportShapeOverlayVertex>& vertices,
-                                      VkBuffer& buffer,
-                                      VkDeviceMemory& memory,
-                                      std::size_t& capacity,
-                                      std::uint32_t& out_count) {
-            out_count = 0;
+                                      DynamicBuffer& resource) {
+            resource.count = 0;
             if (vertices.empty()) {
                 return;
             }
-            if (!ensureShapeOverlayBuffer(vertices.size(), buffer, memory, capacity, out_count)) {
+            if (!ensureDynamicBuffer(resource,
+                                     vertices.size(),
+                                     sizeof(VulkanViewportShapeOverlayVertex),
+                                     256,
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
                 return;
             }
             void* mapped = nullptr;
             const VkDeviceSize bytes =
                 static_cast<VkDeviceSize>(sizeof(VulkanViewportShapeOverlayVertex) * vertices.size());
-            if (vkMapMemory(device, memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
+            if (vkMapMemory(device, resource.memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
                 return;
             }
             std::memcpy(mapped, vertices.data(), static_cast<std::size_t>(bytes));
-            vkUnmapMemory(device, memory);
-            out_count = static_cast<std::uint32_t>(
+            vkUnmapMemory(device, resource.memory);
+            resource.count = static_cast<std::uint32_t>(
                 std::min<std::size_t>(vertices.size(), std::numeric_limits<std::uint32_t>::max()));
         }
 
-        bool ensureTexturedOverlayBuffer(const std::size_t vertex_count) {
-            if (vertex_count == 0) {
-                textured_overlay_vertex_count = 0;
-                return true;
-            }
-            if (textured_overlay_buffer != VK_NULL_HANDLE && textured_overlay_capacity >= vertex_count) {
-                return true;
-            }
-            if (textured_overlay_buffer != VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, textured_overlay_buffer, nullptr);
-                textured_overlay_buffer = VK_NULL_HANDLE;
-            }
-            if (textured_overlay_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, textured_overlay_memory, nullptr);
-                textured_overlay_memory = VK_NULL_HANDLE;
-            }
-
-            std::size_t capacity = 64;
-            while (capacity < vertex_count) {
-                capacity *= 2;
-            }
-            if (!createBuffer(sizeof(VulkanViewportTexturedOverlayVertex) * capacity,
-                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              textured_overlay_buffer,
-                              textured_overlay_memory)) {
-                textured_overlay_capacity = 0;
-                textured_overlay_vertex_count = 0;
-                return false;
-            }
-            textured_overlay_capacity = capacity;
-            return true;
-        }
-
-        void updateTexturedOverlayBuffer(const VulkanViewportPassParams& params) {
-            textured_overlay_vertex_count = 0;
+        void updateTexturedOverlayBuffer(FrameResources& frame, const VulkanViewportPassParams& params) {
+            frame.textured_overlay.count = 0;
             if (params.textured_overlays.empty()) {
                 return;
             }
             const std::size_t vertex_count = params.textured_overlays.size() * 6u;
-            if (!ensureTexturedOverlayBuffer(vertex_count)) {
+            if (!ensureDynamicBuffer(frame.textured_overlay,
+                                     vertex_count,
+                                     sizeof(VulkanViewportTexturedOverlayVertex),
+                                     64,
+                                     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)) {
                 return;
             }
 
@@ -1101,26 +1068,26 @@ namespace lfs::vis {
             void* mapped = nullptr;
             const VkDeviceSize bytes =
                 static_cast<VkDeviceSize>(sizeof(VulkanViewportTexturedOverlayVertex) * vertices.size());
-            if (vkMapMemory(device, textured_overlay_memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
+            if (vkMapMemory(device, frame.textured_overlay.memory, 0, bytes, 0, &mapped) != VK_SUCCESS || !mapped) {
                 return;
             }
             std::memcpy(mapped, vertices.data(), static_cast<std::size_t>(bytes));
-            vkUnmapMemory(device, textured_overlay_memory);
-            textured_overlay_vertex_count = static_cast<std::uint32_t>(
+            vkUnmapMemory(device, frame.textured_overlay.memory);
+            frame.textured_overlay.count = static_cast<std::uint32_t>(
                 std::min<std::size_t>(vertices.size(), std::numeric_limits<std::uint32_t>::max()));
         }
 
-        void updateGridDescriptor(const VkDeviceSize range) const {
-            if (grid_descriptor_set == VK_NULL_HANDLE || grid_uniform_buffer == VK_NULL_HANDLE) {
+        void updateGridDescriptor(FrameResources& frame, const VkDeviceSize range) const {
+            if (frame.grid_descriptor_set == VK_NULL_HANDLE || frame.grid_uniform.buffer == VK_NULL_HANDLE) {
                 return;
             }
             VkDescriptorBufferInfo buffer_info{};
-            buffer_info.buffer = grid_uniform_buffer;
+            buffer_info.buffer = frame.grid_uniform.buffer;
             buffer_info.offset = 0;
             buffer_info.range = range;
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = grid_descriptor_set;
+            write.dstSet = frame.grid_descriptor_set;
             write.dstBinding = 0;
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1128,21 +1095,13 @@ namespace lfs::vis {
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
 
-        [[nodiscard]] bool ensureGridUniformBuffer(const std::size_t grid_count) {
+        [[nodiscard]] bool ensureGridUniformBuffer(FrameResources& frame, const std::size_t grid_count) {
             if (grid_count == 0) {
-                grid_uniform_count = 0;
+                frame.grid_uniform.count = 0;
                 return true;
             }
-            if (grid_uniform_buffer != VK_NULL_HANDLE && grid_uniform_capacity >= grid_count) {
+            if (frame.grid_uniform.buffer != VK_NULL_HANDLE && frame.grid_uniform.capacity >= grid_count) {
                 return true;
-            }
-            if (grid_uniform_buffer != VK_NULL_HANDLE) {
-                vkDestroyBuffer(device, grid_uniform_buffer, nullptr);
-                grid_uniform_buffer = VK_NULL_HANDLE;
-            }
-            if (grid_uniform_memory != VK_NULL_HANDLE) {
-                vkFreeMemory(device, grid_uniform_memory, nullptr);
-                grid_uniform_memory = VK_NULL_HANDLE;
             }
 
             std::size_t capacity = 1;
@@ -1150,17 +1109,17 @@ namespace lfs::vis {
                 capacity *= 2;
             }
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(sizeof(GridUniform) * capacity);
+            destroyDynamicBuffer(frame.grid_uniform);
             if (!createBuffer(bytes,
                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                              grid_uniform_buffer,
-                              grid_uniform_memory)) {
-                grid_uniform_capacity = 0;
-                grid_uniform_count = 0;
+                              frame.grid_uniform.buffer,
+                              frame.grid_uniform.memory)) {
+                frame.grid_uniform = {};
                 return false;
             }
-            grid_uniform_capacity = capacity;
-            updateGridDescriptor(bytes);
+            frame.grid_uniform.capacity = capacity;
+            updateGridDescriptor(frame, bytes);
             return true;
         }
 
@@ -1251,12 +1210,13 @@ namespace lfs::vis {
         }
 
         void updateGridUniforms(const VulkanViewportPassParams& params) {
+            auto& frame = resourcesForFrame(params.frame_slot);
             const auto grids = collectGridOverlays(params);
             if (grids.empty()) {
-                grid_uniform_count = 0;
+                frame.grid_uniform.count = 0;
                 return;
             }
-            if (!ensureGridUniformBuffer(grids.size())) {
+            if (!ensureGridUniformBuffer(frame, grids.size())) {
                 return;
             }
 
@@ -1266,29 +1226,30 @@ namespace lfs::vis {
                 uniforms.push_back(makeGridUniform(grid));
             }
             if (uniforms.empty()) {
-                grid_uniform_count = 0;
+                frame.grid_uniform.count = 0;
                 return;
             }
 
             void* mapped = nullptr;
             const VkDeviceSize bytes =
                 static_cast<VkDeviceSize>(sizeof(GridUniform) * uniforms.size());
-            if (vkMapMemory(device, grid_uniform_memory, 0, bytes, 0, &mapped) == VK_SUCCESS && mapped) {
+            if (vkMapMemory(device, frame.grid_uniform.memory, 0, bytes, 0, &mapped) == VK_SUCCESS && mapped) {
                 std::memcpy(mapped, uniforms.data(), static_cast<std::size_t>(bytes));
-                vkUnmapMemory(device, grid_uniform_memory);
-                grid_uniform_count = static_cast<std::uint32_t>(
+                vkUnmapMemory(device, frame.grid_uniform.memory);
+                frame.grid_uniform.count = static_cast<std::uint32_t>(
                     std::min<std::size_t>(uniforms.size(), std::numeric_limits<std::uint32_t>::max()));
             }
         }
 
         void uploadSceneImage(const VulkanViewportPassParams& params) {
+            auto& frame = resourcesForFrame(params.frame_slot);
             if (!params.scene_image || params.scene_image_size.x <= 0 || params.scene_image_size.y <= 0) {
                 uploaded_scene_tensor = nullptr;
                 return;
             }
             if (params.external_scene_image != VK_NULL_HANDLE &&
                 params.external_scene_image_view != VK_NULL_HANDLE) {
-                if (!bindExternalSceneImage(params)) {
+                if (!bindExternalSceneImage(params, frame)) {
                     LOG_ERROR("Failed to bind external Vulkan viewport scene image");
                 }
                 return;
@@ -1298,10 +1259,11 @@ namespace lfs::vis {
             }
             if (uploaded_scene_tensor == params.scene_image.get() && scene_image_size == params.scene_image_size &&
                 scene_image_view != VK_NULL_HANDLE) {
+                updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return;
             }
             const auto rgba = tensorToRgba8(*params.scene_image, params.scene_image_size);
-            if (!rgba || rgba->empty() || !ensureSceneImage(params.scene_image_size)) {
+            if (!rgba || rgba->empty() || !ensureSceneImage(params.scene_image_size, frame)) {
                 return;
             }
 
@@ -1360,20 +1322,13 @@ namespace lfs::vis {
         }
 
         void prepare(const VulkanViewportPassParams& params) {
+            auto& frame = resourcesForFrame(params.frame_slot);
             updateQuadBuffer(params.scene_image_flip_y);
             updateGridUniforms(params);
-            updateTexturedOverlayBuffer(params);
-            updateOverlayBuffer(params);
-            updateShapeOverlayBuffer(params.shape_overlay_triangles,
-                                     shape_overlay_buffer,
-                                     shape_overlay_memory,
-                                     shape_overlay_capacity,
-                                     shape_overlay_vertex_count);
-            updateShapeOverlayBuffer(params.ui_shape_overlay_triangles,
-                                     ui_shape_overlay_buffer,
-                                     ui_shape_overlay_memory,
-                                     ui_shape_overlay_capacity,
-                                     ui_shape_overlay_vertex_count);
+            updateTexturedOverlayBuffer(frame, params);
+            updateOverlayBuffer(frame, params);
+            updateShapeOverlayBuffer(params.shape_overlay_triangles, frame.shape_overlay);
+            updateShapeOverlayBuffer(params.ui_shape_overlay_triangles, frame.ui_shape_overlay);
             uploadSceneImage(params);
         }
 
@@ -1414,10 +1369,11 @@ namespace lfs::vis {
                                 const VkExtent2D extent,
                                 const VulkanViewportPassParams& params,
                                 const FramebufferRect& main_rect) const {
-            if (grid_uniform_count == 0 ||
+            const auto& frame = resourcesForFrame(params.frame_slot);
+            if (frame.grid_uniform.count == 0 ||
                 grid_pipeline == VK_NULL_HANDLE ||
-                grid_descriptor_set == VK_NULL_HANDLE ||
-                grid_uniform_buffer == VK_NULL_HANDLE) {
+                frame.grid_descriptor_set == VK_NULL_HANDLE ||
+                frame.grid_uniform.buffer == VK_NULL_HANDLE) {
                 return;
             }
 
@@ -1427,12 +1383,12 @@ namespace lfs::vis {
                                     grid_pipeline_layout,
                                     0,
                                     1,
-                                    &grid_descriptor_set,
+                                    &frame.grid_descriptor_set,
                                     0,
                                     nullptr);
             const auto grids = collectGridOverlays(params);
             for (std::uint32_t i = 0;
-                 i < std::min<std::uint32_t>(grid_uniform_count, static_cast<std::uint32_t>(grids.size()));
+                 i < std::min<std::uint32_t>(frame.grid_uniform.count, static_cast<std::uint32_t>(grids.size()));
                  ++i) {
                 const auto& grid = grids[i];
                 if (grid.viewport_size.x <= 0.0f || grid.viewport_size.y <= 0.0f ||
@@ -1459,23 +1415,23 @@ namespace lfs::vis {
         }
 
         void recordShapeOverlays(VkCommandBuffer command_buffer,
-                                 const VkBuffer buffer,
-                                 const std::uint32_t vertex_count) const {
-            if (vertex_count == 0 ||
-                buffer == VK_NULL_HANDLE ||
+                                 const DynamicBuffer& resource) const {
+            if (resource.count == 0 ||
+                resource.buffer == VK_NULL_HANDLE ||
                 shape_overlay_pipeline == VK_NULL_HANDLE) {
                 return;
             }
             const VkDeviceSize offset = 0;
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shape_overlay_pipeline);
-            vkCmdBindVertexBuffers(command_buffer, 0, 1, &buffer, &offset);
-            vkCmdDraw(command_buffer, vertex_count, 1, 0, 0);
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &resource.buffer, &offset);
+            vkCmdDraw(command_buffer, resource.count, 1, 0, 0);
             bindQuad(command_buffer);
         }
 
         void record(VkCommandBuffer command_buffer,
                     const VkExtent2D extent,
                     const VulkanViewportPassParams& params) {
+            const auto& frame = resourcesForFrame(params.frame_slot);
             const FramebufferRect rect = toFramebufferRect(params, extent);
             if (rect.width == 0 || rect.height == 0 || quad_buffer == VK_NULL_HANDLE) {
                 return;
@@ -1486,7 +1442,7 @@ namespace lfs::vis {
 
             const bool has_scene =
                 (params.scene_image || scene_image_external) && scene_image_view != VK_NULL_HANDLE &&
-                scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
+                frame.scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
             if (has_scene) {
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
                 vkCmdBindDescriptorSets(command_buffer,
@@ -1494,19 +1450,19 @@ namespace lfs::vis {
                                         scene_pipeline_layout,
                                         0,
                                         1,
-                                        &scene_descriptor_set,
+                                        &frame.scene_descriptor_set,
                                         0,
                                         nullptr);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
-            if (textured_overlay_vertex_count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
-                textured_overlay_buffer != VK_NULL_HANDLE && !params.textured_overlays.empty()) {
+            if (frame.textured_overlay.count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
+                frame.textured_overlay.buffer != VK_NULL_HANDLE && !params.textured_overlays.empty()) {
                 const VkDeviceSize offset = 0;
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textured_overlay_pipeline);
-                vkCmdBindVertexBuffers(command_buffer, 0, 1, &textured_overlay_buffer, &offset);
+                vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.textured_overlay.buffer, &offset);
                 std::uint32_t first_vertex = 0;
                 for (const auto& overlay : params.textured_overlays) {
-                    if (overlay.texture_id == 0 || first_vertex + 6u > textured_overlay_vertex_count) {
+                    if (overlay.texture_id == 0 || first_vertex + 6u > frame.textured_overlay.count) {
                         first_vertex += 6u;
                         continue;
                     }
@@ -1538,16 +1494,16 @@ namespace lfs::vis {
                 bindQuad(command_buffer);
             }
 
-            if (overlay_vertex_count > 0 && overlay_pipeline != VK_NULL_HANDLE &&
-                overlay_buffer != VK_NULL_HANDLE) {
+            if (frame.overlay.count > 0 && overlay_pipeline != VK_NULL_HANDLE &&
+                frame.overlay.buffer != VK_NULL_HANDLE) {
                 const VkDeviceSize offset = 0;
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline);
-                vkCmdBindVertexBuffers(command_buffer, 0, 1, &overlay_buffer, &offset);
-                vkCmdDraw(command_buffer, overlay_vertex_count, 1, 0, 0);
+                vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.overlay.buffer, &offset);
+                vkCmdDraw(command_buffer, frame.overlay.count, 1, 0, 0);
                 bindQuad(command_buffer);
             }
 
-            recordShapeOverlays(command_buffer, shape_overlay_buffer, shape_overlay_vertex_count);
+            recordShapeOverlays(command_buffer, frame.shape_overlay);
 
             if (!params.pivot_overlays.empty() && pivot_pipeline != VK_NULL_HANDLE) {
                 bindQuad(command_buffer);
@@ -1597,7 +1553,7 @@ namespace lfs::vis {
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
 
-            recordShapeOverlays(command_buffer, ui_shape_overlay_buffer, ui_shape_overlay_vertex_count);
+            recordShapeOverlays(command_buffer, frame.ui_shape_overlay);
         }
 
         void reset() {
@@ -1632,30 +1588,17 @@ namespace lfs::vis {
                     vkDestroyPipelineLayout(device, textured_overlay_pipeline_layout, nullptr);
                 if (pivot_pipeline_layout != VK_NULL_HANDLE)
                     vkDestroyPipelineLayout(device, pivot_pipeline_layout, nullptr);
-                if (grid_uniform_buffer != VK_NULL_HANDLE)
-                    vkDestroyBuffer(device, grid_uniform_buffer, nullptr);
-                if (grid_uniform_memory != VK_NULL_HANDLE)
-                    vkFreeMemory(device, grid_uniform_memory, nullptr);
                 if (quad_buffer != VK_NULL_HANDLE)
                     vkDestroyBuffer(device, quad_buffer, nullptr);
                 if (quad_memory != VK_NULL_HANDLE)
                     vkFreeMemory(device, quad_memory, nullptr);
-                if (overlay_buffer != VK_NULL_HANDLE)
-                    vkDestroyBuffer(device, overlay_buffer, nullptr);
-                if (overlay_memory != VK_NULL_HANDLE)
-                    vkFreeMemory(device, overlay_memory, nullptr);
-                if (shape_overlay_buffer != VK_NULL_HANDLE)
-                    vkDestroyBuffer(device, shape_overlay_buffer, nullptr);
-                if (shape_overlay_memory != VK_NULL_HANDLE)
-                    vkFreeMemory(device, shape_overlay_memory, nullptr);
-                if (ui_shape_overlay_buffer != VK_NULL_HANDLE)
-                    vkDestroyBuffer(device, ui_shape_overlay_buffer, nullptr);
-                if (ui_shape_overlay_memory != VK_NULL_HANDLE)
-                    vkFreeMemory(device, ui_shape_overlay_memory, nullptr);
-                if (textured_overlay_buffer != VK_NULL_HANDLE)
-                    vkDestroyBuffer(device, textured_overlay_buffer, nullptr);
-                if (textured_overlay_memory != VK_NULL_HANDLE)
-                    vkFreeMemory(device, textured_overlay_memory, nullptr);
+                for (auto& frame : frame_resources) {
+                    destroyDynamicBuffer(frame.overlay);
+                    destroyDynamicBuffer(frame.shape_overlay);
+                    destroyDynamicBuffer(frame.ui_shape_overlay);
+                    destroyDynamicBuffer(frame.textured_overlay);
+                    destroyDynamicBuffer(frame.grid_uniform);
+                }
                 if (scene_sampler != VK_NULL_HANDLE)
                     vkDestroySampler(device, scene_sampler, nullptr);
                 if (scene_descriptor_pool != VK_NULL_HANDLE)
