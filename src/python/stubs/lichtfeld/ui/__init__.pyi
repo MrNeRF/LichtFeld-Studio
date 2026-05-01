@@ -1915,6 +1915,11 @@ def open_json_file_dialog() -> str:
     Open a file dialog to select a JSON config file. Returns empty string if cancelled.
     """
 
+def open_csv_file_dialog() -> str:
+    """
+    Open a file dialog to select a CSV file. Returns empty string if cancelled.
+    """
+
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
     Open a save file dialog for JSON files. Returns empty string if cancelled.
