@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_frame_graph.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "viewport/grid.frag.spv.h"
@@ -238,7 +239,7 @@ namespace lfs::vis {
         VkImage scene_image = VK_NULL_HANDLE;
         VkDeviceMemory scene_image_memory = VK_NULL_HANDLE;
         VkImageView scene_image_view = VK_NULL_HANDLE;
-        VkImageLayout scene_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VulkanFrameGraph scene_image_graph;
         glm::ivec2 scene_image_size{0, 0};
         const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
         bool scene_image_external = false;
@@ -792,59 +793,11 @@ namespace lfs::vis {
             return result == VK_SUCCESS;
         }
 
-        void transitionSceneImage(const VkCommandBuffer command_buffer,
-                                  const VkImageLayout old_layout,
-                                  const VkImageLayout new_layout) {
-            VkImageMemoryBarrier2 barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            barrier.oldLayout = old_layout;
-            barrier.newLayout = new_layout;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = scene_image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-
-            VkPipelineStageFlags2 src_stage = VK_PIPELINE_STAGE_2_NONE;
-            VkPipelineStageFlags2 dst_stage = VK_PIPELINE_STAGE_2_NONE;
-            if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                src_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            } else if (old_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-                barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                src_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            } else if (old_layout == VK_IMAGE_LAYOUT_GENERAL) {
-                barrier.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-                src_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            }
-            if (new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                dst_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            } else if (new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-                barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                dst_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            } else if (new_layout == VK_IMAGE_LAYOUT_GENERAL) {
-                barrier.dstAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT;
-                dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            }
-            barrier.srcStageMask = src_stage;
-            barrier.dstStageMask = dst_stage;
-
-            VkDependencyInfo dependency{};
-            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dependency.imageMemoryBarrierCount = 1;
-            dependency.pImageMemoryBarriers = &barrier;
-            vkCmdPipelineBarrier2(command_buffer, &dependency);
-        }
-
         void clearSceneImageBinding() {
+            scene_image_graph.forgetImage(scene_image);
             scene_image = VK_NULL_HANDLE;
             scene_image_memory = VK_NULL_HANDLE;
             scene_image_view = VK_NULL_HANDLE;
-            scene_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             scene_image_size = {0, 0};
             uploaded_scene_tensor = nullptr;
             scene_image_external = false;
@@ -940,6 +893,7 @@ namespace lfs::vis {
             }
 
             scene_image_size = size;
+            scene_image_graph.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
             updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
@@ -955,7 +909,7 @@ namespace lfs::vis {
                 scene_image == params.external_scene_image &&
                 scene_image_view == params.external_scene_image_view &&
                 scene_image_size == params.scene_image_size &&
-                scene_image_layout == params.external_scene_image_layout &&
+                scene_image_graph.imageLayout(scene_image, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
                 scene_image_external_generation == params.external_scene_image_generation) {
                 updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return true;
@@ -964,11 +918,11 @@ namespace lfs::vis {
             destroySceneImage();
             scene_image = params.external_scene_image;
             scene_image_view = params.external_scene_image_view;
-            scene_image_layout = params.external_scene_image_layout;
             scene_image_size = params.scene_image_size;
             uploaded_scene_tensor = params.scene_image.get();
             scene_image_external = true;
             scene_image_external_generation = params.external_scene_image_generation;
+            scene_image_graph.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
             updateSceneDescriptor(frame, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
@@ -1293,7 +1247,10 @@ namespace lfs::vis {
                 vkFreeMemory(device, staging_memory, nullptr);
                 return;
             }
-            transitionSceneImage(command_buffer, scene_image_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            scene_image_graph.transitionImage(command_buffer,
+                                              scene_image,
+                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             VkBufferImageCopy copy{};
             copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             copy.imageSubresource.mipLevel = 0;
@@ -1310,11 +1267,11 @@ namespace lfs::vis {
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                    1,
                                    &copy);
-            transitionSceneImage(command_buffer,
-                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            scene_image_graph.transitionImage(command_buffer,
+                                              scene_image,
+                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             if (endUploadCommands(command_buffer)) {
-                scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 uploaded_scene_tensor = params.scene_image.get();
             }
             vkDestroyBuffer(device, staging_buffer, nullptr);

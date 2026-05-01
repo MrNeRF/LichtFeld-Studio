@@ -6,6 +6,8 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
+#include "window/vulkan_frame_graph.hpp"
+
 #ifdef _WIN32
     #ifndef NOMINMAX
         #define NOMINMAX
@@ -678,6 +680,7 @@ private:
 	VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
 	VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+	lfs::vis::VulkanFrameGraph m_frame_graph;
 	active_render_target_t m_active_render_target = active_render_target_t::None;
 	Rml::LayerHandle m_active_layer = 0;
 	int m_render_layer_stack_size = 0;

@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_frame_graph.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <vulkan/vulkan.h>
@@ -128,6 +129,7 @@ namespace lfs::vis::gui {
         VkImageView image_view = VK_NULL_HANDLE;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VulkanFrameGraph image_graph;
         VkFence upload_fence = VK_NULL_HANDLE;
         VkBuffer pending_staging_buffer = VK_NULL_HANDLE;
         VkDeviceMemory pending_staging_memory = VK_NULL_HANDLE;
@@ -354,42 +356,11 @@ namespace lfs::vis::gui {
         void transitionImageLayout(const VkCommandBuffer command_buffer,
                                    const VkImageLayout old_layout,
                                    const VkImageLayout new_layout) {
-            VkImageMemoryBarrier2 barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-            barrier.oldLayout = old_layout;
-            barrier.newLayout = new_layout;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-
-            VkPipelineStageFlags2 src_stage = VK_PIPELINE_STAGE_2_NONE;
-            VkPipelineStageFlags2 dst_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            if (old_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
-                new_layout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-                barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                src_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            } else if (new_layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-                barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-                src_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-                dst_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            } else {
-                barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE || old_layout == new_layout) {
+                return;
             }
-            barrier.srcStageMask = src_stage;
-            barrier.dstStageMask = dst_stage;
-
-            VkDependencyInfo dependency{};
-            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-            dependency.imageMemoryBarrierCount = 1;
-            dependency.pImageMemoryBarriers = &barrier;
-            vkCmdPipelineBarrier2(command_buffer, &dependency);
+            image_graph.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, old_layout);
+            image_graph.transitionImage(command_buffer, image, VK_IMAGE_ASPECT_COLOR_BIT, new_layout);
         }
 
         [[nodiscard]] bool ensureImage(const int new_width, const int new_height) {
@@ -459,6 +430,7 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
+            image_graph.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {
                 VkDescriptorSetAllocateInfo alloc_info{};
@@ -655,6 +627,7 @@ namespace lfs::vis::gui {
                 image_view = VK_NULL_HANDLE;
             }
             if (image != VK_NULL_HANDLE) {
+                image_graph.forgetImage(image);
                 vkDestroyImage(device, image, nullptr);
                 image = VK_NULL_HANDLE;
             }
