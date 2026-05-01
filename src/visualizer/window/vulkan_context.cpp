@@ -28,6 +28,13 @@ namespace lfs::vis {
             });
         }
 
+        [[nodiscard]] bool layerAvailable(const std::vector<VkLayerProperties>& layers,
+                                          const char* const layer_name) {
+            return std::ranges::any_of(layers, [layer_name](const VkLayerProperties& layer) {
+                return std::strcmp(layer.layerName, layer_name) == 0;
+            });
+        }
+
         void appendUniqueExtension(std::vector<const char*>& extensions, const char* const extension_name) {
             const auto existing = std::ranges::find_if(extensions, [extension_name](const char* const enabled) {
                 return std::strcmp(enabled, extension_name) == 0;
@@ -35,6 +42,103 @@ namespace lfs::vis {
             if (existing == extensions.end()) {
                 extensions.push_back(extension_name);
             }
+        }
+
+        [[nodiscard]] std::string vulkanApiVersionString(const uint32_t api_version) {
+            return std::format("{}.{}.{}",
+                               VK_API_VERSION_MAJOR(api_version),
+                               VK_API_VERSION_MINOR(api_version),
+                               VK_API_VERSION_PATCH(api_version));
+        }
+
+        struct RequiredFeatureSupport {
+            bool synchronization2 = false;
+            bool dynamic_rendering = false;
+            bool timeline_semaphore = false;
+            bool buffer_device_address = false;
+        };
+
+        [[nodiscard]] RequiredFeatureSupport queryRequiredFeatureSupport(const VkPhysicalDevice device) {
+            VkPhysicalDeviceVulkan13Features features13{};
+            features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+
+            VkPhysicalDeviceVulkan12Features features12{};
+            features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+            features12.pNext = &features13;
+
+            VkPhysicalDeviceFeatures2 features2{};
+            features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            features2.pNext = &features12;
+            vkGetPhysicalDeviceFeatures2(device, &features2);
+
+            RequiredFeatureSupport support{};
+            support.synchronization2 = features13.synchronization2 == VK_TRUE;
+            support.dynamic_rendering = features13.dynamicRendering == VK_TRUE;
+            support.timeline_semaphore = features12.timelineSemaphore == VK_TRUE;
+            support.buffer_device_address = features12.bufferDeviceAddress == VK_TRUE;
+            return support;
+        }
+
+        [[nodiscard]] bool hasRequiredFeatures(const RequiredFeatureSupport& support) {
+            return support.synchronization2 &&
+                   support.dynamic_rendering &&
+                   support.timeline_semaphore &&
+                   support.buffer_device_address;
+        }
+
+        void appendMissingFeature(std::string& missing, const bool present, std::string_view feature_name) {
+            if (present) {
+                return;
+            }
+            if (!missing.empty()) {
+                missing += ", ";
+            }
+            missing += feature_name;
+        }
+
+        [[nodiscard]] std::string missingRequiredFeatures(const RequiredFeatureSupport& support) {
+            std::string missing;
+            appendMissingFeature(missing, support.synchronization2, "synchronization2");
+            appendMissingFeature(missing, support.dynamic_rendering, "dynamicRendering");
+            appendMissingFeature(missing, support.timeline_semaphore, "timelineSemaphore");
+            appendMissingFeature(missing, support.buffer_device_address, "bufferDeviceAddress");
+            return missing;
+        }
+
+        [[nodiscard]] bool validationRequestedByBuild() {
+#if defined(DEBUG_BUILD) || !defined(NDEBUG)
+            return true;
+#else
+            return false;
+#endif
+        }
+
+        VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
+            VkDebugUtilsMessageSeverityFlagBitsEXT message_severity,
+            VkDebugUtilsMessageTypeFlagsEXT,
+            const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
+            void*) {
+            const char* const message = callback_data != nullptr && callback_data->pMessage != nullptr
+                                            ? callback_data->pMessage
+                                            : "<missing validation message>";
+
+            if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
+                LOG_ERROR("Vulkan validation: {}", message);
+            } else if ((message_severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0) {
+                LOG_WARN("Vulkan validation: {}", message);
+            }
+            return VK_FALSE;
+        }
+
+        void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& create_info) {
+            create_info = {};
+            create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+            create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                                      VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            create_info.pfnUserCallback = vulkanDebugCallback;
         }
 
         constexpr std::uint64_t kFrameWaitTimeoutNs = 16'000'000;
@@ -104,14 +208,18 @@ namespace lfs::vis {
         if (device_ != VK_NULL_HANDLE) {
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
+            vk_set_debug_utils_object_name_ = nullptr;
         }
         if (surface_ != VK_NULL_HANDLE && instance_ != VK_NULL_HANDLE) {
             SDL_Vulkan_DestroySurface(instance_, surface_, nullptr);
             surface_ = VK_NULL_HANDLE;
         }
         if (instance_ != VK_NULL_HANDLE) {
+            destroyDebugMessenger();
             vkDestroyInstance(instance_, nullptr);
             instance_ = VK_NULL_HANDLE;
+            debug_utils_enabled_ = false;
+            validation_enabled_ = false;
         }
 #endif
     }
@@ -305,23 +413,62 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
         }
 
+        debug_utils_enabled_ = extensionAvailable(available_extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        if (debug_utils_enabled_) {
+            appendUniqueExtension(extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+
+        uint32_t available_layer_count = 0;
+        vkEnumerateInstanceLayerProperties(&available_layer_count, nullptr);
+        std::vector<VkLayerProperties> available_layers(available_layer_count);
+        if (available_layer_count > 0) {
+            vkEnumerateInstanceLayerProperties(&available_layer_count, available_layers.data());
+        }
+
+        std::vector<const char*> layers;
+        const bool validation_requested = validationRequestedByBuild();
+        const bool validation_layer_available = layerAvailable(available_layers, "VK_LAYER_KHRONOS_validation");
+        validation_enabled_ = validation_requested && validation_layer_available && debug_utils_enabled_;
+        if (validation_enabled_) {
+            layers.push_back("VK_LAYER_KHRONOS_validation");
+            LOG_INFO("Vulkan validation enabled");
+        } else if (validation_requested) {
+            if (!validation_layer_available) {
+                LOG_WARN("Vulkan validation requested by build type, but VK_LAYER_KHRONOS_validation is unavailable");
+            }
+            if (!debug_utils_enabled_) {
+                LOG_WARN("Vulkan validation requested by build type, but VK_EXT_debug_utils is unavailable");
+            }
+        }
+
         VkApplicationInfo app_info{};
         app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
         app_info.pApplicationName = "LichtFeld Studio";
         app_info.applicationVersion = VK_MAKE_VERSION(0, 0, 0);
         app_info.pEngineName = "LichtFeld Studio";
         app_info.engineVersion = VK_MAKE_VERSION(0, 0, 0);
-        app_info.apiVersion = VK_API_VERSION_1_0;
+        app_info.apiVersion = VK_API_VERSION_1_3;
+
+        VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
+        if (validation_enabled_) {
+            populateDebugMessengerCreateInfo(debug_create_info);
+        }
 
         VkInstanceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        create_info.pNext = validation_enabled_ ? &debug_create_info : nullptr;
         create_info.pApplicationInfo = &app_info;
+        create_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
+        create_info.ppEnabledLayerNames = layers.data();
         create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         create_info.ppEnabledExtensionNames = extensions.data();
 
         const VkResult result = vkCreateInstance(&create_info, nullptr, &instance_);
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateInstance failed: {}", static_cast<int>(result)));
+        }
+        if (validation_enabled_ && !createDebugMessenger()) {
+            return false;
         }
         return true;
     }
@@ -417,6 +564,21 @@ namespace lfs::vis {
 
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(device, &props);
+            if (props.apiVersion < VK_API_VERSION_1_3) {
+                LOG_WARN("Skipping Vulkan device '{}' because it exposes Vulkan {}, but 1.3 is required",
+                         props.deviceName,
+                         vulkanApiVersionString(props.apiVersion));
+                continue;
+            }
+
+            const RequiredFeatureSupport feature_support = queryRequiredFeatureSupport(device);
+            if (!hasRequiredFeatures(feature_support)) {
+                LOG_WARN("Skipping Vulkan device '{}' because required Vulkan 1.2/1.3 features are missing: {}",
+                         props.deviceName,
+                         missingRequiredFeatures(feature_support));
+                continue;
+            }
+
             if (fallback == VK_NULL_HANDLE) {
                 fallback = device;
             }
@@ -430,12 +592,12 @@ namespace lfs::vis {
             physical_device_ = fallback;
         }
         if (physical_device_ == VK_NULL_HANDLE) {
-            return fail("No Vulkan device supports graphics presentation and swapchain creation");
+            return fail("No Vulkan device supports graphics presentation, swapchain creation, Vulkan 1.3, and required features");
         }
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physical_device_, &props);
-        LOG_INFO("Vulkan device: {}", props.deviceName);
+        LOG_INFO("Vulkan device: {} (API {})", props.deviceName, vulkanApiVersionString(props.apiVersion));
         return true;
     }
 
@@ -498,22 +660,45 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
         }
 
-        const VkPhysicalDeviceFeatures features{};
+        VkPhysicalDeviceVulkan13Features features13{};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features13.synchronization2 = VK_TRUE;
+        features13.dynamicRendering = VK_TRUE;
+
+        VkPhysicalDeviceVulkan12Features features12{};
+        features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        features12.pNext = &features13;
+        features12.timelineSemaphore = VK_TRUE;
+        features12.bufferDeviceAddress = VK_TRUE;
+
+        VkPhysicalDeviceFeatures2 features2{};
+        features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        features2.pNext = &features12;
+
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        create_info.pNext = &features2;
         create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_infos.size());
         create_info.pQueueCreateInfos = queue_infos.data();
         create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         create_info.ppEnabledExtensionNames = extensions.data();
-        create_info.pEnabledFeatures = &features;
 
         const VkResult result = vkCreateDevice(physical_device_, &create_info, nullptr, &device_);
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateDevice failed: {}", static_cast<int>(result)));
         }
 
+        if (debug_utils_enabled_) {
+            vk_set_debug_utils_object_name_ = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+                vkGetDeviceProcAddr(device_, "vkSetDebugUtilsObjectNameEXT"));
+            if (vk_set_debug_utils_object_name_ == nullptr) {
+                LOG_WARN("VK_EXT_debug_utils is enabled, but vkSetDebugUtilsObjectNameEXT could not be loaded");
+            }
+        }
+
         vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
+        setDebugObjectName(VK_OBJECT_TYPE_DEVICE, device_, "LichtFeld Vulkan device");
         external_memory_interop_enabled_ = enable_external_memory;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         if (external_memory_interop_enabled_) {
@@ -651,6 +836,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateSwapchainKHR failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "Main swapchain");
 
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
         swapchain_images_.resize(image_count);
@@ -658,6 +844,11 @@ namespace lfs::vis {
         swapchain_format_ = surface_format.format;
         swapchain_extent_ = extent;
         swapchain_image_usage_ = create_info.imageUsage;
+        for (size_t i = 0; i < swapchain_images_.size(); ++i) {
+            setDebugObjectName(VK_OBJECT_TYPE_IMAGE,
+                               swapchain_images_[i],
+                               std::format("Swapchain image {}", i));
+        }
         return true;
     }
 
@@ -683,6 +874,9 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkCreateImageView failed: {}", static_cast<int>(result)));
             }
+            setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW,
+                               swapchain_image_views_[i],
+                               std::format("Swapchain image view {}", i));
         }
         return true;
     }
@@ -784,6 +978,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateRenderPass failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_RENDER_PASS, render_pass_, "Main render pass");
         return true;
     }
 
@@ -811,6 +1006,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateImage(depth/stencil) failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_IMAGE, depth_stencil_image_, "Depth/stencil image");
 
         VkMemoryRequirements memory_requirements{};
         vkGetImageMemoryRequirements(device_, depth_stencil_image_, &memory_requirements);
@@ -827,6 +1023,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkAllocateMemory(depth/stencil) failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, depth_stencil_memory_, "Depth/stencil memory");
 
         result = vkBindImageMemory(device_, depth_stencil_image_, depth_stencil_memory_, 0);
         if (result != VK_SUCCESS) {
@@ -848,6 +1045,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateImageView(depth/stencil) failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, depth_stencil_image_view_, "Depth/stencil image view");
 
         return true;
     }
@@ -870,6 +1068,9 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkCreateFramebuffer failed: {}", static_cast<int>(result)));
             }
+            setDebugObjectName(VK_OBJECT_TYPE_FRAMEBUFFER,
+                               swapchain_framebuffers_[i],
+                               std::format("Swapchain framebuffer {}", i));
         }
         return true;
     }
@@ -883,6 +1084,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateCommandPool failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, command_pool_, "Main graphics command pool");
         return true;
     }
 
@@ -896,6 +1098,11 @@ namespace lfs::vis {
         const VkResult result = vkAllocateCommandBuffers(device_, &allocate_info, command_buffers_.data());
         if (result != VK_SUCCESS) {
             return fail(std::format("vkAllocateCommandBuffers failed: {}", static_cast<int>(result)));
+        }
+        for (size_t i = 0; i < command_buffers_.size(); ++i) {
+            setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                               command_buffers_[i],
+                               std::format("Swapchain command buffer {}", i));
         }
         return true;
     }
@@ -912,15 +1119,74 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateSemaphore(image_available) failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, image_available_, "Image available semaphore");
         result = vkCreateSemaphore(device_, &semaphore_info, nullptr, &render_finished_);
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateSemaphore(render_finished) failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, render_finished_, "Render finished semaphore");
         result = vkCreateFence(device_, &fence_info, nullptr, &in_flight_);
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateFence failed: {}", static_cast<int>(result)));
         }
+        setDebugObjectName(VK_OBJECT_TYPE_FENCE, in_flight_, "Frame in-flight fence");
         return true;
+    }
+
+    bool VulkanContext::createDebugMessenger() {
+        if (!validation_enabled_) {
+            return true;
+        }
+
+        auto* const create_debug_utils_messenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance_, "vkCreateDebugUtilsMessengerEXT"));
+        if (create_debug_utils_messenger == nullptr) {
+            return fail("VK_EXT_debug_utils is enabled, but vkCreateDebugUtilsMessengerEXT could not be loaded");
+        }
+
+        VkDebugUtilsMessengerCreateInfoEXT create_info{};
+        populateDebugMessengerCreateInfo(create_info);
+        const VkResult result = create_debug_utils_messenger(instance_, &create_info, nullptr, &debug_messenger_);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkCreateDebugUtilsMessengerEXT failed: {}", static_cast<int>(result)));
+        }
+        return true;
+    }
+
+    void VulkanContext::destroyDebugMessenger() {
+        if (debug_messenger_ == VK_NULL_HANDLE || instance_ == VK_NULL_HANDLE) {
+            return;
+        }
+
+        auto* const destroy_debug_utils_messenger = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance_, "vkDestroyDebugUtilsMessengerEXT"));
+        if (destroy_debug_utils_messenger != nullptr) {
+            destroy_debug_utils_messenger(instance_, debug_messenger_, nullptr);
+        }
+        debug_messenger_ = VK_NULL_HANDLE;
+    }
+
+    void VulkanContext::setDebugObjectName(const VkObjectType object_type,
+                                           const std::uint64_t object_handle,
+                                           const std::string_view name) const {
+        if (device_ == VK_NULL_HANDLE ||
+            vk_set_debug_utils_object_name_ == nullptr ||
+            object_handle == 0 ||
+            name.empty()) {
+            return;
+        }
+
+        const std::string owned_name{name};
+        VkDebugUtilsObjectNameInfoEXT name_info{};
+        name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+        name_info.objectType = object_type;
+        name_info.objectHandle = object_handle;
+        name_info.pObjectName = owned_name.c_str();
+
+        const VkResult result = vk_set_debug_utils_object_name_(device_, &name_info);
+        if (result != VK_SUCCESS) {
+            LOG_WARN("vkSetDebugUtilsObjectNameEXT failed for '{}': {}", owned_name, static_cast<int>(result));
+        }
     }
 
     void VulkanContext::destroySwapchain() {

@@ -31,7 +31,7 @@ namespace lfs::vis {
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         info.enabled = true;
-        info.api_version = VK_API_VERSION_1_0;
+        info.api_version = VK_API_VERSION_1_3;
 
         auto* const proc = vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion");
         if (proc == nullptr) {

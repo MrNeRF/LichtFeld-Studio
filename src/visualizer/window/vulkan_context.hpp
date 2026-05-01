@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
@@ -62,6 +64,12 @@ namespace lfs::vis {
             return external_memory_dedicated_allocation_enabled_;
         }
 
+        template <typename VkHandle>
+        void setDebugObjectName(VkObjectType object_type, VkHandle object, std::string_view name) const {
+            setDebugObjectName(object_type, vulkanObjectHandle(object), name);
+        }
+        void setDebugObjectName(VkObjectType object_type, std::uint64_t object_handle, std::string_view name) const;
+
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
 #endif
@@ -94,9 +102,20 @@ namespace lfs::vis {
         bool createCommandPool();
         bool createCommandBuffers();
         bool createSyncObjects();
+        bool createDebugMessenger();
         bool recreateSwapchain();
 
+        void destroyDebugMessenger();
         void destroySwapchain();
+
+        template <typename VkHandle>
+        [[nodiscard]] static std::uint64_t vulkanObjectHandle(VkHandle object) {
+            if constexpr (std::is_pointer_v<VkHandle>) {
+                return reinterpret_cast<std::uint64_t>(object);
+            } else {
+                return static_cast<std::uint64_t>(object);
+            }
+        }
 
         [[nodiscard]] QueueFamilies findQueueFamilies(VkPhysicalDevice device) const;
         [[nodiscard]] bool deviceSupportsSwapchain(VkPhysicalDevice device) const;
@@ -110,6 +129,7 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
 
         VkInstance instance_ = VK_NULL_HANDLE;
+        VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
         VkDevice device_ = VK_NULL_HANDLE;
@@ -141,9 +161,12 @@ namespace lfs::vis {
         bool framebuffer_resized_ = false;
         bool frame_active_ = false;
         bool frame_suboptimal_ = false;
+        bool debug_utils_enabled_ = false;
+        bool validation_enabled_ = false;
         bool instance_external_memory_capabilities_enabled_ = false;
         bool external_memory_interop_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
+        PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
         uint32_t active_image_index_ = 0;
         int framebuffer_width_ = 0;
         int framebuffer_height_ = 0;
