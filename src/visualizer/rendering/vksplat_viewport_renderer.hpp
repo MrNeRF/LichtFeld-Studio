@@ -5,10 +5,12 @@
 #pragma once
 
 #include "core/splat_data.hpp"
-#include "rendering/rendering.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vksplat_fwd/src/gs_renderer.h"
+#include "rendering/rendering.hpp"
 #include "window/vulkan_context.hpp"
 
+#include <array>
 #include <cstddef>
 #include <expected>
 #include <glm/glm.hpp>
@@ -80,6 +82,19 @@ namespace lfs::vis {
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background);
 
+        struct CudaInputSlot {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::size_t element_size = 0; // sizeof(float)
+        };
+
+        void detachManagedBuffers();
+        [[nodiscard]] std::expected<void, std::string> ensureCudaInputSlot(
+            VulkanContext& context,
+            CudaInputSlot& slot,
+            std::size_t required_bytes,
+            const char* debug_name);
+
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
         VulkanGSRenderer renderer_;
@@ -90,6 +105,13 @@ namespace lfs::vis {
         glm::ivec2 output_size_{0, 0};
         VkImageLayout output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t output_generation_ = 0;
+
+        // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs).
+        // When these slots are valid we use CUDA-direct uploads via interop and
+        // skip the GPU->CPU->GPU staging path; otherwise we fall back to the
+        // host packer.
+        std::array<CudaInputSlot, 4> cuda_inputs_{};
+        bool cuda_inputs_supported_ = true;
     };
 
 } // namespace lfs::vis

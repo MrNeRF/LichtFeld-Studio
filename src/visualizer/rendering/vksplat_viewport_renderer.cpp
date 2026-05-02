@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
+#include "vksplat_input_packer.hpp"
 
 #include <array>
 #include <cmath>
@@ -72,50 +73,6 @@ namespace lfs::vis {
                 }
             }
             return result;
-        }
-
-        [[nodiscard]] std::expected<std::vector<float>, std::string> tensorToCpuVector(
-            Tensor tensor,
-            const std::string_view label) {
-            if (!tensor.is_valid() || tensor.numel() == 0) {
-                return std::vector<float>{};
-            }
-
-            try {
-                const Tensor* current = &tensor;
-                Tensor float_tensor;
-                if (current->dtype() != DataType::Float32) {
-                    float_tensor = current->to(DataType::Float32);
-                    current = &float_tensor;
-                }
-
-                Tensor cpu_tensor;
-                if (current->device() != Device::CPU) {
-                    cpu_tensor = current->to(Device::CPU);
-                    current = &cpu_tensor;
-                }
-
-                Tensor contiguous_tensor;
-                if (!current->is_contiguous()) {
-                    contiguous_tensor = current->contiguous();
-                    current = &contiguous_tensor;
-                }
-
-                if (current->dtype() != DataType::Float32 || current->device() != Device::CPU) {
-                    return std::unexpected(std::format("VkSplat failed to stage {} as CPU float32", label));
-                }
-
-                const float* ptr = current->ptr<float>();
-                if (!ptr) {
-                    return std::unexpected(std::format("VkSplat got a null CPU pointer for {}", label));
-                }
-
-                std::vector<float> result(current->numel());
-                std::memcpy(result.data(), ptr, result.size() * sizeof(float));
-                return result;
-            } catch (const std::exception& e) {
-                return std::unexpected(std::format("VkSplat failed to stage {}: {}", label, e.what()));
-            }
         }
 
         [[nodiscard]] VksplatViewportRenderer::ModelInputSnapshot makeModelInputSnapshot(
@@ -297,9 +254,20 @@ namespace lfs::vis {
         if (context_ && context_->device() != VK_NULL_HANDLE) {
             vkDeviceWaitIdle(context_->device());
         }
+        // Detach our managed VkBuffers from buffers_ before the renderer's
+        // cleanupBuffers runs so it does not vkDestroyBuffer them out from
+        // under us.
         if (initialized_) {
+            detachManagedBuffers();
             renderer_.cleanupBuffers(buffers_);
             renderer_.cleanup();
+        }
+        for (auto& slot : cuda_inputs_) {
+            slot.interop.reset();
+            if (context_) {
+                context_->destroyExternalBuffer(slot.buffer);
+            }
+            slot = {};
         }
         if (context_) {
             context_->destroyExternalImage(output_image_);
@@ -312,8 +280,69 @@ namespace lfs::vis {
         uploaded_inputs_ = {};
         output_size_ = {0, 0};
         output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        cuda_inputs_supported_ = true;
         initialized_ = false;
         context_ = nullptr;
+    }
+
+    void VksplatViewportRenderer::detachManagedBuffers() {
+        const auto detach = [](_VulkanBuffer& dev) {
+            dev.buffer = VK_NULL_HANDLE;
+            dev.memory = VK_NULL_HANDLE;
+            dev.allocSize = 0;
+            dev.size = 0;
+        };
+        detach(buffers_.xyz_ws.deviceBuffer);
+        detach(buffers_.rotations.deviceBuffer);
+        detach(buffers_.scales_opacs.deviceBuffer);
+        detach(buffers_.sh_coeffs.deviceBuffer);
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::ensureCudaInputSlot(
+        VulkanContext& context,
+        CudaInputSlot& slot,
+        const std::size_t required_bytes,
+        const char* const debug_name) {
+        if (required_bytes == 0) {
+            return std::unexpected(std::format("VkSplat slot '{}' requested zero-byte allocation", debug_name));
+        }
+        if (slot.buffer.buffer != VK_NULL_HANDLE && slot.buffer.allocation_size >= required_bytes) {
+            return {};
+        }
+        // Re-allocate. The old VkBuffer is still referenced by buffers_ — that
+        // pointer will be reset by the caller after this returns.
+        slot.interop.reset();
+        context.destroyExternalBuffer(slot.buffer);
+
+        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        if (!context.createExternalBuffer(static_cast<VkDeviceSize>(required_bytes), usage, slot.buffer)) {
+            return std::unexpected(std::format("VkSplat external buffer '{}' allocation failed: {}",
+                                               debug_name,
+                                               context.lastError()));
+        }
+        const auto native = context.releaseExternalBufferNativeHandle(slot.buffer);
+        if (!VulkanContext::externalNativeHandleValid(native)) {
+            context.destroyExternalBuffer(slot.buffer);
+            return std::unexpected(std::format("VkSplat external buffer '{}' returned invalid native handle",
+                                               debug_name));
+        }
+        lfs::rendering::CudaVulkanExternalBufferImport import{
+            .memory_handle = native,
+            .allocation_size = static_cast<std::size_t>(slot.buffer.allocation_size),
+            .size = static_cast<std::size_t>(slot.buffer.size),
+            .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+        };
+        if (!slot.interop.init(import)) {
+            const std::string err = slot.interop.lastError();
+            context.destroyExternalBuffer(slot.buffer);
+            return std::unexpected(std::format("VkSplat external buffer '{}' CUDA import failed: {}",
+                                               debug_name,
+                                               err));
+        }
+        slot.element_size = sizeof(float);
+        return {};
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::ensureInitialized(VulkanContext& context) {
@@ -352,86 +381,101 @@ namespace lfs::vis {
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
         const int active_sh_degree) {
-        (void)context;
         (void)active_sh_degree;
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
         }
 
-        const Tensor means_tensor = splat_data.get_means();
-        const Tensor rotations_tensor = splat_data.get_rotation();
-        const Tensor scales_tensor = splat_data.get_scaling();
-        const Tensor opacities_tensor = splat_data.get_opacity();
-        if (means_tensor.ndim() != 2 || means_tensor.size(0) != n || means_tensor.size(1) != 3 ||
-            rotations_tensor.ndim() != 2 || rotations_tensor.size(0) != n || rotations_tensor.size(1) != 4 ||
-            scales_tensor.ndim() != 2 || scales_tensor.size(0) != n || scales_tensor.size(1) != 3 ||
-            opacities_tensor.ndim() != 1 || opacities_tensor.size(0) != n) {
-            return std::unexpected("VkSplat input tensor shapes do not match [N,3]/[N,4]/[N]");
+        if (cuda_inputs_supported_ && context.externalMemoryInteropEnabled()) {
+            auto packed = vksplat::packDeviceInputs(splat_data);
+            if (!packed) {
+                return std::unexpected(packed.error());
+            }
+
+            const std::size_t xyz_bytes = static_cast<std::size_t>(packed->xyz_ws.bytes());
+            const std::size_t rot_bytes = static_cast<std::size_t>(packed->rotations.bytes());
+            const std::size_t so_bytes = static_cast<std::size_t>(packed->scales_opacs.bytes());
+            const std::size_t sh_bytes = static_cast<std::size_t>(packed->sh_coeffs.bytes());
+
+            auto& xyz_slot = cuda_inputs_[0];
+            auto& rot_slot = cuda_inputs_[1];
+            auto& so_slot = cuda_inputs_[2];
+            auto& sh_slot = cuda_inputs_[3];
+
+            const auto setup = [&](CudaInputSlot& slot, std::size_t bytes, const char* name) {
+                return ensureCudaInputSlot(context, slot, bytes, name);
+            };
+            if (auto ok = setup(xyz_slot, xyz_bytes, "xyz_ws"); !ok) {
+                cuda_inputs_supported_ = false;
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = setup(rot_slot, rot_bytes, "rotations"); !ok) {
+                cuda_inputs_supported_ = false;
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = setup(so_slot, so_bytes, "scales_opacs"); !ok) {
+                cuda_inputs_supported_ = false;
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = setup(sh_slot, sh_bytes, "sh_coeffs"); !ok) {
+                cuda_inputs_supported_ = false;
+                return std::unexpected(ok.error());
+            }
+
+            const cudaStream_t stream = packed->xyz_ws.stream();
+            if (!xyz_slot.interop.copyFromTensor(packed->xyz_ws, xyz_bytes, stream) ||
+                !rot_slot.interop.copyFromTensor(packed->rotations, rot_bytes, stream) ||
+                !so_slot.interop.copyFromTensor(packed->scales_opacs, so_bytes, stream) ||
+                !sh_slot.interop.copyFromTensor(packed->sh_coeffs, sh_bytes, stream)) {
+                cuda_inputs_supported_ = false;
+                return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
+                                                   sh_slot.interop.lastError()));
+            }
+            const cudaError_t sync = stream != nullptr ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+            if (sync != cudaSuccess) {
+                cuda_inputs_supported_ = false;
+                return std::unexpected(std::format("VkSplat CUDA stream sync failed: {} ({})",
+                                                   cudaGetErrorName(sync),
+                                                   cudaGetErrorString(sync)));
+            }
+
+            const auto plug = [](_VulkanBuffer& dev, const VulkanContext::ExternalBuffer& src, std::size_t live_bytes) {
+                dev.buffer = src.buffer;
+                dev.memory = src.memory;
+                dev.allocSize = static_cast<std::size_t>(src.allocation_size);
+                dev.size = live_bytes;
+            };
+            plug(buffers_.xyz_ws.deviceBuffer, xyz_slot.buffer, xyz_bytes);
+            plug(buffers_.rotations.deviceBuffer, rot_slot.buffer, rot_bytes);
+            plug(buffers_.scales_opacs.deviceBuffer, so_slot.buffer, so_bytes);
+            plug(buffers_.sh_coeffs.deviceBuffer, sh_slot.buffer, sh_bytes);
+
+            // Resize host-shadow vectors so the rasterizer's bookkeeping (which
+            // calls byteLength()) keeps matching the device-side payload. The
+            // host vectors are not read by the rasterizer; only their size()
+            // matters when the renderer cross-checks element counts.
+            buffers_.xyz_ws.resize(xyz_bytes / sizeof(float));
+            buffers_.rotations.resize(rot_bytes / sizeof(float));
+            buffers_.scales_opacs.resize(so_bytes / sizeof(float));
+            buffers_.sh_coeffs.resize(sh_bytes / sizeof(float));
+
+            buffers_.num_splats = n;
+            buffers_.num_indices = 0;
+            buffers_.is_unsorted_1 = true;
+            uploaded_inputs_ = makeModelInputSnapshot(splat_data);
+            return {};
         }
 
-        auto means = tensorToCpuVector(means_tensor, "model.means");
-        auto rotations = tensorToCpuVector(rotations_tensor, "model.rotation");
-        auto scales = tensorToCpuVector(scales_tensor, "model.scaling");
-        auto opacities = tensorToCpuVector(opacities_tensor, "model.opacity");
-        if (!means || !rotations || !scales || !opacities) {
-            return std::unexpected(!means ? means.error()
-                                          : !rotations ? rotations.error()
-                                                       : !scales ? scales.error()
-                                                                 : opacities.error());
+        // Fallback: legacy host packer + staging upload.
+        if (auto ok = vksplat::packHostInputs(splat_data,
+                                              buffers_.xyz_ws,
+                                              buffers_.rotations,
+                                              buffers_.scales_opacs,
+                                              buffers_.sh_coeffs);
+            !ok) {
+            return std::unexpected(ok.error());
         }
-        if (means->size() != 3 * n || rotations->size() != 4 * n ||
-            scales->size() != 3 * n || opacities->size() != n) {
-            return std::unexpected("VkSplat staged input tensor sizes do not match the model splat count");
-        }
-
-        buffers_.xyz_ws.assign(means->begin(), means->end());
-        buffers_.rotations.assign(rotations->begin(), rotations->end());
-        buffers_.assignScalesOpacs(buffers_.scales_opacs, n, scales->data(), opacities->data());
-
-        buffers_.sh_coeffs.assign(n * 16 * 3, 0.0f);
-        const Tensor& sh0_tensor = splat_data.sh0();
-        if (!sh0_tensor.is_valid() || sh0_tensor.numel() == 0 ||
-            sh0_tensor.size(0) != n || sh0_tensor.size(sh0_tensor.ndim() - 1) != 3) {
-            return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
-        }
-        auto sh0 = tensorToCpuVector(sh0_tensor, "model.sh0");
-        if (!sh0) {
-            return std::unexpected(sh0.error());
-        }
-        if (sh0->size() < 3 * n) {
-            return std::unexpected("VkSplat staged SH DC tensor is smaller than [N, 3]");
-        }
-        for (std::size_t i = 0; i < n; ++i) {
-            for (std::size_t c = 0; c < 3; ++c) {
-                buffers_.sh_coeffs[(i * 16) * 3 + c] = (*sh0)[i * 3 + c];
-            }
-        }
-
-        const Tensor& shn_tensor = splat_data.shN();
-        if (shn_tensor.is_valid() && shn_tensor.numel() > 0) {
-            if (shn_tensor.ndim() != 3 || shn_tensor.size(0) != n || shn_tensor.size(2) != 3) {
-                return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
-            }
-            auto shn = tensorToCpuVector(shn_tensor, "model.shN");
-            if (!shn) {
-                return std::unexpected(shn.error());
-            }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_tensor.size(1));
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-            if (shn->size() < n * source_rest * 3) {
-                return std::unexpected("VkSplat staged SH rest tensor is smaller than [N, coeffs, 3]");
-            }
-            for (std::size_t i = 0; i < n; ++i) {
-                for (std::size_t k = 0; k < rest; ++k) {
-                    for (std::size_t c = 0; c < 3; ++c) {
-                        buffers_.sh_coeffs[((i * 16) + (k + 1)) * 3 + c] =
-                            (*shn)[(i * source_rest + k) * 3 + c];
-                    }
-                }
-            }
-        }
-        buffers_.reorderSH(buffers_.sh_coeffs);
 
         buffers_.num_splats = n;
         buffers_.num_indices = 0;

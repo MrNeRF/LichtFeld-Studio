@@ -240,6 +240,7 @@ if(ENABLE_VULKAN_VIEWER)
     target_sources(lfs_visualizer
             PRIVATE
             gui/rmlui/rmlui_vk_backend.cpp
+            rendering/vksplat_input_packer.cpp
             rendering/vksplat_viewport_renderer.cpp)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
         CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
