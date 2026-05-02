@@ -79,6 +79,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
         [[nodiscard]] std::expected<void, std::string> composePixelState(
             VulkanContext& context,
+            VkCommandBuffer cmd,
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background);
 

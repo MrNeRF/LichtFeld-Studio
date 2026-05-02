@@ -2,13 +2,13 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "rendering_manager.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "model_renderability.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/rasterizer/rasterization/include/rasterization_config.h"
+#include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -336,9 +336,9 @@ namespace lfs::vis {
             }
 
             auto tensor = lfs::core::Tensor::from_vector(
-                output,
-                {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CPU)
+                              output,
+                              {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
+                              lfs::core::Device::CPU)
                               .cuda();
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
@@ -505,6 +505,8 @@ namespace lfs::vis {
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
         }
+
+        framerate_controller_.beginFrame();
 
         const float scale = std::clamp(settings_.render_scale, 0.25f, 1.0f);
         glm::ivec2 render_size(

@@ -1,15 +1,14 @@
 #pragma once
 
-#include <vulkan/vulkan.h>
-#include <vector>
-#include <string>
-#include <map>
-#include <algorithm>  // std::sort
-#include <cstring>  // memcpy
-#include <functional>
+#include <algorithm> // std::sort
 #include <array>
+#include <cstring> // memcpy
+#include <functional>
+#include <map>
+#include <string>
 #include <variant>
-
+#include <vector>
+#include <vulkan/vulkan.h>
 
 #include <cassert>
 
@@ -19,7 +18,6 @@ union Uniform32_t {
     uint32_t u;
     float f;
 };
-
 
 class VulkanGSPipeline {
 public:
@@ -36,28 +34,38 @@ public:
     void cleanupBuffers(VulkanGSPipelineBuffers& buffers);
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
-    void destroyBuffer(_VulkanBuffer &buffer);
-    void resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink=true);
-    template<typename T> _VulkanBuffer& resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink=true);
-    template<typename T> _VulkanBuffer& clearDeviceBuffer(Buffer<T>& buffer, size_t new_size);
-    template<typename T> _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
-    template<typename T> _VulkanBuffer& copyToDevice(Buffer<T>& buffer);
-    template<typename T> void copyFromDevice(Buffer<T>& buffer);
+    void destroyBuffer(_VulkanBuffer& buffer);
+    void resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink = true);
+    template <typename T>
+    _VulkanBuffer& resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink = true);
+    template <typename T>
+    _VulkanBuffer& clearDeviceBuffer(Buffer<T>& buffer, size_t new_size);
+    template <typename T>
+    _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
+    template <typename T>
+    _VulkanBuffer& copyToDevice(Buffer<T>& buffer);
+    template <typename T>
+    void copyFromDevice(Buffer<T>& buffer);
     void copyFromDeviceToDevice(const _VulkanBuffer& src, _VulkanBuffer& dst);
-    template<typename T> void copyFromDeviceToDevice(const Buffer<T>& src, Buffer<T>& dst);
-    template<typename T> T readElement(const _VulkanBuffer& buffer, size_t index);
-    template<typename T> void dumpRawBytesToFile(Buffer<T>& buffer, std::string filename);
+    template <typename T>
+    void copyFromDeviceToDevice(const Buffer<T>& src, Buffer<T>& dst);
+    template <typename T>
+    T readElement(const _VulkanBuffer& buffer, size_t index);
+    template <typename T>
+    void dumpRawBytesToFile(Buffer<T>& buffer, std::string filename);
 
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true);
     bool isCommandBatchInProgress() const {
         return commandBatchInProgress;
     }
+    VkCommandBuffer activeCommandBuffer() const {
+        return command_buffer;
+    }
     bool writeTimestamp(int delta);
     bool writeTimestampNoExcept(int delta);
 
-    size_t getPeakAllocSize() const
-        { return peak_vram; }
+    size_t getPeakAllocSize() const { return peak_vram; }
 
     enum BarrierMask {
         TRANSFER_READ,
@@ -77,7 +85,6 @@ public:
     std::map<std::string, std::variant<uint32_t, std::vector<uint32_t>, bool, std::string>> get_device_info() const;
 
 protected:
-
     struct DeviceRequirement {
         std::array<uint32_t, 3> minMaxGroups;
         std::array<uint32_t, 3> minMaxThreads;
@@ -94,7 +101,7 @@ protected:
     std::vector<std::function<void(const std::vector<std::pair<size_t, double>>&)>> timerCallbacks;
 
     void memoryBarrier(BarrierMask srcMask, BarrierMask dstMask);
-    void bufferMemoryBarrier(const std::vector<std::pair<_VulkanBuffer, BarrierMask>> &buffers, BarrierMask dstMask);
+    void bufferMemoryBarrier(const std::vector<std::pair<_VulkanBuffer, BarrierMask>>& buffers, BarrierMask dstMask);
 
     size_t current_vram = 0;
     size_t peak_vram = 0;
@@ -113,7 +120,11 @@ protected:
 
     enum class DeviceVendor {
         Unknown,
-        NVIDIA, AMD, Intel_R_, ARM, Qualcomm, 
+        NVIDIA,
+        AMD,
+        Intel_R_,
+        ARM,
+        Qualcomm,
     };
     struct DeviceInfo {
         uint32_t subgroupSize;
@@ -131,7 +142,7 @@ protected:
         uint32_t vendorId;
         std::string name;
     } deviceInfo;
-    
+
     // Compute pipeline
     struct _ComputePipeline {
         VkShaderModule shader;
@@ -143,17 +154,21 @@ protected:
         std::vector<int> buffer_layouts;
 
         _ComputePipeline(
-            std::vector<int> buffer_layouts
-        ): shader(VK_NULL_HANDLE), descriptor_pool(VK_NULL_HANDLE),
-            descriptor_set_layout(VK_NULL_HANDLE), descriptor_set(VK_NULL_HANDLE),
-            pipeline_layout(VK_NULL_HANDLE), pipeline(VK_NULL_HANDLE),
-            buffer_layouts(buffer_layouts) {}
+            std::vector<int> buffer_layouts) : shader(VK_NULL_HANDLE),
+                                               descriptor_pool(VK_NULL_HANDLE),
+                                               descriptor_set_layout(VK_NULL_HANDLE),
+                                               descriptor_set(VK_NULL_HANDLE),
+                                               pipeline_layout(VK_NULL_HANDLE),
+                                               pipeline(VK_NULL_HANDLE),
+                                               buffer_layouts(buffer_layouts) {}
 
         _ComputePipeline(int num_buffers)
-        : shader(VK_NULL_HANDLE), descriptor_pool(VK_NULL_HANDLE),
-            descriptor_set_layout(VK_NULL_HANDLE), descriptor_set(VK_NULL_HANDLE),
-            pipeline_layout(VK_NULL_HANDLE), pipeline(VK_NULL_HANDLE)
-        {
+            : shader(VK_NULL_HANDLE),
+              descriptor_pool(VK_NULL_HANDLE),
+              descriptor_set_layout(VK_NULL_HANDLE),
+              descriptor_set(VK_NULL_HANDLE),
+              pipeline_layout(VK_NULL_HANDLE),
+              pipeline(VK_NULL_HANDLE) {
             buffer_layouts.resize(num_buffers);
             for (int i = 0; i < num_buffers; i++)
                 buffer_layouts[i] = i;
@@ -165,9 +180,9 @@ protected:
     struct _ComputePipelinePair {
         _ComputePipeline _cp0, _cp1;
         _ComputePipelinePair(int num_buffers)
-            : _cp0(num_buffers), _cp1(num_buffers) {}
-        _ComputePipeline& operator[](bool b)
-            { return b ? _cp0 : _cp1; }
+            : _cp0(num_buffers),
+              _cp1(num_buffers) {}
+        _ComputePipeline& operator[](bool b) { return b ? _cp0 : _cp1; }
     };
 
     std::vector<_ComputePipeline*> all_compute_pipelines;
@@ -184,7 +199,7 @@ protected:
     _Stager stager;
 
     void allocStagingBuffer(size_t size);
-    
+
     void createInstance();
     void selectPhysicalDevice(int device_id);
     void populateDeviceInfo(VkPhysicalDevice selected_physical_device);
@@ -192,31 +207,30 @@ protected:
     void createCommandPool();
     void createFence();
     void createQueryPools();
-    void createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule *pShaderModule);
+    void createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule* pShaderModule);
 
-    void createComputeDescriptorSetLayout(_ComputePipeline &pipeline);
-    void createComputeDescriptorPool(_ComputePipeline &pipeline);
-    void updateComputeDescriptorSet(_ComputePipeline &pipeline, const std::vector<_VulkanBuffer> &buffers);
-    void createComputePipeline(_ComputePipeline &pipeline, const std::string& spirv_path, uint32_t min_shared_memory=0, bool compatible_subgroup_size=true);
+    void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
+    void createComputeDescriptorPool(_ComputePipeline& pipeline);
+    void updateComputeDescriptorSet(_ComputePipeline& pipeline, const std::vector<_VulkanBuffer>& buffers);
+    void createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory = 0, bool compatible_subgroup_size = true);
     void executeCompute(
         std::vector<std::pair<size_t, size_t>> dims,
         const void* uniformsPtr, size_t uniformSize,
-        _ComputePipeline &pipeline,
-        const std::vector<_VulkanBuffer> &buffers
-    );
+        _ComputePipeline& pipeline,
+        const std::vector<_VulkanBuffer>& buffers);
 
     void _displayImage(Buffer<float>& pixels, int width, bool reverse_alpha);
 
 private:
-    void destroyComputePipeline(_ComputePipeline &pipeline);
+    void destroyComputePipeline(_ComputePipeline& pipeline);
 };
-
 
 class [[nodiscard]] DeviceGuard {
     VulkanGSPipeline* pipeline;
     bool cbip;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
+
 public:
     DeviceGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
         // printf("DeviceGuard constructor\n");
@@ -238,12 +252,10 @@ public:
             if (debugInfo1) {
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
-        }
-        else if (cbip != pipeline->isCommandBatchInProgress()) {
+        } else if (cbip != pipeline->isCommandBatchInProgress()) {
             fprintf(stderr, "commandBatchInProgress changed during DeviceGuard (originally %d)\n", (int)cbip);
             std::terminate();
         }
-
     }
 };
 
@@ -252,6 +264,7 @@ class [[nodiscard]] HostGuard {
     bool cbip;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
+
 public:
     HostGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
         // printf("HostGuard constructor\n");
@@ -273,12 +286,10 @@ public:
             if (debugInfo1) {
                 printf("HostGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
-        }
-        else if (cbip != pipeline->isCommandBatchInProgress()) {
+        } else if (cbip != pipeline->isCommandBatchInProgress()) {
             fprintf(stderr, "commandBatchInProgress changed during HostGuard (originally %d)\n", (int)cbip);
             std::terminate();
         }
-
     }
 };
 
@@ -286,4 +297,4 @@ public:
 // #define HostGuard(args) HostGuard(args, __FILE__, __LINE__)
 
 #define DEVICE_GUARD auto deviceGuard = DeviceGuard(this)
-#define HOST_GUARD auto hostGuard = HostGuard(this)
+#define HOST_GUARD   auto hostGuard = HostGuard(this)

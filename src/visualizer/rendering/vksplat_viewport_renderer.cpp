@@ -177,37 +177,9 @@ namespace lfs::vis {
                                  &barrier);
         }
 
-        [[nodiscard]] std::expected<void, std::string> submitAndWait(VulkanContext& context,
-                                                                     VkCommandBuffer command_buffer,
-                                                                     VkFence fence) {
-            VkResult result = vkEndCommandBuffer(command_buffer);
-            if (result != VK_SUCCESS) {
-                return std::unexpected(vkError("vkEndCommandBuffer", result));
-            }
-            result = vkResetFences(context.device(), 1, &fence);
-            if (result != VK_SUCCESS) {
-                return std::unexpected(vkError("vkResetFences", result));
-            }
-            VkSubmitInfo submit{};
-            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            submit.commandBufferCount = 1;
-            submit.pCommandBuffers = &command_buffer;
-            result = vkQueueSubmit(context.graphicsQueue(), 1, &submit, fence);
-            if (result != VK_SUCCESS) {
-                return std::unexpected(vkError("vkQueueSubmit", result));
-            }
-            result = vkWaitForFences(context.device(), 1, &fence, VK_TRUE, UINT64_MAX);
-            if (result != VK_SUCCESS) {
-                return std::unexpected(vkError("vkWaitForFences", result));
-            }
-            return {};
-        }
     } // namespace
 
     struct VksplatViewportRenderer::ComposePipeline {
-        VkCommandPool command_pool = VK_NULL_HANDLE;
-        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-        VkFence fence = VK_NULL_HANDLE;
         VkShaderModule shader_module = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
@@ -233,12 +205,6 @@ namespace lfs::vis {
             }
             if (shader_module != VK_NULL_HANDLE) {
                 vkDestroyShaderModule(device, shader_module, nullptr);
-            }
-            if (fence != VK_NULL_HANDLE) {
-                vkDestroyFence(device, fence, nullptr);
-            }
-            if (command_pool != VK_NULL_HANDLE) {
-                vkDestroyCommandPool(device, command_pool, nullptr);
             }
             *this = {};
         }
@@ -518,32 +484,7 @@ namespace lfs::vis {
         }
         compose_ = std::make_unique<ComposePipeline>();
         VkDevice device = context.device();
-
-        VkCommandPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-        pool_info.queueFamilyIndex = context.graphicsQueueFamily();
-        VkResult result = vkCreateCommandPool(device, &pool_info, nullptr, &compose_->command_pool);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateCommandPool(VkSplat compose)", result));
-        }
-
-        VkCommandBufferAllocateInfo command_info{};
-        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        command_info.commandPool = compose_->command_pool;
-        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        command_info.commandBufferCount = 1;
-        result = vkAllocateCommandBuffers(device, &command_info, &compose_->command_buffer);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkAllocateCommandBuffers(VkSplat compose)", result));
-        }
-
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        result = vkCreateFence(device, &fence_info, nullptr, &compose_->fence);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateFence(VkSplat compose)", result));
-        }
+        VkResult result = VK_SUCCESS;
 
         VkShaderModuleCreateInfo shader_info{};
         shader_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -628,31 +569,19 @@ namespace lfs::vis {
 
     std::expected<void, std::string> VksplatViewportRenderer::composePixelState(
         VulkanContext& context,
+        VkCommandBuffer cmd,
         const VulkanGSRendererUniforms& uniforms,
         const glm::vec3& background) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return ok;
         }
-
         VkDevice device = context.device();
-        VkResult result = vkResetCommandPool(device, compose_->command_pool, 0);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetCommandPool(VkSplat compose)", result));
-        }
-
-        VkCommandBufferBeginInfo begin{};
-        begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        result = vkBeginCommandBuffer(compose_->command_buffer, &begin);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat compose)", result));
-        }
 
         const bool has_pixel_state = buffers_.num_indices > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
                                      buffers_.pixel_state.deviceBuffer.size > 0;
         if (!has_pixel_state) {
-            imageBarrier(compose_->command_buffer,
+            imageBarrier(cmd,
                          output_image_.image,
                          output_layout_,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -663,21 +592,18 @@ namespace lfs::vis {
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             range.levelCount = 1;
             range.layerCount = 1;
-            vkCmdClearColorImage(compose_->command_buffer,
+            vkCmdClearColorImage(cmd,
                                  output_image_.image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  &clear,
                                  1,
                                  &range);
-            imageBarrier(compose_->command_buffer,
+            imageBarrier(cmd,
                          output_image_.image,
                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                          VK_ACCESS_SHADER_READ_BIT,
                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-            if (auto ok = submitAndWait(context, compose_->command_buffer, compose_->fence); !ok) {
-                return ok;
-            }
             output_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             ++output_generation_;
             return {};
@@ -712,7 +638,7 @@ namespace lfs::vis {
         pixel_barrier.dstQueueFamilyIndex = context.graphicsQueueFamily();
         pixel_barrier.buffer = buffers_.pixel_state.deviceBuffer.buffer;
         pixel_barrier.size = buffers_.pixel_state.deviceBuffer.size;
-        vkCmdPipelineBarrier(compose_->command_buffer,
+        vkCmdPipelineBarrier(cmd,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              0,
@@ -722,15 +648,15 @@ namespace lfs::vis {
                              &pixel_barrier,
                              0,
                              nullptr);
-        imageBarrier(compose_->command_buffer,
+        imageBarrier(cmd,
                      output_image_.image,
                      output_layout_,
                      VK_IMAGE_LAYOUT_GENERAL,
                      VK_ACCESS_SHADER_WRITE_BIT,
                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-        vkCmdBindPipeline(compose_->command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compose_->pipeline);
-        vkCmdBindDescriptorSets(compose_->command_buffer,
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compose_->pipeline);
+        vkCmdBindDescriptorSets(cmd,
                                 VK_PIPELINE_BIND_POINT_COMPUTE,
                                 compose_->pipeline_layout,
                                 0,
@@ -743,25 +669,22 @@ namespace lfs::vis {
             .height = uniforms.image_height,
             .background = glm::vec4(background, 1.0f),
         };
-        vkCmdPushConstants(compose_->command_buffer,
+        vkCmdPushConstants(cmd,
                            compose_->pipeline_layout,
                            VK_SHADER_STAGE_COMPUTE_BIT,
                            0,
                            sizeof(push),
                            &push);
-        vkCmdDispatch(compose_->command_buffer,
+        vkCmdDispatch(cmd,
                       _CEIL_DIV(uniforms.image_width, 16),
                       _CEIL_DIV(uniforms.image_height, 16),
                       1);
-        imageBarrier(compose_->command_buffer,
+        imageBarrier(cmd,
                      output_image_.image,
                      VK_IMAGE_LAYOUT_GENERAL,
                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                      VK_ACCESS_SHADER_READ_BIT,
                      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-        if (auto ok = submitAndWait(context, compose_->command_buffer, compose_->fence); !ok) {
-            return ok;
-        }
         output_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         ++output_generation_;
         return {};
@@ -848,6 +771,7 @@ namespace lfs::vis {
             }
         }
 
+        std::expected<void, std::string> compose_status;
         try {
             auto batch = DeviceGuard(&renderer_);
             renderer_.executeProjectionForward(uniforms, buffers_);
@@ -858,12 +782,15 @@ namespace lfs::vis {
                 renderer_.executeComputeTileRanges(uniforms, buffers_);
                 renderer_.executeRasterizeForward(uniforms, buffers_);
             }
+            // Record compose into the rasterizer's batch so the entire frame
+            // submits and waits exactly once instead of fence-blocking twice.
+            compose_status = composePixelState(
+                context, renderer_.activeCommandBuffer(), uniforms, request.frame_view.background_color);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
         }
-
-        if (auto ok = composePixelState(context, uniforms, request.frame_view.background_color); !ok) {
-            return std::unexpected(ok.error());
+        if (!compose_status) {
+            return std::unexpected(compose_status.error());
         }
 
         return RenderResult{
