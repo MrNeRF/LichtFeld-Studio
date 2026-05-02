@@ -31,6 +31,7 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -135,6 +136,12 @@ namespace lfs::vis {
             void setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
                                      glm::ivec2 size,
                                      bool flip_y);
+            void setVulkanExternalSceneImage(VkImage image,
+                                             VkImageView image_view,
+                                             VkImageLayout layout,
+                                             glm::ivec2 size,
+                                             bool flip_y,
+                                             std::uint64_t generation);
 
             // Used by native panel wrappers
             void renderSelectionOverlays(const UIContext& ctx);
@@ -239,6 +246,12 @@ namespace lfs::vis {
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             glm::ivec2 vulkan_scene_image_size_{0, 0};
             bool vulkan_scene_image_flip_y_ = false;
+            VkImage vulkan_external_scene_image_ = VK_NULL_HANDLE;
+            VkImageView vulkan_external_scene_image_view_ = VK_NULL_HANDLE;
+            VkImageLayout vulkan_external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            glm::ivec2 vulkan_external_scene_image_size_{0, 0};
+            bool vulkan_external_scene_image_flip_y_ = false;
+            std::uint64_t vulkan_external_scene_image_generation_ = 0;
             bool vulkan_scene_interop_disabled_ = false;
             bool vulkan_scene_interop_unavailable_logged_ = false;
             bool vulkan_gui_ = false;

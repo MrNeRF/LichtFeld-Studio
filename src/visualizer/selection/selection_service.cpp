@@ -1249,7 +1249,9 @@ namespace lfs::vis {
             .scaling_modifier = settings.scaling_modifier,
             .mip_filter = settings.mip_filter,
             .sh_degree = scene_state.combined_model->get_active_sh_degree(),
-            .gut = settings.gut,
+            .raster_backend = settings.raster_backend,
+            .gut = settings.gut ||
+                   settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
             .equirectangular = settings.equirectangular,
             .scene =
                 {.model_transforms = &scene_state.model_transforms,

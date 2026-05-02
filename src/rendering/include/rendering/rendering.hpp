@@ -136,6 +136,7 @@ namespace lfs::rendering {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
+        GaussianRasterBackend raster_backend = GaussianRasterBackend::FastGs;
         bool gut = false;
         bool equirectangular = false;
         GaussianSceneState scene;
@@ -149,6 +150,7 @@ namespace lfs::rendering {
         float scaling_modifier = 1.0f;
         bool mip_filter = false;
         int sh_degree = 3;
+        GaussianRasterBackend raster_backend = GaussianRasterBackend::FastGs;
         bool gut = false;
         bool equirectangular = false;
         GaussianSceneState scene;
@@ -247,6 +249,7 @@ namespace lfs::rendering {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
+        GaussianRasterBackend raster_backend = GaussianRasterBackend::FastGs;
         bool gut = false;
         bool equirectangular = false;
         GaussianSceneState scene;

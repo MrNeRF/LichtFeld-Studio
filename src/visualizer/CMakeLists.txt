@@ -239,7 +239,8 @@ target_link_libraries(lfs_visualizer
 if(ENABLE_VULKAN_VIEWER)
     target_sources(lfs_visualizer
             PRIVATE
-            gui/rmlui/rmlui_vk_backend.cpp)
+            gui/rmlui/rmlui_vk_backend.cpp
+            rendering/vksplat_viewport_renderer.cpp)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
         CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
     find_package(glslang CONFIG REQUIRED)
@@ -269,12 +270,14 @@ if(ENABLE_VULKAN_VIEWER)
     compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.frag.spv.h" kTexturedOverlayFragSpv)
     compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.vert.spv.h" kPivotVertSpv)
     compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.frag.spv.h" kPivotFragSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv)
 
     target_link_libraries(lfs_visualizer
             PRIVATE
             Vulkan::Vulkan
             GPUOpen::VulkanMemoryAllocator
             volk::volk_headers)
+    target_link_libraries(lfs_visualizer PRIVATE lfs_vksplat_fwd)
     if(WIN32)
         target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)
     endif()

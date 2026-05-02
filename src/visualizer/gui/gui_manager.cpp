@@ -3262,9 +3262,30 @@ namespace lfs::vis::gui {
         if (target_changed) {
             vulkan_scene_interop_disabled_ = false;
         }
+        vulkan_external_scene_image_ = VK_NULL_HANDLE;
+        vulkan_external_scene_image_view_ = VK_NULL_HANDLE;
+        vulkan_external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_external_scene_image_size_ = {0, 0};
         vulkan_scene_image_ = std::move(image);
         vulkan_scene_image_size_ = size;
         vulkan_scene_image_flip_y_ = flip_y;
+    }
+
+    void GuiManager::setVulkanExternalSceneImage(const VkImage image,
+                                                 const VkImageView image_view,
+                                                 const VkImageLayout layout,
+                                                 const glm::ivec2 size,
+                                                 const bool flip_y,
+                                                 const std::uint64_t generation) {
+        vulkan_scene_image_.reset();
+        vulkan_scene_image_size_ = size;
+        vulkan_scene_image_flip_y_ = flip_y;
+        vulkan_external_scene_image_ = image;
+        vulkan_external_scene_image_view_ = image_view;
+        vulkan_external_scene_image_layout_ = layout;
+        vulkan_external_scene_image_size_ = size;
+        vulkan_external_scene_image_flip_y_ = flip_y;
+        vulkan_external_scene_image_generation_ = generation;
     }
 
     void GuiManager::resetVulkanSceneInterop() {
@@ -3302,6 +3323,9 @@ namespace lfs::vis::gui {
             return;
         }
         if (vulkan_scene_interop_disabled_) {
+            return;
+        }
+        if (vulkan_external_scene_image_ != VK_NULL_HANDLE) {
             return;
         }
 
@@ -3469,7 +3493,18 @@ namespace lfs::vis::gui {
         params.scene_image = vulkan_scene_image_;
         params.scene_image_size = vulkan_scene_image_size_;
         params.scene_image_flip_y = vulkan_scene_image_flip_y_;
-        if (frame_slot < vulkan_scene_interop_.size()) {
+        if (vulkan_external_scene_image_ != VK_NULL_HANDLE &&
+            vulkan_external_scene_image_view_ != VK_NULL_HANDLE &&
+            vulkan_external_scene_image_size_.x > 0 &&
+            vulkan_external_scene_image_size_.y > 0) {
+            params.scene_image_size = vulkan_external_scene_image_size_;
+            params.scene_image_flip_y = vulkan_external_scene_image_flip_y_;
+            params.external_scene_image = vulkan_external_scene_image_;
+            params.external_scene_image_view = vulkan_external_scene_image_view_;
+            params.external_scene_image_layout = vulkan_external_scene_image_layout_;
+            params.external_scene_image_generation = vulkan_external_scene_image_generation_;
+        }
+        if (params.external_scene_image == VK_NULL_HANDLE && frame_slot < vulkan_scene_interop_.size()) {
             const auto& target = vulkan_scene_interop_[frame_slot];
             if (target &&
                 target->interop.valid() &&

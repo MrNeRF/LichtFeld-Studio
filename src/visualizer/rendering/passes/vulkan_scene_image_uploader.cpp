@@ -291,12 +291,15 @@ namespace lfs::vis {
         }
 
         void upload(const VulkanViewportPassParams& params, const VkDescriptorSet scene_descriptor_set) {
-            if (!params.scene_image || params.scene_image_size.x <= 0 || params.scene_image_size.y <= 0) {
+            const bool has_external_image =
+                params.external_scene_image != VK_NULL_HANDLE &&
+                params.external_scene_image_view != VK_NULL_HANDLE;
+            if ((!params.scene_image && !has_external_image) ||
+                params.scene_image_size.x <= 0 || params.scene_image_size.y <= 0) {
                 uploaded_scene_tensor = nullptr;
                 return;
             }
-            if (params.external_scene_image != VK_NULL_HANDLE &&
-                params.external_scene_image_view != VK_NULL_HANDLE) {
+            if (has_external_image) {
                 if (!bindExternalSceneImage(params, scene_descriptor_set)) {
                     LOG_ERROR("Failed to bind external Vulkan viewport scene image");
                 }

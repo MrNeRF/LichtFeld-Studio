@@ -13,6 +13,7 @@
 #include "theme/theme.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -145,6 +146,11 @@ namespace lfs::vis {
             }
 
             settings_ = new_settings;
+            if (settings_.gut &&
+                settings_.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
+                settings_.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
+            }
+            settings_.gut = settings_.raster_backend == lfs::rendering::GaussianRasterBackend::Gut;
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {

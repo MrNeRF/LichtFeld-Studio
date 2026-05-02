@@ -713,7 +713,8 @@ namespace lfs::vis {
         vkGetPhysicalDeviceQueueFamilyProperties(device, &count, families.data());
 
         for (uint32_t i = 0; i < count; ++i) {
-            if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+            if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0 &&
+                (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
                 indices.graphics = i;
             }
 
@@ -904,20 +905,79 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
         }
 
+        const bool enable_subgroup_size_control =
+            extensionAvailable(available_extensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+        if (enable_subgroup_size_control) {
+            appendUniqueExtension(extensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
+        }
+        const bool enable_shader_atomic_float =
+            extensionAvailable(available_extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+        if (enable_shader_atomic_float) {
+            appendUniqueExtension(extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+        }
+
+        VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float_features{};
+        supported_atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+        VkPhysicalDeviceSubgroupSizeControlFeaturesEXT supported_subgroup_size_control_features{};
+        supported_subgroup_size_control_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+        supported_subgroup_size_control_features.pNext =
+            enable_shader_atomic_float ? static_cast<void*>(&supported_atomic_float_features) : nullptr;
+        VkPhysicalDeviceVulkan12Features supported_features12{};
+        supported_features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        supported_features12.pNext = enable_subgroup_size_control
+                                         ? static_cast<void*>(&supported_subgroup_size_control_features)
+                                         : enable_shader_atomic_float
+                                               ? static_cast<void*>(&supported_atomic_float_features)
+                                               : nullptr;
+        VkPhysicalDeviceFeatures2 supported_features2{};
+        supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        supported_features2.pNext = &supported_features12;
+        vkGetPhysicalDeviceFeatures2(physical_device_, &supported_features2);
+
         VkPhysicalDeviceVulkan13Features features13{};
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features13.synchronization2 = VK_TRUE;
         features13.dynamicRendering = VK_TRUE;
 
+        VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features{};
+        atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
+        atomic_float_features.pNext = &features13;
+        atomic_float_features.shaderBufferFloat32AtomicAdd =
+            enable_shader_atomic_float && supported_atomic_float_features.shaderBufferFloat32AtomicAdd
+                ? VK_TRUE
+                : VK_FALSE;
+
+        VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroup_size_control_features{};
+        subgroup_size_control_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+        subgroup_size_control_features.pNext = enable_shader_atomic_float
+                                                   ? static_cast<void*>(&atomic_float_features)
+                                                   : static_cast<void*>(&features13);
+        subgroup_size_control_features.subgroupSizeControl =
+            enable_subgroup_size_control && supported_subgroup_size_control_features.subgroupSizeControl
+                ? VK_TRUE
+                : VK_FALSE;
+        subgroup_size_control_features.computeFullSubgroups =
+            enable_subgroup_size_control && supported_subgroup_size_control_features.computeFullSubgroups
+                ? VK_TRUE
+                : VK_FALSE;
+
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.pNext = &features13;
+        features12.pNext = enable_subgroup_size_control
+                                ? static_cast<void*>(&subgroup_size_control_features)
+                                : enable_shader_atomic_float
+                                      ? static_cast<void*>(&atomic_float_features)
+                                      : static_cast<void*>(&features13);
         features12.timelineSemaphore = VK_TRUE;
         features12.bufferDeviceAddress = VK_TRUE;
+        features12.shaderFloat16 = supported_features12.shaderFloat16;
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.pNext = &features12;
+        features2.features.shaderInt16 = supported_features2.features.shaderInt16;
+        features2.features.shaderInt64 = supported_features2.features.shaderInt64;
 
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1109,6 +1169,7 @@ namespace lfs::vis {
         }
 
         constexpr VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                                            VK_IMAGE_USAGE_STORAGE_BIT |
                                             VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
                                             VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
@@ -1287,6 +1348,130 @@ namespace lfs::vis {
     VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalImageNativeHandle(ExternalImage& image) const {
         const ExternalNativeHandle handle = image.native_handle;
         image.native_handle = kInvalidExternalNativeHandle;
+        return handle;
+    }
+
+    bool VulkanContext::createExternalBuffer(const VkDeviceSize size,
+                                             const VkBufferUsageFlags usage,
+                                             ExternalBuffer& out) {
+        out = {};
+
+        if (!device_ || !physical_device_) {
+            return fail("Cannot create external Vulkan buffer before device initialization");
+        }
+        if (!external_memory_interop_enabled_) {
+            return fail("Vulkan external memory interop is not enabled on this device");
+        }
+        if (size == 0) {
+            return fail("External Vulkan buffer requires a non-zero size");
+        }
+
+        VkExternalMemoryBufferCreateInfo external_buffer_info{};
+        external_buffer_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+        external_buffer_info.handleTypes = kExternalMemoryHandleType;
+
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.pNext = &external_buffer_info;
+        buffer_info.size = size;
+        buffer_info.usage = usage |
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VkResult result = vkCreateBuffer(device_, &buffer_info, nullptr, &out.buffer);
+        if (result != VK_SUCCESS) {
+            out = {};
+            return fail(std::format("vkCreateBuffer(external) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_BUFFER, out.buffer, std::format("External buffer {} bytes", size));
+
+        VkMemoryRequirements memory_requirements{};
+        vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
+        out.size = size;
+        out.allocation_size = memory_requirements.size;
+
+        VkExportMemoryAllocateInfo export_info{};
+        export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+        export_info.handleTypes = kExternalMemoryHandleType;
+
+        VkMemoryAllocateInfo allocate_info{};
+        allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocate_info.pNext = &export_info;
+        allocate_info.allocationSize = memory_requirements.size;
+        allocate_info.memoryTypeIndex =
+            findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
+            destroyExternalBuffer(out);
+            return fail("Could not find Vulkan device-local memory for external buffer");
+        }
+
+        result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
+        if (result != VK_SUCCESS) {
+            destroyExternalBuffer(out);
+            return fail(std::format("vkAllocateMemory(external buffer) failed: {}", static_cast<int>(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "External buffer memory");
+
+        result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
+        if (result != VK_SUCCESS) {
+            destroyExternalBuffer(out);
+            return fail(std::format("vkBindBufferMemory(external buffer) failed: {}", static_cast<int>(result)));
+        }
+
+#ifdef _WIN32
+        auto get_memory_handle = reinterpret_cast<PFN_vkGetMemoryWin32HandleKHR>(
+            vkGetDeviceProcAddr(device_, "vkGetMemoryWin32HandleKHR"));
+        if (get_memory_handle == nullptr) {
+            destroyExternalBuffer(out);
+            return fail("vkGetMemoryWin32HandleKHR is unavailable");
+        }
+        VkMemoryGetWin32HandleInfoKHR handle_info{};
+        handle_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_WIN32_HANDLE_INFO_KHR;
+        handle_info.memory = out.memory;
+        handle_info.handleType = kExternalMemoryHandleType;
+        HANDLE native_handle = nullptr;
+        result = get_memory_handle(device_, &handle_info, &native_handle);
+        out.native_handle = native_handle;
+#else
+        auto get_memory_fd = reinterpret_cast<PFN_vkGetMemoryFdKHR>(
+            vkGetDeviceProcAddr(device_, "vkGetMemoryFdKHR"));
+        if (get_memory_fd == nullptr) {
+            destroyExternalBuffer(out);
+            return fail("vkGetMemoryFdKHR is unavailable");
+        }
+        VkMemoryGetFdInfoKHR fd_info{};
+        fd_info.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+        fd_info.memory = out.memory;
+        fd_info.handleType = kExternalMemoryHandleType;
+        int native_handle = -1;
+        result = get_memory_fd(device_, &fd_info, &native_handle);
+        out.native_handle = native_handle;
+#endif
+        if (result != VK_SUCCESS) {
+            destroyExternalBuffer(out);
+            return fail(std::format("Exporting external buffer memory handle failed: {}", static_cast<int>(result)));
+        }
+        return true;
+    }
+
+    void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
+        if (device_) {
+            if (buffer.buffer != VK_NULL_HANDLE) {
+                vkDestroyBuffer(device_, buffer.buffer, nullptr);
+            }
+            if (buffer.memory != VK_NULL_HANDLE) {
+                vkFreeMemory(device_, buffer.memory, nullptr);
+            }
+        }
+        closeExternalNativeHandle(buffer.native_handle);
+        buffer = {};
+    }
+
+    VulkanContext::ExternalNativeHandle VulkanContext::releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const {
+        const ExternalNativeHandle handle = buffer.native_handle;
+        buffer.native_handle = kInvalidExternalNativeHandle;
         return handle;
     }
 

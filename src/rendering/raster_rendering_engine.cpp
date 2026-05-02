@@ -60,6 +60,7 @@ namespace lfs::rendering {
             bool antialiasing = false;
             bool mip_filter = false;
             int sh_degree = 3;
+            GaussianRasterBackend raster_backend = GaussianRasterBackend::FastGs;
             bool gut = false;
             bool equirectangular = false;
             GaussianSceneState scene;
@@ -1961,6 +1962,7 @@ namespace lfs::rendering {
                     .antialiasing = request.antialiasing,
                     .mip_filter = request.mip_filter,
                     .sh_degree = request.sh_degree,
+                    .raster_backend = request.raster_backend,
                     .gut = request.gut,
                     .equirectangular = request.equirectangular,
                     .scene = request.scene,
@@ -2009,6 +2011,7 @@ namespace lfs::rendering {
                     .scaling_modifier = request.scaling_modifier,
                     .mip_filter = request.mip_filter,
                     .sh_degree = request.sh_degree,
+                    .raster_backend = request.raster_backend,
                     .gut = request.gut,
                     .equirectangular = request.equirectangular,
                     .scene = request.scene,
@@ -2339,7 +2342,9 @@ namespace lfs::rendering {
             applyViewVolumeToRaster(request, resources);
 
             try {
-                if (request.gut || request.equirectangular) {
+                if (request.gut ||
+                    request.raster_backend == GaussianRasterBackend::Gut ||
+                    request.equirectangular) {
                     const auto camera_model = request.equirectangular
                                                   ? GutCameraModel::EQUIRECTANGULAR
                                                   : GutCameraModel::PINHOLE;

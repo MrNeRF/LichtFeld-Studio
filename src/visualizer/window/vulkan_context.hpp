@@ -75,6 +75,14 @@ namespace lfs::vis {
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
         };
 
+        struct ExternalBuffer {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkDeviceSize size = 0;
+            VkDeviceSize allocation_size = 0;
+            ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
+        };
+
         struct ExternalSemaphore {
             VkSemaphore semaphore = VK_NULL_HANDLE;
             std::uint64_t initial_value = 0;
@@ -126,6 +134,11 @@ namespace lfs::vis {
         [[nodiscard]] bool createExternalImage(VkExtent2D extent, VkFormat format, ExternalImage& out);
         void destroyExternalImage(ExternalImage& image);
         [[nodiscard]] ExternalNativeHandle releaseExternalImageNativeHandle(ExternalImage& image) const;
+        [[nodiscard]] bool createExternalBuffer(VkDeviceSize size,
+                                                VkBufferUsageFlags usage,
+                                                ExternalBuffer& out);
+        void destroyExternalBuffer(ExternalBuffer& buffer);
+        [[nodiscard]] ExternalNativeHandle releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const;
         [[nodiscard]] bool createExternalTimelineSemaphore(std::uint64_t initial_value, ExternalSemaphore& out);
         void destroyExternalSemaphore(ExternalSemaphore& semaphore);
         [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;

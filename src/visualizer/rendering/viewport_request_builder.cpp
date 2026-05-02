@@ -119,7 +119,9 @@ namespace lfs::vis {
             .antialiasing = ctx.settings.antialiasing,
             .mip_filter = ctx.settings.mip_filter,
             .sh_degree = ctx.settings.sh_degree,
-            .gut = ctx.settings.gut,
+            .raster_backend = ctx.settings.raster_backend,
+            .gut = ctx.settings.gut ||
+                   ctx.settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
             .equirectangular = ctx.settings.equirectangular,
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,
@@ -171,7 +173,9 @@ namespace lfs::vis {
             .scaling_modifier = ctx.settings.scaling_modifier,
             .mip_filter = ctx.settings.mip_filter,
             .sh_degree = ctx.settings.sh_degree,
-            .gut = ctx.settings.gut,
+            .raster_backend = ctx.settings.raster_backend,
+            .gut = ctx.settings.gut ||
+                   ctx.settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
             .equirectangular = ctx.settings.equirectangular,
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,
@@ -198,6 +202,7 @@ namespace lfs::vis {
             .antialiasing = request.antialiasing,
             .mip_filter = request.mip_filter,
             .sh_degree = request.sh_degree,
+            .raster_backend = request.raster_backend,
             .gut = request.gut,
             .equirectangular = request.equirectangular,
             .scene = request.scene,

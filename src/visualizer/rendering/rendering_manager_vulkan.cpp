@@ -15,6 +15,7 @@
 #include "viewport_appearance_correction.hpp"
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
+#include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <cmath>
 #include <expected>
@@ -443,8 +444,15 @@ namespace lfs::vis {
         if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
             model_change.changed) {
             vulkan_viewport_image_.reset();
+            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_external_viewport_image_generation_ = 0;
             vulkan_viewport_image_size_ = {0, 0};
             vulkan_viewport_image_flip_y_ = false;
+            if (vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_->reset();
+            }
             viewport_artifact_service_.clearViewportOutput();
             markDirty(DirtyFlag::ALL);
         }
@@ -460,7 +468,7 @@ namespace lfs::vis {
         }
 
         if (const DirtyMask required_dirty = frame_lifecycle_service_.requiredDirtyMask(
-                vulkan_viewport_image_ != nullptr,
+                vulkan_viewport_image_ != nullptr || vulkan_external_viewport_image_ != VK_NULL_HANDLE,
                 has_render_content,
                 settings_.split_view_mode);
             required_dirty) {
@@ -470,6 +478,10 @@ namespace lfs::vis {
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
         if (!has_render_content) {
             vulkan_viewport_image_.reset();
+            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_external_viewport_image_generation_ = 0;
             vulkan_viewport_image_size_ = {0, 0};
             vulkan_viewport_image_flip_y_ = false;
             viewport_artifact_service_.clearViewportOutput();
@@ -477,8 +489,18 @@ namespace lfs::vis {
             return {};
         }
 
-        if (frame_dirty == 0 && vulkan_viewport_image_) {
+        if (frame_dirty == 0 &&
+            (vulkan_viewport_image_ || vulkan_external_viewport_image_ != VK_NULL_HANDLE)) {
             render_lock.reset();
+            if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
+                return {.image = {},
+                        .external_image = vulkan_external_viewport_image_,
+                        .external_image_view = vulkan_external_viewport_image_view_,
+                        .external_image_layout = vulkan_external_viewport_image_layout_,
+                        .external_image_generation = vulkan_external_viewport_image_generation_,
+                        .size = vulkan_viewport_image_size_,
+                        .flip_y = vulkan_viewport_image_flip_y_};
+            }
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
@@ -821,12 +843,53 @@ namespace lfs::vis {
             }
         } else if (has_renderable_model) {
             auto request = buildViewportRenderRequest(frame_ctx, render_size);
-            auto render_result = engine_->renderGaussiansImage(*model, request);
-            if (render_result) {
-                rendered_image = std::move(render_result->image);
-                rendered_metadata = std::move(render_result->metadata);
+            if (request.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
+                if (!context.vulkan_context) {
+                    render_error = "VkSplat backend requires an active Vulkan context";
+                } else {
+                    if (!vksplat_viewport_renderer_) {
+                        vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                    }
+                    const bool force_input_upload = (frame_dirty & DirtyFlag::SPLATS) != 0;
+                    auto render_result = vksplat_viewport_renderer_->render(
+                        *context.vulkan_context, *model, request, force_input_upload);
+                    if (render_result) {
+                        render_lock.reset();
+                        vulkan_viewport_image_.reset();
+                        vulkan_external_viewport_image_ = render_result->image;
+                        vulkan_external_viewport_image_view_ = render_result->image_view;
+                        vulkan_external_viewport_image_layout_ = render_result->image_layout;
+                        vulkan_external_viewport_image_generation_ = render_result->generation;
+                        vulkan_viewport_image_size_ = render_result->size;
+                        vulkan_viewport_image_flip_y_ = render_result->flip_y;
+                        vulkan_gt_comparison_content_size_ = {0, 0};
+                        viewport_artifact_service_.clearViewportOutput();
+
+                        if (resize_result.completed) {
+                            frame_lifecycle_service_.noteResizeCompleted();
+                            lfs::core::Tensor::trim_memory_pool();
+                        }
+                        queueCameraMetricsRefreshIfStale(scene_manager);
+                        viewport_interaction_context_.scene_manager = scene_manager;
+                        split_view_service_.updateInfo(FrameResources{});
+                        return {.image = {},
+                                .external_image = vulkan_external_viewport_image_,
+                                .external_image_view = vulkan_external_viewport_image_view_,
+                                .external_image_layout = vulkan_external_viewport_image_layout_,
+                                .external_image_generation = vulkan_external_viewport_image_generation_,
+                                .size = vulkan_viewport_image_size_,
+                                .flip_y = vulkan_viewport_image_flip_y_};
+                    }
+                    render_error = render_result.error();
+                }
             } else {
-                render_error = render_result.error();
+                auto render_result = engine_->renderGaussiansImage(*model, request);
+                if (render_result) {
+                    rendered_image = std::move(render_result->image);
+                    rendered_metadata = std::move(render_result->metadata);
+                } else {
+                    render_error = render_result.error();
+                }
             }
         }
 
@@ -919,6 +982,10 @@ namespace lfs::vis {
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
             vulkan_viewport_image_.reset();
+            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_external_viewport_image_generation_ = 0;
             vulkan_viewport_image_size_ = {0, 0};
             vulkan_viewport_image_flip_y_ = false;
             return {};
@@ -926,6 +993,10 @@ namespace lfs::vis {
 
         auto viewport_image = std::move(rendered_image);
         vulkan_viewport_image_ = viewport_image;
+        vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_external_viewport_image_generation_ = 0;
         vulkan_viewport_image_size_ = render_size;
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
         vulkan_gt_comparison_content_size_ =

@@ -20,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -29,6 +30,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <vulkan/vulkan.h>
 
 namespace lfs::core {
     class Tensor;
@@ -45,6 +47,9 @@ namespace lfs::core::events::cmd {
 } // namespace lfs::core::events::cmd
 
 namespace lfs::vis {
+    class VulkanContext;
+    class VksplatViewportRenderer;
+
     class SceneManager;
     class TrainerManager;
 
@@ -56,10 +61,15 @@ namespace lfs::vis {
             glm::ivec2 logical_screen_size{0, 0};
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
+            VulkanContext* vulkan_context = nullptr;
         };
 
         struct VulkanFrameResult {
             std::shared_ptr<const lfs::core::Tensor> image;
+            VkImage external_image = VK_NULL_HANDLE;
+            VkImageView external_image_view = VK_NULL_HANDLE;
+            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t external_image_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
         };
@@ -392,6 +402,11 @@ namespace lfs::vis {
         mutable FramerateController framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
+        std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
+        VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::uint64_t vulkan_external_viewport_image_generation_ = 0;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};

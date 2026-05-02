@@ -58,7 +58,7 @@ MAX_SIMPLIFY_KNN_K = 64
 BOOL_PROPS = [
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
     "point_cloud_mode", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
-    "equirectangular", "gut", "mip_filter",
+    "equirectangular", "mip_filter",
     "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
     "apply_appearance_correction", "ppisp_vignette_enabled",
 ]
@@ -102,7 +102,7 @@ SCRUB_FIELD_DEFS = {
 }
 
 SELECT_PROPS = [
-    "grid_plane", "sh_degree", "camera_metrics_mode", "mesh_shadow_resolution",
+    "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
 
 ENVIRONMENT_PRESET_PATHS = (
@@ -147,6 +147,7 @@ LOCALE_KEY = {
     "desaturate_cropping": "main_panel.desaturate_cropping",
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
     "equirectangular": "main_panel.equirectangular",
+    "raster_backend": "main_panel.raster_backend",
     "gut": "main_panel.gut_mode",
     "mip_filter": "main_panel.mip_filter",
     "axes_size": "main_panel.axes_size",
@@ -188,7 +189,7 @@ def _prop_label(prop_id):
     key = LOCALE_KEY.get(prop_id)
     if key:
         label = lf.ui.tr(key)
-        if label:
+        if label and label != key:
             return _entry_label(label)
     s = lf.get_render_settings()
     if s:

@@ -11,6 +11,12 @@
 
 namespace lfs::rendering {
 
+    enum class GaussianRasterBackend : int {
+        FastGs = 0,
+        Gut = 1,
+        VkSplat = 2,
+    };
+
     constexpr float DEFAULT_NEAR_PLANE = 0.1f;
     constexpr float DEFAULT_FAR_PLANE = 100000.0f;
     constexpr int MAX_VIEWPORT_SIZE = 16384;

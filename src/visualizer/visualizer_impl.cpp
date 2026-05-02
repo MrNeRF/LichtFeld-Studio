@@ -86,6 +86,9 @@ namespace lfs::vis {
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.gut = options.gut;
+        initial_settings.raster_backend = options.gut
+                                              ? lfs::rendering::GaussianRasterBackend::Gut
+                                              : lfs::rendering::GaussianRasterBackend::FastGs;
         rendering_manager_->updateSettings(initial_settings);
 
         // Create data loading service
@@ -1073,7 +1076,8 @@ namespace lfs::vis {
             .settings = rendering_manager_->getSettings(),
             .logical_screen_size = window_manager_->getWindowSize(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
-            .scene_manager = scene_manager_.get()};
+            .scene_manager = scene_manager_.get(),
+            .vulkan_context = window_manager_->getVulkanContext()};
 
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
@@ -1082,10 +1086,19 @@ namespace lfs::vis {
 
         const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
         if (gui_manager_) {
-            gui_manager_->setVulkanSceneImage(
-                vulkan_frame.image,
-                vulkan_frame.size,
-                vulkan_frame.flip_y);
+            if (vulkan_frame.external_image != VK_NULL_HANDLE) {
+                gui_manager_->setVulkanExternalSceneImage(vulkan_frame.external_image,
+                                                          vulkan_frame.external_image_view,
+                                                          vulkan_frame.external_image_layout,
+                                                          vulkan_frame.size,
+                                                          vulkan_frame.flip_y,
+                                                          vulkan_frame.external_image_generation);
+            } else {
+                gui_manager_->setVulkanSceneImage(
+                    vulkan_frame.image,
+                    vulkan_frame.size,
+                    vulkan_frame.flip_y);
+            }
         }
         if (gui_manager_)
             gui_manager_->render();

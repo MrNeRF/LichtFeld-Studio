@@ -262,7 +262,9 @@ namespace lfs::vis {
             .scaling_modifier = settings_.scaling_modifier,
             .antialiasing = false,
             .sh_degree = 0,
-            .gut = settings_.gut,
+            .raster_backend = settings_.raster_backend,
+            .gut = settings_.gut ||
+                   settings_.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
             .equirectangular = settings_.equirectangular,
             .scene =
                 {.model_transforms = &render_state.model_transforms,

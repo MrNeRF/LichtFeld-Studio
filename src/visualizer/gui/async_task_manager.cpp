@@ -350,7 +350,9 @@ namespace lfs::vis::gui {
                     .antialiasing = render_settings.antialiasing,
                     .mip_filter = render_settings.mip_filter,
                     .sh_degree = render_settings.sh_degree,
-                    .gut = render_settings.gut,
+                    .raster_backend = render_settings.raster_backend,
+                    .gut = render_settings.gut ||
+                           render_settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
                     .equirectangular = render_settings.equirectangular,
                     .scene =
                         {.model_transforms = &snapshot.model_transforms,

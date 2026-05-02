@@ -519,4 +519,147 @@ namespace lfs::rendering {
         return false;
     }
 
+    CudaVulkanBufferInterop::CudaVulkanBufferInterop(CudaVulkanExternalBufferImport buffer) {
+        if (!init(std::move(buffer))) {
+            throw std::runtime_error(last_error_);
+        }
+    }
+
+    CudaVulkanBufferInterop::~CudaVulkanBufferInterop() {
+        reset();
+    }
+
+    CudaVulkanBufferInterop::CudaVulkanBufferInterop(CudaVulkanBufferInterop&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    CudaVulkanBufferInterop& CudaVulkanBufferInterop::operator=(CudaVulkanBufferInterop&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        reset();
+        cuda_mem_ = std::exchange(other.cuda_mem_, nullptr);
+        device_ptr_ = std::exchange(other.device_ptr_, nullptr);
+        allocation_size_ = std::exchange(other.allocation_size_, 0);
+        size_ = std::exchange(other.size_, 0);
+        upload_source_ = std::move(other.upload_source_);
+        last_error_ = std::move(other.last_error_);
+        return *this;
+    }
+
+    bool CudaVulkanBufferInterop::init(CudaVulkanExternalBufferImport buffer) {
+        reset();
+        last_error_.clear();
+
+        if (!nativeHandleValid(buffer.memory_handle)) {
+            return fail("CUDA/Vulkan external buffer import requires a valid memory handle");
+        }
+        if (buffer.allocation_size == 0 || buffer.size == 0 || buffer.size > buffer.allocation_size) {
+            return fail("CUDA/Vulkan external buffer import requires a non-zero size within the allocation");
+        }
+
+        NativeHandleOwner memory_handle(buffer.memory_handle);
+
+        cudaExternalMemoryHandleDesc memory_desc{};
+        memory_desc.type = kCudaExternalMemoryHandleType;
+        memory_desc.size = buffer.allocation_size;
+        if (buffer.dedicated_allocation) {
+            memory_desc.flags = cudaExternalMemoryDedicated;
+        }
+#ifdef _WIN32
+        memory_desc.handle.win32.handle = memory_handle.get();
+#else
+        memory_desc.handle.fd = memory_handle.get();
+#endif
+
+        cudaError_t status = cudaImportExternalMemory(&cuda_mem_, &memory_desc);
+        if (status != cudaSuccess) {
+            reset();
+            return failCuda("cudaImportExternalMemory(buffer)", status);
+        }
+#ifndef _WIN32
+        memory_handle.release();
+#endif
+
+        cudaExternalMemoryBufferDesc buffer_desc{};
+        buffer_desc.offset = 0;
+        buffer_desc.size = buffer.size;
+        status = cudaExternalMemoryGetMappedBuffer(&device_ptr_, cuda_mem_, &buffer_desc);
+        if (status != cudaSuccess) {
+            reset();
+            return failCuda("cudaExternalMemoryGetMappedBuffer", status);
+        }
+
+        allocation_size_ = buffer.allocation_size;
+        size_ = buffer.size;
+        return true;
+    }
+
+    void CudaVulkanBufferInterop::reset() {
+        upload_source_ = {};
+        if (device_ptr_ != nullptr) {
+            cudaFree(device_ptr_);
+            device_ptr_ = nullptr;
+        }
+        if (cuda_mem_ != nullptr) {
+            cudaDestroyExternalMemory(cuda_mem_);
+            cuda_mem_ = nullptr;
+        }
+        allocation_size_ = 0;
+        size_ = 0;
+    }
+
+    bool CudaVulkanBufferInterop::valid() const {
+        return cuda_mem_ != nullptr && device_ptr_ != nullptr && size_ > 0;
+    }
+
+    bool CudaVulkanBufferInterop::copyFromTensor(const lfs::core::Tensor& tensor,
+                                                 const std::size_t byte_count,
+                                                 const cudaStream_t stream) const {
+        last_error_.clear();
+        if (!valid()) {
+            return fail("CUDA/Vulkan external buffer is not initialized");
+        }
+        if (byte_count == 0 || byte_count > size_) {
+            return fail(std::format("CUDA/Vulkan buffer copy size {} exceeds target {}", byte_count, size_));
+        }
+        if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+            return fail("CUDA/Vulkan buffer copy received an invalid tensor");
+        }
+
+        upload_source_ = tensor;
+        if (upload_source_.device() != lfs::core::Device::CUDA) {
+            upload_source_ = upload_source_.to(lfs::core::Device::CUDA, stream);
+        }
+        if (!upload_source_.is_contiguous()) {
+            upload_source_ = upload_source_.contiguous();
+        }
+        if (byte_count > upload_source_.bytes()) {
+            return fail(std::format("CUDA/Vulkan buffer copy requested {} bytes from {} byte tensor",
+                                    byte_count,
+                                    upload_source_.bytes()));
+        }
+
+        lfs::core::waitForCUDAStream(stream, upload_source_.stream());
+        const cudaError_t status = cudaMemcpyAsync(
+            device_ptr_, upload_source_.data_ptr(), byte_count, cudaMemcpyDeviceToDevice, stream);
+        return failCuda("cudaMemcpyAsync(CUDA tensor -> Vulkan buffer)", status);
+    }
+
+    bool CudaVulkanBufferInterop::fail(std::string message) const {
+        last_error_ = std::move(message);
+        return false;
+    }
+
+    bool CudaVulkanBufferInterop::failCuda(const char* const operation, const cudaError_t status) const {
+        if (status == cudaSuccess) {
+            return true;
+        }
+        last_error_ = std::format("{} failed: {} ({})",
+                                  operation,
+                                  cudaGetErrorName(status),
+                                  cudaGetErrorString(status));
+        return false;
+    }
+
 } // namespace lfs::rendering
