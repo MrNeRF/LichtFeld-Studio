@@ -276,7 +276,7 @@ namespace lfs::vis::vksplat {
             const Tensor scales_3d = scales_exp.unsqueeze(2);
             const Tensor opacity_3d = opacity_sig.unsqueeze(2);
             result.scales_opacs = Tensor::cat({scales_3d, opacity_3d}, 1)
-                                      .reshape({n, std::size_t{4}})
+                                      .reshape(lfs::core::TensorShape{n, std::size_t{4}})
                                       .contiguous();
 
             auto sh_padded = buildPaddedShTensor(splat_data);
@@ -286,9 +286,9 @@ namespace lfs::vis::vksplat {
 
             const std::size_t reorder = static_cast<std::size_t>(SH_REORDER_SIZE);
             const std::size_t padded_n = ((n + reorder - 1) / reorder) * reorder;
-            Tensor sh_chunks = sh_padded->reshape({n,
-                                                   static_cast<std::size_t>(kShDim),
-                                                   static_cast<std::size_t>(kShChunkFloats)});
+            Tensor sh_chunks = sh_padded->reshape(lfs::core::TensorShape{n,
+                                                                         static_cast<std::size_t>(kShDim),
+                                                                         static_cast<std::size_t>(kShChunkFloats)});
             if (padded_n != n) {
                 Tensor pad = Tensor::zeros({padded_n - n,
                                             static_cast<std::size_t>(kShDim),
@@ -298,10 +298,10 @@ namespace lfs::vis::vksplat {
                 sh_chunks = Tensor::cat({sh_chunks, pad}, 0);
             }
             const std::size_t n_groups = padded_n / reorder;
-            Tensor sh_grouped = sh_chunks.reshape({n_groups,
-                                                   reorder,
-                                                   static_cast<std::size_t>(kShDim),
-                                                   static_cast<std::size_t>(kShChunkFloats)});
+            Tensor sh_grouped = sh_chunks.reshape(lfs::core::TensorShape{n_groups,
+                                                                         reorder,
+                                                                         static_cast<std::size_t>(kShDim),
+                                                                         static_cast<std::size_t>(kShChunkFloats)});
             result.sh_coeffs = sh_grouped.permute({0, 2, 1, 3}).contiguous();
             result.sh_padded_floats = static_cast<std::size_t>(result.sh_coeffs.numel());
 

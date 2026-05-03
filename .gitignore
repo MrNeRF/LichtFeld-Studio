@@ -1,5 +1,6 @@
 .vscode
 .claude
+CLAUDE.md
 build/
 cmake-build-debug/
 cmake-build-release/
