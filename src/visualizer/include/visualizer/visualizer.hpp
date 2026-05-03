@@ -34,7 +34,6 @@ namespace lfs::vis {
         int width = 1280;
         int height = 720;
         bool antialiasing = false;
-        bool enable_cuda_interop = true;
         bool show_startup_overlay = true;
         bool gut = false;
         GraphicsBackend graphics_backend = GraphicsBackend::Vulkan;

@@ -254,74 +254,7 @@ namespace lfs::rendering {
             CudaVulkanTensorLayout layout,
             CudaVulkanTensorElementType element_type,
             const cudaStream_t stream);
-
-        [[nodiscard]] cudaError_t launchCudaVulkanPackTensorToRgba8(
-            unsigned char* destination,
-            const void* source,
-            std::uint32_t width,
-            std::uint32_t height,
-            int channels,
-            CudaVulkanTensorLayout layout,
-            CudaVulkanTensorElementType element_type,
-            const cudaStream_t stream);
     } // namespace detail
-
-    CudaVulkanRgba8HostBuffer packTensorToRgba8Host(const lfs::core::Tensor& tensor,
-                                                    const CudaVulkanExtent2D extent,
-                                                    const cudaStream_t stream) {
-        CudaVulkanRgba8HostBuffer result{};
-        if (extent.width == 0 || extent.height == 0) {
-            result.error = "CUDA/Vulkan RGBA8 packing requires a non-zero extent";
-            return result;
-        }
-
-        PreparedCudaImageTensor prepared{};
-        if (!prepareCudaImageTensor(tensor, extent, stream, prepared, result.error)) {
-            return result;
-        }
-
-        lfs::core::Tensor packed = lfs::core::Tensor::empty(
-            {static_cast<std::size_t>(extent.height), static_cast<std::size_t>(extent.width), std::size_t{4}},
-            lfs::core::Device::CUDA,
-            lfs::core::DataType::UInt8);
-        if (stream != nullptr) {
-            packed.set_stream(stream);
-        }
-
-        lfs::core::waitForCUDAStream(stream, prepared.tensor.stream());
-        const cudaError_t launch_status = detail::launchCudaVulkanPackTensorToRgba8(
-            packed.ptr<std::uint8_t>(),
-            prepared.tensor.data_ptr(),
-            extent.width,
-            extent.height,
-            prepared.channels,
-            prepared.layout,
-            prepared.element_type,
-            stream);
-        if (launch_status != cudaSuccess) {
-            result.error = std::format("pack tensor to RGBA8 failed: {} ({})",
-                                       cudaGetErrorName(launch_status),
-                                       cudaGetErrorString(launch_status));
-            return result;
-        }
-
-        const cudaError_t sync_status = stream != nullptr ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
-        if (sync_status != cudaSuccess) {
-            result.error = std::format("synchronize packed RGBA8 tensor failed: {} ({})",
-                                       cudaGetErrorName(sync_status),
-                                       cudaGetErrorString(sync_status));
-            return result;
-        }
-
-        const lfs::core::Tensor cpu = packed.to(lfs::core::Device::CPU);
-        const auto* pixels = cpu.ptr<std::uint8_t>();
-        if (pixels == nullptr) {
-            result.error = "packed RGBA8 tensor returned null host data";
-            return result;
-        }
-        result.pixels.assign(pixels, pixels + cpu.numel());
-        return result;
-    }
 
     CudaVulkanInterop::CudaVulkanInterop(CudaVulkanExternalImageImport image,
                                          CudaVulkanExternalSemaphoreImport semaphore) {

@@ -2071,15 +2071,6 @@ namespace lfs::vis::gui {
         }
 #endif
 
-        [[nodiscard]] bool vulkanSceneInteropEnvironmentEnabled() {
-            if (const char* disabled = std::getenv("LFS_NO_VK_CUDA_INTEROP");
-                disabled != nullptr && std::string_view(disabled) != "0") {
-                return false;
-            }
-            const char* enabled = std::getenv("LFS_VK_CUDA_INTEROP");
-            return enabled == nullptr || std::string_view(enabled) != "0";
-        }
-
         std::string makeRmlTabDomId(const std::string& id) {
             std::string result = "rp-tab-";
             result.reserve(result.size() + id.size());
@@ -3316,15 +3307,6 @@ namespace lfs::vis::gui {
 
     void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        const bool interop_explicitly_disabled =
-            (viewer_ && !viewer_->options_.enable_cuda_interop) ||
-            !vulkanSceneInteropEnvironmentEnabled();
-        if (interop_explicitly_disabled) {
-            if (!vulkan_scene_interop_.empty()) {
-                resetVulkanSceneInterop();
-            }
-            return;
-        }
         if (vulkan_scene_interop_disabled_) {
             return;
         }
@@ -3347,17 +3329,6 @@ namespace lfs::vis::gui {
             vulkan_scene_image_->device() != lfs::core::Device::CUDA ||
             vulkan_scene_image_size_.x <= 0 ||
             vulkan_scene_image_size_.y <= 0) {
-            if (!vulkan_scene_interop_.empty()) {
-                resetVulkanSceneInterop();
-            }
-            return;
-        }
-
-        if (!context.externalMemoryInteropEnabled() || !context.externalSemaphoreInteropEnabled()) {
-            if (!vulkan_scene_interop_unavailable_logged_) {
-                LOG_WARN("Vulkan/CUDA viewport interop unavailable on this device; using staging fallback");
-                vulkan_scene_interop_unavailable_logged_ = true;
-            }
             if (!vulkan_scene_interop_.empty()) {
                 resetVulkanSceneInterop();
             }

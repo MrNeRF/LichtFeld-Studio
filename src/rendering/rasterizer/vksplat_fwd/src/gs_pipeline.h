@@ -45,16 +45,7 @@ public:
     template <typename T>
     _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
     template <typename T>
-    _VulkanBuffer& copyToDevice(Buffer<T>& buffer);
-    template <typename T>
-    void copyFromDevice(Buffer<T>& buffer);
-    void copyFromDeviceToDevice(const _VulkanBuffer& src, _VulkanBuffer& dst);
-    template <typename T>
-    void copyFromDeviceToDevice(const Buffer<T>& src, Buffer<T>& dst);
-    template <typename T>
     T readElement(const _VulkanBuffer& buffer, size_t index);
-    template <typename T>
-    void dumpRawBytesToFile(Buffer<T>& buffer, std::string filename);
 
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true);
@@ -222,8 +213,6 @@ protected:
         const void* uniformsPtr, size_t uniformSize,
         _ComputePipeline& pipeline,
         const std::vector<_VulkanBuffer>& buffers);
-
-    void _displayImage(Buffer<float>& pixels, int width, bool reverse_alpha);
 
 private:
     void destroyComputePipeline(_ComputePipeline& pipeline);

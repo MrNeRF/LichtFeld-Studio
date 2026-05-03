@@ -1073,17 +1073,15 @@ namespace lfs::vis {
         has_cooperative_matrix_ = enable_cooperative_matrix;
         has_host_image_copy_ = enable_host_image_copy;
         has_descriptor_indexing_ = supported_features12.descriptorIndexing == VK_TRUE;
-        if (external_memory_interop_enabled_) {
-            LOG_INFO("Vulkan external memory interop enabled{}",
-                     external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
-        } else {
-            LOG_INFO("Vulkan external memory interop unavailable; CUDA viewport upload will use fallback staging");
+        if (!external_memory_interop_enabled_) {
+            return fail("Vulkan external memory interop is required (KHR_external_memory + platform variant); device is missing the extension(s)");
         }
-        if (external_semaphore_interop_enabled_) {
-            LOG_INFO("Vulkan external timeline semaphore interop enabled");
-        } else {
-            LOG_INFO("Vulkan external timeline semaphore interop unavailable");
+        if (!external_semaphore_interop_enabled_) {
+            return fail("Vulkan external timeline-semaphore interop is required (KHR_external_semaphore + platform variant); device is missing the extension(s)");
         }
+        LOG_INFO("Vulkan external memory interop enabled{}",
+                 external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
+        LOG_INFO("Vulkan external timeline semaphore interop enabled");
         return true;
     }
 
@@ -1227,9 +1225,6 @@ namespace lfs::vis {
 
         if (!device_ || !physical_device_) {
             return fail("Cannot create external Vulkan image before device initialization");
-        }
-        if (!external_memory_interop_enabled_) {
-            return fail("Vulkan external memory interop is not enabled on this device");
         }
         if (extent.width == 0 || extent.height == 0 || format == VK_FORMAT_UNDEFINED) {
             return fail("External Vulkan image requires a non-zero extent and defined format");
@@ -1426,9 +1421,6 @@ namespace lfs::vis {
         if (!device_ || !physical_device_) {
             return fail("Cannot create external Vulkan buffer before device initialization");
         }
-        if (!external_memory_interop_enabled_) {
-            return fail("Vulkan external memory interop is not enabled on this device");
-        }
         if (size == 0) {
             return fail("External Vulkan buffer requires a non-zero size");
         }
@@ -1547,9 +1539,6 @@ namespace lfs::vis {
 
         if (!device_ || !physical_device_) {
             return fail("Cannot create external Vulkan semaphore before device initialization");
-        }
-        if (!external_semaphore_interop_enabled_) {
-            return fail("Vulkan external semaphore interop is not enabled on this device");
         }
 
         VkPhysicalDeviceExternalSemaphoreInfo semaphore_info{};

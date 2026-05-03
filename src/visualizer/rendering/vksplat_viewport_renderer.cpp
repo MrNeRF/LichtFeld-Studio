@@ -191,10 +191,8 @@ namespace lfs::vis {
         }
         compose_.reset();
         buffers_ = {};
-        uploaded_inputs_ = {};
         output_size_ = {0, 0};
         output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        cuda_inputs_supported_ = true;
         initialized_ = false;
         context_ = nullptr;
     }
@@ -312,19 +310,10 @@ namespace lfs::vis {
 
     bool VksplatViewportRenderer::inputsResident(const lfs::core::SplatData& splat_data,
                                                  const std::size_t ring_slot) const {
+        if (ring_slot >= ring_uploaded_.size())
+            return false;
         const auto current = makeModelInputSnapshot(splat_data);
-        if (cuda_inputs_supported_) {
-            if (ring_slot >= ring_uploaded_.size())
-                return false;
-            return ring_uploaded_[ring_slot].valid() && ring_uploaded_[ring_slot] == current;
-        }
-        return uploaded_inputs_.valid() &&
-               buffers_.num_splats > 0 &&
-               buffers_.xyz_ws.deviceBuffer.buffer != VK_NULL_HANDLE &&
-               buffers_.sh_coeffs.deviceBuffer.buffer != VK_NULL_HANDLE &&
-               buffers_.rotations.deviceBuffer.buffer != VK_NULL_HANDLE &&
-               buffers_.scales_opacs.deviceBuffer.buffer != VK_NULL_HANDLE &&
-               uploaded_inputs_ == current;
+        return ring_uploaded_[ring_slot].valid() && ring_uploaded_[ring_slot] == current;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::uploadInputs(
@@ -338,92 +327,57 @@ namespace lfs::vis {
             return std::unexpected("VkSplat cannot render an empty model");
         }
 
-        if (cuda_inputs_supported_ && context.externalMemoryInteropEnabled()) {
-            assert(ring_slot < cuda_inputs_.size());
-            auto& ring = cuda_inputs_[ring_slot];
+        assert(context.externalMemoryInteropEnabled());
+        assert(ring_slot < cuda_inputs_.size());
+        auto& ring = cuda_inputs_[ring_slot];
 
-            auto packed = vksplat::packDeviceInputs(splat_data);
-            if (!packed) {
-                return std::unexpected(packed.error());
-            }
-
-            const std::size_t xyz_bytes = static_cast<std::size_t>(packed->xyz_ws.bytes());
-            const std::size_t rot_bytes = static_cast<std::size_t>(packed->rotations.bytes());
-            const std::size_t so_bytes = static_cast<std::size_t>(packed->scales_opacs.bytes());
-            const std::size_t sh_bytes = static_cast<std::size_t>(packed->sh_coeffs.bytes());
-
-            auto& xyz_slot = ring[0];
-            auto& rot_slot = ring[1];
-            auto& so_slot = ring[2];
-            auto& sh_slot = ring[3];
-
-            const auto setup = [&](CudaInputSlot& slot, std::size_t bytes, const char* name) {
-                return ensureCudaInputSlot(context, slot, bytes, name);
-            };
-            if (auto ok = setup(xyz_slot, xyz_bytes, "xyz_ws"); !ok) {
-                cuda_inputs_supported_ = false;
-                return std::unexpected(ok.error());
-            }
-            if (auto ok = setup(rot_slot, rot_bytes, "rotations"); !ok) {
-                cuda_inputs_supported_ = false;
-                return std::unexpected(ok.error());
-            }
-            if (auto ok = setup(so_slot, so_bytes, "scales_opacs"); !ok) {
-                cuda_inputs_supported_ = false;
-                return std::unexpected(ok.error());
-            }
-            if (auto ok = setup(sh_slot, sh_bytes, "sh_coeffs"); !ok) {
-                cuda_inputs_supported_ = false;
-                return std::unexpected(ok.error());
-            }
-
-            const cudaStream_t stream = packed->xyz_ws.stream();
-            if (!xyz_slot.interop.copyFromTensor(packed->xyz_ws, xyz_bytes, stream) ||
-                !rot_slot.interop.copyFromTensor(packed->rotations, rot_bytes, stream) ||
-                !so_slot.interop.copyFromTensor(packed->scales_opacs, so_bytes, stream) ||
-                !sh_slot.interop.copyFromTensor(packed->sh_coeffs, sh_bytes, stream)) {
-                cuda_inputs_supported_ = false;
-                return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
-                                                   sh_slot.interop.lastError()));
-            }
-            const cudaError_t sync = stream != nullptr ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
-            if (sync != cudaSuccess) {
-                cuda_inputs_supported_ = false;
-                return std::unexpected(std::format("VkSplat CUDA stream sync failed: {} ({})",
-                                                   cudaGetErrorName(sync),
-                                                   cudaGetErrorString(sync)));
-            }
-
-            xyz_slot.live_bytes = xyz_bytes;
-            rot_slot.live_bytes = rot_bytes;
-            so_slot.live_bytes = so_bytes;
-            sh_slot.live_bytes = sh_bytes;
-            ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
-            return {};
+        auto packed = vksplat::packDeviceInputs(splat_data);
+        if (!packed) {
+            return std::unexpected(packed.error());
         }
 
-        // Fallback: legacy host packer + staging upload.
-        if (auto ok = vksplat::packHostInputs(splat_data,
-                                              buffers_.xyz_ws,
-                                              buffers_.rotations,
-                                              buffers_.scales_opacs,
-                                              buffers_.sh_coeffs);
-            !ok) {
+        const std::size_t xyz_bytes = static_cast<std::size_t>(packed->xyz_ws.bytes());
+        const std::size_t rot_bytes = static_cast<std::size_t>(packed->rotations.bytes());
+        const std::size_t so_bytes = static_cast<std::size_t>(packed->scales_opacs.bytes());
+        const std::size_t sh_bytes = static_cast<std::size_t>(packed->sh_coeffs.bytes());
+
+        auto& xyz_slot = ring[0];
+        auto& rot_slot = ring[1];
+        auto& so_slot = ring[2];
+        auto& sh_slot = ring[3];
+
+        const auto setup = [&](CudaInputSlot& slot, std::size_t bytes, const char* name) {
+            return ensureCudaInputSlot(context, slot, bytes, name);
+        };
+        if (auto ok = setup(xyz_slot, xyz_bytes, "xyz_ws"); !ok)
             return std::unexpected(ok.error());
+        if (auto ok = setup(rot_slot, rot_bytes, "rotations"); !ok)
+            return std::unexpected(ok.error());
+        if (auto ok = setup(so_slot, so_bytes, "scales_opacs"); !ok)
+            return std::unexpected(ok.error());
+        if (auto ok = setup(sh_slot, sh_bytes, "sh_coeffs"); !ok)
+            return std::unexpected(ok.error());
+
+        const cudaStream_t stream = packed->xyz_ws.stream();
+        if (!xyz_slot.interop.copyFromTensor(packed->xyz_ws, xyz_bytes, stream) ||
+            !rot_slot.interop.copyFromTensor(packed->rotations, rot_bytes, stream) ||
+            !so_slot.interop.copyFromTensor(packed->scales_opacs, so_bytes, stream) ||
+            !sh_slot.interop.copyFromTensor(packed->sh_coeffs, sh_bytes, stream)) {
+            return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
+                                               sh_slot.interop.lastError()));
+        }
+        const cudaError_t sync = stream != nullptr ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
+        if (sync != cudaSuccess) {
+            return std::unexpected(std::format("VkSplat CUDA stream sync failed: {} ({})",
+                                               cudaGetErrorName(sync),
+                                               cudaGetErrorString(sync)));
         }
 
-        buffers_.num_splats = n;
-        buffers_.num_indices = 0;
-        buffers_.is_unsorted_1 = true;
-        try {
-            renderer_.copyToDevice(buffers_.xyz_ws);
-            renderer_.copyToDevice(buffers_.sh_coeffs);
-            renderer_.copyToDevice(buffers_.rotations);
-            renderer_.copyToDevice(buffers_.scales_opacs);
-        } catch (const std::exception& e) {
-            return std::unexpected(std::format("VkSplat input upload failed: {}", e.what()));
-        }
-        uploaded_inputs_ = makeModelInputSnapshot(splat_data);
+        xyz_slot.live_bytes = xyz_bytes;
+        rot_slot.live_bytes = rot_bytes;
+        so_slot.live_bytes = so_bytes;
+        sh_slot.live_bytes = sh_bytes;
+        ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
         return {};
     }
 
@@ -669,9 +623,7 @@ namespace lfs::vis {
         if (request.equirectangular) {
             return std::unexpected("VkSplat forward path supports pinhole cameras, not equirectangular cameras");
         }
-        if (!context.externalMemoryInteropEnabled()) {
-            return std::unexpected("VkSplat viewport path requires Vulkan external memory interop");
-        }
+        assert(context.externalMemoryInteropEnabled());
 
         const int active_sh_degree = std::clamp(request.sh_degree, 0, std::min(3, splat_data.get_max_sh_degree()));
         if (auto ok = ensureInitialized(context); !ok) {
@@ -686,9 +638,7 @@ namespace lfs::vis {
                 return std::unexpected(ok.error());
             }
         }
-        if (cuda_inputs_supported_) {
-            plugRingInputs(ring_slot, static_cast<std::size_t>(splat_data.size()));
-        }
+        plugRingInputs(ring_slot, static_cast<std::size_t>(splat_data.size()));
         if (auto ok = ensureOutputImage(context, size); !ok) {
             return std::unexpected(ok.error());
         }

@@ -130,6 +130,3 @@ struct VulkanGSPipelineBuffers {
 
     static void assignScalesOpacs(Buffer<float>& scales_opacs, size_t n, const float* scales, const float* opacs);
 };
-
-float halfToFloat(uint16_t h);
-uint16_t floatToHalf(float f);

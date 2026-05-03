@@ -52,20 +52,6 @@ namespace lfs::rendering {
         std::uint64_t initial_value = 0;
     };
 
-    struct CudaVulkanRgba8HostBuffer {
-        std::vector<std::uint8_t> pixels;
-        std::string error;
-
-        [[nodiscard]] explicit operator bool() const {
-            return error.empty() && !pixels.empty();
-        }
-    };
-
-    [[nodiscard]] CudaVulkanRgba8HostBuffer packTensorToRgba8Host(
-        const lfs::core::Tensor& tensor,
-        CudaVulkanExtent2D extent,
-        cudaStream_t stream = nullptr);
-
     // Records the Vulkan physical-device UUID expected to back any subsequent
     // CUDA/Vulkan interop. Call once at startup, after Vulkan device selection.
     // The first interop init() then verifies the current CUDA device matches;

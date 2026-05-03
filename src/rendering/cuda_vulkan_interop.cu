@@ -79,41 +79,6 @@ namespace lfs::rendering::detail {
             surf2Dwrite(rgba, surface, static_cast<int>(x * sizeof(uchar4)), static_cast<int>(y));
         }
 
-        __global__ void packTensorToRgba8Kernel(
-            unsigned char* destination,
-            const void* source,
-            std::uint32_t width,
-            std::uint32_t height,
-            int channels,
-            CudaVulkanTensorLayout layout,
-            CudaVulkanTensorElementType element_type) {
-            const std::uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
-            const std::uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
-            if (x >= width || y >= height) {
-                return;
-            }
-
-            uchar4 rgba{};
-            if (element_type == CudaVulkanTensorElementType::UInt8) {
-                const auto* bytes = static_cast<const unsigned char*>(source);
-                rgba.x = loadUInt8Channel(bytes, width, height, channels, layout, x, y, 0);
-                rgba.y = loadUInt8Channel(bytes, width, height, channels, layout, x, y, 1);
-                rgba.z = loadUInt8Channel(bytes, width, height, channels, layout, x, y, 2);
-                rgba.w = loadUInt8Channel(bytes, width, height, channels, layout, x, y, 3);
-            } else {
-                const auto* floats = static_cast<const float*>(source);
-                rgba.x = loadFloatChannel(floats, width, height, channels, layout, x, y, 0);
-                rgba.y = loadFloatChannel(floats, width, height, channels, layout, x, y, 1);
-                rgba.z = loadFloatChannel(floats, width, height, channels, layout, x, y, 2);
-                rgba.w = loadFloatChannel(floats, width, height, channels, layout, x, y, 3);
-            }
-
-            const std::size_t offset = (static_cast<std::size_t>(y) * width + x) * 4;
-            destination[offset + 0] = rgba.x;
-            destination[offset + 1] = rgba.y;
-            destination[offset + 2] = rgba.z;
-            destination[offset + 3] = rgba.w;
-        }
     } // namespace
 
     cudaError_t launchCudaVulkanCopyTensorToSurface(
@@ -137,36 +102,6 @@ namespace lfs::rendering::detail {
         };
         copyTensorToSurfaceKernel<<<grid, block, 0, stream>>>(
             surface,
-            source,
-            width,
-            height,
-            channels,
-            layout,
-            element_type);
-        return cudaGetLastError();
-    }
-
-    cudaError_t launchCudaVulkanPackTensorToRgba8(
-        unsigned char* destination,
-        const void* source,
-        const std::uint32_t width,
-        const std::uint32_t height,
-        const int channels,
-        const CudaVulkanTensorLayout layout,
-        const CudaVulkanTensorElementType element_type,
-        const cudaStream_t stream) {
-        if (destination == nullptr || source == nullptr || width == 0 || height == 0) {
-            return cudaErrorInvalidValue;
-        }
-
-        const dim3 block{16, 16, 1};
-        const dim3 grid{
-            (width + block.x - 1) / block.x,
-            (height + block.y - 1) / block.y,
-            1,
-        };
-        packTensorToRgba8Kernel<<<grid, block, 0, stream>>>(
-            destination,
             source,
             width,
             height,

@@ -120,8 +120,6 @@ namespace lfs::vis {
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
         std::array<std::array<CudaInputSlot, 4>, kInputRingSize> cuda_inputs_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
-        ModelInputSnapshot uploaded_inputs_{}; // host fallback path only
-        bool cuda_inputs_supported_ = true;
     };
 
 } // namespace lfs::vis

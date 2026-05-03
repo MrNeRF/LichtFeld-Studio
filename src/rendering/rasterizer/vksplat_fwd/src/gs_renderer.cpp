@@ -226,9 +226,6 @@ void VulkanGSRenderer::executeRasterizeForward(
             resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
             resizeDeviceBuffer(buffers.n_contributors, num_pixels),
         }));
-
-    // _displayImage(buffers.pixel_state, uniforms.image_width, true);
-    // exit(0);
 }
 
 void VulkanGSRenderer::executeCumsum(

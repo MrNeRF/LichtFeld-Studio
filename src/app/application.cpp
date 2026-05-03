@@ -28,9 +28,9 @@
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include <cstdlib>
-#include <string_view>
 #include <cuda_runtime.h>
 #include <rasterization_api.h>
+#include <string_view>
 
 #ifdef WIN32
 #include <windows.h>
@@ -239,10 +239,6 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->optimization.no_interop) {
-                LOG_INFO("GPU display interop disabled");
-            }
-
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
@@ -271,7 +267,6 @@ namespace lfs::app {
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
-                .enable_cuda_interop = !params->optimization.no_interop,
                 .show_startup_overlay = !disable_splash,
                 .gut = params->optimization.gut,
                 .graphics_backend = graphics_backend,
