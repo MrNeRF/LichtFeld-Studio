@@ -30,7 +30,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <fmt/format.h>
-#include <imgui.h>
 
 namespace lfs::vis {
 

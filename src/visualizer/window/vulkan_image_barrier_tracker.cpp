@@ -51,17 +51,30 @@ namespace lfs::vis {
 
     void VulkanImageBarrierTracker::reset() {
         images_.clear();
+        external_images_.clear();
+    }
+
+    void VulkanImageBarrierTracker::clearSwapchainOnly() {
+        for (auto it = images_.begin(); it != images_.end();) {
+            if (external_images_.contains(it->first)) {
+                ++it;
+            } else {
+                it = images_.erase(it);
+            }
+        }
     }
 
     void VulkanImageBarrierTracker::forgetImage(const VkImage image) {
         if (image != VK_NULL_HANDLE) {
             images_.erase(image);
+            external_images_.erase(image);
         }
     }
 
     void VulkanImageBarrierTracker::registerImage(const VkImage image,
                                                   const VkImageAspectFlags aspect_mask,
-                                                  const VkImageLayout layout) {
+                                                  const VkImageLayout layout,
+                                                  const bool external) {
         if (image == VK_NULL_HANDLE) {
             return;
         }
@@ -72,6 +85,11 @@ namespace lfs::vis {
             .last_stage = access.stage,
             .last_access = access.access,
         };
+        if (external) {
+            external_images_.insert(image);
+        } else {
+            external_images_.erase(image);
+        }
     }
 
     VkImageLayout VulkanImageBarrierTracker::imageLayout(const VkImage image, const VkImageLayout fallback) const {

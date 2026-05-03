@@ -3076,6 +3076,8 @@ namespace lfs::vis::gui {
                 return true;
             }
         }
+        if (rmlui_manager_.wantsTextInput() || rmlui_manager_.anyItemActive())
+            return true;
 
         if (!ui_hidden_ && rml_menu_bar_.isOpen())
             return true;
@@ -3676,9 +3678,12 @@ namespace lfs::vis::gui {
         {
             auto& focus = guiFocusState();
             focus.reset();
-            focus.want_capture_mouse = ImGui::GetIO().WantCaptureMouse;
-            focus.want_capture_keyboard = ImGui::GetIO().WantCaptureKeyboard;
-            focus.want_text_input = ImGui::GetIO().WantTextInput;
+            // Aggregate ImGui (helper widgets / py_ui) and RmlUi (panels, modals, menus)
+            // focus state — neither alone covers the full GUI surface.
+            const ImGuiIO& io = ImGui::GetIO();
+            focus.want_capture_mouse = io.WantCaptureMouse || rmlui_manager_.wantsCaptureMouse();
+            focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
+            focus.want_text_input = io.WantTextInput || rmlui_manager_.wantsTextInput();
         }
 
         // Run queued Python/UI mutations before panel registries take draw snapshots.
@@ -3859,7 +3864,7 @@ namespace lfs::vis::gui {
         ScreenState screen;
         screen.work_pos = {mvp_input->WorkPos.x, mvp_input->WorkPos.y};
         screen.work_size = {mvp_input->WorkSize.x, mvp_input->WorkSize.y};
-        screen.any_item_active = ImGui::IsAnyItemActive();
+        screen.any_item_active = ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
@@ -4101,19 +4106,22 @@ namespace lfs::vis::gui {
                 rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
             global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
                                          panel_input.screen_x, panel_input.screen_y);
-            const auto* mvp_modal = ImGui::GetMainViewport();
-            rml_modal_overlay_->render(static_cast<int>(mvp_modal->Size.x),
-                                       static_cast<int>(mvp_modal->Size.y),
-                                       mvp_modal->Pos.x, mvp_modal->Pos.y,
+            rml_modal_overlay_->render(panel_input.screen_w,
+                                       panel_input.screen_h,
+                                       panel_input.screen_x, panel_input.screen_y,
                                        viewport_layout_.pos.x, viewport_layout_.pos.y,
                                        viewport_layout_.size.x, viewport_layout_.size.y);
         }
 
-        ImGui::Render();
+        // Was ImGui::Render(): the resulting ImDrawData was never submitted (no
+        // ImGui_ImplVulkan_RenderDrawData consumer), so building it was pure CPU waste.
+        // We still call EndFrame to keep the per-frame state machine balanced for the
+        // panels that exercise ImGui internally (py_ui, ui_widgets, theme, etc.).
+        ImGui::EndFrame();
 
         if (vulkan_gui_) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-            guiFocusState().any_item_active |= ImGui::IsAnyItemActive();
+            guiFocusState().any_item_active |= ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
 
             const auto& bg = lfs::vis::theme().menu_background();
             VkClearValue clear_value{};

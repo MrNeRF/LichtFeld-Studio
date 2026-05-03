@@ -5,6 +5,7 @@
 #include "vulkan_loader_probe.hpp"
 
 #include "config.h"
+#include "vulkan_result.hpp"
 
 #include <format>
 
@@ -43,7 +44,7 @@ namespace lfs::vis {
             reinterpret_cast<PFN_vkEnumerateInstanceVersion>(proc);
         const VkResult result = enumerate_instance_version(&info.api_version);
         if (result != VK_SUCCESS) {
-            info.error = std::format("vkEnumerateInstanceVersion returned {}", static_cast<int>(result));
+            info.error = std::format("vkEnumerateInstanceVersion returned {}", vkResultToString(result));
             return info;
         }
 

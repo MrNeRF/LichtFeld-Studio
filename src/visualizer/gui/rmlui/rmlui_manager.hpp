@@ -88,6 +88,14 @@ namespace lfs::vis::gui {
         void trackContextFrame(const Rml::Context* context, int window_x, int window_y);
         RmlCursorRequest consumeCursorRequest();
 
+        // Focus-state aggregators across all live RmlUi contexts. These replace prior
+        // ImGui::GetIO().WantCapture* / ImGui::IsAnyItemActive() reads so viewport input
+        // suppression reflects the actual GUI surface the user is interacting with.
+        [[nodiscard]] bool wantsCaptureMouse() const;
+        [[nodiscard]] bool wantsCaptureKeyboard() const;
+        [[nodiscard]] bool wantsTextInput() const;
+        [[nodiscard]] bool anyItemActive() const;
+
     private:
         struct VulkanContextCommand {
             Rml::Context* context = nullptr;

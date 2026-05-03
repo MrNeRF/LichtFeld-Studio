@@ -43,7 +43,7 @@ Per-frame timeline:
 
 1. CPU side at frame start: `vkWaitForFences(in_flight_[currentFrameSlot()])` — guarantees the prior use of slot N is done before reuse
 2. CUDA work for this frame is enqueued (Vulkan→CUDA wait happens implicitly via the CPU-side fence wait — when the CPU reaches this point, slot N's prior Vulkan reads are done, so CUDA can safely overwrite the slot)
-3. CUDA → `cudaStreamSynchronize` — heavyweight in-frame CUDA→Vulkan barrier (slated for removal by P15 timeline DAG)
+3. After CUDA's `cudaMemcpyAsync` packs the inputs, CUDA signals a per-ring-slot **timeline semaphore** (Vulkan-exportable, imported into CUDA) on the same stream. The Vulkan submit registers `addFrameTimelineWait(timeline, value)` so the compute submit blocks on that signal at `VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT`. **No CPU stall** — the prior `cudaStreamSynchronize` is gone (see `vksplat_viewport_renderer.cpp::uploadInputs`).
 4. Vulkan submit consumes the slot's CUDA-imported buffers, signals `in_flight_[slot]` on completion
 5. `vkQueuePresentKHR` blocks on the render-finished semaphore
 

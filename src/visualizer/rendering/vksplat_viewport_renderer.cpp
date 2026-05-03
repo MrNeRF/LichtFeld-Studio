@@ -9,6 +9,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <array>
 #include <cmath>
@@ -29,7 +30,7 @@ namespace lfs::vis {
         using lfs::core::Tensor;
 
         [[nodiscard]] std::string vkError(const char* const operation, const VkResult result) {
-            return std::format("{} failed: {}", operation, static_cast<int>(result));
+            return std::format("{} failed: {}", operation, vkResultToString(result));
         }
 
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
@@ -439,7 +440,8 @@ namespace lfs::vis {
         }
         context.imageBarriers().registerImage(output_image_.image,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
-                                              VK_IMAGE_LAYOUT_UNDEFINED);
+                                              VK_IMAGE_LAYOUT_UNDEFINED,
+                                              /*external=*/true);
         output_size_ = size;
         ++output_generation_;
         return {};

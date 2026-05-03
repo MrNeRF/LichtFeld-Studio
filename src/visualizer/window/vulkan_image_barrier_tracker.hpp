@@ -8,6 +8,7 @@
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <unordered_map>
+#include <unordered_set>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -22,8 +23,10 @@ namespace lfs::vis {
         };
 
         void reset();
+        void clearSwapchainOnly();
         void forgetImage(VkImage image);
-        void registerImage(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout layout);
+        void registerImage(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout layout,
+                           bool external = false);
 
         [[nodiscard]] VkImageLayout imageLayout(VkImage image,
                                                 VkImageLayout fallback = VK_IMAGE_LAYOUT_UNDEFINED) const;
@@ -35,6 +38,7 @@ namespace lfs::vis {
 
     private:
         std::unordered_map<VkImage, ImageState> images_;
+        std::unordered_set<VkImage> external_images_;
     };
 
 } // namespace lfs::vis

@@ -12,6 +12,7 @@
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/scene_graph_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
+#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "internal/resource_paths.hpp"
@@ -378,6 +379,47 @@ namespace lfs::vis::gui {
     RmlCursorRequest RmlUIManager::consumeCursorRequest() {
         return system_interface_ ? system_interface_->consumeCursorRequest()
                                  : RmlCursorRequest::None;
+    }
+
+    bool RmlUIManager::wantsCaptureMouse() const {
+        for (const auto& [_, context] : contexts_) {
+            if (!context)
+                continue;
+            auto* const hover = context->GetHoverElement();
+            if (hover && hover->GetTagName() != "body")
+                return true;
+        }
+        return false;
+    }
+
+    bool RmlUIManager::wantsCaptureKeyboard() const {
+        for (const auto& [_, context] : contexts_) {
+            if (!context)
+                continue;
+            if (rml_input::hasFocusedKeyboardTarget(context->GetFocusElement()))
+                return true;
+        }
+        return false;
+    }
+
+    bool RmlUIManager::wantsTextInput() const {
+        for (const auto& [_, context] : contexts_) {
+            if (!context)
+                continue;
+            if (rml_input::wantsTextInput(context->GetFocusElement()))
+                return true;
+        }
+        return false;
+    }
+
+    bool RmlUIManager::anyItemActive() const {
+        for (const auto& [_, context] : contexts_) {
+            if (!context)
+                continue;
+            if (rml_input::hasFocusedKeyboardTarget(context->GetFocusElement()))
+                return true;
+        }
+        return false;
     }
 
     void RmlUIManager::queueVulkanContext(Rml::Context* const context,

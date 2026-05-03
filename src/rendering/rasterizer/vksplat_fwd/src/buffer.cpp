@@ -44,7 +44,8 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     buffer_info.size = size;
     buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo aci = {};
@@ -205,16 +206,18 @@ T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
 
     T outValue;
 
-    allocStagingBuffer(buffer.size);
+    // Only need elementSize bytes; sizing the staging buffer to the full source buffer
+    // (num_splats * 4 in the hot readback path) wasted a one-time MB-scale allocation.
+    allocStagingBuffer(elementSize);
     {
         // std::lock_guard<std::mutex> lock(stager.mutex);
         {
             DEVICE_GUARD;
 
-            // Copy only the specific element from device buffer to staging buffer
+            // Copy only the specific element from device buffer to staging buffer.
             VkBufferCopy copyRegion = {};
             copyRegion.srcOffset = offset;
-            copyRegion.dstOffset = offset; // Keep same offset in staging buffer
+            copyRegion.dstOffset = 0;
             copyRegion.size = elementSize;
 
             vkCmdCopyBuffer(command_buffer, buffer.buffer, stager.buffer, 1, &copyRegion);
@@ -227,7 +230,7 @@ T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
             _THROW_ERROR("Failed to map memory while reading buffer element");
         }
 
-        memcpy(&outValue, static_cast<const uint8_t*>(base) + offset, elementSize);
+        memcpy(&outValue, base, elementSize);
 
         vmaUnmapMemory(allocator, stager.allocation);
     }

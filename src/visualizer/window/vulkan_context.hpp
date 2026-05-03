@@ -100,6 +100,8 @@ namespace lfs::vis {
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
+        [[nodiscard]] VkColorSpaceKHR swapchainColorSpace() const { return swapchain_color_space_; }
+        [[nodiscard]] bool hasHdr() const noexcept { return has_hdr_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
         [[nodiscard]] VkImageView depthStencilImageView() const {
             return active_image_index_ < depth_stencil_resources_.size()
@@ -256,6 +258,8 @@ namespace lfs::vis {
 
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;
+        VkColorSpaceKHR swapchain_color_space_ = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        bool has_hdr_ = false;
         VkExtent2D swapchain_extent_{};
         VkImageUsageFlags swapchain_image_usage_ = 0;
         uint32_t min_image_count_ = 2;
@@ -281,7 +285,14 @@ namespace lfs::vis {
         std::vector<PendingImmediateSubmit> pending_immediate_submits_;
         void drainCompletedImmediateSubmits();
         std::vector<FrameTimelineWait> frame_timeline_waits_;
-        std::array<VkSemaphore, kFramesInFlight> image_available_{};
+        // image_available_ is sized to swapchain image count (not framesInFlight). We must
+        // pass a fresh semaphore to each vkAcquireNextImageKHR — reusing one before its
+        // signal has been consumed by submit is undefined per spec. Rotation is independent
+        // of frame slot (next_acquire_index_) and the index used for an acquire is stashed
+        // in active_acquire_index_ so endFrame's submit waits on the same semaphore.
+        std::vector<VkSemaphore> image_available_;
+        std::size_t next_acquire_index_ = 0;
+        std::size_t active_acquire_index_ = 0;
         std::array<VkSemaphore, kFramesInFlight> render_finished_{};
         std::array<VkFence, kFramesInFlight> in_flight_{};
         std::vector<VkFence> swapchain_images_in_flight_;
