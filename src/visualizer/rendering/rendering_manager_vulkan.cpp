@@ -854,6 +854,16 @@ namespace lfs::vis {
             }
         } else if (has_renderable_model) {
             auto request = buildViewportRenderRequest(frame_ctx, render_size);
+            // VkSplat is editing/viewing only — splat files loaded with no
+            // trainer attached. As soon as a dataset is present (ready, paused,
+            // or running), its persistent Vulkan-side sort buffers can be
+            // pinned to densification peaks, so we fall back to FastGs.
+            const bool viewing_only =
+                scene_manager && scene_manager->hasSplatFiles();
+            if (request.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat &&
+                !viewing_only) {
+                request.raster_backend = lfs::rendering::GaussianRasterBackend::FastGs;
+            }
             if (request.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
                 if (!context.vulkan_context) {
                     render_error = "VkSplat backend requires an active Vulkan context";
