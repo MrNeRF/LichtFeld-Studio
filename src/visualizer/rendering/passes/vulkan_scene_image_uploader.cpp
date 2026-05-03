@@ -185,6 +185,11 @@ namespace lfs::vis {
                 params.external_scene_image_view != VK_NULL_HANDLE;
             if ((!params.scene_image && !has_external_image) ||
                 params.scene_image_size.x <= 0 || params.scene_image_size.y <= 0) {
+                // Release the binding — scene_image_view points into externally-owned
+                // interop slots that the caller has already vkDestroyImage'd. Leaving
+                // it set keeps hasImage()==true and the viewport pass would sample from
+                // a freed image, faulting the device.
+                destroySceneImage();
                 uploaded_scene_tensor = nullptr;
                 return;
             }

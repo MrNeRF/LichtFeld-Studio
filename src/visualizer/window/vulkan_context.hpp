@@ -149,6 +149,7 @@ namespace lfs::vis {
         [[nodiscard]] bool endFrame();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
+        [[nodiscard]] bool deviceWaitIdle();
         void addFrameTimelineWait(VkSemaphore semaphore,
                                   std::uint64_t value,
                                   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);

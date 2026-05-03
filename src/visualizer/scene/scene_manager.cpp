@@ -13,6 +13,7 @@
 #include "core/splat_data_transform.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
+#include "gui/gui_manager.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loader.hpp"
@@ -31,6 +32,8 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/model_renderability.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_manager.hpp"
 #include <algorithm>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
@@ -884,6 +887,19 @@ namespace lfs::vis {
         selection_.clearNodeSelection();
         selection_.invalidateNodeMask();
         clearAppearanceModel();
+        // Scene clear can fire from a synchronous menu callback inside the current
+        // GUI render iteration. Drop the GUI's tensor pointer and drain the GPU
+        // before scene_.clear() frees the backing memory — otherwise this same
+        // iteration's prepareVulkanSceneInterop dispatches a CUDA copy from
+        // freed memory and the device faults asynchronously.
+        if (auto* const gui_mgr = services().guiOrNull()) {
+            gui_mgr->setVulkanSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
+        }
+        if (auto* const window_mgr = services().windowOrNull()) {
+            if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
+                (void)vulkan_ctx->deviceWaitIdle();
+            }
+        }
         scene_.clear();
         python::set_application_scene(&scene_);
 

@@ -658,6 +658,18 @@ namespace lfs::vis {
         return waitForFrameFences();
     }
 
+    bool VulkanContext::deviceWaitIdle() {
+        if (device_ == VK_NULL_HANDLE) {
+            return true;
+        }
+        const VkResult result = vkDeviceWaitIdle(device_);
+        if (result != VK_SUCCESS) {
+            return fail(std::format("vkDeviceWaitIdle failed: {}", vkResultToString(result)));
+        }
+        last_error_.clear();
+        return true;
+    }
+
     void VulkanContext::addFrameTimelineWait(const VkSemaphore semaphore,
                                              const std::uint64_t value,
                                              const VkPipelineStageFlags wait_stage) {

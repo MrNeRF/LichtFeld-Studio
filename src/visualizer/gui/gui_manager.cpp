@@ -3301,6 +3301,11 @@ namespace lfs::vis::gui {
         }
         auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
         auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        // A previous frame's submit may still sample one of these slots; drain
+        // before vkDestroyImage to avoid VK_ERROR_DEVICE_LOST.
+        if (vulkan_context) {
+            (void)vulkan_context->waitForSubmittedFrames();
+        }
         for (auto& target : vulkan_scene_interop_) {
             if (!target) {
                 continue;
