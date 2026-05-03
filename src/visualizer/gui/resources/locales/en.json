@@ -432,7 +432,7 @@
       "bg_image_browse": "Browse for a background image",
       "bg_image_clear": "Clear the selected background image",
       "dataset_path": "Path to the loaded dataset",
-      "dataset_images": "Number of images in the dataset",
+      "dataset_images": "Image files discovered in the loaded dataset directory.",
       "dataset_output": "Output directory for trained artifacts",
       "opt_strategy_display": "Active densification strategy",
       "bilateral_grid_x": "Bilateral grid X resolution",
