@@ -217,6 +217,7 @@ namespace lfs::vis {
         }
 
         constexpr std::uint64_t kWaitForeverNs = std::numeric_limits<std::uint64_t>::max();
+        constexpr VkDeviceSize kWindowCaptureBytesPerPixel = 4;
 
         [[nodiscard]] const char* vkFormatToString(const VkFormat format) noexcept {
             switch (format) {
@@ -252,6 +253,68 @@ namespace lfs::vis {
             case VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT: return "VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT";
             case VK_COLOR_SPACE_DISPLAY_NATIVE_AMD: return "VK_COLOR_SPACE_DISPLAY_NATIVE_AMD";
             default: return "VK_COLOR_SPACE_UNKNOWN";
+            }
+        }
+
+        [[nodiscard]] bool copySwapchainPixelsToRgba(const std::uint8_t* const src,
+                                                     const VkFormat format,
+                                                     const VkExtent2D extent,
+                                                     std::vector<std::uint8_t>& rgba,
+                                                     std::string& error) {
+            if (!src) {
+                error = "Window capture staging buffer is null";
+                return false;
+            }
+            if (extent.width == 0 || extent.height == 0) {
+                error = "Window capture dimensions must be positive";
+                return false;
+            }
+            if (extent.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+                extent.height > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+                error = "Window capture dimensions exceed PNG encoder limits";
+                return false;
+            }
+            if (extent.height > std::numeric_limits<std::size_t>::max() / extent.width ||
+                static_cast<std::size_t>(extent.width) * extent.height >
+                    std::numeric_limits<std::size_t>::max() / kWindowCaptureBytesPerPixel) {
+                error = "Window capture buffer is too large";
+                return false;
+            }
+
+            const std::size_t pixel_count = static_cast<std::size_t>(extent.width) * extent.height;
+            rgba.resize(pixel_count * kWindowCaptureBytesPerPixel);
+
+            switch (format) {
+                case VK_FORMAT_R8G8B8A8_UNORM:
+                case VK_FORMAT_R8G8B8A8_SRGB:
+                    std::copy_n(src, rgba.size(), rgba.data());
+                    return true;
+                case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+                case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+                    for (std::size_t i = 0; i < pixel_count; ++i) {
+                        const auto* const in = src + i * kWindowCaptureBytesPerPixel;
+                        auto* const out = rgba.data() + i * kWindowCaptureBytesPerPixel;
+                        out[0] = in[3];
+                        out[1] = in[2];
+                        out[2] = in[1];
+                        out[3] = in[0];
+                    }
+                    return true;
+                case VK_FORMAT_B8G8R8A8_UNORM:
+                case VK_FORMAT_B8G8R8A8_SRGB:
+                    for (std::size_t i = 0; i < pixel_count; ++i) {
+                        const auto* const in = src + i * kWindowCaptureBytesPerPixel;
+                        auto* const out = rgba.data() + i * kWindowCaptureBytesPerPixel;
+                        out[0] = in[2];
+                        out[1] = in[1];
+                        out[2] = in[0];
+                        out[3] = in[3];
+                    }
+                    return true;
+                default:
+                    error = std::format("Window capture does not support swapchain format {}",
+                                        static_cast<int>(format));
+                    return false;
             }
         }
 #endif
@@ -400,6 +463,131 @@ namespace lfs::vis {
     }
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+    void VulkanContext::setWindowCaptureError(std::string message) {
+        window_capture_result_.reset();
+        window_capture_error_ = std::move(message);
+        window_capture_requested_ = false;
+    }
+
+    bool VulkanContext::requestWindowCapture() {
+        window_capture_result_.reset();
+        window_capture_error_.reset();
+        if (device_ == VK_NULL_HANDLE || swapchain_ == VK_NULL_HANDLE) {
+            return fail("Cannot capture window before Vulkan swapchain initialization");
+        }
+        if ((swapchain_image_usage_ & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
+            return fail("Vulkan swapchain images do not support transfer-source readback");
+        }
+        if (window_capture_requested_) {
+            return fail("A Vulkan window capture is already pending");
+        }
+        window_capture_requested_ = true;
+        last_error_.clear();
+        return true;
+    }
+
+    std::expected<VulkanContext::WindowCapture, std::string> VulkanContext::takeWindowCapture() {
+        if (window_capture_result_) {
+            auto result = std::move(*window_capture_result_);
+            window_capture_result_.reset();
+            window_capture_error_.reset();
+            return result;
+        }
+        if (window_capture_error_) {
+            auto error = std::move(*window_capture_error_);
+            window_capture_error_.reset();
+            return std::unexpected(error);
+        }
+        if (window_capture_requested_) {
+            window_capture_requested_ = false;
+        }
+        return std::unexpected("Window capture was not produced by the Vulkan frame");
+    }
+
+    bool VulkanContext::createWindowCaptureBuffer(const VkDeviceSize size,
+                                                  VkBuffer& buffer,
+                                                  VmaAllocation& allocation) {
+        buffer = VK_NULL_HANDLE;
+        allocation = VK_NULL_HANDLE;
+        if (allocator_ == VK_NULL_HANDLE) {
+            setWindowCaptureError("Cannot capture window before Vulkan allocator initialization");
+            return false;
+        }
+        if (size == 0) {
+            setWindowCaptureError("Window capture buffer size must be positive");
+            return false;
+        }
+
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = size;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocation_info{};
+        allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+
+        const VkResult result = vmaCreateBuffer(allocator_,
+                                                &buffer_info,
+                                                &allocation_info,
+                                                &buffer,
+                                                &allocation,
+                                                nullptr);
+        if (result != VK_SUCCESS) {
+            buffer = VK_NULL_HANDLE;
+            allocation = VK_NULL_HANDLE;
+            setWindowCaptureError(std::format("vmaCreateBuffer(window capture) failed: {}",
+                                              static_cast<int>(result)));
+            return false;
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_BUFFER, buffer, "MCP window capture staging buffer");
+        return true;
+    }
+
+    std::expected<VulkanContext::WindowCapture, std::string> VulkanContext::readWindowCaptureBuffer(
+        const VmaAllocation allocation,
+        const VkDeviceSize size,
+        const VkExtent2D extent,
+        const VkFormat format) const {
+        if (allocation == VK_NULL_HANDLE) {
+            return std::unexpected("Window capture staging allocation is null");
+        }
+        const VkDeviceSize expected_size =
+            static_cast<VkDeviceSize>(extent.width) * extent.height * kWindowCaptureBytesPerPixel;
+        if (size < expected_size) {
+            return std::unexpected("Window capture staging allocation is smaller than the swapchain image");
+        }
+
+        VkResult result = vmaInvalidateAllocation(allocator_, allocation, 0, VK_WHOLE_SIZE);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(std::format("vmaInvalidateAllocation(window capture) failed: {}",
+                                               static_cast<int>(result)));
+        }
+
+        void* mapped = nullptr;
+        result = vmaMapMemory(allocator_, allocation, &mapped);
+        if (result != VK_SUCCESS || mapped == nullptr) {
+            return std::unexpected(std::format("vmaMapMemory(window capture) failed: {}",
+                                               static_cast<int>(result)));
+        }
+
+        WindowCapture capture{};
+        capture.width = static_cast<int>(extent.width);
+        capture.height = static_cast<int>(extent.height);
+        std::string error;
+        const bool copied = copySwapchainPixelsToRgba(static_cast<const std::uint8_t*>(mapped),
+                                                      format,
+                                                      extent,
+                                                      capture.rgba,
+                                                      error);
+        vmaUnmapMemory(allocator_, allocation);
+        if (!copied) {
+            return std::unexpected(error);
+        }
+        return capture;
+    }
+
     bool VulkanContext::beginFrame(const VkClearValue& clear_value, Frame& frame) {
         if (frame_active_) {
             return fail("beginFrame called while another Vulkan frame is active");
@@ -542,15 +730,78 @@ namespace lfs::vis {
 
         const std::size_t current_frame = active_frame_index_;
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
+        const bool capture_requested = window_capture_requested_;
+        window_capture_requested_ = false;
+        VkBuffer capture_buffer = VK_NULL_HANDLE;
+        VmaAllocation capture_allocation = VK_NULL_HANDLE;
+        VkDeviceSize capture_size = 0;
+        const VkExtent2D capture_extent = swapchain_extent_;
+        const VkFormat capture_format = swapchain_format_;
+        bool capture_recorded = false;
+        const auto destroy_capture_buffer = [&]() {
+            if (capture_buffer != VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator_, capture_buffer, capture_allocation);
+                capture_buffer = VK_NULL_HANDLE;
+                capture_allocation = VK_NULL_HANDLE;
+            }
+        };
+
         vkCmdEndRendering(command_buffer);
-        image_barriers_.transitionImage(command_buffer,
-                                        swapchain_images_[active_image_index_],
-                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        if (capture_requested) {
+            if ((swapchain_image_usage_ & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0) {
+                setWindowCaptureError("Vulkan swapchain images do not support transfer-source readback");
+            } else if (capture_extent.width == 0 || capture_extent.height == 0) {
+                setWindowCaptureError("Window capture dimensions must be positive");
+            } else {
+                const VkDeviceSize capture_pixels =
+                    static_cast<VkDeviceSize>(capture_extent.width) * capture_extent.height;
+                capture_size = capture_pixels * kWindowCaptureBytesPerPixel;
+                if (createWindowCaptureBuffer(capture_size, capture_buffer, capture_allocation)) {
+                    image_barriers_.transitionImage(command_buffer,
+                                                    swapchain_images_[active_image_index_],
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+                    VkBufferImageCopy copy_region{};
+                    copy_region.bufferOffset = 0;
+                    copy_region.bufferRowLength = 0;
+                    copy_region.bufferImageHeight = 0;
+                    copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    copy_region.imageSubresource.mipLevel = 0;
+                    copy_region.imageSubresource.baseArrayLayer = 0;
+                    copy_region.imageSubresource.layerCount = 1;
+                    copy_region.imageOffset = {0, 0, 0};
+                    copy_region.imageExtent = {capture_extent.width, capture_extent.height, 1};
+                    vkCmdCopyImageToBuffer(command_buffer,
+                                           swapchain_images_[active_image_index_],
+                                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                           capture_buffer,
+                                           1,
+                                           &copy_region);
+
+                    image_barriers_.transitionImage(command_buffer,
+                                                    swapchain_images_[active_image_index_],
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                    capture_recorded = true;
+                }
+            }
+        }
+        if (!capture_recorded) {
+            image_barriers_.transitionImage(command_buffer,
+                                            swapchain_images_[active_image_index_],
+                                            VK_IMAGE_ASPECT_COLOR_BIT,
+                                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        }
 
         VkResult result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             frame_active_ = false;
+            destroy_capture_buffer();
+            if (capture_requested) {
+                setWindowCaptureError(std::format("vkEndCommandBuffer failed before window capture readback: {}",
+                                                  vkResultToString(result)));
+            }
             return fail(std::format("vkEndCommandBuffer failed: {}", vkResultToString(result)));
         }
 
@@ -600,16 +851,45 @@ namespace lfs::vis {
         result = vkResetFences(device_, 1, &frame_fence);
         if (result != VK_SUCCESS) {
             frame_active_ = false;
+            destroy_capture_buffer();
+            if (capture_requested) {
+                setWindowCaptureError(std::format("vkResetFences failed before window capture readback: {}",
+                                                  vkResultToString(result)));
+            }
             return fail(std::format("vkResetFences failed: {}", vkResultToString(result)));
         }
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, frame_fence);
         frame_timeline_waits_.clear();
         if (result != VK_SUCCESS) {
             frame_active_ = false;
+            destroy_capture_buffer();
+            if (capture_requested) {
+                setWindowCaptureError(std::format("vkQueueSubmit failed before window capture readback: {}",
+                                                  vkResultToString(result)));
+            }
             return fail(std::format("vkQueueSubmit failed: {}", vkResultToString(result)));
         }
         if (active_image_index_ < swapchain_images_in_flight_.size()) {
             swapchain_images_in_flight_[active_image_index_] = frame_fence;
+        }
+        if (capture_recorded) {
+            result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
+            if (result != VK_SUCCESS) {
+                setWindowCaptureError(std::format("vkWaitForFences(window capture) failed: {}",
+                                                  vkResultToString(result)));
+            } else {
+                auto capture = readWindowCaptureBuffer(capture_allocation,
+                                                       capture_size,
+                                                       capture_extent,
+                                                       capture_format);
+                if (capture) {
+                    window_capture_error_.reset();
+                    window_capture_result_ = std::move(*capture);
+                } else {
+                    setWindowCaptureError(capture.error());
+                }
+            }
+            destroy_capture_buffer();
         }
 
         VkPresentInfoKHR present_info{};

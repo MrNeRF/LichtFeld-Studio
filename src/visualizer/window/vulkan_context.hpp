@@ -9,6 +9,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -55,6 +56,12 @@ namespace lfs::vis {
             VkImageView swapchain_image_view = VK_NULL_HANDLE;
             VkImageView depth_stencil_image_view = VK_NULL_HANDLE;
             VkExtent2D extent{};
+        };
+
+        struct WindowCapture {
+            int width = 0;
+            int height = 0;
+            std::vector<std::uint8_t> rgba;
         };
 
 #ifdef _WIN32
@@ -147,6 +154,8 @@ namespace lfs::vis {
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
+        [[nodiscard]] bool requestWindowCapture();
+        [[nodiscard]] std::expected<WindowCapture, std::string> takeWindowCapture();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
         [[nodiscard]] bool deviceWaitIdle();
@@ -246,6 +255,15 @@ namespace lfs::vis {
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
+        void setWindowCaptureError(std::string message);
+        [[nodiscard]] bool createWindowCaptureBuffer(VkDeviceSize size,
+                                                     VkBuffer& buffer,
+                                                     VmaAllocation& allocation);
+        [[nodiscard]] std::expected<WindowCapture, std::string> readWindowCaptureBuffer(
+            VmaAllocation allocation,
+            VkDeviceSize size,
+            VkExtent2D extent,
+            VkFormat format) const;
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -311,6 +329,9 @@ namespace lfs::vis {
         bool framebuffer_resized_ = false;
         bool frame_active_ = false;
         bool frame_suboptimal_ = false;
+        bool window_capture_requested_ = false;
+        std::optional<WindowCapture> window_capture_result_;
+        std::optional<std::string> window_capture_error_;
         bool debug_utils_enabled_ = false;
         bool validation_enabled_ = false;
         bool instance_external_memory_capabilities_enabled_ = false;

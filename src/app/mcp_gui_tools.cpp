@@ -30,6 +30,7 @@
 #include "rendering/gs_rasterizer_tensor.hpp"
 #include "sequencer/keyframe.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -41,6 +42,8 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#include "visualizer/window/vulkan_context.hpp"
+#include "visualizer/window/window_manager.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -189,10 +192,37 @@ namespace lfs::app {
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0) {
-            (void)viewer;
-            (void)width;
-            (void)height;
-            return std::unexpected("Full-window capture needs a Vulkan swapchain readback path; use render.capture for viewport capture");
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return std::unexpected("Window capture requires a GUI visualizer");
+            if (!viewer_impl->isOnViewerThread() || !viewer_impl->isProcessingRenderWork())
+                return std::unexpected("Window capture must run from GUI render work");
+
+            auto* const window_manager = viewer_impl->getWindowManager();
+            auto* const gui_manager = viewer_impl->getGuiManager();
+            if (!window_manager || !gui_manager)
+                return std::unexpected("Window capture is not initialized");
+
+            auto* const vulkan_context = window_manager->getVulkanContext();
+            if (!vulkan_context)
+                return std::unexpected("Window capture requires the Vulkan GUI backend");
+
+            if (!vulkan_context->requestWindowCapture()) {
+                const auto& error = vulkan_context->lastError();
+                return std::unexpected(error.empty() ? "Vulkan window capture request failed" : error);
+            }
+
+            gui_manager->render();
+            auto capture = vulkan_context->takeWindowCapture();
+            if (!capture)
+                return std::unexpected(capture.error());
+
+            return mcp::encode_pixels_to_base64(capture->rgba.data(),
+                                                capture->width,
+                                                capture->height,
+                                                4,
+                                                width,
+                                                height);
         }
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
