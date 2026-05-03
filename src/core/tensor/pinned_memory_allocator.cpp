@@ -172,21 +172,28 @@ namespace lfs::core {
 
         // Cache miss - need to allocate new pinned memory
         void* ptr = nullptr;
-        cudaError_t err = cudaHostAlloc(&ptr, rounded_size, cudaHostAllocDefault);
+        cudaError_t err = cuda_pinned_available_
+                              ? cudaHostAlloc(&ptr, rounded_size, cudaHostAllocDefault)
+                              : cudaErrorUnknown;
 
-        if (err != cudaSuccess) {
-            LOG_ERROR("cudaHostAlloc failed for {} bytes: {}",
-                      rounded_size, cudaGetErrorString(err));
-            // Fall back to regular malloc as last resort
+        if (err == cudaSuccess) {
+            allocated_blocks_[ptr] = rounded_size;
+        } else {
+            if (cuda_pinned_available_) {
+                LOG_WARN("CUDA pinned host memory unavailable ({}); using regular host memory",
+                         cudaGetErrorString(err));
+                cudaGetLastError();
+                cuda_pinned_available_ = false;
+            }
             ptr = std::malloc(rounded_size);
             if (!ptr) {
                 LOG_ERROR("Fallback malloc also failed for {} bytes", rounded_size);
                 return nullptr;
             }
-            LOG_WARN("Falling back to regular malloc for {} bytes", rounded_size);
+            allocated_blocks_[ptr] = rounded_size;
+            pageable_blocks_.insert(ptr);
         }
 
-        allocated_blocks_[ptr] = rounded_size;
         stats_.allocated_bytes += rounded_size;
         stats_.num_allocs++;
         stats_.cache_misses++;
@@ -226,6 +233,12 @@ namespace lfs::core {
         allocated_blocks_.erase(it);
         stats_.allocated_bytes -= size;
         stats_.num_deallocs++;
+
+        if (const auto pageable = pageable_blocks_.find(ptr); pageable != pageable_blocks_.end()) {
+            pageable_blocks_.erase(pageable);
+            std::free(ptr);
+            return;
+        }
 
         // Create block with stream tracking and record event
         Block block{ptr, size, stream};

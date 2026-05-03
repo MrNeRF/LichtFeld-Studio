@@ -58,12 +58,15 @@ namespace lfs::python {
 
         state::CudaVersionUnsupported::when([](const auto& e) {
             PyModalRegistry::instance().show_message(
-                "Unsupported CUDA Driver",
-                std::format("Your CUDA driver version ({}.{}) is not supported.\n\n"
+                "CUDA Not Detected",
+                std::format("No CUDA-capable device was detected.\n\n"
+                            "LichtFeld Studio is launching in pure Vulkan mode.\n\n"
+                            "This mode is highly experimental, highly incomplete and likely to crash or otherwise not work. "
+                            "Do not expect things to work.\n\n"
+                            "If you are running on Nvidia, you should stop here and install an up-to-date driver with CUDA support.\n\n"
                             "LichtFeld Studio requires CUDA {}.{} or later\n"
-                            "(NVIDIA driver 570+).\n\n"
-                            "Please update your NVIDIA driver for full functionality.",
-                            e.major, e.minor, e.min_major, e.min_minor),
+                            "(NVIDIA driver 570+).",
+                            e.min_major, e.min_minor),
                 MessageStyle::Warning);
         });
 

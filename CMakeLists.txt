@@ -295,6 +295,22 @@ message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGE
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 if(ENABLE_VULKAN_VIEWER)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT BUILD_PORTABLE)
+        find_library(LFS_SYSTEM_VULKAN_LIBRARY
+            NAMES vulkan libvulkan.so
+            PATHS /lib64 /usr/lib64 /lib /usr/lib
+            NO_DEFAULT_PATH)
+        find_path(LFS_SYSTEM_VULKAN_INCLUDE_DIR
+            NAMES vulkan/vulkan.h
+            PATHS /usr/include
+            NO_DEFAULT_PATH)
+        if(LFS_SYSTEM_VULKAN_LIBRARY AND LFS_SYSTEM_VULKAN_INCLUDE_DIR)
+            set(Vulkan_LIBRARY "${LFS_SYSTEM_VULKAN_LIBRARY}" CACHE FILEPATH "System Vulkan loader" FORCE)
+            set(Vulkan_INCLUDE_DIR "${LFS_SYSTEM_VULKAN_INCLUDE_DIR}" CACHE PATH "System Vulkan headers" FORCE)
+            get_filename_component(LFS_SYSTEM_VULKAN_LIBRARY_DIR "${LFS_SYSTEM_VULKAN_LIBRARY}" DIRECTORY)
+            message(STATUS "Using system Vulkan loader on Linux: ${LFS_SYSTEM_VULKAN_LIBRARY}")
+        endif()
+    endif()
     find_package(Vulkan REQUIRED)
     find_package(VulkanMemoryAllocator CONFIG REQUIRED)
     find_package(volk CONFIG REQUIRED)
@@ -807,6 +823,9 @@ if(UNIX)
                 "$ORIGIN/lib"
                 "${CUDAToolkit_LIBRARY_DIR}"
         )
+        if(DEFINED LFS_SYSTEM_VULKAN_LIBRARY_DIR)
+            list(APPEND _lichtfeld_runtime_rpath_common "${LFS_SYSTEM_VULKAN_LIBRARY_DIR}")
+        endif()
         set(_lichtfeld_runtime_rpath_release "${_lichtfeld_runtime_rpath_common}")
         set(_lichtfeld_runtime_rpath_debug "${_lichtfeld_runtime_rpath_common}")
         if(DEFINED VCPKG_TARGET_TRIPLET)

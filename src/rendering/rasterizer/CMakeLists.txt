@@ -16,6 +16,12 @@ set(RASTERIZER_SOURCES
 
 add_library(lfs_rasterizer STATIC ${RASTERIZER_SOURCES})
 
+if(TARGET dynlink_cuda)
+    set(LFS_RASTERIZER_CUDA_DRIVER_TARGET dynlink_cuda)
+else()
+    set(LFS_RASTERIZER_CUDA_DRIVER_TARGET CUDA::cuda_driver)
+endif()
+
 set_target_properties(lfs_rasterizer PROPERTIES
         CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
         CUDA_SEPARABLE_COMPILATION OFF
@@ -36,7 +42,7 @@ target_link_libraries(lfs_rasterizer
         PUBLIC
         CUDA::cudart
         CUDA::curand
-        CUDA::cuda_driver
+        ${LFS_RASTERIZER_CUDA_DRIVER_TARGET}
         spdlog::spdlog
         lfs_core_cuda       # Required for shared memory arena
         gsplat_fwd          # Forward-only GUT rasterization backend (no training dependency)

@@ -225,14 +225,16 @@ namespace lfs::core {
             int device;
             cudaError_t err = cudaGetDevice(&device);
             if (err != cudaSuccess) {
-                LOG_ERROR(std::string("cudaGetDevice failed: ") + cudaGetErrorString(err));
+                LOG_WARN(std::string("CUDA memory pool unavailable: ") + cudaGetErrorString(err));
+                cudaGetLastError();
                 return;
             }
 
             cudaMemPool_t pool;
             err = cudaDeviceGetDefaultMemPool(&pool, device);
             if (err != cudaSuccess) {
-                LOG_ERROR(std::string("cudaDeviceGetDefaultMemPool failed: ") + cudaGetErrorString(err));
+                LOG_WARN(std::string("CUDA memory pool unavailable: ") + cudaGetErrorString(err));
+                cudaGetLastError();
                 return;
             }
 

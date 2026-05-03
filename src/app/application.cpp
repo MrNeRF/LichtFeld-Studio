@@ -226,33 +226,51 @@ namespace lfs::app {
             return true;
         }
 
+        bool hasCudaDeviceForGuiLaunch() {
+            checkCudaDriverVersion();
+
+            int device_count = 0;
+            const cudaError_t err = cudaGetDeviceCount(&device_count);
+            if (err != cudaSuccess) {
+                LOG_WARN("CUDA device probe failed: {}; launching GUI shell without CUDA warmup",
+                         cudaGetErrorString(err));
+                cudaGetLastError();
+                return false;
+            }
+            if (device_count <= 0) {
+                LOG_WARN("No CUDA-capable device detected; launching GUI shell without CUDA warmup");
+                return false;
+            }
+            return true;
+        }
+
+        void logPrimaryCudaDevice() {
+            cudaDeviceProp prop;
+            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
+                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
+                         prop.totalGlobalMem / (1024 * 1024));
+            }
+        }
+
         std::future<void>& cudaWarmupFuture() {
             static std::future<void> fut;
             return fut;
         }
 
         void warmupCudaSync() {
-            checkCudaDriverVersion();
+            if (!hasCudaDeviceForGuiLaunch())
+                return;
 
-            cudaDeviceProp prop;
-            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
-                         prop.totalGlobalMem / (1024 * 1024));
-            }
-
+            logPrimaryCudaDevice();
             LOG_INFO("Initializing CUDA...");
             fast_lfs::rasterization::warmup_kernels();
         }
 
         void warmupCudaAsync() {
-            checkCudaDriverVersion();
+            if (!hasCudaDeviceForGuiLaunch())
+                return;
 
-            cudaDeviceProp prop;
-            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
-                         prop.totalGlobalMem / (1024 * 1024));
-            }
-
+            logPrimaryCudaDevice();
             LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
                 fast_lfs::rasterization::warmup_kernels();

@@ -11,6 +11,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -159,10 +160,12 @@ namespace lfs::core {
 
         // Track all allocated blocks (for deallocation lookup)
         std::unordered_map<void*, size_t> allocated_blocks_;
+        std::unordered_set<void*> pageable_blocks_;
 
         mutable std::mutex mutex_;
         Stats stats_;
         bool enabled_{true}; // Can disable for A/B testing
+        bool cuda_pinned_available_{true};
         std::atomic<bool> shutdown_{false};
     };
 

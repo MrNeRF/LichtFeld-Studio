@@ -126,6 +126,17 @@ namespace lfs::vis::gui {
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
 
+        [[nodiscard]] bool shouldInitNativeDragDrop() {
+#ifdef _WIN32
+            return true;
+#elif defined(__linux__)
+            const char* const video_driver = SDL_GetCurrentVideoDriver();
+            return video_driver && std::strcmp(video_driver, "x11") == 0;
+#else
+            return false;
+#endif
+        }
+
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
             return isBoundsGizmoHovered() ||
                    isBoundsGizmoActive() ||
@@ -2721,7 +2732,7 @@ namespace lfs::vis::gui {
 
         initMenuBar();
 
-        if (!drag_drop_.init(viewer_->getWindow())) {
+        if (shouldInitNativeDragDrop() && !drag_drop_.init(viewer_->getWindow())) {
             LOG_WARN("Native drag-drop initialization failed, drag-drop will use SDL events only");
         }
         drag_drop_.setFileDropCallback([this](const std::vector<std::string>& paths) {

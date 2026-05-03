@@ -71,6 +71,16 @@ namespace lfs::rendering {
             Tensor* screen_positions_out = nullptr;
         };
 
+        [[nodiscard]] bool hasCudaDeviceForRasterStartup() {
+            int device_count = 0;
+            const cudaError_t err = cudaGetDeviceCount(&device_count);
+            if (err != cudaSuccess) {
+                cudaGetLastError();
+                return false;
+            }
+            return device_count > 0;
+        }
+
         struct EnvironmentImage {
             std::filesystem::path path;
             int width = 0;
@@ -1911,7 +1921,13 @@ namespace lfs::rendering {
 
         Result<void> initializeRasterOnly() override {
             if (!background_.is_valid()) {
-                background_ = Tensor::zeros({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                const auto device = hasCudaDeviceForRasterStartup()
+                                        ? lfs::core::Device::CUDA
+                                        : lfs::core::Device::CPU;
+                background_ = Tensor::zeros({3}, device, lfs::core::DataType::Float32);
+                if (device == lfs::core::Device::CPU) {
+                    LOG_WARN("CUDA device unavailable; raster renderer initialized for GUI shell only");
+                }
             }
             raster_initialized_ = true;
             return {};

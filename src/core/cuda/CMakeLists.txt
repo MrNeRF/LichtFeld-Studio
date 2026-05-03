@@ -20,6 +20,12 @@ set(LFS_CORE_CUDA_SOURCES
 
 add_library(lfs_core_cuda STATIC ${LFS_CORE_CUDA_SOURCES})
 
+if(TARGET dynlink_cuda)
+    set(LFS_CORE_CUDA_DRIVER_TARGET dynlink_cuda)
+else()
+    set(LFS_CORE_CUDA_DRIVER_TARGET CUDA::cuda_driver)
+endif()
+
 target_include_directories(lfs_core_cuda
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include
@@ -37,7 +43,7 @@ find_package(OpenMP REQUIRED COMPONENTS CXX)
 target_link_libraries(lfs_core_cuda
     PUBLIC
         CUDA::cudart
-        CUDA::cuda_driver
+        ${LFS_CORE_CUDA_DRIVER_TARGET}
         CUDA::curand
         spdlog::spdlog
         glm::glm

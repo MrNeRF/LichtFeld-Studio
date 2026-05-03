@@ -21,7 +21,9 @@
 #include <cstring>
 #include <future>
 #include <numbers>
+#include <utility>
 
+#include <cuda_runtime.h>
 #include <glm/glm.hpp>
 
 namespace nb = nanobind;
@@ -91,6 +93,19 @@ namespace lfs::python {
 
             nb::gil_scoped_release release;
             return future.get();
+        }
+
+        [[nodiscard]] bool hasCudaDeviceForPythonView() {
+            static const bool has_device = [] {
+                int device_count = 0;
+                const cudaError_t err = cudaGetDeviceCount(&device_count);
+                if (err != cudaSuccess) {
+                    cudaGetLastError();
+                    return false;
+                }
+                return device_count > 0;
+            }();
+            return has_device;
         }
     } // namespace
 
@@ -793,9 +808,13 @@ namespace lfs::python {
         std::memcpy(R.data_ptr(), view_info->rotation.data(), 9 * sizeof(float));
         std::memcpy(T.data_ptr(), view_info->translation.data(), 3 * sizeof(float));
 
+        const bool use_cuda_view_tensors = hasCudaDeviceForPythonView();
+        auto rotation = use_cuda_view_tensors ? R.cuda() : std::move(R);
+        auto translation = use_cuda_view_tensors ? T.cuda() : std::move(T);
+
         return PyViewInfo{
-            .rotation = PyTensor(R.cuda(), true),
-            .translation = PyTensor(T.cuda(), true),
+            .rotation = PyTensor(std::move(rotation), true),
+            .translation = PyTensor(std::move(translation), true),
             .width = view_info->width,
             .height = view_info->height,
             .fov_x = vertical_fov_to_horizontal_fov(view_info->fov, view_info->width, view_info->height),

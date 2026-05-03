@@ -82,6 +82,11 @@ namespace lfs::vis {
             return haystack && needle && std::strstr(haystack, needle) != nullptr;
         }
 
+        bool hasExplicitSdlVideoDriver() {
+            return std::getenv("SDL_VIDEODRIVER") != nullptr ||
+                   std::getenv("SDL_VIDEO_DRIVER") != nullptr;
+        }
+
         bool shouldPreferX11OnGnome() {
 #if defined(__linux__)
             // GNOME on Wayland can present undecorated SDL toplevels when the
@@ -95,7 +100,7 @@ namespace lfs::vis {
                                   containsToken(session_desktop, "GNOME");
             const bool has_wayland = std::getenv("WAYLAND_DISPLAY") != nullptr;
             const bool has_x11 = std::getenv("DISPLAY") != nullptr;
-            const bool explicit_driver = std::getenv("SDL_VIDEO_DRIVER") != nullptr;
+            const bool explicit_driver = hasExplicitSdlVideoDriver();
             return is_gnome && has_wayland && has_x11 && !explicit_driver;
 #else
             return false;
