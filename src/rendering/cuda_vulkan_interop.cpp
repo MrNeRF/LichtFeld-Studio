@@ -176,7 +176,7 @@ namespace lfs::rendering {
             int channels,
             CudaVulkanTensorLayout layout,
             CudaVulkanTensorElementType element_type,
-            cudaStream_t stream);
+            const cudaStream_t stream);
 
         [[nodiscard]] cudaError_t launchCudaVulkanPackTensorToRgba8(
             unsigned char* destination,
@@ -186,7 +186,7 @@ namespace lfs::rendering {
             int channels,
             CudaVulkanTensorLayout layout,
             CudaVulkanTensorElementType element_type,
-            cudaStream_t stream);
+            const cudaStream_t stream);
     } // namespace detail
 
     CudaVulkanRgba8HostBuffer packTensorToRgba8Host(const lfs::core::Tensor& tensor,
