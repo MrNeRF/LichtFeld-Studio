@@ -50,7 +50,7 @@ __lfs_panel_ids__ = ["lfs.asset_manager"]
 class AssetManagerPanel(Panel):
     """Floating Asset Manager window for browsing splats, videos, and exports."""
 
-    SORT_MODES = ("recent", "name", "size", "type")
+    SORT_MODES = ("name", "size", "type")
     LOADABLE_TYPES = {"ply_3dgs", "ply_pcl", "rad", "sog", "spz", "checkpoint", "dataset", "mesh", "usd"}
 
     id = "lfs.asset_manager"
@@ -82,7 +82,7 @@ class AssetManagerPanel(Panel):
         self._active_filters: Set[str] = set()  # Multi-select: empty = show all
         self._active_tab: str = "info"  # info, parameters, history
         self._view_mode: str = "list"  # gallery, list
-        self._sort_mode: str = "recent"  # recent, name, size, type
+        self._sort_mode: str = "type"  # name, size, type
         self._search_query: str = ""
         self._pending_tag_name: str = ""
 
@@ -100,6 +100,14 @@ class AssetManagerPanel(Panel):
         self._library_mtime: float = 0.0
         self._updating_selection_details: bool = False
         self._pending_transform_applications: List[Dict[str, Any]] = []
+
+        # Panel resize drag state
+        self._sidebar_dragging: bool = False
+        self._sidebar_drag_start_x: float = 0.0
+        self._sidebar_start_width: float = 176.0
+        self._right_panel_dragging: bool = False
+        self._right_panel_drag_start_x: float = 0.0
+        self._right_panel_start_width: float = 300.0
 
     # ── Initialization ────────────────────────────────────────
 
@@ -481,6 +489,10 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_add_tag", self.on_add_tag)
         model.bind_event("on_remove_tag", self.on_remove_tag)
 
+        # Panel resize event handlers
+        model.bind_event("on_sidebar_resize_start", self.on_sidebar_resize_start)
+        model.bind_event("on_right_panel_resize_start", self.on_right_panel_resize_start)
+
     # ── Data Retrieval Methods ─────────────────────────────────
 
     def get_search_query(self) -> str:
@@ -554,12 +566,11 @@ class AssetManagerPanel(Panel):
 
     def get_sort_label(self) -> str:
         labels = {
-            "recent": tr("asset_manager.toolbar.sort_by_recent"),
             "name": tr("asset_manager.toolbar.sort_by_name"),
             "size": tr("asset_manager.toolbar.sort_by_size"),
             "type": tr("asset_manager.toolbar.sort_by_type"),
         }
-        return labels.get(self._sort_mode, tr("asset_manager.toolbar.sort_by_recent"))
+        return labels.get(self._sort_mode, tr("asset_manager.toolbar.sort_by_name"))
 
     def get_active_filters(self) -> Set[str]:
         return self._active_filters
@@ -867,18 +878,6 @@ class AssetManagerPanel(Panel):
         ).lower()
         return query_l in searchable
 
-    def _is_recent_asset(self, asset: Dict[str, Any]) -> bool:
-        try:
-            from datetime import datetime, timedelta
-
-            modified_at = asset.get("modified_at", "")
-            if not modified_at:
-                return False
-            modified = datetime.fromisoformat(modified_at.replace("Z", "+00:00"))
-            return modified >= datetime.now(modified.tzinfo) - timedelta(days=30)
-        except Exception:
-            return False
-
     def _sort_assets(self, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Sort assets based on current sort mode."""
         if self._sort_mode == "name":
@@ -889,7 +888,7 @@ class AssetManagerPanel(Panel):
             )
         if self._sort_mode == "type":
             return sorted(assets, key=lambda a: a.get("type", "").lower())
-        return sorted(assets, key=lambda a: a.get("modified_at", ""), reverse=True)
+        return sorted(assets, key=lambda a: a.get("name", "").lower())
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         """Format asset data for UI display."""
@@ -2844,6 +2843,72 @@ class AssetManagerPanel(Panel):
         self.refresh_catalog()
         self._dirty_model("tags", "assets", "selected_asset_tags")
 
+    # ── Panel Resize Handlers ─────────────────────────────────
+
+    def on_sidebar_resize_start(self, _handle, event, _args):
+        """Start dragging the sidebar resize handle."""
+        self._sidebar_dragging = True
+        self._sidebar_drag_start_x = float(event.get_parameter("mouse_x", "0"))
+        sidebar = self._doc.get_element_by_id("asset-sidebar") if self._doc else None
+        if sidebar:
+            width_str = sidebar.get_attribute("data-value", "176")
+            try:
+                self._sidebar_start_width = float(width_str)
+            except (ValueError, TypeError):
+                self._sidebar_start_width = 176.0
+        else:
+            self._sidebar_start_width = 176.0
+        event.stop_propagation()
+
+    def on_sidebar_resize_delta(self, mouse_x: float) -> None:
+        """Update sidebar width during drag."""
+        if not self._sidebar_dragging:
+            return
+        delta_x = mouse_x - self._sidebar_drag_start_x
+        new_width = self._sidebar_start_width + delta_x
+        # Enforce minimum width of 160dp
+        new_width = max(160.0, new_width)
+        sidebar = self._doc.get_element_by_id("asset-sidebar") if self._doc else None
+        if sidebar:
+            sidebar.set_property("width", f"{int(new_width)}dp")
+            sidebar.set_attribute("data-value", str(int(new_width)))
+
+    def on_sidebar_resize_end(self) -> None:
+        """End sidebar resize drag."""
+        self._sidebar_dragging = False
+
+    def on_right_panel_resize_start(self, _handle, event, _args):
+        """Start dragging the right panel resize handle."""
+        self._right_panel_dragging = True
+        self._right_panel_drag_start_x = float(event.get_parameter("mouse_x", "0"))
+        panel = self._doc.get_element_by_id("asset-info-panel") if self._doc else None
+        if panel:
+            width_str = panel.get_attribute("data-value", "300")
+            try:
+                self._right_panel_start_width = float(width_str)
+            except (ValueError, TypeError):
+                self._right_panel_start_width = 300.0
+        else:
+            self._right_panel_start_width = 300.0
+        event.stop_propagation()
+
+    def on_right_panel_resize_delta(self, mouse_x: float) -> None:
+        """Update right panel width during drag."""
+        if not self._right_panel_dragging:
+            return
+        delta_x = self._right_panel_drag_start_x - mouse_x
+        new_width = self._right_panel_start_width + delta_x
+        # Enforce minimum width of 200dp
+        new_width = max(200.0, new_width)
+        panel = self._doc.get_element_by_id("asset-info-panel") if self._doc else None
+        if panel:
+            panel.set_property("width", f"{int(new_width)}dp")
+            panel.set_attribute("data-value", str(int(new_width)))
+
+    def on_right_panel_resize_end(self) -> None:
+        """End right panel resize drag."""
+        self._right_panel_dragging = False
+
     def on_import_asset(self, _handle, _ev, args):
         """Import a single asset file (point clouds, splats, meshes, etc.)."""
         if not self._asset_index:
@@ -4132,6 +4197,19 @@ class AssetManagerPanel(Panel):
         if content:
             content.add_event_listener("click", self._on_asset_manager_click)
 
+        # Bind resize handle events
+        sidebar_handle = doc.get_element_by_id("sidebar-resize-handle")
+        if sidebar_handle:
+            sidebar_handle.add_event_listener("mousedown", self._on_sidebar_handle_mousedown)
+
+        right_handle = doc.get_element_by_id("right-panel-resize-handle")
+        if right_handle:
+            right_handle.add_event_listener("mousedown", self._on_right_panel_handle_mousedown)
+
+        # Bind document-level mouse events for dragging
+        doc.add_event_listener("mousemove", self._on_resize_mousemove)
+        doc.add_event_listener("mouseup", self._on_resize_mouseup)
+
     def _on_asset_manager_click(self, event) -> None:
         container = event.current_target()
         target = event.target()
@@ -4294,6 +4372,38 @@ class AssetManagerPanel(Panel):
             event.stop_propagation()
         except Exception:
             pass
+
+    def _on_sidebar_handle_mousedown(self, event) -> None:
+        """Handle mousedown on sidebar resize handle."""
+        button = int(event.get_parameter("button", "0"))
+        if button != 0:
+            return
+        self.on_sidebar_resize_start(None, event, None)
+
+    def _on_right_panel_handle_mousedown(self, event) -> None:
+        """Handle mousedown on right panel resize handle."""
+        button = int(event.get_parameter("button", "0"))
+        if button != 0:
+            return
+        self.on_right_panel_resize_start(None, event, None)
+
+    def _on_resize_mousemove(self, event) -> None:
+        """Handle mousemove for panel resizing."""
+        try:
+            mouse_x = float(event.get_parameter("mouse_x", "0"))
+        except (TypeError, ValueError):
+            return
+        if self._sidebar_dragging:
+            self.on_sidebar_resize_delta(mouse_x)
+            event.stop_propagation()
+        elif self._right_panel_dragging:
+            self.on_right_panel_resize_delta(mouse_x)
+            event.stop_propagation()
+
+    def _on_resize_mouseup(self, _event) -> None:
+        """Handle mouseup to end panel resizing."""
+        self.on_sidebar_resize_end()
+        self.on_right_panel_resize_end()
 
     # ── Integration Hooks (Stubs) ─────────────────────────────
 

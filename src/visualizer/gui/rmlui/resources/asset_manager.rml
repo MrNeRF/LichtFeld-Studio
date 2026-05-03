@@ -39,7 +39,8 @@
     </div>
 
     <div id="asset-popup-content">
-      <div id="asset-sidebar">
+      <div id="asset-sidebar" data-value="sidebar_width">
+        <div class="asset-sidebar-inner">
         <div class="asset-sidebar-section">
           <div class="asset-sidebar-title">{{projects_title}}</div>
           <div data-for="project : projects">
@@ -68,8 +69,7 @@
         </div>
 
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title">{{filters_title}}</div>
-          <div class="asset-filter-hint">{{filter_hint}}</div>
+          <div class="asset-sidebar-title" data-tooltip="asset_manager.sidebar.filter_hint">{{filters_title}}</div>
           <div data-for="filter : filters">
             <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
               <input type="checkbox" data-checked="filter.is_selected" />
@@ -77,9 +77,10 @@
             </div>
           </div>
         </div>
-
-
+        </div>
       </div>
+
+      <div id="sidebar-resize-handle" data-event-mousedown="on_sidebar_resize_start"></div>
 
       <div id="asset-gallery">
         <div class="asset-gallery-header">
@@ -159,7 +160,9 @@
         </div>
       </div>
 
-      <div id="asset-info-panel">
+      <div id="right-panel-resize-handle" data-event-mousedown="on_right_panel_resize_start"></div>
+
+      <div id="asset-info-panel" data-value="right_panel_width">
         <div class="asset-info-tabs">
           <div class="asset-info-tab" data-class-is-active="show_info_tab" data-asset-tab="info">{{info_tab_label}}</div>
           <div class="asset-info-tab" data-class-is-active="show_parameters_tab" data-asset-tab="parameters">{{parameters_tab_label}}</div>
@@ -443,18 +446,6 @@
             <div class="asset-info-section">
               <div class="asset-info-section-title">{{project_details_title}}</div>
               <div class="parameter-row">
-                <span class="parameter-label">{{prop_scenes_label}}</span>
-                <span class="parameter-value">{{selected_project_scene_count}}</span>
-              </div>
-              <div class="parameter-row">
-                <span class="parameter-label">{{prop_total_assets_label}}</span>
-                <span class="parameter-value">{{selected_project_total_assets}}</span>
-              </div>
-              <div class="parameter-row">
-                <span class="parameter-label">{{prop_path_label}}</span>
-                <span class="parameter-value">{{selected_project_path}}</span>
-              </div>
-              <div class="parameter-row">
                 <span class="parameter-label">{{prop_created_label}}</span>
                 <span class="parameter-value">{{selected_project_created}}</span>
               </div>
@@ -464,27 +455,11 @@
               </div>
             </div>
 
-            <div class="asset-info-section">
-              <div class="asset-info-section-title">{{scenes_list_title}}</div>
-              <div data-for="proj_scene : selected_project_scenes">
-                <div class="asset-artifact-row" data-attr-data-scene-id="proj_scene.id">
-                  <span class="asset-artifact-name">{{proj_scene.name}}</span>
-                  <span class="asset-artifact-type">{{proj_scene.asset_count}}</span>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div id="asset-popup-footer">
-      <div class="asset-batch-summary">
-        <span class="asset-batch-title">{{selected_count_text}}</span>
-        <span class="asset-batch-subtitle" data-if="has_selection">{{selected_total_text}}</span>
-        <span class="asset-batch-subtitle" data-if="!has_selection">{{multi_select_hint}}</span>
-      </div>
-    </div>
   </div>
 </body>
 </rml>

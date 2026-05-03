@@ -196,13 +196,33 @@
 
 #asset-sidebar {
     width: 176dp;
-    min-width: 176dp;
+    min-width: 160dp;
     min-height: 240dp;
-    padding: 10dp;
     background-color: #2b2825;
     border-right-width: 1dp;
     border-right-color: #3c3630;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.asset-sidebar-inner {
+    flex: 1;
+    padding: 10dp;
     overflow-y: auto;
+    min-width: 0;
+}
+
+#sidebar-resize-handle {
+    width: 6dp;
+    min-width: 6dp;
+    cursor: ew-resize;
+    background-color: transparent;
+    z-index: 10;
+}
+
+#sidebar-resize-handle:hover {
+    background-color: #7fb9a5;
 }
 
 .asset-sidebar-section {
@@ -855,13 +875,25 @@
 
 #asset-info-panel {
     width: 300dp;
-    min-width: 300dp;
+    min-width: 200dp;
     min-height: 240dp;
     background-color: #2b2825;
     border-left-width: 1dp;
     border-left-color: #3c3630;
     display: flex;
     flex-direction: column;
+}
+
+#right-panel-resize-handle {
+    width: 6dp;
+    min-width: 6dp;
+    cursor: ew-resize;
+    background-color: transparent;
+    z-index: 10;
+}
+
+#right-panel-resize-handle:hover {
+    background-color: #7fb9a5;
 }
 
 .asset-info-tabs {
