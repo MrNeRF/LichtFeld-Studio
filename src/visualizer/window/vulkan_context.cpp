@@ -972,10 +972,47 @@ namespace lfs::vis {
                                      : enable_shader_atomic_float
                                          ? static_cast<void*>(&supported_atomic_float_features)
                                          : nullptr;
+
+        // Optional Phase 3/4 modernization features. Each is queried in a
+        // throwaway chain so the main supported-features12 chain stays clean.
+        VkPhysicalDeviceShaderObjectFeaturesEXT supported_shader_object{};
+        supported_shader_object.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT;
+        VkPhysicalDeviceExtendedDynamicState3FeaturesEXT supported_eds3{};
+        supported_eds3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR supported_coop_matrix{};
+        supported_coop_matrix.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        VkPhysicalDeviceHostImageCopyFeaturesEXT supported_host_image_copy{};
+        supported_host_image_copy.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
+
+        void* opt_supported_head = nullptr;
+        if (enable_shader_object) {
+            supported_shader_object.pNext = opt_supported_head;
+            opt_supported_head = &supported_shader_object;
+        }
+        if (enable_extended_dynamic_state3) {
+            supported_eds3.pNext = opt_supported_head;
+            opt_supported_head = &supported_eds3;
+        }
+        if (enable_cooperative_matrix) {
+            supported_coop_matrix.pNext = opt_supported_head;
+            opt_supported_head = &supported_coop_matrix;
+        }
+        if (enable_host_image_copy) {
+            supported_host_image_copy.pNext = opt_supported_head;
+            opt_supported_head = &supported_host_image_copy;
+        }
+
         VkPhysicalDeviceFeatures2 supported_features2{};
         supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         supported_features2.pNext = &supported_features12;
         vkGetPhysicalDeviceFeatures2(physical_device_, &supported_features2);
+
+        if (opt_supported_head != nullptr) {
+            VkPhysicalDeviceFeatures2 opt_query{};
+            opt_query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+            opt_query.pNext = opt_supported_head;
+            vkGetPhysicalDeviceFeatures2(physical_device_, &opt_query);
+        }
 
         VkPhysicalDeviceVulkan13Features features13{};
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -1034,6 +1071,65 @@ namespace lfs::vis {
             supported_features12.descriptorBindingVariableDescriptorCount;
         features12.runtimeDescriptorArray = supported_features12.runtimeDescriptorArray;
 
+        // Optional modernization features. Each is enabled only when both the
+        // extension was loaded AND the device reported the feature supported.
+        // Each struct is prepended to the features12 pNext chain so the existing
+        // chain order (subgroup_size_control / atomic_float / features13) stays
+        // unchanged.
+        void* enabled_chain_head = features12.pNext;
+
+        VkPhysicalDeviceShaderObjectFeaturesEXT shader_object_features{};
+        shader_object_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT;
+        const bool enable_shader_object_feature =
+            enable_shader_object && supported_shader_object.shaderObject == VK_TRUE;
+        if (enable_shader_object_feature) {
+            shader_object_features.shaderObject = VK_TRUE;
+            shader_object_features.pNext = enabled_chain_head;
+            enabled_chain_head = &shader_object_features;
+        }
+
+        VkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features{};
+        eds3_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
+        const bool enable_eds3_feature =
+            enable_extended_dynamic_state3 &&
+            (supported_eds3.extendedDynamicState3ColorBlendEnable == VK_TRUE ||
+             supported_eds3.extendedDynamicState3ColorBlendEquation == VK_TRUE ||
+             supported_eds3.extendedDynamicState3ColorWriteMask == VK_TRUE);
+        if (enable_eds3_feature) {
+            eds3_features.extendedDynamicState3ColorBlendEnable =
+                supported_eds3.extendedDynamicState3ColorBlendEnable;
+            eds3_features.extendedDynamicState3ColorBlendEquation =
+                supported_eds3.extendedDynamicState3ColorBlendEquation;
+            eds3_features.extendedDynamicState3ColorWriteMask =
+                supported_eds3.extendedDynamicState3ColorWriteMask;
+            eds3_features.pNext = enabled_chain_head;
+            enabled_chain_head = &eds3_features;
+        }
+
+        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop_matrix_features{};
+        coop_matrix_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        const bool enable_coop_matrix_feature =
+            enable_cooperative_matrix && supported_coop_matrix.cooperativeMatrix == VK_TRUE;
+        if (enable_coop_matrix_feature) {
+            coop_matrix_features.cooperativeMatrix = VK_TRUE;
+            coop_matrix_features.cooperativeMatrixRobustBufferAccess =
+                supported_coop_matrix.cooperativeMatrixRobustBufferAccess;
+            coop_matrix_features.pNext = enabled_chain_head;
+            enabled_chain_head = &coop_matrix_features;
+        }
+
+        VkPhysicalDeviceHostImageCopyFeaturesEXT host_image_copy_features{};
+        host_image_copy_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
+        const bool enable_host_image_copy_feature =
+            enable_host_image_copy && supported_host_image_copy.hostImageCopy == VK_TRUE;
+        if (enable_host_image_copy_feature) {
+            host_image_copy_features.hostImageCopy = VK_TRUE;
+            host_image_copy_features.pNext = enabled_chain_head;
+            enabled_chain_head = &host_image_copy_features;
+        }
+
+        features12.pNext = enabled_chain_head;
+
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         features2.pNext = &features12;
@@ -1060,6 +1156,13 @@ namespace lfs::vis {
                 LOG_WARN("VK_EXT_debug_utils is enabled, but vkSetDebugUtilsObjectNameEXT could not be loaded");
             }
         }
+        if (enable_push_descriptor) {
+            vk_cmd_push_descriptor_set_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
+                vkGetDeviceProcAddr(device_, "vkCmdPushDescriptorSetKHR"));
+            if (vk_cmd_push_descriptor_set_ == nullptr) {
+                return fail("VK_KHR_push_descriptor is enabled but vkCmdPushDescriptorSetKHR could not be loaded");
+            }
+        }
 
         vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
@@ -1068,10 +1171,10 @@ namespace lfs::vis {
         external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         has_push_descriptor_ = enable_push_descriptor;
-        has_shader_object_ = enable_shader_object;
-        has_extended_dynamic_state3_ = enable_extended_dynamic_state3;
-        has_cooperative_matrix_ = enable_cooperative_matrix;
-        has_host_image_copy_ = enable_host_image_copy;
+        has_shader_object_ = enable_shader_object_feature;
+        has_extended_dynamic_state3_ = enable_eds3_feature;
+        has_cooperative_matrix_ = enable_coop_matrix_feature;
+        has_host_image_copy_ = enable_host_image_copy_feature;
         has_descriptor_indexing_ = supported_features12.descriptorIndexing == VK_TRUE;
         if (!external_memory_interop_enabled_) {
             return fail("Vulkan external memory interop is required (KHR_external_memory + platform variant); device is missing the extension(s)");
@@ -1082,6 +1185,13 @@ namespace lfs::vis {
         LOG_INFO("Vulkan external memory interop enabled{}",
                  external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
         LOG_INFO("Vulkan external timeline semaphore interop enabled");
+        LOG_INFO("Vulkan optional features: descriptor_indexing={} push_descriptor={} shader_object={} extended_dynamic_state3={} cooperative_matrix={} host_image_copy={}",
+                 has_descriptor_indexing_,
+                 has_push_descriptor_,
+                 has_shader_object_,
+                 has_extended_dynamic_state3_,
+                 has_cooperative_matrix_,
+                 has_host_image_copy_);
         return true;
     }
 

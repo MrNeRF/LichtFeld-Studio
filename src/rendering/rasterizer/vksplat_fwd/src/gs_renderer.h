@@ -26,7 +26,6 @@ public:
     VulkanGSRenderer();
     ~VulkanGSRenderer();
 
-    void initialize(const std::map<std::string, std::string>& spirv_paths, int device_id);
     void initializeExternal(const std::map<std::string, std::string>& spirv_paths,
                             VkInstance external_instance,
                             VkPhysicalDevice external_physical_device,
@@ -45,8 +44,6 @@ public:
     void executeSort(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, int num_bits);
 
 protected:
-    virtual DeviceRequirement getDeviceRequirement();
-
     void executeCumsum(
         VulkanGSPipelineBuffers& buffers,
         Buffer<int32_t>& input_buffer,

@@ -122,8 +122,6 @@ namespace lfs::vis {
     struct VksplatViewportRenderer::ComposePipeline {
         VkShaderModule shader_module = VK_NULL_HANDLE;
         VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
-        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
-        VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
 
@@ -136,9 +134,6 @@ namespace lfs::vis {
             }
             if (pipeline_layout != VK_NULL_HANDLE) {
                 vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
-            }
-            if (descriptor_pool != VK_NULL_HANDLE) {
-                vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
             }
             if (descriptor_set_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, descriptor_set_layout, nullptr);
@@ -436,34 +431,12 @@ namespace lfs::vis {
 
         VkDescriptorSetLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
         layout_info.bindingCount = static_cast<std::uint32_t>(bindings.size());
         layout_info.pBindings = bindings.data();
         result = vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &compose_->descriptor_set_layout);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkCreateDescriptorSetLayout(VkSplat compose)", result));
-        }
-
-        std::array<VkDescriptorPoolSize, 2> pool_sizes{};
-        pool_sizes[0] = {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1};
-        pool_sizes[1] = {.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1};
-        VkDescriptorPoolCreateInfo descriptor_pool_info{};
-        descriptor_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        descriptor_pool_info.maxSets = 1;
-        descriptor_pool_info.poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size());
-        descriptor_pool_info.pPoolSizes = pool_sizes.data();
-        result = vkCreateDescriptorPool(device, &descriptor_pool_info, nullptr, &compose_->descriptor_pool);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateDescriptorPool(VkSplat compose)", result));
-        }
-
-        VkDescriptorSetAllocateInfo set_info{};
-        set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        set_info.descriptorPool = compose_->descriptor_pool;
-        set_info.descriptorSetCount = 1;
-        set_info.pSetLayouts = &compose_->descriptor_set_layout;
-        result = vkAllocateDescriptorSets(device, &set_info, &compose_->descriptor_set);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkAllocateDescriptorSets(VkSplat compose)", result));
         }
 
         VkPushConstantRange push_range{};
@@ -542,18 +515,15 @@ namespace lfs::vis {
         image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = compose_->descriptor_set;
         writes[0].dstBinding = 0;
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[0].descriptorCount = 1;
         writes[0].pBufferInfo = &pixel_info;
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = compose_->descriptor_set;
         writes[1].dstBinding = 1;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[1].descriptorCount = 1;
         writes[1].pImageInfo = &image_info;
-        vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
         VkBufferMemoryBarrier2 pixel_barrier{};
         pixel_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
@@ -576,14 +546,12 @@ namespace lfs::vis {
                                                 VK_IMAGE_LAYOUT_GENERAL);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compose_->pipeline);
-        vkCmdBindDescriptorSets(cmd,
-                                VK_PIPELINE_BIND_POINT_COMPUTE,
-                                compose_->pipeline_layout,
-                                0,
-                                1,
-                                &compose_->descriptor_set,
-                                0,
-                                nullptr);
+        context.vkCmdPushDescriptorSet()(cmd,
+                                         VK_PIPELINE_BIND_POINT_COMPUTE,
+                                         compose_->pipeline_layout,
+                                         0,
+                                         static_cast<std::uint32_t>(writes.size()),
+                                         writes.data());
         ComposePushConstants push{
             .width = uniforms.image_width,
             .height = uniforms.image_height,

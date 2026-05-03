@@ -115,8 +115,7 @@ namespace lfs::vis {
         // CUDA-imported VkBuffers so frame N's CUDA upload cannot race frame
         // N-1's Vulkan compute reads. Ring index = currentFrameSlot %
         // framesInFlight; size matches VulkanContext::framesInFlight() (asserted
-        // at runtime). The host fallback path bypasses the ring and uploads
-        // through the renderer's staging buffer.
+        // at runtime).
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
         std::array<std::array<CudaInputSlot, 4>, kInputRingSize> cuda_inputs_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};

@@ -115,6 +115,7 @@ namespace lfs::vis {
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
         [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
         [[nodiscard]] bool hasPushDescriptor() const { return has_push_descriptor_; }
+        [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasShaderObject() const { return has_shader_object_; }
         [[nodiscard]] bool hasExtendedDynamicState3() const { return has_extended_dynamic_state3_; }
         [[nodiscard]] bool hasCooperativeMatrix() const { return has_cooperative_matrix_; }
@@ -291,6 +292,7 @@ namespace lfs::vis {
         bool has_host_image_copy_ = false;
         bool has_descriptor_indexing_ = false;
         PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
+        PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
         uint32_t active_image_index_ = 0;
         std::size_t frame_index_ = 0;
         std::size_t active_frame_index_ = 0;

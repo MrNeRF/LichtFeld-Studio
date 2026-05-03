@@ -25,36 +25,6 @@ void VulkanGSRenderer::cleanup() {
     VulkanGSPipeline::cleanup();
 }
 
-VulkanGSPipeline::DeviceRequirement VulkanGSRenderer::getDeviceRequirement() {
-    const uint32_t minSharedMemory = 4096 * sizeof(sortingKey_t) + 256 * 4;
-    return DeviceRequirement{
-        {12 * 16777216 / 256, 4096 / std::min(TILE_HEIGHT, TILE_WIDTH), 1},
-        {1024, 1 * std::max(TILE_HEIGHT, TILE_WIDTH), 1},
-        minSharedMemory};
-}
-
-void VulkanGSRenderer::initialize(const std::map<std::string, std::string>& spirv_paths, int device_id) {
-
-    VulkanGSPipeline::initialize(device_id);
-
-    createComputePipeline(pipeline_projection_forward, spirv_paths.at("projection_forward"));
-    createComputePipeline(pipeline_generate_keys, spirv_paths.at("generate_keys"));
-    for (int i = 0; i < 2; ++i) {
-        createComputePipeline(pipeline_compute_tile_ranges[i], spirv_paths.at("compute_tile_ranges"));
-        createComputePipeline(pipeline_rasterize_forward[i], spirv_paths.at("rasterize_forward"));
-    }
-    createComputePipeline(pipeline_cumsum.single_pass, spirv_paths.at("cumsum_single_pass"));
-    createComputePipeline(pipeline_cumsum.block_scan, spirv_paths.at("cumsum_block_scan"));
-    createComputePipeline(pipeline_cumsum.scan_block_sums, spirv_paths.at("cumsum_scan_block_sums"));
-    createComputePipeline(pipeline_cumsum.add_block_offsets, spirv_paths.at("cumsum_add_block_offsets"));
-    createComputePipeline(pipeline_sorting_1.upsweep, spirv_paths.at("radix_sort/upsweep"));
-    createComputePipeline(pipeline_sorting_1.spine, spirv_paths.at("radix_sort/spine"));
-    createComputePipeline(pipeline_sorting_1.downsweep, spirv_paths.at("radix_sort/downsweep"));
-    createComputePipeline(pipeline_sorting_2.upsweep, spirv_paths.at("radix_sort/upsweep"));
-    createComputePipeline(pipeline_sorting_2.spine, spirv_paths.at("radix_sort/spine"));
-    createComputePipeline(pipeline_sorting_2.downsweep, spirv_paths.at("radix_sort/downsweep"));
-}
-
 void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::string>& spirv_paths,
                                           VkInstance external_instance,
                                           VkPhysicalDevice external_physical_device,

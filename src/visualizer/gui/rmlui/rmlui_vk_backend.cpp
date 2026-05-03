@@ -1038,12 +1038,8 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     VkDeviceSize image_size = source.size();
     VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
 
-    buffer_data_t cpu_buffer = CreateResource_StagingBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-
-    void* data;
-    vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
-    memcpy(data, source.data(), static_cast<size_t>(image_size));
-    vmaUnmapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation);
+    const bool use_host_image_copy =
+        m_pfn_copy_memory_to_image != nullptr && m_pfn_transition_image_layout != nullptr;
 
     VkExtent3D extent_image = {};
     extent_image.width = static_cast<uint32_t>(width);
@@ -1062,7 +1058,9 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     info.arrayLayers = 1;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    info.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                 (use_host_image_copy ? VkImageUsageFlags(VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT)
+                                      : VkImageUsageFlags(VK_IMAGE_USAGE_TRANSFER_DST_BIT));
 
     VmaAllocationCreateInfo info_allocation = {};
     info_allocation.usage = VMA_MEMORY_USAGE_GPU_ONLY;
@@ -1086,28 +1084,77 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
 #endif
 
-    m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
-        lfs::vis::VulkanImageBarrierTracker upload_barriers;
-        upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-        upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    if (use_host_image_copy) {
+        VkHostImageLayoutTransitionInfoEXT to_dst{};
+        to_dst.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
+        to_dst.image = p_image;
+        to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_dst.subresourceRange.baseMipLevel = 0;
+        to_dst.subresourceRange.levelCount = 1;
+        to_dst.subresourceRange.baseArrayLayer = 0;
+        to_dst.subresourceRange.layerCount = 1;
+        m_pfn_transition_image_layout(m_p_device, 1, &to_dst);
 
-        VkBufferImageCopy region = {};
-        region.bufferOffset = 0;
-        region.bufferRowLength = 0;
-        region.bufferImageHeight = 0;
-
+        VkMemoryToImageCopyEXT region{};
+        region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT;
+        region.pHostPointer = source.data();
         region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         region.imageSubresource.mipLevel = 0;
         region.imageSubresource.baseArrayLayer = 0;
         region.imageSubresource.layerCount = 1;
         region.imageExtent = extent_image;
 
-        vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        VkCopyMemoryToImageInfoEXT copy_info{};
+        copy_info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT;
+        copy_info.dstImage = p_image;
+        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copy_info.regionCount = 1;
+        copy_info.pRegions = &region;
+        m_pfn_copy_memory_to_image(m_p_device, &copy_info);
 
-        upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    });
+        VkHostImageLayoutTransitionInfoEXT to_read{};
+        to_read.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
+        to_read.image = p_image;
+        to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_read.subresourceRange.baseMipLevel = 0;
+        to_read.subresourceRange.levelCount = 1;
+        to_read.subresourceRange.baseArrayLayer = 0;
+        to_read.subresourceRange.layerCount = 1;
+        m_pfn_transition_image_layout(m_p_device, 1, &to_read);
+    } else {
+        buffer_data_t cpu_buffer = CreateResource_StagingBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        void* data;
+        vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        memcpy(data, source.data(), static_cast<size_t>(image_size));
+        vmaUnmapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation);
 
-    DestroyResource_StagingBuffer(cpu_buffer);
+        m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
+            lfs::vis::VulkanImageBarrierTracker upload_barriers;
+            upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+            VkBufferImageCopy region = {};
+            region.bufferOffset = 0;
+            region.bufferRowLength = 0;
+            region.bufferImageHeight = 0;
+
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = 0;
+            region.imageSubresource.baseArrayLayer = 0;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = extent_image;
+
+            vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        });
+
+        DestroyResource_StagingBuffer(cpu_buffer);
+    }
 
     VkImageViewCreateInfo info_image_view = {};
     info_image_view.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -1357,6 +1404,11 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_p_physical_device = context.physical_device;
     m_p_device = context.device;
     m_p_pipeline_cache = context.pipeline_cache;
+
+    m_pfn_copy_memory_to_image = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
+        vkGetDeviceProcAddr(m_p_device, "vkCopyMemoryToImageEXT"));
+    m_pfn_transition_image_layout = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
+        vkGetDeviceProcAddr(m_p_device, "vkTransitionImageLayoutEXT"));
     m_p_queue_graphics = context.graphics_queue;
     m_p_queue_present = context.graphics_queue;
     m_p_queue_compute = context.graphics_queue;

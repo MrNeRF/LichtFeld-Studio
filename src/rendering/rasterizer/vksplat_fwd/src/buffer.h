@@ -118,11 +118,6 @@ struct VulkanGSPipelineBuffers {
     Buffer<int32_t> _sorting_histogram;
     Buffer<int32_t> _sorting_histogram_cumsum;
 
-    size_t getTotalAllocSize();
-    void updateTotalAllocSize();
-    size_t maxTotalAllocSize = 0;
-    std::map<std::string, size_t> getVramBreakdown();
-
     template <typename T>
     static void reorderSH(Buffer<T>& coeffs);
     template <typename T>

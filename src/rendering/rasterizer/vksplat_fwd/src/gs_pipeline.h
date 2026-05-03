@@ -25,7 +25,6 @@ public:
     VulkanGSPipeline();
     ~VulkanGSPipeline();
 
-    void initialize(int device_id);
     void initializeExternal(VkInstance external_instance,
                             VkPhysicalDevice external_physical_device,
                             VkDevice external_device,
@@ -75,25 +74,12 @@ public:
         HOST_READ_WRITE,
     };
 
-    std::map<std::string, std::variant<uint32_t, std::vector<uint32_t>, bool, std::string>> get_device_info() const;
-
 protected:
-    struct DeviceRequirement {
-        std::array<uint32_t, 3> minMaxGroups;
-        std::array<uint32_t, 3> minMaxThreads;
-        uint32_t minSharedMemory;
-    };
-
-    virtual DeviceRequirement getDeviceRequirement() = 0;
-
-    bool enableValidationLayer = false;
-
     bool commandBatchInProgress = false;
     uint32_t timestampNumWritten = 0;
     uint32_t timestampStackDepth = 0;
     std::vector<std::function<void(const std::vector<std::pair<size_t, double>>&)>> timerCallbacks;
 
-    void memoryBarrier(BarrierMask srcMask, BarrierMask dstMask);
     void bufferMemoryBarrier(const std::vector<std::pair<_VulkanBuffer, BarrierMask>>& buffers, BarrierMask dstMask);
 
     size_t current_vram = 0;
@@ -109,18 +95,8 @@ protected:
     VkFence fence;
     VkQueryPool timestamp_query_pool;
     VmaAllocator allocator = VK_NULL_HANDLE;
-    bool owns_instance = true;
-    bool owns_device = true;
-    bool owns_allocator = true;
+    PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
 
-    enum class DeviceVendor {
-        Unknown,
-        NVIDIA,
-        AMD,
-        Intel_R_,
-        ARM,
-        Qualcomm,
-    };
     struct DeviceInfo {
         uint32_t subgroupSize;
         uint32_t sharedSize;
@@ -130,46 +106,34 @@ protected:
         uint32_t maxThreadsX;
         uint32_t maxThreadsY;
         uint32_t maxThreadsZ;
-        bool hasInt16;
-        bool hasInt64;
-        bool hasFloat32AtomicAdd;
-        DeviceVendor vendor;
-        uint32_t vendorId;
-        std::string name;
     } deviceInfo;
 
-    // Compute pipeline
+    // Compute pipeline. Storage-buffer bindings are pushed via
+    // vkCmdPushDescriptorSetKHR each dispatch — no descriptor pool, no
+    // pre-allocated descriptor set, no per-pipeline buffer cache.
     struct _ComputePipeline {
         VkShaderModule shader;
-        VkDescriptorPool descriptor_pool;
         VkDescriptorSetLayout descriptor_set_layout;
-        VkDescriptorSet descriptor_set;
         VkPipelineLayout pipeline_layout;
         VkPipeline pipeline;
         std::vector<int> buffer_layouts;
 
         _ComputePipeline(
             std::vector<int> buffer_layouts) : shader(VK_NULL_HANDLE),
-                                               descriptor_pool(VK_NULL_HANDLE),
                                                descriptor_set_layout(VK_NULL_HANDLE),
-                                               descriptor_set(VK_NULL_HANDLE),
                                                pipeline_layout(VK_NULL_HANDLE),
                                                pipeline(VK_NULL_HANDLE),
                                                buffer_layouts(buffer_layouts) {}
 
         _ComputePipeline(int num_buffers)
             : shader(VK_NULL_HANDLE),
-              descriptor_pool(VK_NULL_HANDLE),
               descriptor_set_layout(VK_NULL_HANDLE),
-              descriptor_set(VK_NULL_HANDLE),
               pipeline_layout(VK_NULL_HANDLE),
               pipeline(VK_NULL_HANDLE) {
             buffer_layouts.resize(num_buffers);
             for (int i = 0; i < num_buffers; i++)
                 buffer_layouts[i] = i;
         }
-
-        std::vector<_VulkanBuffer> buffers;
     };
 
     struct _ComputePipelinePair {
@@ -195,18 +159,13 @@ protected:
 
     void allocStagingBuffer(size_t size);
 
-    void createInstance();
-    void selectPhysicalDevice(int device_id);
     void populateDeviceInfo(VkPhysicalDevice selected_physical_device);
-    void createDevice();
     void createCommandPool();
     void createFence();
     void createQueryPools();
     void createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule* pShaderModule);
 
     void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
-    void createComputeDescriptorPool(_ComputePipeline& pipeline);
-    void updateComputeDescriptorSet(_ComputePipeline& pipeline, const std::vector<_VulkanBuffer>& buffers);
     void createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory = 0, bool compatible_subgroup_size = true);
     void executeCompute(
         std::vector<std::pair<size_t, size_t>> dims,
