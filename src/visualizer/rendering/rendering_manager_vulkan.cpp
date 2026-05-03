@@ -862,6 +862,7 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                     }
                     const bool force_input_upload = (frame_dirty & DirtyFlag::SPLATS) != 0;
+                    LOG_TIMER("vksplat.render");
                     auto render_result = vksplat_viewport_renderer_->render(
                         *context.vulkan_context, *model, request, force_input_upload);
                     if (render_result) {

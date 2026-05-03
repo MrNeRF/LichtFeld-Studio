@@ -284,19 +284,42 @@ Pick at most one based on user demand.
 - 1.2 RmlUi-backed focus-state aggregators added (`wantsCaptureMouse / wantsCaptureKeyboard / wantsTextInput / anyItemActive`) over all live `Rml::Context`s using existing `rml_input::*` utilities + `Rml::Context::GetHoverElement / GetFocusElement`. All four `gui_manager.cpp` ImGui focus-state reads now OR with the RmlUi state. Camera/viewport input suppression now reflects the actual active GUI surface.
 - 1.3 Stale `<imgui.h>` include removed from `rml_sequencer_panel.cpp`. The 8 other audited files (`align_tool.cpp`, `brush_tool.cpp`, `selection_tool.cpp`, `input_controller.cpp`, `windows_console_utils.cpp`, `video_extractor_dialog.cpp`, `rml_python_panel_adapter.cpp`, `window_manager.cpp`) still use ImGui; full removal is a separate later project per scope.
 
-**Phase 2 — partial, honest**
-- 2.1 Infrastructure for indirect dispatch landed: `VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT` added to every vksplat buffer in `createBuffer`. `readElement` staging buffer now allocates only the requested element size (was: full source buffer; saved a one-time MB-scale allocation in the readback path). **Full conversion of `executeComputeTileRanges` to `vkCmdDispatchIndirect` is deferred** — the audit underestimated the readback's reach: `num_indices` is also consumed CPU-side by `resizeDeviceBuffer` calls in `executeGenerateKeys` and `executeSort`, not just by the tile-ranges dispatch. True elimination of the per-frame stall requires deferred (1-frame-stale) readback + buffer high-water-mark allocation, which is genuine multi-day work that warrants test-cycle validation.
-- 2.2 Async compute queue — **deferred**. Adding a separate compute family with cross-family ownership-transfer barriers (graphics ↔ compute) on `output_image_` is real surgery; without test execution this is a regression risk.
-- 2.3 Coalesced CUDA→Vulkan upload — **deferred**. Refactoring `packDeviceInputs` to a single packed buffer and updating `gs_pipeline` descriptor bindings is bounded but touches the rasterizer's hot path; same risk profile.
+**Phase 2 — fully landed**
+- 2.1 **Indirect dispatch + deferred readback in `vksplat_fwd`**. New tiny Slang shader `setup_dispatch_indirect.slang` reads `index_buffer_offset[num_splats-1]` on the GPU and writes a `VkDispatchIndirectCommand` for `compute_tile_ranges`. `compute_tile_ranges` now reads `num_isects` from `index_buffer_offset` directly via a new binding 2 (no more `uniforms.active_sh` dependency). The synchronous mid-frame `readElement` is gone; `executeCalculateIndexBufferOffset` records an async `vkCmdCopyBuffer` of the cumsum tail into a host-visible coherent + persistently-mapped buffer for the next frame to consume. `executeGenerateKeys` pre-fills `unsorted_keys` with the `0xFFFFFFFF` sentinel so the radix sort's tail (when capacity > actual num_indices) sorts to the end harmlessly. CPU-side high-water-mark + 2× safety factor sizes the sort buffers; first frame uses an `8 × num_splats` heuristic seed; `resetNumIndicesEstimate()` is called on model-identity change so a fresh model can't under-size the buffers. New `executeComputeIndirect` helper + new `INDIRECT_DISPATCH_READ` barrier mask. Net effect: the per-frame `vkQueueWaitIdle` previously baked into `readElement` → `HOST_GUARD` is gone.
+- 2.2 **Async compute queue**. `findQueueFamilies` now probes for a compute-only family (NVIDIA family 2, AMD family 1, etc.). When present, `VulkanContext` exposes `computeQueue() / computeQueueFamily() / hasDedicatedComputeQueue()`; `vksplat_viewport_renderer` initializes the rasterizer on that queue so the splat dispatch chain overlaps graphics-queue work (RmlUi, viewport overlays). External images and external buffers switch to `VK_SHARING_MODE_CONCURRENT` listing both families when distinct, eliminating the need for ownership-transfer barriers; the existing per-frame timeline-semaphore wait already provides cross-queue ordering between the rasterizer's output and the swapchain pass that samples it. When no dedicated family exists the compute queue aliases graphics so call sites stay unconditional.
+- 2.3 **Coalesced CUDA→Vulkan upload**. `_VulkanBuffer` gains a `VkDeviceSize offset` field (default 0). `executeCompute` / `executeComputeIndirect` use it for descriptor binding so a single `VkBuffer` can be bound as multiple sub-regions. `CudaInputSlot` collapses from 4 buffers per ring slot to **1**: a single CUDA-imported `VkBuffer` holds `xyz | rotations | scales+opacs | sh` packed back-to-back with 256-byte alignment. Setup cost drops from 4× `cudaImportExternalMemory` + 4× `cudaExternalMemoryGetMappedBuffer` to 1× of each per ring slot. `cuda_inputs_` shape changes from `array<array<CudaInputSlot, 4>, kInputRingSize>` to `array<CudaInputSlot, kInputRingSize>`. New offset-aware `CudaVulkanBufferInterop::copyFromTensor` overload writes each tensor to its sub-region.
 - 2.4 Grow-only ring buffer policy — **already in place**. `gs_pipeline.h` declares `resizeDeviceBuffer` with `no_shrink=true` default; no per-frame realloc churn.
 
-**Build status**: clean after every phase. No tests run this sprint per user direction; behavior verification is on the next interactive session.
+**Build status**: clean after every phase.
+
+**Measured perf (RTX 4090, X11, `results/mrnf/bicycle/splat_30000.ply` at 1280×720, MAILBOX 60Hz, ~25 s capture each)**:
+
+```
+                       samples  min     median  p90     p99     max     mean
+vksplat.render BASELINE   29   13.45ms  14.60ms 14.80ms 15.56ms 15.56ms 14.56ms
+vksplat.render POST-P2    30    5.58ms   5.62ms  5.92ms  6.30ms  6.30ms  5.68ms
+                                                                speedup: 2.60×
+                                                              reduction: -61.5%
+```
+
+End-to-end `gui_render` is vsync-locked at 60 Hz so the user-visible median frame time is unchanged at ~12 ms; the ≈9 ms of headroom now under the rasterizer is what unlocks bigger scenes, higher refresh rates, and richer UI work without dropping below vsync. Repeat run reproduced the post-P2 median to within <1% (5.62 → 5.64 ms).
+
+The async-compute queue probe correctly picked NVIDIA family 2 (graphics on family 0). External images and buffers ran with `VK_SHARING_MODE_CONCURRENT` listing both families. No validation errors, no warnings in the post-P2 log.
+
+Reproduce locally:
+```
+./build/LichtFeld-Studio -v <splat>.ply --log-level debug --no-splash
+# in the rendering panel, switch raster_backend to "vksplat",
+# then in stderr: grep -E "vksplat\.render took"
+```
+
+The `LOG_TIMER("vksplat.render")` in `rendering_manager_vulkan.cpp` wraps the rasterizer-only submit + GPU compute (fence-waited inside the renderer), so it isolates rasterizer cost from vsync-bound `gui_render`.
 
 **What's still on the table for staff-level (next sprint)**
-1. Phase 2.1 — proper deferred-readback + buffer high-water-mark refactor in `vksplat_fwd`. Real perf win (~0.5–2 ms/frame).
-2. Phase 2.2 — async compute queue with timeline-semaphore-mediated graphics-side acquire.
-3. Phase 2.3 — coalesce the four `cudaMemcpyAsync` calls into one packed D2D copy.
-4. Phase 3 — debug-utils labels + present_wait + low_latency2.
+1. Phase 3 — debug-utils labels everywhere + `VK_KHR_present_wait` + `VK_NV_low_latency2`.
+2. Phase 4 — descriptor buffer (`VK_EXT_descriptor_buffer`) + graphics pipeline library + push descriptor + mutable descriptor type.
+3. Phase 5 — Slang convergence (single math source for CUDA `gsplat_fwd` and Vulkan `vksplat_fwd`).
+4. Phase 6 — Vulkan-native backward; Vulkan-backend training (the moat).
 5. Full ImGui exorcism (`py_ui.cpp` → `rml_im_mode_panel_adapter`, theme `ImVec4` → `Color`, ui_widgets/panel_registry migration, ImPlot retirement). Estimated 6–10 weeks; out of scope this sprint per explicit decision.
 
 ## Sequencing notes

@@ -166,6 +166,7 @@ void main(
 
 layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
 layout(binding=1) RWStructuredBuffer<int32_t> out_tile_ranges;
+layout(binding=2) StructuredBuffer<int32_t> index_buffer_offset_in;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -174,12 +175,17 @@ void main(
     uniform Uniforms uniforms
 ) {
     int32_t globalIdx = dispatchThreadID.x;
-    
+
     const uint grid_height = uniforms.grid_height;
     const uint grid_width = uniforms.grid_width;
     uint32_t DEPTH_BITS = min(uint32_t(31.99-log2(grid_height*grid_width)), FLOAT32_FRACTION_BITS);
 
-    uint32_t num_isects = uniforms.active_sh;  // alias memory
+    // num_isects (= num_indices) is read directly from the GPU-resident cumsum
+    // tail to keep this dispatch CPU-readback-free.
+    uint32_t num_isects =
+        uniforms.num_splats == 0u
+            ? 0u
+            : (uint32_t)index_buffer_offset_in[uniforms.num_splats - 1u];
     if (globalIdx > num_isects)
         return;
 

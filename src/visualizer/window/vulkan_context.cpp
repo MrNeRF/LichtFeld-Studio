@@ -777,17 +777,26 @@ namespace lfs::vis {
         for (uint32_t i = 0; i < count; ++i) {
             if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0 &&
                 (families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
-                indices.graphics = i;
+                if (!indices.graphics.has_value())
+                    indices.graphics = i;
             }
 
             VkBool32 present_supported = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface_, &present_supported);
             if (present_supported == VK_TRUE) {
-                indices.present = i;
+                if (!indices.present.has_value())
+                    indices.present = i;
             }
 
-            if (indices.complete()) {
-                break;
+            // Async-compute family: compute-capable, NOT graphics-capable. Typical NVIDIA
+            // layouts have a dedicated compute family at index 2; AMD has one at 1. If the
+            // device exposes only a single graphics+compute family, async_compute stays
+            // unset and the rasterizer submits on the graphics queue (correct, just no
+            // overlap with UI/swapchain work).
+            if ((families[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0 &&
+                (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0 &&
+                !indices.async_compute.has_value()) {
+                indices.async_compute = i;
             }
         }
         return indices;
@@ -910,7 +919,16 @@ namespace lfs::vis {
         graphics_queue_family_ = *families.graphics;
         present_queue_family_ = *families.present;
 
-        const std::set<uint32_t> unique_families{graphics_queue_family_, present_queue_family_};
+        std::set<uint32_t> unique_families{graphics_queue_family_, present_queue_family_};
+        if (families.async_compute.has_value() &&
+            *families.async_compute != graphics_queue_family_) {
+            unique_families.insert(*families.async_compute);
+            compute_queue_family_ = *families.async_compute;
+            has_dedicated_compute_queue_ = true;
+        } else {
+            compute_queue_family_ = graphics_queue_family_;
+            has_dedicated_compute_queue_ = false;
+        }
         std::vector<VkDeviceQueueCreateInfo> queue_infos;
         constexpr float queue_priority = 1.0f;
         for (const uint32_t family : unique_families) {
@@ -1228,6 +1246,16 @@ namespace lfs::vis {
 
         vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
+        if (has_dedicated_compute_queue_) {
+            vkGetDeviceQueue(device_, compute_queue_family_, 0, &compute_queue_);
+            LOG_INFO("Vulkan: dedicated async-compute queue family {} (graphics family {})",
+                     compute_queue_family_, graphics_queue_family_);
+        } else {
+            // Alias graphics so callers can submit unconditionally on computeQueue().
+            compute_queue_ = graphics_queue_;
+            LOG_INFO("Vulkan: no dedicated async-compute family; sharing graphics queue family {}",
+                     graphics_queue_family_);
+        }
         setDebugObjectName(VK_OBJECT_TYPE_DEVICE, device_, "LichtFeld Vulkan device");
         external_memory_interop_enabled_ = enable_external_memory;
         external_semaphore_interop_enabled_ = enable_external_semaphore;
@@ -1461,7 +1489,21 @@ namespace lfs::vis {
         image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         image_info.usage = usage;
         image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // External images written on the async-compute queue and sampled on the
+        // graphics queue need either SHARING_MODE_CONCURRENT or paired ownership-
+        // transfer barriers. CONCURRENT trades a tiny driver-side overhead for the
+        // ability to drop the transfer barriers entirely; the spec-mandated
+        // alternative is fragile when the producer/consumer queue choice can vary.
+        std::array<uint32_t, 2> external_image_families{
+            graphics_queue_family_,
+            has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
+        if (has_dedicated_compute_queue_) {
+            image_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            image_info.queueFamilyIndexCount = static_cast<uint32_t>(external_image_families.size());
+            image_info.pQueueFamilyIndices = external_image_families.data();
+        } else {
+            image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
 
         result = vkCreateImage(device_, &image_info, nullptr, &out.image);
         if (result != VK_SUCCESS) {
@@ -1609,7 +1651,21 @@ namespace lfs::vis {
                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // External buffers are CUDA-written and Vulkan-read; with a dedicated async-
+        // compute queue, the read may happen on a different family than the implicit
+        // graphics submit lane. CONCURRENT avoids the need for ownership-transfer
+        // barriers on every cross-API handoff. See createExternalImage for the same
+        // reasoning.
+        std::array<uint32_t, 2> external_buffer_families{
+            graphics_queue_family_,
+            has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
+        if (has_dedicated_compute_queue_) {
+            buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(external_buffer_families.size());
+            buffer_info.pQueueFamilyIndices = external_buffer_families.data();
+        } else {
+            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
 
         VkResult result = vkCreateBuffer(device_, &buffer_info, nullptr, &out.buffer);
         if (result != VK_SUCCESS) {

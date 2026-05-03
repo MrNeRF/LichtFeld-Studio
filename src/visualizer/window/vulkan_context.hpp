@@ -123,6 +123,12 @@ namespace lfs::vis {
         [[nodiscard]] bool hasCooperativeMatrix() const { return has_cooperative_matrix_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
         [[nodiscard]] bool hasDescriptorIndexing() const { return has_descriptor_indexing_; }
+        // Optional dedicated async-compute queue. When hasDedicatedComputeQueue() is
+        // true, computeQueue() / computeQueueFamily() are distinct from graphicsQueue();
+        // otherwise they alias the graphics queue and submitting on either is equivalent.
+        [[nodiscard]] VkQueue computeQueue() const { return compute_queue_; }
+        [[nodiscard]] uint32_t computeQueueFamily() const { return compute_queue_family_; }
+        [[nodiscard]] bool hasDedicatedComputeQueue() const { return has_dedicated_compute_queue_; }
         [[nodiscard]] const std::array<std::uint8_t, VK_UUID_SIZE>& deviceUUID() const { return device_uuid_; }
 #ifdef _WIN32
         [[nodiscard]] const std::array<std::uint8_t, VK_LUID_SIZE>& deviceLUID() const { return device_luid_; }
@@ -176,6 +182,7 @@ namespace lfs::vis {
         struct QueueFamilies {
             std::optional<uint32_t> graphics;
             std::optional<uint32_t> present;
+            std::optional<uint32_t> async_compute; // optional dedicated compute family
             [[nodiscard]] bool complete() const { return graphics.has_value() && present.has_value(); }
         };
 
@@ -255,6 +262,9 @@ namespace lfs::vis {
         VkQueue present_queue_ = VK_NULL_HANDLE;
         uint32_t graphics_queue_family_ = 0;
         uint32_t present_queue_family_ = 0;
+        VkQueue compute_queue_ = VK_NULL_HANDLE;
+        uint32_t compute_queue_family_ = 0;
+        bool has_dedicated_compute_queue_ = false;
 
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;

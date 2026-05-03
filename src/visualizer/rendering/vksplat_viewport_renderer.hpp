@@ -85,11 +85,20 @@ namespace lfs::vis {
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background);
 
+        // One coalesced CUDA-imported VkBuffer per ring slot, holding all four
+        // input regions (xyz | rotations | scales+opacs | sh) packed back-to-back
+        // with 256-byte alignment. Replaces the prior 4-buffers-per-ring scheme,
+        // collapsing 4× cudaImportExternalMemory + 4× cudaExternalMemoryGetMappedBuffer
+        // setup costs into 1×, and surfacing the regions to the rasterizer through
+        // _VulkanBuffer offset views (no descriptor-side cost).
+        static constexpr std::size_t kInputRegionCount = 4;
+        static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaInputSlot {
             VulkanContext::ExternalBuffer buffer{};
             lfs::rendering::CudaVulkanBufferInterop interop{};
-            std::size_t element_size = 0; // sizeof(float)
-            std::size_t live_bytes = 0;
+            std::array<std::size_t, kInputRegionCount> region_offset{};
+            std::array<std::size_t, kInputRegionCount> region_bytes{};
+            std::size_t total_live_bytes = 0;
         };
 
         void detachManagedBuffers();
@@ -117,7 +126,7 @@ namespace lfs::vis {
         // framesInFlight; size matches VulkanContext::framesInFlight() (asserted
         // at runtime).
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
-        std::array<std::array<CudaInputSlot, 4>, kInputRingSize> cuda_inputs_{};
+        std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the

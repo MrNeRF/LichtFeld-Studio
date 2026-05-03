@@ -175,6 +175,13 @@ namespace lfs::rendering {
         [[nodiscard]] bool copyFromTensor(const lfs::core::Tensor& tensor,
                                           std::size_t byte_count,
                                           cudaStream_t stream = nullptr) const;
+        // Offset-aware variant for coalesced layouts where one CUDA-imported
+        // VkBuffer holds multiple sub-regions (xyz | rotations | scales+opacs |
+        // sh) instead of four separate allocations.
+        [[nodiscard]] bool copyFromTensor(const lfs::core::Tensor& tensor,
+                                          std::size_t byte_count,
+                                          std::size_t dst_offset,
+                                          cudaStream_t stream) const;
 
     private:
         [[nodiscard]] bool fail(std::string message) const;

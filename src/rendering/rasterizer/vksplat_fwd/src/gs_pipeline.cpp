@@ -406,6 +406,8 @@ VkAccessFlags toAccessMask(VulkanGSPipeline::BarrierMask barrierMask) {
         barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
         result |= VK_ACCESS_SHADER_WRITE_BIT;
+    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
+        result |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
     return result;
 }
 
@@ -429,6 +431,8 @@ VkPipelineStageFlags toStageMask(VulkanGSPipeline::BarrierMask barrierMask) {
         barrierMask == VulkanGSPipeline::HOST_WRITE ||
         barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
         result |= VK_PIPELINE_STAGE_HOST_BIT;
+    if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
+        result |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
     return result;
 }
 
@@ -566,8 +570,15 @@ void VulkanGSPipeline::executeCompute(
         if (buffers[binding].buffer == VK_NULL_HANDLE)
             _THROW_ERROR("Buffer " + std::to_string(binding) + " is NULL");
         buffer_infos[idx].buffer = buffers[binding].buffer;
-        buffer_infos[idx].offset = 0;
-        buffer_infos[idx].range = buffers[binding].allocSize;
+        buffer_infos[idx].offset = buffers[binding].offset;
+        // Bind the in-use [offset, offset+size) range. For owned buffers size
+        // is set by resizeDeviceBuffer / createBuffer to match the requested
+        // allocation; for coalesced views into a parent allocation it's the
+        // sub-region's payload byte count. Falling back to allocSize when size
+        // is zero keeps any (rare) legacy callers working without surprises.
+        buffer_infos[idx].range = buffers[binding].size != 0
+                                      ? buffers[binding].size
+                                      : buffers[binding].allocSize;
 
         writes[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[idx].dstSet = VK_NULL_HANDLE; // ignored for push descriptor
@@ -610,6 +621,65 @@ void VulkanGSPipeline::executeCompute(
                      std::to_string(deviceInfo.maxGroupsY) + " " +
                      std::to_string(deviceInfo.maxGroupsZ) + "]");
     vkCmdDispatch(command_buffer, nGroupsX, nGroupsY, nGroupsZ);
+}
+
+void VulkanGSPipeline::executeComputeIndirect(
+    const _VulkanBuffer& indirect_buffer,
+    VkDeviceSize indirect_offset,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<_VulkanBuffer>& buffers) {
+    if (uniformSize > MAX_UNIFORM_SIZE)
+        _THROW_ERROR("Maximum uniform size exceeded");
+    if (indirect_buffer.buffer == VK_NULL_HANDLE)
+        _THROW_ERROR("Indirect dispatch buffer is NULL");
+
+    DEVICE_GUARD;
+
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+
+    const std::size_t num_buffers = pipeline.buffer_layouts.size();
+    std::vector<VkDescriptorBufferInfo> buffer_infos(num_buffers);
+    std::vector<VkWriteDescriptorSet> writes(num_buffers);
+    for (std::size_t idx = 0; idx < num_buffers; ++idx) {
+        const int binding = pipeline.buffer_layouts[idx];
+        if (buffers[binding].buffer == VK_NULL_HANDLE)
+            _THROW_ERROR("Buffer " + std::to_string(binding) + " is NULL");
+        buffer_infos[idx].buffer = buffers[binding].buffer;
+        buffer_infos[idx].offset = buffers[binding].offset;
+        // Bind the in-use [offset, offset+size) range. For owned buffers size
+        // is set by resizeDeviceBuffer / createBuffer to match the requested
+        // allocation; for coalesced views into a parent allocation it's the
+        // sub-region's payload byte count. Falling back to allocSize when size
+        // is zero keeps any (rare) legacy callers working without surprises.
+        buffer_infos[idx].range = buffers[binding].size != 0
+                                      ? buffers[binding].size
+                                      : buffers[binding].allocSize;
+
+        writes[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[idx].dstSet = VK_NULL_HANDLE;
+        writes[idx].dstBinding = static_cast<uint32_t>(binding);
+        writes[idx].dstArrayElement = 0;
+        writes[idx].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[idx].descriptorCount = 1;
+        writes[idx].pBufferInfo = &buffer_infos[idx];
+    }
+    vk_cmd_push_descriptor_set_(command_buffer,
+                                VK_PIPELINE_BIND_POINT_COMPUTE,
+                                pipeline.pipeline_layout,
+                                0,
+                                static_cast<uint32_t>(writes.size()),
+                                writes.data());
+
+    if (uniformsPtr) {
+        vkCmdPushConstants(
+            command_buffer,
+            pipeline.pipeline_layout,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0, (uint32_t)uniformSize, uniformsPtr);
+    }
+
+    vkCmdDispatchIndirect(command_buffer, indirect_buffer.buffer, indirect_offset);
 }
 
 void VulkanGSPipeline::destroyComputePipeline(_ComputePipeline& pipeline) {

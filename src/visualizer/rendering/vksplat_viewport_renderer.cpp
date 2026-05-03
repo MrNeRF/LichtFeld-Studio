@@ -39,6 +39,7 @@ namespace lfs::vis {
                 {"projection_forward", (root / "generated/projection_forward.spv").string()},
                 {"generate_keys", (root / "generated/generate_keys.spv").string()},
                 {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
+                {"setup_dispatch_indirect", (root / "generated/setup_dispatch_indirect.spv").string()},
                 {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
                 {"cumsum_single_pass", (root / "generated/cumsum_single_pass.spv").string()},
                 {"cumsum_block_scan", (root / "generated/cumsum_block_scan.spv").string()},
@@ -164,14 +165,12 @@ namespace lfs::vis {
             renderer_.cleanupBuffers(buffers_);
             renderer_.cleanup();
         }
-        for (auto& ring_slot : cuda_inputs_) {
-            for (auto& slot : ring_slot) {
-                slot.interop.reset();
-                if (context_) {
-                    context_->destroyExternalBuffer(slot.buffer);
-                }
-                slot = {};
+        for (auto& slot : cuda_inputs_) {
+            slot.interop.reset();
+            if (context_) {
+                context_->destroyExternalBuffer(slot.buffer);
             }
+            slot = {};
         }
         for (auto& snap : ring_uploaded_) {
             snap = {};
@@ -207,6 +206,7 @@ namespace lfs::vis {
             dev.allocation = VK_NULL_HANDLE;
             dev.allocSize = 0;
             dev.size = 0;
+            dev.offset = 0;
         };
         detach(buffers_.xyz_ws.deviceBuffer);
         detach(buffers_.rotations.deviceBuffer);
@@ -216,26 +216,30 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::plugRingInputs(const std::size_t ring_slot, const std::size_t num_splats) {
         assert(ring_slot < cuda_inputs_.size());
-        auto& ring = cuda_inputs_[ring_slot];
-        const auto plug = [](_VulkanBuffer& dev, const VulkanContext::ExternalBuffer& src, std::size_t live_bytes) {
-            dev.buffer = src.buffer;
+        auto& slot = cuda_inputs_[ring_slot];
+        // All four region views share one VkBuffer / one device allocation; only
+        // (offset, size) differs per binding. allocation is left null because the
+        // CudaInputSlot owns it.
+        const auto plug = [&](_VulkanBuffer& dev, std::size_t region) {
+            dev.buffer = slot.buffer.buffer;
             dev.allocation = VK_NULL_HANDLE;
-            dev.allocSize = static_cast<std::size_t>(src.allocation_size);
-            dev.size = live_bytes;
+            dev.allocSize = static_cast<std::size_t>(slot.buffer.allocation_size);
+            dev.offset = slot.region_offset[region];
+            dev.size = slot.region_bytes[region];
         };
-        plug(buffers_.xyz_ws.deviceBuffer, ring[0].buffer, ring[0].live_bytes);
-        plug(buffers_.rotations.deviceBuffer, ring[1].buffer, ring[1].live_bytes);
-        plug(buffers_.scales_opacs.deviceBuffer, ring[2].buffer, ring[2].live_bytes);
-        plug(buffers_.sh_coeffs.deviceBuffer, ring[3].buffer, ring[3].live_bytes);
+        plug(buffers_.xyz_ws.deviceBuffer, 0);
+        plug(buffers_.rotations.deviceBuffer, 1);
+        plug(buffers_.scales_opacs.deviceBuffer, 2);
+        plug(buffers_.sh_coeffs.deviceBuffer, 3);
 
         // Resize host-shadow vectors so the rasterizer's bookkeeping (which
-        // calls byteLength()) keeps matching the device-side payload. The
-        // host vectors are not read by the rasterizer; only their size()
-        // matters when the renderer cross-checks element counts.
-        buffers_.xyz_ws.resize(ring[0].live_bytes / sizeof(float));
-        buffers_.rotations.resize(ring[1].live_bytes / sizeof(float));
-        buffers_.scales_opacs.resize(ring[2].live_bytes / sizeof(float));
-        buffers_.sh_coeffs.resize(ring[3].live_bytes / sizeof(float));
+        // calls byteLength()) keeps matching the device-side payload. The host
+        // vectors are not read by the rasterizer; only their size() matters
+        // when the renderer cross-checks element counts.
+        buffers_.xyz_ws.resize(slot.region_bytes[0] / sizeof(float));
+        buffers_.rotations.resize(slot.region_bytes[1] / sizeof(float));
+        buffers_.scales_opacs.resize(slot.region_bytes[2] / sizeof(float));
+        buffers_.sh_coeffs.resize(slot.region_bytes[3] / sizeof(float));
 
         buffers_.num_splats = num_splats;
         buffers_.num_indices = 0;
@@ -253,8 +257,8 @@ namespace lfs::vis {
         if (slot.buffer.buffer != VK_NULL_HANDLE && slot.buffer.allocation_size >= required_bytes) {
             return {};
         }
-        // Re-allocate. The old VkBuffer is still referenced by buffers_ — that
-        // pointer will be reset by the caller after this returns.
+        // Re-allocate. The old VkBuffer is still referenced by buffers_ via the
+        // four offset views — those are reset by the caller after this returns.
         slot.interop.reset();
         context.destroyExternalBuffer(slot.buffer);
 
@@ -285,7 +289,6 @@ namespace lfs::vis {
                                                debug_name,
                                                err));
         }
-        slot.element_size = sizeof(float);
         return {};
     }
 
@@ -298,12 +301,21 @@ namespace lfs::vis {
             return {};
         }
         try {
+            // Submit the splat dispatch chain on the dedicated async-compute queue
+            // when the device exposes one (NVIDIA family 2, AMD family 1, etc.). The
+            // existing per-frame timeline-semaphore wait that gates the swapchain pass
+            // on the rasterizer's output already provides cross-queue ordering, so
+            // graphics-queue work (RmlUi, viewport overlays) can overlap the splat
+            // compute pass with no additional synchronization.
+            const bool use_async_compute = context.hasDedicatedComputeQueue();
             renderer_.initializeExternal(makeVkSplatSpirvPaths(),
                                          context.instance(),
                                          context.physicalDevice(),
                                          context.device(),
-                                         context.graphicsQueue(),
-                                         context.graphicsQueueFamily(),
+                                         use_async_compute ? context.computeQueue()
+                                                           : context.graphicsQueue(),
+                                         use_async_compute ? context.computeQueueFamily()
+                                                           : context.graphicsQueueFamily(),
                                          context.allocator());
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
@@ -361,47 +373,59 @@ namespace lfs::vis {
 
         assert(context.externalMemoryInteropEnabled());
         assert(ring_slot < cuda_inputs_.size());
-        auto& ring = cuda_inputs_[ring_slot];
+        auto& slot = cuda_inputs_[ring_slot];
 
         auto packed = vksplat::packDeviceInputs(splat_data);
         if (!packed) {
             return std::unexpected(packed.error());
         }
 
-        const std::size_t xyz_bytes = static_cast<std::size_t>(packed->xyz_ws.bytes());
-        const std::size_t rot_bytes = static_cast<std::size_t>(packed->rotations.bytes());
-        const std::size_t so_bytes = static_cast<std::size_t>(packed->scales_opacs.bytes());
-        const std::size_t sh_bytes = static_cast<std::size_t>(packed->sh_coeffs.bytes());
-
-        auto& xyz_slot = ring[0];
-        auto& rot_slot = ring[1];
-        auto& so_slot = ring[2];
-        auto& sh_slot = ring[3];
-
-        const auto setup = [&](CudaInputSlot& slot, std::size_t bytes, const char* name) {
-            return ensureCudaInputSlot(context, slot, bytes, name);
+        const std::array<std::size_t, kInputRegionCount> region_bytes{
+            static_cast<std::size_t>(packed->xyz_ws.bytes()),
+            static_cast<std::size_t>(packed->rotations.bytes()),
+            static_cast<std::size_t>(packed->scales_opacs.bytes()),
+            static_cast<std::size_t>(packed->sh_coeffs.bytes()),
         };
-        if (auto ok = setup(xyz_slot, xyz_bytes, "xyz_ws"); !ok)
-            return std::unexpected(ok.error());
-        if (auto ok = setup(rot_slot, rot_bytes, "rotations"); !ok)
-            return std::unexpected(ok.error());
-        if (auto ok = setup(so_slot, so_bytes, "scales_opacs"); !ok)
-            return std::unexpected(ok.error());
-        if (auto ok = setup(sh_slot, sh_bytes, "sh_coeffs"); !ok)
+
+        // Lay out the four regions back-to-back, padding each to kRegionAlignment
+        // so the resulting offsets are valid for VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
+        // bindings on every conformant device. Driver-required alignment is at
+        // most 256 bytes (often less) — overshooting here costs ≤ 1 KiB per ring.
+        std::array<std::size_t, kInputRegionCount> region_offset{};
+        std::size_t cursor = 0;
+        for (std::size_t i = 0; i < kInputRegionCount; ++i) {
+            region_offset[i] = cursor;
+            const std::size_t aligned = (region_bytes[i] + kRegionAlignment - 1) /
+                                        kRegionAlignment * kRegionAlignment;
+            cursor += aligned;
+        }
+        const std::size_t total_bytes = cursor;
+
+        if (auto ok = ensureCudaInputSlot(context, slot, total_bytes, "vksplat_inputs"); !ok)
             return std::unexpected(ok.error());
 
+        slot.region_offset = region_offset;
+        slot.region_bytes = region_bytes;
+        slot.total_live_bytes = total_bytes;
+
+        // Single CUDA-imported VkBuffer — four offset-targeted memcpys. Half the
+        // setup cost (1 import / 1 mapped pointer) of the prior 4-buffer scheme;
+        // the 4× cudaMemcpyAsync calls overlap on the upload stream as before.
         const cudaStream_t stream = packed->xyz_ws.stream();
-        if (!xyz_slot.interop.copyFromTensor(packed->xyz_ws, xyz_bytes, stream) ||
-            !rot_slot.interop.copyFromTensor(packed->rotations, rot_bytes, stream) ||
-            !so_slot.interop.copyFromTensor(packed->scales_opacs, so_bytes, stream) ||
-            !sh_slot.interop.copyFromTensor(packed->sh_coeffs, sh_bytes, stream)) {
+        const auto copy_region = [&](std::size_t i, const lfs::core::Tensor& t) {
+            return slot.interop.copyFromTensor(t, region_bytes[i], region_offset[i], stream);
+        };
+        if (!copy_region(0, packed->xyz_ws) ||
+            !copy_region(1, packed->rotations) ||
+            !copy_region(2, packed->scales_opacs) ||
+            !copy_region(3, packed->sh_coeffs)) {
             return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
-                                               sh_slot.interop.lastError()));
+                                               slot.interop.lastError()));
         }
 
-        // Cross-API handoff: signal CUDA-side after the memcpy completes,
-        // queue a Vulkan-side wait so the next vksplat compute submit waits on
-        // it before reading the buffers. No CPU stall.
+        // Cross-API handoff: signal CUDA-side after the memcpys complete, queue
+        // a Vulkan-side wait so the next vksplat compute submit waits on it
+        // before reading the buffers. No CPU stall.
         auto& timeline = upload_timelines_[ring_slot];
         const std::uint64_t signal_value = ++timeline.value;
         if (!timeline.cuda_semaphore.cudaSignal(signal_value, stream)) {
@@ -412,10 +436,6 @@ namespace lfs::vis {
                                      signal_value,
                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
-        xyz_slot.live_bytes = xyz_bytes;
-        rot_slot.live_bytes = rot_bytes;
-        so_slot.live_bytes = so_bytes;
-        sh_slot.live_bytes = sh_bytes;
         ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
         return {};
     }
@@ -649,6 +669,11 @@ namespace lfs::vis {
             if (auto ok = uploadInputs(context, splat_data, active_sh_degree, ring_slot); !ok) {
                 return std::unexpected(ok.error());
             }
+            // Drop the deferred-readback high-water-mark whenever the model identity
+            // changes — a fresh model can have a wildly different num_indices range,
+            // and stale estimates risk under-sizing the sort buffers (or wasting VRAM
+            // if oversized). The next frame re-seeds via heuristic and grows from there.
+            renderer_.resetNumIndicesEstimate();
         }
         plugRingInputs(ring_slot, static_cast<std::size_t>(splat_data.size()));
         if (auto ok = ensureOutputImage(context, size); !ok) {

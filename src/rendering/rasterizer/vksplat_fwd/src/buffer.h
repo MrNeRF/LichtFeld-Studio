@@ -23,32 +23,37 @@
 struct _VulkanBuffer {
     VkBuffer buffer;
     VmaAllocation allocation;
-    size_t allocSize; // allocated size in bytes
-    size_t size;      // actual size in bytes
+    size_t allocSize;    // allocated size in bytes
+    size_t size;         // actual size in bytes (within the [offset, offset+size) view)
+    VkDeviceSize offset; // descriptor binding offset (0 for owned buffers; non-zero for views into a coalesced parent allocation)
 
     _VulkanBuffer()
         : buffer(VK_NULL_HANDLE),
           allocation(VK_NULL_HANDLE),
           allocSize(0),
-          size(0) {}
+          size(0),
+          offset(0) {}
 
     _VulkanBuffer(const _VulkanBuffer& other)
         : buffer(other.buffer),
           allocation(other.allocation),
           allocSize(other.allocSize),
-          size(other.size) {}
+          size(other.size),
+          offset(other.offset) {}
 
     _VulkanBuffer& operator=(const _VulkanBuffer& other) {
         buffer = other.buffer;
         allocation = other.allocation;
         allocSize = other.allocSize;
         size = other.size;
+        offset = other.offset;
         return *this;
     }
 
     // used to test if descriptor needs to be updated
     bool operator==(const _VulkanBuffer& other) const {
-        return buffer == other.buffer && allocation == other.allocation && allocSize == other.allocSize;
+        return buffer == other.buffer && allocation == other.allocation &&
+               allocSize == other.allocSize && offset == other.offset;
     }
 };
 
@@ -117,6 +122,18 @@ struct VulkanGSPipelineBuffers {
     Buffer<int32_t> _cumsum_blockSums2;
     Buffer<int32_t> _sorting_histogram;
     Buffer<int32_t> _sorting_histogram_cumsum;
+
+    // GPU-resident VkDispatchIndirectCommand for compute_tile_ranges. Filled by
+    // setup_dispatch_indirect; consumed by vkCmdDispatchIndirect. Stored as
+    // Buffer<int32_t> only because the rasterizer only instantiates the buffer
+    // helpers for {uint8_t, float, int32_t, int64_t}; the 12-byte layout (three
+    // 32-bit unsigned counts) is identical to a Buffer<uint32_t>.
+    Buffer<int32_t> dispatch_indirect_compute_tile_ranges;
+
+    // Per-session high-water-mark for unsorted_keys / unsorted_gauss_idx capacity.
+    // Driven by the deferred (1-frame-stale) num_indices readback so generate_keys
+    // never writes past allocated bytes.
+    size_t num_indices_high_water = 0;
 
     template <typename T>
     static void reorderSH(Buffer<T>& coeffs);
