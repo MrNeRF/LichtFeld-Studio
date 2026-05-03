@@ -5,9 +5,11 @@
 #pragma once
 
 #include "core/tensor.hpp"
-#include <cuda_runtime.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cuda_runtime.h>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -63,6 +65,17 @@ namespace lfs::rendering {
         const lfs::core::Tensor& tensor,
         CudaVulkanExtent2D extent,
         cudaStream_t stream = nullptr);
+
+    // Records the Vulkan physical-device UUID expected to back any subsequent
+    // CUDA/Vulkan interop. Call once at startup, after Vulkan device selection.
+    // The first interop init() then verifies the current CUDA device matches;
+    // mismatch is a hard failure (returns false from init() with a clear error).
+    void setExpectedVulkanDeviceUuid(const std::array<std::uint8_t, 16>& uuid);
+
+    // Lazily verifies the CUDA current device's UUID against the value passed
+    // to setExpectedVulkanDeviceUuid(). Returns std::nullopt on success, or an
+    // error message on mismatch / missing setup. Result is cached.
+    [[nodiscard]] std::optional<std::string> verifyCudaMatchesVulkanDevice();
 
     namespace detail {
         enum class CudaVulkanTensorLayout : std::uint8_t {

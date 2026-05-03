@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include <SDL3/SDL.h>
@@ -203,6 +204,7 @@ namespace lfs::vis {
             SDL_Quit();
             return false;
         }
+        lfs::rendering::setExpectedVulkanDeviceUuid(vulkan_context_->deviceUUID());
         if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
             std::cerr << "Failed to present Vulkan bootstrap frame: " << vulkan_context_->lastError() << std::endl;
             vulkan_context_.reset();

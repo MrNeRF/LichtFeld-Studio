@@ -1,0 +1,69 @@
+#version 460 core
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_KHR_shader_subgroup_basic: enable
+
+#extension GL_ARB_shading_language_include : require
+#include "./config.glsl"
+
+layout (local_size_x = WORKGROUP_SIZE) in;
+
+layout (std430, binding = 1) restrict buffer GlobalHistogram {
+  uint32_t data[];  // (8, R)
+} globalHistogram;
+
+layout (std430, binding = 2) writeonly buffer PartitionHistogram {
+  uint32_t data[];  // (P, R)
+} partitionHistogram;
+
+layout (std430, binding = 0) readonly buffer Keys {
+  keyType data[];  // (N)
+} keys;
+
+layout (push_constant) uniform PushConstant {
+  uint32_t pass;
+  uint32_t elementCount;
+} uniforms;
+
+shared uint32_t localHistogram[RADIX];
+
+void main() {
+  uint threadIndex = gl_SubgroupInvocationID;  // 0..31
+  uint subgroupIndex = gl_SubgroupID;  // 0..31
+  uint index = subgroupIndex * gl_SubgroupSize + threadIndex;
+
+  uint elementCount = uniforms.elementCount;
+  int pass = int(uniforms.pass);
+
+  uint partitionIndex = gl_WorkGroupID.x;
+  uint partitionStart = partitionIndex * PARTITION_SIZE;
+
+  // discard all workgroup invocations
+  if (partitionStart >= elementCount) {
+    return;
+  }
+
+  if (index < RADIX) {
+    localHistogram[index] = 0;
+  }
+  barrier();
+
+  // local histogram
+  for (int i = 0; i < PARTITION_DIVISION; ++i) {
+    uint keyIndex = partitionStart + WORKGROUP_SIZE * i + index;
+    keyType key = keyIndex < elementCount ? keys.data[keyIndex] : keyType(-1);
+    uint radix = uint(key >> keyType(8 * pass)) & 255;
+    atomicAdd(localHistogram[radix], 1);
+  }
+  barrier();
+
+  if (index < RADIX) {
+    // set to partition histogram
+    partitionHistogram.data[RADIX * partitionIndex + index] = localHistogram[index];
+
+    // add to global histogram
+    atomicAdd(globalHistogram.data[RADIX * pass + index], localHistogram[index]);
+    // atomicAdd(globalHistogram.data[RADIX * pass + index], 1);
+  }
+}

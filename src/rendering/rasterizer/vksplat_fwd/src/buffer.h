@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include "config.h"
@@ -21,25 +22,25 @@
 // Buffers
 struct _VulkanBuffer {
     VkBuffer buffer;
-    VkDeviceMemory memory;
+    VmaAllocation allocation;
     size_t allocSize; // allocated size in bytes
     size_t size;      // actual size in bytes
 
     _VulkanBuffer()
         : buffer(VK_NULL_HANDLE),
-          memory(VK_NULL_HANDLE),
+          allocation(VK_NULL_HANDLE),
           allocSize(0),
           size(0) {}
 
     _VulkanBuffer(const _VulkanBuffer& other)
         : buffer(other.buffer),
-          memory(other.memory),
+          allocation(other.allocation),
           allocSize(other.allocSize),
           size(other.size) {}
 
     _VulkanBuffer& operator=(const _VulkanBuffer& other) {
         buffer = other.buffer;
-        memory = other.memory;
+        allocation = other.allocation;
         allocSize = other.allocSize;
         size = other.size;
         return *this;
@@ -47,11 +48,7 @@ struct _VulkanBuffer {
 
     // used to test if descriptor needs to be updated
     bool operator==(const _VulkanBuffer& other) const {
-        // printf("%d %d %d %d  ", int(buffer == other.buffer), int(memory == other.memory),
-        //     int(allocSize == other.allocSize), int(size == other.size));
-        // return buffer == other.buffer && memory == other.memory &&
-        //        allocSize == other.allocSize && size == other.size;
-        return buffer == other.buffer && memory == other.memory && allocSize == other.allocSize;
+        return buffer == other.buffer && allocation == other.allocation && allocSize == other.allocSize;
     }
 };
 

@@ -4,7 +4,6 @@
 
 #include "perf_timer.h"
 
-
 PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t image_height;
     uint32_t image_width;
@@ -22,22 +21,22 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     float world_view_transform[16];
 });
 
-
 class VulkanGSRenderer : public VulkanGSPipeline {
 public:
     VulkanGSRenderer();
     ~VulkanGSRenderer();
 
-    void initialize(const std::map<std::string, std::string> &spirv_paths, int device_id);
-    void initializeExternal(const std::map<std::string, std::string> &spirv_paths,
+    void initialize(const std::map<std::string, std::string>& spirv_paths, int device_id);
+    void initializeExternal(const std::map<std::string, std::string>& spirv_paths,
                             VkInstance external_instance,
                             VkPhysicalDevice external_physical_device,
                             VkDevice external_device,
                             VkQueue external_queue,
-                            uint32_t external_queue_family_index);
+                            uint32_t external_queue_family_index,
+                            VmaAllocator external_allocator);
     void cleanup();
 
-    void executeProjectionForward(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, size_t alloc_reserve=0);
+    void executeProjectionForward(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, size_t alloc_reserve = 0);
     void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
@@ -49,17 +48,15 @@ protected:
     virtual DeviceRequirement getDeviceRequirement();
 
     void executeCumsum(
-        VulkanGSPipelineBuffers &buffers,
-        Buffer<int32_t> &input_buffer,
-        Buffer<int32_t> &output_buffer
-    );
+        VulkanGSPipelineBuffers& buffers,
+        Buffer<int32_t>& input_buffer,
+        Buffer<int32_t>& output_buffer);
 
     _ComputePipeline pipeline_projection_forward = _ComputePipeline(11);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     _ComputePipeline pipeline_compute_tile_ranges[2] = {
         _ComputePipeline(2),
-        _ComputePipeline(2)
-    };
+        _ComputePipeline(2)};
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(7);
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
@@ -73,5 +70,4 @@ protected:
         _ComputePipeline downsweep = _ComputePipeline(6);
     } pipeline_sorting_1, pipeline_sorting_2;
     _ComputePipeline pipeline_null = _ComputePipeline(0);
-
 };

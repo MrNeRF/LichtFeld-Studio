@@ -69,7 +69,13 @@
     },
     "vulkan-memory-allocator",
     "volk",
-    "glslang",
+    {
+      "name": "glslang",
+      "features": [
+        "tools"
+      ]
+    },
+    "shader-slang",
     "usd"
   ],
   "overrides": [
@@ -172,6 +178,14 @@
     {
       "name": "rmlui",
       "version": "6.2"
+    },
+    {
+      "name": "glslang",
+      "version": "16.2.0"
+    },
+    {
+      "name": "shader-slang",
+      "version": "2026.5"
     }
   ]
 }

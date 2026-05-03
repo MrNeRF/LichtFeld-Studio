@@ -113,6 +113,19 @@ namespace lfs::vis {
         [[nodiscard]] std::size_t currentFrameSlot() const { return frame_index_; }
         [[nodiscard]] bool externalMemoryInteropEnabled() const { return external_memory_interop_enabled_; }
         [[nodiscard]] bool externalSemaphoreInteropEnabled() const { return external_semaphore_interop_enabled_; }
+        [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
+        [[nodiscard]] bool hasPushDescriptor() const { return has_push_descriptor_; }
+        [[nodiscard]] bool hasShaderObject() const { return has_shader_object_; }
+        [[nodiscard]] bool hasExtendedDynamicState3() const { return has_extended_dynamic_state3_; }
+        [[nodiscard]] bool hasCooperativeMatrix() const { return has_cooperative_matrix_; }
+        [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
+        [[nodiscard]] bool hasDescriptorIndexing() const { return has_descriptor_indexing_; }
+        [[nodiscard]] const std::array<std::uint8_t, VK_UUID_SIZE>& deviceUUID() const { return device_uuid_; }
+#ifdef _WIN32
+        [[nodiscard]] const std::array<std::uint8_t, VK_LUID_SIZE>& deviceLUID() const { return device_luid_; }
+        [[nodiscard]] bool deviceLUIDValid() const { return device_luid_valid_; }
+        [[nodiscard]] std::uint32_t deviceNodeMask() const { return device_node_mask_; }
+#endif
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
         }
@@ -226,6 +239,12 @@ namespace lfs::vis {
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
+        std::array<std::uint8_t, VK_UUID_SIZE> device_uuid_{};
+#ifdef _WIN32
+        std::array<std::uint8_t, VK_LUID_SIZE> device_luid_{};
+        bool device_luid_valid_ = false;
+        std::uint32_t device_node_mask_ = 0;
+#endif
         VkDevice device_ = VK_NULL_HANDLE;
         VmaAllocator allocator_ = VK_NULL_HANDLE;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
@@ -265,6 +284,12 @@ namespace lfs::vis {
         bool external_memory_interop_enabled_ = false;
         bool external_semaphore_interop_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
+        bool has_push_descriptor_ = false;
+        bool has_shader_object_ = false;
+        bool has_extended_dynamic_state3_ = false;
+        bool has_cooperative_matrix_ = false;
+        bool has_host_image_copy_ = false;
+        bool has_descriptor_indexing_ = false;
         PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
         uint32_t active_image_index_ = 0;
         std::size_t frame_index_ = 0;

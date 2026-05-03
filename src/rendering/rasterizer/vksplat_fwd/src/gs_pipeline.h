@@ -8,6 +8,7 @@
 #include <string>
 #include <variant>
 #include <vector>
+#include <vk_mem_alloc.h>
 #include <vulkan/vulkan.h>
 
 #include <cassert>
@@ -29,7 +30,8 @@ public:
                             VkPhysicalDevice external_physical_device,
                             VkDevice external_device,
                             VkQueue external_queue,
-                            uint32_t external_queue_family_index);
+                            uint32_t external_queue_family_index,
+                            VmaAllocator external_allocator);
     void cleanup();
     void cleanupBuffers(VulkanGSPipelineBuffers& buffers);
 
@@ -115,8 +117,10 @@ protected:
     VkCommandBuffer command_buffer;
     VkFence fence;
     VkQueryPool timestamp_query_pool;
+    VmaAllocator allocator = VK_NULL_HANDLE;
     bool owns_instance = true;
     bool owns_device = true;
+    bool owns_allocator = true;
 
     enum class DeviceVendor {
         Unknown,
@@ -192,7 +196,7 @@ protected:
     // For CPU-GPU transfers
     struct _Stager {
         VkBuffer buffer = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
         size_t allocSize = 0;
         std::mutex mutex;
     };

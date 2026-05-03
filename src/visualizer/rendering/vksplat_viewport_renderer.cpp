@@ -117,66 +117,6 @@ namespace lfs::vis {
             glm::vec4 background{0.0f, 0.0f, 0.0f, 1.0f};
         };
 
-        [[nodiscard]] VkAccessFlags accessForLayout(const VkImageLayout layout) {
-            switch (layout) {
-            case VK_IMAGE_LAYOUT_UNDEFINED:
-                return 0;
-            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-                return VK_ACCESS_TRANSFER_WRITE_BIT;
-            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-                return VK_ACCESS_SHADER_READ_BIT;
-            case VK_IMAGE_LAYOUT_GENERAL:
-                return VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-            default:
-                return VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-            }
-        }
-
-        [[nodiscard]] VkPipelineStageFlags stageForLayout(const VkImageLayout layout) {
-            switch (layout) {
-            case VK_IMAGE_LAYOUT_UNDEFINED:
-                return VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-                return VK_PIPELINE_STAGE_TRANSFER_BIT;
-            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-                return VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-            case VK_IMAGE_LAYOUT_GENERAL:
-                return VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-            default:
-                return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-            }
-        }
-
-        void imageBarrier(VkCommandBuffer command_buffer,
-                          VkImage image,
-                          const VkImageLayout old_layout,
-                          const VkImageLayout new_layout,
-                          const VkAccessFlags dst_access,
-                          const VkPipelineStageFlags dst_stage) {
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.srcAccessMask = accessForLayout(old_layout);
-            barrier.dstAccessMask = dst_access;
-            barrier.oldLayout = old_layout;
-            barrier.newLayout = new_layout;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = image;
-            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.layerCount = 1;
-            vkCmdPipelineBarrier(command_buffer,
-                                 stageForLayout(old_layout),
-                                 dst_stage,
-                                 0,
-                                 0,
-                                 nullptr,
-                                 0,
-                                 nullptr,
-                                 1,
-                                 &barrier);
-        }
-
     } // namespace
 
     struct VksplatViewportRenderer::ComposePipeline {
@@ -228,14 +168,22 @@ namespace lfs::vis {
             renderer_.cleanupBuffers(buffers_);
             renderer_.cleanup();
         }
-        for (auto& slot : cuda_inputs_) {
-            slot.interop.reset();
-            if (context_) {
-                context_->destroyExternalBuffer(slot.buffer);
+        for (auto& ring_slot : cuda_inputs_) {
+            for (auto& slot : ring_slot) {
+                slot.interop.reset();
+                if (context_) {
+                    context_->destroyExternalBuffer(slot.buffer);
+                }
+                slot = {};
             }
-            slot = {};
+        }
+        for (auto& snap : ring_uploaded_) {
+            snap = {};
         }
         if (context_) {
+            if (output_image_.image != VK_NULL_HANDLE) {
+                context_->imageBarriers().forgetImage(output_image_.image);
+            }
             context_->destroyExternalImage(output_image_);
             if (compose_) {
                 compose_->destroy(context_->device());
@@ -254,7 +202,7 @@ namespace lfs::vis {
     void VksplatViewportRenderer::detachManagedBuffers() {
         const auto detach = [](_VulkanBuffer& dev) {
             dev.buffer = VK_NULL_HANDLE;
-            dev.memory = VK_NULL_HANDLE;
+            dev.allocation = VK_NULL_HANDLE;
             dev.allocSize = 0;
             dev.size = 0;
         };
@@ -262,6 +210,34 @@ namespace lfs::vis {
         detach(buffers_.rotations.deviceBuffer);
         detach(buffers_.scales_opacs.deviceBuffer);
         detach(buffers_.sh_coeffs.deviceBuffer);
+    }
+
+    void VksplatViewportRenderer::plugRingInputs(const std::size_t ring_slot, const std::size_t num_splats) {
+        assert(ring_slot < cuda_inputs_.size());
+        auto& ring = cuda_inputs_[ring_slot];
+        const auto plug = [](_VulkanBuffer& dev, const VulkanContext::ExternalBuffer& src, std::size_t live_bytes) {
+            dev.buffer = src.buffer;
+            dev.allocation = VK_NULL_HANDLE;
+            dev.allocSize = static_cast<std::size_t>(src.allocation_size);
+            dev.size = live_bytes;
+        };
+        plug(buffers_.xyz_ws.deviceBuffer, ring[0].buffer, ring[0].live_bytes);
+        plug(buffers_.rotations.deviceBuffer, ring[1].buffer, ring[1].live_bytes);
+        plug(buffers_.scales_opacs.deviceBuffer, ring[2].buffer, ring[2].live_bytes);
+        plug(buffers_.sh_coeffs.deviceBuffer, ring[3].buffer, ring[3].live_bytes);
+
+        // Resize host-shadow vectors so the rasterizer's bookkeeping (which
+        // calls byteLength()) keeps matching the device-side payload. The
+        // host vectors are not read by the rasterizer; only their size()
+        // matters when the renderer cross-checks element counts.
+        buffers_.xyz_ws.resize(ring[0].live_bytes / sizeof(float));
+        buffers_.rotations.resize(ring[1].live_bytes / sizeof(float));
+        buffers_.scales_opacs.resize(ring[2].live_bytes / sizeof(float));
+        buffers_.sh_coeffs.resize(ring[3].live_bytes / sizeof(float));
+
+        buffers_.num_splats = num_splats;
+        buffers_.num_indices = 0;
+        buffers_.is_unsorted_1 = true;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::ensureCudaInputSlot(
@@ -325,7 +301,8 @@ namespace lfs::vis {
                                          context.physicalDevice(),
                                          context.device(),
                                          context.graphicsQueue(),
-                                         context.graphicsQueueFamily());
+                                         context.graphicsQueueFamily(),
+                                         context.allocator());
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }
@@ -333,20 +310,28 @@ namespace lfs::vis {
         return {};
     }
 
-    bool VksplatViewportRenderer::inputsResident(const lfs::core::SplatData& splat_data) const {
+    bool VksplatViewportRenderer::inputsResident(const lfs::core::SplatData& splat_data,
+                                                 const std::size_t ring_slot) const {
+        const auto current = makeModelInputSnapshot(splat_data);
+        if (cuda_inputs_supported_) {
+            if (ring_slot >= ring_uploaded_.size())
+                return false;
+            return ring_uploaded_[ring_slot].valid() && ring_uploaded_[ring_slot] == current;
+        }
         return uploaded_inputs_.valid() &&
                buffers_.num_splats > 0 &&
                buffers_.xyz_ws.deviceBuffer.buffer != VK_NULL_HANDLE &&
                buffers_.sh_coeffs.deviceBuffer.buffer != VK_NULL_HANDLE &&
                buffers_.rotations.deviceBuffer.buffer != VK_NULL_HANDLE &&
                buffers_.scales_opacs.deviceBuffer.buffer != VK_NULL_HANDLE &&
-               uploaded_inputs_ == makeModelInputSnapshot(splat_data);
+               uploaded_inputs_ == current;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::uploadInputs(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
-        const int active_sh_degree) {
+        const int active_sh_degree,
+        const std::size_t ring_slot) {
         (void)active_sh_degree;
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
@@ -354,6 +339,9 @@ namespace lfs::vis {
         }
 
         if (cuda_inputs_supported_ && context.externalMemoryInteropEnabled()) {
+            assert(ring_slot < cuda_inputs_.size());
+            auto& ring = cuda_inputs_[ring_slot];
+
             auto packed = vksplat::packDeviceInputs(splat_data);
             if (!packed) {
                 return std::unexpected(packed.error());
@@ -364,10 +352,10 @@ namespace lfs::vis {
             const std::size_t so_bytes = static_cast<std::size_t>(packed->scales_opacs.bytes());
             const std::size_t sh_bytes = static_cast<std::size_t>(packed->sh_coeffs.bytes());
 
-            auto& xyz_slot = cuda_inputs_[0];
-            auto& rot_slot = cuda_inputs_[1];
-            auto& so_slot = cuda_inputs_[2];
-            auto& sh_slot = cuda_inputs_[3];
+            auto& xyz_slot = ring[0];
+            auto& rot_slot = ring[1];
+            auto& so_slot = ring[2];
+            auto& sh_slot = ring[3];
 
             const auto setup = [&](CudaInputSlot& slot, std::size_t bytes, const char* name) {
                 return ensureCudaInputSlot(context, slot, bytes, name);
@@ -406,30 +394,11 @@ namespace lfs::vis {
                                                    cudaGetErrorString(sync)));
             }
 
-            const auto plug = [](_VulkanBuffer& dev, const VulkanContext::ExternalBuffer& src, std::size_t live_bytes) {
-                dev.buffer = src.buffer;
-                dev.memory = src.memory;
-                dev.allocSize = static_cast<std::size_t>(src.allocation_size);
-                dev.size = live_bytes;
-            };
-            plug(buffers_.xyz_ws.deviceBuffer, xyz_slot.buffer, xyz_bytes);
-            plug(buffers_.rotations.deviceBuffer, rot_slot.buffer, rot_bytes);
-            plug(buffers_.scales_opacs.deviceBuffer, so_slot.buffer, so_bytes);
-            plug(buffers_.sh_coeffs.deviceBuffer, sh_slot.buffer, sh_bytes);
-
-            // Resize host-shadow vectors so the rasterizer's bookkeeping (which
-            // calls byteLength()) keeps matching the device-side payload. The
-            // host vectors are not read by the rasterizer; only their size()
-            // matters when the renderer cross-checks element counts.
-            buffers_.xyz_ws.resize(xyz_bytes / sizeof(float));
-            buffers_.rotations.resize(rot_bytes / sizeof(float));
-            buffers_.scales_opacs.resize(so_bytes / sizeof(float));
-            buffers_.sh_coeffs.resize(sh_bytes / sizeof(float));
-
-            buffers_.num_splats = n;
-            buffers_.num_indices = 0;
-            buffers_.is_unsorted_1 = true;
-            uploaded_inputs_ = makeModelInputSnapshot(splat_data);
+            xyz_slot.live_bytes = xyz_bytes;
+            rot_slot.live_bytes = rot_bytes;
+            so_slot.live_bytes = so_bytes;
+            sh_slot.live_bytes = sh_bytes;
+            ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
             return {};
         }
 
@@ -463,6 +432,9 @@ namespace lfs::vis {
         if (output_image_.image != VK_NULL_HANDLE && output_size_ == size) {
             return {};
         }
+        if (output_image_.image != VK_NULL_HANDLE) {
+            context.imageBarriers().forgetImage(output_image_.image);
+        }
         context.destroyExternalImage(output_image_);
         output_size_ = {0, 0};
         output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -473,6 +445,9 @@ namespace lfs::vis {
         if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, output_image_)) {
             return std::unexpected(context.lastError());
         }
+        context.imageBarriers().registerImage(output_image_.image,
+                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                              VK_IMAGE_LAYOUT_UNDEFINED);
         output_size_ = size;
         ++output_generation_;
         return {};
@@ -581,12 +556,10 @@ namespace lfs::vis {
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
                                      buffers_.pixel_state.deviceBuffer.size > 0;
         if (!has_pixel_state) {
-            imageBarrier(cmd,
-                         output_image_.image,
-                         output_layout_,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         VK_ACCESS_TRANSFER_WRITE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+            context.imageBarriers().transitionImage(cmd,
+                                                    output_image_.image,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             VkClearColorValue clear{{background.r, background.g, background.b, 1.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -598,12 +571,10 @@ namespace lfs::vis {
                                  &clear,
                                  1,
                                  &range);
-            imageBarrier(cmd,
-                         output_image_.image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                         VK_ACCESS_SHADER_READ_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+            context.imageBarriers().transitionImage(cmd,
+                                                    output_image_.image,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             output_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             ++output_generation_;
             return {};
@@ -630,30 +601,25 @@ namespace lfs::vis {
         writes[1].pImageInfo = &image_info;
         vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
-        VkBufferMemoryBarrier pixel_barrier{};
-        pixel_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        pixel_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        pixel_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        pixel_barrier.srcQueueFamilyIndex = context.graphicsQueueFamily();
-        pixel_barrier.dstQueueFamilyIndex = context.graphicsQueueFamily();
+        VkBufferMemoryBarrier2 pixel_barrier{};
+        pixel_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        pixel_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        pixel_barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        pixel_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        pixel_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        pixel_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pixel_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         pixel_barrier.buffer = buffers_.pixel_state.deviceBuffer.buffer;
         pixel_barrier.size = buffers_.pixel_state.deviceBuffer.size;
-        vkCmdPipelineBarrier(cmd,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0,
-                             0,
-                             nullptr,
-                             1,
-                             &pixel_barrier,
-                             0,
-                             nullptr);
-        imageBarrier(cmd,
-                     output_image_.image,
-                     output_layout_,
-                     VK_IMAGE_LAYOUT_GENERAL,
-                     VK_ACCESS_SHADER_WRITE_BIT,
-                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        VkDependencyInfo pixel_dep{};
+        pixel_dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        pixel_dep.bufferMemoryBarrierCount = 1;
+        pixel_dep.pBufferMemoryBarriers = &pixel_barrier;
+        vkCmdPipelineBarrier2(cmd, &pixel_dep);
+        context.imageBarriers().transitionImage(cmd,
+                                                output_image_.image,
+                                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                                VK_IMAGE_LAYOUT_GENERAL);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compose_->pipeline);
         vkCmdBindDescriptorSets(cmd,
@@ -679,12 +645,10 @@ namespace lfs::vis {
                       _CEIL_DIV(uniforms.image_width, 16),
                       _CEIL_DIV(uniforms.image_height, 16),
                       1);
-        imageBarrier(cmd,
-                     output_image_.image,
-                     VK_IMAGE_LAYOUT_GENERAL,
-                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                     VK_ACCESS_SHADER_READ_BIT,
-                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        context.imageBarriers().transitionImage(cmd,
+                                                output_image_.image,
+                                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         output_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         ++output_generation_;
         return {};
@@ -713,10 +677,17 @@ namespace lfs::vis {
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
-        if (force_input_upload || !inputsResident(splat_data)) {
-            if (auto ok = uploadInputs(context, splat_data, active_sh_degree); !ok) {
+
+        const std::size_t ring_slot = context.currentFrameSlot() % kInputRingSize;
+        assert(context.framesInFlight() == kInputRingSize);
+
+        if (force_input_upload || !inputsResident(splat_data, ring_slot)) {
+            if (auto ok = uploadInputs(context, splat_data, active_sh_degree, ring_slot); !ok) {
                 return std::unexpected(ok.error());
             }
+        }
+        if (cuda_inputs_supported_) {
+            plugRingInputs(ring_slot, static_cast<std::size_t>(splat_data.size()));
         }
         if (auto ok = ensureOutputImage(context, size); !ok) {
             return std::unexpected(ok.error());

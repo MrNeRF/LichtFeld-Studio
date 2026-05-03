@@ -9,11 +9,11 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <limits>
 #include <set>
 #include <utility>
@@ -156,7 +156,7 @@ namespace lfs::vis {
             create_info = {};
             create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
             create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+                                          VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
             create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
                                       VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
@@ -417,9 +417,9 @@ namespace lfs::vis {
 
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
         image_barriers_.transitionImage(command_buffer,
-                                     swapchain_images_[image_index],
-                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                                        swapchain_images_[image_index],
+                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         if (image_index >= depth_stencil_resources_.size() ||
             depth_stencil_resources_[image_index].image == VK_NULL_HANDLE ||
@@ -428,9 +428,9 @@ namespace lfs::vis {
         }
         const DepthStencilResource& depth_stencil = depth_stencil_resources_[image_index];
         image_barriers_.transitionImage(command_buffer,
-                                     depth_stencil.image,
-                                     depthStencilAspectMask(),
-                                     VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+                                        depth_stencil.image,
+                                        depthStencilAspectMask(),
+                                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
         VkRenderingAttachmentInfo color_attachment{};
         color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -485,9 +485,9 @@ namespace lfs::vis {
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
         vkCmdEndRendering(command_buffer);
         image_barriers_.transitionImage(command_buffer,
-                                     swapchain_images_[active_image_index_],
-                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                                        swapchain_images_[active_image_index_],
+                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         VkResult result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
@@ -823,6 +823,19 @@ namespace lfs::vis {
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(physical_device_, &props);
         LOG_INFO("Vulkan device: {} (API {})", props.deviceName, vulkanApiVersionString(props.apiVersion));
+
+        VkPhysicalDeviceIDProperties id_props{};
+        id_props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+        VkPhysicalDeviceProperties2 props2{};
+        props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        props2.pNext = &id_props;
+        vkGetPhysicalDeviceProperties2(physical_device_, &props2);
+        std::memcpy(device_uuid_.data(), id_props.deviceUUID, VK_UUID_SIZE);
+#ifdef _WIN32
+        std::memcpy(device_luid_.data(), id_props.deviceLUID, VK_LUID_SIZE);
+        device_luid_valid_ = id_props.deviceLUIDValid != VK_FALSE;
+        device_node_mask_ = id_props.deviceNodeMask;
+#endif
         return true;
     }
 
@@ -916,6 +929,35 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
 
+        // Phase 2/3 modernization extensions. Each is opportunistic — enabled
+        // when present, and code paths that need them gate on the runtime flag
+        // exposed via VulkanContext::has*() accessors.
+        const bool enable_push_descriptor =
+            extensionAvailable(available_extensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+        if (enable_push_descriptor) {
+            appendUniqueExtension(extensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+        }
+        const bool enable_shader_object =
+            extensionAvailable(available_extensions, VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
+        if (enable_shader_object) {
+            appendUniqueExtension(extensions, VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
+        }
+        const bool enable_extended_dynamic_state3 =
+            extensionAvailable(available_extensions, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+        if (enable_extended_dynamic_state3) {
+            appendUniqueExtension(extensions, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+        }
+        const bool enable_cooperative_matrix =
+            extensionAvailable(available_extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        if (enable_cooperative_matrix) {
+            appendUniqueExtension(extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
+        }
+        const bool enable_host_image_copy =
+            extensionAvailable(available_extensions, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+        if (enable_host_image_copy) {
+            appendUniqueExtension(extensions, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
+        }
+
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float_features{};
         supported_atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
         VkPhysicalDeviceSubgroupSizeControlFeaturesEXT supported_subgroup_size_control_features{};
@@ -927,9 +969,9 @@ namespace lfs::vis {
         supported_features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         supported_features12.pNext = enable_subgroup_size_control
                                          ? static_cast<void*>(&supported_subgroup_size_control_features)
-                                         : enable_shader_atomic_float
-                                               ? static_cast<void*>(&supported_atomic_float_features)
-                                               : nullptr;
+                                     : enable_shader_atomic_float
+                                         ? static_cast<void*>(&supported_atomic_float_features)
+                                         : nullptr;
         VkPhysicalDeviceFeatures2 supported_features2{};
         supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         supported_features2.pNext = &supported_features12;
@@ -965,13 +1007,32 @@ namespace lfs::vis {
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         features12.pNext = enable_subgroup_size_control
-                                ? static_cast<void*>(&subgroup_size_control_features)
-                                : enable_shader_atomic_float
-                                      ? static_cast<void*>(&atomic_float_features)
-                                      : static_cast<void*>(&features13);
+                               ? static_cast<void*>(&subgroup_size_control_features)
+                           : enable_shader_atomic_float
+                               ? static_cast<void*>(&atomic_float_features)
+                               : static_cast<void*>(&features13);
         features12.timelineSemaphore = VK_TRUE;
         features12.bufferDeviceAddress = VK_TRUE;
         features12.shaderFloat16 = supported_features12.shaderFloat16;
+        // Descriptor indexing (bindless). Required for the descriptor-indexing
+        // path used by RmlUi + viewport scene/grid bindings (Phase 3 P8).
+        // All four are widely supported on NVIDIA and AMD desktop drivers; we
+        // mirror device-reported support and let pickPhysicalDevice gate the
+        // mandatory subset via hasRequiredFeatures.
+        features12.descriptorIndexing = supported_features12.descriptorIndexing;
+        features12.shaderSampledImageArrayNonUniformIndexing =
+            supported_features12.shaderSampledImageArrayNonUniformIndexing;
+        features12.shaderStorageBufferArrayNonUniformIndexing =
+            supported_features12.shaderStorageBufferArrayNonUniformIndexing;
+        features12.descriptorBindingPartiallyBound =
+            supported_features12.descriptorBindingPartiallyBound;
+        features12.descriptorBindingSampledImageUpdateAfterBind =
+            supported_features12.descriptorBindingSampledImageUpdateAfterBind;
+        features12.descriptorBindingUpdateUnusedWhilePending =
+            supported_features12.descriptorBindingUpdateUnusedWhilePending;
+        features12.descriptorBindingVariableDescriptorCount =
+            supported_features12.descriptorBindingVariableDescriptorCount;
+        features12.runtimeDescriptorArray = supported_features12.runtimeDescriptorArray;
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -1006,6 +1067,12 @@ namespace lfs::vis {
         external_memory_interop_enabled_ = enable_external_memory;
         external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
+        has_push_descriptor_ = enable_push_descriptor;
+        has_shader_object_ = enable_shader_object;
+        has_extended_dynamic_state3_ = enable_extended_dynamic_state3;
+        has_cooperative_matrix_ = enable_cooperative_matrix;
+        has_host_image_copy_ = enable_host_image_copy;
+        has_descriptor_indexing_ = supported_features12.descriptorIndexing == VK_TRUE;
         if (external_memory_interop_enabled_) {
             LOG_INFO("Vulkan external memory interop enabled{}",
                      external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
@@ -1793,8 +1860,8 @@ namespace lfs::vis {
         swapchain_image_usage_ = create_info.imageUsage;
         for (size_t i = 0; i < swapchain_images_.size(); ++i) {
             image_barriers_.registerImage(swapchain_images_[i],
-                                       VK_IMAGE_ASPECT_COLOR_BIT,
-                                       VK_IMAGE_LAYOUT_UNDEFINED);
+                                          VK_IMAGE_ASPECT_COLOR_BIT,
+                                          VK_IMAGE_LAYOUT_UNDEFINED);
             setDebugObjectName(VK_OBJECT_TYPE_IMAGE,
                                swapchain_images_[i],
                                std::format("Swapchain image {}", i));
@@ -1916,8 +1983,8 @@ namespace lfs::vis {
                                std::format("Depth/stencil image view {}", i));
 
             image_barriers_.registerImage(resource.image,
-                                       depthStencilAspectMask(),
-                                       VK_IMAGE_LAYOUT_UNDEFINED);
+                                          depthStencilAspectMask(),
+                                          VK_IMAGE_LAYOUT_UNDEFINED);
         }
         return true;
     }
