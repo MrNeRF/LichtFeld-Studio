@@ -1187,6 +1187,46 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), "Get node transform matrix (16 floats, column-major)");
 
     m.def(
+        "get_node_source_path", [](const std::string& name) -> std::optional<std::string> {
+            const auto* sm = lfs::python::get_scene_manager();
+            if (!sm)
+                return std::nullopt;
+
+            if (auto path = sm->getPlyPath(name); path) {
+                return lfs::core::path_to_utf8(*path);
+            }
+
+            const auto& scene = sm->getScene();
+            const auto* node = scene.getNode(name);
+            if (!node)
+                return std::nullopt;
+
+            if (node->type == lfs::core::NodeType::DATASET) {
+                const auto dataset_path = sm->getDatasetPath();
+                if (!dataset_path.empty()) {
+                    return lfs::core::path_to_utf8(dataset_path);
+                }
+            }
+
+            if (node->parent_id != lfs::core::NULL_NODE) {
+                if (const auto* parent = scene.getNodeById(node->parent_id); parent) {
+                    if (parent->type == lfs::core::NodeType::DATASET) {
+                        const auto dataset_path = sm->getDatasetPath();
+                        if (!dataset_path.empty()) {
+                            return lfs::core::path_to_utf8(dataset_path);
+                        }
+                    }
+                    if (auto path = sm->getPlyPath(parent->name); path) {
+                        return lfs::core::path_to_utf8(*path);
+                    }
+                }
+            }
+
+            return std::nullopt;
+        },
+        nb::arg("name"), "Get original source path for a node if available");
+
+    m.def(
         "get_node_visualizer_world_transform", [](const std::string& name) -> std::optional<std::vector<float>> {
             auto* sm = lfs::python::get_scene_manager();
             if (!sm)

@@ -444,20 +444,28 @@ class TransformControlsController:
             return
 
         node_name = self._selected[0]
-        if self._active_tool == "builtin.rotate":
-            euler_to_use = self._euler
-            self._state.euler_display = self._euler.copy()
-        else:
-            current_transform = self._single_display_transform(node_name)
-            decomp_current = lf.decompose_transform(current_transform) if current_transform else None
-            euler_to_use = decomp_current["rotation_euler_deg"] if decomp_current else self._euler
 
-        new_transform = lf.compose_transform(self._trans, euler_to_use, self._scale)
+        # Always read current transform to ensure we have up-to-date translation and scale
+        current_transform = self._single_display_transform(node_name)
+        decomp_current = lf.decompose_transform(current_transform) if current_transform else None
+
+        if self._active_tool == "builtin.rotate":
+            euler_to_use = list(self._euler)  # COPY to avoid reference issues
+            self._state.euler_display = list(self._euler)  # COPY
+            # Use current translation and scale from node to ensure we're not using stale values
+            trans_to_use = list(decomp_current["translation"]) if decomp_current else list(self._trans)
+            scale_to_use = list(decomp_current["scale"]) if decomp_current else list(self._scale)
+        else:
+            euler_to_use = list(decomp_current["rotation_euler_deg"]) if decomp_current else list(self._euler)
+            trans_to_use = list(self._trans)  # COPY
+            scale_to_use = list(self._scale)  # COPY
+
+        new_transform = lf.compose_transform(trans_to_use, euler_to_use, scale_to_use)
         self._set_single_display_transform(node_name, new_transform)
 
         if self._active_tool == "builtin.rotate":
             new_decomp = lf.decompose_transform(new_transform)
-            self._state.euler_display_rotation = new_decomp["rotation_quat"].copy()
+            self._state.euler_display_rotation = list(new_decomp["rotation_quat"])  # COPY
 
     def _apply_multi_transform(self, tool: str):
         if (

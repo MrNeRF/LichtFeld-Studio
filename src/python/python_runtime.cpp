@@ -87,6 +87,9 @@ namespace lfs::python {
         GetTransformSpaceCallback g_get_transform_space_cb = nullptr;
         SetTransformSpaceCallback g_set_transform_space_cb = nullptr;
 
+        // Asset Manager save callback
+        SaveAssetCallback g_save_asset_cb = nullptr;
+
         // Thumbnail callbacks
         RequestThumbnailCallback g_request_thumbnail_cb = nullptr;
         ProcessThumbnailsCallback g_process_thumbnails_cb = nullptr;
@@ -517,6 +520,15 @@ namespace lfs::python {
     void set_transform_space(int space) {
         if (g_set_transform_space_cb)
             g_set_transform_space_cb(space);
+    }
+
+    void set_save_asset_callback(SaveAssetCallback save_cb) {
+        g_save_asset_cb = save_cb;
+    }
+
+    void invoke_save_asset(const std::string& node_name) {
+        if (g_save_asset_cb)
+            g_save_asset_cb(node_name.c_str());
     }
 
     void set_scene_manager(vis::SceneManager* sm) { g_scene_manager.store(sm); }

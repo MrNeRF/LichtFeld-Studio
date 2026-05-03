@@ -3,6 +3,7 @@
 """File menu implementation using Blender-style operators."""
 
 import lichtfeld as lf
+from .asset_manager_integration import register_catalog_asset_path
 from .types import Operator
 from .layouts.menus import register_menu, menu_operator, menu_separator
 from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
@@ -37,6 +38,7 @@ class ImportPlyOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_ply_file_dialog("")
         if path:
+            register_catalog_asset_path(path, select=True)
             lf.load_file(path, is_dataset=False)
         return {"FINISHED"}
 
@@ -48,6 +50,12 @@ class ImportMeshOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_mesh_file_dialog("")
         if path:
+            register_catalog_asset_path(
+                path,
+                asset_type="mesh",
+                role="reference",
+                select=True,
+            )
             lf.load_file(path, is_dataset=False)
         return {"FINISHED"}
 

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <glm/glm.hpp>
 #include <imgui.h>
 
@@ -44,7 +46,7 @@ namespace lfs::vis::gui {
         glm::vec3 total_translation{0.0f};
     };
 
-    TranslationGizmoResult drawTranslationGizmo(const TranslationGizmoConfig& config);
+    LFS_VIS_API TranslationGizmoResult drawTranslationGizmo(const TranslationGizmoConfig& config);
 
     [[nodiscard]] bool isTranslationGizmoHovered();
     [[nodiscard]] bool isTranslationGizmoActive();

@@ -66,6 +66,7 @@
 .row-icon.type-icon.camera       { image-color: @{alpha(text_dim,0.78)}; }
 .row-icon.type-icon.camera_group { image-color: @{alpha(primary_dim,0.80)}; }
 .row-icon.type-icon.cropbox      { image-color: @{alpha(warning,0.90)}; }
+.row-icon.type-icon.transform    { image-color: @{alpha(warning,0.90)}; }
 .row-icon.type-icon.ellipsoid    { image-color: @{alpha(info,0.90)}; }
 .row-icon.type-icon.pointcloud   { image-color: @{alpha(secondary,0.80)}; }
 .row-icon.type-icon.mesh         { image-color: @{alpha(success,0.90)}; }

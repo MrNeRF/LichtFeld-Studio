@@ -79,6 +79,7 @@ namespace lfs::vis::gui {
             bool collapsed = false;
             bool draggable = false;
             bool training_enabled = true;
+            std::string name;
             std::string label;
             std::string node_id_text;
             std::string encoded_label;

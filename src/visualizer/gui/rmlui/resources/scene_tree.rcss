@@ -499,6 +499,7 @@ scene-graph,
 .row-icon.type-icon.camera       { image-color: rgba(127, 153, 204, 200); }
 .row-icon.type-icon.camera_group { image-color: rgba(153, 178, 230, 204); }
 .row-icon.type-icon.cropbox      { image-color: rgba(255, 178, 77, 230); }
+.row-icon.type-icon.transform    { image-color: rgba(255, 178, 77, 230); }
 .row-icon.type-icon.ellipsoid    { image-color: rgba(77, 204, 255, 230); }
 .row-icon.type-icon.pointcloud   { image-color: rgba(204, 127, 255, 204); }
 .row-icon.type-icon.mesh         { image-color: rgba(127, 230, 153, 230); }

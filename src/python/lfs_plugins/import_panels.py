@@ -7,6 +7,7 @@ from pathlib import Path
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .asset_manager_integration import register_catalog_asset_path
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
 
@@ -329,6 +330,7 @@ class DatasetImportPanel(_ImportDialogPanel):
                 params.ppisp = True
 
         lf.ui.set_panel_enabled(self.id, False)
+        register_catalog_asset_path(dataset_path, is_dataset=True, select=True)
         lf.load_file(
             dataset_path,
             is_dataset=True,
@@ -491,6 +493,13 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
             return
 
         lf.ui.set_panel_enabled(self.id, False)
+        register_catalog_asset_path(self._dataset_path, is_dataset=True)
+        register_catalog_asset_path(
+            self._checkpoint_path,
+            asset_type="checkpoint",
+            role="training_checkpoint",
+            select=True,
+        )
         lf.load_checkpoint_for_training(
             self._checkpoint_path,
             self._dataset_path,

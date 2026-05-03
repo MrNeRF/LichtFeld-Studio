@@ -3,7 +3,7 @@
 """Tools menu implementation."""
 
 import lichtfeld as lf
-from .layouts.menus import register_menu, menu_action
+from .layouts.menus import register_menu, menu_action, menu_separator
 
 __lfs_menu_classes__ = ["ToolsMenu"]
 
@@ -19,6 +19,11 @@ class ToolsMenu:
     def menu_items(self):
         tr = lf.ui.tr
         return [
+            menu_action(
+                tr("menu.tools.asset_manager"),
+                lambda: lf.ui.set_panel_enabled("lfs.asset_manager", True),
+            ),
+            menu_separator(),
             menu_action(
                 tr("menu.tools.python_console"),
                 lf.ui.show_python_console,

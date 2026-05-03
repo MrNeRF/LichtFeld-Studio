@@ -550,7 +550,7 @@ namespace lfs::vis::gui {
                                                                      : glm::vec3(0.0f)));
         glm::mat4 transform_gizmo_matrix(1.0f);
         transform_gizmo_matrix[3] = glm::vec4(transform_gizmo_position, 1.0f);
-        if (!is_multi_selection && !use_world_space) {
+        if (!is_multi_selection) {
             const glm::mat3 rotation_scale(first_node ? scene_coords::nodeVisualizerWorldTransform(scene, first_node->id)
                                                       : glm::mat4(1.0f));
             transform_gizmo_matrix[0] = glm::vec4(rotation_scale[0], 0.0f);
@@ -799,8 +799,13 @@ namespace lfs::vis::gui {
 
                 for (size_t i = 0; i < node_gizmo_node_names_.size(); ++i) {
                     const glm::mat4 new_world_transform = world_delta * node_original_visualizer_world_transforms_[i];
-                    gizmo_ops::setNodeVisualizerWorldTransform(
-                        scene_manager->getScene(), node_gizmo_node_names_[i], new_world_transform);
+                    if (const auto new_local_transform =
+                            scene_coords::nodeLocalTransformFromVisualizerWorld(
+                                scene_manager->getScene(),
+                                node_gizmo_node_names_[i],
+                                new_world_transform)) {
+                        scene_manager->setNodeTransform(node_gizmo_node_names_[i], *new_local_transform);
+                    }
                 }
             } else if (node_gizmo_operation_ == GizmoOperation::Scale &&
                        !node_bounds_scale_active_ &&
@@ -812,8 +817,13 @@ namespace lfs::vis::gui {
 
                 for (size_t i = 0; i < node_gizmo_node_names_.size(); ++i) {
                     const glm::mat4 new_world_transform = world_delta * node_original_visualizer_world_transforms_[i];
-                    gizmo_ops::setNodeVisualizerWorldTransform(
-                        scene_manager->getScene(), node_gizmo_node_names_[i], new_world_transform);
+                    if (const auto new_local_transform =
+                            scene_coords::nodeLocalTransformFromVisualizerWorld(
+                                scene_manager->getScene(),
+                                node_gizmo_node_names_[i],
+                                new_world_transform)) {
+                        scene_manager->setNodeTransform(node_gizmo_node_names_[i], *new_local_transform);
+                    }
                 }
             } else if (is_multi_selection) {
                 if (node_gizmo_operation_ == GizmoOperation::Translate) {
@@ -823,8 +833,13 @@ namespace lfs::vis::gui {
 
                     for (size_t i = 0; i < node_gizmo_node_names_.size(); ++i) {
                         const glm::mat4 new_world_transform = world_delta * node_original_visualizer_world_transforms_[i];
-                        gizmo_ops::setNodeVisualizerWorldTransform(
-                            scene_manager->getScene(), node_gizmo_node_names_[i], new_world_transform);
+                        if (const auto new_local_transform =
+                                scene_coords::nodeLocalTransformFromVisualizerWorld(
+                                    scene_manager->getScene(),
+                                    node_gizmo_node_names_[i],
+                                    new_world_transform)) {
+                            scene_manager->setNodeTransform(node_gizmo_node_names_[i], *new_local_transform);
+                        }
                     }
                 }
             } else if (node_bounds_scale_active_) {

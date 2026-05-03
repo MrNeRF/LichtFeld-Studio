@@ -373,6 +373,10 @@ namespace lfs::vis::gui {
             return {makeFilter("JSON Files", {".json"})};
         }
 
+        [[nodiscard]] std::vector<DialogFilter> csvFilters() {
+            return {makeFilter("CSV Files", {".csv"})};
+        }
+
         [[nodiscard]] std::vector<DialogFilter> videoFilters() {
             return {makeFilter("Video Files", {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})};
         }
@@ -438,6 +442,12 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenJsonFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(jsonFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenCsvFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(csvFilters(), defaultPath), result);
         return result;
     }
 

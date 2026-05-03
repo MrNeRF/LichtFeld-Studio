@@ -872,7 +872,7 @@ progress fill {
 
 .icon-btn {
     display: inline-block;
-    padding: 4dp;
+    padding: 8dp;
     background-color: transparent;
     border-width: 0;
     cursor: pointer;
