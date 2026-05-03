@@ -269,6 +269,17 @@ namespace lfs::vis {
         std::array<VkCommandPool, kFramesInFlight> command_pools_{};
         std::array<VkCommandBuffer, kFramesInFlight> command_buffers_{};
         VkCommandPool immediate_command_pool_ = VK_NULL_HANDLE;
+        // Async cleanup queue for transitionImageLayoutImmediate. The function
+        // used to vkWaitForFences synchronously after submit (3-9ms/frame on
+        // the CUDA→Vulkan handoff path because it also blocked CPU on the
+        // CUDA-signaled semaphore via vkWaitSemaphores). Now we fire-and-
+        // forget: submit, push (cmd, fence) here, drain on next call.
+        struct PendingImmediateSubmit {
+            VkCommandBuffer cmd = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+        };
+        std::vector<PendingImmediateSubmit> pending_immediate_submits_;
+        void drainCompletedImmediateSubmits();
         std::vector<FrameTimelineWait> frame_timeline_waits_;
         std::array<VkSemaphore, kFramesInFlight> image_available_{};
         std::array<VkSemaphore, kFramesInFlight> render_finished_{};

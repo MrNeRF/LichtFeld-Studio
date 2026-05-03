@@ -50,6 +50,8 @@ namespace lfs::vis::gui {
 
     class LangChangeListener final : public Rml::EventListener {
     public:
+        explicit LangChangeListener(RmlUIManager* mgr) : mgr_(mgr) {}
+
         void ProcessEvent(Rml::Event& event) override {
             auto* el = event.GetCurrentElement();
             if (!el)
@@ -63,9 +65,17 @@ namespace lfs::vis::gui {
 
             auto& loc = lfs::event::LocalizationManager::getInstance();
             const auto available = loc.getAvailableLanguages();
-            if (idx < static_cast<int>(available.size()))
-                loc.setLanguage(available[idx]);
+            if (idx >= static_cast<int>(available.size()))
+                return;
+
+            const auto& lang = available[idx];
+            loc.setLanguage(lang);
+            if (mgr_ && (lang == "ja" || lang == "ko" || lang == "zh"))
+                mgr_->ensureCjkFontsLoaded();
         }
+
+    private:
+        RmlUIManager* mgr_ = nullptr;
     };
 
     void StartupOverlay::openURL(const char* url) {
@@ -111,7 +121,7 @@ namespace lfs::vis::gui {
                 el->AddEventListener(Rml::EventId::Click, link_listener_);
         }
 
-        lang_listener_ = new LangChangeListener();
+        lang_listener_ = new LangChangeListener(rml_manager_);
         auto* lang_select = document_->GetElementById("lang-select");
         if (lang_select)
             lang_select->AddEventListener(Rml::EventId::Change, lang_listener_);
@@ -169,7 +179,7 @@ namespace lfs::vis::gui {
         }
 
         if (!lang_listener_)
-            lang_listener_ = new LangChangeListener();
+            lang_listener_ = new LangChangeListener(rml_manager_);
         auto* lang_select = document_->GetElementById("lang-select");
         if (lang_select)
             lang_select->AddEventListener(Rml::EventId::Change, lang_listener_);

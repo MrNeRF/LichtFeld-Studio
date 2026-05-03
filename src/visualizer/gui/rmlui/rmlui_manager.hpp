@@ -23,7 +23,7 @@ class RenderInterface_VK;
 namespace Rml {
     class Context;
     class RenderInterface;
-}
+} // namespace Rml
 
 namespace lfs::vis {
     class VulkanContext;
@@ -50,6 +50,8 @@ namespace lfs::vis::gui {
         Rml::Context* createContext(const std::string& name, int width, int height);
         Rml::Context* getContext(const std::string& name);
         void destroyContext(const std::string& name);
+
+        void ensureCjkFontsLoaded();
 
         void setResizeDeferring(bool defer) { resize_deferring_ = defer; }
         [[nodiscard]] bool isResizeDeferring() const { return resize_deferring_; }
@@ -107,6 +109,8 @@ namespace lfs::vis::gui {
         std::unique_ptr<Rml::RenderInterface> owned_render_interface_;
         RenderInterface_VK* vulkan_render_interface_ = nullptr;
         std::unique_ptr<RmlTextInputHandler> text_input_handler_;
+        std::vector<std::vector<std::byte>> font_blobs_;
+        bool cjk_fonts_loaded_ = false;
         std::unordered_map<std::string, Rml::Context*> contexts_;
         std::vector<VulkanContextCommand> vulkan_queue_;
         std::vector<VulkanContextCommand> vulkan_foreground_queue_;

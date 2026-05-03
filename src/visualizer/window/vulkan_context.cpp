@@ -284,6 +284,17 @@ namespace lfs::vis {
         destroySwapchain();
 
         if (immediate_command_pool_ != VK_NULL_HANDLE) {
+            // Drain any in-flight async submits before destroying their pool.
+            for (auto& pending : pending_immediate_submits_) {
+                if (pending.fence != VK_NULL_HANDLE) {
+                    vkWaitForFences(device_, 1, &pending.fence, VK_TRUE, kWaitForeverNs);
+                    vkDestroyFence(device_, pending.fence, nullptr);
+                }
+                if (pending.cmd != VK_NULL_HANDLE) {
+                    vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &pending.cmd);
+                }
+            }
+            pending_immediate_submits_.clear();
             vkDestroyCommandPool(device_, immediate_command_pool_, nullptr);
             immediate_command_pool_ = VK_NULL_HANDLE;
         }
@@ -1736,6 +1747,26 @@ namespace lfs::vis {
         return handle;
     }
 
+    void VulkanContext::drainCompletedImmediateSubmits() {
+        if (device_ == VK_NULL_HANDLE || pending_immediate_submits_.empty()) {
+            return;
+        }
+        auto write = pending_immediate_submits_.begin();
+        for (auto read = pending_immediate_submits_.begin(); read != pending_immediate_submits_.end(); ++read) {
+            const VkResult status = vkGetFenceStatus(device_, read->fence);
+            if (status == VK_SUCCESS) {
+                vkDestroyFence(device_, read->fence, nullptr);
+                vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &read->cmd);
+            } else {
+                if (write != read) {
+                    *write = *read;
+                }
+                ++write;
+            }
+        }
+        pending_immediate_submits_.erase(write, pending_immediate_submits_.end());
+    }
+
     bool VulkanContext::transitionImageLayoutImmediate(const VkImage image,
                                                        const VkImageLayout old_layout,
                                                        const VkImageLayout new_layout,
@@ -1754,6 +1785,8 @@ namespace lfs::vis {
             last_error_.clear();
             return true;
         }
+        // Reap any prior fire-and-forget submits that have completed.
+        drainCompletedImmediateSubmits();
 
         VkCommandBufferAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1855,6 +1888,10 @@ namespace lfs::vis {
         VkPipelineStageFlags resolved_wait_stage = wait_stage == 0
                                                        ? static_cast<VkPipelineStageFlags>(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
                                                        : wait_stage;
+        // CPU-side vkWaitSemaphores removed — the submit-time wait below
+        // already gates the GPU on the external (CUDA) timeline. Blocking the
+        // CPU here doubled the cost of every CUDA→Vulkan handoff (3-9ms/frame
+        // observed). The submit's pWaitSemaphores entry is sufficient.
         if (wait_semaphore != VK_NULL_HANDLE) {
             timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
             timeline_submit_info.waitSemaphoreValueCount = 1;
@@ -1863,21 +1900,6 @@ namespace lfs::vis {
             submit_info.waitSemaphoreCount = 1;
             submit_info.pWaitSemaphores = &wait_semaphore;
             submit_info.pWaitDstStageMask = &resolved_wait_stage;
-
-            VkSemaphoreWaitInfo wait_info{};
-            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
-            wait_info.semaphoreCount = 1;
-            wait_info.pSemaphores = &wait_semaphore;
-            wait_info.pValues = &wait_value;
-            result = vkWaitSemaphores(device_, &wait_info, kExternalTimelineWaitTimeoutNs);
-            if (result == VK_TIMEOUT) {
-                vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
-                return fail(std::format("Timed out waiting for external timeline semaphore value {}", wait_value));
-            }
-            if (result != VK_SUCCESS) {
-                vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
-                return fail(std::format("vkWaitSemaphores(external timeline) failed: {}", static_cast<int>(result)));
-            }
         }
         VkFenceCreateInfo fence_info{};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -1889,14 +1911,15 @@ namespace lfs::vis {
         }
 
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, submit_fence);
-        if (result == VK_SUCCESS) {
-            result = vkWaitForFences(device_, 1, &submit_fence, VK_TRUE, kWaitForeverNs);
-        }
-        vkDestroyFence(device_, submit_fence, nullptr);
-        vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
         if (result != VK_SUCCESS) {
-            return fail(std::format("Immediate Vulkan image layout transition failed: {}", static_cast<int>(result)));
+            vkDestroyFence(device_, submit_fence, nullptr);
+            vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
+            return fail(std::format("Immediate Vulkan image layout transition submit failed: {}", static_cast<int>(result)));
         }
+        // Fire-and-forget: queue cmd+fence for lazy reaping. Vulkan queues are
+        // FIFO per VkQueue, so subsequent submits on graphics_queue_ correctly
+        // observe the layout transition without any CPU-side wait.
+        pending_immediate_submits_.push_back({command_buffer, submit_fence});
         last_error_.clear();
         return true;
     }

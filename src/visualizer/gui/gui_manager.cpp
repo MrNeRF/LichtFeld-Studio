@@ -1195,7 +1195,12 @@ namespace lfs::vis::gui {
                 int channels = 0;
             };
 
-            static constexpr size_t kWorkerCount = 2;
+            // Thumbnail decode is OIIO read + CPU downscale; ~17-25 ms per
+            // image at typical full-res. With only 2 workers a 50-image
+            // dataset took ~600 ms of single-threaded decode dominating
+            // viewport_pass_prepare_record. Bumped to 8 — modern desktop
+            // CPUs idle most of these cores during dataset load anyway.
+            static constexpr size_t kWorkerCount = 8;
             static constexpr uint64_t kDecodeRetryFrames = 180;
             static constexpr uint64_t kMissingRetryFrames = 1800;
             static constexpr uint64_t kUploadRetryFrames = 60;
@@ -2425,6 +2430,11 @@ namespace lfs::vis::gui {
                 return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
             };
 
+            const std::string lang =
+                lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+            const bool needs_jp_zh = (lang == "ja" || lang == "zh");
+            const bool needs_kr = (lang == "ko");
+
             const auto load_font_latin_only =
                 [&](const std::filesystem::path& path, const float size) -> ImFont* {
                 if (!is_font_valid(path))
@@ -2436,7 +2446,7 @@ namespace lfs::vis::gui {
             };
 
             const auto merge_cjk = [&](const float size) {
-                if (is_font_valid(japanese_path)) {
+                if (needs_jp_zh && is_font_valid(japanese_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
                     config.OversampleH = 1;
@@ -2447,7 +2457,7 @@ namespace lfs::vis::gui {
                     io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
                                                  io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
                 }
-                if (is_font_valid(korean_path)) {
+                if (needs_kr && is_font_valid(korean_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
                     config.OversampleH = 1;

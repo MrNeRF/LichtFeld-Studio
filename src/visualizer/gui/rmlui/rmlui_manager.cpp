@@ -29,8 +29,12 @@
 #include <RmlUi/Debugger.h>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <string_view>
+#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -131,46 +135,126 @@ namespace lfs::vis::gui {
         Rml::Factory::RegisterElementInstancer("terminal-view", &terminal_instancer);
 
         try {
-            const auto regular_path = lfs::vis::getAssetPath("fonts/Inter-Regular.ttf");
-            if (Rml::LoadFontFace(regular_path.string(), true)) {
-                LOG_INFO("RmlUI: loaded font {}", regular_path.string());
-            } else {
-                LOG_WARN("RmlUI: failed to load Inter-Regular.ttf");
-            }
-            const auto bold_path = lfs::vis::getAssetPath("fonts/Inter-SemiBold.ttf");
-            if (Rml::LoadFontFace(bold_path.string(), false)) {
-                LOG_INFO("RmlUI: loaded font {}", bold_path.string());
-            } else {
-                LOG_WARN("RmlUI: failed to load Inter-SemiBold.ttf");
+            struct FontSpec {
+                const char* asset;
+                const char* family;
+                Rml::Style::FontStyle style;
+                Rml::Style::FontWeight weight;
+                bool fallback;
+            };
+            const FontSpec specs[] = {
+                {"fonts/Inter-Regular.ttf", "Inter", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal, true},
+                {"fonts/Inter-SemiBold.ttf", "Inter", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight(600), false},
+                {"fonts/JetBrainsMono-Regular.ttf", "JetBrains Mono", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Normal, false},
+            };
+            constexpr std::size_t kFontCount = sizeof(specs) / sizeof(specs[0]);
+
+            struct LoadedFont {
+                std::filesystem::path path;
+                std::vector<std::byte> bytes;
+            };
+            std::array<std::future<LoadedFont>, kFontCount> futures;
+            for (std::size_t i = 0; i < kFontCount; ++i) {
+                const char* asset = specs[i].asset;
+                futures[i] = std::async(std::launch::async, [asset]() {
+                    LoadedFont out;
+                    out.path = lfs::vis::getAssetPath(asset);
+                    std::ifstream f(out.path, std::ios::binary | std::ios::ate);
+                    if (!f)
+                        return out;
+                    const auto sz = f.tellg();
+                    if (sz <= 0)
+                        return out;
+                    f.seekg(0, std::ios::beg);
+                    out.bytes.resize(static_cast<std::size_t>(sz));
+                    f.read(reinterpret_cast<char*>(out.bytes.data()), sz);
+                    return out;
+                });
             }
 
-            const auto jp_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
-            if (Rml::LoadFontFace(jp_path.string(), true)) {
-                LOG_INFO("RmlUI: loaded font {}", jp_path.string());
-            } else {
-                LOG_WARN("RmlUI: failed to load NotoSansJP-Regular.ttf");
-            }
-
-            const auto kr_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
-            if (Rml::LoadFontFace(kr_path.string(), true)) {
-                LOG_INFO("RmlUI: loaded font {}", kr_path.string());
-            } else {
-                LOG_WARN("RmlUI: failed to load NotoSansKR-Regular.ttf");
-            }
-
-            const auto mono_path = lfs::vis::getAssetPath("fonts/JetBrainsMono-Regular.ttf");
-            if (Rml::LoadFontFace(mono_path.string(), false)) {
-                LOG_INFO("RmlUI: loaded font {}", mono_path.string());
-            } else {
-                LOG_WARN("RmlUI: failed to load JetBrainsMono-Regular.ttf");
+            font_blobs_.reserve(kFontCount);
+            for (std::size_t i = 0; i < kFontCount; ++i) {
+                LoadedFont loaded = futures[i].get();
+                if (loaded.bytes.empty()) {
+                    LOG_WARN("RmlUI: failed to read {}", specs[i].asset);
+                    continue;
+                }
+                font_blobs_.push_back(std::move(loaded.bytes));
+                const auto& blob = font_blobs_.back();
+                Rml::Span<const Rml::byte> data{
+                    reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
+                if (Rml::LoadFontFace(data, specs[i].family, specs[i].style, specs[i].weight, specs[i].fallback)) {
+                    LOG_INFO("RmlUI: loaded font {}", loaded.path.string());
+                } else {
+                    LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+                }
             }
         } catch (const std::exception& e) {
-            LOG_WARN("RmlUI: font not found: {}", e.what());
+            LOG_WARN("RmlUI: font load error: {}", e.what());
         }
 
         initialized_ = true;
         LOG_INFO("RmlUI initialized");
         return true;
+    }
+
+    void RmlUIManager::ensureCjkFontsLoaded() {
+        if (cjk_fonts_loaded_ || !initialized_)
+            return;
+        cjk_fonts_loaded_ = true;
+
+        struct CjkSpec {
+            const char* asset;
+            const char* family;
+        };
+        const CjkSpec specs[] = {
+            {"fonts/NotoSansJP-Regular.ttf", "Noto Sans JP"},
+            {"fonts/NotoSansKR-Regular.ttf", "Noto Sans KR"},
+        };
+
+        struct LoadedFont {
+            std::filesystem::path path;
+            std::vector<std::byte> bytes;
+        };
+        std::array<std::future<LoadedFont>, 2> futures;
+        for (std::size_t i = 0; i < 2; ++i) {
+            const char* asset = specs[i].asset;
+            futures[i] = std::async(std::launch::async, [asset]() {
+                LoadedFont out;
+                try {
+                    out.path = lfs::vis::getAssetPath(asset);
+                    std::ifstream f(out.path, std::ios::binary | std::ios::ate);
+                    if (!f)
+                        return out;
+                    const auto sz = f.tellg();
+                    if (sz <= 0)
+                        return out;
+                    f.seekg(0, std::ios::beg);
+                    out.bytes.resize(static_cast<std::size_t>(sz));
+                    f.read(reinterpret_cast<char*>(out.bytes.data()), sz);
+                } catch (...) {
+                }
+                return out;
+            });
+        }
+
+        for (std::size_t i = 0; i < 2; ++i) {
+            LoadedFont loaded = futures[i].get();
+            if (loaded.bytes.empty()) {
+                LOG_WARN("RmlUI: failed to read {}", specs[i].asset);
+                continue;
+            }
+            font_blobs_.push_back(std::move(loaded.bytes));
+            const auto& blob = font_blobs_.back();
+            Rml::Span<const Rml::byte> data{
+                reinterpret_cast<const Rml::byte*>(blob.data()), blob.size()};
+            if (Rml::LoadFontFace(data, specs[i].family, Rml::Style::FontStyle::Normal,
+                                  Rml::Style::FontWeight::Normal, true)) {
+                LOG_INFO("RmlUI: loaded CJK font {}", loaded.path.string());
+            } else {
+                LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+            }
+        }
     }
 
     void RmlUIManager::shutdown() {
