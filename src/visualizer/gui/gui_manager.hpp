@@ -40,8 +40,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <imgui.h>
 #include <vulkan/vulkan.h>
+#include <imgui.h>
 
 struct SDL_Cursor;
 
@@ -135,7 +135,8 @@ namespace lfs::vis {
             [[nodiscard]] bool isDragHovering() const { return drag_drop_hovering_; }
             void setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
                                      glm::ivec2 size,
-                                     bool flip_y);
+                                     bool flip_y,
+                                     std::uint64_t generation);
             void setVulkanExternalSceneImage(VkImage image,
                                              VkImageView image_view,
                                              VkImageLayout layout,
@@ -244,6 +245,7 @@ namespace lfs::vis {
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
             std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
+            std::uint64_t vulkan_scene_image_generation_ = 0;
             glm::ivec2 vulkan_scene_image_size_{0, 0};
             bool vulkan_scene_image_flip_y_ = false;
             VkImage vulkan_external_scene_image_ = VK_NULL_HANDLE;

@@ -368,6 +368,7 @@ namespace lfs::vis {
     } // namespace
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
+        LOG_TIMER("renderVulkanFrame");
         SceneManager* const scene_manager = context.scene_manager;
 
         if (!engine_) {
@@ -429,6 +430,7 @@ namespace lfs::vis {
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
         SceneRenderState scene_state;
         if (scene_manager) {
+            LOG_TIMER("renderVulkanFrame.buildRenderState");
             scene_state = scene_manager->buildRenderState();
         }
         const bool has_renderable_model = hasRenderableGaussians(model);
@@ -476,6 +478,8 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        LOG_PERF("renderVulkanFrame.frame_dirty=0x{:x} model={} pc={} mesh={} env={}",
+                 frame_dirty, has_renderable_model, has_point_cloud, has_meshes, has_environment);
         if (!has_render_content) {
             vulkan_viewport_image_.reset();
             vulkan_external_viewport_image_ = VK_NULL_HANDLE;
@@ -491,6 +495,7 @@ namespace lfs::vis {
 
         if (frame_dirty == 0 &&
             (vulkan_viewport_image_ || vulkan_external_viewport_image_ != VK_NULL_HANDLE)) {
+            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
             render_lock.reset();
             if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
                 return {.image = {},
@@ -498,10 +503,12 @@ namespace lfs::vis {
                         .external_image_view = vulkan_external_viewport_image_view_,
                         .external_image_layout = vulkan_external_viewport_image_layout_,
                         .external_image_generation = vulkan_external_viewport_image_generation_,
+                        .image_generation = vulkan_viewport_image_generation_,
                         .size = vulkan_viewport_image_size_,
                         .flip_y = vulkan_viewport_image_flip_y_};
             }
             return {.image = vulkan_viewport_image_,
+                    .image_generation = vulkan_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
         }
@@ -825,6 +832,7 @@ namespace lfs::vis {
         if (rendered_image) {
             // Split-view render already produced the final viewport image.
         } else if (render_point_cloud && has_renderable_model) {
+            LOG_TIMER("renderVulkanFrame.renderPointCloudImage(splat)");
             auto request = buildPointCloudRenderRequest(frame_ctx, render_size, frame_ctx.scene_state.model_transforms);
             auto render_result = engine_->renderPointCloudImage(*model, request);
             if (render_result) {
@@ -834,6 +842,7 @@ namespace lfs::vis {
                 render_error = render_result.error();
             }
         } else if (render_point_cloud && has_point_cloud) {
+            LOG_TIMER("renderVulkanFrame.renderPointCloudImage(pc)");
             const std::vector<glm::mat4> point_cloud_transforms = {frame_ctx.scene_state.point_cloud_transform};
             auto request = buildPointCloudRenderRequest(frame_ctx, render_size, point_cloud_transforms);
             auto render_result = engine_->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, request);
@@ -995,6 +1004,9 @@ namespace lfs::vis {
 
         auto viewport_image = std::move(rendered_image);
         vulkan_viewport_image_ = viewport_image;
+        ++vulkan_viewport_image_generation_;
+        if (vulkan_viewport_image_generation_ == 0)
+            ++vulkan_viewport_image_generation_;
         vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1021,6 +1033,7 @@ namespace lfs::vis {
         split_view_service_.updateInfo(split_info_resources);
 
         return {.image = vulkan_viewport_image_,
+                .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
                 .flip_y = vulkan_viewport_image_flip_y_};
     }

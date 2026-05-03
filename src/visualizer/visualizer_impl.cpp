@@ -1097,11 +1097,14 @@ namespace lfs::vis {
                 gui_manager_->setVulkanSceneImage(
                     vulkan_frame.image,
                     vulkan_frame.size,
-                    vulkan_frame.flip_y);
+                    vulkan_frame.flip_y,
+                    vulkan_frame.image_generation);
             }
         }
-        if (gui_manager_)
+        if (gui_manager_) {
+            LOG_TIMER("VisualizerImpl::render.gui_render");
             gui_manager_->render();
+        }
 
         processRenderWorkQueue();
         python::flush_signals();
@@ -1115,6 +1118,10 @@ namespace lfs::vis {
         const bool has_python_overlay = python::has_viewport_draw_handlers();
         const bool has_python_redraw = python::consume_redraw_request();
         const bool needs_gui_animation = gui_manager_ && gui_manager_->needsAnimationFrame();
+
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={}",
+                 needs_render, continuous_input, has_python_animation, has_python_overlay,
+                 has_python_redraw, needs_gui_animation);
 
         if (needs_render || continuous_input || has_python_animation || has_python_overlay ||
             has_python_redraw || needs_gui_animation) {

@@ -70,6 +70,10 @@ namespace lfs::vis {
             VkImageView external_image_view = VK_NULL_HANDLE;
             VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t external_image_generation = 0;
+            // Bumps only when the underlying image content changes (fresh render).
+            // Cache-HIT frames keep the previous value so downstream consumers
+            // (e.g. CUDA→Vulkan interop upload) can skip work by generation.
+            std::uint64_t image_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
         };
@@ -402,6 +406,7 @@ namespace lfs::vis {
         mutable FramerateController framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
+        std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;

@@ -4,8 +4,8 @@
 
 #include "gui/gui_manager.hpp"
 #include "control/command_api.hpp"
-#include "core/cuda_version.hpp"
 #include "core/camera.hpp"
+#include "core/cuda_version.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
@@ -75,21 +75,21 @@
 #include <deque>
 #include <format>
 #include <fstream>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui_impl_sdl3.h>
 #include <imgui_internal.h>
 #include <iterator>
 #include <limits>
-#include <glm/gtc/constants.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
-#include <utility>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace lfs::vis {
     struct VulkanSceneInteropTarget {
@@ -101,7 +101,11 @@ namespace lfs::vis {
         VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t timeline_value = 0;
         std::uint64_t generation = 0;
-        const lfs::core::Tensor* uploaded_tensor = nullptr;
+        // Generation of the source content (renderer-supplied) most recently
+        // copied into this slot's external image. Used to skip re-uploads when
+        // the renderer returns the same logical image (cache HIT) even though
+        // it allocated a fresh Tensor pointer.
+        std::uint64_t uploaded_source_generation = 0;
 
         void destroy(VulkanContext& context) {
             interop.reset();
@@ -110,7 +114,7 @@ namespace lfs::vis {
             size = {0, 0};
             layout = VK_IMAGE_LAYOUT_UNDEFINED;
             timeline_value = 0;
-            uploaded_tensor = nullptr;
+            uploaded_source_generation = 0;
             ++generation;
         }
 #endif
@@ -417,8 +421,7 @@ namespace lfs::vis::gui {
 
                 const auto pa = project_equirect(world_a);
                 const auto pb = project_equirect(world_b);
-                if (!pa || !pb || std::abs((pa->x - panel.pos.x) / panel.size.x -
-                                           (pb->x - panel.pos.x) / panel.size.x) > 0.5f) {
+                if (!pa || !pb || std::abs((pa->x - panel.pos.x) / panel.size.x - (pb->x - panel.pos.x) / panel.size.x) > 0.5f) {
                     return std::nullopt;
                 }
                 return std::pair(*pa, *pb);
@@ -993,8 +996,7 @@ namespace lfs::vis::gui {
                     const bool path_is_missing =
                         !ec || ec == std::errc::no_such_file_or_directory ||
                         ec == std::errc::not_a_directory;
-                    markFailed(uid, path_key, path_is_missing ? kMissingRetryFrames
-                                                              : kDecodeRetryFrames);
+                    markFailed(uid, path_key, path_is_missing ? kMissingRetryFrames : kDecodeRetryFrames);
                     return false;
                 }
 
@@ -2034,7 +2036,6 @@ namespace lfs::vis::gui {
                                               : 1.0f - std::clamp(time_since_set / kPivotDurationSec, 0.0f, 1.0f);
                     appendPivotShaderOverlay(params, panel, settings, panel.viewport->camera.getPivot(), opacity);
                 }
-
             }
         }
 
@@ -3255,7 +3256,8 @@ namespace lfs::vis::gui {
 
     void GuiManager::setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
                                          const glm::ivec2 size,
-                                         const bool flip_y) {
+                                         const bool flip_y,
+                                         const std::uint64_t generation) {
         const bool target_changed =
             vulkan_scene_image_.get() != image.get() ||
             vulkan_scene_image_size_ != size;
@@ -3267,6 +3269,7 @@ namespace lfs::vis::gui {
         vulkan_external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_scene_image_size_ = {0, 0};
         vulkan_scene_image_ = std::move(image);
+        vulkan_scene_image_generation_ = generation;
         vulkan_scene_image_size_ = size;
         vulkan_scene_image_flip_y_ = flip_y;
     }
@@ -3361,8 +3364,11 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (!context.waitForCurrentFrameSlot()) {
-            fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
+        {
+            LOG_TIMER("interop.waitForCurrentFrameSlot");
+            if (!context.waitForCurrentFrameSlot()) {
+                fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
+            }
         }
 
         const std::size_t frame_slot = context.currentFrameSlot();
@@ -3386,6 +3392,11 @@ namespace lfs::vis::gui {
             !target_ptr ||
             target_ptr->size != target_size ||
             !target_ptr->interop.valid();
+        LOG_PERF("interop slot={} recreate={} cur_gen={} uploaded_gen={} layout={}",
+                 frame_slot, recreate,
+                 vulkan_scene_image_generation_,
+                 target_ptr ? target_ptr->uploaded_source_generation : 0,
+                 target_ptr ? static_cast<int>(target_ptr->layout) : -1);
         if (recreate) {
             reset_frame_target();
             auto target = std::make_unique<VulkanSceneInteropTarget>();
@@ -3437,12 +3448,18 @@ namespace lfs::vis::gui {
         }
 
         auto& target = *target_ptr;
-        if (target.uploaded_tensor == vulkan_scene_image_.get() &&
+        // Skip the upload (and the queue-blocking layout transitions inside it)
+        // when this slot already holds the same content. Renderer cache-HIT
+        // frames keep image_generation stable while alternating tensor pointers,
+        // so identity-by-pointer is unsafe — use the source generation.
+        if (vulkan_scene_image_generation_ != 0 &&
+            target.uploaded_source_generation == vulkan_scene_image_generation_ &&
             target.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
             return;
         }
 
         if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            LOG_TIMER("interop.transition_to_GENERAL");
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
                                                         VK_IMAGE_LAYOUT_GENERAL)) {
@@ -3451,24 +3468,33 @@ namespace lfs::vis::gui {
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
         }
 
-        if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
-            fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
+        {
+            LOG_TIMER("interop.copyTensorToSurface");
+            if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
+                fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
+            }
         }
         const std::uint64_t signal_value = ++target.timeline_value;
-        if (!target.interop.signal(signal_value)) {
-            fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
+        {
+            LOG_TIMER("interop.cuda_signal");
+            if (!target.interop.signal(signal_value)) {
+                fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
+            }
         }
-        if (!context.transitionImageLayoutImmediate(target.image.image,
-                                                    VK_IMAGE_LAYOUT_GENERAL,
-                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    target.semaphore.semaphore,
-                                                    signal_value,
-                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
-            fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
+        {
+            LOG_TIMER("interop.transition_to_READ_ONLY");
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        target.semaphore.semaphore,
+                                                        signal_value,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
+            }
         }
         target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        target.uploaded_tensor = vulkan_scene_image_.get();
+        target.uploaded_source_generation = vulkan_scene_image_generation_;
         ++target.generation;
 #else
         (void)context;
@@ -3510,7 +3536,8 @@ namespace lfs::vis::gui {
                 target->interop.valid() &&
                 target->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
                 target->size == params.scene_image_size &&
-                target->uploaded_tensor == vulkan_scene_image_.get()) {
+                vulkan_scene_image_generation_ != 0 &&
+                target->uploaded_source_generation == vulkan_scene_image_generation_) {
                 params.external_scene_image = target->image.image;
                 params.external_scene_image_view = target->image.view;
                 params.external_scene_image_layout = target->layout;
@@ -3573,8 +3600,7 @@ namespace lfs::vis::gui {
             if (viewer_) {
                 SceneManager* const scene_manager = viewer_->getSceneManager();
                 std::optional<SceneRenderState> overlay_scene_state;
-                if (scene_manager &&
-                    (settings.show_camera_frustums || settings.show_crop_box || settings.show_ellipsoid)) {
+                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
                     overlay_scene_state = scene_manager->buildRenderState();
                 }
                 const GizmoState gizmo_state = rendering_manager->getGizmoState();
@@ -3621,7 +3647,6 @@ namespace lfs::vis::gui {
         (void)params;
 #endif
     }
-
 
     void GuiManager::render() {
         auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
@@ -4114,36 +4139,49 @@ namespace lfs::vis::gui {
             clear_value.color = VkClearColorValue{{bg.x, bg.y, bg.z, 1.0f}};
 
             if (vulkan_context) {
+                LOG_TIMER("gui_render.prepareVulkanSceneInterop");
                 prepareVulkanSceneInterop(*vulkan_context);
             }
 
             VulkanContext::Frame frame{};
-            if (vulkan_context && vulkan_context->beginFrame(clear_value, frame)) {
+            bool begin_ok = false;
+            {
+                LOG_TIMER("gui_render.vulkan_beginFrame");
+                begin_ok = vulkan_context && vulkan_context->beginFrame(clear_value, frame);
+            }
+            if (begin_ok) {
                 const VulkanViewportPassParams viewport_params = buildVulkanViewportParams(frame.extent,
-                                                                                          frame.frame_slot);
+                                                                                           frame.frame_slot);
                 bool viewport_pass_ready = false;
                 if (!vulkan_viewport_pass_) {
                     vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();
                 }
                 viewport_pass_ready = vulkan_viewport_pass_->init(*vulkan_context);
                 if (viewport_pass_ready) {
+                    LOG_TIMER("gui_render.viewport_pass_prepare_record");
                     vulkan_viewport_pass_->prepare(*vulkan_context, viewport_params);
                     recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
                 }
-                if (rmlui_manager_.beginVulkanFrame(frame.command_buffer,
-                                                    frame.extent,
-                                                    frame.swapchain_image,
-                                                    frame.swapchain_image_view,
-                                                    frame.depth_stencil_image_view,
-                                                    frame.frame_slot)) {
-                    rmlui_manager_.renderQueuedVulkanContexts(false);
-                    rmlui_manager_.renderQueuedVulkanContexts(true);
-                    rmlui_manager_.endVulkanFrame();
-                } else {
-                    rmlui_manager_.clearVulkanQueue();
+                {
+                    LOG_TIMER("gui_render.rmlui_record");
+                    if (rmlui_manager_.beginVulkanFrame(frame.command_buffer,
+                                                        frame.extent,
+                                                        frame.swapchain_image,
+                                                        frame.swapchain_image_view,
+                                                        frame.depth_stencil_image_view,
+                                                        frame.frame_slot)) {
+                        rmlui_manager_.renderQueuedVulkanContexts(false);
+                        rmlui_manager_.renderQueuedVulkanContexts(true);
+                        rmlui_manager_.endVulkanFrame();
+                    } else {
+                        rmlui_manager_.clearVulkanQueue();
+                    }
                 }
-                if (!vulkan_context->endFrame()) {
-                    LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());
+                {
+                    LOG_TIMER("gui_render.vulkan_endFrame");
+                    if (!vulkan_context->endFrame()) {
+                        LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());
+                    }
                 }
             } else if (vulkan_context) {
                 rmlui_manager_.clearVulkanQueue();
