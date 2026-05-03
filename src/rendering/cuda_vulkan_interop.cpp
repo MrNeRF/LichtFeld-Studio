@@ -532,6 +532,104 @@ namespace lfs::rendering {
         return false;
     }
 
+    // ===== CudaTimelineSemaphore =================================================
+
+    CudaTimelineSemaphore::~CudaTimelineSemaphore() {
+        reset();
+    }
+
+    CudaTimelineSemaphore::CudaTimelineSemaphore(CudaTimelineSemaphore&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    CudaTimelineSemaphore& CudaTimelineSemaphore::operator=(CudaTimelineSemaphore&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        reset();
+        cuda_timeline_ = std::exchange(other.cuda_timeline_, nullptr);
+        last_error_ = std::move(other.last_error_);
+        return *this;
+    }
+
+    bool CudaTimelineSemaphore::init(CudaVulkanExternalSemaphoreImport semaphore) {
+        reset();
+        last_error_.clear();
+
+        if (auto err = verifyCudaMatchesVulkanDevice(); err) {
+            return fail(*err);
+        }
+        if (!nativeHandleValid(semaphore.semaphore_handle)) {
+            return fail("CUDA timeline semaphore import requires a valid handle");
+        }
+
+        NativeHandleOwner semaphore_handle(semaphore.semaphore_handle);
+
+        cudaExternalSemaphoreHandleDesc semaphore_desc{};
+        semaphore_desc.type = kCudaExternalSemaphoreHandleType;
+#ifdef _WIN32
+        semaphore_desc.handle.win32.handle = semaphore_handle.get();
+#else
+        semaphore_desc.handle.fd = semaphore_handle.get();
+#endif
+
+        cudaError_t status = cudaImportExternalSemaphore(&cuda_timeline_, &semaphore_desc);
+        if (status != cudaSuccess) {
+            return failCuda("cudaImportExternalSemaphore", status);
+        }
+#ifndef _WIN32
+        semaphore_handle.release();
+#endif
+        return true;
+    }
+
+    void CudaTimelineSemaphore::reset() {
+        if (cuda_timeline_ != nullptr) {
+            cudaDestroyExternalSemaphore(cuda_timeline_);
+            cuda_timeline_ = nullptr;
+        }
+    }
+
+    bool CudaTimelineSemaphore::cudaSignal(const std::uint64_t value, const cudaStream_t stream) const {
+        last_error_.clear();
+        if (cuda_timeline_ == nullptr) {
+            return fail("CUDA timeline semaphore is not initialized");
+        }
+        cudaExternalSemaphoreSignalParams params{};
+        params.params.fence.value = value;
+        return failCuda("cudaSignalExternalSemaphoresAsync",
+                        cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream));
+    }
+
+    bool CudaTimelineSemaphore::cudaWait(const std::uint64_t value, const cudaStream_t stream) const {
+        last_error_.clear();
+        if (cuda_timeline_ == nullptr) {
+            return fail("CUDA timeline semaphore is not initialized");
+        }
+        cudaExternalSemaphoreWaitParams params{};
+        params.params.fence.value = value;
+        return failCuda("cudaWaitExternalSemaphoresAsync",
+                        cudaWaitExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream));
+    }
+
+    bool CudaTimelineSemaphore::fail(std::string message) const {
+        last_error_ = std::move(message);
+        return false;
+    }
+
+    bool CudaTimelineSemaphore::failCuda(const char* const operation, const cudaError_t status) const {
+        if (status == cudaSuccess) {
+            return true;
+        }
+        last_error_ = std::format("{} failed: {} ({})",
+                                  operation,
+                                  cudaGetErrorName(status),
+                                  cudaGetErrorString(status));
+        return false;
+    }
+
+    // ===== CudaVulkanBufferInterop ===============================================
+
     CudaVulkanBufferInterop::CudaVulkanBufferInterop(CudaVulkanExternalBufferImport buffer) {
         if (!init(std::move(buffer))) {
             throw std::runtime_error(last_error_);

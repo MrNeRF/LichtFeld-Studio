@@ -229,39 +229,78 @@ void write_spherical_harmonics_coeffs_grads(SpherHarmCoeffs coeffs, uint32_t g_i
 #endif  // USE_FLOAT4_BATCH_WRITE
 
 
+// Compute the 16-element SH basis vector for a given direction. Used by both
+// the scalar and the cooperative-matrix paths.
 [Differentiable]
-float3 compute_color_from_sh_coeffs(SpherHarmCoeffs sh, float3 dir, uint32_t active_sh) {
-    float3 rgb = SH_C0 * (sh.coeff0);
-    static const float _2 = float(2.0), _3 = float(3.0), _4 = float(4.0);
+void compute_sh_basis_16(float3 dir, uint32_t active_sh, out float basis[16]) {
+    [ForceUnroll]
+    for (uint i = 0; i < 16; ++i) basis[i] = float(0.0);
+
+    basis[0] = SH_C0;
     if (active_sh > 0) {
-        rgb = rgb - SH_C1 * dir.y * (sh.coeff1) + SH_C1 * dir.z * (sh.coeff2) - SH_C1 * dir.x * (sh.coeff3);
-        if (active_sh > 1)
-        {
+        basis[1] = -SH_C1 * dir.y;
+        basis[2] =  SH_C1 * dir.z;
+        basis[3] = -SH_C1 * dir.x;
+        if (active_sh > 1) {
             float xx = dir.x * dir.x, yy = dir.y * dir.y, zz = dir.z * dir.z;
             float xy = dir.x * dir.y, yz = dir.y * dir.z, xz = dir.x * dir.z;
-            rgb = rgb +
-                  SH_C2[0] * xy * (sh.coeff4) +
-                  SH_C2[1] * yz * (sh.coeff5) +
-                  SH_C2[2] * (_2 * zz - xx - yy) * (sh.coeff6) +
-                  SH_C2[3] * xz * (sh.coeff7) +
-                  SH_C2[4] * (xx - yy) * (sh.coeff8);
-
-            if (active_sh > 2)
-            {
-                rgb = rgb +
-                      SH_C3[0] * dir.y * (_3 * xx - yy) * (sh.coeff9) +
-                      SH_C3[1] * xy * dir.z * (sh.coeff10) +
-                      SH_C3[2] * dir.y * (_4 * zz - xx - yy) * (sh.coeff11) +
-                      SH_C3[3] * dir.z * (_2 * zz - _3 * xx - _3 * yy) * (sh.coeff12) +
-                      SH_C3[4] * dir.x * (_4 * zz - xx - yy) * (sh.coeff13) +
-                      SH_C3[5] * dir.z * (xx - yy) * (sh.coeff14) +
-                      SH_C3[6] * dir.x * (xx - _3 * yy) * (sh.coeff15);
+            basis[4] = SH_C2[0] * xy;
+            basis[5] = SH_C2[1] * yz;
+            basis[6] = SH_C2[2] * (2.0 * zz - xx - yy);
+            basis[7] = SH_C2[3] * xz;
+            basis[8] = SH_C2[4] * (xx - yy);
+            if (active_sh > 2) {
+                basis[9]  = SH_C3[0] * dir.y * (3.0 * xx - yy);
+                basis[10] = SH_C3[1] * xy * dir.z;
+                basis[11] = SH_C3[2] * dir.y * (4.0 * zz - xx - yy);
+                basis[12] = SH_C3[3] * dir.z * (2.0 * zz - 3.0 * xx - 3.0 * yy);
+                basis[13] = SH_C3[4] * dir.x * (4.0 * zz - xx - yy);
+                basis[14] = SH_C3[5] * dir.z * (xx - yy);
+                basis[15] = SH_C3[6] * dir.x * (xx - 3.0 * yy);
             }
         }
     }
+}
+
+[Differentiable]
+float3 compute_color_from_sh_coeffs(SpherHarmCoeffs sh, float3 dir, uint32_t active_sh) {
+    float basis[16];
+    compute_sh_basis_16(dir, active_sh, basis);
+
+    // Stack coefficients into a 3-row × 16-col matrix (one row per RGB channel).
+    // Per-channel result is the dot product of basis with that row.
+    float3 rgb = float3(0.0);
+    rgb += basis[0]  * sh.coeff0;
+    rgb += basis[1]  * sh.coeff1;
+    rgb += basis[2]  * sh.coeff2;
+    rgb += basis[3]  * sh.coeff3;
+    rgb += basis[4]  * sh.coeff4;
+    rgb += basis[5]  * sh.coeff5;
+    rgb += basis[6]  * sh.coeff6;
+    rgb += basis[7]  * sh.coeff7;
+    rgb += basis[8]  * sh.coeff8;
+    rgb += basis[9]  * sh.coeff9;
+    rgb += basis[10] * sh.coeff10;
+    rgb += basis[11] * sh.coeff11;
+    rgb += basis[12] * sh.coeff12;
+    rgb += basis[13] * sh.coeff13;
+    rgb += basis[14] * sh.coeff14;
+    rgb += basis[15] * sh.coeff15;
 
     rgb += float(0.5);
     rgb = max(rgb, float(0.0));
 
     return rgb;
 }
+
+// NOTE on cooperative-matrix SH evaluation (P13, deferred):
+// Per-gaussian directions mean every input to SH eval varies per output, so
+// no shared-axis matmul shape exists. A diagonal-pattern 16x16x16 fp16 mma
+// could extract per-gaussian results but at 1/16 utilization; given Slang
+// 2026.5's CoopMat API targets neural-net-scale uint4-vectorized matmuls
+// (Load/Store take uint4 strides + ShMemPool), the wiring cost outweighs the
+// throughput win on Ampere+. A real coop-matrix win here needs the
+// projection pass restructured to dispatch per-tile (where many gaussians
+// share approximate directions) — algorithm change, not a shader edit.
+// The basis split above (compute_sh_basis_16) is the precondition for that
+// future rewrite.

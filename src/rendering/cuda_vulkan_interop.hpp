@@ -121,6 +121,39 @@ namespace lfs::rendering {
         mutable std::string last_error_;
     };
 
+    // Standalone CUDA-importable timeline semaphore. Used to gate Vulkan work
+    // on CUDA work without a CPU-side cudaStreamSynchronize: the producing
+    // CUDA stream signals a monotonic value, and a Vulkan submit waits on the
+    // same value via the Vulkan-side VkSemaphore. The Vulkan handle is owned
+    // by VulkanContext (createExternalTimelineSemaphore); this class only
+    // owns the imported cudaExternalSemaphore_t.
+    class CudaTimelineSemaphore {
+    public:
+        CudaTimelineSemaphore() = default;
+        ~CudaTimelineSemaphore();
+
+        CudaTimelineSemaphore(const CudaTimelineSemaphore&) = delete;
+        CudaTimelineSemaphore& operator=(const CudaTimelineSemaphore&) = delete;
+        CudaTimelineSemaphore(CudaTimelineSemaphore&& other) noexcept;
+        CudaTimelineSemaphore& operator=(CudaTimelineSemaphore&& other) noexcept;
+
+        [[nodiscard]] bool init(CudaVulkanExternalSemaphoreImport semaphore);
+        void reset();
+
+        [[nodiscard]] bool valid() const { return cuda_timeline_ != nullptr; }
+        [[nodiscard]] const std::string& lastError() const { return last_error_; }
+
+        [[nodiscard]] bool cudaSignal(std::uint64_t value, cudaStream_t stream = nullptr) const;
+        [[nodiscard]] bool cudaWait(std::uint64_t value, cudaStream_t stream = nullptr) const;
+
+    private:
+        [[nodiscard]] bool fail(std::string message) const;
+        [[nodiscard]] bool failCuda(const char* operation, cudaError_t status) const;
+
+        cudaExternalSemaphore_t cuda_timeline_ = nullptr;
+        mutable std::string last_error_;
+    };
+
     class CudaVulkanBufferInterop {
     public:
         CudaVulkanBufferInterop() = default;

@@ -119,6 +119,18 @@ namespace lfs::vis {
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
         std::array<std::array<CudaInputSlot, 4>, kInputRingSize> cuda_inputs_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
+
+        // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
+        // CUDA upload completing — eliminates the per-frame
+        // cudaStreamSynchronize that previously blocked the CPU after every
+        // upload (P15). Values are monotonic; on each upload we bump the slot's
+        // counter, signal CUDA-side, and queue a Vulkan-side wait.
+        struct UploadTimeline {
+            VulkanContext::ExternalSemaphore vk_semaphore{};
+            lfs::rendering::CudaTimelineSemaphore cuda_semaphore{};
+            std::uint64_t value = 0;
+        };
+        std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
     };
 
 } // namespace lfs::vis

@@ -175,6 +175,14 @@ namespace lfs::vis {
         for (auto& snap : ring_uploaded_) {
             snap = {};
         }
+        for (auto& timeline : upload_timelines_) {
+            timeline.cuda_semaphore.reset();
+            if (context_) {
+                context_->destroyExternalSemaphore(timeline.vk_semaphore);
+            }
+            timeline.vk_semaphore = {};
+            timeline.value = 0;
+        }
         if (context_) {
             if (output_image_.image != VK_NULL_HANDLE) {
                 context_->imageBarriers().forgetImage(output_image_.image);
@@ -299,6 +307,34 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }
+
+        // Per-ring-slot upload timeline: a Vulkan-exportable timeline semaphore
+        // imported into CUDA so we can signal CUDA-side after the upload's
+        // cudaMemcpyAsync and have Vulkan compute wait on it — replacing the
+        // per-frame cudaStreamSynchronize that previously blocked the CPU.
+        for (auto& timeline : upload_timelines_) {
+            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
+                return std::unexpected(std::format(
+                    "VkSplat upload timeline semaphore creation failed: {}",
+                    context.lastError()));
+            }
+            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
+            if (!VulkanContext::externalNativeHandleValid(handle)) {
+                context.destroyExternalSemaphore(timeline.vk_semaphore);
+                return std::unexpected("VkSplat upload timeline semaphore export failed");
+            }
+            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
+            import.semaphore_handle = handle;
+            import.initial_value = timeline.vk_semaphore.initial_value;
+            if (!timeline.cuda_semaphore.init(import)) {
+                std::string err = timeline.cuda_semaphore.lastError();
+                context.destroyExternalSemaphore(timeline.vk_semaphore);
+                return std::unexpected(std::format(
+                    "VkSplat upload timeline semaphore CUDA import failed: {}", err));
+            }
+            timeline.value = 0;
+        }
+
         initialized_ = true;
         return {};
     }
@@ -361,12 +397,19 @@ namespace lfs::vis {
             return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
                                                sh_slot.interop.lastError()));
         }
-        const cudaError_t sync = stream != nullptr ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
-        if (sync != cudaSuccess) {
-            return std::unexpected(std::format("VkSplat CUDA stream sync failed: {} ({})",
-                                               cudaGetErrorName(sync),
-                                               cudaGetErrorString(sync)));
+
+        // Cross-API handoff: signal CUDA-side after the memcpy completes,
+        // queue a Vulkan-side wait so the next vksplat compute submit waits on
+        // it before reading the buffers. No CPU stall.
+        auto& timeline = upload_timelines_[ring_slot];
+        const std::uint64_t signal_value = ++timeline.value;
+        if (!timeline.cuda_semaphore.cudaSignal(signal_value, stream)) {
+            return std::unexpected(std::format("VkSplat CUDA upload signal failed: {}",
+                                               timeline.cuda_semaphore.lastError()));
         }
+        context.addFrameTimelineWait(timeline.vk_semaphore.semaphore,
+                                     signal_value,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
         xyz_slot.live_bytes = xyz_bytes;
         rot_slot.live_bytes = rot_bytes;
@@ -477,7 +520,6 @@ namespace lfs::vis {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return ok;
         }
-        VkDevice device = context.device();
 
         const bool has_pixel_state = buffers_.num_indices > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
