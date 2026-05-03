@@ -29,6 +29,7 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <future>
 #include <rasterization_api.h>
 #include <string_view>
 
@@ -225,7 +226,12 @@ namespace lfs::app {
             return true;
         }
 
-        void warmupCuda() {
+        std::future<void>& cudaWarmupFuture() {
+            static std::future<void> fut;
+            return fut;
+        }
+
+        void warmupCudaSync() {
             checkCudaDriverVersion();
 
             cudaDeviceProp prop;
@@ -236,6 +242,21 @@ namespace lfs::app {
 
             LOG_INFO("Initializing CUDA...");
             fast_lfs::rasterization::warmup_kernels();
+        }
+
+        void warmupCudaAsync() {
+            checkCudaDriverVersion();
+
+            cudaDeviceProp prop;
+            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
+                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
+                         prop.totalGlobalMem / (1024 * 1024));
+            }
+
+            LOG_INFO("Initializing CUDA (async)...");
+            cudaWarmupFuture() = std::async(std::launch::async, [] {
+                fast_lfs::rasterization::warmup_kernels();
+            });
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
@@ -250,7 +271,7 @@ namespace lfs::app {
                 params->optimization.no_splash;
 #endif
 
-            warmupCuda();
+            warmupCudaAsync();
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 
@@ -283,6 +304,11 @@ namespace lfs::app {
             if (!params->dataset.data_path.empty() && !std::filesystem::exists(params->dataset.data_path)) {
                 LOG_ERROR("Dataset not found: {}", lfs::core::path_to_utf8(params->dataset.data_path));
                 return 1;
+            }
+
+            if (params->import_cameras_path || params->resume_checkpoint) {
+                if (auto& fut = cudaWarmupFuture(); fut.valid())
+                    fut.wait();
             }
 
             if (params->import_cameras_path) {

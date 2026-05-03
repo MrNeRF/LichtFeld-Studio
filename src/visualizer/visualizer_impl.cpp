@@ -977,10 +977,16 @@ namespace lfs::vis {
             }
         } else if (!pending_dataset_path_.empty()) {
             auto path = std::exchange(pending_dataset_path_, {});
-            LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
-            if (const auto result = data_loader_->loadDataset(path); !result) {
-                LOG_ERROR("Failed to load dataset: {}", result.error());
+            LOG_INFO("Queueing dataset import: {}", lfs::core::path_to_utf8(path));
+            const auto& params = data_loader_->getParameters();
+            cmd::LoadFile{
+                .path = path,
+                .is_dataset = true,
+                .output_path = params.dataset.output_path,
+                .init_path = params.init_path.value_or(std::string{}),
+                .centralize_dataset = params.dataset.centralize_dataset,
             }
+                .emit();
         }
 
         // Auto-start training if --train flag was passed
