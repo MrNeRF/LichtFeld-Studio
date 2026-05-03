@@ -81,7 +81,7 @@ class AssetManagerPanel(Panel):
         self._selected_run_id: Optional[str] = None
         self._active_filters: Set[str] = set()  # Multi-select: empty = show all
         self._active_tab: str = "info"  # info, parameters, history
-        self._view_mode: str = "gallery"  # gallery, list
+        self._view_mode: str = "list"  # gallery, list
         self._sort_mode: str = "recent"  # recent, name, size, type
         self._search_query: str = ""
         self._pending_tag_name: str = ""
@@ -1077,7 +1077,7 @@ class AssetManagerPanel(Panel):
             },
             {
                 "id": "pcl",
-                "label": "PCL",
+                "label": "PointCloud",
                 "count": pcl_count,
                 "is_selected": "pcl" in self._active_filters,
             },
@@ -2128,18 +2128,16 @@ class AssetManagerPanel(Panel):
             return "Asset"
         asset_type = asset.get("type", "")
         type_labels = {
-            "ply_3dgs": "SPLAT",
-            "ply_pcl": "PCL",
-            "ply": "SPLAT",  # Legacy PLY type
+            "ply_3dgs": "Splat",
+            "ply_pcl": "PointCloud",
+            "ply": "Splat",
             "rad": "RAD",
             "sog": "SOG",
             "spz": "SPZ",
             "checkpoint": "CKPT",
-            "dataset": "DATASET",
-            "mesh": "MESH",
-            "usd": "USD",
-            "mp4": "VIDEO",
-            "mov": "VIDEO",
+            "dataset": "Dataset",
+            "mesh": "Mesh",
+            "usd": "USD"
         }
         return type_labels.get(asset_type, asset_type.upper() if asset_type else "Asset")
 
@@ -2156,14 +2154,14 @@ class AssetManagerPanel(Panel):
             return ""
         asset_type = asset.get("type", "")
         type_labels = {
-            "ply_3dgs": "SPLAT",
-            "ply_pcl": "PCL",
-            "ply": "SPLAT",  # Legacy PLY type
+            "ply_3dgs": "Splat",
+            "ply_pcl": "PointCloud",
+            "ply": "Splat",  # Legacy PLY type
             "rad": "RAD",
             "sog": "SOG",
             "spz": "SPZ",
             "checkpoint": "CKPT",
-            "dataset": "DATASET",
+            "dataset": "Dataset",
             "mesh": "MESH",
             "usd": "USD",
             "mp4": "VIDEO",

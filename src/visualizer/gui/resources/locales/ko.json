@@ -218,7 +218,7 @@
     "type.dataset": "데이터셋",
     "type.gaussian_splat": "가우시안 스플랫",
     "type.mesh": "메시",
-    "type.pcl": "PCL",
+    "type.pcl": "PointCloud",
     "type.point_cloud": "포인트 클라우드",
     "type.project": "프로젝트",
     "type.rad": "RAD",

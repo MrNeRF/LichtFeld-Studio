@@ -139,13 +139,9 @@
           <div class="asset-list-header">
             <span class="asset-col asset-col-name">{{col_name_label}}</span>
             <span class="asset-col asset-col-type">{{col_type_label}}</span>
-            <span class="asset-col asset-col-role">{{col_role_label}}</span>
             <span class="asset-col asset-col-project">{{col_project_label}}</span>
-            <span class="asset-col asset-col-scene">{{col_scene_label}}</span>
-            <span class="asset-col asset-col-run">{{col_run_label}}</span>
             <span class="asset-col asset-col-size">{{col_size_label}}</span>
             <span class="asset-col asset-col-modified">{{col_modified_label}}</span>
-            <span class="asset-col asset-col-status">{{col_status_label}}</span>
           </div>
             <div data-for="asset : assets">
               <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
@@ -154,13 +150,9 @@
                   <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                 </span>
                 <span class="asset-col asset-col-type">{{asset.type_label}}</span>
-                <span class="asset-col asset-col-role">{{asset.role_label}}</span>
                 <span class="asset-col asset-col-project">{{asset.project_name}}</span>
-                <span class="asset-col asset-col-scene">{{asset.scene_name}}</span>
-                <span class="asset-col asset-col-run">{{asset.run_name}}</span>
                 <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                 <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
-                <span class="asset-col asset-col-status">{{asset.status_label}}</span>
               </div>
             </div>
           </div>
@@ -257,48 +249,12 @@
                   <span class="parameter-value">{{selected_asset_dataset_masks}}</span>
                 </div>
                 <div class="parameter-row">
-                  <span class="parameter-label">{{prop_sparse_model_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_sparse_model}}</span>
-                </div>
-                <div class="parameter-row">
                   <span class="parameter-label">{{prop_cameras_label}}</span>
                   <span class="parameter-value">{{selected_asset_dataset_camera_count}}</span>
                 </div>
                 <div class="parameter-row" data-if="selected_asset_dataset_initial_points">
                   <span class="parameter-label">{{prop_initial_points_label}}</span>
                   <span class="parameter-value">{{selected_asset_dataset_initial_points}}</span>
-                </div>
-              </div>
-
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{tags_title}}</div>
-                <div class="asset-info-tags">
-                  <div data-for="tag : selected_asset_tags">
-                    <div class="asset-info-tag-row">
-                      <span class="asset-card-tag">{{tag.value}}</span>
-                      <button class="asset-tag-remove" data-event-click="on_remove_tag(tag.value)">{{remove_tag_label}}</button>
-                    </div>
-                  </div>
-                </div>
-                <div class="asset-tag-editor">
-                  <input type="text" placeholder="{{add_tag_placeholder}}" data-value="pending_tag_name" data-event-change="on_pending_tag_change" />
-                  <button class="asset-info-button" data-event-click="on_add_tag">{{add_tag_button_label}}</button>
-                </div>
-              </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_geometry_metadata">
-                <div class="asset-info-section-title">{{geometry_metadata_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_bounding_box_label}}</span>
-                  <span class="parameter-value">{{selected_asset_bounding_box}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_center_label}}</span>
-                  <span class="parameter-value">{{selected_asset_center}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_scale_label}}</span>
-                  <span class="parameter-value">{{selected_asset_scale}}</span>
                 </div>
               </div>
 
@@ -325,6 +281,22 @@
                   <span class="parameter-value">{{selected_asset_expected_path}}</span>
                 </div>
                 <button class="asset-info-button" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+              </div>
+
+              <div class="asset-info-section">
+                <div class="asset-info-section-title">{{tags_title}}</div>
+                <div class="asset-info-tags">
+                  <div data-for="tag : selected_asset_tags">
+                    <div class="asset-info-tag-row">
+                      <span class="asset-card-tag">{{tag.value}}</span>
+                      <button class="asset-tag-remove" data-event-click="on_remove_tag(tag.value)">{{remove_tag_label}}</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="asset-tag-editor">
+                  <input type="text" placeholder="{{add_tag_placeholder}}" data-value="pending_tag_name" data-event-change="on_pending_tag_change" />
+                  <button class="asset-info-button" data-event-click="on_add_tag">{{add_tag_button_label}}</button>
+                </div>
               </div>
 
             </div>

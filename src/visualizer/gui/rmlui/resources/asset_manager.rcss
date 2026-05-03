@@ -549,6 +549,9 @@
     font-size: 12dp;
     font-weight: 600;
     color: #f0ebe2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .asset-card-title,
@@ -559,6 +562,9 @@
 
 .asset-card-subtitle {
     margin-bottom: 4dp;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .asset-favorite,
@@ -764,8 +770,8 @@
     display: flex;
     flex-direction: row;
     align-items: center;
-    gap: 8dp;
-    min-width: 860dp;
+    gap: 6dp;
+    min-width: 480dp;
     width: 100%;
     box-sizing: border-box;
 }
@@ -812,13 +818,13 @@
 }
 
 .asset-col-name {
-    width: 170dp;
-    min-width: 120dp;
+    width: 140dp;
+    min-width: 100dp;
     flex-shrink: 1;
 }
 
 .asset-col-type {
-    width: 56dp;
+    width: 50dp;
     flex-shrink: 0;
 }
 
@@ -827,20 +833,18 @@
     flex-shrink: 0;
 }
 
-.asset-col-project,
-.asset-col-scene,
-.asset-col-run {
-    width: 96dp;
+.asset-col-project {
+    width: 80dp;
     flex-shrink: 0;
 }
 
 .asset-col-size {
-    width: 72dp;
+    width: 60dp;
     flex-shrink: 0;
 }
 
 .asset-col-modified {
-    width: 96dp;
+    width: 80dp;
     flex-shrink: 0;
 }
 
