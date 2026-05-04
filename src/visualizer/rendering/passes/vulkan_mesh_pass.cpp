@@ -156,13 +156,12 @@ namespace lfs::vis {
             std::vector<GpuMaterial> materials;
             std::vector<GpuSubmesh> submeshes;
 
-            // Cached on CPU side so we can recompute shadow light_vp per frame without
-            // re-uploading vertices.
             glm::vec3 aabb_min{0.0f};
             glm::vec3 aabb_max{0.0f};
 
-            // Per-mesh shadow target (re-created on resolution change).
             ShadowTarget shadow{};
+            glm::mat4 cached_light_vp{1.0f};
+            bool cached_light_vp_valid = false;
         };
 
         // Placeholder 1x1 shadow image bound when shadow_enabled=false; satisfies the
@@ -1400,6 +1399,137 @@ namespace lfs::vis {
             vmaUnmapMemory(allocator, mat.ubo_alloc);
         }
 
+        glm::mat4 computeLightVp(const GpuMesh& gpu, const glm::mat4& model,
+                                 const glm::vec3& light_dir) const {
+            const std::array<glm::vec3, 8> corners{
+                glm::vec3{gpu.aabb_min.x, gpu.aabb_min.y, gpu.aabb_min.z},
+                glm::vec3{gpu.aabb_max.x, gpu.aabb_min.y, gpu.aabb_min.z},
+                glm::vec3{gpu.aabb_min.x, gpu.aabb_max.y, gpu.aabb_min.z},
+                glm::vec3{gpu.aabb_max.x, gpu.aabb_max.y, gpu.aabb_min.z},
+                glm::vec3{gpu.aabb_min.x, gpu.aabb_min.y, gpu.aabb_max.z},
+                glm::vec3{gpu.aabb_max.x, gpu.aabb_min.y, gpu.aabb_max.z},
+                glm::vec3{gpu.aabb_min.x, gpu.aabb_max.y, gpu.aabb_max.z},
+                glm::vec3{gpu.aabb_max.x, gpu.aabb_max.y, gpu.aabb_max.z},
+            };
+            glm::vec3 ws_min(std::numeric_limits<float>::max());
+            glm::vec3 ws_max(std::numeric_limits<float>::lowest());
+            for (const auto& c : corners) {
+                const glm::vec3 wp = glm::vec3(model * glm::vec4(c, 1.0f));
+                ws_min = glm::min(ws_min, wp);
+                ws_max = glm::max(ws_max, wp);
+            }
+
+            const glm::vec3 center = (ws_min + ws_max) * 0.5f;
+            const float radius = glm::length(ws_max - ws_min) * 0.5f;
+            const glm::vec3 dir = glm::length(light_dir) > 1e-6f ? glm::normalize(light_dir)
+                                                                 : glm::vec3(0.0f, 1.0f, 0.0f);
+            const glm::vec3 eye = center + dir * radius * 2.0f;
+            glm::vec3 up(0.0f, 1.0f, 0.0f);
+            if (std::abs(glm::dot(dir, up)) > 0.99f) {
+                up = glm::vec3(0.0f, 0.0f, 1.0f);
+            }
+            const glm::mat4 light_view = glm::lookAt(eye, center, up);
+            const glm::mat4 light_proj = glm::ortho(-radius, radius, -radius, radius,
+                                                    0.01f, radius * 4.0f);
+            return light_proj * light_view;
+        }
+
+        bool ensureShadowTarget(GpuMesh& gpu, int resolution) {
+            if (gpu.shadow.image != VK_NULL_HANDLE && gpu.shadow.resolution == resolution) {
+                return true;
+            }
+            return createShadowTarget(resolution, gpu.shadow);
+        }
+
+        bool recordShadowPass(GpuMesh& gpu, const glm::mat4& light_mvp) {
+            if (gpu.shadow.image == VK_NULL_HANDLE || shadow_pipeline == VK_NULL_HANDLE) {
+                return false;
+            }
+            VkCommandBuffer cb = beginSingleTimeCommands();
+            if (cb == VK_NULL_HANDLE) {
+                return false;
+            }
+
+            VkImageMemoryBarrier to_attach{};
+            to_attach.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            to_attach.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            to_attach.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            to_attach.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            to_attach.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            to_attach.image = gpu.shadow.image;
+            to_attach.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            to_attach.subresourceRange.levelCount = 1;
+            to_attach.subresourceRange.layerCount = 1;
+            to_attach.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            to_attach.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &to_attach);
+
+            VkClearValue clear{};
+            clear.depthStencil = {1.0f, 0};
+            VkRenderingAttachmentInfo depth_attachment{};
+            depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            depth_attachment.imageView = gpu.shadow.view;
+            depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            depth_attachment.clearValue = clear;
+
+            VkRenderingInfo rendering{};
+            rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            rendering.renderArea.offset = {0, 0};
+            rendering.renderArea.extent = {static_cast<std::uint32_t>(gpu.shadow.resolution),
+                                           static_cast<std::uint32_t>(gpu.shadow.resolution)};
+            rendering.layerCount = 1;
+            rendering.pDepthAttachment = &depth_attachment;
+            vkCmdBeginRendering(cb, &rendering);
+
+            VkViewport vp{};
+            vp.x = 0.0f;
+            vp.y = 0.0f;
+            vp.width = static_cast<float>(gpu.shadow.resolution);
+            vp.height = static_cast<float>(gpu.shadow.resolution);
+            vp.minDepth = 0.0f;
+            vp.maxDepth = 1.0f;
+            VkRect2D sc{};
+            sc.extent = rendering.renderArea.extent;
+            vkCmdSetViewport(cb, 0, 1, &vp);
+            vkCmdSetScissor(cb, 0, 1, &sc);
+
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, shadow_pipeline);
+            ShadowPush push{};
+            std::memcpy(push.light_mvp, &light_mvp[0][0], sizeof(push.light_mvp));
+            vkCmdPushConstants(cb, shadow_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(push), &push);
+
+            VkBuffer vbuf = gpu.vertex_buffer;
+            VkDeviceSize voff = 0;
+            vkCmdBindVertexBuffers(cb, 0, 1, &vbuf, &voff);
+            vkCmdBindIndexBuffer(cb, gpu.index_buffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cb, gpu.total_index_count, 1, 0, 0, 0);
+
+            vkCmdEndRendering(cb);
+
+            VkImageMemoryBarrier to_read{};
+            to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            to_read.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            to_read.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            to_read.image = gpu.shadow.image;
+            to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            to_read.subresourceRange.levelCount = 1;
+            to_read.subresourceRange.layerCount = 1;
+            to_read.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 0, 0, nullptr, 0, nullptr, 1, &to_read);
+
+            return endSingleTimeCommands(cb);
+        }
+
         void prepare(const VulkanMeshPassParams& params) {
             ++frame_counter;
             for (const auto& item : params.items) {
@@ -1419,6 +1549,24 @@ namespace lfs::vis {
                 } else {
                     it->second.last_used_frame = frame_counter;
                 }
+            }
+
+            for (const auto& item : params.items) {
+                if (!item.mesh || !item.shadow_enabled || item.shadow_map_resolution <= 0) {
+                    continue;
+                }
+                auto it = mesh_cache.find(item.mesh);
+                if (it == mesh_cache.end() || it->second.vertex_buffer == VK_NULL_HANDLE) {
+                    continue;
+                }
+                auto& gpu = it->second;
+                if (!ensureShadowTarget(gpu, item.shadow_map_resolution)) {
+                    continue;
+                }
+                const glm::mat4 light_vp = computeLightVp(gpu, item.model, item.light_dir);
+                gpu.cached_light_vp = light_vp;
+                gpu.cached_light_vp_valid = true;
+                recordShadowPass(gpu, light_vp * item.model);
             }
 
             constexpr std::uint64_t kEvictAfter = 120;
@@ -1459,8 +1607,13 @@ namespace lfs::vis {
                 }
                 auto& gpu = it->second;
 
-                writeLightUbo(params, item, glm::mat4(1.0f), false);
-                bindShadowMap(shadow_dummy);
+                const bool shadow_active = item.shadow_enabled &&
+                                           gpu.shadow.image != VK_NULL_HANDLE &&
+                                           gpu.cached_light_vp_valid;
+                writeLightUbo(params, item,
+                              shadow_active ? gpu.cached_light_vp : glm::mat4(1.0f),
+                              shadow_active);
+                bindShadowMap(shadow_active ? gpu.shadow : shadow_dummy);
 
                 // Patch per-frame emphasis state into the material UBOs for this mesh.
                 for (auto& mat : gpu.materials) {
