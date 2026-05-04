@@ -3898,6 +3898,7 @@ namespace lfs::vis::gui {
             params.mesh_items = std::move(mesh_frame.items);
             params.environment = std::move(mesh_frame.environment);
             params.depth_blit = std::move(mesh_frame.depth_blit);
+            params.split_view = std::move(mesh_frame.split_view);
         }
 
         // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay

@@ -12,6 +12,7 @@
 #include "passes/vulkan_depth_blit_pass.hpp"
 #include "passes/vulkan_environment_pass.hpp"
 #include "passes/vulkan_mesh_pass.hpp"
+#include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_types.hpp"
@@ -333,6 +334,7 @@ namespace lfs::vis {
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
             lfs::vis::VulkanEnvironmentParams environment;
             lfs::vis::VulkanDepthBlitParams depth_blit;
+            lfs::vis::VulkanSplitViewParams split_view;
         };
         void setVulkanMeshFrame(VulkanMeshFrame frame) {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);

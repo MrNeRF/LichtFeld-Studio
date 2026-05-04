@@ -8,6 +8,7 @@
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
+#include "vulkan_split_view_pass.hpp"
 
 #include <array>
 #include <cstddef>
@@ -119,6 +120,10 @@ namespace lfs::vis {
         // Splat depth blit. When set, mesh draws will depth-test against the splat
         // depth surface, so meshes occluded by splats render correctly.
         VulkanDepthBlitParams depth_blit;
+
+        // Split-view composite. When enabled, replaces the single-tensor scene quad
+        // blit with a two-panel composite (master-style divider/handle/grip in-shader).
+        VulkanSplitViewParams split_view;
     };
 
     class LFS_VIS_API VulkanViewportPass {

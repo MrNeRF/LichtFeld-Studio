@@ -177,6 +177,7 @@ namespace lfs::vis {
         VulkanMeshPass mesh_pass;
         VulkanEnvironmentPass environment_pass;
         VulkanDepthBlitPass depth_blit_pass;
+        VulkanSplitViewPass split_view_pass;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -236,6 +237,11 @@ namespace lfs::vis {
             }
             if (!depth_blit_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
                 LOG_ERROR("Vulkan viewport pass: depth-blit sub-pass init failed");
+                reset();
+                return false;
+            }
+            if (!split_view_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
+                LOG_ERROR("Vulkan viewport pass: split-view sub-pass init failed");
                 reset();
                 return false;
             }
@@ -955,6 +961,7 @@ namespace lfs::vis {
             mesh_pass.prepare(*context, mesh_params);
             environment_pass.prepare(params.environment);
             depth_blit_pass.prepare(params.depth_blit);
+            split_view_pass.prepare(params.split_view);
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -1079,7 +1086,15 @@ namespace lfs::vis {
             const bool has_scene =
                 scene_image_uploader.hasImage() &&
                 frame.scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
-            if (has_scene) {
+            const bool split_active = params.split_view.enabled && split_view_pass.ready();
+            if (split_active) {
+                split_view_pass.record(command_buffer,
+                                       {static_cast<std::uint32_t>(rect.width),
+                                        static_cast<std::uint32_t>(rect.height)},
+                                       params.split_view);
+                bindQuad(command_buffer);
+                bindViewport(command_buffer, rect);
+            } else if (has_scene) {
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, scene_pipeline);
                 vkCmdBindDescriptorSets(command_buffer,
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1226,6 +1241,7 @@ namespace lfs::vis {
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
                 depth_blit_pass.shutdown();
+                split_view_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)

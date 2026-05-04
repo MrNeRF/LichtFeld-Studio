@@ -91,53 +91,6 @@ namespace lfs::vis {
             return panels;
         }
 
-        struct CpuChwImage {
-            lfs::core::Tensor tensor;
-            int width = 0;
-            int height = 0;
-            int channels = 0;
-
-            [[nodiscard]] bool valid() const {
-                return tensor.is_valid() && width > 0 && height > 0 && channels >= 3;
-            }
-        };
-
-        [[nodiscard]] std::expected<CpuChwImage, std::string> toCpuChwFloatImage(
-            const std::shared_ptr<lfs::core::Tensor>& image) {
-            if (!image || !image->is_valid() || image->ndim() != 3) {
-                return std::unexpected("Invalid image tensor");
-            }
-
-            lfs::core::Tensor formatted = *image;
-            const auto layout = lfs::rendering::detectImageLayout(formatted);
-            if (layout == lfs::rendering::ImageLayout::Unknown) {
-                return std::unexpected("Unsupported image tensor layout");
-            }
-            if (formatted.dtype() == lfs::core::DataType::UInt8) {
-                formatted = formatted.to(lfs::core::DataType::Float32) / 255.0f;
-            } else if (formatted.dtype() != lfs::core::DataType::Float32) {
-                formatted = formatted.to(lfs::core::DataType::Float32);
-            }
-            if (layout == lfs::rendering::ImageLayout::HWC) {
-                formatted = formatted.permute({2, 0, 1}).contiguous();
-            }
-            formatted = formatted.cpu().contiguous();
-
-            return CpuChwImage{
-                .tensor = std::move(formatted),
-                .width = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC ? image->size(1) : image->size(2)),
-                .height = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC ? image->size(0) : image->size(1)),
-                .channels = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC ? image->size(2) : image->size(0))};
-        }
-
-        struct CompositePanelImage {
-            std::shared_ptr<lfs::core::Tensor> image;
-            float start_position = 0.0f;
-            float end_position = 1.0f;
-            bool normalize_x_to_panel = false;
-            bool flip_y = false;
-        };
-
         struct SplitCompositeContentRect {
             int x = 0;
             int y = 0;
@@ -181,166 +134,6 @@ namespace lfs::vis {
             rect.width = std::clamp(rect.width, 1, output_size.x);
             rect.height = std::clamp(rect.height, 1, output_size.y);
             return rect;
-        }
-
-        [[nodiscard]] float sampleNearestChw(
-            const CpuChwImage& image,
-            const float u,
-            const float v,
-            const int channel) {
-            const float clamped_u = std::clamp(u, 0.0f, 1.0f);
-            const float clamped_v = std::clamp(v, 0.0f, 1.0f);
-            const int x = std::clamp(
-                static_cast<int>(std::lround(clamped_u * static_cast<float>(image.width - 1))),
-                0,
-                image.width - 1);
-            const int y = std::clamp(
-                static_cast<int>(std::lround(clamped_v * static_cast<float>(image.height - 1))),
-                0,
-                image.height - 1);
-            const float* const data = image.tensor.ptr<float>();
-            return data[(static_cast<size_t>(channel) * image.height + y) * image.width + x];
-        }
-
-        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> compositeSplitImages(
-            const CompositePanelImage& left_panel,
-            const CompositePanelImage& right_panel,
-            const glm::ivec2 output_size,
-            const glm::vec3& background_color,
-            const float split_position,
-            const bool letterbox = false,
-            const glm::ivec2 content_size = {0, 0}) {
-            if (output_size.x <= 0 || output_size.y <= 0) {
-                return std::unexpected("Invalid split-view output size");
-            }
-
-            auto left = toCpuChwFloatImage(left_panel.image);
-            if (!left) {
-                return std::unexpected(left.error());
-            }
-            auto right = toCpuChwFloatImage(right_panel.image);
-            if (!right) {
-                return std::unexpected(right.error());
-            }
-
-            const int width = output_size.x;
-            const int height = output_size.y;
-            const size_t pixel_count = static_cast<size_t>(width) * height;
-            std::vector<float> output(3 * pixel_count, 0.0f);
-            for (size_t i = 0; i < pixel_count; ++i) {
-                output[i] = background_color.r;
-                output[pixel_count + i] = background_color.g;
-                output[2 * pixel_count + i] = background_color.b;
-            }
-
-            constexpr glm::vec3 kDividerColor(0.29f, 0.33f, 0.42f);
-            constexpr float kMinBarWidthPx = 4.0f;
-            constexpr float kHandleHeightPx = 80.0f;
-            constexpr float kHandleWidthPx = 24.0f;
-            constexpr float kGripSpacingPx = 10.0f;
-            constexpr float kGripWidthPx = 2.0f;
-            constexpr float kGripLengthPx = 12.0f;
-            constexpr float kCornerRadiusPx = 6.0f;
-            constexpr int kGripLineCount = 2;
-
-            const SplitCompositeContentRect rect =
-                resolveSplitCompositeContentRect(output_size, letterbox, content_size);
-            const int divider = rect.x + splitViewDividerPixel(rect.width, split_position);
-            const float split_x = static_cast<float>(rect.x) +
-                                  std::clamp(split_position, 0.0f, 1.0f) *
-                                      static_cast<float>(rect.width);
-            const float center_y =
-                static_cast<float>(rect.y) + static_cast<float>(rect.height) * 0.5f;
-
-            const auto write_pixel = [&](const size_t pixel_index, const glm::vec3& color) {
-                output[pixel_index] = color.r;
-                output[pixel_count + pixel_index] = color.g;
-                output[2 * pixel_count + pixel_index] = color.b;
-            };
-
-            const auto divider_color_for_pixel = [&](const int x,
-                                                     const int y) -> std::optional<glm::vec3> {
-                const float px = static_cast<float>(x) + 0.5f;
-                const float py = static_cast<float>(y) + 0.5f;
-                const float dist_from_split = std::abs(px - split_x);
-                if (dist_from_split >= kMinBarWidthPx * 0.5f) {
-                    return std::nullopt;
-                }
-
-                glm::vec3 color = kDividerColor;
-                const float handle_height = std::min(kHandleHeightPx, static_cast<float>(rect.height));
-                const float handle_width = std::min(kHandleWidthPx, static_cast<float>(rect.width));
-                const float dist_from_center = std::abs(py - center_y);
-
-                if (dist_from_center < handle_height * 0.5f &&
-                    dist_from_split < handle_width * 0.5f) {
-                    const glm::vec2 handle_size(handle_width, handle_height);
-                    const glm::vec2 local_pos(dist_from_split, dist_from_center);
-                    const float corner_radius =
-                        std::min(kCornerRadiusPx, std::min(handle_width, handle_height) * 0.5f);
-                    const glm::vec2 corner_dist =
-                        local_pos - (handle_size * 0.5f - glm::vec2(corner_radius));
-                    if (corner_dist.x <= 0.0f || corner_dist.y <= 0.0f ||
-                        glm::length(corner_dist) <= corner_radius) {
-                        color = kDividerColor * 0.8f;
-
-                        const float local_y = py - center_y;
-                        for (int i = -kGripLineCount; i <= kGripLineCount; ++i) {
-                            const float line_y = static_cast<float>(i) * kGripSpacingPx;
-                            if (std::abs(local_y - line_y) < kGripWidthPx &&
-                                dist_from_split < kGripLengthPx * 0.5f) {
-                                color = glm::vec3(1.0f, 1.0f, 1.0f) * 0.9f;
-                                break;
-                            }
-                        }
-                    }
-                }
-                return color;
-            };
-
-            const auto sample_panel = [](const CpuChwImage& image,
-                                         const CompositePanelImage& panel,
-                                         const float u,
-                                         const float v,
-                                         const int channel) {
-                float panel_u = u;
-                if (panel.normalize_x_to_panel) {
-                    const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
-                    panel_u = (u - panel.start_position) / span;
-                }
-                const float panel_v = panel.flip_y ? 1.0f - v : v;
-                return sampleNearestChw(image, panel_u, panel_v, channel);
-            };
-
-            for (int y = rect.y; y < rect.y + rect.height; ++y) {
-                const float v = rect.height > 1
-                                    ? static_cast<float>(y - rect.y) / static_cast<float>(rect.height - 1)
-                                    : 0.0f;
-                for (int x = rect.x; x < rect.x + rect.width; ++x) {
-                    const float u = rect.width > 1
-                                        ? static_cast<float>(x - rect.x) / static_cast<float>(rect.width - 1)
-                                        : 0.0f;
-                    const bool use_left = x < divider;
-                    const auto& image = use_left ? *left : *right;
-                    const auto& panel = use_left ? left_panel : right_panel;
-                    const size_t pixel_index = static_cast<size_t>(y) * width + x;
-                    write_pixel(
-                        pixel_index,
-                        glm::vec3(sample_panel(image, panel, u, v, 0),
-                                  sample_panel(image, panel, u, v, 1),
-                                  sample_panel(image, panel, u, v, 2)));
-                    if (const auto divider_color = divider_color_for_pixel(x, y)) {
-                        write_pixel(pixel_index, *divider_color);
-                    }
-                }
-            }
-
-            auto tensor = lfs::core::Tensor::from_vector(
-                              output,
-                              {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
-                              lfs::core::Device::CPU)
-                              .cuda();
-            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
 
         [[nodiscard]] lfs::rendering::FrameMetadata makeSplitMetadata(
@@ -545,6 +338,7 @@ namespace lfs::vis {
         bool rendered_image_contains_ground_truth = false;
         glm::ivec2 rendered_gt_content_size{0, 0};
         std::optional<SplitViewInfo> rendered_split_info;
+        VulkanSplitViewParams pending_split_view{};
 
         struct RenderedPanel {
             std::shared_ptr<lfs::core::Tensor> image;
@@ -690,37 +484,23 @@ namespace lfs::vis {
 
                             if (rendered && rendered->image) {
                                 auto gt_image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
-                                auto composite = compositeSplitImages(
-                                    CompositePanelImage{
-                                        .image = std::move(gt_image),
-                                        .start_position = 0.0f,
-                                        .end_position = settings_.split_position,
-                                        .normalize_x_to_panel = false},
-                                    CompositePanelImage{
-                                        .image = rendered->image,
-                                        .start_position = settings_.split_position,
-                                        .end_position = 1.0f,
-                                        .normalize_x_to_panel = false,
-                                        .flip_y = rendered->metadata.flip_y},
-                                    render_size,
-                                    settings_.background_color,
-                                    settings_.split_position,
-                                    true,
-                                    gt_size);
-                                if (composite) {
-                                    rendered_image = std::move(*composite);
-                                    rendered_metadata = rendered->metadata;
-                                    rendered_image_contains_ground_truth = true;
-                                    rendered_gt_content_size = gt_size;
-                                    rendered_split_info = SplitViewInfo{
-                                        .enabled = true,
-                                        .mode_label = "GT Compare",
-                                        .detail_label = camera->image_name(),
-                                        .left_name = "Ground Truth",
-                                        .right_name = "Rendered"};
-                                } else {
-                                    render_error = composite.error();
-                                }
+                                const SplitCompositeContentRect rect =
+                                    resolveSplitCompositeContentRect(render_size, true, gt_size);
+                                pending_split_view.enabled = true;
+                                pending_split_view.split_position = settings_.split_position;
+                                pending_split_view.background = settings_.background_color;
+                                pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
+                                pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, false};
+                                pending_split_view.right = {rendered->image, settings_.split_position, 1.0f, false, rendered->metadata.flip_y};
+                                rendered_metadata = rendered->metadata;
+                                rendered_image_contains_ground_truth = true;
+                                rendered_gt_content_size = gt_size;
+                                rendered_split_info = SplitViewInfo{
+                                    .enabled = true,
+                                    .mode_label = "GT Compare",
+                                    .detail_label = camera->image_name(),
+                                    .left_name = "Ground Truth",
+                                    .right_name = "Rendered"};
                             } else {
                                 render_error = rendered ? "GT comparison render returned no image" : rendered.error();
                             }
@@ -744,34 +524,19 @@ namespace lfs::vis {
                     SplitViewPanelId::Right,
                     std::nullopt);
                 if (left && right) {
-                    auto composite = compositeSplitImages(
-                        CompositePanelImage{
-                            .image = left->image,
-                            .start_position = (*layouts)[0].start_position,
-                            .end_position = (*layouts)[0].end_position,
-                            .normalize_x_to_panel = true,
-                            .flip_y = left->metadata.flip_y},
-                        CompositePanelImage{
-                            .image = right->image,
-                            .start_position = (*layouts)[1].start_position,
-                            .end_position = (*layouts)[1].end_position,
-                            .normalize_x_to_panel = true,
-                            .flip_y = right->metadata.flip_y},
-                        render_size,
-                        settings_.background_color,
-                        settings_.split_position);
-                    if (composite) {
-                        rendered_image = std::move(*composite);
-                        rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
-                        rendered_split_info = SplitViewInfo{
-                            .enabled = true,
-                            .mode_label = "Split View",
-                            .detail_label = "Primary | Secondary",
-                            .left_name = "Primary View",
-                            .right_name = "Secondary View"};
-                    } else {
-                        render_error = composite.error();
-                    }
+                    pending_split_view.enabled = true;
+                    pending_split_view.split_position = settings_.split_position;
+                    pending_split_view.background = settings_.background_color;
+                    pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
+                    pending_split_view.left = {left->image, (*layouts)[0].start_position, (*layouts)[0].end_position, true, left->metadata.flip_y};
+                    pending_split_view.right = {right->image, (*layouts)[1].start_position, (*layouts)[1].end_position, true, right->metadata.flip_y};
+                    rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
+                    rendered_split_info = SplitViewInfo{
+                        .enabled = true,
+                        .mode_label = "Split View",
+                        .detail_label = "Primary | Secondary",
+                        .left_name = "Primary View",
+                        .right_name = "Secondary View"};
                 } else {
                     render_error = left ? right.error() : left.error();
                 }
@@ -791,36 +556,21 @@ namespace lfs::vis {
                 auto right = render_panel_image(
                     context.viewport, render_size, std::nullopt, std::optional<std::vector<bool>>(right_mask));
                 if (left && right) {
-                    auto composite = compositeSplitImages(
-                        CompositePanelImage{
-                            .image = left->image,
-                            .start_position = 0.0f,
-                            .end_position = settings_.split_position,
-                            .normalize_x_to_panel = false,
-                            .flip_y = left->metadata.flip_y},
-                        CompositePanelImage{
-                            .image = right->image,
-                            .start_position = settings_.split_position,
-                            .end_position = 1.0f,
-                            .normalize_x_to_panel = false,
-                            .flip_y = right->metadata.flip_y},
-                        render_size,
-                        settings_.background_color,
-                        settings_.split_position);
-                    if (composite) {
-                        rendered_image = std::move(*composite);
-                        rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
-                        rendered_split_info = SplitViewInfo{
-                            .enabled = true,
-                            .mode_label = "Split View",
-                            .detail_label = std::format("{} | {}",
-                                                        visible_nodes[left_idx]->name,
-                                                        visible_nodes[right_idx]->name),
-                            .left_name = visible_nodes[left_idx]->name,
-                            .right_name = visible_nodes[right_idx]->name};
-                    } else {
-                        render_error = composite.error();
-                    }
+                    pending_split_view.enabled = true;
+                    pending_split_view.split_position = settings_.split_position;
+                    pending_split_view.background = settings_.background_color;
+                    pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
+                    pending_split_view.left = {left->image, 0.0f, settings_.split_position, false, left->metadata.flip_y};
+                    pending_split_view.right = {right->image, settings_.split_position, 1.0f, false, right->metadata.flip_y};
+                    rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
+                    rendered_split_info = SplitViewInfo{
+                        .enabled = true,
+                        .mode_label = "Split View",
+                        .detail_label = std::format("{} | {}",
+                                                    visible_nodes[left_idx]->name,
+                                                    visible_nodes[right_idx]->name),
+                        .left_name = visible_nodes[left_idx]->name,
+                        .right_name = visible_nodes[right_idx]->name};
                 } else {
                     render_error = left ? right.error() : left.error();
                 }
@@ -927,8 +677,9 @@ namespace lfs::vis {
             clearVulkanMeshFrame();
         }
 
-        if ((rendered_image || render_error.empty()) &&
-            (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty())) {
+        if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
+            (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty() ||
+             pending_split_view.enabled)) {
             VulkanMeshFrame gpu_mesh_frame;
             const auto vp_data = frame_ctx.makeViewportData();
             gpu_mesh_frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
@@ -993,6 +744,8 @@ namespace lfs::vis {
                 glm::radians(settings_.environment_rotation_degrees);
             gpu_mesh_frame.environment.equirectangular_view = settings_.equirectangular;
 
+            gpu_mesh_frame.split_view = pending_split_view;
+
             // Splat depth → mesh-pass z-test source. Only meaningful when the splat
             // produced a depth tensor (CUDA rasterizer path; vksplat doesn't yet).
             if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
@@ -1014,7 +767,9 @@ namespace lfs::vis {
         render_lock.reset();
 
         const bool has_gpu_only_pass =
-            !frame_ctx.scene_state.meshes.empty() || environmentBackgroundEnabled(settings_);
+            !frame_ctx.scene_state.meshes.empty() ||
+            environmentBackgroundEnabled(settings_) ||
+            pending_split_view.enabled;
 
         if (!rendered_image && has_gpu_only_pass) {
             vulkan_viewport_image_.reset();
@@ -1024,7 +779,14 @@ namespace lfs::vis {
             vulkan_external_viewport_image_generation_ = 0;
             vulkan_viewport_image_size_ = render_size;
             vulkan_viewport_image_flip_y_ = false;
-            vulkan_gt_comparison_content_size_ = {0, 0};
+            vulkan_gt_comparison_content_size_ =
+                rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
+            FrameResources split_info_resources;
+            if (rendered_split_info) {
+                split_info_resources.split_view_executed = true;
+                split_info_resources.split_info = *rendered_split_info;
+            }
+            split_view_service_.updateInfo(split_info_resources);
             return {.image = nullptr,
                     .image_generation = 0,
                     .size = vulkan_viewport_image_size_,
