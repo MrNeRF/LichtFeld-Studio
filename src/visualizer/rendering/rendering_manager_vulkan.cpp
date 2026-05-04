@@ -923,8 +923,23 @@ namespace lfs::vis {
                 frame_ctx.current_camera_id);
         }
 
+        if (frame_ctx.scene_state.meshes.empty()) {
+            clearVulkanMeshFrame();
+        }
+
         if ((rendered_image || render_error.empty()) &&
             (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty())) {
+            // Phase 1 GPU mesh path: build VulkanMeshDrawItems and hand them to gui_manager
+            // via RenderingManager. The vulkan_viewport_pass will rasterize them on the GPU
+            // (see VulkanMeshPass), bypassing the legacy CPU `rasterizeMeshTriangle` fallback
+            // that ran inside renderVideoCompositeFrame.
+            VulkanMeshFrame gpu_mesh_frame;
+            const auto vp_data = frame_ctx.makeViewportData();
+            gpu_mesh_frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
+            gpu_mesh_frame.camera_position = vp_data.translation;
+            gpu_mesh_frame.items.reserve(frame_ctx.scene_state.meshes.size());
+
+            // Match master: when any mesh / node is selected, dim the non-emphasized ones.
             const bool any_selected_mesh = std::any_of(
                 frame_ctx.scene_state.meshes.begin(),
                 frame_ctx.scene_state.meshes.end(),
@@ -936,34 +951,42 @@ namespace lfs::vis {
             const bool dim_non_emphasized =
                 settings_.desaturate_unselected && (any_selected_mesh || any_selected_node);
 
-            std::vector<lfs::rendering::MeshFrameItem> mesh_items;
-            mesh_items.reserve(frame_ctx.scene_state.meshes.size());
+            // Headlight: master uses normalize(camera_pos) so the light always points from
+            // the world origin towards the camera. Settings.mesh_light_dir is currently
+            // unused in master's path; matching it here.
+            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
+                                                ? glm::normalize(vp_data.translation)
+                                                : settings_.mesh_light_dir;
+
             for (const auto& mesh : frame_ctx.scene_state.meshes) {
                 if (!mesh.mesh) {
                     continue;
                 }
-                mesh_items.push_back(lfs::rendering::MeshFrameItem{
-                    .mesh = mesh.mesh,
-                    .transform = mesh.transform,
-                    .options =
-                        {.wireframe_overlay = settings_.mesh_wireframe,
-                         .wireframe_color = settings_.mesh_wireframe_color,
-                         .wireframe_width = settings_.mesh_wireframe_width,
-                         .light_dir = settings_.mesh_light_dir,
-                         .light_intensity = settings_.mesh_light_intensity,
-                         .ambient = settings_.mesh_ambient,
-                         .backface_culling = settings_.mesh_backface_culling,
-                         .shadow_enabled = settings_.mesh_shadow_enabled,
-                         .shadow_map_resolution = settings_.mesh_shadow_resolution,
-                         .is_emphasized = mesh.is_selected,
-                         .dim_non_emphasized = dim_non_emphasized,
-                         .flash_intensity = frame_ctx.selection_flash_intensity,
-                         .background_color = settings_.background_color,
-                         .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)},
-                });
+                lfs::vis::VulkanMeshDrawItem item{};
+                item.mesh = mesh.mesh;
+                item.model = mesh.transform;
+                item.light_dir = headlight_dir;
+                item.light_intensity = settings_.mesh_light_intensity;
+                item.ambient = settings_.mesh_ambient;
+                item.backface_culling = settings_.mesh_backface_culling;
+                item.is_emphasized = mesh.is_selected;
+                item.dim_non_emphasized = dim_non_emphasized;
+                item.flash_intensity = frame_ctx.selection_flash_intensity;
+                item.wireframe_overlay = settings_.mesh_wireframe;
+                item.wireframe_color = settings_.mesh_wireframe_color;
+                item.wireframe_width = settings_.mesh_wireframe_width;
+                item.shadow_enabled = settings_.mesh_shadow_enabled;
+                item.shadow_map_resolution = settings_.mesh_shadow_resolution;
+                gpu_mesh_frame.items.push_back(item);
             }
+            setVulkanMeshFrame(std::move(gpu_mesh_frame));
 
-            if (environmentBackgroundEnabled(settings_) || !mesh_items.empty()) {
+            // Environment background still goes through the CPU composite for now —
+            // the GPU env renderer is a separate follow-up. Mesh items are intentionally
+            // empty here so the CPU rasterizer doesn't double-render them.
+            std::vector<lfs::rendering::MeshFrameItem> mesh_items;
+
+            if (environmentBackgroundEnabled(settings_)) {
                 std::optional<lfs::rendering::GpuFrame> primary_frame;
                 bool can_composite = true;
                 if (rendered_image) {
@@ -998,6 +1021,23 @@ namespace lfs::vis {
             }
         }
         render_lock.reset();
+
+        // Mesh-only path: no splat/pc/env produced a rendered_image, but we have GPU mesh
+        // items queued. Synthesize a flat-color background tensor so the existing scene
+        // upload pipeline keeps working; the VulkanMeshPass draws on top of it.
+        if (!rendered_image && !frame_ctx.scene_state.meshes.empty()) {
+            const int bg_h = std::max(render_size.y, 1);
+            const int bg_w = std::max(render_size.x, 1);
+            lfs::core::Tensor bg = lfs::core::Tensor::zeros(
+                {3, static_cast<int64_t>(bg_h), static_cast<int64_t>(bg_w)},
+                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            // RGB channels filled separately via channel-wise broadcast assignment would
+            // require ops we don't need here — flat black background is fine for Phase 1
+            // mesh preview; the mesh pass rasterizes on top with proper depth.
+            rendered_image = std::make_shared<lfs::core::Tensor>(std::move(bg));
+            rendered_metadata = {};
+            rendered_metadata.flip_y = false;
+        }
 
         if (!rendered_image) {
             vulkan_gt_comparison_content_size_ = {0, 0};

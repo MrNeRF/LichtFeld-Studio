@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "vulkan_mesh_pass.hpp"
 
 #include <array>
 #include <cstddef>
@@ -102,6 +103,12 @@ namespace lfs::vis {
         std::vector<VulkanViewportShapeOverlayVertex> ui_shape_overlay_triangles;
         std::vector<VulkanViewportPivotOverlay> pivot_overlays;
         std::vector<VulkanViewportTexturedOverlay> textured_overlays;
+
+        // GPU-rendered meshes drawn into the same color/depth attachments as the
+        // viewport pass. Replaces the old CPU `rasterizeMeshTriangle` fallback path.
+        glm::mat4 mesh_view_projection{1.0f};
+        glm::vec3 mesh_camera_position{0.0f};
+        std::vector<VulkanMeshDrawItem> mesh_items;
     };
 
     class LFS_VIS_API VulkanViewportPass {

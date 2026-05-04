@@ -3600,6 +3600,34 @@ namespace lfs::vis::gui {
             return;
         }
 
+        const std::size_t frame_slot = context.currentFrameSlot();
+        const bool slot_array_resize_needed = vulkan_scene_interop_.size() != context.framesInFlight();
+
+        // Cache-HIT fast path: when nothing about the source image changed since the last
+        // upload into THIS slot's interop target, there's no work to do — and crucially no
+        // need to vkWaitForFences this slot. The previous unconditional wait was costing
+        // ~kFrameDuration ms per frame (10–12 ms with kFramesInFlight=1) for no reason on
+        // every renderer cache-HIT frame, which dominated gui_render time.
+        if (!slot_array_resize_needed && frame_slot < vulkan_scene_interop_.size()) {
+            const auto& target_ptr_const = vulkan_scene_interop_[frame_slot];
+            const glm::ivec2 target_size = vulkan_scene_image_size_;
+            const bool recreate_needed =
+                !target_ptr_const ||
+                target_ptr_const->size != target_size ||
+                !target_ptr_const->interop.valid();
+            if (!recreate_needed &&
+                vulkan_scene_image_generation_ != 0 &&
+                target_ptr_const->uploaded_source_generation == vulkan_scene_image_generation_ &&
+                target_ptr_const->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                LOG_PERF("interop slot={} cache-HIT-skip cur_gen={} layout={}",
+                         frame_slot, vulkan_scene_image_generation_,
+                         static_cast<int>(target_ptr_const->layout));
+                return;
+            }
+        }
+
+        // Slow path: we will write to the interop image (recreate, transition, or copy).
+        // Wait for any in-flight GPU use of this slot to finish before we touch it.
         {
             LOG_TIMER("interop.waitForCurrentFrameSlot");
             if (!context.waitForCurrentFrameSlot()) {
@@ -3607,8 +3635,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        const std::size_t frame_slot = context.currentFrameSlot();
-        if (vulkan_scene_interop_.size() != context.framesInFlight()) {
+        if (slot_array_resize_needed) {
             resetVulkanSceneInterop();
             vulkan_scene_interop_.resize(context.framesInFlight());
         }
@@ -3861,6 +3888,13 @@ namespace lfs::vis::gui {
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
+
+            // Pull GPU mesh frame populated by renderVulkanFrame. The vulkan_viewport_pass
+            // will rasterize these on the GPU instead of the legacy CPU rasterizer path.
+            auto mesh_frame = rendering_manager->getVulkanMeshFrame();
+            params.mesh_view_projection = mesh_frame.view_projection;
+            params.mesh_camera_position = mesh_frame.camera_position;
+            params.mesh_items = std::move(mesh_frame.items);
         }
 
         // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay
@@ -3961,14 +3995,20 @@ namespace lfs::vis::gui {
         }
 
         // Start frame
-        ImGui_ImplSDL3_NewFrame();
-        rmlui_manager_.clearVulkanQueue();
+        {
+            LOG_TIMER("gui_render.imgui_newFrame");
+            ImGui_ImplSDL3_NewFrame();
+            rmlui_manager_.clearVulkanQueue();
+        }
         const auto& sdl_input = viewer_->getWindowManager()->frameInput();
 
         // Check mouse state before ImGui::NewFrame() updates WantCaptureMouse
         const bool mouse_in_viewport = isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y);
 
-        ImGui::NewFrame();
+        {
+            LOG_TIMER("gui_render.imgui_NewFrame_call");
+            ImGui::NewFrame();
+        }
 
         {
             auto& focus = guiFocusState();
@@ -4269,7 +4309,10 @@ namespace lfs::vis::gui {
 
         PanelInputState floating_input = panel_input;
         floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
-        reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+        {
+            LOG_TIMER("gui_render.draw_panels.Floating");
+            reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+        }
 
         applyFrameInputCapture(&rml_right_panel_);
 
@@ -4373,7 +4416,10 @@ namespace lfs::vis::gui {
             overlay_renderer->beginFrame();
         }
 
-        reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+        {
+            LOG_TIMER("gui_render.draw_panels.ViewportOverlay");
+            reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+        }
 
         if (overlay_renderer) {
             overlay_renderer->endFrame();
@@ -4389,6 +4435,7 @@ namespace lfs::vis::gui {
             show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
 
         if (!ui_hidden_) {
+            LOG_TIMER("gui_render.status_bar_and_StatusBar");
             const float status_bar_h =
                 PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
             rml_status_bar_.render(draw_ctx,
@@ -4401,10 +4448,16 @@ namespace lfs::vis::gui {
             reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
-        python::draw_python_modals(scene);
-        python::draw_python_popups(scene);
+        {
+            LOG_TIMER("gui_render.python_modals_and_popups");
+            python::draw_python_modals(scene);
+            python::draw_python_popups(scene);
+        }
 
-        rml_modal_overlay_->processInput(raw_panel_input);
+        {
+            LOG_TIMER("gui_render.rml_modal_processInput");
+            rml_modal_overlay_->processInput(raw_panel_input);
+        }
         if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
             applyRmlCursorRequest(rmlui_manager_.consumeCursorRequest());
         apply_cursor(rml_right_panel_.getCursorRequest());
@@ -4414,6 +4467,7 @@ namespace lfs::vis::gui {
         syncWindowTextInput(viewer_->getWindow());
 
         if (vulkan_gui_) {
+            LOG_TIMER("gui_render.menu_context_modal_render");
             if (menu_bar_ && !ui_hidden_)
                 rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
             global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
@@ -4429,7 +4483,10 @@ namespace lfs::vis::gui {
         // ImGui_ImplVulkan_RenderDrawData consumer), so building it was pure CPU waste.
         // We still call EndFrame to keep the per-frame state machine balanced for the
         // panels that exercise ImGui internally (py_ui, ui_widgets, theme, etc.).
-        ImGui::EndFrame();
+        {
+            LOG_TIMER("gui_render.imgui_EndFrame");
+            ImGui::EndFrame();
+        }
 
         if (vulkan_gui_) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
@@ -4451,8 +4508,11 @@ namespace lfs::vis::gui {
                 begin_ok = vulkan_context && vulkan_context->beginFrame(clear_value, frame);
             }
             if (begin_ok) {
-                const VulkanViewportPassParams viewport_params = buildVulkanViewportParams(frame.extent,
-                                                                                           frame.frame_slot);
+                VulkanViewportPassParams viewport_params{};
+                {
+                    LOG_TIMER("gui_render.buildVulkanViewportParams");
+                    viewport_params = buildVulkanViewportParams(frame.extent, frame.frame_slot);
+                }
                 bool viewport_pass_ready = false;
                 if (!vulkan_viewport_pass_) {
                     vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();

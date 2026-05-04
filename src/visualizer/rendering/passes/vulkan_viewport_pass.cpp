@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_image_uploader.hpp"
 #include "window/vulkan_context.hpp"
 
@@ -172,6 +173,7 @@ namespace lfs::vis {
         VkDescriptorSetLayout scene_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
         VulkanSceneImageUploader scene_image_uploader;
+        VulkanMeshPass mesh_pass;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -216,6 +218,11 @@ namespace lfs::vis {
             if (!createSampler() || !scene_image_uploader.init(context, scene_sampler) ||
                 !createSceneDescriptors() || !createGridResources() ||
                 !createQuadBuffer() || !createPipelines()) {
+                reset();
+                return false;
+            }
+            if (!mesh_pass.init(context, color_format, depth_stencil_format)) {
+                LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
                 reset();
                 return false;
             }
@@ -926,6 +933,13 @@ namespace lfs::vis {
             updateShapeOverlayBuffer(params.shape_overlay_triangles, frame.shape_overlay);
             updateShapeOverlayBuffer(params.ui_shape_overlay_triangles, frame.ui_shape_overlay);
             uploadSceneImage(params);
+
+            VulkanMeshPassParams mesh_params{
+                .view_projection = params.mesh_view_projection,
+                .camera_position = params.mesh_camera_position,
+                .items = params.mesh_items,
+            };
+            mesh_pass.prepare(*context, mesh_params);
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -1051,6 +1065,21 @@ namespace lfs::vis {
                                         nullptr);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
+            // Mesh sub-pass: GPU-rasterize meshes after the cached splat scene blit.
+            // Mesh writes depth, scene quad doesn't, so meshes correctly z-test against
+            // each other and always sit on top of the splat scene image.
+            if (!params.mesh_items.empty()) {
+                VulkanMeshPassParams mesh_params{
+                    .view_projection = params.mesh_view_projection,
+                    .camera_position = params.mesh_camera_position,
+                    .items = params.mesh_items,
+                };
+                mesh_pass.record(command_buffer, {static_cast<std::uint32_t>(rect.width), static_cast<std::uint32_t>(rect.height)},
+                                 mesh_params);
+                bindQuad(command_buffer);
+                bindViewport(command_buffer, rect);
+            }
+
             if (frame.textured_overlay.count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
                 frame.textured_overlay.buffer != VK_NULL_HANDLE && !params.textured_overlays.empty()) {
                 const VkDeviceSize offset = 0;
@@ -1159,6 +1188,7 @@ namespace lfs::vis {
                              context->lastError());
                 }
                 scene_image_uploader.shutdown();
+                mesh_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)

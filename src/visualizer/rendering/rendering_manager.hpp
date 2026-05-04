@@ -9,6 +9,7 @@
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
+#include "passes/vulkan_mesh_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_types.hpp"
@@ -321,6 +322,27 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool isLassoAddMode() const { return viewport_overlay_service_.lassoAddMode(); }
 
+        // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
+        // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
+        // Replaces the old CPU `renderVideoCompositeFrame` mesh path.
+        struct VulkanMeshFrame {
+            glm::mat4 view_projection{1.0f};
+            glm::vec3 camera_position{0.0f};
+            std::vector<lfs::vis::VulkanMeshDrawItem> items;
+        };
+        void setVulkanMeshFrame(VulkanMeshFrame frame) {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            vulkan_mesh_frame_ = std::move(frame);
+        }
+        [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            return vulkan_mesh_frame_;
+        }
+        void clearVulkanMeshFrame() {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            vulkan_mesh_frame_ = {};
+        }
+
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             viewport_overlay_service_.setPreviewSelection(preview, add_mode);
@@ -431,6 +453,8 @@ namespace lfs::vis {
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;
+        mutable std::mutex vulkan_mesh_frame_mutex_;
+        VulkanMeshFrame vulkan_mesh_frame_;
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;
         std::optional<CameraMetricsJobRequest> active_camera_metrics_request_;
