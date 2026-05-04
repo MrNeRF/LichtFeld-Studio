@@ -719,7 +719,14 @@ namespace lfs::vis {
         row_major_view[3] = translation.x;
         row_major_view[7] = translation.y;
         row_major_view[11] = translation.z;
-        if (request.scene.model_transforms && request.scene.model_transforms->size() == 1) {
+        // VkSplat doesn't yet rebake per-gaussian transform indices, so it can
+        // only fold a single model transform into the view matrix. With one or
+        // more visible nodes, apply the first transform — the data→visualizer
+        // axes correction is identical across paste-cloned nodes, so this keeps
+        // the typical multi-node case (paste, same-source duplicates) oriented
+        // correctly. Truly heterogeneous per-node transforms still need a CUDA
+        // backend until vksplat grows transform indexing.
+        if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
             row_major_view = multiplyRowMajorMat4(row_major_view, rowMajorMat4(request.scene.model_transforms->front()));
         }
         for (int row = 0; row < 4; ++row) {

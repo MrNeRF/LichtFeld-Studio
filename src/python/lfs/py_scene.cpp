@@ -619,10 +619,14 @@ namespace lfs::python {
     }
 
     std::optional<PySceneNode> PyScene::get_node(const std::string& name) {
-        auto* node = scene_->getMutableNode(name);
+        // Use the const lookup + const_cast so we don't blow the combined-model
+        // cache on every read. Actual mutations go through SceneNode property
+        // setters whose callbacks trigger Scene::notifyMutation, which still
+        // invalidates the cache — same pattern as get_nodes/get_visible_nodes.
+        const auto* node = scene_->getNode(name);
         if (!node)
             return std::nullopt;
-        return PySceneNode(node, scene_);
+        return PySceneNode(const_cast<core::SceneNode*>(node), scene_);
     }
 
     std::vector<PySceneNode> PyScene::get_nodes() {
@@ -1282,12 +1286,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);

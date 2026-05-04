@@ -95,8 +95,8 @@ namespace lfs::python {
         nb::list result;
 
         for (const auto& name : names) {
-            if (auto* node = scene_ref.getMutableNode(name)) {
-                result.append(nb::cast(PySceneNode(node, &scene_ref)));
+            if (const auto* node = scene_ref.getNode(name)) {
+                result.append(nb::cast(PySceneNode(const_cast<core::SceneNode*>(node), &scene_ref)));
             }
         }
         return result;
@@ -114,8 +114,8 @@ namespace lfs::python {
         }
 
         auto& scene_ref = sm->getScene();
-        if (auto* node = scene_ref.getMutableNode(name)) {
-            return nb::cast(PySceneNode(node, &scene_ref));
+        if (const auto* node = scene_ref.getNode(name)) {
+            return nb::cast(PySceneNode(const_cast<core::SceneNode*>(node), &scene_ref));
         }
         return nb::none();
     }
