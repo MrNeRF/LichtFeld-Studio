@@ -1167,6 +1167,15 @@ namespace lfs::vis {
                     vulkan_frame.flip_y,
                     vulkan_frame.image_generation);
             }
+            if (vulkan_frame.split_right_image) {
+                gui_manager_->setVulkanSplitRightImage(
+                    vulkan_frame.split_right_image,
+                    vulkan_frame.split_right_size,
+                    vulkan_frame.split_right_flip_y,
+                    vulkan_frame.image_generation);
+            } else {
+                gui_manager_->clearVulkanSplitRightImage();
+            }
         }
         if (gui_manager_) {
             LOG_TIMER("VisualizerImpl::render.gui_render");

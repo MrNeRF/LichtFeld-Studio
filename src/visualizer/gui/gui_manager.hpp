@@ -144,6 +144,15 @@ namespace lfs::vis {
                                              bool flip_y,
                                              std::uint64_t generation);
 
+            // Split-view's right panel routes through a parallel CUDA/Vulkan interop
+            // slot so we don't pay PCIe staging cost for it; the left panel reuses the
+            // existing scene image interop above.
+            void setVulkanSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                          glm::ivec2 size,
+                                          bool flip_y,
+                                          std::uint64_t generation);
+            void clearVulkanSplitRightImage();
+
             // Used by native panel wrappers
             void renderSelectionOverlays(const UIContext& ctx);
             void renderViewportDecorations();
@@ -156,6 +165,8 @@ namespace lfs::vis {
                                       const VulkanViewportPassParams& params);
             void prepareVulkanSceneInterop(VulkanContext& context);
             void resetVulkanSceneInterop();
+            void prepareVulkanSplitRightInterop(VulkanContext& context);
+            void resetVulkanSplitRightInterop();
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();
@@ -255,6 +266,18 @@ namespace lfs::vis {
             bool vulkan_external_scene_image_flip_y_ = false;
             std::uint64_t vulkan_external_scene_image_generation_ = 0;
             bool vulkan_scene_interop_disabled_ = false;
+
+            // Parallel slot for split-view's right panel.
+            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_split_right_interop_;
+            std::shared_ptr<const lfs::core::Tensor> vulkan_split_right_image_;
+            std::uint64_t vulkan_split_right_image_generation_ = 0;
+            glm::ivec2 vulkan_split_right_image_size_{0, 0};
+            bool vulkan_split_right_image_flip_y_ = false;
+            VkImage vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+            VkImageView vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+            VkImageLayout vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t vulkan_split_right_external_image_generation_ = 0;
+            bool vulkan_split_right_interop_disabled_ = false;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
 

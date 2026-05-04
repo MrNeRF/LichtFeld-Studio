@@ -23,6 +23,10 @@ namespace lfs::vis {
         float end_position = 1.0f;
         bool normalize_x_to_panel = false;
         bool flip_y = false;
+        // When set, the pass binds this VkImageView directly and skips the staging
+        // upload path. The view must outlive the frame's record/submit (gui_manager
+        // owns the per-frame interop slot it points into).
+        VkImageView external_image_view = VK_NULL_HANDLE;
     };
 
     struct VulkanSplitViewParams {

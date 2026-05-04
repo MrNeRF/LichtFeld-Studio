@@ -134,6 +134,9 @@ namespace lfs::vis {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             const lfs::core::Tensor* uploaded_tensor = nullptr;
+            // Last bound view (either our staging-uploaded view or an external interop
+            // view supplied via params). Used to detect descriptor-rebind needs.
+            VkImageView bound_view = VK_NULL_HANDLE;
 
             // Persistent staging: kept alive between frames so identical-size uploads
             // don't repeatedly allocate / map / unmap an 8 MB buffer at 1080p.
@@ -673,16 +676,20 @@ namespace lfs::vis {
             return true;
         }
 
-        void rebindDescriptorsIfDirty() {
-            if (!descriptors_dirty || left.view == VK_NULL_HANDLE || right.view == VK_NULL_HANDLE) {
+        void rebindDescriptorsIfDirty(VkImageView left_view, VkImageView right_view) {
+            const bool changed = left_view != left.bound_view || right_view != right.bound_view;
+            if (!descriptors_dirty && !changed) {
+                return;
+            }
+            if (left_view == VK_NULL_HANDLE || right_view == VK_NULL_HANDLE) {
                 return;
             }
             std::array<VkDescriptorImageInfo, 2> infos{};
             infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            infos[0].imageView = left.view;
+            infos[0].imageView = left_view;
             infos[0].sampler = sampler;
             infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            infos[1].imageView = right.view;
+            infos[1].imageView = right_view;
             infos[1].sampler = sampler;
             std::array<VkWriteDescriptorSet, 2> writes{};
             for (std::uint32_t i = 0; i < 2; ++i) {
@@ -696,23 +703,32 @@ namespace lfs::vis {
             vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
             descriptors_dirty = false;
+            left.bound_view = left_view;
+            right.bound_view = right_view;
+        }
+
+        // Returns the view to bind for one panel: the externally-supplied interop view
+        // when present, otherwise the staging-uploaded view (filling it in if needed).
+        VkImageView resolvePanelView(PanelImage& panel, const VulkanSplitViewPanel& spec) {
+            if (spec.external_image_view != VK_NULL_HANDLE) {
+                return spec.external_image_view;
+            }
+            if (spec.image && spec.image.get() != panel.uploaded_tensor) {
+                if (!uploadPanel(panel, *spec.image)) {
+                    return VK_NULL_HANDLE;
+                }
+                descriptors_dirty = true;
+            }
+            return panel.view;
         }
 
         void prepare(const VulkanSplitViewParams& params) {
-            if (!params.enabled || !params.left.image || !params.right.image) {
+            if (!params.enabled) {
                 return;
             }
-            if (params.left.image.get() != left.uploaded_tensor) {
-                if (uploadPanel(left, *params.left.image)) {
-                    descriptors_dirty = true;
-                }
-            }
-            if (params.right.image.get() != right.uploaded_tensor) {
-                if (uploadPanel(right, *params.right.image)) {
-                    descriptors_dirty = true;
-                }
-            }
-            rebindDescriptorsIfDirty();
+            const VkImageView left_view = resolvePanelView(left, params.left);
+            const VkImageView right_view = resolvePanelView(right, params.right);
+            rebindDescriptorsIfDirty(left_view, right_view);
         }
 
         void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanSplitViewParams& params) {
@@ -783,7 +799,8 @@ namespace lfs::vis {
         }
 
         bool ready() const {
-            return pipeline != VK_NULL_HANDLE && left.view != VK_NULL_HANDLE && right.view != VK_NULL_HANDLE;
+            return pipeline != VK_NULL_HANDLE && left.bound_view != VK_NULL_HANDLE &&
+                   right.bound_view != VK_NULL_HANDLE;
         }
     };
 

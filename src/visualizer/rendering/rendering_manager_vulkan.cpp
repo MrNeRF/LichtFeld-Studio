@@ -962,10 +962,42 @@ namespace lfs::vis {
                 viewport_artifact_service_.clearViewportOutput();
             }
 
-            return {.image = nullptr,
-                    .image_generation = 0,
-                    .size = vulkan_viewport_image_size_,
-                    .flip_y = vulkan_viewport_image_flip_y_};
+            // Split-view: hand both panels to gui_manager so the existing scene
+            // image interop covers the left panel and a parallel slot covers the right.
+            // Both arrive in the viewport pass as external Vulkan image views; the
+            // CPU staging path stays as a fallback for any frame where interop fails.
+            VulkanFrameResult result{};
+            result.image_generation = ++split_view_image_generation_;
+            if (result.image_generation == 0) {
+                result.image_generation = ++split_view_image_generation_;
+            }
+            result.size = vulkan_viewport_image_size_;
+            result.flip_y = vulkan_viewport_image_flip_y_;
+
+            const auto tensor_size = [](const lfs::core::Tensor& t) -> glm::ivec2 {
+                const auto layout = lfs::rendering::detectImageLayout(t);
+                if (layout == lfs::rendering::ImageLayout::Unknown) {
+                    return {0, 0};
+                }
+                return {lfs::rendering::imageWidth(t, layout),
+                        lfs::rendering::imageHeight(t, layout)};
+            };
+
+            if (pending_split_view.enabled) {
+                if (auto left_tensor = pending_split_view.left.image) {
+                    const auto sz = tensor_size(*left_tensor);
+                    result.image = std::move(left_tensor);
+                    result.size = sz;
+                    result.flip_y = pending_split_view.left.flip_y;
+                }
+                if (auto right_tensor = pending_split_view.right.image) {
+                    const auto sz = tensor_size(*right_tensor);
+                    result.split_right_image = std::move(right_tensor);
+                    result.split_right_size = sz;
+                    result.split_right_flip_y = pending_split_view.right.flip_y;
+                }
+            }
+            return result;
         }
 
         if (!rendered_image) {

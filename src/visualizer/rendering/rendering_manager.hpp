@@ -80,6 +80,13 @@ namespace lfs::vis {
             std::uint64_t image_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
+
+            // Split-view right panel. The left panel reuses the `image` slot above
+            // (rideshares the existing scene-image interop). When this is set, the
+            // gui-side split interop slot uploads it in parallel to the left panel.
+            std::shared_ptr<const lfs::core::Tensor> split_right_image;
+            glm::ivec2 split_right_size{0, 0};
+            bool split_right_flip_y = false;
         };
 
         RenderingManager();
@@ -440,6 +447,7 @@ namespace lfs::vis {
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t vulkan_external_viewport_image_generation_ = 0;
+        std::uint64_t split_view_image_generation_ = 0;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
