@@ -3897,6 +3897,7 @@ namespace lfs::vis::gui {
             params.mesh_camera_position = mesh_frame.camera_position;
             params.mesh_items = std::move(mesh_frame.items);
             params.environment = std::move(mesh_frame.environment);
+            params.depth_blit = std::move(mesh_frame.depth_blit);
         }
 
         // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay

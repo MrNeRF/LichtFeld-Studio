@@ -993,6 +993,22 @@ namespace lfs::vis {
                 glm::radians(settings_.environment_rotation_degrees);
             gpu_mesh_frame.environment.equirectangular_view = settings_.equirectangular;
 
+            // Splat depth → mesh-pass z-test source. Only meaningful when the splat
+            // produced a depth tensor (CUDA rasterizer path; vksplat doesn't yet).
+            if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
+                rendered_metadata.depth_panels[0].depth &&
+                rendered_metadata.depth_panels[0].depth->is_valid()) {
+                gpu_mesh_frame.depth_blit.depth = rendered_metadata.depth_panels[0].depth;
+                gpu_mesh_frame.depth_blit.depth_is_ndc = rendered_metadata.depth_is_ndc;
+                gpu_mesh_frame.depth_blit.flip_y = !rendered_metadata.flip_y;
+                gpu_mesh_frame.depth_blit.near_plane = rendered_metadata.near_plane > 0.0f
+                                                           ? rendered_metadata.near_plane
+                                                           : 0.1f;
+                gpu_mesh_frame.depth_blit.far_plane = rendered_metadata.far_plane > 0.0f
+                                                          ? rendered_metadata.far_plane
+                                                          : 1000.0f;
+            }
+
             setVulkanMeshFrame(std::move(gpu_mesh_frame));
         }
         render_lock.reset();

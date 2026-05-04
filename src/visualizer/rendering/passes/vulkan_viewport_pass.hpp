@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 
@@ -114,6 +115,10 @@ namespace lfs::vis {
         // GPU-rendered equirect environment background. Replaces the old CPU
         // `renderEnvironmentBackground` per-pixel sampling loop.
         VulkanEnvironmentParams environment;
+
+        // Splat depth blit. When set, mesh draws will depth-test against the splat
+        // depth surface, so meshes occluded by splats render correctly.
+        VulkanDepthBlitParams depth_blit;
     };
 
     class LFS_VIS_API VulkanViewportPass {

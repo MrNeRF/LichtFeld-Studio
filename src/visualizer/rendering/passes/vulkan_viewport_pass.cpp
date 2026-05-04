@@ -176,6 +176,7 @@ namespace lfs::vis {
         VulkanSceneImageUploader scene_image_uploader;
         VulkanMeshPass mesh_pass;
         VulkanEnvironmentPass environment_pass;
+        VulkanDepthBlitPass depth_blit_pass;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -230,6 +231,11 @@ namespace lfs::vis {
             }
             if (!environment_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
                 LOG_ERROR("Vulkan viewport pass: environment sub-pass init failed");
+                reset();
+                return false;
+            }
+            if (!depth_blit_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
+                LOG_ERROR("Vulkan viewport pass: depth-blit sub-pass init failed");
                 reset();
                 return false;
             }
@@ -948,6 +954,7 @@ namespace lfs::vis {
             };
             mesh_pass.prepare(*context, mesh_params);
             environment_pass.prepare(params.environment);
+            depth_blit_pass.prepare(params.depth_blit);
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -1084,9 +1091,18 @@ namespace lfs::vis {
                                         nullptr);
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
+            // Splat depth → framebuffer depth attachment. Lets the mesh draws that
+            // follow depth-test against the splat surface so meshes occluded by
+            // splats render correctly.
+            if (!params.mesh_items.empty() && depth_blit_pass.hasDepth()) {
+                depth_blit_pass.record(command_buffer,
+                                       {static_cast<std::uint32_t>(rect.width),
+                                        static_cast<std::uint32_t>(rect.height)},
+                                       params.depth_blit);
+                bindQuad(command_buffer);
+                bindViewport(command_buffer, rect);
+            }
             // Mesh sub-pass: GPU-rasterize meshes after the cached splat scene blit.
-            // Mesh writes depth, scene quad doesn't, so meshes correctly z-test against
-            // each other and always sit on top of the splat scene image.
             if (!params.mesh_items.empty()) {
                 VulkanMeshPassParams mesh_params{
                     .view_projection = params.mesh_view_projection,
@@ -1209,6 +1225,7 @@ namespace lfs::vis {
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
+                depth_blit_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)
