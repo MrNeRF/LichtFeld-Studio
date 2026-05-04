@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "internal/resource_paths.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <OpenImageIO/imageio.h>
@@ -371,7 +372,15 @@ namespace lfs::vis {
             if (path.empty()) {
                 return false;
             }
-            const std::string utf8 = lfs::core::path_to_utf8(path);
+            std::filesystem::path resolved = path;
+            if (!resolved.is_absolute() && !std::filesystem::exists(resolved)) {
+                try {
+                    resolved = lfs::vis::getAssetPath(lfs::core::path_to_utf8(path));
+                } catch (const std::exception&) {
+                    resolved = lfs::core::getAssetsDir() / path;
+                }
+            }
+            const std::string utf8 = lfs::core::path_to_utf8(resolved);
             std::unique_ptr<OIIO::ImageInput> in(OIIO::ImageInput::open(utf8));
             if (!in) {
                 LOG_WARN("VulkanEnvironmentPass: failed to open environment map {}: {}", utf8, OIIO::geterror());
@@ -551,8 +560,7 @@ namespace lfs::vis {
             }
             const bool ok = loadFromPath(params.map_path);
             load_failed_for_path = !ok;
-            if (!ok)
-                loaded_path = params.map_path;
+            loaded_path = params.map_path;
         }
 
         void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanEnvironmentParams& params) {

@@ -929,17 +929,12 @@ namespace lfs::vis {
 
         if ((rendered_image || render_error.empty()) &&
             (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty())) {
-            // Phase 1 GPU mesh path: build VulkanMeshDrawItems and hand them to gui_manager
-            // via RenderingManager. The vulkan_viewport_pass will rasterize them on the GPU
-            // (see VulkanMeshPass), bypassing the legacy CPU `rasterizeMeshTriangle` fallback
-            // that ran inside renderVideoCompositeFrame.
             VulkanMeshFrame gpu_mesh_frame;
             const auto vp_data = frame_ctx.makeViewportData();
             gpu_mesh_frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
             gpu_mesh_frame.camera_position = vp_data.translation;
             gpu_mesh_frame.items.reserve(frame_ctx.scene_state.meshes.size());
 
-            // Match master: when any mesh / node is selected, dim the non-emphasized ones.
             const bool any_selected_mesh = std::any_of(
                 frame_ctx.scene_state.meshes.begin(),
                 frame_ctx.scene_state.meshes.end(),
@@ -951,9 +946,6 @@ namespace lfs::vis {
             const bool dim_non_emphasized =
                 settings_.desaturate_unselected && (any_selected_mesh || any_selected_node);
 
-            // Headlight: master uses normalize(camera_pos) so the light always points from
-            // the world origin towards the camera. Settings.mesh_light_dir is currently
-            // unused in master's path; matching it here.
             const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
                                                 ? glm::normalize(vp_data.translation)
                                                 : settings_.mesh_light_dir;
@@ -980,8 +972,6 @@ namespace lfs::vis {
                 gpu_mesh_frame.items.push_back(item);
             }
 
-            // GPU environment renderer params. Replaces the CPU
-            // renderEnvironmentBackground per-pixel sampling loop.
             const auto frame_view = frame_ctx.makeFrameView();
             gpu_mesh_frame.environment.enabled = environmentBackgroundEnabled(settings_);
             gpu_mesh_frame.environment.map_path = settings_.environment_map_path;
@@ -1007,18 +997,22 @@ namespace lfs::vis {
         }
         render_lock.reset();
 
-        // GPU env / mesh paths: when no splat / point cloud produced a rendered_image,
-        // synthesize a small flat tensor so the scene-image upload path is satisfied.
-        // The viewport pass's clearViewport + GPU env / mesh sub-passes paint over it.
-        if (!rendered_image &&
-            (!frame_ctx.scene_state.meshes.empty() || environmentBackgroundEnabled(settings_))) {
-            lfs::core::Tensor bg = lfs::core::Tensor::zeros(
-                {3, static_cast<int64_t>(std::max(render_size.y, 1)),
-                 static_cast<int64_t>(std::max(render_size.x, 1))},
-                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            rendered_image = std::make_shared<lfs::core::Tensor>(std::move(bg));
-            rendered_metadata = {};
-            rendered_metadata.flip_y = false;
+        const bool has_gpu_only_pass =
+            !frame_ctx.scene_state.meshes.empty() || environmentBackgroundEnabled(settings_);
+
+        if (!rendered_image && has_gpu_only_pass) {
+            vulkan_viewport_image_.reset();
+            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_external_viewport_image_generation_ = 0;
+            vulkan_viewport_image_size_ = render_size;
+            vulkan_viewport_image_flip_y_ = false;
+            vulkan_gt_comparison_content_size_ = {0, 0};
+            return {.image = nullptr,
+                    .image_generation = 0,
+                    .size = vulkan_viewport_image_size_,
+                    .flip_y = vulkan_viewport_image_flip_y_};
         }
 
         if (!rendered_image) {

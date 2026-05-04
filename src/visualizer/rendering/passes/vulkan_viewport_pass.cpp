@@ -651,7 +651,7 @@ namespace lfs::vis {
             using namespace viewport_shaders;
 
             return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
-                                  scene_descriptor_layout, nullptr, false, PipelineVertexLayout::ScreenQuad,
+                                  scene_descriptor_layout, nullptr, true, PipelineVertexLayout::ScreenQuad,
                                   scene_pipeline_layout, scene_pipeline) &&
                    createPipeline(kScreenQuadVertSpv, kVignetteFragSpv, "vignette",
                                   VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
