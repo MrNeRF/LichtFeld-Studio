@@ -5,6 +5,7 @@
 #include "screen_overlay_renderer.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace lfs::rendering {
