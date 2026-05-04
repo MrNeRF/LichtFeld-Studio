@@ -4,18 +4,12 @@
 
 #pragma once
 
-#include <expected>
 #include <glm/glm.hpp>
 #include <optional>
 #include <span>
-#include <string>
-#include <string_view>
 #include <vector>
 
 namespace lfs::rendering {
-
-    template <typename T>
-    using Result = std::expected<T, std::string>;
 
     struct OverlayColor {
         float r = 0.0f, g = 0.0f, b = 0.0f, a = 0.0f;
@@ -47,13 +41,7 @@ namespace lfs::rendering {
 
     class ScreenOverlayRenderer {
     public:
-        ScreenOverlayRenderer();
-        ~ScreenOverlayRenderer();
-
-        Result<void> initialize();
-        void shutdown();
-
-        void beginFrame(int window_pixel_w, int window_pixel_h);
+        void beginFrame();
         void endFrame();
         bool isFrameActive() const { return frame_active_; }
 
@@ -68,14 +56,6 @@ namespace lfs::rendering {
         void addRect(glm::vec2 a, glm::vec2 b, OverlayColor c, float thickness = 1.0f);
         void addRectFilled(glm::vec2 a, glm::vec2 b, OverlayColor c);
         void addTriangleFilled(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2, OverlayColor c);
-
-        void addText(glm::vec2 top_left_px, std::string_view text, OverlayColor c, float size_px);
-        void addTextWithShadow(glm::vec2 top_left_px, std::string_view text,
-                               OverlayColor c, OverlayColor shadow_c, float size_px,
-                               glm::vec2 shadow_offset = {1.0f, 1.0f});
-        [[nodiscard]] glm::vec2 measureText(std::string_view text, float size_px) const;
-
-        void flush();
 
         std::vector<OverlayCommand> consumeCommands();
 
@@ -99,8 +79,6 @@ namespace lfs::rendering {
         std::optional<OverlayClipRect> currentClip() const;
 
         bool frame_active_ = false;
-        int window_w_ = 0;
-        int window_h_ = 0;
         std::vector<OverlayCommand> commands_;
         std::vector<OverlayClipRect> clip_stack_;
     };

@@ -84,11 +84,6 @@ namespace lfs::python {
                 case PyViewportDrawContext::DrawCommand::FILLED_CIRCLE_2D:
                     overlay->addCircleFilled({cmd.x1, cmd.y1}, cmd.radius, color);
                     break;
-                case PyViewportDrawContext::DrawCommand::TEXT_2D: {
-                    const float size_px = cmd.font_size > 0.0f ? cmd.font_size : 14.0f;
-                    overlay->addText({cmd.x1, cmd.y1}, cmd.text, color, size_px);
-                    break;
-                }
                 case PyViewportDrawContext::DrawCommand::LINE_3D: {
                     auto s = draw_ctx.world_to_screen({cmd.x1, cmd.y1, cmd.z1});
                     auto e = draw_ctx.world_to_screen({cmd.x2, cmd.y2, cmd.z2});
@@ -107,15 +102,9 @@ namespace lfs::python {
                     }
                     break;
                 }
-                case PyViewportDrawContext::DrawCommand::TEXT_3D: {
-                    auto p = draw_ctx.world_to_screen({cmd.x1, cmd.y1, cmd.z1});
-                    if (p) {
-                        auto [px, py] = *p;
-                        const float size_px = cmd.font_size > 0.0f ? cmd.font_size : 14.0f;
-                        overlay->addText({px, py}, cmd.text, color, size_px);
-                    }
+                case PyViewportDrawContext::DrawCommand::TEXT_2D:
+                case PyViewportDrawContext::DrawCommand::TEXT_3D:
                     break;
-                }
                 default:
                     assert(false && "Unknown DrawCommand type");
                     break;

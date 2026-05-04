@@ -20,21 +20,8 @@ namespace lfs::rendering {
         }
     } // namespace
 
-    ScreenOverlayRenderer::ScreenOverlayRenderer() = default;
-    ScreenOverlayRenderer::~ScreenOverlayRenderer() = default;
-
-    Result<void> ScreenOverlayRenderer::initialize() { return {}; }
-
-    void ScreenOverlayRenderer::shutdown() {
-        commands_.clear();
-        clip_stack_.clear();
-        frame_active_ = false;
-    }
-
-    void ScreenOverlayRenderer::beginFrame(const int window_pixel_w, const int window_pixel_h) {
+    void ScreenOverlayRenderer::beginFrame() {
         frame_active_ = true;
-        window_w_ = window_pixel_w;
-        window_h_ = window_pixel_h;
         commands_.clear();
         clip_stack_.clear();
     }
@@ -175,25 +162,6 @@ namespace lfs::rendering {
             .color_premul = toPremul(c),
             .clip = currentClip(),
         });
-    }
-
-    void ScreenOverlayRenderer::addText(glm::vec2, std::string_view, OverlayColor, float) {
-        // Text is intentionally a no-op on the Vulkan overlay path. The Vulkan viewport pass
-        // does not yet expose a font atlas, so selection/align/python text labels are dropped.
-        // Callers (selection_tool, align_tool, python overlay flush) tolerate missing text.
-    }
-
-    void ScreenOverlayRenderer::addTextWithShadow(glm::vec2, std::string_view, OverlayColor,
-                                                  OverlayColor, float, glm::vec2) {
-        // See addText.
-    }
-
-    glm::vec2 ScreenOverlayRenderer::measureText(std::string_view, float) const {
-        return {0.0f, 0.0f};
-    }
-
-    void ScreenOverlayRenderer::flush() {
-        // Drained externally via consumeCommands() at frame compose time.
     }
 
     std::vector<OverlayCommand> ScreenOverlayRenderer::consumeCommands() {

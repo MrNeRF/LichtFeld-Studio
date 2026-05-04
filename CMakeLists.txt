@@ -655,14 +655,6 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Copying visualizer icons"
 )
 
-# Copy rendering shaders
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-        "${CMAKE_SOURCE_DIR}/src/rendering/resources/shaders"
-        "${RESOURCE_DIR}/shaders"
-    COMMENT "Copying rendering shaders"
-)
-
 # Copy fonts (from visualizer)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different

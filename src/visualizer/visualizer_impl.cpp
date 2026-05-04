@@ -189,7 +189,6 @@ namespace lfs::vis {
             selection_tool_.reset();
         } else if (input_controller_) {
             input_controller_->setSelectionTool(selection_tool_);
-            selection_tool_->setInputBindings(&input_controller_->getBindings());
         }
 
         tools_initialized_ = true;

@@ -364,13 +364,8 @@ set(VISUALIZER_SOURCE_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 set(RENDERING_SOURCE_RESOURCE_DIR "${PROJECT_SOURCE_DIR}/src/rendering/resources")
 
 # Create resource directories in build folder
-file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/shaders")
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets")
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/fonts")
-
-# Copy shaders to build directory
-file(COPY "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/"
-        DESTINATION "${VISUALIZER_BUILD_RESOURCE_DIR}/shaders")
 
 # Copy assets from resources/assets if they exist
 file(GLOB ASSET_FILES CONFIGURE_DEPENDS "${VISUALIZER_SOURCE_RESOURCE_DIR}/assets/*")
@@ -475,10 +470,8 @@ endif()
 target_compile_definitions(lfs_visualizer PRIVATE
         LFS_VIS_EXPORTS
         PROJECT_ROOT_PATH="${PROJECT_SOURCE_DIR}"
-        VISUALIZER_SHADER_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/shaders"
         VISUALIZER_ASSET_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/assets"
         VISUALIZER_LOCALE_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/locales"
-        VISUALIZER_SOURCE_SHADER_PATH="${RENDERING_SOURCE_RESOURCE_DIR}/shaders"
         VISUALIZER_SOURCE_ASSET_PATH="${VISUALIZER_SOURCE_RESOURCE_DIR}/assets"
         ${LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS}
         $<$<CONFIG:Debug>:DEBUG_BUILD>
@@ -509,15 +502,6 @@ if(NOT BUILD_PORTABLE)
 endif()
 
 # Optionally install resources
-install(DIRECTORY ${RENDERING_SOURCE_RESOURCE_DIR}/shaders/
-        DESTINATION share/LichtFeld-Studio/visualizer/resources/shaders
-        FILES_MATCHING
-        PATTERN "*.vert"
-        PATTERN "*.frag"
-        PATTERN "*.geom"
-        PATTERN "*.glsl"
-)
-
 install(FILES ${RENDERING_SOURCE_RESOURCE_DIR}/assets/JetBrainsMono-Regular.ttf
         DESTINATION share/LichtFeld-Studio/visualizer/resources/assets/fonts)
 
@@ -536,8 +520,6 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
 
 # Add custom target for resource files (makes them show up in IDEs)
 file(GLOB_RECURSE VISUALIZER_RESOURCE_FILES
-        "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/*.vert"
-        "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/*.frag"
         "${VISUALIZER_SOURCE_RESOURCE_DIR}/assets/*.ttf"
 )
 if (VISUALIZER_RESOURCE_FILES)

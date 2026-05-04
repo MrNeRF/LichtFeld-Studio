@@ -2241,10 +2241,6 @@ namespace lfs::rendering {
             return best_uid;
         }
 
-        void clearFrustumCache() override {}
-
-        void setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader>, bool) override {}
-
         ScreenOverlayRenderer* getScreenOverlayRenderer() override {
             return &overlay_renderer_;
         }

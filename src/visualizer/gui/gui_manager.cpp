@@ -4130,7 +4130,7 @@ namespace lfs::vis::gui {
             }
         }
         if (overlay_renderer) {
-            overlay_renderer->beginFrame(panel_input.screen_w, panel_input.screen_h);
+            overlay_renderer->beginFrame();
         }
 
         reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
@@ -4525,35 +4525,6 @@ namespace lfs::vis::gui {
                             const float initial_ring_thickness = can_close ? 2.0f : 1.5f;
                             overlay->addCircle(screen_points.front(), initial_ring_radius,
                                                close_hint_color, 24, initial_ring_thickness);
-                        }
-
-                        if (closed && screen_points.size() >= 3) {
-                            float cx = 0.0f, cy = 0.0f;
-                            for (const auto& sp : screen_points) {
-                                cx += sp.x;
-                                cy += sp.y;
-                            }
-                            cx /= static_cast<float>(screen_points.size());
-                            cy /= static_cast<float>(screen_points.size());
-
-                            constexpr std::string_view hint_lines[] = {
-                                "Enter to confirm",
-                                "Shift-click edge: add",
-                                "Ctrl-click vertex: remove"};
-                            const float font_px = theme().fonts.small_size;
-                            float max_w = 0.0f;
-                            for (const auto& line : hint_lines) {
-                                max_w = std::max(max_w, overlay->measureText(line, font_px).x);
-                            }
-                            const float line_h = font_px * 1.2f;
-                            const float total_h = line_h * static_cast<float>(std::size(hint_lines));
-                            const float start_x = cx - max_w * 0.5f;
-                            const float start_y = cy - total_h * 0.5f;
-                            const auto text_color = toCol(t.palette.text, 0.9f);
-                            for (size_t i = 0; i < std::size(hint_lines); ++i) {
-                                overlay->addText({start_x, start_y + line_h * static_cast<float>(i)},
-                                                 hint_lines[i], text_color, font_px);
-                            }
                         }
 
                         overlay->popClipRect();
