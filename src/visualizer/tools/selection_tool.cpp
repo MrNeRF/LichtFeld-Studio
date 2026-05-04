@@ -13,7 +13,9 @@
 #include "theme/theme.hpp"
 #include <SDL3/SDL.h>
 #include <cmath>
+#include <cstdio>
 #include <glm/gtc/quaternion.hpp>
+#include <imgui.h>
 
 namespace lfs::vis::tools {
 
@@ -266,19 +268,50 @@ namespace lfs::vis::tools {
             {viewport_bounds.x, viewport_bounds.y},
             {viewport_bounds.x + viewport_bounds.width, viewport_bounds.y + viewport_bounds.height});
 
-        float mouse_x = 0.0f;
-        float mouse_y = 0.0f;
-        SDL_GetMouseState(&mouse_x, &mouse_y);
-        const glm::vec2 mp{mouse_x, mouse_y};
-        const auto sel_border = toOverlay(theme().palette.primary, 0.85f);
+        // ImGui::GetMousePos returns the cached, NewFrame-aligned cursor — matches what the
+        // viewport pass will see this frame. SDL_GetMouseState samples one extra event-pump
+        // late, which surfaces as a visible lag on the selection ring.
+        const ImVec2 mouse_imv = ImGui::GetMousePos();
+        const glm::vec2 mp{mouse_imv.x, mouse_imv.y};
+        const auto& t = theme();
+        const auto sel_border = toOverlay(t.palette.primary, 0.85f);
 
+        // Cursor circle / cross is drawn by GuiManager in a late-stage pass so the
+        // sample-to-present path is as short as possible and the ring tracks the mouse
+        // without a visible frame trail. Labels stay here; their offset from the cursor
+        // makes any small drift much less perceptible than the ring itself.
+        (void)sel_border;
+
+        const SDL_Keymod kmods = SDL_GetModState();
+        const char* op_suffix = "";
+        if (kmods & SDL_KMOD_CTRL) {
+            op_suffix = " -";
+        } else if (kmods & SDL_KMOD_SHIFT) {
+            op_suffix = " +";
+        }
+
+        const char* mode_name = nullptr;
+        float text_offset = 15.0f;
         if (selection_mode == lfs::vis::SelectionPreviewMode::Centers) {
-            overlay->addCircle(mp, brush_radius_, sel_border, 32, 2.0f);
-            overlay->addCircleFilled(mp, 3.0f, sel_border);
+            mode_name = "SEL";
+            text_offset = brush_radius_ + 10.0f;
         } else {
-            constexpr float CROSS_SIZE = 8.0f;
-            overlay->addLine({mp.x - CROSS_SIZE, mp.y}, {mp.x + CROSS_SIZE, mp.y}, sel_border, 2.0f);
-            overlay->addLine({mp.x, mp.y - CROSS_SIZE}, {mp.x, mp.y + CROSS_SIZE}, sel_border, 2.0f);
+            switch (selection_mode) {
+            case lfs::vis::SelectionPreviewMode::Rings: mode_name = "RING"; break;
+            case lfs::vis::SelectionPreviewMode::Rectangle: mode_name = "RECT"; break;
+            case lfs::vis::SelectionPreviewMode::Polygon: mode_name = "POLY"; break;
+            case lfs::vis::SelectionPreviewMode::Lasso: mode_name = "LASSO"; break;
+            default: break;
+            }
+        }
+
+        if (mode_name) {
+            char label_buf[32];
+            std::snprintf(label_buf, sizeof(label_buf), "%s%s", mode_name, op_suffix);
+            const float label_size = t.fonts.large_size;
+            const glm::vec2 text_pos{mp.x + text_offset, mp.y - label_size * 0.5f};
+            constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
+            overlay->addTextWithShadow(text_pos, label_buf, toOverlay(t.overlay.text), kShadow, label_size);
         }
     }
 

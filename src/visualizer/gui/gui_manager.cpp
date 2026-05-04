@@ -11,6 +11,8 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include <ft2build.h>
+#include FT_FREETYPE_H
 #include "core/tensor.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -338,6 +340,185 @@ namespace lfs::vis::gui {
             }
         }
 
+        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+                                       std::uintptr_t texture_id,
+                                       const std::array<glm::vec2, 4>& screen_points,
+                                       const glm::vec2& uv_min,
+                                       const glm::vec2& uv_max,
+                                       const glm::vec4& tint_opacity,
+                                       const glm::vec4& effects);
+
+        // FreeType-baked overlay font atlas. Independent of ImGui's font system — the user
+        // wants the vulkan branch to stop reaching into ImFont/io.Fonts. Atlas covers ASCII
+        // printable range, baked at a single reference pixel size; runtime font_size scales
+        // glyph quads.
+        struct OverlayGlyph {
+            glm::vec2 uv0{0.0f};
+            glm::vec2 uv1{0.0f};
+            glm::vec2 size_px{0.0f};
+            glm::vec2 bearing_px{0.0f}; // x = bitmap_left, y = bitmap_top (positive up)
+            float advance_px = 0.0f;
+        };
+
+        struct OverlayFontAtlas {
+            VulkanUiTexture texture;
+            std::array<OverlayGlyph, 128> glyphs{};
+            float atlas_px_size = 0.0f;
+            bool valid = false;
+        };
+
+        OverlayFontAtlas g_overlay_atlas;
+
+        bool buildOverlayFontAtlas(const std::filesystem::path& font_path, const float pixel_size) {
+            g_overlay_atlas = {};
+
+            FT_Library ft = nullptr;
+            if (FT_Init_FreeType(&ft) != 0) {
+                LOG_WARN("Overlay font atlas: FT_Init_FreeType failed");
+                return false;
+            }
+            struct FTLib {
+                FT_Library lib;
+                ~FTLib() {
+                    if (lib)
+                        FT_Done_FreeType(lib);
+                }
+            } ft_guard{ft};
+
+            const std::string font_utf8 = lfs::core::path_to_utf8(font_path);
+            FT_Face face = nullptr;
+            if (FT_New_Face(ft, font_utf8.c_str(), 0, &face) != 0) {
+                LOG_WARN("Overlay font atlas: FT_New_Face failed for {}", font_utf8);
+                return false;
+            }
+            struct FTFace {
+                FT_Face face;
+                ~FTFace() {
+                    if (face)
+                        FT_Done_Face(face);
+                }
+            } face_guard{face};
+
+            const FT_UInt px = static_cast<FT_UInt>(std::max(8.0f, pixel_size));
+            FT_Set_Pixel_Sizes(face, 0, px);
+
+            constexpr int kAtlasW = 1024;
+            constexpr int kPad = 1;
+            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(kAtlasW) * kAtlasW * 4, 0);
+
+            int pen_x = kPad;
+            int pen_y = kPad;
+            int row_h = 0;
+            int max_y = 0;
+
+            for (int code = 32; code < 128; ++code) {
+                if (FT_Load_Char(face, static_cast<FT_ULong>(code), FT_LOAD_RENDER) != 0) {
+                    continue;
+                }
+                const FT_GlyphSlot g = face->glyph;
+                const int w = static_cast<int>(g->bitmap.width);
+                const int h = static_cast<int>(g->bitmap.rows);
+
+                if (pen_x + w + kPad > kAtlasW) {
+                    pen_x = kPad;
+                    pen_y += row_h + kPad;
+                    row_h = 0;
+                }
+                if (pen_y + h + kPad > kAtlasW) {
+                    LOG_WARN("Overlay font atlas: out of space at glyph {}", code);
+                    break;
+                }
+
+                for (int y = 0; y < h; ++y) {
+                    const std::uint8_t* src = g->bitmap.buffer + y * g->bitmap.pitch;
+                    std::uint8_t* dst = rgba.data() + ((pen_y + y) * kAtlasW + pen_x) * 4;
+                    for (int x = 0; x < w; ++x) {
+                        const std::uint8_t a = src[x];
+                        dst[x * 4 + 0] = 255;
+                        dst[x * 4 + 1] = 255;
+                        dst[x * 4 + 2] = 255;
+                        dst[x * 4 + 3] = a;
+                    }
+                }
+
+                OverlayGlyph& og = g_overlay_atlas.glyphs[code];
+                og.uv0 = {static_cast<float>(pen_x) / kAtlasW,
+                          static_cast<float>(pen_y) / kAtlasW};
+                og.uv1 = {static_cast<float>(pen_x + w) / kAtlasW,
+                          static_cast<float>(pen_y + h) / kAtlasW};
+                og.size_px = {static_cast<float>(w), static_cast<float>(h)};
+                og.bearing_px = {static_cast<float>(g->bitmap_left),
+                                 static_cast<float>(g->bitmap_top)};
+                og.advance_px = static_cast<float>(g->advance.x) / 64.0f;
+
+                pen_x += w + kPad;
+                row_h = std::max(row_h, h);
+                max_y = std::max(max_y, pen_y + h);
+            }
+
+            if (!g_overlay_atlas.texture.upload(rgba.data(), kAtlasW, kAtlasW, 4)) {
+                LOG_WARN("Overlay font atlas: Vulkan upload failed");
+                return false;
+            }
+
+            g_overlay_atlas.atlas_px_size = static_cast<float>(px);
+            g_overlay_atlas.valid = true;
+            LOG_INFO("Overlay font atlas baked at {} px ({}x{} pixels used)",
+                     px, kAtlasW, max_y + kPad);
+            return true;
+        }
+
+        glm::vec2 measureOverlayText(std::string_view text, float size_px) {
+            if (!g_overlay_atlas.valid || text.empty() || size_px <= 0.0f) {
+                return {0.0f, 0.0f};
+            }
+            const float scale = size_px / g_overlay_atlas.atlas_px_size;
+            float width = 0.0f;
+            for (const char ch : text) {
+                const auto code = static_cast<unsigned char>(ch);
+                if (code < g_overlay_atlas.glyphs.size()) {
+                    width += g_overlay_atlas.glyphs[code].advance_px;
+                }
+            }
+            return {width * scale, size_px};
+        }
+
+        void appendTextOverlay(VulkanViewportPassParams& params,
+                               const lfs::rendering::OverlayCommand& cmd) {
+            if (!g_overlay_atlas.valid || cmd.text.empty() || cmd.font_size <= 0.0f ||
+                cmd.color_premul.a <= 0.0f) {
+                return;
+            }
+            const std::uintptr_t texture_id = g_overlay_atlas.texture.textureId();
+            if (texture_id == 0) {
+                return;
+            }
+            const float scale = cmd.font_size / g_overlay_atlas.atlas_px_size;
+            const float baseline_y = cmd.p0.y + cmd.font_size; // top_left → baseline
+            float pen_x = cmd.p0.x;
+
+            for (const char ch : cmd.text) {
+                const auto code = static_cast<unsigned char>(ch);
+                if (code >= g_overlay_atlas.glyphs.size()) {
+                    continue;
+                }
+                const OverlayGlyph& g = g_overlay_atlas.glyphs[code];
+                if (g.size_px.x > 0.0f && g.size_px.y > 0.0f) {
+                    const float x0 = pen_x + g.bearing_px.x * scale;
+                    const float y0 = baseline_y - g.bearing_px.y * scale;
+                    const float x1 = x0 + g.size_px.x * scale;
+                    const float y1 = y0 + g.size_px.y * scale;
+                    const std::array<glm::vec2, 4> pts = {
+                        glm::vec2{x0, y0}, glm::vec2{x1, y0},
+                        glm::vec2{x1, y1}, glm::vec2{x0, y1}};
+                    appendTexturedOverlayQuad(params, texture_id, pts,
+                                              g.uv0, g.uv1,
+                                              cmd.color_premul, {1.0f, 0.0f, 0.0f, 0.0f});
+                }
+                pen_x += g.advance_px * scale;
+            }
+        }
+
         void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
                                                 lfs::rendering::RenderingEngine* engine) {
             if (!engine) {
@@ -380,6 +561,9 @@ namespace lfs::vis::gui {
                                                     command.radius,
                                                     command.color_premul,
                                                     command.thickness);
+                    break;
+                case lfs::rendering::OverlayCommandType::Text:
+                    appendTextOverlay(params, command);
                     break;
                 }
             }
@@ -2589,6 +2773,20 @@ namespace lfs::vis::gui {
         if (!io.Fonts->Build()) {
             LOG_ERROR("Font atlas build failed — CJK glyphs may be missing");
         }
+
+        // Bake an independent FreeType atlas for ScreenOverlayRenderer Text commands.
+        // Kept separate from ImGui's font atlas: the Vulkan branch has no ImGui renderer
+        // backend, and reaching into io.Fonts trips the new RendererHasTextures contract.
+        try {
+            const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
+            const float atlas_size_px = std::round(t.fonts.large_size * scale);
+            if (!buildOverlayFontAtlas(regular_path, atlas_size_px)) {
+                LOG_WARN("Overlay font atlas not built; selection/tool labels won't render");
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Overlay font atlas: failed to resolve regular font path: {}", e.what());
+        }
+        lfs::rendering::ScreenOverlayRenderer::setTextMeasureFn(&measureOverlayText);
     }
 
     void GuiManager::applyUiScale(float scale) {
@@ -3207,6 +3405,8 @@ namespace lfs::vis::gui {
         sequencer_ui_.destroyGraphicsResources();
         drag_drop_.shutdown();
         destroyCustomCursors();
+        lfs::rendering::ScreenOverlayRenderer::setTextMeasureFn({});
+        g_overlay_atlas = {};
         setVulkanUiTextureContext(nullptr);
         resetVulkanSceneInterop();
         vulkan_scene_image_.reset();
@@ -3663,6 +3863,44 @@ namespace lfs::vis::gui {
             appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
         }
 
+        // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay
+        // queueing and just before the GPU command buffer is recorded. Global polling hits
+        // the OS directly. ImGui::GetMousePos and SDL_GetMouseState both return the cached
+        // NewFrame-aligned value, so without this the cursor ring lags an extra event-pump
+        // behind the hardware pointer.
+        if (viewer_ && !ui_hidden_ && !guiFocusState().want_capture_mouse) {
+            if (auto* const sel = viewer_->getSelectionTool(); sel && sel->isEnabled()) {
+                SDL_Window* const window = viewer_->getWindow();
+                int win_x = 0;
+                int win_y = 0;
+                if (window) {
+                    SDL_GetWindowPosition(window, &win_x, &win_y);
+                }
+                float gx = 0.0f;
+                float gy = 0.0f;
+                SDL_GetGlobalMouseState(&gx, &gy);
+                const glm::vec2 mp{gx - static_cast<float>(win_x), gy - static_cast<float>(win_y)};
+                auto* const rm = viewer_->getRenderingManager();
+                const auto mode = rm ? rm->getSelectionPreviewMode()
+                                     : lfs::vis::SelectionPreviewMode::Centers;
+                const auto& palette = lfs::vis::theme().palette;
+                const glm::vec4 color{palette.primary.x * 0.85f, palette.primary.y * 0.85f,
+                                      palette.primary.z * 0.85f, 0.85f};
+                if (mode == lfs::vis::SelectionPreviewMode::Centers) {
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                    mp, sel->getBrushRadius(), color, 2.0f);
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params,
+                                             mp, 3.0f, color);
+                } else {
+                    constexpr float CROSS = 8.0f;
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params,
+                                           {mp.x - CROSS, mp.y}, {mp.x + CROSS, mp.y}, color, 2.0f);
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params,
+                                           {mp.x, mp.y - CROSS}, {mp.x, mp.y + CROSS}, color, 2.0f);
+                }
+            }
+        }
+
         const auto& vignette = lfs::vis::theme().vignette;
         params.vignette_enabled = vignette.enabled && vignette.intensity > 0.0f;
         params.vignette_intensity = vignette.intensity;
@@ -3735,10 +3973,12 @@ namespace lfs::vis::gui {
         {
             auto& focus = guiFocusState();
             focus.reset();
-            // Aggregate ImGui (helper widgets / py_ui) and RmlUi (panels, modals, menus)
-            // focus state — neither alone covers the full GUI surface.
+            // Seed from ImGui only; RmlUi panels populate their own claims during
+            // processInput. Aggregating wantsCaptureMouse() here reads stale hover
+            // state from the previous frame, which becomes self-perpetuating once a
+            // panel sets a hover element — toolbar tools then cannot be activated.
             const ImGuiIO& io = ImGui::GetIO();
-            focus.want_capture_mouse = io.WantCaptureMouse || rmlui_manager_.wantsCaptureMouse();
+            focus.want_capture_mouse = io.WantCaptureMouse;
             focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
             focus.want_text_input = io.WantTextInput || rmlui_manager_.wantsTextInput();
         }
@@ -4525,6 +4765,35 @@ namespace lfs::vis::gui {
                             const float initial_ring_thickness = can_close ? 2.0f : 1.5f;
                             overlay->addCircle(screen_points.front(), initial_ring_radius,
                                                close_hint_color, 24, initial_ring_thickness);
+                        }
+
+                        if (closed && screen_points.size() >= 3) {
+                            float cx = 0.0f, cy = 0.0f;
+                            for (const auto& sp : screen_points) {
+                                cx += sp.x;
+                                cy += sp.y;
+                            }
+                            cx /= static_cast<float>(screen_points.size());
+                            cy /= static_cast<float>(screen_points.size());
+
+                            constexpr std::string_view hint_lines[] = {
+                                "Enter to confirm",
+                                "Shift-click edge: add",
+                                "Ctrl-click vertex: remove"};
+                            const float font_px = theme().fonts.small_size;
+                            float max_w = 0.0f;
+                            for (const auto& line : hint_lines) {
+                                max_w = std::max(max_w, overlay->measureText(line, font_px).x);
+                            }
+                            const float line_h = font_px * 1.2f;
+                            const float total_h = line_h * static_cast<float>(std::size(hint_lines));
+                            const float start_x = cx - max_w * 0.5f;
+                            const float start_y = cy - total_h * 0.5f;
+                            const auto text_color = toCol(t.palette.text, 0.9f);
+                            for (size_t i = 0; i < std::size(hint_lines); ++i) {
+                                overlay->addText({start_x, start_y + line_h * static_cast<float>(i)},
+                                                 hint_lines[i], text_color, font_px);
+                            }
                         }
 
                         overlay->popClipRect();

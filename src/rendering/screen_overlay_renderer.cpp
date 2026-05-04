@@ -18,7 +18,16 @@ namespace lfs::rendering {
             const int seg = static_cast<int>(std::round(r * 0.75f)) + 8;
             return std::clamp(seg, kMinCircleSegments, kMaxCircleSegments);
         }
+
+        TextMeasureFn& textMeasureFn() {
+            static TextMeasureFn fn;
+            return fn;
+        }
     } // namespace
+
+    void ScreenOverlayRenderer::setTextMeasureFn(TextMeasureFn fn) {
+        textMeasureFn() = std::move(fn);
+    }
 
     void ScreenOverlayRenderer::beginFrame() {
         frame_active_ = true;
@@ -162,6 +171,35 @@ namespace lfs::rendering {
             .color_premul = toPremul(c),
             .clip = currentClip(),
         });
+    }
+
+    void ScreenOverlayRenderer::addText(const glm::vec2 top_left_px, const std::string_view text,
+                                        const OverlayColor c, const float size_px) {
+        if (text.empty() || size_px <= 0.0f || c.a <= 0.0f) {
+            return;
+        }
+        commands_.push_back({
+            .type = OverlayCommandType::Text,
+            .p0 = top_left_px,
+            .color_premul = toPremul(c),
+            .clip = currentClip(),
+            .text = std::string(text),
+            .font_size = size_px,
+        });
+    }
+
+    void ScreenOverlayRenderer::addTextWithShadow(const glm::vec2 top_left_px, const std::string_view text,
+                                                  const OverlayColor c, const OverlayColor shadow_c,
+                                                  const float size_px, const glm::vec2 shadow_offset) {
+        addText(top_left_px + shadow_offset, text, shadow_c, size_px);
+        addText(top_left_px, text, c, size_px);
+    }
+
+    glm::vec2 ScreenOverlayRenderer::measureText(const std::string_view text, const float size_px) const {
+        if (const auto& fn = textMeasureFn(); fn) {
+            return fn(text, size_px);
+        }
+        return {0.0f, 0.0f};
     }
 
     std::vector<OverlayCommand> ScreenOverlayRenderer::consumeCommands() {

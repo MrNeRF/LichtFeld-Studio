@@ -280,7 +280,10 @@ namespace lfs::vis {
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
         std::vector<DepthStencilResource> depth_stencil_resources_;
 
-        static constexpr std::size_t kFramesInFlight = 2;
+        // Single frame in flight — CPU waits for GPU each frame instead of pre-recording
+        // the next one. Eliminates the frame of cursor latency that comes from "CPU is
+        // 1 frame ahead of GPU".
+        static constexpr std::size_t kFramesInFlight = 1;
         std::array<VkCommandPool, kFramesInFlight> command_pools_{};
         std::array<VkCommandBuffer, kFramesInFlight> command_buffers_{};
         VkCommandPool immediate_command_pool_ = VK_NULL_HANDLE;

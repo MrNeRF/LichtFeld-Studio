@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <functional>
 #include <glm/glm.hpp>
 #include <optional>
 #include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::rendering {
@@ -20,6 +23,7 @@ namespace lfs::rendering {
         Triangle,
         CircleFilled,
         CircleOutline,
+        Text,
     };
 
     struct OverlayClipRect {
@@ -37,10 +41,16 @@ namespace lfs::rendering {
         float radius = 0.0f;
         int segments = 0;
         std::optional<OverlayClipRect> clip;
+        std::string text;
+        float font_size = 0.0f;
     };
+
+    using TextMeasureFn = std::function<glm::vec2(std::string_view, float)>;
 
     class ScreenOverlayRenderer {
     public:
+        static void setTextMeasureFn(TextMeasureFn fn);
+
         void beginFrame();
         void endFrame();
         bool isFrameActive() const { return frame_active_; }
@@ -56,6 +66,12 @@ namespace lfs::rendering {
         void addRect(glm::vec2 a, glm::vec2 b, OverlayColor c, float thickness = 1.0f);
         void addRectFilled(glm::vec2 a, glm::vec2 b, OverlayColor c);
         void addTriangleFilled(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2, OverlayColor c);
+
+        void addText(glm::vec2 top_left_px, std::string_view text, OverlayColor c, float size_px);
+        void addTextWithShadow(glm::vec2 top_left_px, std::string_view text,
+                               OverlayColor c, OverlayColor shadow_c, float size_px,
+                               glm::vec2 shadow_offset = {1.0f, 1.0f});
+        [[nodiscard]] glm::vec2 measureText(std::string_view text, float size_px) const;
 
         std::vector<OverlayCommand> consumeCommands();
 
