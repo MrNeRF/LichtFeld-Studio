@@ -17,7 +17,6 @@
 #include <expected>
 #include <format>
 #include <limits>
-#include <numeric>
 #include <vector>
 
 #include <glm/glm.hpp>
