@@ -18,8 +18,9 @@ namespace lfs::rendering {
 
     inline ImageLayout detectImageLayout(const Tensor& image) {
         assert(image.ndim() == 3);
-        const bool last_is_channel = (image.size(2) == 3 || image.size(2) == 4);
-        const bool first_is_channel = (image.size(0) == 3 || image.size(0) == 4);
+        const auto is_channel = [](const auto dim) { return dim == 1 || dim == 3 || dim == 4; };
+        const bool last_is_channel = is_channel(image.size(2));
+        const bool first_is_channel = is_channel(image.size(0));
 
         if (first_is_channel && !last_is_channel)
             return ImageLayout::CHW;
