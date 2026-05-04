@@ -54,7 +54,8 @@ namespace lfs::vis {
         [[nodiscard]] bool init(VulkanContext& context, VkFormat color_format,
                                 VkFormat depth_format, VkBuffer screen_quad_buffer);
         void prepare(const VulkanSplitViewParams& params);
-        void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanSplitViewParams& params);
+        // panel_rect and params.content_rect are both in framebuffer-space coords.
+        void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params);
         void shutdown();
 
         [[nodiscard]] bool ready() const;

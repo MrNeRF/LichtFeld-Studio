@@ -461,8 +461,9 @@ namespace lfs::vis {
                 vkDestroyFence(device, p.fence, nullptr);
                 p.fence = VK_NULL_HANDLE;
             }
-            p.pack_bytes.clear();
-            p.pack_bytes.shrink_to_fit();
+            // ensurePanelImage() calls destroyPanel() on resize, which runs
+            // *between* packPanelToRgba8() filling pack_bytes and the staging
+            // memcpy reading from it — so we must NOT clear pack_bytes here.
             p.width = 0;
             p.height = 0;
             p.uploaded_tensor = nullptr;
@@ -731,22 +732,20 @@ namespace lfs::vis {
             rebindDescriptorsIfDirty(left_view, right_view);
         }
 
-        void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanSplitViewParams& params) {
+        void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params) {
             if (!ready() || !params.enabled || screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
 
             VkViewport vp{};
-            vp.x = 0.0f;
-            vp.y = 0.0f;
-            vp.width = static_cast<float>(extent.width);
-            vp.height = static_cast<float>(extent.height);
+            vp.x = static_cast<float>(panel_rect.offset.x);
+            vp.y = static_cast<float>(panel_rect.offset.y);
+            vp.width = static_cast<float>(panel_rect.extent.width);
+            vp.height = static_cast<float>(panel_rect.extent.height);
             vp.minDepth = 0.0f;
             vp.maxDepth = 1.0f;
-            VkRect2D sc{};
-            sc.extent = extent;
             vkCmdSetViewport(cb, 0, 1, &vp);
-            vkCmdSetScissor(cb, 0, 1, &sc);
+            vkCmdSetScissor(cb, 0, 1, &panel_rect);
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
@@ -821,10 +820,10 @@ namespace lfs::vis {
             impl_->prepare(params);
     }
 
-    void VulkanSplitViewPass::record(VkCommandBuffer cb, VkExtent2D extent,
+    void VulkanSplitViewPass::record(VkCommandBuffer cb, const VkRect2D& panel_rect,
                                      const VulkanSplitViewParams& params) {
         if (impl_)
-            impl_->record(cb, extent, params);
+            impl_->record(cb, panel_rect, params);
     }
 
     void VulkanSplitViewPass::shutdown() {

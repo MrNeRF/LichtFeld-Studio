@@ -654,7 +654,7 @@ namespace lfs::vis {
                                 pending_split_view.background = settings_.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
                                 pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, false};
-                                pending_split_view.right = {rendered->image, settings_.split_position, 1.0f, false, rendered->metadata.flip_y};
+                                pending_split_view.right = {rendered->image, settings_.split_position, 1.0f, false, !rendered->metadata.flip_y};
                                 rendered_metadata = rendered->metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
@@ -691,8 +691,8 @@ namespace lfs::vis {
                     pending_split_view.split_position = settings_.split_position;
                     pending_split_view.background = settings_.background_color;
                     pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
-                    pending_split_view.left = {left->image, (*layouts)[0].start_position, (*layouts)[0].end_position, true, left->metadata.flip_y};
-                    pending_split_view.right = {right->image, (*layouts)[1].start_position, (*layouts)[1].end_position, true, right->metadata.flip_y};
+                    pending_split_view.left = {left->image, (*layouts)[0].start_position, (*layouts)[0].end_position, true, !left->metadata.flip_y};
+                    pending_split_view.right = {right->image, (*layouts)[1].start_position, (*layouts)[1].end_position, true, !right->metadata.flip_y};
                     rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
                     rendered_split_info = SplitViewInfo{
                         .enabled = true,
@@ -723,8 +723,8 @@ namespace lfs::vis {
                     pending_split_view.split_position = settings_.split_position;
                     pending_split_view.background = settings_.background_color;
                     pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
-                    pending_split_view.left = {left->image, 0.0f, settings_.split_position, false, left->metadata.flip_y};
-                    pending_split_view.right = {right->image, settings_.split_position, 1.0f, false, right->metadata.flip_y};
+                    pending_split_view.left = {left->image, 0.0f, settings_.split_position, false, !left->metadata.flip_y};
+                    pending_split_view.right = {right->image, settings_.split_position, 1.0f, false, !right->metadata.flip_y};
                     rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
                     rendered_split_info = SplitViewInfo{
                         .enabled = true,
@@ -742,8 +742,10 @@ namespace lfs::vis {
 
         const bool render_point_cloud = settings_.point_cloud_mode || !has_renderable_model;
 
-        if (rendered_image) {
-            // Split-view render already produced the final viewport image.
+        if (rendered_image || pending_split_view.enabled) {
+            // Split-view paths populate pending_split_view directly; skip the
+            // full-viewport fallback that would set rendered_image to a wrong-
+            // sized tensor and squash the left panel through the scene interop.
         } else if (render_point_cloud && has_renderable_model) {
             LOG_TIMER("renderVulkanFrame.renderPointCloudImage(splat)");
             auto request = buildPointCloudRenderRequest(frame_ctx, render_size, frame_ctx.scene_state.model_transforms);

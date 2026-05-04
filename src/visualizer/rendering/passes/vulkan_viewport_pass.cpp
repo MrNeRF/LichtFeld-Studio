@@ -1088,10 +1088,17 @@ namespace lfs::vis {
                 frame.scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
             const bool split_active = params.split_view.enabled && split_view_pass.ready();
             if (split_active) {
-                split_view_pass.record(command_buffer,
-                                       {static_cast<std::uint32_t>(rect.width),
-                                        static_cast<std::uint32_t>(rect.height)},
-                                       params.split_view);
+                // content_rect arrives panel-local; lift it into framebuffer
+                // coords so the shader's letterbox check matches gl_FragCoord.
+                VulkanSplitViewParams adjusted = params.split_view;
+                adjusted.content_rect.x += rect.x;
+                adjusted.content_rect.y += rect.y;
+                const VkRect2D panel_rect{
+                    .offset = {rect.x, rect.y},
+                    .extent = {static_cast<std::uint32_t>(rect.width),
+                               static_cast<std::uint32_t>(rect.height)},
+                };
+                split_view_pass.record(command_buffer, panel_rect, adjusted);
                 bindQuad(command_buffer);
                 bindViewport(command_buffer, rect);
             } else if (has_scene) {
