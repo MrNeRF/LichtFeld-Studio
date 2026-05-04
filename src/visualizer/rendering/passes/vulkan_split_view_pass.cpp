@@ -46,15 +46,14 @@ namespace lfs::vis {
             return m;
         }
 
-        struct PackedRgba {
-            std::vector<std::uint8_t> bytes;
-            std::uint32_t width = 0;
-            std::uint32_t height = 0;
-        };
-
-        // Convert a CHW float [0,1] tensor on CUDA to a tightly-packed RGBA8 byte buffer
-        // on CPU. TBB-parallel over rows so we don't burn ms on the conversion at 1080p.
-        bool packPanelToRgba8(const lfs::core::Tensor& tensor, PackedRgba& out) {
+        // Convert a CHW float [0,1] tensor (CUDA or CPU) into a tightly packed RGBA8
+        // buffer at `dst`. TBB-parallel over rows. Caller owns the destination memory
+        // (we point straight at a persistently-mapped VMA staging buffer when possible)
+        // so this function performs zero allocations on the hot path.
+        bool packPanelToRgba8(const lfs::core::Tensor& tensor,
+                              std::uint8_t* dst,
+                              std::uint32_t& out_w,
+                              std::uint32_t& out_h) {
             if (!tensor.is_valid() || tensor.ndim() != 3) {
                 return false;
             }
@@ -79,9 +78,8 @@ namespace lfs::vis {
             if (channels < 3 || h <= 0 || w <= 0) {
                 return false;
             }
-            out.width = static_cast<std::uint32_t>(w);
-            out.height = static_cast<std::uint32_t>(h);
-            out.bytes.resize(static_cast<std::size_t>(w) * h * 4u);
+            out_w = static_cast<std::uint32_t>(w);
+            out_h = static_cast<std::uint32_t>(h);
             const float* data = cpu.ptr<float>();
             const std::size_t plane = static_cast<std::size_t>(w) * h;
 
@@ -89,7 +87,7 @@ namespace lfs::vis {
                 tbb::blocked_range<int>(0, h),
                 [&](const tbb::blocked_range<int>& r) {
                     for (int y = r.begin(); y != r.end(); ++y) {
-                        std::uint8_t* dst = out.bytes.data() + static_cast<std::size_t>(y) * w * 4u;
+                        std::uint8_t* row_dst = dst + static_cast<std::size_t>(y) * w * 4u;
                         const float* row_r = data + static_cast<std::size_t>(y) * w;
                         const float* row_g = data + plane + static_cast<std::size_t>(y) * w;
                         const float* row_b = data + 2u * plane + static_cast<std::size_t>(y) * w;
@@ -101,10 +99,10 @@ namespace lfs::vis {
                             const float fg = std::clamp(row_g[x], 0.0f, 1.0f);
                             const float fb = std::clamp(row_b[x], 0.0f, 1.0f);
                             const float fa = row_a ? std::clamp(row_a[x], 0.0f, 1.0f) : 1.0f;
-                            dst[x * 4 + 0] = static_cast<std::uint8_t>(fr * 255.0f + 0.5f);
-                            dst[x * 4 + 1] = static_cast<std::uint8_t>(fg * 255.0f + 0.5f);
-                            dst[x * 4 + 2] = static_cast<std::uint8_t>(fb * 255.0f + 0.5f);
-                            dst[x * 4 + 3] = static_cast<std::uint8_t>(fa * 255.0f + 0.5f);
+                            row_dst[x * 4 + 0] = static_cast<std::uint8_t>(fr * 255.0f + 0.5f);
+                            row_dst[x * 4 + 1] = static_cast<std::uint8_t>(fg * 255.0f + 0.5f);
+                            row_dst[x * 4 + 2] = static_cast<std::uint8_t>(fb * 255.0f + 0.5f);
+                            row_dst[x * 4 + 3] = static_cast<std::uint8_t>(fa * 255.0f + 0.5f);
                         }
                     }
                 });
@@ -136,6 +134,20 @@ namespace lfs::vis {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             const lfs::core::Tensor* uploaded_tensor = nullptr;
+
+            // Persistent staging: kept alive between frames so identical-size uploads
+            // don't repeatedly allocate / map / unmap an 8 MB buffer at 1080p.
+            VkBuffer staging_buffer = VK_NULL_HANDLE;
+            VmaAllocation staging_alloc = VK_NULL_HANDLE;
+            void* staging_mapped = nullptr;
+            VkDeviceSize staging_capacity = 0;
+            // Persistent CHW->RGBA pack buffer. tbb::parallel_for fills this in place
+            // every frame; growing only when the panel resolution increases.
+            std::vector<std::uint8_t> pack_bytes;
+            // Persistent command buffer for the upload submit. Reused across frames
+            // via vkResetCommandBuffer instead of vkAllocate/Free per upload.
+            VkCommandBuffer cmd = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
         };
         PanelImage left{};
         PanelImage right{};
@@ -422,9 +434,79 @@ namespace lfs::vis {
                 p.image = VK_NULL_HANDLE;
                 p.alloc = VK_NULL_HANDLE;
             }
+            if (p.staging_buffer != VK_NULL_HANDLE) {
+                if (p.staging_mapped) {
+                    vmaUnmapMemory(allocator, p.staging_alloc);
+                    p.staging_mapped = nullptr;
+                }
+                vmaDestroyBuffer(allocator, p.staging_buffer, p.staging_alloc);
+                p.staging_buffer = VK_NULL_HANDLE;
+                p.staging_alloc = VK_NULL_HANDLE;
+                p.staging_capacity = 0;
+            }
+            if (p.cmd != VK_NULL_HANDLE && transfer_pool != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &p.cmd);
+                p.cmd = VK_NULL_HANDLE;
+            }
+            if (p.fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, p.fence, nullptr);
+                p.fence = VK_NULL_HANDLE;
+            }
+            p.pack_bytes.clear();
+            p.pack_bytes.shrink_to_fit();
             p.width = 0;
             p.height = 0;
             p.uploaded_tensor = nullptr;
+        }
+
+        bool ensureStaging(PanelImage& p, VkDeviceSize bytes) {
+            if (p.staging_buffer != VK_NULL_HANDLE && p.staging_capacity >= bytes) {
+                return true;
+            }
+            if (p.staging_buffer != VK_NULL_HANDLE) {
+                if (p.staging_mapped) {
+                    vmaUnmapMemory(allocator, p.staging_alloc);
+                    p.staging_mapped = nullptr;
+                }
+                vmaDestroyBuffer(allocator, p.staging_buffer, p.staging_alloc);
+                p.staging_buffer = VK_NULL_HANDLE;
+                p.staging_alloc = VK_NULL_HANDLE;
+            }
+            VkBufferCreateInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bi.size = bytes;
+            bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo sa{};
+            sa.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                       VMA_ALLOCATION_CREATE_MAPPED_BIT;
+            VmaAllocationInfo ai{};
+            if (vmaCreateBuffer(allocator, &bi, &sa, &p.staging_buffer, &p.staging_alloc, &ai) != VK_SUCCESS) {
+                return false;
+            }
+            p.staging_mapped = ai.pMappedData;
+            p.staging_capacity = bytes;
+            return true;
+        }
+
+        bool ensurePanelCmd(PanelImage& p) {
+            if (p.cmd != VK_NULL_HANDLE && p.fence != VK_NULL_HANDLE) {
+                return true;
+            }
+            VkCommandBufferAllocateInfo a{};
+            a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            a.commandPool = transfer_pool;
+            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            a.commandBufferCount = 1;
+            if (vkAllocateCommandBuffers(device, &a, &p.cmd) != VK_SUCCESS) {
+                return false;
+            }
+            VkFenceCreateInfo fi{};
+            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            // Created signaled so the first vkWaitForFences before recording is a no-op.
+            fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            return vkCreateFence(device, &fi, nullptr, &p.fence) == VK_SUCCESS;
         }
 
         bool ensurePanelImage(PanelImage& p, std::uint32_t w, std::uint32_t h) {
@@ -468,45 +550,66 @@ namespace lfs::vis {
         }
 
         bool uploadPanel(PanelImage& panel, const lfs::core::Tensor& tensor) {
-            PackedRgba pkt;
-            if (!packPanelToRgba8(tensor, pkt)) {
+            // Probe size from the tensor; resize the persistent pack buffer only when
+            // the tensor's resolution exceeds the current capacity.
+            if (!tensor.is_valid() || tensor.ndim() != 3) {
                 return false;
             }
-            if (!ensurePanelImage(panel, pkt.width, pkt.height)) {
+            const auto layout = lfs::rendering::detectImageLayout(tensor);
+            const int probe_w = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC
+                                                     ? tensor.size(1)
+                                                     : tensor.size(2));
+            const int probe_h = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC
+                                                     ? tensor.size(0)
+                                                     : tensor.size(1));
+            if (probe_w <= 0 || probe_h <= 0) {
+                return false;
+            }
+            const std::size_t need_pack = static_cast<std::size_t>(probe_w) * probe_h * 4u;
+            if (panel.pack_bytes.size() < need_pack) {
+                panel.pack_bytes.resize(need_pack);
+            }
+
+            std::uint32_t pkt_w = 0;
+            std::uint32_t pkt_h = 0;
+            if (!packPanelToRgba8(tensor, panel.pack_bytes.data(), pkt_w, pkt_h)) {
+                return false;
+            }
+            if (!ensurePanelImage(panel, pkt_w, pkt_h)) {
                 return false;
             }
 
-            const VkDeviceSize bytes = static_cast<VkDeviceSize>(pkt.bytes.size());
-            VkBuffer staging = VK_NULL_HANDLE;
-            VmaAllocation staging_alloc = VK_NULL_HANDLE;
-            VkBufferCreateInfo bi{};
-            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            bi.size = bytes;
-            bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-            bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VmaAllocationCreateInfo sa{};
-            sa.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            if (vmaCreateBuffer(allocator, &bi, &sa, &staging, &staging_alloc, nullptr) != VK_SUCCESS) {
+            const VkDeviceSize bytes =
+                static_cast<VkDeviceSize>(pkt_w) * pkt_h * 4u;
+            if (!ensureStaging(panel, bytes) || !ensurePanelCmd(panel)) {
                 return false;
             }
-            void* mapped = nullptr;
-            if (vmaMapMemory(allocator, staging_alloc, &mapped) != VK_SUCCESS) {
-                vmaDestroyBuffer(allocator, staging, staging_alloc);
-                return false;
-            }
-            std::memcpy(mapped, pkt.bytes.data(), static_cast<std::size_t>(bytes));
-            vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
-            vmaUnmapMemory(allocator, staging_alloc);
+            std::memcpy(panel.staging_mapped, panel.pack_bytes.data(), static_cast<std::size_t>(bytes));
+            vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
 
-            VkCommandBuffer cb = beginSingleTimeCommands();
-            if (cb == VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, staging, staging_alloc);
+            // Wait for any prior submit on this command buffer before re-recording.
+            // First-frame the fence is in unsignaled state and vkWaitForFences with
+            // timeout=0 returns VK_TIMEOUT; the reset below makes the next submit valid.
+            vkWaitForFences(device, 1, &panel.fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
+            vkResetFences(device, 1, &panel.fence);
+            if (vkResetCommandBuffer(panel.cmd, 0) != VK_SUCCESS) {
                 return false;
             }
+            VkCommandBufferBeginInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            if (vkBeginCommandBuffer(panel.cmd, &bi) != VK_SUCCESS) {
+                return false;
+            }
+
+            // After the first upload the panel image already sits in
+            // SHADER_READ_ONLY_OPTIMAL; transition back to TRANSFER_DST.
+            const VkImageLayout old_layout = (panel.uploaded_tensor != nullptr)
+                                                 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                 : VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageMemoryBarrier to_dst{};
             to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            to_dst.oldLayout = old_layout;
             to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -514,16 +617,22 @@ namespace lfs::vis {
             to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             to_dst.subresourceRange.levelCount = 1;
             to_dst.subresourceRange.layerCount = 1;
-            to_dst.srcAccessMask = 0;
+            to_dst.srcAccessMask =
+                old_layout == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_SHADER_READ_BIT;
             to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            const VkPipelineStageFlags src_stage =
+                old_layout == VK_IMAGE_LAYOUT_UNDEFINED
+                    ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+            vkCmdPipelineBarrier(panel.cmd, src_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
                                  0, 0, nullptr, 0, nullptr, 1, &to_dst);
 
             VkBufferImageCopy region{};
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             region.imageSubresource.layerCount = 1;
             region.imageExtent = {panel.width, panel.height, 1};
-            vkCmdCopyBufferToImage(cb, staging, panel.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            vkCmdCopyBufferToImage(panel.cmd, panel.staging_buffer, panel.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
             VkImageMemoryBarrier to_read{};
             to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -537,14 +646,23 @@ namespace lfs::vis {
             to_read.subresourceRange.layerCount = 1;
             to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            vkCmdPipelineBarrier(panel.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                                  0, 0, nullptr, 0, nullptr, 1, &to_read);
 
-            const bool ok = endSingleTimeCommands(cb);
-            vmaDestroyBuffer(allocator, staging, staging_alloc);
-            if (!ok) {
+            if (vkEndCommandBuffer(panel.cmd) != VK_SUCCESS) {
                 return false;
             }
+            VkSubmitInfo si{};
+            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            si.commandBufferCount = 1;
+            si.pCommandBuffers = &panel.cmd;
+            if (vkQueueSubmit(graphics_queue, 1, &si, panel.fence) != VK_SUCCESS) {
+                return false;
+            }
+            // The viewport pass that consumes this image runs on the same queue right
+            // after, so submission order alone makes the upload visible — no fence wait
+            // here. We only block on the fence on the NEXT upload to this panel.
             panel.uploaded_tensor = &tensor;
             return true;
         }
