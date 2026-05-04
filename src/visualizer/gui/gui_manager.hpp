@@ -153,6 +153,12 @@ namespace lfs::vis {
                                           std::uint64_t generation);
             void clearVulkanSplitRightImage();
 
+            // Splat depth -> R32_SFLOAT external image for the depth-blit pass to sample.
+            void setVulkanDepthBlitImage(std::shared_ptr<const lfs::core::Tensor> depth,
+                                         glm::ivec2 size,
+                                         std::uint64_t generation);
+            void clearVulkanDepthBlitImage();
+
             // Used by native panel wrappers
             void renderSelectionOverlays(const UIContext& ctx);
             void renderViewportDecorations();
@@ -167,6 +173,8 @@ namespace lfs::vis {
             void resetVulkanSceneInterop();
             void prepareVulkanSplitRightInterop(VulkanContext& context);
             void resetVulkanSplitRightInterop();
+            void prepareVulkanDepthBlitInterop(VulkanContext& context);
+            void resetVulkanDepthBlitInterop();
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();
@@ -278,6 +286,17 @@ namespace lfs::vis {
             VkImageLayout vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t vulkan_split_right_external_image_generation_ = 0;
             bool vulkan_split_right_interop_disabled_ = false;
+
+            // R32_SFLOAT slot for splat depth (consumed by VulkanDepthBlitPass).
+            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_depth_blit_interop_;
+            std::shared_ptr<const lfs::core::Tensor> vulkan_depth_blit_image_;
+            std::uint64_t vulkan_depth_blit_image_generation_ = 0;
+            glm::ivec2 vulkan_depth_blit_image_size_{0, 0};
+            VkImage vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+            VkImageView vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+            VkImageLayout vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t vulkan_depth_blit_external_image_generation_ = 0;
+            bool vulkan_depth_blit_interop_disabled_ = false;
             bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
 

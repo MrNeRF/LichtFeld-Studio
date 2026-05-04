@@ -1176,6 +1176,20 @@ namespace lfs::vis {
             } else {
                 gui_manager_->clearVulkanSplitRightImage();
             }
+
+            // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
+            const auto mesh_frame = rendering_manager_->getVulkanMeshFrame();
+            if (mesh_frame.depth_blit.depth && mesh_frame.depth_blit.depth->is_valid() &&
+                mesh_frame.depth_blit.depth->ndim() == 3 &&
+                mesh_frame.depth_blit.depth->size(0) == 1) {
+                const auto& d = *mesh_frame.depth_blit.depth;
+                gui_manager_->setVulkanDepthBlitImage(
+                    mesh_frame.depth_blit.depth,
+                    glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
+                    vulkan_frame.image_generation);
+            } else {
+                gui_manager_->clearVulkanDepthBlitImage();
+            }
         }
         if (gui_manager_) {
             LOG_TIMER("VisualizerImpl::render.gui_render");

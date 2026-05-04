@@ -159,6 +159,8 @@ namespace lfs::rendering {
             switch (format) {
             case CudaVulkanImageFormat::Rgba8Unorm:
                 return cudaCreateChannelDesc(8, 8, 8, 8, cudaChannelFormatKindUnsigned);
+            case CudaVulkanImageFormat::R32Sfloat:
+                return cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
             }
             return {};
         }
@@ -167,12 +169,15 @@ namespace lfs::rendering {
             switch (format) {
             case CudaVulkanImageFormat::Rgba8Unorm:
                 return "RGBA8_UNORM";
+            case CudaVulkanImageFormat::R32Sfloat:
+                return "R32_SFLOAT";
             }
             return "unknown";
         }
 
         [[nodiscard]] bool formatSupported(const CudaVulkanImageFormat format) {
-            return format == CudaVulkanImageFormat::Rgba8Unorm;
+            return format == CudaVulkanImageFormat::Rgba8Unorm ||
+                   format == CudaVulkanImageFormat::R32Sfloat;
         }
 
         struct PreparedCudaImageTensor {
@@ -253,6 +258,14 @@ namespace lfs::rendering {
             int channels,
             CudaVulkanTensorLayout layout,
             CudaVulkanTensorElementType element_type,
+            const cudaStream_t stream);
+        [[nodiscard]] cudaError_t launchCudaVulkanCopyTensorToSurfaceR32f(
+            cudaSurfaceObject_t surface,
+            const float* source,
+            std::uint32_t width,
+            std::uint32_t height,
+            int channels,
+            CudaVulkanTensorLayout layout,
             const cudaStream_t stream);
     } // namespace detail
 
@@ -480,15 +493,30 @@ namespace lfs::rendering {
         }
 
         lfs::core::waitForCUDAStream(stream, upload_source_.stream());
-        const cudaError_t status = detail::launchCudaVulkanCopyTensorToSurface(
-            surface_,
-            data,
-            extent_.width,
-            extent_.height,
-            prepared.channels,
-            prepared.layout,
-            prepared.element_type,
-            stream);
+        cudaError_t status = cudaSuccess;
+        if (format_ == CudaVulkanImageFormat::R32Sfloat) {
+            if (prepared.element_type != detail::CudaVulkanTensorElementType::Float32) {
+                return fail("CUDA/Vulkan R32_SFLOAT surface requires a float tensor");
+            }
+            status = detail::launchCudaVulkanCopyTensorToSurfaceR32f(
+                surface_,
+                static_cast<const float*>(data),
+                extent_.width,
+                extent_.height,
+                prepared.channels,
+                prepared.layout,
+                stream);
+        } else {
+            status = detail::launchCudaVulkanCopyTensorToSurface(
+                surface_,
+                data,
+                extent_.width,
+                extent_.height,
+                prepared.channels,
+                prepared.layout,
+                prepared.element_type,
+                stream);
+        }
         return failCuda("copy tensor to CUDA surface", status);
     }
 

@@ -62,6 +62,9 @@ namespace lfs::vis {
 
         const lfs::core::Tensor* uploaded_tensor = nullptr;
         std::uint64_t uploaded_generation = 0;
+        // Last view bound to the descriptor (either our staging-uploaded view or an
+        // external interop view). Tracked so we know when to rewrite the descriptor.
+        VkImageView bound_view = VK_NULL_HANDLE;
 
         // Persistent staging path: keep the upload buffer + transfer cmd between
         // frames so per-frame depth uploads don't allocate / map / submit-and-wait.
@@ -468,19 +471,8 @@ namespace lfs::vis {
             }
             image_width = w;
             image_height = h;
-
-            VkDescriptorImageInfo di{};
-            di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            di.imageView = image_view;
-            di.sampler = sampler;
-            VkWriteDescriptorSet w_desc{};
-            w_desc.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w_desc.dstSet = desc_set;
-            w_desc.dstBinding = 0;
-            w_desc.descriptorCount = 1;
-            w_desc.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            w_desc.pImageInfo = &di;
-            vkUpdateDescriptorSets(device, 1, &w_desc, 0, nullptr);
+            // Force a rebind: the previous bound view now points at destroyed memory.
+            bound_view = VK_NULL_HANDLE;
             return true;
         }
 
@@ -582,20 +574,50 @@ namespace lfs::vis {
             return true;
         }
 
+        void rebindDescriptor(VkImageView view) {
+            if (view == VK_NULL_HANDLE || view == bound_view) {
+                return;
+            }
+            VkDescriptorImageInfo di{};
+            di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            di.imageView = view;
+            di.sampler = sampler;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = desc_set;
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &di;
+            vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+            bound_view = view;
+        }
+
         void prepare(const VulkanDepthBlitParams& params) {
+            // Interop fast-path: gui_manager already CUDA-copied the depth tensor into
+            // an external Vulkan image and transitioned it to SHADER_READ_ONLY. Just
+            // bind that view directly.
+            if (params.external_image_view != VK_NULL_HANDLE) {
+                rebindDescriptor(params.external_image_view);
+                return;
+            }
             if (!params.depth || !params.depth->is_valid()) {
                 if (image != VK_NULL_HANDLE)
                     destroyImage();
+                bound_view = VK_NULL_HANDLE;
                 return;
             }
             if (params.depth.get() == uploaded_tensor && image != VK_NULL_HANDLE) {
+                rebindDescriptor(image_view);
                 return;
             }
-            uploadDepth(*params.depth);
+            if (uploadDepth(*params.depth)) {
+                rebindDescriptor(image_view);
+            }
         }
 
         void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanDepthBlitParams& params) {
-            if (pipeline == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE ||
+            if (pipeline == VK_NULL_HANDLE || bound_view == VK_NULL_HANDLE ||
                 screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
@@ -659,7 +681,7 @@ namespace lfs::vis {
     }
 
     bool VulkanDepthBlitPass::hasDepth() const {
-        return impl_ && impl_->image != VK_NULL_HANDLE;
+        return impl_ && impl_->bound_view != VK_NULL_HANDLE;
     }
 
 } // namespace lfs::vis

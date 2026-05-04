@@ -30,6 +30,7 @@ namespace lfs::rendering {
 
     enum class CudaVulkanImageFormat : std::uint8_t {
         Rgba8Unorm,
+        R32Sfloat,
     };
 
     struct CudaVulkanExternalImageImport {

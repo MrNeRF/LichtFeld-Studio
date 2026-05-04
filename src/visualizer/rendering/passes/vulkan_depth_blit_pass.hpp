@@ -22,6 +22,9 @@ namespace lfs::vis {
         bool flip_y = false;
         float near_plane = 0.1f;
         float far_plane = 1000.0f;
+        // When set, the pass binds this VkImageView (a CUDA/Vulkan interop slot owned
+        // by gui_manager) and skips the staging upload path.
+        VkImageView external_image_view = VK_NULL_HANDLE;
     };
 
     // Writes a sampled depth value into the framebuffer's depth attachment via

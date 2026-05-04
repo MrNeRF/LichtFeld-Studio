@@ -79,6 +79,25 @@ namespace lfs::rendering::detail {
             surf2Dwrite(rgba, surface, static_cast<int>(x * sizeof(uchar4)), static_cast<int>(y));
         }
 
+        __global__ void copyTensorToSurfaceR32fKernel(
+            cudaSurfaceObject_t surface,
+            const float* source,
+            std::uint32_t width,
+            std::uint32_t height,
+            int channels,
+            CudaVulkanTensorLayout layout) {
+            const std::uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
+            const std::uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
+            if (x >= width || y >= height) {
+                return;
+            }
+            // Read channel 0 from the source tensor regardless of CHW/HWC layout.
+            const float value = layout == CudaVulkanTensorLayout::Hwc
+                                    ? source[(static_cast<std::size_t>(y) * width + x) * channels]
+                                    : source[(static_cast<std::size_t>(y) * width + x)];
+            surf2Dwrite(value, surface, static_cast<int>(x * sizeof(float)), static_cast<int>(y));
+        }
+
     } // namespace
 
     cudaError_t launchCudaVulkanCopyTensorToSurface(
@@ -108,6 +127,28 @@ namespace lfs::rendering::detail {
             channels,
             layout,
             element_type);
+        return cudaGetLastError();
+    }
+
+    cudaError_t launchCudaVulkanCopyTensorToSurfaceR32f(
+        const cudaSurfaceObject_t surface,
+        const float* source,
+        const std::uint32_t width,
+        const std::uint32_t height,
+        const int channels,
+        const CudaVulkanTensorLayout layout,
+        const cudaStream_t stream) {
+        if (surface == 0 || source == nullptr || width == 0 || height == 0) {
+            return cudaErrorInvalidValue;
+        }
+        const dim3 block{16, 16, 1};
+        const dim3 grid{
+            (width + block.x - 1) / block.x,
+            (height + block.y - 1) / block.y,
+            1,
+        };
+        copyTensorToSurfaceR32fKernel<<<grid, block, 0, stream>>>(
+            surface, source, width, height, channels, layout);
         return cudaGetLastError();
     }
 

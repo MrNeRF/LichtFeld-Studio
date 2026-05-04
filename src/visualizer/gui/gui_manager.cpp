@@ -3569,6 +3569,30 @@ namespace lfs::vis::gui {
         vulkan_split_right_external_image_generation_ = 0;
     }
 
+    void GuiManager::setVulkanDepthBlitImage(std::shared_ptr<const lfs::core::Tensor> depth,
+                                             const glm::ivec2 size,
+                                             const std::uint64_t generation) {
+        const bool target_changed =
+            vulkan_depth_blit_image_.get() != depth.get() ||
+            vulkan_depth_blit_image_size_ != size;
+        if (target_changed) {
+            vulkan_depth_blit_interop_disabled_ = false;
+        }
+        vulkan_depth_blit_image_ = std::move(depth);
+        vulkan_depth_blit_image_generation_ = generation;
+        vulkan_depth_blit_image_size_ = size;
+    }
+
+    void GuiManager::clearVulkanDepthBlitImage() {
+        vulkan_depth_blit_image_.reset();
+        vulkan_depth_blit_image_size_ = {0, 0};
+        vulkan_depth_blit_image_generation_ = 0;
+        vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_depth_blit_external_image_generation_ = 0;
+    }
+
     void GuiManager::resetVulkanSceneInterop() {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_scene_interop_.empty()) {
@@ -3990,6 +4014,205 @@ namespace lfs::vis::gui {
 #endif
     }
 
+    void GuiManager::resetVulkanDepthBlitInterop() {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (vulkan_depth_blit_interop_.empty()) {
+            return;
+        }
+        auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+        auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        if (vulkan_context) {
+            (void)vulkan_context->waitForSubmittedFrames();
+        }
+        for (auto& target : vulkan_depth_blit_interop_) {
+            if (!target) {
+                continue;
+            }
+            if (vulkan_context) {
+                target->destroy(*vulkan_context);
+            } else {
+                target->interop.reset();
+            }
+        }
+        vulkan_depth_blit_interop_.clear();
+#else
+        vulkan_depth_blit_interop_.clear();
+#endif
+    }
+
+    void GuiManager::prepareVulkanDepthBlitInterop(VulkanContext& context) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (vulkan_depth_blit_interop_disabled_) {
+            return;
+        }
+
+        const auto fail_required_interop = [this](std::string message) -> void {
+            vulkan_depth_blit_interop_disabled_ = true;
+            resetVulkanDepthBlitInterop();
+            LOG_ERROR("Required Vulkan/CUDA depth-blit interop failed: {}", message);
+#ifndef NDEBUG
+            assert(false && "Required Vulkan/CUDA depth-blit interop failed");
+#endif
+            throw std::runtime_error(std::move(message));
+        };
+
+        if (!vulkan_depth_blit_image_ ||
+            !vulkan_depth_blit_image_->is_valid() ||
+            vulkan_depth_blit_image_->device() != lfs::core::Device::CUDA ||
+            vulkan_depth_blit_image_size_.x <= 0 ||
+            vulkan_depth_blit_image_size_.y <= 0) {
+            if (!vulkan_depth_blit_interop_.empty()) {
+                resetVulkanDepthBlitInterop();
+            }
+            vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+            vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+            vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            return;
+        }
+
+        const std::size_t frame_slot = context.currentFrameSlot();
+        const bool slot_array_resize_needed =
+            vulkan_depth_blit_interop_.size() != context.framesInFlight();
+
+        if (!slot_array_resize_needed && frame_slot < vulkan_depth_blit_interop_.size()) {
+            const auto& target_ptr_const = vulkan_depth_blit_interop_[frame_slot];
+            const glm::ivec2 target_size = vulkan_depth_blit_image_size_;
+            const bool recreate_needed =
+                !target_ptr_const ||
+                target_ptr_const->size != target_size ||
+                !target_ptr_const->interop.valid();
+            if (!recreate_needed &&
+                vulkan_depth_blit_image_generation_ != 0 &&
+                target_ptr_const->uploaded_source_generation == vulkan_depth_blit_image_generation_ &&
+                target_ptr_const->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                vulkan_depth_blit_external_image_ = target_ptr_const->image.image;
+                vulkan_depth_blit_external_image_view_ = target_ptr_const->image.view;
+                vulkan_depth_blit_external_image_layout_ = target_ptr_const->layout;
+                vulkan_depth_blit_external_image_generation_ = target_ptr_const->generation;
+                return;
+            }
+        }
+
+        if (!context.waitForCurrentFrameSlot()) {
+            fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
+        }
+
+        if (slot_array_resize_needed) {
+            resetVulkanDepthBlitInterop();
+            vulkan_depth_blit_interop_.resize(context.framesInFlight());
+        }
+        if (frame_slot >= vulkan_depth_blit_interop_.size()) {
+            fail_required_interop(std::format("invalid frame slot {}", frame_slot));
+        }
+        auto& target_ptr = vulkan_depth_blit_interop_[frame_slot];
+        const auto reset_frame_target = [&]() {
+            if (target_ptr) {
+                target_ptr->destroy(context);
+                target_ptr.reset();
+            }
+        };
+
+        const glm::ivec2 target_size = vulkan_depth_blit_image_size_;
+        const bool recreate =
+            !target_ptr ||
+            target_ptr->size != target_size ||
+            !target_ptr->interop.valid();
+        if (recreate) {
+            reset_frame_target();
+            auto target = std::make_unique<VulkanSceneInteropTarget>();
+            const VkExtent2D extent{
+                static_cast<std::uint32_t>(target_size.x),
+                static_cast<std::uint32_t>(target_size.y),
+            };
+            if (!context.createExternalImage(extent, VK_FORMAT_R32_SFLOAT, target->image) ||
+                !context.createExternalTimelineSemaphore(0, target->semaphore)) {
+                const std::string error = std::format("target creation failed: {}", context.lastError());
+                if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
+                    target->destroy(context);
+                }
+                fail_required_interop(error);
+            }
+            if (!context.transitionImageLayoutImmediate(target->image.image,
+                                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                const std::string error = std::format("image initialization failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+
+            const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
+            const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
+            lfs::rendering::CudaVulkanExternalImageImport image_import{
+                .memory_handle = memory_handle,
+                .allocation_size = static_cast<std::size_t>(target->image.allocation_size),
+                .extent = {.width = extent.width, .height = extent.height},
+                .format = lfs::rendering::CudaVulkanImageFormat::R32Sfloat,
+                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+            };
+            lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
+                .semaphore_handle = semaphore_handle,
+                .initial_value = 0,
+            };
+            if (!target->interop.init(image_import, semaphore_import)) {
+                const std::string error = std::format("CUDA import failed: {}", target->interop.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+            target->size = target_size;
+            target->layout = VK_IMAGE_LAYOUT_GENERAL;
+            target_ptr = std::move(target);
+            LOG_INFO("Vulkan/CUDA depth-blit interop initialized for slot {}: {}x{}",
+                     frame_slot, target_size.x, target_size.y);
+        }
+
+        auto& target = *target_ptr;
+        if (vulkan_depth_blit_image_generation_ != 0 &&
+            target.uploaded_source_generation == vulkan_depth_blit_image_generation_ &&
+            target.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            vulkan_depth_blit_external_image_ = target.image.image;
+            vulkan_depth_blit_external_image_view_ = target.image.view;
+            vulkan_depth_blit_external_image_layout_ = target.layout;
+            vulkan_depth_blit_external_image_generation_ = target.generation;
+            return;
+        }
+
+        if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        target.layout,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
+            }
+            target.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        if (!target.interop.copyTensorToSurface(*vulkan_depth_blit_image_)) {
+            fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
+        }
+        const std::uint64_t signal_value = ++target.timeline_value;
+        if (!target.interop.signal(signal_value)) {
+            fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
+        }
+        if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                    VK_IMAGE_LAYOUT_GENERAL,
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    target.semaphore.semaphore,
+                                                    signal_value,
+                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+            fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
+        }
+        target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        target.uploaded_source_generation = vulkan_depth_blit_image_generation_;
+        ++target.generation;
+        vulkan_depth_blit_external_image_ = target.image.image;
+        vulkan_depth_blit_external_image_view_ = target.image.view;
+        vulkan_depth_blit_external_image_layout_ = target.layout;
+        vulkan_depth_blit_external_image_generation_ = target.generation;
+#else
+        (void)context;
+#endif
+    }
+
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
                                                                    const std::size_t frame_slot) const {
         const bool has_viewport_layout =
@@ -4124,6 +4347,9 @@ namespace lfs::vis::gui {
             params.mesh_items = std::move(mesh_frame.items);
             params.environment = std::move(mesh_frame.environment);
             params.depth_blit = std::move(mesh_frame.depth_blit);
+            if (vulkan_depth_blit_external_image_view_ != VK_NULL_HANDLE) {
+                params.depth_blit.external_image_view = vulkan_depth_blit_external_image_view_;
+            }
             params.split_view = std::move(mesh_frame.split_view);
             // Stitch in CUDA/Vulkan interop views: left reuses the existing scene
             // interop slot; right has its own parallel slot. When set, the split-view
@@ -4741,6 +4967,7 @@ namespace lfs::vis::gui {
                 LOG_TIMER("gui_render.prepareVulkanSceneInterop");
                 prepareVulkanSceneInterop(*vulkan_context);
                 prepareVulkanSplitRightInterop(*vulkan_context);
+                prepareVulkanDepthBlitInterop(*vulkan_context);
             }
 
             VulkanContext::Frame frame{};
