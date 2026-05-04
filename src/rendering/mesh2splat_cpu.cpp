@@ -22,6 +22,10 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <tbb/blocked_range.h>
+#include <tbb/enumerable_thread_specific.h>
+#include <tbb/parallel_for.h>
+
 namespace lfs::rendering {
 
     using core::DataType;
@@ -39,7 +43,6 @@ namespace lfs::rendering {
 
         struct FaceData {
             glm::vec3 position[3]{};
-            glm::vec3 normal[3]{};
             glm::vec2 uv[3]{};
             glm::vec4 color[3]{glm::vec4(1.0f), glm::vec4(1.0f), glm::vec4(1.0f)};
             glm::vec2 ortho_uv[3]{};
@@ -47,6 +50,11 @@ namespace lfs::rendering {
             glm::vec3 face_normal{0.0f, 1.0f, 0.0f};
             glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
             glm::vec3 packed_scale{1.0f, 1.0f, 1.0e-7f};
+
+            glm::vec4 base_color{1.0f};
+            const TextureImage* albedo_texture = nullptr;
+            glm::vec4 premul_color[3]{glm::vec4(1.0f), glm::vec4(1.0f), glm::vec4(1.0f)};
+            bool uniform_color = false;
         };
 
         [[nodiscard]] bool reportProgress(const Mesh2SplatProgressCallback& progress,
@@ -65,88 +73,6 @@ namespace lfs::rendering {
                                                   const glm::vec3& v1,
                                                   const glm::vec3& v2) {
             return safeNormalize(glm::cross(v1 - v0, v2 - v0), glm::vec3(0.0f, 1.0f, 0.0f));
-        }
-
-        [[nodiscard]] glm::vec3 srgbToLinear(const glm::vec3& value) {
-            return glm::pow(glm::clamp(value, glm::vec3(0.0f), glm::vec3(1.0f)), glm::vec3(2.2f));
-        }
-
-        [[nodiscard]] glm::vec4 fetchTexel(const TextureImage& image, const int x, const int y) {
-            if (image.width <= 0 || image.height <= 0 || image.channels <= 0 || image.pixels.empty()) {
-                return glm::vec4(1.0f);
-            }
-
-            const int px = std::clamp(x, 0, image.width - 1);
-            const int py = std::clamp(y, 0, image.height - 1);
-            const size_t index =
-                (static_cast<size_t>(py) * static_cast<size_t>(image.width) + static_cast<size_t>(px)) *
-                static_cast<size_t>(image.channels);
-
-            const auto read = [&](const int channel, const float fallback) {
-                return channel < image.channels
-                           ? static_cast<float>(image.pixels[index + static_cast<size_t>(channel)]) / 255.0f
-                           : fallback;
-            };
-
-            return {
-                read(0, 1.0f),
-                read(1, read(0, 1.0f)),
-                read(2, read(0, 1.0f)),
-                read(3, 1.0f),
-            };
-        }
-
-        [[nodiscard]] glm::vec4 sampleTextureBilinear(const TextureImage& image, float u, float v) {
-            if (image.width <= 0 || image.height <= 0 || image.channels <= 0 || image.pixels.empty()) {
-                return glm::vec4(1.0f);
-            }
-
-            u -= std::floor(u);
-            v -= std::floor(v);
-
-            const float x = u * static_cast<float>(image.width - 1);
-            const float y = v * static_cast<float>(image.height - 1);
-            const int x0 = std::clamp(static_cast<int>(std::floor(x)), 0, image.width - 1);
-            const int y0 = std::clamp(static_cast<int>(std::floor(y)), 0, image.height - 1);
-            const int x1 = (x0 + 1) % image.width;
-            const int y1 = (y0 + 1) % image.height;
-            const float tx = x - static_cast<float>(x0);
-            const float ty = y - static_cast<float>(y0);
-
-            const glm::vec4 top = glm::mix(fetchTexel(image, x0, y0), fetchTexel(image, x1, y0), tx);
-            const glm::vec4 bottom = glm::mix(fetchTexel(image, x0, y1), fetchTexel(image, x1, y1), tx);
-            return glm::mix(top, bottom, ty);
-        }
-
-        [[nodiscard]] glm::vec4 materialColorAt(const MeshData& mesh,
-                                                const size_t material_index,
-                                                const glm::vec2& uv,
-                                                const glm::vec4& vertex_color) {
-            glm::vec4 material_factor(1.0f);
-            glm::vec4 color(1.0f);
-
-            if (material_index < mesh.materials.size()) {
-                const auto& material = mesh.materials[material_index];
-                material_factor = material.base_color;
-
-                if (material.has_albedo_texture() &&
-                    material.albedo_tex > 0 &&
-                    material.albedo_tex <= mesh.texture_images.size()) {
-                    const auto& image = mesh.texture_images[material.albedo_tex - 1u];
-                    color = sampleTextureBilinear(image, uv.x, uv.y);
-                    color = glm::vec4(srgbToLinear(glm::vec3(color)), color.a);
-                } else {
-                    color = vertex_color;
-                }
-            } else {
-                color = vertex_color;
-            }
-
-            const glm::vec4 albedo = color * material_factor;
-            const glm::vec3 encoded = glm::pow(
-                glm::clamp(glm::vec3(albedo), glm::vec3(0.0f), glm::vec3(1.0f)),
-                glm::vec3(1.0f / 2.2f));
-            return glm::vec4(encoded, albedo.a);
         }
 
         [[nodiscard]] glm::vec2 projectForDominantAxis(const glm::vec3& position,
@@ -248,17 +174,6 @@ namespace lfs::rendering {
             const float* vertices = vertices_cpu.ptr<float>();
             const int32_t* indices = indices_cpu.ptr<int32_t>();
 
-            Tensor normals_cpu;
-            const float* normals = nullptr;
-            if (mesh.has_normals()) {
-                normals_cpu = mesh.normals.device() == Device::CPU
-                                  ? mesh.normals.contiguous()
-                                  : mesh.normals.to(Device::CPU).contiguous();
-                if (normals_cpu.shape()[0] == vertices_cpu.shape()[0]) {
-                    normals = normals_cpu.ptr<float>();
-                }
-            }
-
             Tensor texcoords_cpu;
             const float* texcoords = nullptr;
             if (mesh.has_texcoords()) {
@@ -338,15 +253,6 @@ namespace lfs::rendering {
                     }
 
                     face.face_normal = computeFaceNormal(face.position[0], face.position[1], face.position[2]);
-                    for (int corner = 0; corner < 3; ++corner) {
-                        face.normal[corner] = normals
-                                                  ? safeNormalize(glm::vec3(
-                                                                      normals[face_indices[corner] * 3 + 0],
-                                                                      normals[face_indices[corner] * 3 + 1],
-                                                                      normals[face_indices[corner] * 3 + 2]),
-                                                                  face.face_normal)
-                                                  : face.face_normal;
-                    }
                     faces.push_back(face);
                 }
             }
@@ -354,30 +260,98 @@ namespace lfs::rendering {
             return faces;
         }
 
-        [[nodiscard]] glm::vec3 interpolate(const glm::vec3 (&values)[3], const glm::vec3& barycentric) {
-            return values[0] * barycentric.x + values[1] * barycentric.y + values[2] * barycentric.z;
-        }
-
-        [[nodiscard]] glm::vec2 interpolate(const glm::vec2 (&values)[3], const glm::vec3& barycentric) {
-            return values[0] * barycentric.x + values[1] * barycentric.y + values[2] * barycentric.z;
-        }
-
-        [[nodiscard]] glm::vec4 interpolate(const glm::vec4 (&values)[3], const glm::vec3& barycentric) {
-            return values[0] * barycentric.x + values[1] * barycentric.y + values[2] * barycentric.z;
+        void prepareMaterialBindings(const MeshData& mesh, std::vector<FaceData>& faces) {
+            for (auto& face : faces) {
+                face.base_color = glm::vec4(1.0f);
+                face.albedo_texture = nullptr;
+                if (face.material_index < mesh.materials.size()) {
+                    const auto& material = mesh.materials[face.material_index];
+                    face.base_color = material.base_color;
+                    if (material.has_albedo_texture() &&
+                        material.albedo_tex > 0 &&
+                        material.albedo_tex <= mesh.texture_images.size()) {
+                        const auto& image = mesh.texture_images[material.albedo_tex - 1u];
+                        if (image.width > 0 && image.height > 0 && image.channels > 0 &&
+                            !image.pixels.empty()) {
+                            face.albedo_texture = &image;
+                        }
+                    }
+                }
+                for (int corner = 0; corner < 3; ++corner) {
+                    face.premul_color[corner] = face.color[corner] * face.base_color;
+                }
+                face.uniform_color = face.premul_color[0] == face.premul_color[1] &&
+                                     face.premul_color[1] == face.premul_color[2];
+            }
         }
 
         struct GaussianSample {
             glm::vec3 position;
-            glm::vec4 color;
-            glm::quat rotation;
-            glm::vec3 scale;
+            glm::vec3 color_encoded;
+            std::uint32_t face_index;
         };
 
-        // Scanline-rasterize one face into the [0, res] x [0, res] orthogonal-UV grid.
-        // For each pixel sample (px+0.5, py+0.5) inside the triangle, emit one Gaussian.
-        // Mirrors master's GS+FS pipeline (one fragment = one Gaussian).
+        [[nodiscard]] inline glm::vec3 gammaEncode(glm::vec3 c) {
+            c = glm::clamp(c, glm::vec3(0.0f), glm::vec3(1.0f));
+            constexpr float inv_gamma = 1.0f / 2.2f;
+            return {std::pow(c.x, inv_gamma), std::pow(c.y, inv_gamma), std::pow(c.z, inv_gamma)};
+        }
+
+        // Bilinear sampler operating directly on raw image data with hoisted invariants.
+        // Returns gamma-encoded color (sRGB texture → linear via pow(2.2) → mul base_color → encode).
+        [[nodiscard]] inline glm::vec4 sampleAlbedoLinear(const TextureImage& img, float u, float v) {
+            u -= std::floor(u);
+            v -= std::floor(v);
+            const int w = img.width;
+            const int h = img.height;
+            const int ch = img.channels;
+            const float x = u * static_cast<float>(w - 1);
+            const float y = v * static_cast<float>(h - 1);
+            const int x0 = static_cast<int>(x);
+            const int y0 = static_cast<int>(y);
+            const int x1 = (x0 + 1) % w;
+            const int y1 = (y0 + 1) % h;
+            const float tx = x - static_cast<float>(x0);
+            const float ty = y - static_cast<float>(y0);
+            constexpr float inv255 = 1.0f / 255.0f;
+            const std::uint8_t* base = img.pixels.data();
+            const auto fetch = [&](int px, int py) -> glm::vec4 {
+                const std::size_t idx = (static_cast<std::size_t>(py) * static_cast<std::size_t>(w) +
+                                         static_cast<std::size_t>(px)) *
+                                        static_cast<std::size_t>(ch);
+                if (ch >= 4) {
+                    return {base[idx + 0] * inv255, base[idx + 1] * inv255,
+                            base[idx + 2] * inv255, base[idx + 3] * inv255};
+                }
+                if (ch == 3) {
+                    return {base[idx + 0] * inv255, base[idx + 1] * inv255,
+                            base[idx + 2] * inv255, 1.0f};
+                }
+                if (ch == 2) {
+                    const float r = base[idx + 0] * inv255;
+                    return {r, r, r, base[idx + 1] * inv255};
+                }
+                const float r = base[idx + 0] * inv255;
+                return {r, r, r, 1.0f};
+            };
+            const glm::vec4 c00 = fetch(x0, y0);
+            const glm::vec4 c10 = fetch(x1, y0);
+            const glm::vec4 c01 = fetch(x0, y1);
+            const glm::vec4 c11 = fetch(x1, y1);
+            const glm::vec4 top = glm::mix(c00, c10, tx);
+            const glm::vec4 bot = glm::mix(c01, c11, tx);
+            glm::vec4 c = glm::mix(top, bot, ty);
+            // Approximate sRGB → linear (master uses GL_SRGB8 hardware path, same exponent).
+            c = glm::vec4(glm::pow(glm::clamp(glm::vec3(c), 0.0f, 1.0f), glm::vec3(2.2f)), c.a);
+            return c;
+        }
+
+        // Scanline-rasterize one face. One Gaussian per pixel covered, matching master's
+        // GS+FS one-fragment-per-Gaussian semantics. Uses incremental edge functions
+        // (constant per-pixel deltas) and a per-face material fast path that skips the
+        // texture sample + sRGB→linear when the face is untextured + uniform-vertex-color.
         void rasterizeFace(const FaceData& face,
-                           const MeshData& mesh,
+                           const std::uint32_t face_index,
                            const int resolution,
                            std::vector<GaussianSample>& out) {
             const float res_f = static_cast<float>(resolution);
@@ -385,7 +359,11 @@ namespace lfs::rendering {
             const glm::vec2 p1 = face.ortho_uv[1] * res_f;
             const glm::vec2 p2 = face.ortho_uv[2] * res_f;
 
-            const float det = (p1.x - p0.x) * (p2.y - p0.y) - (p1.y - p0.y) * (p2.x - p0.x);
+            const float dx10 = p1.x - p0.x;
+            const float dy10 = p1.y - p0.y;
+            const float dx20 = p2.x - p0.x;
+            const float dy20 = p2.y - p0.y;
+            const float det = dx10 * dy20 - dy10 * dx20;
             if (std::abs(det) < 1.0e-10f) {
                 return;
             }
@@ -399,28 +377,65 @@ namespace lfs::rendering {
             const int y0 = std::max(0, static_cast<int>(std::floor(min_y)));
             const int x1 = std::min(resolution - 1, static_cast<int>(std::ceil(max_x)));
             const int y1 = std::min(resolution - 1, static_cast<int>(std::ceil(max_y)));
+            if (x0 > x1 || y0 > y1) {
+                return;
+            }
+
+            // Incremental edge functions: per-pixel deltas are constants.
+            const float w1_dx = dy20 * inv_det;
+            const float w1_dy = -dx20 * inv_det;
+            const float w2_dx = -dy10 * inv_det;
+            const float w2_dy = dx10 * inv_det;
+
+            const float sx0 = static_cast<float>(x0) + 0.5f - p0.x;
+            const float sy0 = static_cast<float>(y0) + 0.5f - p0.y;
+            float w1_row = sx0 * w1_dx + sy0 * w1_dy;
+            float w2_row = sx0 * w2_dx + sy0 * w2_dy;
+
+            const bool textured = face.albedo_texture != nullptr;
+            const bool uniform = face.uniform_color && !textured;
+
+            // Pre-encode the uniform color once for the whole triangle.
+            glm::vec3 uniform_encoded(0.0f);
+            if (uniform) {
+                uniform_encoded = gammaEncode(glm::vec3(face.premul_color[0]));
+            }
+
+            const std::size_t bbox_pixels = static_cast<std::size_t>(x1 - x0 + 1) *
+                                            static_cast<std::size_t>(y1 - y0 + 1);
+            if (out.capacity() - out.size() < bbox_pixels) {
+                out.reserve(out.size() + std::max(bbox_pixels, out.capacity()));
+            }
 
             for (int py = y0; py <= y1; ++py) {
-                for (int px = x0; px <= x1; ++px) {
-                    const glm::vec2 sample(static_cast<float>(px) + 0.5f,
-                                           static_cast<float>(py) + 0.5f);
-                    const float w1 = ((sample.x - p0.x) * (p2.y - p0.y) -
-                                      (sample.y - p0.y) * (p2.x - p0.x)) *
-                                     inv_det;
-                    const float w2 = ((p1.x - p0.x) * (sample.y - p0.y) -
-                                      (p1.y - p0.y) * (sample.x - p0.x)) *
-                                     inv_det;
+                float w1 = w1_row;
+                float w2 = w2_row;
+                for (int px = x0; px <= x1; ++px, w1 += w1_dx, w2 += w2_dx) {
                     const float w0 = 1.0f - w1 - w2;
                     if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) {
                         continue;
                     }
-                    const glm::vec3 bary{w0, w1, w2};
-                    const glm::vec3 position = interpolate(face.position, bary);
-                    const glm::vec2 uv = interpolate(face.uv, bary);
-                    const glm::vec4 vertex_color = interpolate(face.color, bary);
-                    const glm::vec4 color = materialColorAt(mesh, face.material_index, uv, vertex_color);
-                    out.push_back({position, color, face.rotation, face.packed_scale});
+                    const glm::vec3 position = face.position[0] * w0 +
+                                               face.position[1] * w1 +
+                                               face.position[2] * w2;
+                    glm::vec3 encoded;
+                    if (uniform) {
+                        encoded = uniform_encoded;
+                    } else if (!textured) {
+                        const glm::vec4 albedo = face.premul_color[0] * w0 +
+                                                 face.premul_color[1] * w1 +
+                                                 face.premul_color[2] * w2;
+                        encoded = gammaEncode(glm::vec3(albedo));
+                    } else {
+                        const glm::vec2 uv = face.uv[0] * w0 + face.uv[1] * w1 + face.uv[2] * w2;
+                        const glm::vec4 tex = sampleAlbedoLinear(*face.albedo_texture, uv.x, uv.y);
+                        const glm::vec4 albedo = tex * face.base_color;
+                        encoded = gammaEncode(glm::vec3(albedo));
+                    }
+                    out.push_back({position, encoded, face_index});
                 }
+                w1_row += w1_dy;
+                w2_row += w2_dy;
             }
         }
 
@@ -463,9 +478,15 @@ namespace lfs::rendering {
             return std::unexpected("Cancelled");
         }
 
-        for (auto& face : faces) {
-            finishFaceBasisAndScale(face, global_min, global_max);
-        }
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, faces.size()),
+            [&](const tbb::blocked_range<size_t>& r) {
+                for (size_t i = r.begin(); i != r.end(); ++i) {
+                    finishFaceBasisAndScale(faces[i], global_min, global_max);
+                }
+            });
+
+        prepareMaterialBindings(mesh, faces);
 
         LOG_INFO("mesh2splat: CPU rasterizer converting {} triangles "
                  "(resolution={}, bbox=[{:.2f},{:.2f},{:.2f}]-[{:.2f},{:.2f},{:.2f}])",
@@ -473,24 +494,33 @@ namespace lfs::rendering {
                  global_min.x, global_min.y, global_min.z,
                  global_max.x, global_max.y, global_max.z);
 
-        std::vector<GaussianSample> samples;
-        samples.reserve(static_cast<size_t>(options.resolution_target) *
-                        static_cast<size_t>(options.resolution_target));
+        tbb::enumerable_thread_specific<std::vector<GaussianSample>> buckets;
 
-        size_t processed_faces = 0;
-        for (const auto& face : faces) {
-            rasterizeFace(face, mesh, options.resolution_target, samples);
-            ++processed_faces;
-            if ((processed_faces & 0x3ffu) == 0u) {
-                const float pct = 0.2f + 0.6f * static_cast<float>(processed_faces) /
-                                             static_cast<float>(faces.size());
-                if (!reportProgress(progress, pct, "Rasterizing mesh")) {
-                    return std::unexpected("Cancelled");
-                }
-            }
+        if (!reportProgress(progress, 0.2f, "Rasterizing mesh")) {
+            return std::unexpected("Cancelled");
         }
 
-        const size_t gaussian_count = samples.size();
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, faces.size()),
+            [&](const tbb::blocked_range<size_t>& r) {
+                auto& b = buckets.local();
+                for (size_t i = r.begin(); i != r.end(); ++i) {
+                    rasterizeFace(faces[i], static_cast<std::uint32_t>(i),
+                                  options.resolution_target, b);
+                }
+            });
+
+        std::vector<const std::vector<GaussianSample>*> bucket_ptrs;
+        std::vector<std::size_t> bucket_offsets;
+        std::size_t gaussian_count = 0;
+        bucket_ptrs.reserve(buckets.size());
+        bucket_offsets.reserve(buckets.size());
+        for (const auto& b : buckets) {
+            bucket_ptrs.push_back(&b);
+            bucket_offsets.push_back(gaussian_count);
+            gaussian_count += b.size();
+        }
+
         if (gaussian_count == 0u) {
             return std::unexpected("Conversion produced zero gaussians");
         }
@@ -498,48 +528,80 @@ namespace lfs::rendering {
         LOG_INFO("mesh2splat: produced {} gaussians (resolution={})",
                  gaussian_count, options.resolution_target);
 
-        std::vector<float> means(gaussian_count * 3u);
-        std::vector<float> scaling_raw(gaussian_count * 3u);
-        std::vector<float> rotation_raw(gaussian_count * 4u);
-        std::vector<float> opacity_raw(gaussian_count);
-        std::vector<float> sh0(gaussian_count * 3u);
-
-        const float scale_multiplier = options.sigma / static_cast<float>(options.resolution_target);
-        const float opacity_logit = -std::log(1.0f / 0.999f - 1.0f);
-
-        for (size_t i = 0; i < gaussian_count; ++i) {
-            const auto& s = samples[i];
-            means[i * 3 + 0] = s.position.x;
-            means[i * 3 + 1] = s.position.y;
-            means[i * 3 + 2] = s.position.z;
-
-            const glm::vec3 ls = glm::max(s.scale * scale_multiplier, glm::vec3(1.0e-8f));
-            scaling_raw[i * 3 + 0] = std::log(ls.x);
-            scaling_raw[i * 3 + 1] = std::log(ls.y);
-            scaling_raw[i * 3 + 2] = std::log(ls.z);
-
-            const glm::quat r = glm::normalize(s.rotation);
-            rotation_raw[i * 4 + 0] = r.w;
-            rotation_raw[i * 4 + 1] = r.x;
-            rotation_raw[i * 4 + 2] = r.y;
-            rotation_raw[i * 4 + 3] = r.z;
-
-            opacity_raw[i] = opacity_logit;
-
-            sh0[i * 3 + 0] = (s.color.r - 0.5f) / SH_C0;
-            sh0[i * 3 + 1] = (s.color.g - 0.5f) / SH_C0;
-            sh0[i * 3 + 2] = (s.color.b - 0.5f) / SH_C0;
-        }
-
         if (!reportProgress(progress, 0.85f, "Building SplatData")) {
             return std::unexpected("Cancelled");
         }
 
-        Tensor means_tensor = Tensor::from_vector(means, {gaussian_count, 3}, Device::CPU).cuda();
-        Tensor scaling_tensor = Tensor::from_vector(scaling_raw, {gaussian_count, 3}, Device::CPU).cuda();
-        Tensor rotation_tensor = Tensor::from_vector(rotation_raw, {gaussian_count, 4}, Device::CPU).cuda();
-        Tensor opacity_tensor = Tensor::from_vector(opacity_raw, {gaussian_count, 1}, Device::CPU).cuda();
-        Tensor sh0_tensor = Tensor::from_vector(sh0, {gaussian_count, 1, 3}, Device::CPU).cuda();
+        Tensor means_tensor = Tensor::empty({gaussian_count, 3}, Device::CPU);
+        Tensor scaling_tensor = Tensor::empty({gaussian_count, 3}, Device::CPU);
+        Tensor rotation_tensor = Tensor::empty({gaussian_count, 4}, Device::CPU);
+        Tensor opacity_tensor = Tensor::empty({gaussian_count, 1}, Device::CPU);
+        Tensor sh0_tensor = Tensor::empty({gaussian_count, 1, 3}, Device::CPU);
+
+        float* means_ptr = means_tensor.ptr<float>();
+        float* scale_ptr = scaling_tensor.ptr<float>();
+        float* rot_ptr = rotation_tensor.ptr<float>();
+        float* opacity_ptr = opacity_tensor.ptr<float>();
+        float* sh0_ptr = sh0_tensor.ptr<float>();
+
+        const float scale_multiplier = options.sigma / static_cast<float>(options.resolution_target);
+        const float opacity_logit = -std::log(1.0f / 0.999f - 1.0f);
+
+        // Pre-normalize per-face quaternion once, log-scale once. Saves one normalize +
+        // three logs per pixel vs. doing it inside the per-sample loop.
+        std::vector<glm::vec4> face_rot_wxyz(faces.size());
+        std::vector<glm::vec3> face_log_scale(faces.size());
+        tbb::parallel_for(
+            tbb::blocked_range<std::size_t>(0, faces.size()),
+            [&](const tbb::blocked_range<std::size_t>& r) {
+                for (std::size_t i = r.begin(); i != r.end(); ++i) {
+                    const glm::quat q = glm::normalize(faces[i].rotation);
+                    face_rot_wxyz[i] = glm::vec4(q.w, q.x, q.y, q.z);
+                    const glm::vec3 ls = glm::max(faces[i].packed_scale * scale_multiplier,
+                                                  glm::vec3(1.0e-8f));
+                    face_log_scale[i] = glm::vec3(std::log(ls.x), std::log(ls.y), std::log(ls.z));
+                }
+            });
+
+        tbb::parallel_for(
+            tbb::blocked_range<std::size_t>(0, bucket_ptrs.size()),
+            [&](const tbb::blocked_range<std::size_t>& r) {
+                for (std::size_t b = r.begin(); b != r.end(); ++b) {
+                    const auto& bucket = *bucket_ptrs[b];
+                    const std::size_t base = bucket_offsets[b];
+                    const std::size_t n = bucket.size();
+                    for (std::size_t i = 0; i < n; ++i) {
+                        const std::size_t out = base + i;
+                        const auto& s = bucket[i];
+                        means_ptr[out * 3 + 0] = s.position.x;
+                        means_ptr[out * 3 + 1] = s.position.y;
+                        means_ptr[out * 3 + 2] = s.position.z;
+
+                        const glm::vec3& ls = face_log_scale[s.face_index];
+                        scale_ptr[out * 3 + 0] = ls.x;
+                        scale_ptr[out * 3 + 1] = ls.y;
+                        scale_ptr[out * 3 + 2] = ls.z;
+
+                        const glm::vec4& q = face_rot_wxyz[s.face_index];
+                        rot_ptr[out * 4 + 0] = q.x;
+                        rot_ptr[out * 4 + 1] = q.y;
+                        rot_ptr[out * 4 + 2] = q.z;
+                        rot_ptr[out * 4 + 3] = q.w;
+
+                        opacity_ptr[out] = opacity_logit;
+
+                        sh0_ptr[out * 3 + 0] = (s.color_encoded.x - 0.5f) / SH_C0;
+                        sh0_ptr[out * 3 + 1] = (s.color_encoded.y - 0.5f) / SH_C0;
+                        sh0_ptr[out * 3 + 2] = (s.color_encoded.z - 0.5f) / SH_C0;
+                    }
+                }
+            });
+
+        means_tensor = means_tensor.cuda();
+        scaling_tensor = scaling_tensor.cuda();
+        rotation_tensor = rotation_tensor.cuda();
+        opacity_tensor = opacity_tensor.cuda();
+        sh0_tensor = sh0_tensor.cuda();
         Tensor shn_tensor = Tensor::zeros({gaussian_count, 0, 3}, Device::CUDA);
 
         auto splat = std::make_unique<SplatData>(

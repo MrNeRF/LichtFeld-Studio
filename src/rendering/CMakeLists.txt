@@ -26,6 +26,7 @@ target_link_libraries(lfs_rendering_tensor
         glm::glm
         OpenImageIO::OpenImageIO
         spdlog::spdlog
+        TBB::tbb
 )
 
 target_include_directories(lfs_rendering_tensor
