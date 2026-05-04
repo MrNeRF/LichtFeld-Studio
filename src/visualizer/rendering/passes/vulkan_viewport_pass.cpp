@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_image_uploader.hpp"
 #include "window/vulkan_context.hpp"
@@ -174,6 +175,7 @@ namespace lfs::vis {
         VkDescriptorPool scene_descriptor_pool = VK_NULL_HANDLE;
         VulkanSceneImageUploader scene_image_uploader;
         VulkanMeshPass mesh_pass;
+        VulkanEnvironmentPass environment_pass;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -223,6 +225,11 @@ namespace lfs::vis {
             }
             if (!mesh_pass.init(context, color_format, depth_stencil_format)) {
                 LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
+                reset();
+                return false;
+            }
+            if (!environment_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
+                LOG_ERROR("Vulkan viewport pass: environment sub-pass init failed");
                 reset();
                 return false;
             }
@@ -940,6 +947,7 @@ namespace lfs::vis {
                 .items = params.mesh_items,
             };
             mesh_pass.prepare(*context, mesh_params);
+            environment_pass.prepare(params.environment);
         }
 
         void bindViewport(VkCommandBuffer command_buffer, const FramebufferRect& rect) const {
@@ -1049,6 +1057,17 @@ namespace lfs::vis {
             bindViewport(command_buffer, rect);
             bindQuad(command_buffer);
             clearViewport(command_buffer, rect, params.background_color);
+
+            // Environment background runs first so the splat scene quad and meshes draw
+            // on top. Skipped when not enabled / no map loaded.
+            if (params.environment.enabled && environment_pass.hasTexture()) {
+                environment_pass.record(command_buffer,
+                                        {static_cast<std::uint32_t>(rect.width),
+                                         static_cast<std::uint32_t>(rect.height)},
+                                        params.environment);
+                bindQuad(command_buffer);
+                bindViewport(command_buffer, rect);
+            }
 
             const bool has_scene =
                 scene_image_uploader.hasImage() &&
@@ -1189,6 +1208,7 @@ namespace lfs::vis {
                 }
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
+                environment_pass.shutdown();
                 if (scene_pipeline != VK_NULL_HANDLE)
                     vkDestroyPipeline(device, scene_pipeline, nullptr);
                 if (vignette_pipeline != VK_NULL_HANDLE)

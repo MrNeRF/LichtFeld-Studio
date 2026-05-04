@@ -3889,12 +3889,14 @@ namespace lfs::vis::gui {
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
 
-            // Pull GPU mesh frame populated by renderVulkanFrame. The vulkan_viewport_pass
-            // will rasterize these on the GPU instead of the legacy CPU rasterizer path.
+            // Pull GPU mesh / environment frame populated by renderVulkanFrame. The
+            // vulkan_viewport_pass rasterizes these on the GPU instead of the legacy
+            // CPU rasterizer / env-sample paths.
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
             params.mesh_items = std::move(mesh_frame.items);
+            params.environment = std::move(mesh_frame.environment);
         }
 
         // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay

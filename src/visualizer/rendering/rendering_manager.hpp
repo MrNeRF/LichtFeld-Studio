@@ -9,6 +9,7 @@
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
+#include "passes/vulkan_environment_pass.hpp"
 #include "passes/vulkan_mesh_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
@@ -329,6 +330,7 @@ namespace lfs::vis {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
+            lfs::vis::VulkanEnvironmentParams environment;
         };
         void setVulkanMeshFrame(VulkanMeshFrame frame) {
             std::lock_guard lock(vulkan_mesh_frame_mutex_);

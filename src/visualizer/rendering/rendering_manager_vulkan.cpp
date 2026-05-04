@@ -979,61 +979,43 @@ namespace lfs::vis {
                 item.shadow_map_resolution = settings_.mesh_shadow_resolution;
                 gpu_mesh_frame.items.push_back(item);
             }
-            setVulkanMeshFrame(std::move(gpu_mesh_frame));
 
-            // Environment background still goes through the CPU composite for now —
-            // the GPU env renderer is a separate follow-up. Mesh items are intentionally
-            // empty here so the CPU rasterizer doesn't double-render them.
-            std::vector<lfs::rendering::MeshFrameItem> mesh_items;
-
-            if (environmentBackgroundEnabled(settings_)) {
-                std::optional<lfs::rendering::GpuFrame> primary_frame;
-                bool can_composite = true;
-                if (rendered_image) {
-                    auto tensor_frame = engine_->materializeGpuFrame(rendered_image, rendered_metadata, render_size);
-                    if (tensor_frame) {
-                        primary_frame = std::move(*tensor_frame);
-                    } else {
-                        can_composite = false;
-                        LOG_ERROR("Failed to prepare tensor frame for Vulkan compositing: {}", tensor_frame.error());
-                    }
-                }
-                if (can_composite) {
-                    lfs::rendering::VideoCompositeFrameRequest composite_request{
-                        .viewport = frame_ctx.makeViewportData(),
-                        .frame_view = frame_ctx.makeFrameView(),
-                        .background_color = settings_.background_color,
-                        .environment =
-                            {.enabled = environmentBackgroundEnabled(settings_),
-                             .map_path = settings_.environment_map_path,
-                             .exposure = settings_.environment_exposure,
-                             .rotation_degrees = settings_.environment_rotation_degrees,
-                             .equirectangular = settings_.equirectangular},
-                        .meshes = std::move(mesh_items),
-                    };
-                    auto composite = engine_->renderVideoCompositeFrame(primary_frame, composite_request);
-                    if (composite) {
-                        rendered_image = std::make_shared<lfs::core::Tensor>(std::move(*composite));
-                    } else {
-                        LOG_ERROR("Failed to composite Vulkan frame: {}", composite.error());
-                    }
-                }
+            // GPU environment renderer params. Replaces the CPU
+            // renderEnvironmentBackground per-pixel sampling loop.
+            const auto frame_view = frame_ctx.makeFrameView();
+            gpu_mesh_frame.environment.enabled = environmentBackgroundEnabled(settings_);
+            gpu_mesh_frame.environment.map_path = settings_.environment_map_path;
+            gpu_mesh_frame.environment.camera_to_world = vp_data.rotation;
+            gpu_mesh_frame.environment.viewport_size =
+                glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y));
+            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
+                const auto& intr = *frame_view.intrinsics_override;
+                gpu_mesh_frame.environment.intrinsics =
+                    glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
+            } else {
+                const auto [fx, fy] =
+                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
+                gpu_mesh_frame.environment.intrinsics =
+                    glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
             }
+            gpu_mesh_frame.environment.exposure = settings_.environment_exposure;
+            gpu_mesh_frame.environment.rotation_radians =
+                glm::radians(settings_.environment_rotation_degrees);
+            gpu_mesh_frame.environment.equirectangular_view = settings_.equirectangular;
+
+            setVulkanMeshFrame(std::move(gpu_mesh_frame));
         }
         render_lock.reset();
 
-        // Mesh-only path: no splat/pc/env produced a rendered_image, but we have GPU mesh
-        // items queued. Synthesize a flat-color background tensor so the existing scene
-        // upload pipeline keeps working; the VulkanMeshPass draws on top of it.
-        if (!rendered_image && !frame_ctx.scene_state.meshes.empty()) {
-            const int bg_h = std::max(render_size.y, 1);
-            const int bg_w = std::max(render_size.x, 1);
+        // GPU env / mesh paths: when no splat / point cloud produced a rendered_image,
+        // synthesize a small flat tensor so the scene-image upload path is satisfied.
+        // The viewport pass's clearViewport + GPU env / mesh sub-passes paint over it.
+        if (!rendered_image &&
+            (!frame_ctx.scene_state.meshes.empty() || environmentBackgroundEnabled(settings_))) {
             lfs::core::Tensor bg = lfs::core::Tensor::zeros(
-                {3, static_cast<int64_t>(bg_h), static_cast<int64_t>(bg_w)},
+                {3, static_cast<int64_t>(std::max(render_size.y, 1)),
+                 static_cast<int64_t>(std::max(render_size.x, 1))},
                 lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            // RGB channels filled separately via channel-wise broadcast assignment would
-            // require ops we don't need here — flat black background is fine for Phase 1
-            // mesh preview; the mesh pass rasterizes on top with proper depth.
             rendered_image = std::make_shared<lfs::core::Tensor>(std::move(bg));
             rendered_metadata = {};
             rendered_metadata.flip_y = false;

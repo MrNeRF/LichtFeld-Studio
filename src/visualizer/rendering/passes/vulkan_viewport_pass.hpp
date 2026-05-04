@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 
 #include <array>
@@ -109,6 +110,10 @@ namespace lfs::vis {
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
         std::vector<VulkanMeshDrawItem> mesh_items;
+
+        // GPU-rendered equirect environment background. Replaces the old CPU
+        // `renderEnvironmentBackground` per-pixel sampling loop.
+        VulkanEnvironmentParams environment;
     };
 
     class LFS_VIS_API VulkanViewportPass {
