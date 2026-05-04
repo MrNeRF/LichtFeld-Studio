@@ -960,7 +960,10 @@
     "centralize_dataset": "Dataset centreren",
     "centralize_off": "Uit",
     "centralize_by_pointcloud": "Op puntenwolk",
-    "centralize_by_cameras": "Op camera's"
+    "centralize_by_cameras": "Op camera's",
+    "max_width": "Max. breedte (px)",
+    "max_width_disable": "Verkleinen uitschakelen",
+    "max_width_hint": "Bredere afbeeldingen worden verkleind. 0 schakelt de limiet uit."
   },
   "notification": {
     "cannot_open": "Kan niet openen",

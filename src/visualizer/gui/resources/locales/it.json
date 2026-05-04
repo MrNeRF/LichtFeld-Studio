@@ -962,7 +962,10 @@
     "centralize_dataset": "Centralizza dataset",
     "centralize_off": "Disattivato",
     "centralize_by_pointcloud": "Per nuvola di punti",
-    "centralize_by_cameras": "Per telecamere"
+    "centralize_by_cameras": "Per telecamere",
+    "max_width": "Larghezza max. (px)",
+    "max_width_disable": "Disattiva ridimensionamento",
+    "max_width_hint": "Le immagini più larghe vengono ridimensionate. 0 disattiva il limite."
   },
   "notification": {
     "cannot_open": "Impossibile aprire",

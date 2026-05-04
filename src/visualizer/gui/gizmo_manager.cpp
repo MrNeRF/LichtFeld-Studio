@@ -657,7 +657,7 @@ namespace lfs::vis::gui {
                                                                      : glm::vec3(0.0f)));
         glm::mat4 transform_gizmo_matrix(1.0f);
         transform_gizmo_matrix[3] = glm::vec4(transform_gizmo_position, 1.0f);
-        if (!is_multi_selection && !use_world_space) {
+        if (!is_multi_selection) {
             const glm::mat3 rotation_scale(first_node ? scene_coords::nodeVisualizerWorldTransform(scene, first_node->id)
                                                       : glm::mat4(1.0f));
             transform_gizmo_matrix[0] = glm::vec4(rotation_scale[0], 0.0f);

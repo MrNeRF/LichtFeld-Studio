@@ -30,6 +30,7 @@
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
 #include <SDL3/SDL_events.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -573,9 +574,46 @@ namespace lfs::vis {
             info.width = viewport_.windowSize.x;
             info.height = viewport_.windowSize.y;
             info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+            info.orthographic = settings.orthographic;
+            info.ortho_scale = settings.ortho_scale;
             return info;
         });
         callback_cleanup_.add([] { vis::set_view_callback(nullptr); });
+
+        vis::set_view_for_panel_callback([this](const vis::SplitViewPanelId panel) -> std::optional<vis::ViewInfo> {
+            if (!rendering_manager_)
+                return std::nullopt;
+
+            const auto& settings = rendering_manager_->getSettings();
+            const Viewport& vp = rendering_manager_->resolvePanelViewport(viewport_, panel);
+            const auto R = vp.getRotationMatrix();
+            const auto T = vp.getTranslation();
+
+            vis::ViewInfo info;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    info.rotation[i * 3 + j] = R[j][i];
+            info.translation = {T.x, T.y, T.z};
+            const auto P = vp.camera.getPivot();
+            info.pivot = {P.x, P.y, P.z};
+
+            const int total_width = viewport_.windowSize.x;
+            int panel_width = total_width;
+            if (rendering_manager_->isSplitViewActive() && total_width > 0) {
+                const float split_pos = std::clamp(settings.split_position, 0.0f, 1.0f);
+                const int divider = static_cast<int>(static_cast<float>(total_width) * split_pos);
+                panel_width = (panel == vis::SplitViewPanelId::Left)
+                                  ? std::max(1, divider)
+                                  : std::max(1, total_width - divider);
+            }
+            info.width = panel_width;
+            info.height = viewport_.windowSize.y;
+            info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+            info.orthographic = settings.orthographic;
+            info.ortho_scale = settings.ortho_scale;
+            return info;
+        });
+        callback_cleanup_.add([] { vis::set_view_for_panel_callback(nullptr); });
 
         vis::set_set_view_callback([this](const vis::SetViewParams& params) {
             const glm::vec3 eye(params.eye[0], params.eye[1], params.eye[2]);
@@ -596,6 +634,30 @@ namespace lfs::vis {
                 rendering_manager_->markDirty(DirtyFlag::CAMERA);
         });
         callback_cleanup_.add([] { vis::set_set_view_callback(nullptr); });
+
+        vis::set_set_view_for_panel_callback([this](const vis::SplitViewPanelId panel,
+                                                    const vis::SetViewParams& params) {
+            if (!rendering_manager_)
+                return;
+
+            const glm::vec3 eye(params.eye[0], params.eye[1], params.eye[2]);
+            const glm::vec3 target(params.target[0], params.target[1], params.target[2]);
+            const glm::vec3 up(params.up[0], params.up[1], params.up[2]);
+
+            const auto rotation = buildValidatedViewRotation(eye, target, up);
+            if (!rotation) {
+                LOG_WARN("Ignoring set_view request with degenerate or non-finite eye/target/up vectors");
+                return;
+            }
+
+            Viewport& vp = rendering_manager_->resolvePanelViewport(viewport_, panel);
+            vp.camera.R = *rotation;
+            vp.camera.t = eye;
+            vp.camera.setPivot(target);
+
+            rendering_manager_->markDirty(DirtyFlag::CAMERA);
+        });
+        callback_cleanup_.add([] { vis::set_set_view_for_panel_callback(nullptr); });
 
         vis::set_set_fov_callback([this](float fov_degrees) {
             if (rendering_manager_)

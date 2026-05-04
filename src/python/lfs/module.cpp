@@ -8,6 +8,7 @@
 #include <nanobind/stl/vector.h>
 
 #include <deque>
+#include <optional>
 
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
@@ -783,19 +784,22 @@ NB_MODULE(lichtfeld, m) {
         "load_file",
         [](const std::string& path, const bool is_dataset,
            const std::string& output_path, const std::string& init_path,
-           const std::string& centralize_dataset) {
+           const std::string& centralize_dataset,
+           std::optional<int> max_width) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile{
                 .path = python_utf8_path(path),
                 .is_dataset = is_dataset,
                 .output_path = python_utf8_path(output_path),
                 .init_path = python_utf8_path(init_path),
-                .centralize_dataset = centralize_dataset}
+                .centralize_dataset = centralize_dataset,
+                .max_width = max_width}
                 .emit();
         },
         nb::arg("path"), nb::arg("is_dataset") = false,
         nb::arg("output_path") = "", nb::arg("init_path") = "",
         nb::arg("centralize_dataset") = "off",
+        nb::arg("max_width") = nb::none(),
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

@@ -24,6 +24,8 @@ namespace lfs::vis {
         int width;
         int height;
         float fov;
+        bool orthographic = false;
+        float ortho_scale = 100.0f;
     };
 
     struct SetViewParams {
@@ -33,6 +35,7 @@ namespace lfs::vis {
     };
 
     using SetViewCallback = std::function<void(const SetViewParams&)>;
+    using SetViewForPanelCallback = std::function<void(SplitViewPanelId, const SetViewParams&)>;
     using SetFovCallback = std::function<void(float)>;
 
     struct ViewportRender {
@@ -41,19 +44,24 @@ namespace lfs::vis {
     };
 
     using GetViewCallback = std::function<std::optional<ViewInfo>()>;
+    using GetViewForPanelCallback = std::function<std::optional<ViewInfo>(SplitViewPanelId)>;
     using GetViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
     using CaptureViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
 
     LFS_VIS_API void set_view_callback(GetViewCallback callback);
+    LFS_VIS_API void set_view_for_panel_callback(GetViewForPanelCallback callback);
     LFS_VIS_API void set_viewport_render_callback(GetViewportRenderCallback callback);
     LFS_VIS_API void set_capture_viewport_render_callback(CaptureViewportRenderCallback callback);
     [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_current_view_info();
+    [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_view_info_for_panel(SplitViewPanelId panel);
     [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> get_viewport_render();
     [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> capture_viewport_render();
 
     LFS_VIS_API void set_set_view_callback(SetViewCallback callback);
+    LFS_VIS_API void set_set_view_for_panel_callback(SetViewForPanelCallback callback);
     LFS_VIS_API void set_set_fov_callback(SetFovCallback callback);
     LFS_VIS_API void apply_set_view(const SetViewParams& params);
+    LFS_VIS_API void apply_set_view_for_panel(SplitViewPanelId panel, const SetViewParams& params);
     LFS_VIS_API void apply_set_fov(float fov_degrees);
 
     struct RenderSettingsProxy {

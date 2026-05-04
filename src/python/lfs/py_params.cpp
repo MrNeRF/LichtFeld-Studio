@@ -403,7 +403,7 @@ namespace lfs::python {
             [](const DatasetConfig& c) { return c.test_every; });
 
         add_int(
-            "max_width", "Max Width", 0, 0, 65535, "Maximum image width; 0 disables the cap", false,
+            "max_width", "Max Width", 3840, 0, 65535, "Maximum image width; 0 disables the cap", false,
             [](const DatasetConfig& c) { return c.max_width; },
             [](DatasetConfig& c, int v) { c.max_width = v; });
 

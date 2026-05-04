@@ -963,7 +963,10 @@
     "centralize_dataset": "데이터셋 중앙 정렬",
     "centralize_off": "끄기",
     "centralize_by_pointcloud": "포인트 클라우드 기준",
-    "centralize_by_cameras": "카메라 기준"
+    "centralize_by_cameras": "카메라 기준",
+    "max_width": "최대 너비 (px)",
+    "max_width_disable": "다운스케일링 비활성화",
+    "max_width_hint": "이보다 넓은 이미지는 축소됩니다. 0이면 제한 없음."
   },
   "notification": {
     "cannot_open": "열 수 없음",

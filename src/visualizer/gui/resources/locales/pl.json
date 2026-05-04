@@ -963,7 +963,10 @@
     "centralize_dataset": "Wyśrodkuj zbiór danych",
     "centralize_off": "Wyłączone",
     "centralize_by_pointcloud": "Według chmury punktów",
-    "centralize_by_cameras": "Według kamer"
+    "centralize_by_cameras": "Według kamer",
+    "max_width": "Maks. szerokość (px)",
+    "max_width_disable": "Wyłącz skalowanie",
+    "max_width_hint": "Szersze obrazy są zmniejszane. 0 wyłącza limit."
   },
   "notification": {
     "cannot_open": "Nie można otworzyć",

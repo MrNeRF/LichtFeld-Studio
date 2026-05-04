@@ -532,6 +532,8 @@ namespace lfs::vis::gui {
                 params.init_path = lfs::core::path_to_utf8(cmd.init_path);
             if (!cmd.centralize_dataset.empty())
                 params.dataset.centralize_dataset = cmd.centralize_dataset;
+            if (cmd.max_width.has_value() && *cmd.max_width >= 0)
+                params.dataset.max_width = *cmd.max_width;
             startAsyncImport(cmd.path, params);
         });
 

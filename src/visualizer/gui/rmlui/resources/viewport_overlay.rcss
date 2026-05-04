@@ -23,14 +23,14 @@ body {
 
 .toolbar-container {
     display: flex;
-    padding: 6dp;
-    gap: 4dp;
+    padding: 0;
+    gap: 0;
 }
 
 .subtoolbar-container {
     display: flex;
-    padding: 4dp;
-    gap: 3dp;
+    padding: 0;
+    gap: 0;
 }
 
 .toolbar-vertical {

@@ -481,8 +481,26 @@ namespace lfs::python {
         return result;
     }
 
-    std::optional<PyCameraState> get_camera() {
-        const auto info = vis::get_current_view_info();
+    namespace {
+        [[nodiscard]] std::optional<vis::SplitViewPanelId> parsePanelArg(const std::string& panel) {
+            if (panel.empty() || panel == "main")
+                return std::nullopt;
+            if (panel == "left")
+                return vis::SplitViewPanelId::Left;
+            if (panel == "right")
+                return vis::SplitViewPanelId::Right;
+            throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
+        }
+
+        [[nodiscard]] std::optional<vis::ViewInfo> viewInfoForPanelArg(const std::string& panel) {
+            const auto panel_id = parsePanelArg(panel);
+            return panel_id ? vis::get_view_info_for_panel(*panel_id)
+                            : vis::get_current_view_info();
+        }
+    } // namespace
+
+    std::optional<PyCameraState> get_camera(const std::string& panel) {
+        const auto info = viewInfoForPanelArg(panel);
         if (!info)
             return std::nullopt;
 
@@ -502,13 +520,17 @@ namespace lfs::python {
 
     void set_camera(const std::tuple<float, float, float>& eye,
                     const std::tuple<float, float, float>& target,
-                    const std::tuple<float, float, float>& up) {
+                    const std::tuple<float, float, float>& up,
+                    const std::string& panel) {
         const vis::SetViewParams params{
             .eye = {std::get<0>(eye), std::get<1>(eye), std::get<2>(eye)},
             .target = {std::get<0>(target), std::get<1>(target), std::get<2>(target)},
             .up = {std::get<0>(up), std::get<1>(up), std::get<2>(up)},
         };
-        vis::apply_set_view(params);
+        if (const auto panel_id = parsePanelArg(panel))
+            vis::apply_set_view_for_panel(*panel_id, params);
+        else
+            vis::apply_set_view(params);
     }
 
     void set_camera_fov(float fov_degrees) {
@@ -782,8 +804,8 @@ namespace lfs::python {
         return PyTensor(std::move(screen_positions), true);
     }
 
-    std::optional<PyViewInfo> get_current_view() {
-        const auto view_info = vis::get_current_view_info();
+    std::optional<PyViewInfo> get_current_view(const std::string& panel) {
+        const auto view_info = viewInfoForPanelArg(panel);
         if (!view_info)
             return std::nullopt;
 
@@ -800,6 +822,8 @@ namespace lfs::python {
             .height = view_info->height,
             .fov_x = vertical_fov_to_horizontal_fov(view_info->fov, view_info->width, view_info->height),
             .fov_y = view_info->fov,
+            .orthographic = view_info->orthographic,
+            .ortho_scale = view_info->ortho_scale,
         };
     }
 
@@ -836,13 +860,19 @@ namespace lfs::python {
             .def_ro("height", &PyViewInfo::height)
             .def_ro("fov_x", &PyViewInfo::fov_x)
             .def_ro("fov_y", &PyViewInfo::fov_y)
+            .def_ro("orthographic", &PyViewInfo::orthographic)
+            .def_ro("ortho_scale", &PyViewInfo::ortho_scale)
             .def_prop_ro(
-                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+                "ortho_view_extent_world", [](const PyViewInfo& self) -> float {
+                    if (!self.orthographic || self.ortho_scale <= 0.0f)
+                        return 0.0f;
+                    return static_cast<float>(self.height) / self.ortho_scale;
+                },
+                "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
+            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
-                    return {acc(0), acc(1), acc(2)};
-                },
-                "Camera position as (x, y, z) tuple");
+                    return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");
 
         nb::class_<PyViewportRender>(m, "ViewportRender")
             .def_ro("image", &PyViewportRender::image)
@@ -887,7 +917,15 @@ Returns:
     Tensor [N, 2] with (x, y) pixel coordinates for each Gaussian
 )doc");
 
-        m.def("get_current_view", &get_current_view, "Get current viewport camera pose (None if not available)");
+        m.def("get_current_view", &get_current_view, nb::arg("panel") = std::string{"main"},
+              R"doc(
+Get current viewport camera pose (None if not available).
+
+Args:
+    panel: 'main' (default) returns the focused viewport, 'left'/'right' returns the
+        per-panel camera. In independent split-view mode, the right panel has its own
+        camera; otherwise both panels share the main camera.
+)doc");
 
         nb::class_<PyCameraState>(m, "CameraState")
             .def_ro("eye", &PyCameraState::eye)
@@ -895,13 +933,29 @@ Returns:
             .def_ro("up", &PyCameraState::up)
             .def_ro("fov", &PyCameraState::fov);
 
-        m.def("get_camera", &get_camera,
-              "Get current viewport camera state (eye, target, up, fov) or None if unavailable");
+        m.def("get_camera", &get_camera, nb::arg("panel") = std::string{"main"},
+              R"doc(
+Get current viewport camera state (eye, target, up, fov) or None if unavailable.
+
+Args:
+    panel: 'main' (default), 'left', or 'right'. 'left'/'right' return the per-panel
+        camera in independent split-view mode; otherwise both panels share the main camera.
+)doc");
 
         m.def("set_camera", &set_camera,
               nb::arg("eye"), nb::arg("target"),
               nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
-              "Move the viewport camera to look from eye toward target");
+              nb::arg("panel") = std::string{"main"},
+              R"doc(
+Move the viewport camera to look from eye toward target.
+
+Args:
+    eye: camera position (x, y, z).
+    target: look-at target (x, y, z).
+    up: world up vector (default (0, 1, 0)).
+    panel: 'main' (default), 'left', or 'right'. In independent split-view mode the right
+        panel can be moved independently; otherwise this falls back to the main camera.
+)doc");
 
         m.def("set_camera_fov", &set_camera_fov,
               nb::arg("fov"),

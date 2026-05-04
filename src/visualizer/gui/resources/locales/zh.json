@@ -808,7 +808,10 @@
     "centralize_dataset": "居中数据集",
     "centralize_off": "关闭",
     "centralize_by_pointcloud": "按点云",
-    "centralize_by_cameras": "按相机"
+    "centralize_by_cameras": "按相机",
+    "max_width": "最大宽度 (px)",
+    "max_width_disable": "禁用降采样",
+    "max_width_hint": "更宽的图像将被缩小。0 表示不限制。"
   },
   "notification": {
     "cannot_open": "无法打开",

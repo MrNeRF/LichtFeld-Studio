@@ -963,7 +963,10 @@
     "centralize_dataset": "データセットを中心に配置",
     "centralize_off": "オフ",
     "centralize_by_pointcloud": "点群を基準",
-    "centralize_by_cameras": "カメラを基準"
+    "centralize_by_cameras": "カメラを基準",
+    "max_width": "最大幅 (px)",
+    "max_width_disable": "ダウンスケーリングを無効化",
+    "max_width_hint": "これより幅の大きい画像は縮小されます。0で制限なし。"
   },
   "notification": {
     "cannot_open": "開けません",

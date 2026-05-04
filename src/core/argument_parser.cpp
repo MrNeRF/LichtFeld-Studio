@@ -141,7 +141,7 @@ namespace {
                                                                 {"2", 2},
                                                                 {"4", 4},
                                                                 {"8", 8}});
-            ::args::ValueFlag<int> max_width(dataset_group, "max_width", "Max width of images in px; 0 disables the cap (default: 0)", {"max-width"});
+            ::args::ValueFlag<int> max_width(dataset_group, "max_width", "Max width of images in px; 0 disables the cap (default: 3840)", {"max-width"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
             ::args::Flag undistort(dataset_group, "undistort", "Undistort images on-the-fly before training", {"undistort"});
@@ -522,7 +522,7 @@ namespace {
                                         // Capture values, not references
                                         iterations_val = cli_option_present({"-i", "--iter"}) ? std::optional<uint32_t>(::args::get(iterations)) : std::optional<uint32_t>(),
                                         resize_factor_val = resize_factor ? std::optional<int>(::args::get(resize_factor)) : std::optional<int>(1), // default 1
-                                        max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(),
+                                        max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(3840),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         no_fs_cache_flag = static_cast<bool>(no_fs_cache),
                                         max_cap_val = cli_option_present({"--max-cap"}) ? std::optional<int>(::args::get(max_cap)) : std::optional<int>(),

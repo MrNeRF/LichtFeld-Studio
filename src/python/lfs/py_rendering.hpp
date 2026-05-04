@@ -8,7 +8,9 @@
 #include "visualizer/ipc/view_context.hpp"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <optional>
+#include <string>
 #include <tuple>
 
 namespace nb = nanobind;
@@ -26,6 +28,8 @@ namespace lfs::python {
         int height;
         float fov_x;
         float fov_y;
+        bool orthographic;
+        float ortho_scale;
     };
 
     struct PyViewportRender {
@@ -40,10 +44,11 @@ namespace lfs::python {
         float fov;
     };
 
-    [[nodiscard]] std::optional<PyCameraState> get_camera();
+    [[nodiscard]] std::optional<PyCameraState> get_camera(const std::string& panel = "main");
     void set_camera(const std::tuple<float, float, float>& eye,
                     const std::tuple<float, float, float>& target,
-                    const std::tuple<float, float, float>& up);
+                    const std::tuple<float, float, float>& up,
+                    const std::string& panel = "main");
     void set_camera_fov(float fov_degrees);
 
     [[nodiscard]] std::optional<PyViewportRender> get_viewport_render();
@@ -57,7 +62,7 @@ namespace lfs::python {
     [[nodiscard]] std::optional<PyTensor> compute_screen_positions(const PyTensor& rotation, const PyTensor& translation,
                                                                    int width, int height, float fov_degrees = 60.0f);
 
-    [[nodiscard]] std::optional<PyViewInfo> get_current_view();
+    [[nodiscard]] std::optional<PyViewInfo> get_current_view(const std::string& panel = "main");
 
     [[nodiscard]] std::tuple<PyTensor, PyTensor> look_at(
         const std::tuple<float, float, float>& eye, const std::tuple<float, float, float>& target,

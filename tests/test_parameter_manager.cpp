@@ -158,7 +158,7 @@ namespace {
         EXPECT_TRUE(dataset.output_path.empty());
         EXPECT_EQ(dataset.images, "images");
         EXPECT_EQ(dataset.resize_factor, -1);
-        EXPECT_EQ(dataset.max_width, 0);
+        EXPECT_EQ(dataset.max_width, 3840);
         EXPECT_TRUE(dataset.loading_params.use_cpu_memory);
     }
 

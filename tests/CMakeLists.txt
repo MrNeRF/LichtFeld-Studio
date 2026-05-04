@@ -210,6 +210,7 @@ set(TEST_FILES
     test_mcp_app_utils.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
     test_video_color_convert.cpp

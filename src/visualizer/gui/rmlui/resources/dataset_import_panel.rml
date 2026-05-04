@@ -89,6 +89,20 @@
       </div>
     </div>
 
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.max_width</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="max_width_str" />
+          <label class="impdlg-checkbox-label">
+            <input type="checkbox" data-checked="max_width_disabled" />
+            <span class="text-muted">@tr:load_dataset_popup.max_width_disable</span>
+          </label>
+        </div>
+        <span class="impdlg-meta text-muted">@tr:load_dataset_popup.max_width_hint</span>
+      </div>
+    </div>
+
     <span class="impdlg-note text-muted">@tr:load_dataset_popup.help_text</span>
 
     <div class="impdlg-buttons">
