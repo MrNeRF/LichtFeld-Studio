@@ -91,6 +91,169 @@ namespace lfs::vis {
             return panels;
         }
 
+        // CPU split-view composite kept ONLY for capture/screenshot — runs lazily on
+        // demand when captureViewportImage() is called, never per-frame. Mirrors the
+        // pixel-for-pixel result of the Vulkan split_view.frag shader so screenshots
+        // match what the user sees on screen.
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> composeSplitViewCpu(
+            const VulkanSplitViewParams& params,
+            const glm::ivec2& output_size) {
+            const auto load_panel = [](const std::shared_ptr<const lfs::core::Tensor>& image)
+                -> std::optional<std::tuple<lfs::core::Tensor, int, int, int>> {
+                if (!image || !image->is_valid() || image->ndim() != 3) {
+                    return std::nullopt;
+                }
+                const auto layout = lfs::rendering::detectImageLayout(*image);
+                if (layout == lfs::rendering::ImageLayout::Unknown) {
+                    return std::nullopt;
+                }
+                lfs::core::Tensor t = *image;
+                if (t.dtype() == lfs::core::DataType::UInt8) {
+                    t = t.to(lfs::core::DataType::Float32) / 255.0f;
+                } else if (t.dtype() != lfs::core::DataType::Float32) {
+                    t = t.to(lfs::core::DataType::Float32);
+                }
+                if (layout == lfs::rendering::ImageLayout::HWC) {
+                    t = t.permute({2, 0, 1}).contiguous();
+                }
+                t = t.cpu().contiguous();
+                const int w = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC
+                                                   ? image->size(1)
+                                                   : image->size(2));
+                const int h = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC
+                                                   ? image->size(0)
+                                                   : image->size(1));
+                const int c = static_cast<int>(layout == lfs::rendering::ImageLayout::HWC
+                                                   ? image->size(2)
+                                                   : image->size(0));
+                return std::make_tuple(std::move(t), w, h, c);
+            };
+            auto left_data = load_panel(params.left.image);
+            auto right_data = load_panel(params.right.image);
+            if (!left_data || !right_data) {
+                return {};
+            }
+
+            const int width = output_size.x;
+            const int height = output_size.y;
+            if (width <= 0 || height <= 0) {
+                return {};
+            }
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.0f);
+            for (std::size_t i = 0; i < pixel_count; ++i) {
+                output[i] = params.background.r;
+                output[pixel_count + i] = params.background.g;
+                output[2 * pixel_count + i] = params.background.b;
+            }
+
+            const auto sample = [](const lfs::core::Tensor& tensor, int w, int h,
+                                   float u, float v, int channel) {
+                const int x = std::clamp(static_cast<int>(std::lround(std::clamp(u, 0.0f, 1.0f) *
+                                                                      static_cast<float>(w - 1))),
+                                         0, w - 1);
+                const int y = std::clamp(static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) *
+                                                                      static_cast<float>(h - 1))),
+                                         0, h - 1);
+                const float* data = tensor.ptr<float>();
+                return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+            };
+
+            const int rect_x = params.content_rect.x;
+            const int rect_y = params.content_rect.y;
+            const int rect_w = std::max(params.content_rect.z, 1);
+            const int rect_h = std::max(params.content_rect.w, 1);
+            const int divider = rect_x + splitViewDividerPixel(rect_w, params.split_position);
+            const float split_x = static_cast<float>(rect_x) +
+                                  std::clamp(params.split_position, 0.0f, 1.0f) *
+                                      static_cast<float>(rect_w);
+            const float center_y = static_cast<float>(rect_y) + static_cast<float>(rect_h) * 0.5f;
+
+            constexpr glm::vec3 kDividerColor(0.29f, 0.33f, 0.42f);
+            constexpr float kMinBarWidthPx = 4.0f;
+            constexpr float kHandleHeightPx = 80.0f;
+            constexpr float kHandleWidthPx = 24.0f;
+            constexpr float kCornerRadiusPx = 6.0f;
+            constexpr float kGripSpacingPx = 10.0f;
+            constexpr float kGripWidthPx = 2.0f;
+            constexpr float kGripLengthPx = 12.0f;
+            constexpr int kGripLineCount = 2;
+
+            const auto write = [&](std::size_t idx, const glm::vec3& c) {
+                output[idx] = c.r;
+                output[pixel_count + idx] = c.g;
+                output[2 * pixel_count + idx] = c.b;
+            };
+
+            for (int y = rect_y; y < rect_y + rect_h; ++y) {
+                const float v = rect_h > 1
+                                    ? static_cast<float>(y - rect_y) / static_cast<float>(rect_h - 1)
+                                    : 0.0f;
+                for (int x = rect_x; x < rect_x + rect_w; ++x) {
+                    const float u = rect_w > 1
+                                        ? static_cast<float>(x - rect_x) / static_cast<float>(rect_w - 1)
+                                        : 0.0f;
+                    const bool use_left = x < divider;
+                    const auto& panel = use_left ? params.left : params.right;
+                    const auto& data = use_left ? *left_data : *right_data;
+                    float panel_u = u;
+                    if (panel.normalize_x_to_panel) {
+                        const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
+                        panel_u = (u - panel.start_position) / span;
+                    }
+                    const float panel_v = panel.flip_y ? 1.0f - v : v;
+                    const std::size_t idx = static_cast<std::size_t>(y) * width + x;
+                    write(idx,
+                          {sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                  panel_u, panel_v, 0),
+                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                  panel_u, panel_v, 1),
+                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                  panel_u, panel_v, 2)});
+
+                    const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
+                    if (dist_from_split < kMinBarWidthPx * 0.5f) {
+                        glm::vec3 color = kDividerColor;
+                        const float dist_from_center =
+                            std::abs(static_cast<float>(y) + 0.5f - center_y);
+                        const float handle_h = std::min(kHandleHeightPx, static_cast<float>(rect_h));
+                        const float handle_w = std::min(kHandleWidthPx, static_cast<float>(rect_w));
+                        if (dist_from_center < handle_h * 0.5f &&
+                            dist_from_split < handle_w * 0.5f) {
+                            const float corner_radius =
+                                std::min(kCornerRadiusPx, std::min(handle_w, handle_h) * 0.5f);
+                            const glm::vec2 corner_dist =
+                                glm::vec2(dist_from_split, dist_from_center) -
+                                (glm::vec2(handle_w, handle_h) * 0.5f - glm::vec2(corner_radius));
+                            if (corner_dist.x <= 0.0f || corner_dist.y <= 0.0f ||
+                                glm::length(corner_dist) <= corner_radius) {
+                                color = kDividerColor * 0.8f;
+                                const float local_y = static_cast<float>(y) + 0.5f - center_y;
+                                for (int i = -kGripLineCount; i <= kGripLineCount; ++i) {
+                                    const float line_y = static_cast<float>(i) * kGripSpacingPx;
+                                    if (std::abs(local_y - line_y) < kGripWidthPx &&
+                                        dist_from_split < kGripLengthPx * 0.5f) {
+                                        color = glm::vec3(0.9f);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        write(idx, color);
+                    }
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                              output,
+                              {static_cast<std::size_t>(3),
+                               static_cast<std::size_t>(height),
+                               static_cast<std::size_t>(width)},
+                              lfs::core::Device::CPU)
+                              .cuda();
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
         struct SplitCompositeContentRect {
             int x = 0;
             int y = 0;
@@ -787,6 +950,18 @@ namespace lfs::vis {
                 split_info_resources.split_info = *rendered_split_info;
             }
             split_view_service_.updateInfo(split_info_resources);
+
+            if (pending_split_view.enabled) {
+                viewport_artifact_service_.setLazyCapture(
+                    [params = pending_split_view, render_size]() {
+                        return composeSplitViewCpu(params, render_size);
+                    },
+                    rendered_metadata,
+                    render_size);
+            } else {
+                viewport_artifact_service_.clearViewportOutput();
+            }
+
             return {.image = nullptr,
                     .image_generation = 0,
                     .size = vulkan_viewport_image_size_,

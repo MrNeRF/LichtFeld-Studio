@@ -77,6 +77,7 @@ namespace lfs::vis {
         metadata_ = {};
         gpu_frame_.reset();
         rendered_size_ = {0, 0};
+        lazy_capture_ = {};
         invalidateCapture();
     }
 
@@ -97,6 +98,7 @@ namespace lfs::vis {
         metadata_ = makeCachedRenderMetadata(metadata);
         gpu_frame_.reset();
         rendered_size_ = rendered_size;
+        lazy_capture_ = {};
         if (viewport_output_updated) {
             invalidateCapture();
         }
@@ -106,6 +108,28 @@ namespace lfs::vis {
     void ViewportArtifactService::storeCapturedImage(std::shared_ptr<lfs::core::Tensor> image) {
         captured_image_ = std::move(image);
         captured_artifact_generation_ = captured_image_ ? artifact_generation_ : 0;
+    }
+
+    void ViewportArtifactService::setLazyCapture(LazyCaptureFn fn,
+                                                 const lfs::rendering::FrameMetadata& metadata,
+                                                 const glm::ivec2& rendered_size) {
+        metadata_ = makeCachedRenderMetadata(metadata);
+        gpu_frame_.reset();
+        rendered_size_ = rendered_size;
+        invalidateCapture();
+        lazy_capture_ = std::move(fn);
+    }
+
+    std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::resolveLazyCapture() {
+        if (!lazy_capture_) {
+            return {};
+        }
+        if (captured_image_ && captured_artifact_generation_ == artifact_generation_) {
+            return captured_image_;
+        }
+        auto image = lazy_capture_();
+        storeCapturedImage(image);
+        return image;
     }
 
     float ViewportArtifactService::sampleLinearDepthAt(

@@ -185,6 +185,10 @@ namespace lfs::vis {
             return image;
         }
 
+        if (viewport_artifact_service_.hasLazyCapture()) {
+            return viewport_artifact_service_.resolveLazyCapture();
+        }
+
         if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {
             return {};
         }
