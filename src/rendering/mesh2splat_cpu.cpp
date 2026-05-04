@@ -392,50 +392,74 @@ namespace lfs::rendering {
             float w1_row = sx0 * w1_dx + sy0 * w1_dy;
             float w2_row = sx0 * w2_dx + sy0 * w2_dy;
 
-            const bool textured = face.albedo_texture != nullptr;
-            const bool uniform = face.uniform_color && !textured;
-
-            // Pre-encode the uniform color once for the whole triangle.
-            glm::vec3 uniform_encoded(0.0f);
-            if (uniform) {
-                uniform_encoded = gammaEncode(glm::vec3(face.premul_color[0]));
-            }
-
             const std::size_t bbox_pixels = static_cast<std::size_t>(x1 - x0 + 1) *
                                             static_cast<std::size_t>(y1 - y0 + 1);
             if (out.capacity() - out.size() < bbox_pixels) {
                 out.reserve(out.size() + std::max(bbox_pixels, out.capacity()));
             }
 
-            for (int py = y0; py <= y1; ++py) {
-                float w1 = w1_row;
-                float w2 = w2_row;
-                for (int px = x0; px <= x1; ++px, w1 += w1_dx, w2 += w2_dx) {
-                    const float w0 = 1.0f - w1 - w2;
-                    if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) {
-                        continue;
+            // Manually unswitched per-face: hoists the texture/uniform/per-pixel-color
+            // decision out of the per-pixel hot loop so each variant stays branchless inside.
+            if (face.albedo_texture != nullptr) {
+                const TextureImage& tex_img = *face.albedo_texture;
+                for (int py = y0; py <= y1; ++py) {
+                    float w1 = w1_row;
+                    float w2 = w2_row;
+                    for (int px = x0; px <= x1; ++px, w1 += w1_dx, w2 += w2_dx) {
+                        const float w0 = 1.0f - w1 - w2;
+                        if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) {
+                            continue;
+                        }
+                        const glm::vec3 position = face.position[0] * w0 +
+                                                   face.position[1] * w1 +
+                                                   face.position[2] * w2;
+                        const glm::vec2 uv = face.uv[0] * w0 + face.uv[1] * w1 + face.uv[2] * w2;
+                        const glm::vec4 tex = sampleAlbedoLinear(tex_img, uv.x, uv.y);
+                        const glm::vec3 encoded = gammaEncode(glm::vec3(tex * face.base_color));
+                        out.push_back({position, encoded, face_index});
                     }
-                    const glm::vec3 position = face.position[0] * w0 +
-                                               face.position[1] * w1 +
-                                               face.position[2] * w2;
-                    glm::vec3 encoded;
-                    if (uniform) {
-                        encoded = uniform_encoded;
-                    } else if (!textured) {
+                    w1_row += w1_dy;
+                    w2_row += w2_dy;
+                }
+            } else if (face.uniform_color) {
+                const glm::vec3 uniform_encoded = gammaEncode(glm::vec3(face.premul_color[0]));
+                for (int py = y0; py <= y1; ++py) {
+                    float w1 = w1_row;
+                    float w2 = w2_row;
+                    for (int px = x0; px <= x1; ++px, w1 += w1_dx, w2 += w2_dx) {
+                        const float w0 = 1.0f - w1 - w2;
+                        if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) {
+                            continue;
+                        }
+                        const glm::vec3 position = face.position[0] * w0 +
+                                                   face.position[1] * w1 +
+                                                   face.position[2] * w2;
+                        out.push_back({position, uniform_encoded, face_index});
+                    }
+                    w1_row += w1_dy;
+                    w2_row += w2_dy;
+                }
+            } else {
+                for (int py = y0; py <= y1; ++py) {
+                    float w1 = w1_row;
+                    float w2 = w2_row;
+                    for (int px = x0; px <= x1; ++px, w1 += w1_dx, w2 += w2_dx) {
+                        const float w0 = 1.0f - w1 - w2;
+                        if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) {
+                            continue;
+                        }
+                        const glm::vec3 position = face.position[0] * w0 +
+                                                   face.position[1] * w1 +
+                                                   face.position[2] * w2;
                         const glm::vec4 albedo = face.premul_color[0] * w0 +
                                                  face.premul_color[1] * w1 +
                                                  face.premul_color[2] * w2;
-                        encoded = gammaEncode(glm::vec3(albedo));
-                    } else {
-                        const glm::vec2 uv = face.uv[0] * w0 + face.uv[1] * w1 + face.uv[2] * w2;
-                        const glm::vec4 tex = sampleAlbedoLinear(*face.albedo_texture, uv.x, uv.y);
-                        const glm::vec4 albedo = tex * face.base_color;
-                        encoded = gammaEncode(glm::vec3(albedo));
+                        const glm::vec3 encoded = gammaEncode(glm::vec3(albedo));
+                        out.push_back({position, encoded, face_index});
                     }
-                    out.push_back({position, encoded, face_index});
+                    w1_row += w1_dy;
+                    w2_row += w2_dy;
                 }
-                w1_row += w1_dy;
-                w2_row += w2_dy;
             }
         }
 
