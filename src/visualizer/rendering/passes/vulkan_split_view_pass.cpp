@@ -425,6 +425,12 @@ namespace lfs::vis {
         }
 
         void destroyPanel(PanelImage& p) {
+            // Drain any pending transfer submit so we never destroy device memory
+            // that the GPU is still reading from.
+            if (p.fence != VK_NULL_HANDLE) {
+                vkWaitForFences(device, 1, &p.fence, VK_TRUE,
+                                std::numeric_limits<std::uint64_t>::max());
+            }
             if (p.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device, p.view, nullptr);
                 p.view = VK_NULL_HANDLE;
