@@ -231,19 +231,7 @@ namespace lfs::vis::gui {
                    !parent_is_dataset;
         }
 
-        [[nodiscard]] bool isTransformHelperGroupName(const std::string& name) {
-            constexpr std::string_view suffix = "_transform";
-            return name.size() > suffix.size() && name.ends_with(suffix);
-        }
-
-        [[nodiscard]] bool isTransformHelperNode(const core::SceneNode& node) {
-            return node.type == core::NodeType::GROUP && isTransformHelperGroupName(node.name);
-        }
-
         [[nodiscard]] bool canSaveAsAsset(const core::SceneNode& node) {
-            if (isTransformHelperNode(node))
-                return false;
-
             switch (node.type) {
             case core::NodeType::SPLAT:
             case core::NodeType::POINTCLOUD:
@@ -630,11 +618,6 @@ namespace lfs::vis::gui {
         snapshots.reserve(nodes.size());
         root_ids.reserve(nodes.size());
 
-        const auto childIsTreeVisible = [&scene](const core::NodeId child_id) {
-            const auto* child = scene.getNodeById(child_id);
-            return child && !isTransformHelperNode(*child);
-        };
-
         for (const core::SceneNode* node : nodes) {
             NodeSnapshot snapshot;
             snapshot.id = node->id;
@@ -643,8 +626,7 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
-            snapshot.has_children = std::any_of(node->children.begin(), node->children.end(),
-                                                childIsTreeVisible);
+            snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.has_mask = node->type == core::NodeType::CAMERA && !node->mask_path.empty();
 
@@ -715,8 +697,6 @@ namespace lfs::vis::gui {
             return;
 
         const NodeSnapshot& snapshot = it->second;
-        if (snapshot.type == core::NodeType::GROUP && isTransformHelperGroupName(snapshot.name))
-            return;
 
         std::vector<FlatRow> child_rows;
         for (const core::NodeId child_id : snapshot.children)
@@ -757,8 +737,6 @@ namespace lfs::vis::gui {
             return;
 
         const NodeSnapshot& snapshot = it->second;
-        if (snapshot.type == core::NodeType::GROUP && isTransformHelperGroupName(snapshot.name))
-            return;
 
         rows.push_back(FlatRow{
             .id = snapshot.id,
@@ -1045,15 +1023,10 @@ namespace lfs::vis::gui {
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.delete_icon, "display", row.deletable ? "inline" : "none");
 
-        // Check if this is a transform node (GROUP node with name ending in "_transform")
-        const bool is_transform_node = (row.type == core::NodeType::GROUP) &&
-                                       isTransformHelperGroupName(row.name);
-
-        const std::string_view icon_sprite = is_transform_node ? "icon-cropbox" : typeIconSprite(row.type);
-        const std::string_view type_class = is_transform_node ? "transform" : typeClass(row.type);
+        const std::string_view icon_sprite = typeIconSprite(row.type);
         const std::string_view unicode = unicodeIcon(row.type);
-        setCachedTypeClass(slot.type_icon, type_class);
-        setCachedTypeClass(slot.unicode_icon, type_class);
+        setCachedTypeClass(slot.type_icon, typeClass(row.type));
+        setCachedTypeClass(slot.unicode_icon, typeClass(row.type));
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
@@ -1740,11 +1713,6 @@ namespace lfs::vis::gui {
                 items.push_back(makeAction(
                     tr("scene.merge_to_single_ply"),
                     prefixedAction(std::format("merge_group:{}", node_id))));
-                if (isTransformHelperNode(*node)) {
-                    items.push_back(makeAction(
-                        tr(string_keys::Transform::RESET_TRANSFORM),
-                        prefixedAction(std::format("reset_transform:{}", node_id))));
-                }
             }
 
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
@@ -1928,15 +1896,6 @@ namespace lfs::vis::gui {
             }
         } else if (kind == "add_group_root") {
             cmd::AddGroup{.name = tr("scene.new_group_name"), .parent_name = ""}.emit();
-        } else if (kind == "reset_transform" && parts.size() >= 2) {
-            core::NodeId node_id = core::NULL_NODE;
-            if (!parseNodeId(parts[1], node_id))
-                return;
-            if (const auto* node = scene->getNodeById(node_id)) {
-                if (isTransformHelperNode(*node)) {
-                    scene_manager->setNodeTransform(node->name, glm::mat4(1.0f));
-                }
-            }
         } else if ((kind == "add_cropbox" || kind == "add_ellipsoid" || kind == "save_node") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))

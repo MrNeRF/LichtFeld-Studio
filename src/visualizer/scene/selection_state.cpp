@@ -71,28 +71,12 @@ namespace lfs::vis {
         if (!node_mask_dirty_)
             return cached_node_mask_;
 
-        // A "_transform" GROUP helper is a CHILD of its data node, so the descendant-based
-        // mask in Scene::getSelectedNodeMask wouldn't cover the data node when the helper
-        // is selected. Resolve back to the parent before querying the mask.
         std::vector<std::string> names;
         names.reserve(selected_nodes_.size());
         for (const auto id : selected_nodes_) {
             const auto* node = scene.getNodeById(id);
-            if (!node)
-                continue;
-            if (node->type == core::NodeType::GROUP &&
-                node->parent_id != core::NULL_NODE) {
-                if (const auto* parent = scene.getNodeById(node->parent_id);
-                    parent &&
-                    (parent->type == core::NodeType::SPLAT ||
-                     parent->type == core::NodeType::MESH ||
-                     parent->type == core::NodeType::POINTCLOUD) &&
-                    node->name == parent->name + "_transform") {
-                    names.push_back(parent->name);
-                    continue;
-                }
-            }
-            names.push_back(node->name);
+            if (node)
+                names.push_back(node->name);
         }
 
         cached_node_mask_ = scene.getSelectedNodeMask(names);
