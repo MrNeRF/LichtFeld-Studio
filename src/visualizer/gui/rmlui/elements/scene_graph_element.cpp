@@ -630,6 +630,11 @@ namespace lfs::vis::gui {
         snapshots.reserve(nodes.size());
         root_ids.reserve(nodes.size());
 
+        const auto childIsTreeVisible = [&scene](const core::NodeId child_id) {
+            const auto* child = scene.getNodeById(child_id);
+            return child && !isTransformHelperNode(*child);
+        };
+
         for (const core::SceneNode* node : nodes) {
             NodeSnapshot snapshot;
             snapshot.id = node->id;
@@ -638,7 +643,8 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
-            snapshot.has_children = !node->children.empty();
+            snapshot.has_children = std::any_of(node->children.begin(), node->children.end(),
+                                                childIsTreeVisible);
             snapshot.training_enabled = node->training_enabled;
             snapshot.has_mask = node->type == core::NodeType::CAMERA && !node->mask_path.empty();
 
@@ -709,6 +715,9 @@ namespace lfs::vis::gui {
             return;
 
         const NodeSnapshot& snapshot = it->second;
+        if (snapshot.type == core::NodeType::GROUP && isTransformHelperGroupName(snapshot.name))
+            return;
+
         std::vector<FlatRow> child_rows;
         for (const core::NodeId child_id : snapshot.children)
             appendSnapshotRows(child_id, depth + 1, child_rows, filter_text_lower);
@@ -748,6 +757,9 @@ namespace lfs::vis::gui {
             return;
 
         const NodeSnapshot& snapshot = it->second;
+        if (snapshot.type == core::NodeType::GROUP && isTransformHelperGroupName(snapshot.name))
+            return;
+
         rows.push_back(FlatRow{
             .id = snapshot.id,
             .type = snapshot.type,

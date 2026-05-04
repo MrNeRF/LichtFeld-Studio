@@ -342,6 +342,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("gallery_label", lambda: tr("asset_manager.toolbar.view_gallery"))
         model.bind_func("list_label", lambda: tr("asset_manager.toolbar.view_list"))
         model.bind_func("import_label", lambda: tr("asset_manager.toolbar.import"))
+        model.bind_func("clean_missing_label", lambda: tr("asset_manager.toolbar.clean_missing"))
         model.bind_func("import_asset_label", lambda: tr("asset_manager.import_menu.import_asset"))
         model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
         model.bind_func("import_checkpoint_label", lambda: tr("asset_manager.import_menu.import_checkpoint"))
@@ -459,6 +460,7 @@ class AssetManagerPanel(Panel):
         model.bind_event("set_tab", self.set_tab)
         model.bind_event("set_view_mode", self.set_view_mode)
         model.bind_event("cycle_sort_mode", self.cycle_sort_mode)
+        model.bind_event("clean_missing", self.clean_missing)
         model.bind_event("toggle_asset_selection", self.toggle_asset_selection)
         model.bind_event("on_search", self.on_search)
         model.bind_event("on_import_asset", self.on_import_asset)
@@ -790,13 +792,34 @@ class AssetManagerPanel(Panel):
             "context_label": context_label,
         }
 
+    # Missing-asset entries are pruned from the index once their catalog metadata
+    # has had time to be touched without the file reappearing — distinguishes a
+    # transient unmount from genuine cleanup.
+    _STALE_ASSET_GRACE_DAYS = 7
+
     def get_filtered_assets(self) -> List[Dict[str, Any]]:
         """Return assets filtered by search query, active filter, and selections."""
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
             return []
 
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        stale_cutoff = timedelta(days=self._STALE_ASSET_GRACE_DAYS)
+        prune_ids: List[str] = []
+
         assets = []
-        for _asset_id, asset in self._asset_index.assets.items():
+        for asset_id, asset in self._asset_index.assets.items():
+            file_path = asset.get("absolute_path") or asset.get("path")
+            if not file_path or not os.path.exists(file_path):
+                modified_at = asset.get("modified_at", "")
+                try:
+                    ts = datetime.fromisoformat(modified_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if now - ts > stale_cutoff:
+                        prune_ids.append(asset_id)
+                except (ValueError, AttributeError):
+                    prune_ids.append(asset_id)
+                continue
+
             if (
                 self._selected_project_id
                 and asset.get("project_id") != self._selected_project_id
@@ -841,6 +864,11 @@ class AssetManagerPanel(Panel):
                 continue
 
             assets.append(self._format_asset_for_ui(asset))
+
+        if prune_ids:
+            for pid in prune_ids:
+                self._asset_index.delete_asset(pid)
+            self._asset_index.save()
 
         return self._sort_assets(assets)
 
@@ -2729,6 +2757,24 @@ class AssetManagerPanel(Panel):
         self._sort_mode = self.SORT_MODES[(current_index + 1) % len(self.SORT_MODES)]
         self._dirty_model("sort_mode", "sort_label", "assets")
 
+    def clean_missing(self, _handle, _ev, _args):
+        """Prune every catalog entry whose backing file is no longer on disk."""
+        if not self._asset_index or not hasattr(self._asset_index, "assets"):
+            return
+        prune_ids = [
+            asset_id
+            for asset_id, asset in self._asset_index.assets.items()
+            if not (asset.get("absolute_path") or asset.get("path"))
+            or not os.path.exists(asset.get("absolute_path") or asset.get("path"))
+        ]
+        if not prune_ids:
+            return
+        for pid in prune_ids:
+            self._asset_index.delete_asset(pid)
+        self._asset_index.save()
+        self._log_info("Pruned %d missing asset(s) from catalog", len(prune_ids))
+        self._dirty_model("assets", "asset_count")
+
     def toggle_asset_selection(self, _handle, _ev, args):
         """Toggle selection state of an asset."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
@@ -2981,7 +3027,7 @@ class AssetManagerPanel(Panel):
 
             file_path = asset.get("absolute_path") or asset.get("path")
             if not file_path or not os.path.exists(file_path):
-                _logger.warning(f"Asset file not found: {file_path}")
+                self._asset_index.delete_asset(asset_id)
                 continue
 
             try:
@@ -3270,7 +3316,7 @@ class AssetManagerPanel(Panel):
 
         file_path = asset.get("absolute_path") or asset.get("path")
         if not file_path or not os.path.exists(file_path):
-            self._log_warn("Asset file not found: %s", file_path)
+            self._asset_index.delete_asset(asset_id)
             return
 
         try:

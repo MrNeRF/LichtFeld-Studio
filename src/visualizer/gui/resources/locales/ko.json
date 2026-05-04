@@ -197,6 +197,7 @@
     "summary.total": "총계",
     "title": "에셋 매니저",
     "toolbar.import": "가져오기",
+    "toolbar.clean_missing": "정리",
     "toolbar.search_icon": "검색",
     "toolbar.search_placeholder": "에셋 검색...",
     "toolbar.sort_by": "정렬: 최근",

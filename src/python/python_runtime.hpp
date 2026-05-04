@@ -699,9 +699,13 @@ namespace lfs::python {
     // view_matrix/proj_matrix: column-major 4x4, others: float arrays
     // draw_list: opaque pointer to ImDrawList (cast by implementation)
     using HasViewportDrawHandlersCallback = bool (*)();
+    // overlay_renderer: opaque pointer to lfs::rendering::ScreenOverlayRenderer (used for the
+    // queued 2D draw commands). draw_list: ImDrawList* used only for the python transform-gizmo
+    // path (still ImGui-rendered).
     using InvokeViewportOverlayCallback = void (*)(const float* view_matrix, const float* proj_matrix,
                                                    const float* vp_pos, const float* vp_size,
                                                    const float* cam_pos, const float* cam_fwd,
+                                                   void* overlay_renderer,
                                                    void* draw_list);
 
     LFS_PYTHON_RUNTIME_API void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,
@@ -710,6 +714,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,
                                                         const float* vp_pos, const float* vp_size,
                                                         const float* cam_pos, const float* cam_fwd,
+                                                        void* overlay_renderer,
                                                         void* draw_list);
 
 } // namespace lfs::python

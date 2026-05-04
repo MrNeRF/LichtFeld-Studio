@@ -7,7 +7,9 @@
 #include "gui/gui_focus_state.hpp"
 #include "input/input_bindings.hpp"
 #include "input/key_codes.hpp"
+#include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection/selection_service.hpp"
 #include "theme/theme.hpp"
@@ -15,11 +17,30 @@
 #include <cmath>
 #include <glm/gtc/quaternion.hpp>
 #include <string>
-#include <imgui.h>
 
 namespace lfs::vis::tools {
 
     namespace {
+
+        constexpr lfs::rendering::OverlayColor kOverlayShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
+
+        [[nodiscard]] lfs::rendering::OverlayColor toOverlay(const auto& c) {
+            return {c.x, c.y, c.z, c.w};
+        }
+
+        [[nodiscard]] lfs::rendering::OverlayColor toOverlay(const auto& c, float alpha) {
+            return {c.x, c.y, c.z, alpha};
+        }
+
+        [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
+            auto* const rm = ctx.getRenderingManager();
+            if (!rm)
+                return nullptr;
+            auto* const engine = rm->getRenderingEngineIfInitialized();
+            if (!engine)
+                return nullptr;
+            return engine->getScreenOverlayRenderer();
+        }
 
         [[nodiscard]] float depthBoxHalfHeight(const ToolContext& ctx, const float half_width) {
             const auto& bounds = ctx.getViewportBounds();
@@ -165,23 +186,24 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::drawDepthFrustum(const ToolContext& ctx) const {
+        auto* const overlay = getOverlayRenderer(ctx);
+        if (!overlay || !overlay->isFrameActive())
+            return;
+
         const auto& t = theme();
         const auto& bounds = ctx.getViewportBounds();
         const float text_x = bounds.x + 10.0f;
         const float text_y = bounds.y + bounds.height - 42.0f;
         const float half_height = depthBoxHalfHeight(ctx, frustum_half_width_);
-        ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
 
         char info_text[128];
         snprintf(info_text, sizeof(info_text), "Depth Box  Near %.2f  Far %.1f  Size %.1f x %.1f",
                  depth_near_, depth_far_, frustum_half_width_ * 2.0f, half_height * 2.0f);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_x + 1.0f, text_y + 1.0f},
-                           t.overlay_shadow_u32(), info_text);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_x, text_y},
-                           t.overlay_text_u32(), info_text);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {text_x, text_y + 18.0f},
-                           t.overlay_hint_u32(),
-                           "X toggle | Alt+Scroll depth");
+        overlay->addTextWithShadow({text_x, text_y}, info_text,
+                                   toOverlay(t.overlay.text), kOverlayShadow,
+                                   t.fonts.large_size);
+        overlay->addText({text_x, text_y + 18.0f}, "X toggle | Alt+Scroll depth",
+                         toOverlay(t.overlay.text_dim, 0.78f), t.fonts.small_size);
     }
 
     void SelectionTool::syncDepthFilterRenderMode(const ToolContext& ctx) {
@@ -274,19 +296,28 @@ namespace lfs::vis::tools {
             return;
         }
 
+        auto* const overlay = getOverlayRenderer(*tool_context_);
+        if (!overlay || !overlay->isFrameActive())
+            return;
+
         auto selection_mode = lfs::vis::SelectionPreviewMode::Centers;
         const auto* const rm = tool_context_->getRenderingManager();
         if (rm) {
             selection_mode = rm->getSelectionPreviewMode();
         }
 
-        ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
         const auto& viewport_bounds = tool_context_->getViewportBounds();
-        draw_list->PushClipRect({viewport_bounds.x, viewport_bounds.y},
-                                {viewport_bounds.x + viewport_bounds.width, viewport_bounds.y + viewport_bounds.height},
-                                true);
-        const ImVec2 mouse_pos = ImGui::GetMousePos();
+        const lfs::rendering::ScreenOverlayRenderer::ScopedClipRect clip(
+            *overlay,
+            {viewport_bounds.x, viewport_bounds.y},
+            {viewport_bounds.x + viewport_bounds.width, viewport_bounds.y + viewport_bounds.height});
+
+        float mouse_x = 0.0f;
+        float mouse_y = 0.0f;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+        const glm::vec2 mp{mouse_x, mouse_y};
         const auto& t = theme();
+        const auto sel_border = toOverlay(t.palette.primary, 0.85f);
 
         const SDL_Keymod keymods = SDL_GetModState();
         int mods = 0;
@@ -302,19 +333,17 @@ namespace lfs::vis::tools {
         else if (op == SelectionOp::Remove)
             op_suffix = " -";
 
-        static char label_buf[32];
+        char label_buf[32];
         float text_offset = 15.0f;
         if (selection_mode == lfs::vis::SelectionPreviewMode::Centers) {
-            draw_list->AddCircle(mouse_pos, brush_radius_, t.selection_border_u32(), 32, 2.0f);
-            draw_list->AddCircleFilled(mouse_pos, 3.0f, t.selection_border_u32());
+            overlay->addCircle(mp, brush_radius_, sel_border, 32, 2.0f);
+            overlay->addCircleFilled(mp, 3.0f, sel_border);
             snprintf(label_buf, sizeof(label_buf), "SEL%s", op_suffix);
             text_offset = brush_radius_ + 10.0f;
         } else {
             constexpr float CROSS_SIZE = 8.0f;
-            draw_list->AddLine({mouse_pos.x - CROSS_SIZE, mouse_pos.y},
-                               {mouse_pos.x + CROSS_SIZE, mouse_pos.y}, t.selection_border_u32(), 2.0f);
-            draw_list->AddLine({mouse_pos.x, mouse_pos.y - CROSS_SIZE},
-                               {mouse_pos.x, mouse_pos.y + CROSS_SIZE}, t.selection_border_u32(), 2.0f);
+            overlay->addLine({mp.x - CROSS_SIZE, mp.y}, {mp.x + CROSS_SIZE, mp.y}, sel_border, 2.0f);
+            overlay->addLine({mp.x, mp.y - CROSS_SIZE}, {mp.x, mp.y + CROSS_SIZE}, sel_border, 2.0f);
 
             const char* mode_name = "";
             switch (selection_mode) {
@@ -327,10 +356,11 @@ namespace lfs::vis::tools {
             snprintf(label_buf, sizeof(label_buf), "%s%s", mode_name, op_suffix);
         }
 
-        const ImVec2 text_pos(mouse_pos.x + text_offset, mouse_pos.y - t.fonts.heading_size / 2.0f);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.heading_size, {text_pos.x + 1.0f, text_pos.y + 1.0f},
-                           t.overlay_shadow_u32(), label_buf);
-        draw_list->AddText(ImGui::GetFont(), t.fonts.heading_size, text_pos, t.overlay_text_u32(), label_buf);
+        const float label_size = t.fonts.large_size;
+        const glm::vec2 text_pos{mp.x + text_offset, mp.y - label_size / 2.0f};
+        overlay->addTextWithShadow(text_pos, label_buf,
+                                   toOverlay(t.overlay.text), kOverlayShadow,
+                                   label_size);
 
         if (depth_filter_enabled_) {
             drawDepthFrustum(*tool_context_);
@@ -338,12 +368,12 @@ namespace lfs::vis::tools {
 
         if (crop_filter_enabled_) {
             constexpr float LINE_SPACING = 18.0f;
-            constexpr ImU32 CROP_FILTER_COLOR = IM_COL32(100, 200, 255, 255);
-            constexpr ImU32 CROP_FILTER_WARN_COLOR = IM_COL32(255, 180, 90, 255);
+            const lfs::rendering::OverlayColor CROP_FILTER_COLOR{100.0f / 255.0f, 200.0f / 255.0f, 255.0f / 255.0f, 1.0f};
+            const lfs::rendering::OverlayColor CROP_FILTER_WARN_COLOR{255.0f / 255.0f, 180.0f / 255.0f, 90.0f / 255.0f, 1.0f};
             const float text_x = viewport_bounds.x + 10.0f;
             const float text_y = viewport_bounds.y + viewport_bounds.height - (depth_filter_enabled_ ? 70.0f : 45.0f);
             std::string crop_target = "Target: select cropbox, ellipsoid, or owning splat";
-            ImU32 target_color = CROP_FILTER_WARN_COLOR;
+            lfs::rendering::OverlayColor target_color = CROP_FILTER_WARN_COLOR;
 
             if (auto* const sm = tool_context_->getSceneManager()) {
                 std::string targets;
@@ -365,21 +395,17 @@ namespace lfs::vis::tools {
 
                 if (!targets.empty()) {
                     crop_target = targets;
-                    target_color = t.overlay_text_u32();
+                    target_color = toOverlay(t.overlay.text);
                 }
             }
 
-            draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_x + 1.0f, text_y + 1.0f},
-                               t.overlay_shadow_u32(), "Crop Filter: ON");
-            draw_list->AddText(ImGui::GetFont(), t.fonts.large_size, {text_x, text_y},
-                               CROP_FILTER_COLOR, "Crop Filter: ON");
-            draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {text_x, text_y + LINE_SPACING},
-                               target_color, crop_target.c_str());
-            draw_list->AddText(ImGui::GetFont(), t.fonts.small_size, {text_x, text_y + LINE_SPACING * 2.0f},
-                               t.overlay_hint_u32(), "Ctrl+Alt+C: toggle");
+            overlay->addTextWithShadow({text_x, text_y}, "Crop Filter: ON",
+                                       CROP_FILTER_COLOR, kOverlayShadow,
+                                       t.fonts.large_size);
+            overlay->addText({text_x, text_y + LINE_SPACING}, crop_target, target_color, t.fonts.small_size);
+            overlay->addText({text_x, text_y + LINE_SPACING * 2.0f}, "Ctrl+Alt+C: toggle",
+                             toOverlay(t.overlay.text_dim, 0.78f), t.fonts.small_size);
         }
-
-        draw_list->PopClipRect();
     }
 
 } // namespace lfs::vis::tools

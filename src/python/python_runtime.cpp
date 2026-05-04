@@ -1204,10 +1204,11 @@ namespace lfs::python {
     void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,
                                  const float* vp_pos, const float* vp_size,
                                  const float* cam_pos, const float* cam_fwd,
+                                 void* overlay_renderer,
                                  void* draw_list) {
         if (g_invoke_viewport_overlay_cb) {
             g_invoke_viewport_overlay_cb(view_matrix, proj_matrix, vp_pos, vp_size,
-                                         cam_pos, cam_fwd, draw_list);
+                                         cam_pos, cam_fwd, overlay_renderer, draw_list);
         }
     }
 

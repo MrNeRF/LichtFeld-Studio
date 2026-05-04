@@ -194,6 +194,7 @@
     "summary.total": "Totaal",
     "title": "Asset Manager",
     "toolbar.import": "Importeren",
+    "toolbar.clean_missing": "Opruimen",
     "toolbar.search_icon": "Zoeken",
     "toolbar.search_placeholder": "Zoek assets...",
     "toolbar.sort_by": "Sorteren op: Recent",

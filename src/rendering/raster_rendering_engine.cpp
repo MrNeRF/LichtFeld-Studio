@@ -15,6 +15,7 @@
 #include "point_cloud_raster.cuh"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
+#include "screen_overlay_renderer.hpp"
 #include <OpenImageIO/imageio.h>
 #include <algorithm>
 #include <array>
@@ -2240,6 +2241,14 @@ namespace lfs::rendering {
             return best_uid;
         }
 
+        void clearFrustumCache() override {}
+
+        void setFrustumImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader>, bool) override {}
+
+        ScreenOverlayRenderer* getScreenOverlayRenderer() override {
+            return &overlay_renderer_;
+        }
+
     private:
         GpuFrame cacheTensorFrame(std::shared_ptr<lfs::core::Tensor> image,
                                   const FrameMetadata& metadata,
@@ -2455,6 +2464,7 @@ namespace lfs::rendering {
         unsigned int cached_tensor_frame_id_ = 0;
         std::shared_ptr<lfs::core::Tensor> cached_tensor_frame_image_;
         FrameMetadata cached_tensor_frame_metadata_{};
+        ScreenOverlayRenderer overlay_renderer_;
     };
 
     std::unique_ptr<RenderingEngine> RenderingEngine::create() {

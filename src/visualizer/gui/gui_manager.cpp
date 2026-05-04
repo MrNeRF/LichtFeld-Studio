@@ -51,6 +51,7 @@
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
 #include "theme/theme.hpp"
@@ -331,6 +332,53 @@ namespace lfs::vis::gui {
                                                     command.p0,
                                                     command.radius,
                                                     command.color,
+                                                    command.thickness);
+                    break;
+                }
+            }
+        }
+
+        void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
+                                                lfs::rendering::RenderingEngine* engine) {
+            if (!engine) {
+                return;
+            }
+            auto* const overlay = engine->getScreenOverlayRenderer();
+            if (!overlay) {
+                return;
+            }
+            const auto commands = overlay->consumeCommands();
+            for (const auto& command : commands) {
+                switch (command.type) {
+                case lfs::rendering::OverlayCommandType::Line:
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles,
+                                           params,
+                                           command.p0,
+                                           command.p1,
+                                           command.color_premul,
+                                           command.thickness);
+                    break;
+                case lfs::rendering::OverlayCommandType::Triangle:
+                    appendScreenOverlayTriangle(params.overlay_triangles,
+                                                params,
+                                                command.p0,
+                                                command.p1,
+                                                command.p2,
+                                                command.color_premul);
+                    break;
+                case lfs::rendering::OverlayCommandType::CircleFilled:
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                             params,
+                                             command.p0,
+                                             command.radius,
+                                             command.color_premul);
+                    break;
+                case lfs::rendering::OverlayCommandType::CircleOutline:
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
+                                                    params,
+                                                    command.p0,
+                                                    command.radius,
+                                                    command.color_premul,
                                                     command.thickness);
                     break;
                 }
@@ -3611,6 +3659,10 @@ namespace lfs::vis::gui {
 
         appendLineRendererCommandOverlays(params);
 
+        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
+        }
+
         const auto& vignette = lfs::vis::theme().vignette;
         params.vignette_enabled = vignette.enabled && vignette.intensity > 0.0f;
         params.vignette_intensity = vignette.intensity;
@@ -4070,7 +4122,22 @@ namespace lfs::vis::gui {
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
         }
+
+        lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
+        if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            if (auto* const engine = rendering->getRenderingEngineIfInitialized()) {
+                overlay_renderer = engine->getScreenOverlayRenderer();
+            }
+        }
+        if (overlay_renderer) {
+            overlay_renderer->beginFrame(panel_input.screen_w, panel_input.screen_h);
+        }
+
         reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+
+        if (overlay_renderer) {
+            overlay_renderer->endFrame();
+        }
 
         rml_viewport_overlay_.render();
 
@@ -4207,7 +4274,21 @@ namespace lfs::vis::gui {
         const bool mouse_over_ui = guiFocusState().want_capture_mouse;
         if (!ui_hidden_ && !mouse_over_ui && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
             auto* rm = ctx.viewer->getRenderingManager();
-            auto* draw_list = ImGui::GetForegroundDrawList();
+            lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
+            if (rm) {
+                if (auto* const engine = rm->getRenderingEngineIfInitialized()) {
+                    overlay = engine->getScreenOverlayRenderer();
+                }
+            }
+            if (!overlay || !overlay->isFrameActive()) {
+                return;
+            }
+            const auto toCol = [](const ImVec4& c, float a) {
+                return lfs::rendering::OverlayColor{c.x, c.y, c.z, a};
+            };
+            const auto toCol4 = [](const ImVec4& c) {
+                return lfs::rendering::OverlayColor{c.x, c.y, c.z, c.w};
+            };
             const glm::ivec2 rendered_size = rm ? rm->getRenderedSize() : glm::ivec2(0);
             struct PreviewPanelContext {
                 float x = 0.0f;
@@ -4262,24 +4343,24 @@ namespace lfs::vis::gui {
                     (panel_ctx.render_height > 0)
                         ? (panel_ctx.height / static_cast<float>(panel_ctx.render_height))
                         : (1.0f / std::max(rm ? rm->getSettings().render_scale : 1.0f, 0.001f));
-                return ImVec2(panel_ctx.x + x * render_to_screen_x,
-                              panel_ctx.y + y * render_to_screen_y);
+                return glm::vec2(panel_ctx.x + x * render_to_screen_x,
+                                 panel_ctx.y + y * render_to_screen_y);
             };
             // Keep preview overlays inside the live viewport region so docked panels stay in front.
             const auto push_preview_clip = [&](const PreviewPanelContext& panel_ctx) {
-                const ImVec2 clip_min(panel_ctx.x, panel_ctx.y);
+                const glm::vec2 clip_min(panel_ctx.x, panel_ctx.y);
                 float clip_bottom = panel_ctx.y + panel_ctx.height;
                 const float bottom_dock_top = panel_layout_.bottomDockTopY();
                 if (bottom_dock_top > 0.0f) {
                     clip_bottom = std::min(clip_bottom, bottom_dock_top);
                 }
 
-                const ImVec2 clip_max(panel_ctx.x + panel_ctx.width, clip_bottom);
+                const glm::vec2 clip_max(panel_ctx.x + panel_ctx.width, clip_bottom);
                 if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y) {
                     return false;
                 }
 
-                draw_list->PushClipRect(clip_min, clip_max, true);
+                overlay->pushClipRect(clip_min, clip_max, true);
                 return true;
             };
 
@@ -4290,19 +4371,18 @@ namespace lfs::vis::gui {
                 rm->getCursorPreviewState(bx, by, br, add_mode);
                 const auto panel_ctx = resolve_preview_panel(rm->getCursorPreviewPanel());
 
-                const ImVec2 screen_pos = render_to_screen(panel_ctx, bx, by);
+                const glm::vec2 screen_pos = render_to_screen(panel_ctx, bx, by);
                 const float screen_radius =
                     (panel_ctx.render_width > 0)
                         ? br * (panel_ctx.width / static_cast<float>(panel_ctx.render_width))
                         : br;
 
-                const ImU32 brush_color = add_mode
-                                              ? toU32WithAlpha(t.palette.success, 0.8f)
-                                              : toU32WithAlpha(t.palette.error, 0.8f);
+                const auto brush_color = add_mode ? toCol(t.palette.success, 0.8f)
+                                                  : toCol(t.palette.error, 0.8f);
                 if (push_preview_clip(panel_ctx)) {
-                    draw_list->AddCircle(screen_pos, screen_radius, brush_color, 32, 2.0f);
-                    draw_list->AddCircleFilled(screen_pos, 3.0f, brush_color);
-                    draw_list->PopClipRect();
+                    overlay->addCircle(screen_pos, screen_radius, brush_color, 32, 2.0f);
+                    overlay->addCircleFilled(screen_pos, 3.0f, brush_color);
+                    overlay->popClipRect();
                 }
             }
 
@@ -4313,20 +4393,18 @@ namespace lfs::vis::gui {
                 rm->getRectPreview(rx0, ry0, rx1, ry1, add_mode);
                 const auto panel_ctx = resolve_preview_panel(rm->getRectPreviewPanel());
 
-                const ImVec2 p0 = render_to_screen(panel_ctx, rx0, ry0);
-                const ImVec2 p1 = render_to_screen(panel_ctx, rx1, ry1);
+                const glm::vec2 p0 = render_to_screen(panel_ctx, rx0, ry0);
+                const glm::vec2 p1 = render_to_screen(panel_ctx, rx1, ry1);
 
-                const ImU32 fill_color = add_mode
-                                             ? toU32WithAlpha(t.palette.success, 0.15f)
-                                             : toU32WithAlpha(t.palette.error, 0.15f);
-                const ImU32 border_color = add_mode
-                                               ? toU32WithAlpha(t.palette.success, 0.8f)
-                                               : toU32WithAlpha(t.palette.error, 0.8f);
+                const auto fill_color = add_mode ? toCol(t.palette.success, 0.15f)
+                                                 : toCol(t.palette.error, 0.15f);
+                const auto border_color = add_mode ? toCol(t.palette.success, 0.8f)
+                                                   : toCol(t.palette.error, 0.8f);
 
                 if (push_preview_clip(panel_ctx)) {
-                    draw_list->AddRectFilled(p0, p1, fill_color);
-                    draw_list->AddRect(p0, p1, border_color, 0.0f, 0, 2.0f);
-                    draw_list->PopClipRect();
+                    overlay->addRectFilled(p0, p1, fill_color);
+                    overlay->addRect(p0, p1, border_color, 2.0f);
+                    overlay->popClipRect();
                 }
             }
 
@@ -4339,20 +4417,18 @@ namespace lfs::vis::gui {
                 const auto panel_ctx = resolve_preview_panel(rm->getPolygonPreviewPanel());
 
                 if (!points.empty() || !world_points.empty()) {
-                    const ImU32 line_color = add_mode
-                                                 ? toU32WithAlpha(t.palette.success, 0.8f)
-                                                 : toU32WithAlpha(t.palette.error, 0.8f);
-                    const ImU32 fill_color = add_mode
-                                                 ? toU32WithAlpha(t.palette.success, 0.15f)
-                                                 : toU32WithAlpha(t.palette.error, 0.15f);
-                    const ImU32 vertex_color = t.polygon_vertex_u32();
-                    const ImU32 vertex_hover_color = t.polygon_vertex_hover_u32();
-                    const ImU32 close_hint_color = t.polygon_close_hint_u32();
-                    const ImU32 line_to_mouse_color = add_mode
-                                                          ? toU32WithAlpha(t.palette.success, 0.5f)
-                                                          : toU32WithAlpha(t.palette.error, 0.5f);
+                    const auto line_color = add_mode ? toCol(t.palette.success, 0.8f)
+                                                     : toCol(t.palette.error, 0.8f);
+                    const auto fill_color = add_mode ? toCol(t.palette.success, 0.15f)
+                                                     : toCol(t.palette.error, 0.15f);
+                    const auto vertex_color = toCol4(t.palette.warning);
+                    const auto vertex_hover_color = toCol4(t.palette.success);
+                    const auto close_hint_color = toCol(t.palette.success, 0.78f);
+                    const auto line_to_mouse_color = add_mode
+                                                         ? toCol(t.palette.success, 0.5f)
+                                                         : toCol(t.palette.error, 0.5f);
 
-                    std::vector<ImVec2> screen_points;
+                    std::vector<glm::vec2> screen_points;
                     if (rm->isPolygonPreviewWorldSpace()) {
                         const auto render_settings = rm->getSettings();
                         screen_points.reserve(world_points.size());
@@ -4396,23 +4472,23 @@ namespace lfs::vis::gui {
 
                     if (push_preview_clip(panel_ctx)) {
                         if (closed && screen_points.size() >= 3) {
-                            draw_list->AddConvexPolyFilled(screen_points.data(), static_cast<int>(screen_points.size()), fill_color);
+                            overlay->addConvexPolyFilled(screen_points, fill_color);
                         }
 
                         for (size_t i = 0; i + 1 < screen_points.size(); ++i) {
-                            draw_list->AddLine(screen_points[i], screen_points[i + 1], line_color, 2.0f);
+                            overlay->addLine(screen_points[i], screen_points[i + 1], line_color, 2.0f);
                         }
                         if (closed && screen_points.size() >= 3) {
-                            draw_list->AddLine(screen_points.back(), screen_points.front(), line_color, 2.0f);
+                            overlay->addLine(screen_points.back(), screen_points.front(), line_color, 2.0f);
                         }
 
-                        const ImVec2 mouse_pos =
+                        const glm::vec2 mouse_pos =
                             s_frame_input
-                                ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
-                                : ImVec2(viewport_layout_.pos.x, viewport_layout_.pos.y);
+                                ? glm::vec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
+                                : glm::vec2(viewport_layout_.pos.x, viewport_layout_.pos.y);
                         constexpr float CLOSE_THRESHOLD = 12.0f;
                         constexpr float VERTEX_RADIUS = 5.0f;
-                        const auto distance_sq = [](const ImVec2 a, const ImVec2 b) {
+                        const auto distance_sq = [](const glm::vec2 a, const glm::vec2 b) {
                             const float dx = a.x - b.x;
                             const float dy = a.y - b.y;
                             return dx * dx + dy * dy;
@@ -4429,26 +4505,26 @@ namespace lfs::vis::gui {
                         }
 
                         if (!closed && !screen_points.empty()) {
-                            draw_list->AddLine(screen_points.back(), mouse_pos, line_to_mouse_color, 1.0f);
+                            overlay->addLine(screen_points.back(), mouse_pos, line_to_mouse_color, 1.0f);
 
                             if (can_close) {
-                                draw_list->AddCircle(screen_points.front(), 9.0f, close_hint_color, 16, 2.0f);
+                                overlay->addCircle(screen_points.front(), 9.0f, close_hint_color, 16, 2.0f);
                             }
                         }
 
                         for (size_t i = 0; i < screen_points.size(); ++i) {
-                            const ImU32 color = (static_cast<int>(i) == hovered_idx || (can_close && i == 0))
-                                                    ? vertex_hover_color
-                                                    : vertex_color;
-                            draw_list->AddCircleFilled(screen_points[i], VERTEX_RADIUS, color);
-                            draw_list->AddCircle(screen_points[i], VERTEX_RADIUS, line_color, 16, 1.5f);
+                            const auto color = (static_cast<int>(i) == hovered_idx || (can_close && i == 0))
+                                                   ? vertex_hover_color
+                                                   : vertex_color;
+                            overlay->addCircleFilled(screen_points[i], VERTEX_RADIUS, color);
+                            overlay->addCircle(screen_points[i], VERTEX_RADIUS, line_color, 16, 1.5f);
                         }
 
                         if (!screen_points.empty()) {
                             const float initial_ring_radius = can_close ? 9.0f : 8.0f;
                             const float initial_ring_thickness = can_close ? 2.0f : 1.5f;
-                            draw_list->AddCircle(screen_points.front(), initial_ring_radius,
-                                                 close_hint_color, 24, initial_ring_thickness);
+                            overlay->addCircle(screen_points.front(), initial_ring_radius,
+                                               close_hint_color, 24, initial_ring_thickness);
                         }
 
                         if (closed && screen_points.size() >= 3) {
@@ -4460,14 +4536,27 @@ namespace lfs::vis::gui {
                             cx /= static_cast<float>(screen_points.size());
                             cy /= static_cast<float>(screen_points.size());
 
-                            const char* hint = "Enter to confirm\nShift-click edge: add\nCtrl-click vertex: remove";
-                            const ImVec2 text_size = ImGui::CalcTextSize(hint);
-                            draw_list->AddText(
-                                ImVec2(cx - text_size.x * 0.5f, cy - text_size.y * 0.5f),
-                                toU32WithAlpha(t.palette.text, 0.9f), hint);
+                            constexpr std::string_view hint_lines[] = {
+                                "Enter to confirm",
+                                "Shift-click edge: add",
+                                "Ctrl-click vertex: remove"};
+                            const float font_px = theme().fonts.small_size;
+                            float max_w = 0.0f;
+                            for (const auto& line : hint_lines) {
+                                max_w = std::max(max_w, overlay->measureText(line, font_px).x);
+                            }
+                            const float line_h = font_px * 1.2f;
+                            const float total_h = line_h * static_cast<float>(std::size(hint_lines));
+                            const float start_x = cx - max_w * 0.5f;
+                            const float start_y = cy - total_h * 0.5f;
+                            const auto text_color = toCol(t.palette.text, 0.9f);
+                            for (size_t i = 0; i < std::size(hint_lines); ++i) {
+                                overlay->addText({start_x, start_y + line_h * static_cast<float>(i)},
+                                                 hint_lines[i], text_color, font_px);
+                            }
                         }
 
-                        draw_list->PopClipRect();
+                        overlay->popClipRect();
                     }
                 }
             }
@@ -4479,18 +4568,17 @@ namespace lfs::vis::gui {
                 const auto panel_ctx = resolve_preview_panel(rm->getLassoPreviewPanel());
 
                 if (points.size() >= 2) {
-                    const ImU32 line_color = add_mode
-                                                 ? toU32WithAlpha(t.palette.success, 0.8f)
-                                                 : toU32WithAlpha(t.palette.error, 0.8f);
+                    const auto line_color = add_mode ? toCol(t.palette.success, 0.8f)
+                                                     : toCol(t.palette.error, 0.8f);
 
                     if (push_preview_clip(panel_ctx)) {
-                        ImVec2 prev = render_to_screen(panel_ctx, points[0].first, points[0].second);
+                        glm::vec2 prev = render_to_screen(panel_ctx, points[0].first, points[0].second);
                         for (size_t i = 1; i < points.size(); ++i) {
-                            ImVec2 curr = render_to_screen(panel_ctx, points[i].first, points[i].second);
-                            draw_list->AddLine(prev, curr, line_color, 2.0f);
+                            const glm::vec2 curr = render_to_screen(panel_ctx, points[i].first, points[i].second);
+                            overlay->addLine(prev, curr, line_color, 2.0f);
                             prev = curr;
                         }
-                        draw_list->PopClipRect();
+                        overlay->popClipRect();
                     }
                 }
             }

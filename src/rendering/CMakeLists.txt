@@ -12,6 +12,7 @@ set(RENDERING_TENSOR_SOURCES
         cuda_interaction_kernels.cu
         point_cloud_raster.cu
         mesh2splat_cpu.cpp
+        screen_overlay_renderer.cpp
 )
 
 add_library(lfs_rendering_tensor STATIC ${RENDERING_TENSOR_SOURCES})

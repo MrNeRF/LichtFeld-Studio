@@ -94,6 +94,7 @@
     "toolbar.view_gallery": "Gallery",
     "toolbar.view_list": "List",
     "toolbar.import": "Import",
+    "toolbar.clean_missing": "Clean",
     "import_menu.import_asset": "Import Asset...",
     "import_menu.import_dataset": "Import Dataset...",
     "import_menu.import_checkpoint": "Import Checkpoint...",

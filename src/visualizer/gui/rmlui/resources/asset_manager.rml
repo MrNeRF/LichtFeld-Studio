@@ -16,6 +16,10 @@
         <span>{{sort_label}}</span>
       </button>
 
+      <button class="asset-sort-button" data-event-click="clean_missing">
+        <span>{{clean_missing_label}}</span>
+      </button>
+
       <div class="asset-view-toggle">
         <button class="asset-view-button" data-class-is-active="is_gallery_view" data-event-click="set_view_mode('gallery')">{{gallery_label}}</button>
         <button class="asset-view-button" data-class-is-active="is_list_view" data-event-click="set_view_mode('list')">{{list_label}}</button>

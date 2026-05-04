@@ -153,34 +153,22 @@ namespace lfs::vis {
 
         [[nodiscard]] const core::SceneNode* findTransformHelperChild(const core::Scene& scene,
                                                                       const core::SceneNode& data_node) {
+            const std::string expected_name = data_node.name + "_transform";
             for (const auto child_id : data_node.children) {
                 const auto* child = scene.getNodeById(child_id);
-                if (!child || child->type != core::NodeType::GROUP) {
-                    continue;
-                }
-                const std::string expected_name = data_node.name + "_transform";
-                if (child->name == expected_name) {
+                if (child && child->type == core::NodeType::GROUP && child->name == expected_name)
                     return child;
-                }
             }
             return nullptr;
         }
 
         [[nodiscard]] const core::SceneNode* findDataParentForTransformHelper(const core::Scene& scene,
                                                                               const core::SceneNode& transform_node) {
-            if (transform_node.parent_id == core::NULL_NODE || !isTransformHelperName(transform_node.name)) {
+            if (transform_node.parent_id == core::NULL_NODE || !isTransformHelperName(transform_node.name))
                 return nullptr;
-            }
-
             const auto* parent = scene.getNodeById(transform_node.parent_id);
-            if (!parent) {
+            if (!parent || transform_node.name != parent->name + "_transform")
                 return nullptr;
-            }
-
-            const std::string expected_name = parent->name + "_transform";
-            if (transform_node.name != expected_name) {
-                return nullptr;
-            }
             return parent;
         }
 
@@ -581,7 +569,7 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::GROUP)}
                     .emit();
 
-                selectNode(transform_name);
+                selectNode(name);
 
                 LOG_INFO("Loaded mesh '{}'", name);
             } else {
@@ -663,7 +651,7 @@ namespace lfs::vis {
                 }
 
                 // Select the transform helper node by default.
-                selectNode(transform_name);
+                selectNode(name);
 
                 // Check for companion PPISP file
                 auto ppisp_path = lfs::training::find_ppisp_companion(path);
@@ -794,7 +782,7 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::GROUP)}
                     .emit();
 
-                selectNode(transform_name);
+                selectNode(name);
 
                 LOG_INFO("Added mesh '{}' ({} vertices, {} faces)", name,
                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
@@ -856,7 +844,7 @@ namespace lfs::vis {
                 updateCropBoxToFitScene(true);
             }
 
-            selectNode(transform_name);
+            selectNode(name);
 
             auto ppisp_path = lfs::training::find_ppisp_companion(path);
             if (!ppisp_path.empty()) {
