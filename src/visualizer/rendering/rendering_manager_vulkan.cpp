@@ -709,7 +709,8 @@ namespace lfs::vis {
                 const std::optional<std::vector<bool>>& node_visibility_override,
                 const lfs::core::SplatData* model_override = nullptr,
                 const std::vector<glm::mat4>* model_transforms_override = nullptr,
-                const std::optional<VksplatViewportRenderer::OutputSlot> vksplat_output_slot = std::nullopt)
+                const std::optional<VksplatViewportRenderer::OutputSlot> vksplat_output_slot = std::nullopt,
+                const lfs::rendering::ViewportRenderRequest* request_override = nullptr)
             -> std::expected<RenderedPanel, std::string> {
             const lfs::core::SplatData* const panel_model = model_override ? model_override : model;
             if (panel_size.x <= 0 || panel_size.y <= 0) {
@@ -773,7 +774,9 @@ namespace lfs::vis {
                                      .flip_y = flip_y};
             }
 
-            auto request = buildViewportRenderRequest(frame_ctx, panel_size, &source_viewport, panel_id);
+            auto request = request_override
+                               ? *request_override
+                               : buildViewportRenderRequest(frame_ctx, panel_size, &source_viewport, panel_id);
             std::vector<glm::mat4> transforms_storage;
             if (model_transforms_override) {
                 request.scene.model_transforms = model_transforms_override;
@@ -891,8 +894,7 @@ namespace lfs::vis {
                                 request.equirectangular = render_camera->equirectangular;
                             }
 
-                            std::shared_ptr<lfs::core::Tensor> compare_image;
-                            lfs::rendering::FrameMetadata compare_metadata{};
+                            RenderedPanel compare_panel{};
                             std::string compare_error;
 
                             const bool use_point_cloud_compare =
@@ -903,8 +905,10 @@ namespace lfs::vis {
                                 point_request.frame_view = request.frame_view;
                                 auto rendered = engine_->renderPointCloudImage(*model, point_request);
                                 if (rendered && rendered->image) {
-                                    compare_image = std::move(rendered->image);
-                                    compare_metadata = std::move(rendered->metadata);
+                                    const bool flip_y = !rendered->metadata.flip_y;
+                                    compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                  .metadata = std::move(rendered->metadata),
+                                                                  .flip_y = flip_y};
                                 } else {
                                     compare_error = rendered ? "Point-cloud GT comparison render returned no image"
                                                              : rendered.error();
@@ -918,30 +922,41 @@ namespace lfs::vis {
                                 auto rendered = engine_->renderPointCloudImage(
                                     *frame_ctx.scene_state.point_cloud, point_request);
                                 if (rendered && rendered->image) {
-                                    compare_image = std::move(rendered->image);
-                                    compare_metadata = std::move(rendered->metadata);
+                                    const bool flip_y = !rendered->metadata.flip_y;
+                                    compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                  .metadata = std::move(rendered->metadata),
+                                                                  .flip_y = flip_y};
                                 } else {
                                     compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
                                                              : rendered.error();
                                 }
                             } else if (has_renderable_model) {
-                                auto rendered = engine_->renderGaussiansImage(*model, request);
-                                if (rendered && rendered->image) {
-                                    compare_image = std::move(rendered->image);
-                                    compare_metadata = std::move(rendered->metadata);
+                                auto rendered = render_panel_image(
+                                    context.viewport,
+                                    gt_size,
+                                    std::nullopt,
+                                    std::nullopt,
+                                    nullptr,
+                                    nullptr,
+                                    VksplatViewportRenderer::OutputSlot::SplitRight,
+                                    &request);
+                                if (rendered) {
+                                    compare_panel = std::move(*rendered);
                                 } else {
-                                    compare_error = rendered ? "GT comparison render returned no image" : rendered.error();
+                                    compare_error = rendered.error();
                                 }
                             } else {
                                 compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
                             }
 
-                            if (compare_image) {
-                                compare_image = applyViewportAppearanceCorrection(
-                                    std::move(compare_image),
-                                    scene_manager,
-                                    settings_,
-                                    camera->uid());
+                            if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
+                                if (compare_panel.image) {
+                                    compare_panel.image = applyViewportAppearanceCorrection(
+                                        std::move(compare_panel.image),
+                                        scene_manager,
+                                        settings_,
+                                        camera->uid());
+                                }
                                 auto gt_image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(render_size, true, gt_size);
@@ -950,8 +965,9 @@ namespace lfs::vis {
                                 pending_split_view.background = settings_.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
                                 pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, true};
-                                pending_split_view.right = {compare_image, settings_.split_position, 1.0f, false, !compare_metadata.flip_y};
-                                rendered_metadata = compare_metadata;
+                                pending_split_view.right =
+                                    make_split_panel(compare_panel, settings_.split_position, 1.0f, false);
+                                rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
                                 rendered_split_info = SplitViewInfo{
