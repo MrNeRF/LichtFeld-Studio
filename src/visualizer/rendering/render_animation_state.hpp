@@ -39,7 +39,7 @@ namespace lfs::vis {
                 const auto elapsed = std::chrono::steady_clock::now() -
                                      fromNs(selection_flash_start_ns.load(std::memory_order_acquire));
                 if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
-                    return DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+                    return DirtyFlag::MESH | DirtyFlag::OVERLAY;
                 }
                 selection_flash_active.store(false);
             }
@@ -59,7 +59,7 @@ namespace lfs::vis {
         [[nodiscard]] DirtyMask triggerSelectionFlash() {
             selection_flash_start_ns.store(toNs(std::chrono::steady_clock::now()), std::memory_order_release);
             selection_flash_active.store(true);
-            return DirtyFlag::SPLATS | DirtyFlag::MESH;
+            return DirtyFlag::MESH | DirtyFlag::OVERLAY;
         }
 
         void setOverlayAnimationActive(bool active) { overlay_active.store(active); }

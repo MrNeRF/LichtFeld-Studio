@@ -438,7 +438,7 @@ namespace lfs::vis {
         void handleTrainingStarted();
         void handleTrainingCompleted();
         void handleSceneLoaded();
-        void handleSceneChanged();
+        void handleSceneChanged(uint32_t mutation_flags);
         void handleSceneCleared();
         void handlePLYVisibilityChanged();
         void handlePLYAdded();
