@@ -398,8 +398,10 @@ namespace lfs::rendering {
         glm::mat4 light_vp(1.0f);
         if (opts.shadow_enabled && shadow_shader_.valid()) {
             const int res = opts.shadow_map_resolution;
-            if (shadow_map_resolution_ != res)
-                setupShadowFBO(res);
+            if (shadow_map_resolution_ != res) {
+                if (auto result = setupShadowFBO(res); !result)
+                    return result;
+            }
 
             if (shadow_fbo_.get()) {
                 light_vp = compute_light_vp(mesh, model, headlight_dir);

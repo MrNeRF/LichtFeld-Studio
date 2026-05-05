@@ -329,8 +329,10 @@ namespace lfs::vis {
                 .filters = {}};
 
             if (const auto result = engine_->renderPointCloudGpuFrame(*model, request)) {
-                engine_->presentGpuFrame(*result, {0, 0}, {width, height});
-                rendered = true;
+                if (auto r = engine_->presentGpuFrame(*result, {0, 0}, {width, height}); !r)
+                    LOG_WARN("presentGpuFrame failed: {}", r.error());
+                else
+                    rendered = true;
             }
         } else {
             const lfs::rendering::ViewportRenderRequest request{
@@ -348,8 +350,10 @@ namespace lfs::vis {
                 .overlay = {}};
 
             if (const auto result = engine_->renderGaussiansGpuFrame(*model, request)) {
-                engine_->presentGpuFrame(result->frame, {0, 0}, {width, height});
-                rendered = true;
+                if (auto r = engine_->presentGpuFrame(result->frame, {0, 0}, {width, height}); !r)
+                    LOG_WARN("presentGpuFrame failed: {}", r.error());
+                else
+                    rendered = true;
             }
         }
 

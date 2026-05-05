@@ -1568,19 +1568,19 @@ namespace lfs::rendering {
         }
 
         if (auto result = vignette_shader_.set("u_viewport_size", glm::vec2(viewport_size)); !result) {
-            vignette_shader_.unbind();
+            if (auto r = vignette_shader_.unbind(); !r) return r;
             return result;
         }
         if (auto result = vignette_shader_.set("u_vignette_intensity", vignette.intensity); !result) {
-            vignette_shader_.unbind();
+            if (auto r = vignette_shader_.unbind(); !r) return r;
             return result;
         }
         if (auto result = vignette_shader_.set("u_vignette_radius", vignette.radius); !result) {
-            vignette_shader_.unbind();
+            if (auto r = vignette_shader_.unbind(); !r) return r;
             return result;
         }
         if (auto result = vignette_shader_.set("u_vignette_softness", vignette.softness); !result) {
-            vignette_shader_.unbind();
+            if (auto r = vignette_shader_.unbind(); !r) return r;
             return result;
         }
 

@@ -329,8 +329,9 @@ namespace lfs::rendering {
         applyClipScissor();
 
         std::string s(text);
-        text_renderer_->RenderText(s, top_left_px.x, gl_y, scale,
-                                   glm::vec3(c.r, c.g, c.b), c.a);
+        if (auto r = text_renderer_->RenderText(s, top_left_px.x, gl_y, scale,
+                                                glm::vec3(c.r, c.g, c.b), c.a); !r)
+            LOG_WARN("RenderText failed: {}", r.error());
     }
 
     void ScreenOverlayRenderer::addTextWithShadow(glm::vec2 top_left_px, std::string_view text,

@@ -191,8 +191,10 @@ namespace lfs::rendering {
         const glm::mat4 mvp = projection * view;
         if (auto result = s->set("u_mvp", mvp); !result)
             return result;
-        s->set("u_view", view);
-        s->set("u_equirectangular", equirectangular);
+        if (auto result = s->set("u_view", view); !result)
+            return result;
+        if (auto result = s->set("u_equirectangular", equirectangular); !result)
+            return result;
 
         VAOBinder vao_bind(vao_);
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices_.size()));

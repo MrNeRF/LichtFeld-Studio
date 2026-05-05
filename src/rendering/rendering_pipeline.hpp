@@ -98,14 +98,14 @@ namespace lfs::rendering {
                 return makeViewMatrix(view_rotation, view_translation);
             }
 
-            [[nodiscard]] glm::mat4 getProjectionMatrix(const float near_plane = DEFAULT_NEAR_PLANE,
-                                                        const float far_plane = DEFAULT_FAR_PLANE) const {
+            [[nodiscard]] glm::mat4 getProjectionMatrix(const float near_clip = DEFAULT_NEAR_PLANE,
+                                                        const float far_clip = DEFAULT_FAR_PLANE) const {
                 if (intrinsics_override.has_value() && !orthographic) {
                     return createProjectionMatrixFromIntrinsics(
-                        viewport_size, *intrinsics_override, near_plane, far_plane);
+                        viewport_size, *intrinsics_override, near_clip, far_clip);
                 }
                 const float vfov = focalLengthToVFov(focal_length_mm);
-                return createProjectionMatrix(viewport_size, vfov, orthographic, ortho_scale, near_plane, far_plane);
+                return createProjectionMatrix(viewport_size, vfov, orthographic, ortho_scale, near_clip, far_clip);
             }
         };
 

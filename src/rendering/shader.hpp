@@ -7,6 +7,8 @@
 #include <glad/glad.h>
 
 #include "core/logger.hpp"
+#include <cerrno>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -371,9 +373,17 @@ namespace lfs::rendering {
 
             std::ifstream file(filePath);
             if (!file.is_open()) {
-                LOG_ERROR("Failed to open shader file: {} (error: {})", filePath, strerror(errno));
-                throw std::runtime_error(std::format("Failed to open shader file: {} (error: {})",
-                                                     filePath, strerror(errno)));
+                const int err = errno;
+#ifdef _MSC_VER
+                char errbuf[256];
+                ::strerror_s(errbuf, sizeof(errbuf), err);
+                const std::string errmsg(errbuf);
+#else
+                const std::string errmsg(std::strerror(err));
+#endif
+                LOG_ERROR("Failed to open shader file: {} (error: {})", filePath, errmsg);
+                throw std::runtime_error(
+                    std::format("Failed to open shader file: {} (error: {})", filePath, errmsg));
             }
 
             std::stringstream buffer;

@@ -227,13 +227,16 @@ namespace lfs::training {
         for (const auto& cmd : local) {
             switch (cmd.target) {
             case CommandTarget::Model:
-                exec_model(cmd, view);
+                if (auto result = exec_model(cmd, view); !result)
+                    LOG_WARN("exec_model failed for op '{}': {}", cmd.op, result.error());
                 break;
             case CommandTarget::Optimizer:
-                exec_optimizer(cmd, view);
+                if (auto result = exec_optimizer(cmd, view); !result)
+                    LOG_WARN("exec_optimizer failed for op '{}': {}", cmd.op, result.error());
                 break;
             case CommandTarget::Session:
-                exec_session(cmd, view);
+                if (auto result = exec_session(cmd, view); !result)
+                    LOG_WARN("exec_session failed for op '{}': {}", cmd.op, result.error());
                 break;
             }
         }
@@ -324,7 +327,10 @@ namespace lfs::training {
             if (vec.size() != dim) {
                 return std::unexpected("Vector length mismatch with attribute dimension");
             }
-            const std::vector<float> vec_f(vec.begin(), vec.end());
+            std::vector<float> vec_f;
+            vec_f.reserve(vec.size());
+            for (double d : vec)
+                vec_f.push_back(static_cast<float>(d));
             auto value_tensor = core::Tensor::from_vector(vec_f, {size_t{1}, dim}, tensor.device());
             value_tensor = value_tensor.broadcast_to(tensor.shape());
             const auto mask_float = mask_full.to(tensor.dtype());

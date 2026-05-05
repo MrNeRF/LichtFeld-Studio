@@ -602,20 +602,20 @@ namespace lfs::rendering {
             if (!shader.isBound())
                 return std::unexpected("Failed to bind camera frustum shader");
 
-            shader->set("viewProj", view_proj);
-            shader->set("view", view);
-            shader->set("viewPos", view_position);
-            shader->set("pickingMode", false);
-            shader->set("equirectangularView", equirectangular_view);
-            shader->set("showImages", true);
-            shader->set("imageOpacity", image_opacity_);
+            if (auto r = shader->set("viewProj", view_proj); !r) return r;
+            if (auto r = shader->set("view", view); !r) return r;
+            if (auto r = shader->set("viewPos", view_position); !r) return r;
+            if (auto r = shader->set("pickingMode", false); !r) return r;
+            if (auto r = shader->set("equirectangularView", equirectangular_view); !r) return r;
+            if (auto r = shader->set("showImages", true); !r) return r;
+            if (auto r = shader->set("imageOpacity", image_opacity_); !r) return r;
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
-            shader->set("cameraTextures", 0);
+            if (auto r = shader->set("cameraTextures", 0); !r) return r;
 
             if (!frustum_instances.empty()) {
-                shader->set("focusIndex", frustum_focus);
+                if (auto r = shader->set("focusIndex", frustum_focus); !r) return r;
                 VAOBinder vao_bind(vao_);
                 setupInstanceAttributes(frustum_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
@@ -625,7 +625,7 @@ namespace lfs::rendering {
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("focusIndex", sphere_focus);
+                if (auto r = shader->set("focusIndex", sphere_focus); !r) return r;
                 VAOBinder vao_bind(sphere_vao_);
                 setupInstanceAttributes(sphere_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
@@ -642,17 +642,17 @@ namespace lfs::rendering {
             if (!shader.isBound())
                 return std::unexpected("Failed to bind camera frustum lines shader");
 
-            shader->set("viewProj", view_proj);
-            shader->set("view", view);
-            shader->set("viewPos", view_position);
-            shader->set("pickingMode", false);
-            shader->set("equirectangularView", equirectangular_view);
-            shader->set("showImages", false);
+            if (auto r = shader->set("viewProj", view_proj); !r) return r;
+            if (auto r = shader->set("view", view); !r) return r;
+            if (auto r = shader->set("viewPos", view_position); !r) return r;
+            if (auto r = shader->set("pickingMode", false); !r) return r;
+            if (auto r = shader->set("equirectangularView", equirectangular_view); !r) return r;
+            if (auto r = shader->set("showImages", false); !r) return r;
 
             glLineWidth(WIREFRAME_WIDTH);
 
             if (!frustum_instances.empty()) {
-                shader->set("focusIndex", frustum_focus);
+                if (auto r = shader->set("focusIndex", frustum_focus); !r) return r;
                 VAOBinder vao_bind(vao_);
                 setupInstanceAttributes(frustum_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
@@ -662,7 +662,7 @@ namespace lfs::rendering {
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("focusIndex", sphere_focus);
+                if (auto r = shader->set("focusIndex", sphere_focus); !r) return r;
                 VAOBinder vao_bind(sphere_vao_);
                 setupInstanceAttributes(sphere_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
@@ -804,10 +804,14 @@ namespace lfs::rendering {
             const glm::mat4 view_proj = projection * view;
             const glm::vec3 view_pos = glm::vec3(glm::inverse(view)[3]);
 
-            shader->set("viewProj", view_proj);
-            shader->set("viewPos", view_pos);
-            shader->set("pickingMode", true);
-            shader->set("minimumPickDistance", scale * 2.0f);
+            if (auto r = shader->set("viewProj", view_proj); !r)
+                return std::unexpected(r.error());
+            if (auto r = shader->set("viewPos", view_pos); !r)
+                return std::unexpected(r.error());
+            if (auto r = shader->set("pickingMode", true); !r)
+                return std::unexpected(r.error());
+            if (auto r = shader->set("minimumPickDistance", scale * 2.0f); !r)
+                return std::unexpected(r.error());
 
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);

@@ -529,7 +529,8 @@ namespace lfs::rendering {
 
         GLint viewport[4];
         glGetIntegerv(GL_VIEWPORT, viewport);
-        split_shader_.set("viewportSize", glm::vec2(static_cast<float>(viewport[2]), static_cast<float>(viewport[3])));
+        if (auto result = split_shader_.set("viewportSize", glm::vec2(static_cast<float>(viewport[2]), static_cast<float>(viewport[3]))); !result)
+            LOG_TRACE("Uniform 'viewportSize' not found in shader: {}", result.error());
 
         VAOBinder vao_bind(quad_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
