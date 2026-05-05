@@ -16,8 +16,6 @@
 #include "gui/video_export_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
-#include "rendering/environment_renderer.hpp"
-#include "rendering/framebuffer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/rendering.hpp"
@@ -168,10 +166,8 @@ namespace lfs::vis::gui {
     }
 
     struct VideoExportEnvironmentState {
-        lfs::rendering::EnvironmentRenderer renderer;
         std::string cached_environment_path_value;
         std::filesystem::path cached_environment_resolved_path;
-        std::string last_environment_error;
     };
 
     [[nodiscard]] std::filesystem::path resolveVideoExportEnvironmentPath(
@@ -196,38 +192,6 @@ namespace lfs::vis::gui {
         return state.cached_environment_resolved_path;
     }
 
-    void renderVideoExportBackground(VideoExportEnvironmentState& environment_state,
-                                     const RenderSettings& render_settings,
-                                     const rendering::FrameView& frame_view) {
-        glClearColor(render_settings.background_color.r,
-                     render_settings.background_color.g,
-                     render_settings.background_color.b,
-                     1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        if (!environmentBackgroundEnabled(render_settings)) {
-            return;
-        }
-
-        const auto environment_path = resolveVideoExportEnvironmentPath(
-            environment_state, render_settings.environment_map_path);
-        if (auto render_result = environment_state.renderer.render(
-                frame_view,
-                environment_path,
-                render_settings.environment_exposure,
-                render_settings.environment_rotation_degrees,
-                render_settings.equirectangular);
-            !render_result) {
-            if (render_result.error() != environment_state.last_environment_error) {
-                environment_state.last_environment_error = render_result.error();
-                LOG_DEBUG("Video export environment background fallback: {}",
-                          environment_state.last_environment_error);
-            }
-        } else {
-            environment_state.last_environment_error.clear();
-        }
-    }
-
     lfs::core::Tensor orientVideoExportFrameForEncoder(const lfs::core::Tensor& image) {
         if (!image.is_valid() || image.ndim() != 3) {
             return image;
@@ -238,8 +202,8 @@ namespace lfs::vis::gui {
             return image.contiguous();
         }
 
-        // Match the viewport preview path, which presents textures through OpenGL's
-        // bottom-left texture origin before the user sees them.
+        // Match the viewport preview path, which presents rendered frames through
+        // a bottom-left texture origin before the user sees them.
         return lfs::rendering::flipImageVertical(image, layout);
     }
 
@@ -358,7 +322,8 @@ namespace lfs::vis::gui {
                          .equirectangular = render_settings.equirectangular},
                     .scene =
                         {.model_transforms = &snapshot.model_transforms,
-                         .transform_indices = snapshot.transform_indices},
+                         .transform_indices = snapshot.transform_indices,
+                         .node_visibility_mask = snapshot.node_visibility_mask},
                     .filters = {},
                     .transparent_background = render_environment};
                 applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
@@ -385,7 +350,9 @@ namespace lfs::vis::gui {
                     .antialiasing = render_settings.antialiasing,
                     .mip_filter = render_settings.mip_filter,
                     .sh_degree = render_settings.sh_degree,
-                    .gut = render_settings.gut,
+                    .raster_backend = render_settings.raster_backend,
+                    .gut = render_settings.gut ||
+                           render_settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
                     .equirectangular = render_settings.equirectangular,
                     .scene =
                         {.model_transforms = &snapshot.model_transforms,
@@ -436,7 +403,8 @@ namespace lfs::vis::gui {
                      .equirectangular = render_settings.equirectangular},
                 .scene =
                     {.model_transforms = &point_cloud_transforms,
-                     .transform_indices = nullptr},
+                     .transform_indices = nullptr,
+                     .node_visibility_mask = {}},
                 .filters = {},
                 .transparent_background = render_environment};
             applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
@@ -463,87 +431,41 @@ namespace lfs::vis::gui {
             return std::unexpected("No rendered image produced for video export");
         }
 
-        GLint saved_draw_fbo = 0;
-        GLint saved_read_fbo = 0;
-        GLint saved_viewport[4] = {0, 0, 0, 0};
-        const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
-        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &saved_draw_fbo);
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &saved_read_fbo);
-        glGetIntegerv(GL_VIEWPORT, saved_viewport);
-
-        rendering::FrameBuffer composite_fbo;
-        composite_fbo.resize(width, height);
-        composite_fbo.bind();
-        glDisable(GL_SCISSOR_TEST);
-        glViewport(0, 0, width, height);
-        renderVideoExportBackground(environment_state, render_settings, frame_view);
-
-        auto restore_state = [&]() {
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(saved_draw_fbo));
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(saved_read_fbo));
-            glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
-            if (scissor_was_enabled) {
-                glEnable(GL_SCISSOR_TEST);
-            } else {
-                glDisable(GL_SCISSOR_TEST);
-            }
-        };
-
         const bool any_selected = std::any_of(snapshot.meshes.begin(), snapshot.meshes.end(),
                                               [](const auto& mesh) { return mesh.is_selected; }) ||
                                   std::any_of(snapshot.selected_node_mask.begin(),
                                               snapshot.selected_node_mask.end(),
                                               [](const bool selected) { return selected; });
 
-        engine.resetMeshFrameState();
+        std::vector<rendering::MeshFrameItem> mesh_items;
+        mesh_items.reserve(snapshot.meshes.size());
         for (const auto& mesh_snapshot : snapshot.meshes) {
             if (!mesh_snapshot.mesh)
                 continue;
-            const auto mesh_options = makeVideoExportMeshOptions(
-                render_settings, any_selected, mesh_snapshot.is_selected);
-            auto mesh_result = engine.renderMesh(
-                *mesh_snapshot.mesh,
-                viewport,
-                mesh_snapshot.transform,
-                mesh_options,
-                primary_frame.has_value());
-            if (!mesh_result) {
-                restore_state();
-                return std::unexpected(mesh_result.error());
-            }
+            mesh_items.push_back(rendering::MeshFrameItem{
+                .mesh = mesh_snapshot.mesh.get(),
+                .transform = mesh_snapshot.transform,
+                .options = makeVideoExportMeshOptions(
+                    render_settings, any_selected, mesh_snapshot.is_selected),
+            });
         }
 
-        if (engine.hasMeshRender()) {
-            if (primary_frame.has_value()) {
-                if (auto composite_result = engine.compositeMeshAndGpuFrame(*primary_frame, {width, height});
-                    !composite_result) {
-                    restore_state();
-                    return std::unexpected(composite_result.error());
-                }
-            } else {
-                if (auto present_result = engine.presentMeshOnly(); !present_result) {
-                    restore_state();
-                    return std::unexpected(present_result.error());
-                }
-            }
-        } else if (primary_frame.has_value()) {
-            if (auto present_result = engine.presentGpuFrame(*primary_frame, {0, 0}, {width, height});
-                !present_result) {
-                restore_state();
-                return std::unexpected(present_result.error());
-            }
-        }
-
-        std::vector<float> pixels(static_cast<size_t>(width) * static_cast<size_t>(height) * 3);
-        glReadPixels(0, 0, width, height, GL_RGB, GL_FLOAT, pixels.data());
-
-        restore_state();
-
-        const auto image_cpu = lfs::core::Tensor::from_vector(
-            pixels,
-            {static_cast<size_t>(height), static_cast<size_t>(width), size_t{3}},
-            lfs::core::Device::CPU);
-        return image_cpu.permute({2, 0, 1}).cuda();
+        rendering::VideoCompositeFrameRequest composite_request{
+            .viewport = viewport,
+            .frame_view = frame_view,
+            .background_color = render_settings.background_color,
+            .environment =
+                {.enabled = render_environment,
+                 .map_path = render_environment
+                                 ? resolveVideoExportEnvironmentPath(
+                                       environment_state, render_settings.environment_map_path)
+                                 : std::filesystem::path{},
+                 .exposure = render_settings.environment_exposure,
+                 .rotation_degrees = render_settings.environment_rotation_degrees,
+                 .equirectangular = render_settings.equirectangular},
+            .meshes = std::move(mesh_items),
+        };
+        return engine.renderVideoCompositeFrame(primary_frame, composite_request);
     }
 
     AsyncTaskManager::AsyncTaskManager(VisualizerImpl* viewer)
@@ -1440,7 +1362,7 @@ namespace lfs::vis::gui {
             return;
         mesh2splat_state_.pending.store(false);
 
-        executeMesh2SplatOnGlThread();
+        executeMesh2SplatOnGraphicsThread();
 
         bool has_result;
         {
@@ -1467,7 +1389,7 @@ namespace lfs::vis::gui {
         mesh2splat_state_.progress.store(has_result ? 1.0f : 0.0f);
     }
 
-    void AsyncTaskManager::executeMesh2SplatOnGlThread() {
+    void AsyncTaskManager::executeMesh2SplatOnGraphicsThread() {
         std::shared_ptr<lfs::core::MeshData> mesh;
         lfs::core::Mesh2SplatOptions options;
         {
@@ -1479,27 +1401,26 @@ namespace lfs::vis::gui {
         if (!mesh)
             return;
 
-        auto progress_cb = [this](float progress, const std::string& stage) -> bool {
-            mesh2splat_state_.progress.store(progress);
-            {
+        auto result = lfs::rendering::mesh_to_splat(
+            *mesh,
+            options,
+            [this](const float progress, const std::string& stage) {
+                mesh2splat_state_.progress.store(progress);
                 const std::lock_guard lock(mesh2splat_state_.mutex);
                 mesh2splat_state_.stage = stage;
-            }
-            return true;
-        };
-
-        auto result = lfs::rendering::mesh_to_splat(*mesh, options, progress_cb);
+                return mesh2splat_state_.active.load();
+            });
 
         const std::lock_guard lock(mesh2splat_state_.mutex);
         if (result) {
             mesh2splat_state_.result = std::move(*result);
-            mesh2splat_state_.stage = "Applying...";
-            LOG_INFO("Mesh2Splat conversion produced {} gaussians",
-                     mesh2splat_state_.result->size());
+            mesh2splat_state_.error.clear();
+            mesh2splat_state_.stage = "Complete";
         } else {
+            mesh2splat_state_.result.reset();
             mesh2splat_state_.error = result.error();
             mesh2splat_state_.stage = "Failed";
-            LOG_ERROR("Mesh2Splat conversion failed: {}", result.error());
+            LOG_ERROR("Mesh2Splat conversion failed: {}", mesh2splat_state_.error);
         }
     }
 
@@ -1529,24 +1450,29 @@ namespace lfs::vis::gui {
         if (scene.getNode(node_name))
             scene.removeNode(node_name);
 
-        scene.addSplat(node_name, std::move(splat_data));
+        const std::string added_name =
+            scene_manager->addGeneratedSplatNode(std::move(splat_data), source_name, node_name, true);
+        if (added_name.empty()) {
+            LOG_ERROR("Mesh2Splat: failed to add splat node '{}'", node_name);
+            return;
+        }
 
         {
             const std::lock_guard lock(mesh2splat_state_.mutex);
             mesh2splat_state_.stage = "Complete";
         }
 
-        const auto* const added_node = scene.getNode(node_name);
+        const auto* const added_node = scene.getNode(added_name);
         const size_t num_gaussians =
             added_node && added_node->model ? added_node->model->size() : 0;
 
         lfs::core::events::state::Mesh2SplatCompleted{
             .source_name = source_name,
-            .node_name = node_name,
+            .node_name = added_name,
             .num_gaussians = num_gaussians}
             .emit();
 
-        LOG_INFO("Mesh2Splat: added splat node '{}'", node_name);
+        LOG_INFO("Mesh2Splat: added splat node '{}'", added_name);
     }
 
     void AsyncTaskManager::startSplatSimplify(const std::string& source_name,

@@ -66,7 +66,6 @@
     "build_info.commit": "提交",
     "build_info.build_type": "构建类型",
     "build_info.platform": "平台",
-    "build_info.cuda_gl_interop": "CUDA-GL互操作",
     "build_type.debug": "调试",
     "build_type.release": "发布",
     "platform.windows": "Windows",

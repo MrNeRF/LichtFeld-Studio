@@ -1379,7 +1379,7 @@ NB_MODULE(lichtfeld, m) {
                 const auto path = lfs::vis::getAssetPath("icon/" + name + ".png");
                 const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
 
-                const auto result = lfs::python::create_gl_texture(data, width, height, channels);
+                const auto result = lfs::python::create_ui_texture(data, width, height, channels);
                 lfs::core::free_image(data);
 
                 const auto tex_id = static_cast<uint64_t>(result.texture_id);
@@ -1390,12 +1390,12 @@ NB_MODULE(lichtfeld, m) {
                 return 0;
             }
         },
-        nb::arg("name"), "Load an icon texture from assets/icon/{name}.png, returns OpenGL texture ID");
+        nb::arg("name"), "Load an icon texture from assets/icon/{name}.png, returns UI texture ID");
 
     m.def(
         "free_icon", [](const uint64_t texture_id) {
             if (texture_id > 0)
-                lfs::python::delete_gl_texture(static_cast<uint32_t>(texture_id));
+                lfs::python::delete_ui_texture(texture_id);
         },
         nb::arg("texture_id"), "Free an icon texture");
 
@@ -1580,7 +1580,7 @@ NB_MODULE(lichtfeld, m) {
     auto mesh_module = m.def_submodule("mesh", "Mesh operations and OpenMesh bindings");
     lfs::python::register_mesh(mesh_module);
 
-    // Mesh-to-splat conversion (async, uses GL thread)
+    // Mesh-to-splat conversion (async, uses the graphics thread)
     lfs::python::register_mesh2splat(m);
     lfs::python::register_splat_simplify(m);
 
@@ -1628,11 +1628,6 @@ NB_MODULE(lichtfeld, m) {
     build_info.attr("platform") = "Linux";
 #else
     build_info.attr("platform") = "Unknown";
-#endif
-#ifdef CUDA_GL_INTEROP_ENABLED
-    build_info.attr("cuda_gl_interop") = true;
-#else
-    build_info.attr("cuda_gl_interop") = false;
 #endif
     build_info.attr("repo_url") = "https://github.com/MrNeRF/LichtFeld-Studio";
     build_info.attr("website_url") = "https://lichtfeld.io";
@@ -1930,7 +1925,7 @@ Plugin Hooks (RAII):
   # Auto-unregisters when handler is destroyed
 
 Mesh-to-Splat:
-  lf.mesh_to_splat("name")       - Convert mesh to splats (async)
+  lf.mesh_to_splat("name")       - Convert a mesh node into Gaussian splats
   lf.is_mesh2splat_active()      - Check if conversion is running
   lf.get_mesh2splat_progress()   - Get progress (0.0-1.0)
   lf.get_mesh2splat_stage()      - Get current stage text

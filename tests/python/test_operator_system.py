@@ -1,7 +1,7 @@
 """Tests for the Blender-style operator system.
 
 These tests verify the operator registration, invocation, and lifecycle methods.
-All tests run without GUI/OpenGL context, so EditorContext is not available.
+All tests run without the visualizer GUI backend, so EditorContext is not available.
 """
 
 import pytest

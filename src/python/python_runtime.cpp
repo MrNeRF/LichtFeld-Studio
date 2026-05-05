@@ -45,10 +45,10 @@ namespace lfs::python {
         // Exit popup state for window close callback (thread-safe)
         std::atomic<bool> g_exit_popup_open{false};
 
-        // GL-thread callback queue (set once during module init, before any reader threads)
-        std::thread::id g_gl_thread_id{};
-        std::mutex g_gl_callbacks_mutex;
-        std::vector<std::function<void()>> g_gl_callbacks;
+        // Graphics-thread callback queue (set once during module init, before any reader threads)
+        std::thread::id g_graphics_thread_id{};
+        std::mutex g_graphics_callbacks_mutex;
+        std::vector<std::function<void()>> g_graphics_callbacks;
 
         // Sequencer callbacks
         IsSequencerVisibleCallback g_is_sequencer_visible_cb = nullptr;
@@ -633,20 +633,20 @@ namespace lfs::python {
         *user_data = g_imgui_alloc_user_data;
     }
 
-    void set_gl_texture_service(const CreateTextureFn create, const DeleteTextureFn del, const MaxTextureSizeFn max_size) {
+    void set_ui_texture_service(const CreateTextureFn create, const DeleteTextureFn del, const MaxTextureSizeFn max_size) {
         assert(create && del && max_size);
         g_create_texture = create;
         g_delete_texture = del;
         g_max_texture_size_fn = max_size;
     }
 
-    TextureResult create_gl_texture(const unsigned char* data, const int w, const int h, const int channels) {
+    TextureResult create_ui_texture(const unsigned char* data, const int w, const int h, const int channels) {
         if (!g_create_texture)
             return {0, w, h};
         return g_create_texture(data, w, h, channels);
     }
 
-    void delete_gl_texture(const uint32_t texture_id) {
+    void delete_ui_texture(const uint64_t texture_id) {
         if (!g_delete_texture || texture_id == 0)
             return;
         g_delete_texture(texture_id);
@@ -748,9 +748,9 @@ namespace lfs::python {
         }
     }
 
-    void shutdown_python_gl_resources() {
-        if (g_bridge.shutdown_gl_resources) {
-            g_bridge.shutdown_gl_resources();
+    void shutdown_python_ui_resources() {
+        if (g_bridge.shutdown_ui_resources) {
+            g_bridge.shutdown_ui_resources();
         }
     }
 
@@ -1047,23 +1047,23 @@ namespace lfs::python {
     bool is_exit_popup_open() { return g_exit_popup_open.load(); }
     void set_exit_popup_open(bool open) { g_exit_popup_open.store(open); }
 
-    void set_gl_thread_id(std::thread::id id) { g_gl_thread_id = id; }
+    void set_graphics_thread_id(std::thread::id id) { g_graphics_thread_id = id; }
 
-    bool on_gl_thread() {
-        return g_gl_thread_id != std::thread::id{} &&
-               std::this_thread::get_id() == g_gl_thread_id;
+    bool on_graphics_thread() {
+        return g_graphics_thread_id != std::thread::id{} &&
+               std::this_thread::get_id() == g_graphics_thread_id;
     }
 
-    void schedule_gl_callback(std::function<void()> fn) {
-        std::lock_guard lock(g_gl_callbacks_mutex);
-        g_gl_callbacks.push_back(std::move(fn));
+    void schedule_graphics_callback(std::function<void()> fn) {
+        std::lock_guard lock(g_graphics_callbacks_mutex);
+        g_graphics_callbacks.push_back(std::move(fn));
     }
 
-    void flush_gl_callbacks() {
+    void flush_graphics_callbacks() {
         std::vector<std::function<void()>> pending;
         {
-            std::lock_guard lock(g_gl_callbacks_mutex);
-            pending.swap(g_gl_callbacks);
+            std::lock_guard lock(g_graphics_callbacks_mutex);
+            pending.swap(g_graphics_callbacks);
         }
         for (auto& fn : pending)
             fn();

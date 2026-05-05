@@ -128,7 +128,6 @@ namespace lfs::vis {
         markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         viewport_artifact_service_.clearViewportOutput();
         frame_lifecycle_service_.resetViewportSize();
-        gt_texture_cache_.clear();
     }
 
     void RenderingManager::handleGridSettingsChanged(const ui::GridSettingsChanged& event) {
@@ -147,23 +146,16 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleTrainingStarted() {
-        clearFrustumThumbnailState();
-        invalidateFrustumImageLoaderSync(true);
-        syncFrustumImageLoader(viewport_interaction_context_.scene_manager);
         markDirty(DirtyFlag::OVERLAY);
     }
 
     void RenderingManager::handleTrainingCompleted() {
-        invalidateFrustumImageLoaderSync();
-        syncFrustumImageLoader(viewport_interaction_context_.scene_manager);
         markDirty(DirtyFlag::OVERLAY);
     }
 
     void RenderingManager::handleSceneLoaded() {
         LOG_DEBUG("Scene loaded, marking render dirty");
-        invalidateFrustumImageLoaderSync();
         markDirty();
-        gt_texture_cache_.clear();
         invalidateCameraMetricsRequests(true);
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
@@ -181,27 +173,18 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneChanged() {
-        pass_graph_.resetPointCloudCache();
         markDirty();
     }
 
     void RenderingManager::handleSceneCleared() {
         viewport_artifact_service_.clearViewportOutput();
-        pass_graph_.resetPointCloudCache();
-        gt_texture_cache_.clear();
         invalidateCameraMetricsRequests(true);
-        invalidateFrustumImageLoaderSync();
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             result = split_view_service_.handleSceneCleared(settings_);
             syncGridPlanesLocked(settings_.grid_plane);
         }
-        clearFrustumThumbnailState();
-        if (engine_) {
-            engine_->setFrustumImageLoader(nullptr, false);
-        }
-        storeFrustumImageLoaderSyncState({}, false, false);
         camera_interaction_service_.clearCurrentCamera();
         camera_interaction_service_.clearHoveredCamera();
         frame_lifecycle_service_.resetModelTracking();

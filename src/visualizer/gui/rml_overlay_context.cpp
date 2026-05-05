@@ -1,16 +1,11 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_overlay_context.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
@@ -29,7 +24,6 @@ namespace lfs::vis::gui {
     }
 
     RmlOverlayContext::~RmlOverlayContext() {
-        fbo_.destroy();
         if (ctx_ && mgr_)
             mgr_->destroyContext(context_name_);
     }
@@ -94,6 +88,8 @@ namespace lfs::vis::gui {
 
     void RmlOverlayContext::render(const float x, const float y, const float w, const float h,
                                    const int screen_w, const int screen_h) {
+        (void)screen_w;
+        (void)screen_h;
         if (!ctx_ || !doc_)
             return;
 
@@ -103,32 +99,13 @@ namespace lfs::vis::gui {
         if (px_w <= 0 || px_h <= 0)
             return;
 
-        if (!mgr_->shouldDeferFboUpdate(fbo_)) {
-            if (px_w != width_ || px_h != height_)
-                resize(px_w, px_h);
+        if (!mgr_ || !mgr_->getVulkanRenderInterface())
+            return;
 
-            fbo_.ensure(px_w, px_h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render_iface = mgr_->getRenderInterface();
-            assert(render_iface);
-            render_iface->SetViewport(px_w, px_h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render_iface->SetTargetFramebuffer(fbo_.fbo());
-
-            render_iface->BeginFrame();
-            ctx_->Render();
-            render_iface->EndFrame();
-
-            render_iface->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
-        }
-
-        if (fbo_.valid())
-            fbo_.blitToScreen(x, y, w, h, screen_w, screen_h);
+        if (px_w != width_ || px_h != height_)
+            resize(px_w, px_h);
+        ctx_->Update();
+        mgr_->queueVulkanContext(ctx_, x, y, true, true, x, y, x + w, y + h);
     }
 
     void RmlOverlayContext::forwardMouseInput(const PanelInputState& input,
@@ -189,8 +166,7 @@ namespace lfs::vis::gui {
             el->SetClass("visible", false);
     }
 
-    void RmlOverlayContext::destroyGLResources() {
-        fbo_.destroy();
+    void RmlOverlayContext::releaseRendererResources() {
     }
 
 } // namespace lfs::vis::gui

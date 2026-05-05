@@ -74,7 +74,6 @@ namespace lfs::core {
         return exe_dir;
     }
 
-    inline std::filesystem::path getShadersDir() { return getResourceBaseDir() / "shaders"; }
     inline std::filesystem::path getAssetsDir() { return getResourceBaseDir() / "assets"; }
     inline std::filesystem::path getIconsDir() { return getAssetsDir() / "icon"; }
     inline std::filesystem::path getFontsDir() { return getAssetsDir() / "fonts"; }

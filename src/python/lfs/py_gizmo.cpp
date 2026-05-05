@@ -15,6 +15,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 
+#include <SDL3/SDL_mouse.h>
 #include <nanobind/stl/shared_ptr.h>
 
 #include <atomic>
@@ -33,6 +34,21 @@ namespace lfs::python {
         constexpr float MATRIX_EPSILON = 1e-6f;
 
         std::atomic<int> g_next_transform_gizmo_id{100000};
+
+        [[nodiscard]] vis::gui::NativeGizmoInput native_gizmo_input_from_sdl() {
+            static bool previous_left_down = false;
+            float mouse_x = 0.0f;
+            float mouse_y = 0.0f;
+            const SDL_MouseButtonFlags buttons = SDL_GetMouseState(&mouse_x, &mouse_y);
+            const bool left_down = (buttons & SDL_BUTTON_LMASK) != 0;
+            const bool left_clicked = left_down && !previous_left_down;
+            previous_left_down = left_down;
+            return {
+                .mouse_pos = {mouse_x, mouse_y},
+                .mouse_left_down = left_down,
+                .mouse_left_clicked = left_clicked,
+            };
+        }
 
         [[nodiscard]] TransformGizmoOperation parse_transform_gizmo_operation(const std::string& operation) {
             if (operation == "translate" || operation == "translation" || operation == "move")
@@ -587,7 +603,7 @@ namespace lfs::python {
                                       const glm::mat4& projection,
                                       const glm::vec2& viewport_pos,
                                       const glm::vec2& viewport_size,
-                                      ImDrawList* draw_list) {
+                                      vis::gui::NativeOverlayDrawList* draw_list) {
         state_->changed = false;
         state_->hovered = false;
 
@@ -605,6 +621,7 @@ namespace lfs::python {
         bool active_now = false;
         bool changed_now = false;
         bool hovered_now = false;
+        const vis::gui::NativeGizmoInput gizmo_input = native_gizmo_input_from_sdl();
 
         if (state_->operation == TransformGizmoOperation::Translate) {
             vis::gui::TranslationGizmoConfig config;
@@ -616,6 +633,7 @@ namespace lfs::python {
             config.pivot_world = glm::vec3(state_->matrix[3]);
             config.orientation_world = orientation_for_operation();
             config.draw_list = draw_list;
+            config.input = gizmo_input;
             config.input_enabled = state_->input_enabled;
             config.snap = state_->snap;
             config.snap_units = state_->translate_snap;
@@ -637,6 +655,7 @@ namespace lfs::python {
             config.pivot_world = glm::vec3(state_->matrix[3]);
             config.orientation_world = orientation_for_operation();
             config.draw_list = draw_list;
+            config.input = gizmo_input;
             config.input_enabled = state_->input_enabled;
             config.snap = state_->snap;
             config.snap_degrees = state_->rotate_snap_degrees;
@@ -662,6 +681,7 @@ namespace lfs::python {
             config.pivot_world = glm::vec3(state_->matrix[3]);
             config.orientation_world = orientation_for_operation();
             config.draw_list = draw_list;
+            config.input = gizmo_input;
             config.input_enabled = state_->input_enabled;
             config.snap = state_->snap;
             config.snap_ratio = state_->scale_snap_ratio;
@@ -761,7 +781,7 @@ namespace lfs::python {
                                             const glm::mat4& projection,
                                             const glm::vec2& viewport_pos,
                                             const glm::vec2& viewport_size,
-                                            ImDrawList* draw_list) {
+                                            vis::gui::NativeOverlayDrawList* draw_list) {
         std::vector<std::shared_ptr<PyTransformGizmoState>> states;
         {
             std::lock_guard lock(mutex_);

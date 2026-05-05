@@ -6,7 +6,6 @@
 
 #include "gui/panel_height_mode.hpp"
 #include "gui/panel_registry.hpp"
-#include "gui/rmlui/rml_fbo.hpp"
 #include <core/export.hpp>
 #include <cstddef>
 #include <mutex>
@@ -54,8 +53,6 @@ namespace lfs::vis::gui {
         static void setFrameTooltip(const std::string& tip, const void* hover_target);
         static bool consumeFrameWantsKeyboard();
         static bool consumeFrameWantsTextInput();
-        static void clearQueuedForegroundComposites();
-        static void flushQueuedForegroundComposites(int screen_w, int screen_h);
 
         void setHeightMode(PanelHeightMode mode) { height_mode_ = mode; }
         PanelHeightMode getHeightMode() const { return height_mode_; }
@@ -100,19 +97,6 @@ namespace lfs::vis::gui {
         void renderIfDirty(int pw, int ph, float& display_h);
         void compositeDirectToScreen(float x, float y, float w, float h) const;
 
-        struct CompositeCommand {
-            const RmlFBO* fbo = nullptr;
-            float x = 0.0f;
-            float y = 0.0f;
-            float w = 0.0f;
-            float h = 0.0f;
-            float clip_x1 = 0.0f;
-            float clip_y1 = 0.0f;
-            float clip_x2 = 0.0f;
-            float clip_y2 = 0.0f;
-            std::optional<ShadowRect> popover_shadow;
-        };
-
         RmlUIManager* manager_;
         std::string context_name_;
         std::string rml_path_;
@@ -142,7 +126,6 @@ namespace lfs::vis::gui {
         float clip_y_min_ = -1.0f;
         float clip_y_max_ = -1.0f;
         const PanelInputState* input_ = nullptr;
-        RmlFBO fbo_;
 
         bool render_needed_ = true;
         bool animation_active_ = false;
@@ -153,8 +136,6 @@ namespace lfs::vis::gui {
         int last_forwarded_mx_ = -1;
         int last_forwarded_my_ = -1;
         bool last_hovered_ = false;
-
-        static std::vector<CompositeCommand> queued_foreground_composites_;
     };
 
 } // namespace lfs::vis::gui

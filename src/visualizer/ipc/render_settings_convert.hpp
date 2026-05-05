@@ -58,7 +58,8 @@ namespace lfs::vis {
         p.show_pivot = s.show_pivot;
         p.split_view_mode = static_cast<int>(s.split_view_mode);
         p.split_position = s.split_position;
-        p.gut = s.gut;
+        p.raster_backend = static_cast<int>(s.raster_backend);
+        p.gut = s.raster_backend == lfs::rendering::GaussianRasterBackend::Gut;
         p.equirectangular = s.equirectangular;
         p.orthographic = s.orthographic;
         p.ortho_scale = s.ortho_scale;
@@ -126,7 +127,11 @@ namespace lfs::vis {
         s.show_pivot = p.show_pivot;
         s.split_view_mode = static_cast<SplitViewMode>(p.split_view_mode);
         s.split_position = p.split_position;
-        s.gut = p.gut;
+        s.raster_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
+        if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
+            s.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
+        }
+        s.gut = s.raster_backend == lfs::rendering::GaussianRasterBackend::Gut;
         s.equirectangular = p.equirectangular;
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;

@@ -32,7 +32,7 @@ target_link_libraries(lfs_mcp
     lfs_event_bridge
     lfs_io
     lfs_training
-    lfs_rendering
+    lfs_rendering_tensor
     lfs_python_utils
     OpenSSL::SSL
     OpenSSL::Crypto

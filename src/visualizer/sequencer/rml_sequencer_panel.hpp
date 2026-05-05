@@ -3,7 +3,6 @@
 
 #pragma once
 
-#include "gui/rmlui/rml_fbo.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "sequencer_controller.hpp"
 #include <RmlUi/Core/EventListener.h>
@@ -159,7 +158,7 @@ namespace lfs::vis {
         [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
-        void destroyGLResources();
+        void destroyGraphicsResources();
         void reloadResources();
 
     private:
@@ -326,13 +325,6 @@ namespace lfs::vis {
         float cached_dp_ratio_ = 1.0f;
         float cached_height_ = panel_config::HEIGHT;
         float cached_total_height_ = panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT;
-
-        gui::RmlFBO fbo_;
-        bool pending_foreground_composite_ = false;
-        float pending_composite_x_ = 0.0f;
-        float pending_composite_y_ = 0.0f;
-        float pending_composite_width_ = 0.0f;
-        float pending_composite_height_ = 0.0f;
 
         // Interaction state
         bool dragging_playhead_ = false;

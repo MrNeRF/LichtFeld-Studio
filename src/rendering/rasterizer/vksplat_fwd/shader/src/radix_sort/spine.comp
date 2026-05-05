@@ -1,0 +1,100 @@
+#version 460 core
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_shader_subgroup_basic: enable
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_ballot: enable
+
+#extension GL_ARB_shading_language_include : require
+#include "./config.glsl"
+
+// dispatch this shader (RADIX, 1, 1), so that gl_WorkGroupID.x is radix
+layout (local_size_x = WORKGROUP_SIZE) in;
+
+layout (std430, binding = 0) restrict buffer GlobalHistogram {
+  uint32_t data[];  // (8, R)
+} globalHistogram;
+
+layout (std430, binding = 1) restrict buffer PartitionHistogram {
+  uint32_t data[];  // (P, R)
+} partitionHistogram;
+
+layout (push_constant) uniform PushConstant {
+  uint32_t pass;
+  uint32_t elementCount;
+} uniforms;
+
+shared uint32_t reduction;
+shared uint32_t intermediate[SUBGROUP_SIZE];
+
+void main() {
+  uint threadIndex = gl_SubgroupInvocationID;  // 0..31
+  uint subgroupIndex = gl_SubgroupID;  // 0..15
+  uint index = subgroupIndex * gl_SubgroupSize + threadIndex;
+  uint radix = gl_WorkGroupID.x;
+
+  uint elementCount = uniforms.elementCount;
+  int pass = int(uniforms.pass);
+
+  uint partitionCount = (elementCount + PARTITION_SIZE - 1) / PARTITION_SIZE;
+
+  if (index == 0) {
+    reduction = 0;
+  }
+  barrier();
+
+  for (uint i = 0; WORKGROUP_SIZE * i < partitionCount; ++i) {
+    uint partitionIndex = WORKGROUP_SIZE * i + index;
+    uint32_t value = partitionIndex < partitionCount ? partitionHistogram.data[RADIX * partitionIndex + radix] : 0;
+    uint32_t excl = subgroupExclusiveAdd(value) + reduction;
+    uint32_t sum = subgroupAdd(value);
+
+    if (subgroupElect()) {
+      intermediate[subgroupIndex] = sum;
+    }
+    barrier();
+
+    if (index < gl_NumSubgroups) {
+      uint32_t excl = subgroupExclusiveAdd(intermediate[index]);
+      uint32_t sum = subgroupAdd(intermediate[index]);
+      intermediate[index] = excl;
+
+      if (index == 0) {
+        reduction += sum;
+      }
+    }
+    barrier();
+
+    if (partitionIndex < partitionCount) {
+      excl += intermediate[subgroupIndex];
+      partitionHistogram.data[RADIX * partitionIndex + radix] = excl;
+    }
+    barrier();
+  }
+
+  if (gl_WorkGroupID.x == 0) {
+    // one workgroup is responsible for global histogram prefix sum
+    uint32_t value, excl, sum;
+    if (index < RADIX) {
+      value = globalHistogram.data[RADIX * pass + index];
+      excl = subgroupExclusiveAdd(value);
+      sum = subgroupAdd(value);
+
+      if (subgroupElect()) {
+        intermediate[subgroupIndex] = sum;
+      }
+    }
+    barrier();
+
+    if (index < RADIX / gl_SubgroupSize) {
+      uint32_t excl = subgroupExclusiveAdd(intermediate[index]);
+      intermediate[index] = excl;
+    }
+    barrier();
+
+    if (index < RADIX) {
+      excl += intermediate[subgroupIndex];
+      globalHistogram.data[RADIX * pass + index] = excl;
+    }
+  }
+}

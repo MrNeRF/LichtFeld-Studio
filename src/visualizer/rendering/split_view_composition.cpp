@@ -31,7 +31,7 @@ namespace lfs::vis {
                 .model_transform = model_transform,
                 .gaussian_render = std::nullopt,
                 .point_cloud_render = std::nullopt,
-                .texture_id = 0};
+                .image_handle = 0};
 
             if (ctx.settings.point_cloud_mode) {
                 content.point_cloud_render =
@@ -137,7 +137,7 @@ namespace lfs::vis {
                                   .model_transform = glm::mat4(1.0f),
                                   .gaussian_render = std::nullopt,
                                   .point_cloud_render = std::nullopt,
-                                  .texture_id = res.gt_context->gt_texture_id},
+                                  .image_handle = res.gt_context->gt_image_handle},
                              .presentation =
                                  {.start_position = 0.0f,
                                   .end_position = ctx.settings.split_position,
@@ -153,7 +153,7 @@ namespace lfs::vis {
                                   .model_transform = glm::mat4(1.0f),
                                   .gaussian_render = std::nullopt,
                                   .point_cloud_render = std::nullopt,
-                                  .texture_id = res.cached_gpu_frame->color.id},
+                                  .image_handle = res.cached_gpu_frame->color.id},
                              .presentation =
                                  {.start_position = ctx.settings.split_position,
                                   .end_position = 1.0f,

@@ -82,7 +82,7 @@ namespace lfs::vis::gui::widgets {
     void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, float rounding = 6.0f);
 
     // Icon button with selection state styling
-    LFS_VIS_API bool IconButton(const char* id, unsigned int texture, const ImVec2& size, bool selected = false,
+    LFS_VIS_API bool IconButton(const char* id, ImTextureID texture, const ImVec2& size, bool selected = false,
                                 const char* fallback_label = "?");
 
     // Semantic colored buttons - subtle tint on surface, stronger on hover

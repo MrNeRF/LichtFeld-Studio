@@ -9,9 +9,6 @@
 #include "core/services.hpp"
 #include "core/tensor.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "visualizer/rendering/passes/mesh_pass.hpp"
-#include "visualizer/rendering/passes/point_cloud_pass.hpp"
-#include "visualizer/rendering/passes/splat_raster_pass.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/split_view_composition.hpp"
@@ -265,7 +262,7 @@ namespace lfs::vis {
         EXPECT_EQ(pose.translation, glm::vec3(1.0f, 2.0f, 3.0f));
     }
 
-    TEST(RenderingManagerEventsTest, OrthographicTogglePreservesApparentZoomAtPivotInBothDirections) {
+    TEST_F(RenderingManagerEventsTest, OrthographicTogglePreservesApparentZoomAtPivotInBothDirections) {
         RenderingManager manager;
         auto settings = manager.getSettings();
         settings.focal_length_mm = 50.0f;
@@ -312,7 +309,7 @@ namespace lfs::vis {
 
         FrameResources res;
         res.gt_context = GTComparisonContext{
-            .gt_texture_id = 11,
+            .gt_image_handle = 11,
             .camera_id = 7,
             .dimensions = {320, 240},
             .gpu_aligned_dims = {320, 256},
@@ -870,35 +867,6 @@ namespace lfs::vis {
         EXPECT_TRUE(right_request.overlay.cursor.enabled);
     }
 
-    TEST(RenderPassSensitivityTest, SplitViewToggleInvalidatesBaseViewportContent) {
-        SplatRasterPass splat_pass;
-        PointCloudPass point_cloud_pass;
-
-        EXPECT_NE(splat_pass.sensitivity() & DirtyFlag::SPLIT_VIEW, 0u);
-        EXPECT_NE(point_cloud_pass.sensitivity() & DirtyFlag::SPLIT_VIEW, 0u);
-        EXPECT_NE(MeshPass::MESH_GEOMETRY_MASK & DirtyFlag::SPLIT_VIEW, 0u);
-    }
-
-    TEST(RenderPassSensitivityTest, InvalidTrainingModelRoutesToPointCloudFallback) {
-        Viewport viewport;
-        RenderSettings settings;
-        SceneManager manager;
-        const lfs::core::SplatData invalid_model;
-
-        FrameContext ctx{
-            .viewport = viewport,
-            .scene_manager = &manager,
-            .model = &invalid_model,
-            .settings = settings,
-            .render_size = viewport.windowSize};
-
-        SplatRasterPass splat_pass;
-        PointCloudPass point_cloud_pass;
-
-        EXPECT_FALSE(splat_pass.shouldExecute(DirtyFlag::SPLATS, ctx));
-        EXPECT_TRUE(point_cloud_pass.shouldExecute(DirtyFlag::SPLATS, ctx));
-    }
-
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
         RenderingManager manager;
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
@@ -922,22 +890,6 @@ namespace lfs::vis {
         lfs::core::events::state::SceneCleared{}.emit();
 
         EXPECT_EQ(manager.getSettings().split_view_mode, SplitViewMode::Disabled);
-    }
-
-    TEST_F(RenderingManagerEventsTest, SceneClearedResetsFrustumLoaderSyncCache) {
-        RenderingManager manager;
-        manager.frustum_loader_sync_initialized_ = true;
-        manager.synced_frustum_allow_fallback_ = true;
-        manager.frustum_loader_dirty_.store(true, std::memory_order_relaxed);
-        manager.frustum_loader_poll_until_ready_.store(true, std::memory_order_relaxed);
-
-        lfs::core::events::state::SceneCleared{}.emit();
-
-        EXPECT_TRUE(manager.frustum_loader_sync_initialized_);
-        EXPECT_FALSE(manager.synced_frustum_loader_);
-        EXPECT_FALSE(manager.synced_frustum_allow_fallback_);
-        EXPECT_FALSE(manager.frustum_loader_dirty_.load(std::memory_order_relaxed));
-        EXPECT_FALSE(manager.frustum_loader_poll_until_ready_.load(std::memory_order_relaxed));
     }
 
     TEST_F(RenderingManagerEventsTest, ToggleIndependentSplitViewInitializesSecondaryViewport) {

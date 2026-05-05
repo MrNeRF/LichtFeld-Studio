@@ -449,6 +449,8 @@ namespace lfs::vis {
 
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
+        LOG_PERF("InputController::handleMouseButton button={} action={} pos=({},{}) drag_mode={}",
+                 button, action, x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
         const bool is_left_button = button == static_cast<int>(input::AppMouseButton::LEFT);
         const bool press_consumed_camera_frustum =
@@ -905,6 +907,8 @@ namespace lfs::vis {
     }
 
     void InputController::handleMouseMove(double x, double y) {
+        LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
+                 x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
 
         // Forward to pie menu if open — consume event to prevent viewport interaction
@@ -1890,6 +1894,8 @@ namespace lfs::vis {
             if (node->type == core::NodeType::CAMERA && node->camera_uid == uid) {
                 if (auto result = cap::selectNode(*sm, node->name); !result) {
                     LOG_WARN("Camera selection failed for '{}': {}", node->name, result.error());
+                } else if (auto* rendering_manager = services().renderingOrNull()) {
+                    rendering_manager->markDirty(DirtyFlag::OVERLAY);
                 }
                 return;
             }
@@ -2070,6 +2076,7 @@ namespace lfs::vis {
 
     void InputController::beginPanDrag(const PanelInteractionState& interaction, const int button,
                                        const double x, const double y) {
+        LOG_PERF("InputController::beginPanDrag button={} pos=({},{})", button, x, y);
         interaction.viewport->camera.initScreenPos(glm::vec2(x, y));
         drag_viewport_ = interaction.viewport;
         drag_split_panel_ = interaction.panel;
@@ -2327,6 +2334,7 @@ namespace lfs::vis {
     }
 
     void InputController::publishCameraMove(Viewport* target_viewport) {
+        LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport_;
         if (selection_tool_ && selection_tool_->isEnabled()) {
             selection_tool_->syncDepthFilterToCamera(*active_viewport);

@@ -2,10 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
@@ -15,7 +11,6 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
@@ -34,7 +29,6 @@
 #include <cstddef>
 #include <filesystem>
 #include <format>
-#include <imgui_impl_opengl3.h>
 #include <imgui_internal.h>
 #include <string_view>
 #include <unordered_set>
@@ -49,7 +43,6 @@ namespace lfs::vis::gui {
     static bool s_frame_tooltip_updated_this_frame = false;
     static bool s_frame_wants_keyboard = false;
     static bool s_frame_wants_text_input = false;
-    std::vector<RmlPanelHost::CompositeCommand> RmlPanelHost::queued_foreground_composites_;
 
     std::string RmlPanelHost::consumeFrameTooltip() {
         const bool updated = s_frame_tooltip_updated_this_frame;
@@ -101,54 +94,6 @@ namespace lfs::vis::gui {
         const bool result = s_frame_wants_text_input;
         s_frame_wants_text_input = false;
         return result;
-    }
-
-    void RmlPanelHost::clearQueuedForegroundComposites() {
-        queued_foreground_composites_.clear();
-    }
-
-    void RmlPanelHost::flushQueuedForegroundComposites(const int screen_w, const int screen_h) {
-        if (screen_w <= 0 || screen_h <= 0) {
-            queued_foreground_composites_.clear();
-            return;
-        }
-
-        for (const auto& cmd : queued_foreground_composites_) {
-            if (!cmd.fbo || !cmd.fbo->valid())
-                continue;
-            {
-                ImDrawList draw_list(ImGui::GetDrawListSharedData());
-                draw_list._ResetForNewFrame();
-                draw_list.PushTextureID(ImGui::GetIO().Fonts->TexID);
-                draw_list.PushClipRectFullScreen();
-                widgets::DrawFloatingWindowShadow(&draw_list, {cmd.x, cmd.y}, {cmd.w, cmd.h},
-                                                  theme().sizes.window_rounding);
-                draw_list.PopClipRect();
-
-                if (!draw_list.CmdBuffer.empty() && !draw_list.VtxBuffer.empty()) {
-                    ImDrawData draw_data{};
-                    draw_data.DisplayPos = ImVec2(0.0f, 0.0f);
-                    draw_data.DisplaySize = ImVec2(static_cast<float>(screen_w),
-                                                   static_cast<float>(screen_h));
-                    draw_data.FramebufferScale = ImGui::GetIO().DisplayFramebufferScale;
-                    draw_data.Valid = true;
-                    draw_data.AddDrawList(&draw_list);
-                    ImGui_ImplOpenGL3_RenderDrawData(&draw_data);
-                }
-            }
-            cmd.fbo->blitToScreenClipped(cmd.x, cmd.y, cmd.w, cmd.h,
-                                         screen_w, screen_h,
-                                         cmd.clip_x1, cmd.clip_y1,
-                                         cmd.clip_x2, cmd.clip_y2);
-            if (cmd.popover_shadow) {
-                const auto& shadow = *cmd.popover_shadow;
-                widgets::DrawPopoverShadowOverlay(ImGui::GetForegroundDrawList(),
-                                                  {shadow.x, shadow.y},
-                                                  {shadow.w, shadow.h},
-                                                  shadow.rounding);
-            }
-        }
-        queued_foreground_composites_.clear();
     }
 
     namespace {
@@ -234,8 +179,6 @@ namespace lfs::vis::gui {
     }
 
     RmlPanelHost::~RmlPanelHost() {
-        std::erase_if(queued_foreground_composites_,
-                      [this](const CompositeCommand& cmd) { return cmd.fbo == &fbo_; });
         if (manager_ && manager_->isInitialized())
             manager_->destroyContext(context_name_);
         rml_context_ = nullptr;
@@ -489,7 +432,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::renderIfDirty(int pw, int ph, float& display_h) {
-        if (manager_ && manager_->shouldDeferFboUpdate(fbo_))
+        if (!manager_ || !manager_->getVulkanRenderInterface())
             return;
 
         const bool theme_dirty = syncThemeProperties();
@@ -497,12 +440,8 @@ namespace lfs::vis::gui {
         const bool externally_clipped =
             (clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_);
 
-        const bool fbo_reallocated = fbo_.ensure(pw, std::min(ph, kMaxFboSize));
-        if (!fbo_.valid())
-            return;
-
         const bool dirty = render_needed_ || content_dirty_ || theme_dirty ||
-                           size_dirty || animation_active_ || fbo_reallocated;
+                           size_dirty || animation_active_;
         if (!dirty)
             return;
 
@@ -561,10 +500,6 @@ namespace lfs::vis::gui {
                 display_h = static_cast<float>(ph);
             }
 
-            fbo_.ensure(pw, ph);
-            if (!fbo_.valid())
-                return;
-
             if (pw != last_layout_w_ || ph != last_layout_h_)
                 updateContextLayout(pw, ph);
 
@@ -577,21 +512,6 @@ namespace lfs::vis::gui {
         content_dirty_ = false;
         if (height_mode_ != PanelHeightMode::Content)
             last_content_height_ = display_h;
-
-        auto* render = manager_->getRenderInterface();
-        assert(render);
-        render->SetViewport(pw, ph);
-
-        GLint prev_fbo = 0;
-        fbo_.bind(&prev_fbo);
-        render->SetTargetFramebuffer(fbo_.fbo());
-
-        render->BeginFrame();
-        rml_context_->Render();
-        render->EndFrame();
-
-        render->SetTargetFramebuffer(0);
-        fbo_.unbind(prev_fbo);
 
         animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
         last_fbo_w_ = pw;
@@ -646,7 +566,30 @@ namespace lfs::vis::gui {
         renderIfDirty(w, h, display_h);
 
         const ImVec2 panel_screen_pos = ImGui::GetCursorScreenPos();
-        fbo_.blitAsImage(avail_w, display_h);
+        if (!manager_ || !manager_->getVulkanRenderInterface())
+            return;
+
+        const auto* vp = ImGui::GetMainViewport();
+        const float screen_x = vp ? vp->Pos.x : 0.0f;
+        const float screen_y = vp ? vp->Pos.y : 0.0f;
+        const ImVec2 clip_min = ImGui::GetWindowDrawList()->GetClipRectMin();
+        const ImVec2 clip_max = ImGui::GetWindowDrawList()->GetClipRectMax();
+        const float clip_x1 = std::max(clip_min.x, panel_screen_pos.x);
+        const float clip_y1 = std::max(clip_min.y, panel_screen_pos.y);
+        const float clip_x2 = std::min(clip_max.x, panel_screen_pos.x + avail_w);
+        const float clip_y2 = std::min(clip_max.y, panel_screen_pos.y + display_h);
+        ImGui::Dummy(ImVec2(avail_w, display_h));
+        if (clip_x2 <= clip_x1 || clip_y2 <= clip_y1)
+            return;
+        manager_->queueVulkanContext(rml_context_,
+                                     panel_screen_pos.x - screen_x,
+                                     panel_screen_pos.y - screen_y,
+                                     foreground_,
+                                     true,
+                                     clip_x1 - screen_x,
+                                     clip_y1 - screen_y,
+                                     clip_x2 - screen_x,
+                                     clip_y2 - screen_y);
         if (auto* vp = ImGui::GetMainViewport()) {
             const auto popup_shadow =
                 collectVisibleColorPickerPopupShadow(panel_screen_pos.x, panel_screen_pos.y);
@@ -793,7 +736,8 @@ namespace lfs::vis::gui {
 
     void RmlPanelHost::compositeDirectToScreen(const float x, const float y,
                                                const float w, const float h) const {
-        if (!input_ || !fbo_.valid() || w <= 0.0f || h <= 0.0f)
+        if (!input_ || !manager_ || !manager_->getVulkanRenderInterface() ||
+            w <= 0.0f || h <= 0.0f)
             return;
 
         float clip_x1 = x;
@@ -815,29 +759,12 @@ namespace lfs::vis::gui {
         const float screen_clip_y1 = clip_y1 - input_->screen_y;
         const float screen_clip_x2 = clip_x2 - input_->screen_x;
         const float screen_clip_y2 = clip_y2 - input_->screen_y;
-        const auto popover_shadow = collectVisibleColorPickerPopupShadow(screen_x, screen_y);
+        manager_->queueVulkanContext(rml_context_, screen_x, screen_y, foreground_,
+                                     true,
+                                     screen_clip_x1, screen_clip_y1,
+                                     screen_clip_x2, screen_clip_y2);
 
-        if (foreground_) {
-            queued_foreground_composites_.push_back({
-                .fbo = &fbo_,
-                .x = screen_x,
-                .y = screen_y,
-                .w = w,
-                .h = h,
-                .clip_x1 = screen_clip_x1,
-                .clip_y1 = screen_clip_y1,
-                .clip_x2 = screen_clip_x2,
-                .clip_y2 = screen_clip_y2,
-                .popover_shadow = popover_shadow,
-            });
-            return;
-        }
-
-        fbo_.blitToScreenClipped(screen_x, screen_y, w, h,
-                                 input_->screen_w, input_->screen_h,
-                                 screen_clip_x1, screen_clip_y1,
-                                 screen_clip_x2, screen_clip_y2);
-        if (popover_shadow) {
+        if (const auto popover_shadow = collectVisibleColorPickerPopupShadow(screen_x, screen_y)) {
             const auto& shadow = *popover_shadow;
             widgets::DrawPopoverShadowOverlay(ImGui::GetForegroundDrawList(),
                                               {shadow.x, shadow.y},
@@ -867,7 +794,7 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
-        if (!input_ || !fbo_.valid())
+        if (!input_ || !manager_ || !manager_->getVulkanRenderInterface())
             return false;
 
         bool had_input = false;
@@ -934,8 +861,8 @@ namespace lfs::vis::gui {
         float local_x = mouse_x - panel_x;
         float local_y = mouse_y - panel_y;
 
-        const float logical_w = static_cast<float>(fbo_.width());
-        const float logical_h = static_cast<float>(fbo_.height());
+        const float logical_w = static_cast<float>(last_fbo_w_);
+        const float logical_h = static_cast<float>(last_fbo_h_);
 
         bool hovered = hitTestPanelShape(local_x, local_y, logical_w, logical_h);
 

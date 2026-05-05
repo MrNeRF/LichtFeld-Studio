@@ -5,6 +5,7 @@
 #include "gui/native_panels.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/line_renderer.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -22,7 +23,6 @@
 
 #include <algorithm>
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui.h>
 
 namespace lfs::vis::gui::native_panels {
 
@@ -61,8 +61,8 @@ namespace lfs::vis::gui::native_panels {
         : gui_(gui) {}
 
     void ViewportDecorationsPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
         gui_->renderViewportDecorations();
+        (void)ctx;
     }
 
     SequencerPanel::SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout)
@@ -202,10 +202,11 @@ namespace lfs::vis::gui::native_panels {
             }
         }
 
+        NativeOverlayDrawList draw_list;
         python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
                                         vp_pos, vp_size, cam_pos, cam_fwd,
                                         overlay,
-                                        ImGui::GetBackgroundDrawList());
+                                        &draw_list);
     }
 
 } // namespace lfs::vis::gui::native_panels

@@ -75,5 +75,4 @@
     color: @{text};
     background-color: @{surface};
     border-color: @{border};
-    box-shadow: @{layered_shadow.3};
 }

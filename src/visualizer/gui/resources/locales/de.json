@@ -66,7 +66,6 @@
     "build_info.commit": "Commit",
     "build_info.build_type": "Build-Typ",
     "build_info.platform": "Plattform",
-    "build_info.cuda_gl_interop": "CUDA-GL Interop",
     "build_type.debug": "Debug",
     "build_type.release": "Release",
     "platform.windows": "Windows",

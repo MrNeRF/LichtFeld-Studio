@@ -4,7 +4,6 @@
 
 #include "gui/panel_layout.hpp"
 #include "gui/panels/python_console_panel.hpp"
-#include "gui/rmlui/rml_fbo.hpp"
 #include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"

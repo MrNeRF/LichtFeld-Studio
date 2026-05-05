@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "gui/line_renderer.hpp"
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -18,8 +20,6 @@
 #include <vector>
 
 namespace nb = nanobind;
-
-struct ImDrawList;
 
 namespace lfs::python {
 
@@ -223,7 +223,7 @@ namespace lfs::python {
                         const glm::mat4& projection,
                         const glm::vec2& viewport_pos,
                         const glm::vec2& viewport_size,
-                        ImDrawList* draw_list);
+                        lfs::vis::gui::NativeOverlayDrawList* draw_list);
 
     private:
         explicit PyTransformGizmo(std::shared_ptr<PyTransformGizmoState> state);
@@ -253,7 +253,7 @@ namespace lfs::python {
                       const glm::mat4& projection,
                       const glm::vec2& viewport_pos,
                       const glm::vec2& viewport_size,
-                      ImDrawList* draw_list);
+                      lfs::vis::gui::NativeOverlayDrawList* draw_list);
 
     private:
         mutable std::mutex mutex_;

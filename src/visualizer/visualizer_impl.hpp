@@ -179,6 +179,7 @@ namespace lfs::vis {
         void setupPythonBridge();
         void setupViewContextBridge();
         void beginShutdown(std::string_view reason = "Viewer is shutting down");
+        void processRenderWorkQueue();
 
         class CallbackCleanup {
             std::vector<std::function<void()>> cleanups_;

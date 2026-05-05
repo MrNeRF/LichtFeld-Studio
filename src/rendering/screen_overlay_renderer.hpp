@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include "gl_resources.hpp"
-#include "shader_manager.hpp"
+#include <functional>
 #include <glm/glm.hpp>
-#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -15,21 +14,44 @@
 
 namespace lfs::rendering {
 
-    class TextRenderer;
-
     struct OverlayColor {
-        float r, g, b, a;
+        float r = 0.0f, g = 0.0f, b = 0.0f, a = 0.0f;
     };
+
+    enum class OverlayCommandType {
+        Line,
+        Triangle,
+        CircleFilled,
+        CircleOutline,
+        Text,
+    };
+
+    struct OverlayClipRect {
+        glm::vec2 min{0.0f};
+        glm::vec2 max{0.0f};
+    };
+
+    struct OverlayCommand {
+        OverlayCommandType type = OverlayCommandType::Line;
+        glm::vec2 p0{0.0f};
+        glm::vec2 p1{0.0f};
+        glm::vec2 p2{0.0f};
+        glm::vec4 color_premul{0.0f};
+        float thickness = 1.0f;
+        float radius = 0.0f;
+        int segments = 0;
+        std::optional<OverlayClipRect> clip;
+        std::string text;
+        float font_size = 0.0f;
+    };
+
+    using TextMeasureFn = std::function<glm::vec2(std::string_view, float)>;
 
     class ScreenOverlayRenderer {
     public:
-        ScreenOverlayRenderer();
-        ~ScreenOverlayRenderer();
+        static void setTextMeasureFn(TextMeasureFn fn);
 
-        Result<void> initialize();
-        void shutdown();
-
-        void beginFrame(int window_pixel_w, int window_pixel_h);
+        void beginFrame();
         void endFrame();
         bool isFrameActive() const { return frame_active_; }
 
@@ -51,7 +73,7 @@ namespace lfs::rendering {
                                glm::vec2 shadow_offset = {1.0f, 1.0f});
         [[nodiscard]] glm::vec2 measureText(std::string_view text, float size_px) const;
 
-        void flush();
+        std::vector<OverlayCommand> consumeCommands();
 
         class ScopedClipRect {
         public:
@@ -69,40 +91,12 @@ namespace lfs::rendering {
         };
 
     private:
-        struct Vertex {
-            glm::vec2 pos_px;
-            glm::vec4 color_premul;
-        };
-        struct ClipRect {
-            glm::vec2 min;
-            glm::vec2 max;
-        };
-
-        void uploadAndDraw();
-        void applyClipScissor() const;
-        std::vector<glm::vec2> circlePerimeter(glm::vec2 center, float radius, int segments) const;
         glm::vec4 toPremul(OverlayColor c) const;
-        int adaptiveSegments(float radius) const;
-        void emitTriangle(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2, glm::vec4 c);
-        void emitLineSegment(glm::vec2 a, glm::vec2 b, glm::vec4 c, float thickness);
-        Result<void> ensureFontLoaded();
+        std::optional<OverlayClipRect> currentClip() const;
 
         bool frame_active_ = false;
-        int window_w_ = 0;
-        int window_h_ = 0;
-
-        VAO vao_;
-        VBO vbo_;
-        std::size_t vbo_capacity_bytes_ = 0;
-        ManagedShader shader_;
-        bool initialized_ = false;
-
-        std::vector<Vertex> verts_;
-        std::vector<ClipRect> clip_stack_;
-
-        std::unique_ptr<TextRenderer> text_renderer_;
-        bool text_renderer_failed_ = false;
-        unsigned int text_atlas_size_ = 32;
+        std::vector<OverlayCommand> commands_;
+        std::vector<OverlayClipRect> clip_stack_;
     };
 
 } // namespace lfs::rendering

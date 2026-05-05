@@ -3,7 +3,7 @@
 """Tests for icon cache.
 
 Targets:
-- py_ui.cpp:154-191 - Icon loading without GL context
+- py_ui.cpp - Icon loading without a running GUI texture backend
 - py_ui.cpp:297-304 - Concurrent access to icon cache
 """
 
@@ -19,18 +19,18 @@ import pytest
 _has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-@pytest.mark.skipif(not _has_display, reason="No display available for GL context")
+@pytest.mark.skipif(not _has_display, reason="No display available for GUI texture backend")
 class TestIconCache:
     """Tests for icon cache edge cases."""
 
-    def test_icon_load_without_gl_context(self, lf):
-        """Icon loading without OpenGL context should be handled."""
-        # Without GUI, GL context is not available
+    def test_icon_load_without_gui_texture_backend(self, lf):
+        """Icon loading without a GUI texture backend should be handled."""
+        # Without the visualizer, the UI texture backend is not available.
         try:
             # This would require an icon path that exists
             result = lf.ui.load_icon("nonexistent_icon.png")
         except (RuntimeError, FileNotFoundError, OSError):
-            pass  # Expected without GL context
+            pass  # Expected without a GUI texture backend
 
     def test_load_invalid_icon_path(self, lf):
         """Loading icon from invalid path."""
@@ -101,7 +101,7 @@ def plugin_icons_dir(monkeypatch):
         PluginManager._instance = original_instance
 
 
-@pytest.mark.skipif(not _has_display, reason="No display available for GL context")
+@pytest.mark.skipif(not _has_display, reason="No display available for GUI texture backend")
 class TestPluginIconCleanup:
     """Tests for plugin icon cleanup."""
 
@@ -147,7 +147,7 @@ def on_unload():
         # Should not crash
 
 
-@pytest.mark.skipif(not _has_display, reason="No display available for GL context")
+@pytest.mark.skipif(not _has_display, reason="No display available for GUI texture backend")
 class TestIconCacheMemory:
     """Tests for icon cache memory management."""
 

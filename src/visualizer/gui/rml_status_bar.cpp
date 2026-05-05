@@ -2,10 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_status_bar.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -14,7 +10,6 @@
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "internal/resource_paths.hpp"
@@ -239,7 +234,6 @@ namespace lfs::vis::gui {
 
     void RmlStatusBar::shutdown() {
         model_handle_ = {};
-        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("status_bar");
         rml_context_ = nullptr;
@@ -596,14 +590,8 @@ namespace lfs::vis::gui {
         const bool needs_render = size_changed || theme_changed || had_pending_model_dirty ||
                                   content_changed ||
                                   (animation_active_ && refresh_due);
-        if (rml_manager_->shouldDeferFboUpdate(fbo_)) {
-            if (needs_render)
-                model_dirty_ = true;
-            if (fbo_.valid())
-                fbo_.blitToScreen(blit_rect.x, blit_rect.y, blit_rect.w, blit_rect.h,
-                                  blit_rect.screen_w, blit_rect.screen_h);
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
-        }
 
         if (needs_render) {
             rml_context_->SetDimensions(Rml::Vector2i(render_w, render_h));
@@ -613,33 +601,18 @@ namespace lfs::vis::gui {
             }
             rml_context_->Update();
 
-            fbo_.ensure(render_w, render_h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render = rml_manager_->getRenderInterface();
-            assert(render);
-            render->SetViewport(render_w, render_h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render->SetTargetFramebuffer(fbo_.fbo());
-
-            render->BeginFrame();
-            rml_context_->Render();
-            render->EndFrame();
-
-            render->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
-
             animation_active_ = animation_active_ || (rml_context_->GetNextUpdateDelay() == 0);
             last_render_w_ = render_w;
             last_render_h_ = render_h;
         }
 
-        if (fbo_.valid())
-            fbo_.blitToScreen(blit_rect.x, blit_rect.y, blit_rect.w, blit_rect.h,
-                              blit_rect.screen_w, blit_rect.screen_h);
+        rml_manager_->queueVulkanContext(rml_context_, blit_rect.x, blit_rect.y,
+                                         false,
+                                         true,
+                                         blit_rect.x,
+                                         blit_rect.y,
+                                         blit_rect.x + blit_rect.w,
+                                         blit_rect.y + blit_rect.h);
     }
 
 } // namespace lfs::vis::gui

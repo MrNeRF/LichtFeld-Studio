@@ -261,11 +261,15 @@
         <input type="checkbox" data-checked="equirectangular" />
       </label>
     </div>
-    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.gut_mode">
-      <span class="setting-row__label-col">{{label_gut}}</span>
-      <label class="setting-row__control-col setting-row__control-col--checkbox">
-        <input type="checkbox" data-checked="gut" />
-      </label>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.raster_backend">
+      <span class="setting-row__label-col">{{label_raster_backend}}</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <select data-value="raster_backend">
+          <option value="fast_gs">fast_gs</option>
+          <option value="3dgut">3dgut</option>
+          <option value="vksplat" data-if="vksplat_available">vksplat (experimental)</option>
+        </select>
+      </div>
     </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mip_filter">
       <span class="setting-row__label-col">{{label_mip_filter}}</span>

@@ -215,7 +215,7 @@ namespace {
         constexpr size_t width = 2;
         constexpr size_t height = 2;
 
-        // Simulate raw OpenGL-style readback: the logical bottom row is bright.
+        // Simulate raw bottom-left-origin readback: the logical bottom row is bright.
         for (size_t col = 0; col < width; ++col) {
             ptr[0 * height * width + col * height + 0] = 10.0f;
         }

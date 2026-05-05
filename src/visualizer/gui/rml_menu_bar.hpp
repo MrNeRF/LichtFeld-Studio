@@ -5,7 +5,6 @@
 #pragma once
 
 #include "gui/panel_layout.hpp"
-#include "gui/rmlui/rml_fbo.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
@@ -94,7 +93,6 @@ namespace lfs::vis::gui {
         void suspend();
         bool wantsInput() const { return wants_input_; }
         bool isOpen() const { return open_menu_index_ >= 0; }
-        const RmlFBO& fbo() const { return fbo_; }
         float barHeight() const;
 
     private:
@@ -109,8 +107,6 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::DataModelHandle menu_model_;
-
-        RmlFBO fbo_;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;

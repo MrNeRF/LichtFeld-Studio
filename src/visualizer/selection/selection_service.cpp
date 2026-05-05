@@ -1084,7 +1084,7 @@ namespace lfs::vis {
         }
 
         auto* const engine = rendering_manager_->getRenderingEngineIfInitialized();
-        if (!engine || !engine->isInitialized()) {
+        if (!engine || !engine->isRasterInitialized()) {
             return nullptr;
         }
 
@@ -1122,7 +1122,7 @@ namespace lfs::vis {
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
         auto* const engine = rendering_manager_->getRenderingEngineIfInitialized();
-        if (!engine || !engine->isInitialized()) {
+        if (!engine || !engine->isRasterInitialized()) {
             return nullptr;
         }
 
@@ -1231,7 +1231,7 @@ namespace lfs::vis {
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
         auto* const engine = rendering_manager_->getRenderingEngine();
-        if (!engine || !engine->isInitialized()) {
+        if (!engine || !engine->isRasterInitialized()) {
             return std::nullopt;
         }
 
@@ -1249,7 +1249,9 @@ namespace lfs::vis {
             .scaling_modifier = settings.scaling_modifier,
             .mip_filter = settings.mip_filter,
             .sh_degree = scene_state.combined_model->get_active_sh_degree(),
-            .gut = settings.gut,
+            .raster_backend = settings.raster_backend,
+            .gut = settings.gut ||
+                   settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
             .equirectangular = settings.equirectangular,
             .scene =
                 {.model_transforms = &scene_state.model_transforms,

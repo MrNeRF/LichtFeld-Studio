@@ -4,6 +4,9 @@
 
 # Add forward-only gsplat backend subdirectory
 add_subdirectory(gsplat_fwd)
+if(ENABLE_VULKAN_VIEWER)
+    add_subdirectory(vksplat_fwd)
+endif()
 
 set(RASTERIZER_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/src/forward.cu

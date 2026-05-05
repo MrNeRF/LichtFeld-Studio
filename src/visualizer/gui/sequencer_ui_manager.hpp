@@ -5,13 +5,13 @@
 #pragma once
 
 #include "gui/film_strip_renderer.hpp"
-#include "gui/gl_line_renderer.hpp"
 #include "gui/keyframe_scene_sync.hpp"
+#include "gui/line_renderer.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/sequencer_viewport_edit_mode.hpp"
 #include "gui/ui_context.hpp"
-#include "rendering/gl_resources.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include <chrono>
@@ -43,7 +43,7 @@ namespace lfs::vis {
             void setSequencerEnabled(bool enabled);
             void reloadRmlResources();
 
-            void destroyGLResources();
+            void destroyGraphicsResources();
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
@@ -75,7 +75,7 @@ namespace lfs::vis {
             std::unique_ptr<RmlSequencerPanel> panel_;
             std::unique_ptr<gui::RmlSequencerOverlay> overlay_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;
-            GLLineRenderer line_renderer_;
+            LineRenderer line_renderer_;
             FilmStripRenderer film_strip_;
 
             SequencerViewportEditMode viewport_edit_mode_ = SequencerViewportEditMode::None;
@@ -89,11 +89,8 @@ namespace lfs::vis {
             static constexpr int PREVIEW_WIDTH = 320;
             static constexpr int PREVIEW_HEIGHT = 180;
             static constexpr float PREVIEW_TARGET_FPS = 30.0f;
-            rendering::FBO pip_fbo_;
-            rendering::Texture pip_texture_;
-            rendering::RBO pip_depth_rbo_;
+            VulkanUiTexture pip_texture_;
             bool pip_initialized_ = false;
-            bool pip_init_failed_ = false;
             std::optional<size_t> pip_last_keyframe_;
             bool pip_needs_update_ = true;
             bool last_equirectangular_ = false;

@@ -404,7 +404,7 @@ def compose_transform(translation: Sequence[float], euler_deg: Sequence[float], 
 
 def load_icon(name: str) -> int:
     """
-    Load an icon texture from assets/icon/{name}.png, returns OpenGL texture ID
+    Load an icon texture from assets/icon/{name}.png, returns UI texture ID
     """
 
 def free_icon(texture_id: int) -> None:
@@ -1012,9 +1012,7 @@ class Tensor:
         """Return numpy array view (zero-copy for CPU contiguous tensors)"""
 
 def mesh_to_splat(mesh_name: str, sigma: float = 0.6499999761581421, quality: float = 0.5, max_resolution: int = 1024, light_dir: tuple[float, float, float] | None = None, light_intensity: float = 0.699999988079071, ambient: float = 0.4000000059604645) -> None:
-    """
-    Convert a mesh node to gaussian splats. Runs asynchronously on the GL thread.
-    """
+    """Request mesh-to-splat conversion for a mesh node."""
 
 def is_mesh2splat_active() -> bool:
     """Check if a mesh-to-splat conversion is currently running"""

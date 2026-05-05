@@ -33,8 +33,6 @@ namespace lfs::vis::tools {
 
     namespace {
 
-        constexpr lfs::rendering::OverlayColor kOverlayShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
-
         [[nodiscard]] lfs::rendering::OverlayColor toOverlay(const auto& c) {
             return {c.x, c.y, c.z, c.w};
         }
@@ -197,6 +195,7 @@ namespace lfs::vis::tools {
             {bounds.x + bounds.width, bounds.y + bounds.height});
 
         constexpr float SPHERE_RADIUS = 0.05f;
+        constexpr lfs::rendering::OverlayColor kShadow{0.0f, 0.0f, 0.0f, 180.0f / 255.0f};
         const auto& t = theme();
         const auto SPHERE_COLOR = toOverlay(t.palette.error);
         const auto SPHERE_OUTLINE = toOverlay(t.overlay.text);
@@ -216,10 +215,9 @@ namespace lfs::vis::tools {
             overlay->addCircleFilled(screen_pos, screen_radius, SPHERE_COLOR, 32);
             overlay->addCircle(screen_pos, screen_radius, SPHERE_OUTLINE, 32, 1.5f);
 
-            const char label = '1' + static_cast<char>(i);
+            const char label[2] = {static_cast<char>('1' + static_cast<char>(i)), '\0'};
             overlay->addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
-                             std::string_view{&label, 1},
-                             toOverlay(t.overlay.text), label_size);
+                             label, toOverlay(t.overlay.text), label_size);
         }
 
         if (over_gui)
@@ -247,10 +245,9 @@ namespace lfs::vis::tools {
                     overlay->addCircleFilled(screen_pos, screen_radius, PREVIEW_COLOR, 32);
                     overlay->addCircle(screen_pos, screen_radius, toOverlay(t.palette.text, 0.6f), 32, 1.5f);
 
-                    const char label = '1' + static_cast<char>(picked_points.size());
+                    const char label[2] = {static_cast<char>('1' + static_cast<char>(picked_points.size())), '\0'};
                     overlay->addText({screen_pos.x - 4.0f, screen_pos.y - 6.0f},
-                                     std::string_view{&label, 1},
-                                     toOverlay(t.palette.text, 0.7f), label_size);
+                                     label, toOverlay(t.palette.text, 0.7f), label_size);
                 }
             }
         }
@@ -290,7 +287,8 @@ namespace lfs::vis::tools {
 
                     overlay->addLine(center_screen, normal_screen, YELLOW, 4.0f);
                     overlay->addCircleFilled(normal_screen, 10.0f, YELLOW);
-                    overlay->addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f}, "UP", YELLOW, label_size);
+                    overlay->addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f},
+                                     "UP", YELLOW, label_size);
 
                     const glm::vec2 p0_screen = projectToScreen(panel_proj, p0);
                     const glm::vec2 p1_screen = projectToScreen(panel_proj, p1);
@@ -310,13 +308,14 @@ namespace lfs::vis::tools {
         default: break;
         }
         if (instruction) {
-            overlay->addText({mouse_pos.x + 15.0f, mouse_pos.y - 10.0f}, instruction, CROSSHAIR_COLOR, label_size);
+            overlay->addText({mouse_pos.x + 15.0f, mouse_pos.y - 10.0f},
+                             instruction, CROSSHAIR_COLOR, label_size);
         }
 
         char count_text[16];
         snprintf(count_text, sizeof(count_text), "Points: %zu/3", picked_points.size());
-        overlay->addTextWithShadow({bounds.x + 10.0f, bounds.y + 40.0f}, count_text,
-                                   toOverlay(t.overlay.text), kOverlayShadow,
+        overlay->addTextWithShadow({bounds.x + 10.0f, bounds.y + 40.0f},
+                                   count_text, toOverlay(t.overlay.text), kShadow,
                                    t.fonts.large_size);
     }
 

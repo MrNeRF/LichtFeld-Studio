@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "rendering/gl_resources.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "sequencer/keyframe.hpp"
 #include <array>
 #include <core/export.hpp>
@@ -92,15 +92,15 @@ namespace lfs::vis::gui {
         [[nodiscard]] const std::optional<HoverState>& hoverState() const { return hover_state_; }
         [[nodiscard]] const std::vector<ThumbInfo>& thumbs() const { return thumbs_; }
         [[nodiscard]] const std::vector<ExactMarkerInfo>& markers() const { return exact_markers_; }
-        [[nodiscard]] unsigned int textureIdForSlot(const int slot_idx) const;
+        [[nodiscard]] std::uintptr_t textureIdForSlot(const int slot_idx) const;
         [[nodiscard]] bool slotIsCurrentGeneration(const int slot_idx) const;
 
         void invalidateAll();
-        void destroyGLResources();
+        void destroyGraphicsResources();
 
     private:
         struct Slot {
-            rendering::Texture texture;
+            VulkanUiTexture texture;
             float time = -1.0f;
             uint32_t frame_used = 0;
             uint32_t generation = 0;
@@ -116,7 +116,6 @@ namespace lfs::vis::gui {
             int preferred_slot = -1;
         };
 
-        void initGL();
         int findSlot(float time, float tolerance,
                      const std::array<bool, MAX_SLOTS>& claimed_slots) const;
         int allocateSlot(const std::array<bool, MAX_SLOTS>& claimed_slots);
@@ -125,10 +124,6 @@ namespace lfs::vis::gui {
                              RenderingManager* rm, SceneManager* sm);
 
         std::array<Slot, MAX_SLOTS> slots_;
-        rendering::FBO fbo_;
-        rendering::RBO depth_rbo_;
-        bool gl_initialized_ = false;
-        bool gl_init_failed_ = false;
         uint32_t frame_counter_ = 0;
 
         std::vector<ThumbInfo> thumbs_;

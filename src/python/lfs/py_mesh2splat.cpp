@@ -50,7 +50,10 @@ namespace lfs::python {
 
                 if (light_dir) {
                     auto [x, y, z] = *light_dir;
-                    opts.light_dir = glm::normalize(glm::vec3(x, y, z));
+                    const glm::vec3 requested_light_dir(x, y, z);
+                    const float len = glm::length(requested_light_dir);
+                    if (len > 1e-6f)
+                        opts.light_dir = requested_light_dir / len;
                 } else {
                     auto view = vis::get_current_view_info();
                     if (view) {
@@ -70,7 +73,7 @@ namespace lfs::python {
             nb::arg("light_dir") = nb::none(),
             nb::arg("light_intensity") = 0.7f,
             nb::arg("ambient") = 0.4f,
-            "Convert a mesh node to gaussian splats. Runs asynchronously on the GL thread.");
+            "Request mesh-to-splat conversion for a mesh node.");
 
         m.def(
             "is_mesh2splat_active",

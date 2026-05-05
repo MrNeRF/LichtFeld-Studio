@@ -5,6 +5,7 @@
 #include "viewport_overlay.hpp"
 #include "core/logger.hpp"
 #include "gil.hpp"
+#include "gui/line_renderer.hpp"
 #include "lfs/py_gizmo.hpp"
 #include "lfs/py_viewport.hpp"
 #include "python_runtime.hpp"
@@ -15,7 +16,6 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui.h>
 
 namespace lfs::python {
 
@@ -54,7 +54,7 @@ namespace lfs::python {
             registry.invoke_handlers(DrawHandlerTiming::PostView, draw_ctx);
             registry.invoke_handlers(DrawHandlerTiming::PostUI, draw_ctx);
 
-            auto* dl = static_cast<ImDrawList*>(draw_list_ptr);
+            auto* dl = static_cast<vis::gui::NativeOverlayDrawList*>(draw_list_ptr);
             PyTransformGizmoRegistry::instance().draw_all(view, proj, vp_p, vp_s, dl);
 
             auto* overlay = static_cast<lfs::rendering::ScreenOverlayRenderer*>(overlay_renderer_ptr);

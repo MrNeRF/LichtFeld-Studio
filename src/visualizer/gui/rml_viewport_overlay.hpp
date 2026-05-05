@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "gui/rmlui/rml_fbo.hpp"
 #include <chrono>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -45,7 +44,6 @@ namespace lfs::vis::gui {
         void setGTMetricsOverlay(GTMetricsOverlayState state);
         void reloadResources();
         void render();
-        void compositeToScreen(int screen_w, int screen_h) const;
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
@@ -61,8 +59,6 @@ namespace lfs::vis::gui {
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
-
-        RmlFBO fbo_;
 
         glm::vec2 vp_pos_{0, 0};
         glm::vec2 vp_size_{0, 0};

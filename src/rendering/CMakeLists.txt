@@ -4,100 +4,57 @@
 
 add_subdirectory(rasterizer)
 
-set(RENDERING_SOURCES
-        rendering_engine.cpp
-        rendering_engine_impl.cpp
-        rendering_pipeline.cpp
+# Local to this target: mesh2splat.cpp compiles GLSL → SPIR-V at runtime via glslang.
+find_package(glslang CONFIG REQUIRED)
+
+set(RENDERING_TENSOR_SOURCES
+        cuda_vulkan_interop.cpp
+        cuda_vulkan_interop.cu
         gs_rasterizer_tensor.cpp
-        point_cloud_renderer.cpp
-        grid_renderer.cpp
-        bbox_renderer.cpp
-        ellipsoid_renderer.cpp
-        axes_renderer.cpp
-        pivot_renderer.cpp
-        text_renderer.cpp
-        environment_renderer.cpp
-        viewport_gizmo.cpp
-        screen_overlay_renderer.cpp
-        framebuffer_factory.cpp
-        shader_manager.cpp
-        screen_renderer.cpp
-        split_view_renderer.cpp
-        camera_frustum_renderer.cpp
-        mesh_renderer.cpp
+        raster_rendering_engine.cpp
+        cuda_interaction_kernels.cu
+        point_cloud_raster.cu
         mesh2splat.cpp
-        depth_compositor.cpp
+        screen_overlay_renderer.cpp
 )
 
-# Conditionally add CUDA GL interop
-if(CUDA_GL_INTEROP_ENABLED)
-    list(APPEND RENDERING_SOURCES
-        cuda_gl_interop.cpp
-        cuda_gl_kernels.cu)
-endif()
+add_library(lfs_rendering_tensor STATIC ${RENDERING_TENSOR_SOURCES})
 
-add_library(lfs_rendering STATIC ${RENDERING_SOURCES})
-
-target_link_libraries(lfs_rendering
+target_link_libraries(lfs_rendering_tensor
         PUBLIC
-        lfs_core                # Link core module
-        lfs_geometry            # LibTorch-free geometry module
-        # gs_kernels              # Temporarily disabled - requires LibTorch
+        lfs_core
         PRIVATE
-        lfs_io
         lfs_rasterizer
-        glm::glm
-        glad::glad
-        ${OPENGL_LIBRARIES}
         CUDA::cudart
+        glm::glm
+        Vulkan::Vulkan
+        glslang::glslang
+        glslang::SPIRV
+        glslang::glslang-default-resource-limits
         OpenImageIO::OpenImageIO
         spdlog::spdlog
-        Freetype::Freetype
+        TBB::tbb
 )
 
-# Since we're linking to lfs_core PUBLIC, we inherit its include directories
-# which include: ${CMAKE_BINARY_DIR}/include (for config.h)
-#                ${CMAKE_SOURCE_DIR}/gsplat (for Common.h)
-target_include_directories(lfs_rendering
+target_include_directories(lfs_rendering_tensor
         PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:include>
         PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src
-        ${OPENGL_INCLUDE_DIRS}
 )
 
-# Handle shaders
-set(RENDERING_BUILD_RESOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/resources")
-set(RENDERING_SOURCE_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
-
-file(MAKE_DIRECTORY "${RENDERING_BUILD_RESOURCE_DIR}/shaders")
-file(MAKE_DIRECTORY "${RENDERING_BUILD_RESOURCE_DIR}/shaders/mesh2splat")
-
-file(GLOB SHADER_FILES "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/*")
-foreach(SHADER_FILE ${SHADER_FILES})
-    if(NOT IS_DIRECTORY ${SHADER_FILE})
-        get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
-        configure_file(${SHADER_FILE} "${RENDERING_BUILD_RESOURCE_DIR}/shaders/${SHADER_NAME}" COPYONLY)
-    endif()
-endforeach()
-
-file(GLOB MESH2SPLAT_SHADER_FILES "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/mesh2splat/*")
-foreach(SHADER_FILE ${MESH2SPLAT_SHADER_FILES})
-    get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
-    configure_file(${SHADER_FILE} "${RENDERING_BUILD_RESOURCE_DIR}/shaders/mesh2splat/${SHADER_NAME}" COPYONLY)
-endforeach()
-
-target_compile_definitions(lfs_rendering PRIVATE
-        SHADER_PATH="${RENDERING_BUILD_RESOURCE_DIR}/shaders"
-        RENDERING_SOURCE_SHADER_PATH="${RENDERING_SOURCE_RESOURCE_DIR}/shaders"
-        $<$<BOOL:${CUDA_GL_INTEROP_ENABLED}>:CUDA_GL_INTEROP_ENABLED>
+target_compile_definitions(lfs_rendering_tensor PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
+
+add_library(lfs_rendering INTERFACE)
+target_link_libraries(lfs_rendering INTERFACE lfs_rendering_tensor)
 
 if(NOT BUILD_PORTABLE)
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/rendering.hpp
                   ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/frame_contract.hpp
+                  ${CMAKE_CURRENT_SOURCE_DIR}/include/rendering/mesh2splat.hpp
             DESTINATION include/rendering)
 endif()

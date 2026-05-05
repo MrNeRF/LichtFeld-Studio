@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include "gui/line_renderer.hpp"
+
 #include <glm/glm.hpp>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -30,7 +31,8 @@ namespace lfs::vis::gui {
         glm::mat3 orientation_world{1.0f};
         glm::vec3 half_extents_world{0.5f};
         glm::vec3 min_half_extents_world{0.0005f};
-        ImDrawList* draw_list = nullptr;
+        NativeOverlayDrawList* draw_list = nullptr;
+        NativeGizmoInput input;
         bool input_enabled = true;
         bool snap = false;
         float snap_ratio = 0.1f;

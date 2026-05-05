@@ -242,7 +242,7 @@ target_compile_definitions(lfs_py PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_core,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering,lfs_sequencer>"
+        "$<LINK_GROUP:RESCAN,lfs_core,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering_tensor,lfs_sequencer>"
     )
 else()
     set(LFS_PY_INTERNAL_LINK_LIBS
@@ -254,7 +254,7 @@ else()
         lfs_python_runtime
         lfs_training
         lfs_io
-        lfs_rendering
+        lfs_rendering_tensor
         lfs_sequencer
     )
 endif()

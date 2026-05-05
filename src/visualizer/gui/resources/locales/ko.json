@@ -66,7 +66,6 @@
     "build_info.commit": "커밋",
     "build_info.build_type": "빌드 유형",
     "build_info.platform": "플랫폼",
-    "build_info.cuda_gl_interop": "CUDA-GL 상호운용",
     "build_type.debug": "디버그",
     "build_type.release": "릴리스",
     "platform.windows": "Windows",

@@ -8,11 +8,12 @@
 #include "core/export.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
-#include "gt_texture_cache.hpp"
 #include "internal/viewport.hpp"
+#include "passes/vulkan_depth_blit_pass.hpp"
+#include "passes/vulkan_environment_pass.hpp"
+#include "passes/vulkan_mesh_pass.hpp"
+#include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
-#include "render_pass_graph.hpp"
-#include "rendering/cuda_gl_interop.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_types.hpp"
 #include "split_view_service.hpp"
@@ -23,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -32,13 +34,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <vulkan/vulkan.h>
 
 namespace lfs::core {
     class Tensor;
-}
-
-namespace lfs::io {
-    class PipelinedImageLoader;
 }
 
 namespace lfs::core::events::ui {
@@ -52,6 +51,9 @@ namespace lfs::core::events::cmd {
 } // namespace lfs::core::events::cmd
 
 namespace lfs::vis {
+    class VulkanContext;
+    class VksplatViewportRenderer;
+
     class SceneManager;
     class TrainerManager;
 
@@ -63,6 +65,28 @@ namespace lfs::vis {
             glm::ivec2 logical_screen_size{0, 0};
             const ViewportRegion* viewport_region = nullptr;
             SceneManager* scene_manager = nullptr;
+            VulkanContext* vulkan_context = nullptr;
+        };
+
+        struct VulkanFrameResult {
+            std::shared_ptr<const lfs::core::Tensor> image;
+            VkImage external_image = VK_NULL_HANDLE;
+            VkImageView external_image_view = VK_NULL_HANDLE;
+            VkImageLayout external_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t external_image_generation = 0;
+            // Bumps only when the underlying image content changes (fresh render).
+            // Cache-HIT frames keep the previous value so downstream consumers
+            // (e.g. CUDA→Vulkan interop upload) can skip work by generation.
+            std::uint64_t image_generation = 0;
+            glm::ivec2 size{0, 0};
+            bool flip_y = false;
+
+            // Split-view right panel. The left panel reuses the `image` slot above
+            // (rideshares the existing scene-image interop). When this is set, the
+            // gui-side split interop slot uploads it in parallel to the left panel.
+            std::shared_ptr<const lfs::core::Tensor> split_right_image{};
+            glm::ivec2 split_right_size{0, 0};
+            bool split_right_flip_y = false;
         };
 
         RenderingManager();
@@ -74,24 +98,14 @@ namespace lfs::vis {
 
         // Main render function
         void renderFrame(const RenderContext& context);
+        VulkanFrameResult renderVulkanFrame(const RenderContext& context);
 
-        // Render preview to external texture (for PiP preview)
-        bool renderPreviewFrame(SceneManager* scene_manager,
-                                const glm::mat3& camera_rotation,
-                                const glm::vec3& camera_position,
-                                float focal_length_mm,
-                                unsigned int target_fbo,
-                                unsigned int target_texture,
-                                int width, int height);
-
-        // Render preview image directly into an external texture without touching
-        // the shared viewport presentation textures.
-        bool renderPreviewTexture(SceneManager* scene_manager,
-                                  const glm::mat3& camera_rotation,
-                                  const glm::vec3& camera_position,
-                                  float focal_length_mm,
-                                  unsigned int target_texture,
-                                  int width, int height);
+        // Render preview image without touching the shared viewport presentation textures.
+        std::shared_ptr<lfs::core::Tensor> renderPreviewImage(SceneManager* scene_manager,
+                                                              const glm::mat3& camera_rotation,
+                                                              const glm::vec3& camera_position,
+                                                              float focal_length_mm,
+                                                              int width, int height);
 
         void markDirty();
         void markDirty(DirtyMask flags);
@@ -211,6 +225,7 @@ namespace lfs::vis {
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
         }
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
+        int getHoveredCameraId() const { return camera_interaction_service_.hoveredCameraId(); }
 
         struct CameraMetricsOverlayState {
             int camera_id = -1;
@@ -317,6 +332,31 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool isLassoAddMode() const { return viewport_overlay_service_.lassoAddMode(); }
 
+        // Vulkan mesh frame — populated by `renderVulkanFrame` when there are meshes in
+        // the scene, consumed by gui_manager to feed `vulkan_viewport_pass.mesh_items`.
+        // Replaces the old CPU `renderVideoCompositeFrame` mesh path.
+        struct VulkanMeshFrame {
+            glm::mat4 view_projection{1.0f};
+            glm::vec3 camera_position{0.0f};
+            std::vector<lfs::vis::VulkanMeshDrawItem> items;
+            std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
+            lfs::vis::VulkanEnvironmentParams environment;
+            lfs::vis::VulkanDepthBlitParams depth_blit;
+            lfs::vis::VulkanSplitViewParams split_view;
+        };
+        void setVulkanMeshFrame(VulkanMeshFrame frame) {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            vulkan_mesh_frame_ = std::move(frame);
+        }
+        [[nodiscard]] VulkanMeshFrame getVulkanMeshFrame() const {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            return vulkan_mesh_frame_;
+        }
+        void clearVulkanMeshFrame() {
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            vulkan_mesh_frame_ = {};
+        }
+
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             viewport_overlay_service_.setPreviewSelection(preview, add_mode);
@@ -351,6 +391,7 @@ namespace lfs::vis {
         }
         void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
+        [[nodiscard]] GizmoState getGizmoState() const { return viewport_overlay_service_.makeFrameGizmoState(); }
 
         void setViewportResizeActive(bool active);
         [[nodiscard]] bool isViewportResizeDeferring() const {
@@ -373,12 +414,6 @@ namespace lfs::vis {
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
-        void clearFrustumThumbnailState();
-        void invalidateFrustumImageLoaderSync(bool poll_until_ready = false);
-        void syncFrustumImageLoader(SceneManager* scene_manager);
-        void storeFrustumImageLoaderSyncState(std::shared_ptr<lfs::io::PipelinedImageLoader> loader,
-                                              bool allow_fallback,
-                                              bool wait_for_active_loader);
         void setupEventHandlers();
         void handleToggleSplitView();
         void handleToggleIndependentSplitView(const lfs::core::events::cmd::ToggleIndependentSplitView& event);
@@ -404,11 +439,19 @@ namespace lfs::vis {
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
-        RenderPassGraph pass_graph_;
         mutable FramerateController framerate_controller_;
 
-        // GT texture cache
-        GTTextureCache gt_texture_cache_;
+        std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
+        std::uint64_t vulkan_viewport_image_generation_ = 0;
+        std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
+        VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::uint64_t vulkan_external_viewport_image_generation_ = 0;
+        std::uint64_t split_view_image_generation_ = 0;
+        glm::ivec2 vulkan_viewport_image_size_{0, 0};
+        bool vulkan_viewport_image_flip_y_ = false;
+        glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
@@ -425,7 +468,8 @@ namespace lfs::vis {
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;
-        mutable std::mutex frustum_loader_sync_mutex_;
+        mutable std::mutex vulkan_mesh_frame_mutex_;
+        VulkanMeshFrame vulkan_mesh_frame_;
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;
         std::optional<CameraMetricsJobRequest> active_camera_metrics_request_;
@@ -433,13 +477,8 @@ namespace lfs::vis {
         std::jthread camera_metrics_worker_;
         uint64_t camera_metrics_request_generation_ = 0;
         std::chrono::steady_clock::time_point last_camera_metrics_refresh_time_{};
-        std::shared_ptr<lfs::io::PipelinedImageLoader> synced_frustum_loader_;
-        std::atomic<bool> frustum_loader_dirty_{true};
-        std::atomic<bool> frustum_loader_poll_until_ready_{false};
-        bool frustum_loader_sync_initialized_ = false;
-        bool synced_frustum_allow_fallback_ = true;
-
         bool initialized_ = false;
+        bool raster_initialized_ = false;
 
         ViewportInteractionContext viewport_interaction_context_;
 

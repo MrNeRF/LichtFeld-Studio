@@ -127,7 +127,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
-    LFS_PYTHON_RUNTIME_API void shutdown_python_gl_resources();
+    LFS_PYTHON_RUNTIME_API void shutdown_python_ui_resources();
 
     // Menu interface for C++ code
     LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
@@ -271,7 +271,7 @@ namespace lfs::python {
         // Lifecycle
         void (*cleanup)() = nullptr;
         void (*prepare_ui)() = nullptr;
-        void (*shutdown_gl_resources)() = nullptr;
+        void (*shutdown_ui_resources)() = nullptr;
     };
 
     LFS_PYTHON_RUNTIME_API void set_bridge(const PyBridge& b);
@@ -566,21 +566,22 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void mark_plugins_loaded();
     LFS_PYTHON_RUNTIME_API bool are_plugins_loaded();
 
-    // GL texture service — all GL calls happen in the EXE, Python DLL calls through these
+    // UI texture service. The executable owns the graphics backend resources; Python
+    // receives opaque ImGui texture IDs.
     struct TextureResult {
-        uint32_t texture_id;
+        uint64_t texture_id;
         int width;
         int height;
     };
 
     using CreateTextureFn = TextureResult (*)(const unsigned char* data, int w, int h, int channels);
-    using DeleteTextureFn = void (*)(uint32_t texture_id);
+    using DeleteTextureFn = void (*)(uint64_t texture_id);
     using MaxTextureSizeFn = int (*)();
 
-    LFS_PYTHON_RUNTIME_API void set_gl_texture_service(CreateTextureFn create, DeleteTextureFn del,
+    LFS_PYTHON_RUNTIME_API void set_ui_texture_service(CreateTextureFn create, DeleteTextureFn del,
                                                        MaxTextureSizeFn max_size);
-    LFS_PYTHON_RUNTIME_API TextureResult create_gl_texture(const unsigned char* data, int w, int h, int channels);
-    LFS_PYTHON_RUNTIME_API void delete_gl_texture(uint32_t texture_id);
+    LFS_PYTHON_RUNTIME_API TextureResult create_ui_texture(const unsigned char* data, int w, int h, int channels);
+    LFS_PYTHON_RUNTIME_API void delete_ui_texture(uint64_t texture_id);
     LFS_PYTHON_RUNTIME_API int get_max_texture_size();
 
     // ImGui state sharing across DLL boundaries (void* to avoid imgui.h dependency)
@@ -643,11 +644,11 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void register_rml_document(const char* name, void* doc);
     LFS_PYTHON_RUNTIME_API void unregister_rml_document(const char* name);
 
-    // GL-thread callback queue — schedule work that requires the GL context
-    LFS_PYTHON_RUNTIME_API void set_gl_thread_id(std::thread::id id);
-    LFS_PYTHON_RUNTIME_API bool on_gl_thread();
-    LFS_PYTHON_RUNTIME_API void schedule_gl_callback(std::function<void()> fn);
-    LFS_PYTHON_RUNTIME_API void flush_gl_callbacks();
+    // Graphics-thread callback queue - schedule work that touches UI backend resources.
+    LFS_PYTHON_RUNTIME_API void set_graphics_thread_id(std::thread::id id);
+    LFS_PYTHON_RUNTIME_API bool on_graphics_thread();
+    LFS_PYTHON_RUNTIME_API void schedule_graphics_callback(std::function<void()> fn);
+    LFS_PYTHON_RUNTIME_API void flush_graphics_callbacks();
 
     // Exit popup state - thread-safe flag for window close callback
     LFS_PYTHON_RUNTIME_API bool is_exit_popup_open();

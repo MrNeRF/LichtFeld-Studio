@@ -27,8 +27,11 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -36,12 +39,20 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
+#include <vulkan/vulkan.h>
 #include <imgui.h>
 
 struct SDL_Cursor;
 
+namespace lfs::core {
+    class Tensor;
+}
+
 namespace lfs::vis {
     class VisualizerImpl;
+    class VulkanContext;
+    struct VulkanSceneInteropTarget;
 
     namespace gui {
         struct GuiHitTestResult {
@@ -122,12 +133,48 @@ namespace lfs::vis {
 
             // Drag-drop state for overlays
             [[nodiscard]] bool isDragHovering() const { return drag_drop_hovering_; }
+            void setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                     glm::ivec2 size,
+                                     bool flip_y,
+                                     std::uint64_t generation);
+            void setVulkanExternalSceneImage(VkImage image,
+                                             VkImageView image_view,
+                                             VkImageLayout layout,
+                                             glm::ivec2 size,
+                                             bool flip_y,
+                                             std::uint64_t generation);
+
+            // Split-view's right panel routes through a parallel CUDA/Vulkan interop
+            // slot so we don't pay PCIe staging cost for it; the left panel reuses the
+            // existing scene image interop above.
+            void setVulkanSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                          glm::ivec2 size,
+                                          bool flip_y,
+                                          std::uint64_t generation);
+            void clearVulkanSplitRightImage();
+
+            // Splat depth -> R32_SFLOAT external image for the depth-blit pass to sample.
+            void setVulkanDepthBlitImage(std::shared_ptr<const lfs::core::Tensor> depth,
+                                         glm::ivec2 size,
+                                         std::uint64_t generation);
+            void clearVulkanDepthBlitImage();
 
             // Used by native panel wrappers
             void renderSelectionOverlays(const UIContext& ctx);
             void renderViewportDecorations();
 
         private:
+            [[nodiscard]] VulkanViewportPassParams buildVulkanViewportParams(VkExtent2D extent,
+                                                                             std::size_t frame_slot) const;
+            void recordVulkanViewport(VkCommandBuffer command_buffer,
+                                      VkExtent2D extent,
+                                      const VulkanViewportPassParams& params);
+            void prepareVulkanSceneInterop(VulkanContext& context);
+            void resetVulkanSceneInterop();
+            void prepareVulkanSplitRightInterop(VulkanContext& context);
+            void resetVulkanSplitRightInterop();
+            void prepareVulkanDepthBlitInterop(VulkanContext& context);
+            void resetVulkanDepthBlitInterop();
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();
@@ -214,6 +261,43 @@ namespace lfs::vis {
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;
+            std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
+            std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
+            std::uint64_t vulkan_scene_image_generation_ = 0;
+            glm::ivec2 vulkan_scene_image_size_{0, 0};
+            bool vulkan_scene_image_flip_y_ = false;
+            VkImage vulkan_external_scene_image_ = VK_NULL_HANDLE;
+            VkImageView vulkan_external_scene_image_view_ = VK_NULL_HANDLE;
+            VkImageLayout vulkan_external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            glm::ivec2 vulkan_external_scene_image_size_{0, 0};
+            bool vulkan_external_scene_image_flip_y_ = false;
+            std::uint64_t vulkan_external_scene_image_generation_ = 0;
+            bool vulkan_scene_interop_disabled_ = false;
+
+            // Parallel slot for split-view's right panel.
+            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_split_right_interop_;
+            std::shared_ptr<const lfs::core::Tensor> vulkan_split_right_image_;
+            std::uint64_t vulkan_split_right_image_generation_ = 0;
+            glm::ivec2 vulkan_split_right_image_size_{0, 0};
+            bool vulkan_split_right_image_flip_y_ = false;
+            VkImage vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+            VkImageView vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+            VkImageLayout vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t vulkan_split_right_external_image_generation_ = 0;
+            bool vulkan_split_right_interop_disabled_ = false;
+
+            // R32_SFLOAT slot for splat depth (consumed by VulkanDepthBlitPass).
+            std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_depth_blit_interop_;
+            std::shared_ptr<const lfs::core::Tensor> vulkan_depth_blit_image_;
+            std::uint64_t vulkan_depth_blit_image_generation_ = 0;
+            glm::ivec2 vulkan_depth_blit_image_size_{0, 0};
+            VkImage vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+            VkImageView vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+            VkImageLayout vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t vulkan_depth_blit_external_image_generation_ = 0;
+            bool vulkan_depth_blit_interop_disabled_ = false;
+            bool vulkan_gui_ = false;
             SDL_Cursor* pipette_cursor_ = nullptr;
 
             // Native panel wrapper storage (registered with PanelRegistry)

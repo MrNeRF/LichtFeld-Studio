@@ -5,9 +5,9 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/line_renderer.hpp"
 
 #include <glm/glm.hpp>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -27,7 +27,8 @@ namespace lfs::vis::gui {
         glm::mat4 projection{1.0f};
         glm::vec3 pivot_world{0.0f};
         glm::mat3 orientation_world{1.0f};
-        ImDrawList* draw_list = nullptr;
+        NativeOverlayDrawList* draw_list = nullptr;
+        NativeGizmoInput input;
         bool input_enabled = true;
         bool snap = false;
         float snap_degrees = 5.0f;

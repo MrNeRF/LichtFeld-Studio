@@ -66,15 +66,4 @@ namespace lfs::rendering {
         }
     };
 
-    struct ScreenSpaceVignette {
-        bool enabled = false;
-        float intensity = 0.0f;
-        float radius = 0.75f;
-        float softness = 0.45f;
-
-        [[nodiscard]] bool active() const {
-            return enabled && intensity > 0.0f;
-        }
-    };
-
 } // namespace lfs::rendering

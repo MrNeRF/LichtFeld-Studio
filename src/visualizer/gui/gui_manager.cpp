@@ -2,29 +2,28 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// glad must be included before OpenGL headers
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/gui_manager.hpp"
 #include "control/command_api.hpp"
+#include "core/camera.hpp"
 #include "core/cuda_version.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include "core/tensor.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/layout_state.hpp"
+#include "gui/line_renderer.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/rotation_gizmo.hpp"
 #include "gui/scale_gizmo.hpp"
@@ -34,6 +33,7 @@
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include <implot.h>
 
 #include "gui/gui_focus_state.hpp"
@@ -49,28 +49,80 @@
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
+#include "rendering/image_layout.hpp"
+#include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/scene_render_state.hpp"
 #include "theme/theme.hpp"
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
+#include "training/trainer.hpp"
+#include "training/training_manager.hpp"
+#include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
+#include "window/vulkan_context.hpp"
 #include <OpenImageIO/imageio.h>
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <array>
+#include <cassert>
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
+#include <cstring>
+#include <deque>
 #include <format>
 #include <fstream>
-#include <imgui_impl_opengl3.h>
+#include <glm/gtc/constants.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui_impl_sdl3.h>
 #include <imgui_internal.h>
 #include <iterator>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <span>
+#include <stdexcept>
 #include <string_view>
+#include <thread>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
+
+namespace lfs::vis {
+    struct VulkanSceneInteropTarget {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        VulkanContext::ExternalImage image;
+        VulkanContext::ExternalSemaphore semaphore;
+        lfs::rendering::CudaVulkanInterop interop;
+        glm::ivec2 size{0, 0};
+        VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        std::uint64_t timeline_value = 0;
+        std::uint64_t generation = 0;
+        // Generation of the source content (renderer-supplied) most recently
+        // copied into this slot's external image. Used to skip re-uploads when
+        // the renderer returns the same logical image (cache HIT) even though
+        // it allocated a fresh Tensor pointer.
+        std::uint64_t uploaded_source_generation = 0;
+
+        void destroy(VulkanContext& context) {
+            interop.reset();
+            context.destroyExternalSemaphore(semaphore);
+            context.destroyExternalImage(image);
+            size = {0, 0};
+            layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            timeline_value = 0;
+            uploaded_source_generation = 0;
+            ++generation;
+        }
+#endif
+    };
+} // namespace lfs::vis
 
 namespace lfs::vis::gui {
 
@@ -86,6 +138,2142 @@ namespace lfs::vis::gui {
                    isScaleGizmoActive() ||
                    isTranslationGizmoHovered() ||
                    isTranslationGizmoActive();
+        }
+
+        struct VulkanGuidePanelTarget {
+            SplitViewPanelId panel = SplitViewPanelId::Left;
+            const Viewport* viewport = nullptr;
+            glm::vec2 pos{0.0f};
+            glm::vec2 size{0.0f};
+            glm::ivec2 render_size{0};
+
+            [[nodiscard]] bool valid() const {
+                return viewport != nullptr && size.x > 0.0f && size.y > 0.0f &&
+                       render_size.x > 0 && render_size.y > 0;
+            }
+        };
+
+        [[nodiscard]] glm::vec4 guideColor(const ImVec4& color, const float alpha) {
+            return {color.x, color.y, color.z, std::clamp(alpha, 0.0f, 1.0f)};
+        }
+
+        [[nodiscard]] glm::vec2 screenToViewportNdc(const glm::vec2& screen,
+                                                    const glm::vec2& viewport_pos,
+                                                    const glm::vec2& viewport_size) {
+            const float x = viewport_size.x > 0.0f
+                                ? (screen.x - viewport_pos.x) / viewport_size.x
+                                : 0.0f;
+            const float y = viewport_size.y > 0.0f
+                                ? (screen.y - viewport_pos.y) / viewport_size.y
+                                : 0.0f;
+            return {x * 2.0f - 1.0f, y * 2.0f - 1.0f};
+        }
+
+        void appendShapeOverlayTriangle(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                        const glm::vec2& viewport_pos,
+                                        const glm::vec2& viewport_size,
+                                        const glm::vec2& point,
+                                        const glm::vec2& p0,
+                                        const glm::vec2& p1,
+                                        const glm::vec4& color,
+                                        const glm::vec4& shape_params) {
+            out.push_back({
+                .position = screenToViewportNdc(point, viewport_pos, viewport_size),
+                .screen_position = point,
+                .p0 = p0,
+                .p1 = p1,
+                .color = color,
+                .params = shape_params,
+            });
+        }
+
+        void appendShapeOverlayQuad(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                    const glm::vec2& viewport_pos,
+                                    const glm::vec2& viewport_size,
+                                    const glm::vec2& a,
+                                    const glm::vec2& b,
+                                    const glm::vec2& c,
+                                    const glm::vec2& d,
+                                    const glm::vec2& p0,
+                                    const glm::vec2& p1,
+                                    const glm::vec4& color,
+                                    const glm::vec4& shape_params) {
+            if (color.a <= 0.0f || viewport_size.x <= 0.0f || viewport_size.y <= 0.0f) {
+                return;
+            }
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, b, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, d, p0, p1, color, shape_params);
+        }
+
+        void appendShapeOverlayLine(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                    const VulkanViewportPassParams& params,
+                                    const glm::vec2& p0,
+                                    const glm::vec2& p1,
+                                    const glm::vec4& color,
+                                    const float thickness) {
+            if (color.a <= 0.0f) {
+                return;
+            }
+            const glm::vec2 delta = p1 - p0;
+            const float len = glm::length(delta);
+            if (!std::isfinite(len) || len <= 1e-4f) {
+                return;
+            }
+            const glm::vec2 dir = delta / len;
+            const glm::vec2 normal(-dir.y, dir.x);
+            const float extent = std::max(thickness, 1.0f) * 0.5f + 2.0f;
+            appendShapeOverlayQuad(out,
+                                   params.viewport_pos,
+                                   params.viewport_size,
+                                   p0 - dir * extent + normal * extent,
+                                   p1 + dir * extent + normal * extent,
+                                   p1 + dir * extent - normal * extent,
+                                   p0 - dir * extent - normal * extent,
+                                   p0,
+                                   p1,
+                                   color,
+                                   {0.0f, std::max(thickness, 1.0f), 0.0f, 1.0f});
+        }
+
+        void appendShapeOverlayCircle(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                      const VulkanViewportPassParams& params,
+                                      const glm::vec2& center,
+                                      const float radius,
+                                      const glm::vec4& color) {
+            if (radius <= 0.0f || color.a <= 0.0f) {
+                return;
+            }
+            const float extent = radius + 2.0f;
+            appendShapeOverlayQuad(out,
+                                   params.viewport_pos,
+                                   params.viewport_size,
+                                   center + glm::vec2(-extent, -extent),
+                                   center + glm::vec2(extent, -extent),
+                                   center + glm::vec2(extent, extent),
+                                   center + glm::vec2(-extent, extent),
+                                   center,
+                                   center,
+                                   color,
+                                   {1.0f, 0.0f, radius, 1.0f});
+        }
+
+        void appendShapeOverlayCircleOutline(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                             const VulkanViewportPassParams& params,
+                                             const glm::vec2& center,
+                                             const float radius,
+                                             const glm::vec4& color,
+                                             const float thickness) {
+            if (radius <= 0.0f || color.a <= 0.0f) {
+                return;
+            }
+            const float extent = radius + std::max(thickness, 1.0f) * 0.5f + 2.0f;
+            appendShapeOverlayQuad(out,
+                                   params.viewport_pos,
+                                   params.viewport_size,
+                                   center + glm::vec2(-extent, -extent),
+                                   center + glm::vec2(extent, -extent),
+                                   center + glm::vec2(extent, extent),
+                                   center + glm::vec2(-extent, extent),
+                                   center,
+                                   center,
+                                   color,
+                                   {2.0f, std::max(thickness, 1.0f), radius, 1.0f});
+        }
+
+        void appendScreenOverlayTriangle(std::vector<VulkanViewportOverlayVertex>& out,
+                                         const VulkanViewportPassParams& params,
+                                         const glm::vec2& p0,
+                                         const glm::vec2& p1,
+                                         const glm::vec2& p2,
+                                         const glm::vec4& color) {
+            if (color.a <= 0.0f || params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+            out.push_back({.position = screenToViewportNdc(p0, params.viewport_pos, params.viewport_size),
+                           .color = color});
+            out.push_back({.position = screenToViewportNdc(p1, params.viewport_pos, params.viewport_size),
+                           .color = color});
+            out.push_back({.position = screenToViewportNdc(p2, params.viewport_pos, params.viewport_size),
+                           .color = color});
+        }
+
+        void appendLineRendererCommandOverlays(VulkanViewportPassParams& params) {
+            const auto commands = consumeLineRendererCommands();
+            for (const auto& command : commands) {
+                switch (command.type) {
+                case LineRendererCommandType::Line:
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles,
+                                           params,
+                                           command.p0,
+                                           command.p1,
+                                           command.color,
+                                           command.thickness);
+                    break;
+                case LineRendererCommandType::Triangle:
+                    appendScreenOverlayTriangle(params.overlay_triangles,
+                                                params,
+                                                command.p0,
+                                                command.p1,
+                                                command.p2,
+                                                command.color);
+                    break;
+                case LineRendererCommandType::Circle:
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                             params,
+                                             command.p0,
+                                             command.thickness,
+                                             command.color);
+                    break;
+                case LineRendererCommandType::CircleOutline:
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
+                                                    params,
+                                                    command.p0,
+                                                    command.radius,
+                                                    command.color,
+                                                    command.thickness);
+                    break;
+                }
+            }
+        }
+
+        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+                                       std::uintptr_t texture_id,
+                                       const std::array<glm::vec2, 4>& screen_points,
+                                       const glm::vec2& uv_min,
+                                       const glm::vec2& uv_max,
+                                       const glm::vec4& tint_opacity,
+                                       const glm::vec4& effects);
+
+        // FreeType-baked overlay font atlas. Independent of ImGui's font system — the user
+        // wants the vulkan branch to stop reaching into ImFont/io.Fonts. Atlas covers ASCII
+        // printable range, baked at a single reference pixel size; runtime font_size scales
+        // glyph quads.
+        struct OverlayGlyph {
+            glm::vec2 uv0{0.0f};
+            glm::vec2 uv1{0.0f};
+            glm::vec2 size_px{0.0f};
+            glm::vec2 bearing_px{0.0f}; // x = bitmap_left, y = bitmap_top (positive up)
+            float advance_px = 0.0f;
+        };
+
+        struct OverlayFontAtlas {
+            VulkanUiTexture texture;
+            std::array<OverlayGlyph, 128> glyphs{};
+            float atlas_px_size = 0.0f;
+            bool valid = false;
+        };
+
+        OverlayFontAtlas g_overlay_atlas;
+
+        bool buildOverlayFontAtlas(const std::filesystem::path& font_path, const float pixel_size) {
+            g_overlay_atlas = {};
+
+            FT_Library ft = nullptr;
+            if (FT_Init_FreeType(&ft) != 0) {
+                LOG_WARN("Overlay font atlas: FT_Init_FreeType failed");
+                return false;
+            }
+            struct FTLib {
+                FT_Library lib;
+                ~FTLib() {
+                    if (lib)
+                        FT_Done_FreeType(lib);
+                }
+            } ft_guard{ft};
+
+            const std::string font_utf8 = lfs::core::path_to_utf8(font_path);
+            FT_Face face = nullptr;
+            if (FT_New_Face(ft, font_utf8.c_str(), 0, &face) != 0) {
+                LOG_WARN("Overlay font atlas: FT_New_Face failed for {}", font_utf8);
+                return false;
+            }
+            struct FTFace {
+                FT_Face face;
+                ~FTFace() {
+                    if (face)
+                        FT_Done_Face(face);
+                }
+            } face_guard{face};
+
+            const FT_UInt px = static_cast<FT_UInt>(std::max(8.0f, pixel_size));
+            FT_Set_Pixel_Sizes(face, 0, px);
+
+            constexpr int kAtlasW = 1024;
+            constexpr int kPad = 1;
+            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(kAtlasW) * kAtlasW * 4, 0);
+
+            int pen_x = kPad;
+            int pen_y = kPad;
+            int row_h = 0;
+            int max_y = 0;
+
+            for (int code = 32; code < 128; ++code) {
+                if (FT_Load_Char(face, static_cast<FT_ULong>(code), FT_LOAD_RENDER) != 0) {
+                    continue;
+                }
+                const FT_GlyphSlot g = face->glyph;
+                const int w = static_cast<int>(g->bitmap.width);
+                const int h = static_cast<int>(g->bitmap.rows);
+
+                if (pen_x + w + kPad > kAtlasW) {
+                    pen_x = kPad;
+                    pen_y += row_h + kPad;
+                    row_h = 0;
+                }
+                if (pen_y + h + kPad > kAtlasW) {
+                    LOG_WARN("Overlay font atlas: out of space at glyph {}", code);
+                    break;
+                }
+
+                for (int y = 0; y < h; ++y) {
+                    const std::uint8_t* src = g->bitmap.buffer + y * g->bitmap.pitch;
+                    std::uint8_t* dst = rgba.data() + ((pen_y + y) * kAtlasW + pen_x) * 4;
+                    for (int x = 0; x < w; ++x) {
+                        const std::uint8_t a = src[x];
+                        dst[x * 4 + 0] = 255;
+                        dst[x * 4 + 1] = 255;
+                        dst[x * 4 + 2] = 255;
+                        dst[x * 4 + 3] = a;
+                    }
+                }
+
+                OverlayGlyph& og = g_overlay_atlas.glyphs[code];
+                og.uv0 = {static_cast<float>(pen_x) / kAtlasW,
+                          static_cast<float>(pen_y) / kAtlasW};
+                og.uv1 = {static_cast<float>(pen_x + w) / kAtlasW,
+                          static_cast<float>(pen_y + h) / kAtlasW};
+                og.size_px = {static_cast<float>(w), static_cast<float>(h)};
+                og.bearing_px = {static_cast<float>(g->bitmap_left),
+                                 static_cast<float>(g->bitmap_top)};
+                og.advance_px = static_cast<float>(g->advance.x) / 64.0f;
+
+                pen_x += w + kPad;
+                row_h = std::max(row_h, h);
+                max_y = std::max(max_y, pen_y + h);
+            }
+
+            if (!g_overlay_atlas.texture.upload(rgba.data(), kAtlasW, kAtlasW, 4)) {
+                LOG_WARN("Overlay font atlas: Vulkan upload failed");
+                return false;
+            }
+
+            g_overlay_atlas.atlas_px_size = static_cast<float>(px);
+            g_overlay_atlas.valid = true;
+            LOG_INFO("Overlay font atlas baked at {} px ({}x{} pixels used)",
+                     px, kAtlasW, max_y + kPad);
+            return true;
+        }
+
+        glm::vec2 measureOverlayText(std::string_view text, float size_px) {
+            if (!g_overlay_atlas.valid || text.empty() || size_px <= 0.0f) {
+                return {0.0f, 0.0f};
+            }
+            const float scale = size_px / g_overlay_atlas.atlas_px_size;
+            float width = 0.0f;
+            for (const char ch : text) {
+                const auto code = static_cast<unsigned char>(ch);
+                if (code < g_overlay_atlas.glyphs.size()) {
+                    width += g_overlay_atlas.glyphs[code].advance_px;
+                }
+            }
+            return {width * scale, size_px};
+        }
+
+        void appendTextOverlay(VulkanViewportPassParams& params,
+                               const lfs::rendering::OverlayCommand& cmd) {
+            if (!g_overlay_atlas.valid || cmd.text.empty() || cmd.font_size <= 0.0f ||
+                cmd.color_premul.a <= 0.0f) {
+                return;
+            }
+            const std::uintptr_t texture_id = g_overlay_atlas.texture.textureId();
+            if (texture_id == 0) {
+                return;
+            }
+            const float scale = cmd.font_size / g_overlay_atlas.atlas_px_size;
+            const float baseline_y = cmd.p0.y + cmd.font_size; // top_left → baseline
+            float pen_x = cmd.p0.x;
+
+            for (const char ch : cmd.text) {
+                const auto code = static_cast<unsigned char>(ch);
+                if (code >= g_overlay_atlas.glyphs.size()) {
+                    continue;
+                }
+                const OverlayGlyph& g = g_overlay_atlas.glyphs[code];
+                if (g.size_px.x > 0.0f && g.size_px.y > 0.0f) {
+                    const float x0 = pen_x + g.bearing_px.x * scale;
+                    const float y0 = baseline_y - g.bearing_px.y * scale;
+                    const float x1 = x0 + g.size_px.x * scale;
+                    const float y1 = y0 + g.size_px.y * scale;
+                    const std::array<glm::vec2, 4> pts = {
+                        glm::vec2{x0, y0}, glm::vec2{x1, y0},
+                        glm::vec2{x1, y1}, glm::vec2{x0, y1}};
+                    appendTexturedOverlayQuad(params, texture_id, pts,
+                                              g.uv0, g.uv1,
+                                              cmd.color_premul, {1.0f, 0.0f, 0.0f, 0.0f});
+                }
+                pen_x += g.advance_px * scale;
+            }
+        }
+
+        void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
+                                                lfs::rendering::RenderingEngine* engine) {
+            if (!engine) {
+                return;
+            }
+            auto* const overlay = engine->getScreenOverlayRenderer();
+            if (!overlay) {
+                return;
+            }
+            const auto commands = overlay->consumeCommands();
+            for (const auto& command : commands) {
+                switch (command.type) {
+                case lfs::rendering::OverlayCommandType::Line:
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles,
+                                           params,
+                                           command.p0,
+                                           command.p1,
+                                           command.color_premul,
+                                           command.thickness);
+                    break;
+                case lfs::rendering::OverlayCommandType::Triangle:
+                    appendScreenOverlayTriangle(params.overlay_triangles,
+                                                params,
+                                                command.p0,
+                                                command.p1,
+                                                command.p2,
+                                                command.color_premul);
+                    break;
+                case lfs::rendering::OverlayCommandType::CircleFilled:
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                             params,
+                                             command.p0,
+                                             command.radius,
+                                             command.color_premul);
+                    break;
+                case lfs::rendering::OverlayCommandType::CircleOutline:
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles,
+                                                    params,
+                                                    command.p0,
+                                                    command.radius,
+                                                    command.color_premul,
+                                                    command.thickness);
+                    break;
+                case lfs::rendering::OverlayCommandType::Text:
+                    appendTextOverlay(params, command);
+                    break;
+                }
+            }
+        }
+
+        void addResolvedVulkanPanel(std::vector<VulkanGuidePanelTarget>& panels,
+                                    const std::optional<RenderingManager::ViewerPanelInfo>& info_opt) {
+            if (!info_opt || !info_opt->valid()) {
+                return;
+            }
+            const auto& info = *info_opt;
+            panels.push_back({
+                .panel = info.panel,
+                .viewport = info.viewport,
+                .pos = {info.x, info.y},
+                .size = {info.width, info.height},
+                .render_size = {info.render_width, info.render_height},
+            });
+        }
+
+        [[nodiscard]] std::vector<VulkanGuidePanelTarget> collectVulkanGuidePanels(
+            const VisualizerImpl& viewer,
+            const ViewportLayout& viewport_layout,
+            const RenderingManager& rendering_manager) {
+            std::vector<VulkanGuidePanelTarget> panels;
+            panels.reserve(2);
+
+            const auto& viewport = viewer.getViewport();
+            if (rendering_manager.isIndependentSplitViewActive()) {
+                addResolvedVulkanPanel(panels, rendering_manager.resolveViewerPanel(
+                                                   viewport, viewport_layout.pos, viewport_layout.size,
+                                                   std::nullopt, SplitViewPanelId::Left));
+                addResolvedVulkanPanel(panels, rendering_manager.resolveViewerPanel(
+                                                   viewport, viewport_layout.pos, viewport_layout.size,
+                                                   std::nullopt, SplitViewPanelId::Right));
+            }
+
+            if (!panels.empty()) {
+                return panels;
+            }
+
+            const glm::ivec2 render_size(
+                std::max(static_cast<int>(std::round(viewport_layout.size.x)), 1),
+                std::max(static_cast<int>(std::round(viewport_layout.size.y)), 1));
+            panels.push_back({
+                .panel = SplitViewPanelId::Left,
+                .viewport = &viewport,
+                .pos = viewport_layout.pos,
+                .size = viewport_layout.size,
+                .render_size = render_size,
+            });
+            return panels;
+        }
+
+        [[nodiscard]] glm::vec2 renderToPanelScreen(const VulkanGuidePanelTarget& panel,
+                                                    const glm::vec2& projected) {
+            const float sx = panel.size.x / static_cast<float>(std::max(panel.render_size.x, 1));
+            const float sy = panel.size.y / static_cast<float>(std::max(panel.render_size.y, 1));
+            return glm::vec2(panel.pos.x + projected.x * sx, panel.pos.y + projected.y * sy);
+        }
+
+        [[nodiscard]] std::optional<std::pair<glm::vec2, glm::vec2>> projectSegmentToScreenClipped(
+            const VulkanGuidePanelTarget& panel,
+            const RenderSettings& settings,
+            const glm::vec3& world_a,
+            const glm::vec3& world_b) {
+            if (settings.equirectangular) {
+                const glm::mat3 rotation = panel.viewport->getRotationMatrix();
+                const glm::vec3 translation = panel.viewport->getTranslation();
+
+                const auto project_equirect = [&](const glm::vec3& world) -> std::optional<glm::vec2> {
+                    const glm::vec3 view = glm::transpose(rotation) * (world - translation);
+                    const float len = glm::length(view);
+                    if (!std::isfinite(len) || len <= 1e-6f) {
+                        return std::nullopt;
+                    }
+                    const glm::vec3 dir = view / len;
+                    const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
+                    const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
+                                        (glm::pi<float>() * 0.5f);
+                    if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
+                        return std::nullopt;
+                    }
+                    return panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
+                                                 (ndc_y * 0.5f + 0.5f) * panel.size.y);
+                };
+
+                const auto pa = project_equirect(world_a);
+                const auto pb = project_equirect(world_b);
+                if (!pa || !pb || std::abs((pa->x - panel.pos.x) / panel.size.x - (pb->x - panel.pos.x) / panel.size.x) > 0.5f) {
+                    return std::nullopt;
+                }
+                return std::pair(*pa, *pb);
+            }
+
+            constexpr float kMinViewZ = -1e-4f;
+            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
+            const glm::vec3 translation = panel.viewport->getTranslation();
+            glm::vec3 view_a = glm::transpose(rotation) * (world_a - translation);
+            glm::vec3 view_b = glm::transpose(rotation) * (world_b - translation);
+
+            if (view_a.z >= kMinViewZ && view_b.z >= kMinViewZ) {
+                return std::nullopt;
+            }
+
+            const auto clip_to_near = [](glm::vec3& inside, glm::vec3& outside) {
+                const float denom = outside.z - inside.z;
+                if (std::abs(denom) <= 1e-8f) {
+                    return;
+                }
+                const float t = (-1e-4f - inside.z) / denom;
+                outside = glm::mix(inside, outside, std::clamp(t, 0.0f, 1.0f));
+                outside.z = -1e-4f;
+            };
+            if (view_a.z >= kMinViewZ) {
+                clip_to_near(view_b, view_a);
+            }
+            if (view_b.z >= kMinViewZ) {
+                clip_to_near(view_a, view_b);
+            }
+
+            const auto project_view = [&](const glm::vec3& view) -> std::optional<glm::vec2> {
+                const float width = static_cast<float>(std::max(panel.render_size.x, 1));
+                const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+                const float cx = width * 0.5f;
+                const float cy = height * 0.5f;
+                if (settings.orthographic) {
+                    if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f) {
+                        return std::nullopt;
+                    }
+                    return glm::vec2(cx + view.x * settings.ortho_scale,
+                                     cy - view.y * settings.ortho_scale);
+                }
+                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                    panel.render_size, settings.focal_length_mm);
+                const float depth = -view.z;
+                if (depth <= 0.0f) {
+                    return std::nullopt;
+                }
+                return glm::vec2(cx + view.x * fx / depth,
+                                 cy - view.y * fy / depth);
+            };
+
+            const auto pa = project_view(view_a);
+            const auto pb = project_view(view_b);
+            if (!pa || !pb) {
+                return std::nullopt;
+            }
+            return std::pair(renderToPanelScreen(panel, *pa), renderToPanelScreen(panel, *pb));
+        }
+
+        [[nodiscard]] std::optional<glm::vec2> projectPointToPanelScreen(
+            const VulkanGuidePanelTarget& panel,
+            const RenderSettings& settings,
+            const glm::vec3& world) {
+            const glm::mat3 rotation = panel.viewport->getRotationMatrix();
+            const glm::vec3 translation = panel.viewport->getTranslation();
+            const glm::vec3 view = glm::transpose(rotation) * (world - translation);
+
+            if (settings.equirectangular) {
+                const float len = glm::length(view);
+                if (!std::isfinite(len) || len <= 1e-6f) {
+                    return std::nullopt;
+                }
+                const glm::vec3 dir = view / len;
+                const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
+                const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
+                                    (glm::pi<float>() * 0.5f);
+                if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
+                    return std::nullopt;
+                }
+                return panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
+                                             (ndc_y * 0.5f + 0.5f) * panel.size.y);
+            }
+
+            constexpr float kMinViewZ = -1e-4f;
+            if (view.z >= kMinViewZ) {
+                return std::nullopt;
+            }
+
+            const float width = static_cast<float>(std::max(panel.render_size.x, 1));
+            const float height = static_cast<float>(std::max(panel.render_size.y, 1));
+            const float cx = width * 0.5f;
+            const float cy = height * 0.5f;
+            if (settings.orthographic) {
+                if (!std::isfinite(settings.ortho_scale) || settings.ortho_scale <= 0.0f) {
+                    return std::nullopt;
+                }
+                return renderToPanelScreen(panel, glm::vec2(cx + view.x * settings.ortho_scale,
+                                                            cy - view.y * settings.ortho_scale));
+            }
+
+            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                panel.render_size, settings.focal_length_mm);
+            const float depth = -view.z;
+            if (depth <= 0.0f) {
+                return std::nullopt;
+            }
+            return renderToPanelScreen(panel, glm::vec2(cx + view.x * fx / depth,
+                                                        cy - view.y * fy / depth));
+        }
+
+        [[nodiscard]] bool projectedQuadVisible(const std::array<glm::vec2, 4>& points,
+                                                const VulkanGuidePanelTarget& panel) {
+            glm::vec2 min_point(std::numeric_limits<float>::max());
+            glm::vec2 max_point(-std::numeric_limits<float>::max());
+            float area_twice = 0.0f;
+            for (size_t i = 0; i < points.size(); ++i) {
+                const glm::vec2& p = points[i];
+                if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+                    return false;
+                }
+                min_point = glm::min(min_point, p);
+                max_point = glm::max(max_point, p);
+                const glm::vec2& q = points[(i + 1) % points.size()];
+                area_twice += p.x * q.y - q.x * p.y;
+            }
+
+            const glm::vec2 panel_min = panel.pos;
+            const glm::vec2 panel_max = panel.pos + panel.size;
+            if (max_point.x < panel_min.x || max_point.y < panel_min.y ||
+                min_point.x > panel_max.x || min_point.y > panel_max.y) {
+                return false;
+            }
+
+            const glm::vec2 extent = max_point - min_point;
+            const float panel_limit = std::max(panel.size.x, panel.size.y) * 8.0f;
+            return std::abs(area_twice) >= 2.0f &&
+                   extent.x <= panel_limit &&
+                   extent.y <= panel_limit;
+        }
+
+        void appendTexturedOverlayQuad(VulkanViewportPassParams& params,
+                                       const std::uintptr_t texture_id,
+                                       const std::array<glm::vec2, 4>& screen_points,
+                                       const glm::vec2& uv_min,
+                                       const glm::vec2& uv_max,
+                                       const glm::vec4& tint_opacity,
+                                       const glm::vec4& effects) {
+            if (texture_id == 0 || tint_opacity.a <= 0.0f ||
+                params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+
+            const auto ndc = [&](const glm::vec2& screen) {
+                return screenToViewportNdc(screen, params.viewport_pos, params.viewport_size);
+            };
+
+            VulkanViewportTexturedOverlay overlay{};
+            overlay.texture_id = texture_id;
+            overlay.tint_opacity = tint_opacity;
+            overlay.effects = effects;
+            overlay.vertices = {{
+                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}},
+                {.position = ndc(screen_points[1]), .uv = {uv_max.x, uv_min.y}},
+                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}},
+                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}},
+                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}},
+                {.position = ndc(screen_points[3]), .uv = {uv_min.x, uv_max.y}},
+            }};
+            params.textured_overlays.push_back(overlay);
+        }
+
+        struct VulkanViewportGizmoMarker {
+            int encoded_axis = -1;
+            int axis = 0;
+            bool negative = false;
+            glm::vec2 screen_pos{0.0f};
+            float radius = 0.0f;
+            float depth = 0.0f;
+            bool visible = false;
+        };
+
+        struct VulkanViewportGizmoLayout {
+            glm::vec2 top_left{0.0f};
+            glm::vec2 center{0.0f};
+            float size = 0.0f;
+            std::array<VulkanViewportGizmoMarker, 6> markers{};
+        };
+
+        constexpr std::array<glm::vec3, 3> kViewportGizmoAxisColors = {
+            glm::vec3{0.89f, 0.15f, 0.21f},
+            glm::vec3{0.54f, 0.86f, 0.20f},
+            glm::vec3{0.17f, 0.48f, 0.87f}};
+        constexpr float kViewportGizmoSize = 95.0f;
+        constexpr float kViewportGizmoMarginX = 10.0f;
+        constexpr float kViewportGizmoMarginY = 10.0f;
+        constexpr float kViewportGizmoDistance = 2.8f;
+        constexpr float kViewportGizmoFovDegrees = 38.0f;
+        constexpr float kViewportGizmoSphereRadius = 0.198f;
+        constexpr float kViewportGizmoLabelDistance = 0.63f;
+        constexpr float kViewportGizmoHoverScale = 1.2f;
+        constexpr float kViewportGizmoHoverBrightness = 1.3f;
+        constexpr float kViewportGizmoHitRadiusScale = 2.5f;
+        constexpr float kViewportGizmoRingInnerRadius = 0.55f;
+
+        [[nodiscard]] glm::vec4 viewportGizmoAxisColor(const int axis,
+                                                       const float alpha,
+                                                       const float brightness = 1.0f) {
+            const glm::vec3 c = glm::clamp(kViewportGizmoAxisColors[static_cast<size_t>(axis)] * brightness,
+                                           glm::vec3(0.0f), glm::vec3(1.0f));
+            return {c.r, c.g, c.b, std::clamp(alpha, 0.0f, 1.0f)};
+        }
+
+        [[nodiscard]] std::optional<VulkanViewportGizmoLayout> buildViewportGizmoLayout(
+            const VulkanGuidePanelTarget& panel,
+            const float size,
+            const float margin_x,
+            const float margin_y) {
+            if (!panel.valid() || size <= 0.0f) {
+                return std::nullopt;
+            }
+
+            VulkanViewportGizmoLayout layout;
+            layout.size = size;
+            layout.top_left = {
+                panel.pos.x + panel.size.x - size - margin_x,
+                panel.pos.y + margin_y,
+            };
+            layout.center = layout.top_left + glm::vec2(size * 0.5f);
+
+            glm::mat4 view = lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(), glm::vec3(0.0f));
+            view[3][2] = -kViewportGizmoDistance;
+            const glm::mat4 proj =
+                glm::perspective(glm::radians(kViewportGizmoFovDegrees), 1.0f, 0.1f, 10.0f);
+            const float projected_marker_radius =
+                kViewportGizmoSphereRadius *
+                (1.0f / std::tan(glm::radians(kViewportGizmoFovDegrees) * 0.5f)) /
+                kViewportGizmoDistance *
+                size * 0.5f;
+
+            const auto project_marker = [&](const int axis, const bool negative) {
+                VulkanViewportGizmoMarker marker;
+                marker.axis = axis;
+                marker.negative = negative;
+                marker.encoded_axis = axis + (negative ? 3 : 0);
+
+                glm::vec3 position(0.0f);
+                position[axis] = negative ? -kViewportGizmoLabelDistance : kViewportGizmoLabelDistance;
+
+                const glm::vec4 clip = proj * view * glm::vec4(position, 1.0f);
+                if (clip.w <= 0.0f) {
+                    return marker;
+                }
+
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                const float local_x = (ndc.x * 0.5f + 0.5f) * size;
+                const float local_y = (1.0f - (ndc.y * 0.5f + 0.5f)) * size;
+                marker.screen_pos = layout.top_left + glm::vec2(local_x, local_y);
+                marker.radius = projected_marker_radius;
+                marker.depth = clip.z / clip.w;
+                marker.visible = true;
+                return marker;
+            };
+
+            for (int axis = 0; axis < 3; ++axis) {
+                layout.markers[static_cast<size_t>(axis)] = project_marker(axis, false);
+                layout.markers[static_cast<size_t>(axis + 3)] = project_marker(axis, true);
+            }
+            return layout;
+        }
+
+        [[nodiscard]] int hitTestViewportGizmoLayout(const VulkanViewportGizmoLayout& layout,
+                                                     const glm::vec2& mouse_pos) {
+            for (const auto& marker : layout.markers) {
+                if (!marker.visible) {
+                    continue;
+                }
+                const glm::vec2 delta = mouse_pos - marker.screen_pos;
+                const float radius = marker.radius * kViewportGizmoHitRadiusScale;
+                if (glm::dot(delta, delta) <= radius * radius) {
+                    return marker.encoded_axis;
+                }
+            }
+            return -1;
+        }
+
+        void appendViewportGizmoLabel(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                      const VulkanViewportPassParams& params,
+                                      const glm::vec2& center,
+                                      const int axis,
+                                      const float radius) {
+            const glm::vec4 white(1.0f, 1.0f, 1.0f, 0.96f);
+            const float s = std::max(radius * 0.42f, 3.0f);
+            const float thickness = std::max(radius * 0.16f, 1.25f);
+            if (axis == 0) {
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center + glm::vec2(s, s),
+                                       white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, s), center + glm::vec2(s, -s),
+                                       white, thickness);
+            } else if (axis == 1) {
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center, white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(s, -s), center, white, thickness);
+                appendShapeOverlayLine(out, params, center, center + glm::vec2(0.0f, s), white, thickness);
+            } else {
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center + glm::vec2(s, -s),
+                                       white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(s, -s), center + glm::vec2(-s, s),
+                                       white, thickness);
+                appendShapeOverlayLine(out, params, center + glm::vec2(-s, s), center + glm::vec2(s, s),
+                                       white, thickness);
+            }
+        }
+
+        void appendViewportGizmoLayout(std::vector<VulkanViewportShapeOverlayVertex>& out,
+                                       const VulkanViewportPassParams& params,
+                                       const VulkanViewportGizmoLayout& layout,
+                                       const int hovered_axis) {
+            const auto& t = theme();
+
+            std::vector<const VulkanViewportGizmoMarker*> draw_order;
+            draw_order.reserve(layout.markers.size());
+            for (const auto& marker : layout.markers) {
+                if (marker.visible) {
+                    draw_order.push_back(&marker);
+                }
+            }
+            std::sort(draw_order.begin(), draw_order.end(),
+                      [](const auto* a, const auto* b) {
+                          return a->depth > b->depth;
+                      });
+
+            for (const auto& marker : layout.markers) {
+                if (!marker.visible || marker.negative) {
+                    continue;
+                }
+                appendShapeOverlayLine(out, params, layout.center, marker.screen_pos,
+                                       viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f);
+            }
+
+            for (const auto* const marker_ptr : draw_order) {
+                const auto& marker = *marker_ptr;
+                const bool hovered = hovered_axis == marker.encoded_axis;
+                const float radius = marker.radius * (hovered ? kViewportGizmoHoverScale : 1.0f);
+                const float brightness = hovered ? kViewportGizmoHoverBrightness : 1.0f;
+                const glm::vec4 color = viewportGizmoAxisColor(marker.axis,
+                                                               marker.negative ? 0.88f : 1.0f,
+                                                               brightness);
+                if (marker.negative) {
+                    const float ring_center_radius =
+                        radius * (1.0f + kViewportGizmoRingInnerRadius) * 0.5f;
+                    const float ring_thickness =
+                        radius * (1.0f - kViewportGizmoRingInnerRadius);
+                    appendShapeOverlayCircleOutline(out, params, marker.screen_pos, ring_center_radius,
+                                                    color, ring_thickness);
+                } else {
+                    appendShapeOverlayCircle(out, params, marker.screen_pos, radius, color);
+                    appendShapeOverlayCircleOutline(out, params, marker.screen_pos, radius,
+                                                    guideColor(t.palette.background, 0.55f), 1.0f);
+                    appendViewportGizmoLabel(out, params, marker.screen_pos, marker.axis, radius);
+                }
+            }
+        }
+
+        void appendVulkanViewportGizmoOverlay(VulkanViewportPassParams& params,
+                                              VisualizerImpl& viewer,
+                                              const ViewportLayout& viewport_layout,
+                                              RenderingManager& rendering_manager,
+                                              const bool ui_hidden,
+                                              const bool dragging) {
+            if (ui_hidden || params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+
+            const auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
+            if (panels.empty()) {
+                return;
+            }
+
+            int hovered_axis = -1;
+            SplitViewPanelId hovered_panel = SplitViewPanelId::Left;
+            bool has_hovered_panel = false;
+            if (!guiFocusState().want_capture_mouse) {
+                if (auto* const window_manager = viewer.getWindowManager()) {
+                    const auto& frame_input = window_manager->frameInput();
+                    const glm::vec2 mouse(frame_input.mouse_x, frame_input.mouse_y);
+                    for (const auto& panel : panels) {
+                        const float gizmo_x = panel.pos.x + panel.size.x -
+                                              kViewportGizmoSize - kViewportGizmoMarginX;
+                        const float gizmo_y = panel.pos.y + kViewportGizmoMarginY;
+                        const bool mouse_in_gizmo = mouse.x >= gizmo_x &&
+                                                    mouse.x <= gizmo_x + kViewportGizmoSize &&
+                                                    mouse.y >= gizmo_y &&
+                                                    mouse.y <= gizmo_y + kViewportGizmoSize;
+                        if (!mouse_in_gizmo) {
+                            continue;
+                        }
+                        if (const auto layout = buildViewportGizmoLayout(
+                                panel, kViewportGizmoSize, kViewportGizmoMarginX, kViewportGizmoMarginY)) {
+                            hovered_axis = hitTestViewportGizmoLayout(*layout, mouse);
+                        }
+                        hovered_panel = panel.panel;
+                        has_hovered_panel = true;
+                        break;
+                    }
+                }
+            }
+
+            for (const auto& panel : panels) {
+                if (const auto layout = buildViewportGizmoLayout(
+                        panel, kViewportGizmoSize, kViewportGizmoMarginX, kViewportGizmoMarginY)) {
+                    appendViewportGizmoLayout(params.ui_shape_overlay_triangles,
+                                              params,
+                                              *layout,
+                                              has_hovered_panel && hovered_panel == panel.panel ? hovered_axis : -1);
+                    if (dragging && (!has_hovered_panel || hovered_panel == panel.panel)) {
+                        appendShapeOverlayCircle(params.ui_shape_overlay_triangles,
+                                                 params,
+                                                 layout->center,
+                                                 layout->size * 0.46f,
+                                                 guideColor(theme().overlay.text_dim, 0.20f));
+                    }
+                }
+            }
+        }
+
+        void addProjectedOverlayLine(std::vector<VulkanViewportOverlayVertex>& out,
+                                     VulkanViewportPassParams& params,
+                                     const VulkanGuidePanelTarget& panel,
+                                     const RenderSettings& settings,
+                                     const glm::vec3& a,
+                                     const glm::vec3& b,
+                                     const glm::vec4& color,
+                                     const float thickness) {
+            (void)out;
+            if (const auto projected = projectSegmentToScreenClipped(panel, settings, a, b)) {
+                appendShapeOverlayLine(params.shape_overlay_triangles,
+                                       params,
+                                       projected->first,
+                                       projected->second,
+                                       color,
+                                       thickness);
+            }
+        }
+
+        [[nodiscard]] std::array<glm::vec3, 8> boxCorners(const glm::vec3& min,
+                                                          const glm::vec3& max,
+                                                          const glm::mat4& box_to_world) {
+            const std::array local{
+                glm::vec3(min.x, min.y, min.z),
+                glm::vec3(max.x, min.y, min.z),
+                glm::vec3(max.x, max.y, min.z),
+                glm::vec3(min.x, max.y, min.z),
+                glm::vec3(min.x, min.y, max.z),
+                glm::vec3(max.x, min.y, max.z),
+                glm::vec3(max.x, max.y, max.z),
+                glm::vec3(min.x, max.y, max.z),
+            };
+            std::array<glm::vec3, 8> world{};
+            for (size_t i = 0; i < local.size(); ++i) {
+                world[i] = glm::vec3(box_to_world * glm::vec4(local[i], 1.0f));
+            }
+            return world;
+        }
+
+        void appendProjectedBox(std::vector<VulkanViewportOverlayVertex>& out,
+                                VulkanViewportPassParams& params,
+                                const VulkanGuidePanelTarget& panel,
+                                const RenderSettings& settings,
+                                const glm::vec3& min,
+                                const glm::vec3& max,
+                                const glm::mat4& box_to_world,
+                                const glm::vec4& color,
+                                const float thickness) {
+            constexpr std::array<std::pair<int, int>, 12> edges{{
+                {0, 1},
+                {1, 2},
+                {2, 3},
+                {3, 0},
+                {4, 5},
+                {5, 6},
+                {6, 7},
+                {7, 4},
+                {0, 4},
+                {1, 5},
+                {2, 6},
+                {3, 7},
+            }};
+
+            const auto corners = boxCorners(min, max, box_to_world);
+            for (const auto& [a, b] : edges) {
+                addProjectedOverlayLine(out, params, panel, settings,
+                                        corners[static_cast<size_t>(a)],
+                                        corners[static_cast<size_t>(b)],
+                                        color, thickness);
+            }
+        }
+
+        [[nodiscard]] glm::vec4 cropGuideColor(const glm::vec3& base_color,
+                                               const bool inverse,
+                                               const float flash) {
+            const glm::vec3 inverse_color(1.0f, 0.2f, 0.2f);
+            const glm::vec3 color = glm::mix(inverse ? inverse_color : base_color,
+                                             glm::vec3(1.0f),
+                                             std::clamp(flash, 0.0f, 1.0f));
+            return glm::vec4(color, 0.95f);
+        }
+
+        struct ThumbnailPlacement {
+            std::uintptr_t texture_id = 0;
+            glm::vec2 uv_min{0.0f};
+            glm::vec2 uv_max{1.0f};
+        };
+
+        class CameraThumbnailCache {
+        public:
+            static constexpr int kThumbnailSize = 128;
+
+            void beginFrame() {
+                std::lock_guard lock(mutex_);
+                ++frame_counter_;
+            }
+
+            void clear() {
+                std::lock_guard lock(mutex_);
+                load_queue_.clear();
+                ready_queue_.clear();
+                entries_.clear();
+                pages_.clear();
+                cv_.notify_all();
+            }
+
+            bool request(const lfs::core::Camera& camera) {
+                const int uid = camera.uid();
+                if (uid < 0) {
+                    return false;
+                }
+
+                const std::filesystem::path path = camera.image_path();
+                const std::string path_key = lfs::core::path_to_utf8(path);
+                if (path_key.empty()) {
+                    markFailed(uid, path_key, std::numeric_limits<uint64_t>::max());
+                    return false;
+                }
+
+                {
+                    std::lock_guard lock(mutex_);
+                    ensureWorkersLocked();
+
+                    Entry& entry = entries_[uid];
+                    if (entry.path_key != path_key) {
+                        releaseSlotLocked(entry);
+                        entry = Entry{};
+                        entry.path_key = path_key;
+                    }
+                    entry.last_touched_frame = frame_counter_;
+
+                    const bool waiting = entry.state == State::Queued ||
+                                         entry.state == State::Loading ||
+                                         entry.state == State::UploadReady;
+                    if (entry.state == State::Ready || waiting) {
+                        return false;
+                    }
+                    if (entry.state == State::Failed &&
+                        entry.retry_frame > frame_counter_) {
+                        return false;
+                    }
+                }
+
+                std::error_code ec;
+                if (!std::filesystem::is_regular_file(path, ec)) {
+                    const bool path_is_missing =
+                        !ec || ec == std::errc::no_such_file_or_directory ||
+                        ec == std::errc::not_a_directory;
+                    markFailed(uid, path_key, path_is_missing ? kMissingRetryFrames : kDecodeRetryFrames);
+                    return false;
+                }
+
+                std::lock_guard lock(mutex_);
+                Entry& entry = entries_[uid];
+                if (entry.path_key != path_key) {
+                    releaseSlotLocked(entry);
+                    entry = Entry{};
+                    entry.path_key = path_key;
+                }
+                const bool waiting = entry.state == State::Queued ||
+                                     entry.state == State::Loading ||
+                                     entry.state == State::UploadReady;
+                if (entry.state == State::Ready || waiting ||
+                    (entry.state == State::Failed && entry.retry_frame > frame_counter_)) {
+                    return false;
+                }
+                entry.state = State::Queued;
+                entry.generation += 1;
+                load_queue_.push_back(Task{
+                    .uid = uid,
+                    .path = path,
+                    .path_key = path_key,
+                    .generation = entry.generation,
+                });
+                cv_.notify_one();
+                return true;
+            }
+
+            std::optional<ThumbnailPlacement> placement(const int uid) {
+                std::lock_guard lock(mutex_);
+                const auto it = entries_.find(uid);
+                if (it == entries_.end() ||
+                    it->second.state != State::Ready ||
+                    it->second.page_index < 0 ||
+                    it->second.slot < 0 ||
+                    static_cast<size_t>(it->second.page_index) >= pages_.size()) {
+                    return std::nullopt;
+                }
+                const AtlasPage& page = pages_[static_cast<size_t>(it->second.page_index)];
+                const std::uintptr_t texture_id = page.texture.textureId();
+                if (texture_id == 0) {
+                    return std::nullopt;
+                }
+                auto [uv_min, uv_max] = slotUv(it->second.slot);
+                return ThumbnailPlacement{
+                    .texture_id = texture_id,
+                    .uv_min = uv_min,
+                    .uv_max = uv_max,
+                };
+            }
+
+            bool processReadyUploads(const size_t max_uploads) {
+                bool progressed = false;
+                for (size_t upload_index = 0; upload_index < max_uploads; ++upload_index) {
+                    Decoded decoded;
+                    int page_index = -1;
+                    int slot = -1;
+                    {
+                        std::lock_guard lock(mutex_);
+                        if (ready_queue_.empty()) {
+                            break;
+                        }
+                        decoded = std::move(ready_queue_.front());
+                        ready_queue_.pop_front();
+                        cv_.notify_all();
+                        const auto it = entries_.find(decoded.uid);
+                        if (it == entries_.end() ||
+                            it->second.path_key != decoded.path_key ||
+                            it->second.generation != decoded.generation ||
+                            it->second.state != State::UploadReady) {
+                            progressed = true;
+                            continue;
+                        }
+                        Entry& entry = it->second;
+                        if (!allocateSlotLocked(entry)) {
+                            entry.state = State::Failed;
+                            entry.retry_frame = frame_counter_ + kUploadRetryFrames;
+                            progressed = true;
+                            continue;
+                        }
+                        page_index = entry.page_index;
+                        slot = entry.slot;
+                    }
+
+                    const int slot_x = (slot % kAtlasSlotsPerAxis) * kThumbnailSize;
+                    const int slot_y = (slot / kAtlasSlotsPerAxis) * kThumbnailSize;
+                    const bool uploaded =
+                        pages_[static_cast<size_t>(page_index)].texture.uploadRegion(decoded.pixels.data(),
+                                                                                     kAtlasTextureSize,
+                                                                                     kAtlasTextureSize,
+                                                                                     slot_x,
+                                                                                     slot_y,
+                                                                                     decoded.width,
+                                                                                     decoded.height,
+                                                                                     decoded.channels);
+
+                    {
+                        std::lock_guard lock(mutex_);
+                        const auto it = entries_.find(decoded.uid);
+                        if (it == entries_.end() ||
+                            it->second.path_key != decoded.path_key ||
+                            it->second.generation != decoded.generation) {
+                            progressed = true;
+                            continue;
+                        }
+
+                        if (uploaded) {
+                            it->second.state = State::Ready;
+                            it->second.retry_frame = 0;
+                        } else {
+                            releaseSlotLocked(it->second);
+                            it->second.state = State::Failed;
+                            it->second.retry_frame = frame_counter_ + kUploadRetryFrames;
+                        }
+                    }
+                    progressed = true;
+                }
+                return progressed;
+            }
+
+            bool hasPendingWork() const {
+                std::lock_guard lock(mutex_);
+                if (!load_queue_.empty() || !ready_queue_.empty()) {
+                    return true;
+                }
+                for (const auto& [_, entry] : entries_) {
+                    if (entry.state == State::Queued ||
+                        entry.state == State::Loading ||
+                        entry.state == State::UploadReady) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            void pruneTo(const std::unordered_set<int>& active_uids) {
+                {
+                    std::lock_guard lock(mutex_);
+                    for (auto it = entries_.begin(); it != entries_.end();) {
+                        if (active_uids.contains(it->first)) {
+                            ++it;
+                            continue;
+                        }
+                        releaseSlotLocked(it->second);
+                        it = entries_.erase(it);
+                    }
+                    while (!pages_.empty() && pages_.back().live_slots == 0) {
+                        pages_.pop_back();
+                    }
+                    cv_.notify_all();
+                }
+            }
+
+        private:
+            enum class State {
+                Empty,
+                Queued,
+                Loading,
+                UploadReady,
+                Ready,
+                Failed,
+            };
+
+            struct Entry {
+                std::string path_key;
+                State state = State::Empty;
+                uint64_t generation = 0;
+                uint64_t retry_frame = 0;
+                uint64_t last_touched_frame = 0;
+                int page_index = -1;
+                int slot = -1;
+            };
+
+            struct AtlasPage {
+                VulkanUiTexture texture;
+                std::vector<int> free_slots;
+                int next_slot = 0;
+                int live_slots = 0;
+            };
+
+            struct Task {
+                int uid = -1;
+                std::filesystem::path path;
+                std::string path_key;
+                uint64_t generation = 0;
+            };
+
+            struct Decoded {
+                int uid = -1;
+                std::string path_key;
+                uint64_t generation = 0;
+                std::vector<std::uint8_t> pixels;
+                int width = 0;
+                int height = 0;
+                int channels = 0;
+            };
+
+            // Thumbnail decode is OIIO read + CPU downscale; ~17-25 ms per
+            // image at typical full-res. With only 2 workers a 50-image
+            // dataset took ~600 ms of single-threaded decode dominating
+            // viewport_pass_prepare_record. Bumped to 8 — modern desktop
+            // CPUs idle most of these cores during dataset load anyway.
+            static constexpr size_t kWorkerCount = 8;
+            static constexpr uint64_t kDecodeRetryFrames = 180;
+            static constexpr uint64_t kMissingRetryFrames = 1800;
+            static constexpr uint64_t kUploadRetryFrames = 60;
+            static constexpr size_t kMaxPendingUploads = 32;
+            static constexpr int kAtlasSlotsPerAxis = 8;
+            static constexpr int kAtlasSlotsPerPage = kAtlasSlotsPerAxis * kAtlasSlotsPerAxis;
+            static constexpr int kAtlasTextureSize = kThumbnailSize * kAtlasSlotsPerAxis;
+
+            void ensureWorkersLocked() {
+                if (workers_started_) {
+                    return;
+                }
+                workers_started_ = true;
+                for (size_t i = 0; i < kWorkerCount; ++i) {
+                    std::thread([this] {
+                        workerLoop();
+                    }).detach();
+                }
+            }
+
+            void markFailed(const int uid, const std::string& path_key, const uint64_t retry_frames) {
+                std::lock_guard lock(mutex_);
+                Entry& entry = entries_[uid];
+                if (entry.path_key != path_key) {
+                    releaseSlotLocked(entry);
+                    entry = Entry{};
+                    entry.path_key = path_key;
+                }
+                entry.state = State::Failed;
+                entry.retry_frame = retry_frames == std::numeric_limits<uint64_t>::max()
+                                        ? std::numeric_limits<uint64_t>::max()
+                                        : frame_counter_ + retry_frames;
+            }
+
+            [[nodiscard]] bool allocateSlotLocked(Entry& entry) {
+                if (entry.page_index >= 0 && entry.slot >= 0) {
+                    return true;
+                }
+
+                for (size_t i = 0; i < pages_.size(); ++i) {
+                    AtlasPage& page = pages_[i];
+                    if (!page.free_slots.empty()) {
+                        entry.page_index = static_cast<int>(i);
+                        entry.slot = page.free_slots.back();
+                        page.free_slots.pop_back();
+                        ++page.live_slots;
+                        return true;
+                    }
+                    if (page.next_slot < kAtlasSlotsPerPage) {
+                        entry.page_index = static_cast<int>(i);
+                        entry.slot = page.next_slot++;
+                        ++page.live_slots;
+                        return true;
+                    }
+                }
+
+                pages_.emplace_back();
+                AtlasPage& page = pages_.back();
+                entry.page_index = static_cast<int>(pages_.size() - 1);
+                entry.slot = page.next_slot++;
+                page.live_slots = 1;
+                return true;
+            }
+
+            void releaseSlotLocked(Entry& entry) {
+                if (entry.page_index < 0 ||
+                    entry.slot < 0 ||
+                    static_cast<size_t>(entry.page_index) >= pages_.size()) {
+                    entry.page_index = -1;
+                    entry.slot = -1;
+                    return;
+                }
+                AtlasPage& page = pages_[static_cast<size_t>(entry.page_index)];
+                page.free_slots.push_back(entry.slot);
+                page.live_slots = std::max(0, page.live_slots - 1);
+                entry.page_index = -1;
+                entry.slot = -1;
+            }
+
+            [[nodiscard]] static std::pair<glm::vec2, glm::vec2> slotUv(const int slot) {
+                const int slot_x = (slot % kAtlasSlotsPerAxis) * kThumbnailSize;
+                const int slot_y = (slot / kAtlasSlotsPerAxis) * kThumbnailSize;
+                constexpr float kInset = 0.5f;
+                const float atlas = static_cast<float>(kAtlasTextureSize);
+                return {
+                    glm::vec2((static_cast<float>(slot_x) + kInset) / atlas,
+                              (static_cast<float>(slot_y) + kInset) / atlas),
+                    glm::vec2((static_cast<float>(slot_x + kThumbnailSize) - kInset) / atlas,
+                              (static_cast<float>(slot_y + kThumbnailSize) - kInset) / atlas),
+                };
+            }
+
+            [[nodiscard]] static std::vector<std::uint8_t> resizeToThumbnail(
+                const unsigned char* pixels,
+                const int width,
+                const int height,
+                const int channels) {
+                std::vector<std::uint8_t> resized(kThumbnailSize * kThumbnailSize * 3u);
+                if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
+                    return {};
+                }
+                for (int y = 0; y < kThumbnailSize; ++y) {
+                    const int src_y_unflipped =
+                        std::min(static_cast<int>((static_cast<int64_t>(y) * height) / kThumbnailSize),
+                                 height - 1);
+                    const int src_y = height - 1 - src_y_unflipped;
+                    for (int x = 0; x < kThumbnailSize; ++x) {
+                        const int src_x =
+                            std::min(static_cast<int>((static_cast<int64_t>(x) * width) / kThumbnailSize),
+                                     width - 1);
+                        const size_t src = (static_cast<size_t>(src_y) * static_cast<size_t>(width) +
+                                            static_cast<size_t>(src_x)) *
+                                           static_cast<size_t>(channels);
+                        const size_t dst = (static_cast<size_t>(y) * kThumbnailSize +
+                                            static_cast<size_t>(x)) *
+                                           3u;
+                        if (channels == 1) {
+                            resized[dst + 0] = pixels[src];
+                            resized[dst + 1] = pixels[src];
+                            resized[dst + 2] = pixels[src];
+                        } else {
+                            resized[dst + 0] = pixels[src + 0];
+                            resized[dst + 1] = pixels[src + 1];
+                            resized[dst + 2] = pixels[src + 2];
+                        }
+                    }
+                }
+                return resized;
+            }
+
+            bool claimTask(Task& task) {
+                std::unique_lock lock(mutex_);
+                ensureWorkersLocked();
+                cv_.wait(lock, [&] {
+                    return !load_queue_.empty();
+                });
+                task = std::move(load_queue_.front());
+                load_queue_.pop_front();
+
+                const auto it = entries_.find(task.uid);
+                if (it == entries_.end() ||
+                    it->second.path_key != task.path_key ||
+                    it->second.generation != task.generation ||
+                    it->second.state != State::Queued) {
+                    return false;
+                }
+                it->second.state = State::Loading;
+                return true;
+            }
+
+            void workerLoop() {
+                while (true) {
+                    Task task;
+                    if (!claimTask(task)) {
+                        continue;
+                    }
+
+                    Decoded decoded;
+                    decoded.uid = task.uid;
+                    decoded.path_key = task.path_key;
+                    decoded.generation = task.generation;
+
+                    try {
+                        auto [raw_pixels, width, height, channels] =
+                            lfs::core::load_image(task.path, -1, kThumbnailSize);
+                        std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> pixels(
+                            raw_pixels, &lfs::core::free_image);
+                        if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
+                            throw std::runtime_error("decoded empty image");
+                        }
+
+                        decoded.pixels = resizeToThumbnail(pixels.get(), width, height, channels);
+                        if (decoded.pixels.empty()) {
+                            throw std::runtime_error("thumbnail resize failed");
+                        }
+                        decoded.width = kThumbnailSize;
+                        decoded.height = kThumbnailSize;
+                        decoded.channels = 3;
+
+                        std::unique_lock lock(mutex_);
+                        cv_.wait(lock, [&] {
+                            return ready_queue_.size() < kMaxPendingUploads;
+                        });
+                        const auto it = entries_.find(task.uid);
+                        if (it == entries_.end() ||
+                            it->second.path_key != task.path_key ||
+                            it->second.generation != task.generation) {
+                            continue;
+                        }
+                        it->second.state = State::UploadReady;
+                        ready_queue_.push_back(std::move(decoded));
+                    } catch (const std::exception& e) {
+                        std::lock_guard lock(mutex_);
+                        const auto it = entries_.find(task.uid);
+                        if (it != entries_.end() &&
+                            it->second.path_key == task.path_key &&
+                            it->second.generation == task.generation) {
+                            it->second.state = State::Failed;
+                            it->second.retry_frame = frame_counter_ + kDecodeRetryFrames;
+                            LOG_DEBUG("Camera thumbnail load failed for '{}': {}", task.path_key, e.what());
+                        }
+                    }
+                }
+            }
+
+            mutable std::mutex mutex_;
+            std::condition_variable cv_;
+            std::deque<Task> load_queue_;
+            std::deque<Decoded> ready_queue_;
+            std::unordered_map<int, Entry> entries_;
+            std::vector<AtlasPage> pages_;
+            uint64_t frame_counter_ = 0;
+            bool workers_started_ = false;
+        };
+
+        CameraThumbnailCache& cameraThumbnailCache() {
+            static auto* const cache = new CameraThumbnailCache();
+            return *cache;
+        }
+
+        [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
+            const lfs::core::Camera& camera,
+            const glm::mat4& scene_transform) {
+            auto rotation_tensor = camera.R();
+            auto translation_tensor = camera.T();
+            if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
+                return std::nullopt;
+            }
+            if (rotation_tensor.device() != lfs::core::Device::CPU) {
+                rotation_tensor = rotation_tensor.cpu();
+            }
+            if (translation_tensor.device() != lfs::core::Device::CPU) {
+                translation_tensor = translation_tensor.cpu();
+            }
+            if (rotation_tensor.dtype() != lfs::core::DataType::Float32 ||
+                translation_tensor.dtype() != lfs::core::DataType::Float32 ||
+                rotation_tensor.numel() < 9 || translation_tensor.numel() < 3) {
+                return std::nullopt;
+            }
+
+            const float* const rotation = rotation_tensor.ptr<float>();
+            const float* const translation = translation_tensor.ptr<float>();
+            if (!rotation || !translation) {
+                return std::nullopt;
+            }
+
+            glm::mat4 world_to_camera(1.0f);
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col) {
+                    world_to_camera[col][row] = rotation[row * 3 + col];
+                }
+                world_to_camera[3][row] = translation[row];
+            }
+
+            return scene_transform * glm::inverse(world_to_camera) *
+                   lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+        }
+
+        [[nodiscard]] std::vector<glm::mat4> resolveCameraSceneTransforms(
+            const SceneManager& scene_manager,
+            const SceneRenderState* scene_state,
+            const size_t camera_count) {
+            if (scene_state && scene_state->camera_scene_transforms.size() == camera_count) {
+                return scene_state->camera_scene_transforms;
+            }
+
+            auto transforms = scene_manager.getScene().getVisibleCameraSceneTransforms();
+            if (transforms.size() != camera_count) {
+                transforms.assign(camera_count, glm::mat4(1.0f));
+            }
+            for (auto& transform : transforms) {
+                transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
+            }
+            return transforms;
+        }
+
+        [[nodiscard]] float cameraFrustumVisibilityAlpha(const glm::vec3& camera_position,
+                                                         const glm::vec3& view_position,
+                                                         const float scale,
+                                                         const bool disabled) {
+            constexpr float kFadeStartMultiplier = 5.0f;
+            constexpr float kFadeEndMultiplier = 0.2f;
+            constexpr float kMinVisibleMultiplier = 0.1f;
+            constexpr float kMinVisibleAlpha = 0.05f;
+
+            const float safe_scale = std::max(scale, 0.0f);
+            const float fade_start = kFadeStartMultiplier * safe_scale;
+            const float fade_end = kFadeEndMultiplier * safe_scale;
+            const float min_visible = kMinVisibleMultiplier * safe_scale;
+            const float distance = glm::length(camera_position - view_position);
+
+            float alpha = 1.0f;
+            if (distance < min_visible) {
+                alpha = 0.0f;
+            } else if (distance < fade_end) {
+                alpha = kMinVisibleAlpha;
+            } else if (distance < fade_start && fade_start > fade_end) {
+                const float t = (distance - fade_end) / (fade_start - fade_end);
+                alpha = kMinVisibleAlpha + (1.0f - kMinVisibleAlpha) * (t * t * (3.0f - 2.0f * t));
+            }
+            if (disabled) {
+                alpha *= 0.4f;
+            }
+            return alpha;
+        }
+
+        [[nodiscard]] glm::vec4 cameraFrustumColor(const lfs::core::Camera& camera,
+                                                   const size_t camera_index,
+                                                   const RenderSettings& settings,
+                                                   const std::span<const glm::vec3> per_camera_colors,
+                                                   const float alpha,
+                                                   const bool focused,
+                                                   const bool disabled,
+                                                   const bool emphasized) {
+            const bool has_override = camera_index < per_camera_colors.size();
+            const bool is_validation = camera.image_name().find("test") != std::string::npos;
+            glm::vec3 color = is_validation ? settings.eval_camera_color : settings.train_camera_color;
+            if (has_override) {
+                const glm::vec3 override_color = per_camera_colors[camera_index];
+                if (std::isfinite(override_color.x) &&
+                    std::isfinite(override_color.y) &&
+                    std::isfinite(override_color.z)) {
+                    color = override_color;
+                }
+            }
+
+            float final_alpha = alpha;
+            if (emphasized) {
+                color = glm::vec3(1.0f, 0.55f, 0.0f);
+                final_alpha = std::min(1.0f, final_alpha + 0.4f);
+            }
+            if (focused) {
+                color = is_validation ? glm::vec3(0.9f, 0.75f, 0.0f)
+                                      : glm::vec3(1.0f, 0.55f, 0.0f);
+                final_alpha = std::min(1.0f, final_alpha + 0.3f);
+            }
+            if (disabled) {
+                color = glm::mix(color, glm::vec3(0.5f), 0.5f);
+                final_alpha *= 0.5f;
+            }
+            return glm::vec4(color, std::clamp(final_alpha, 0.0f, 1.0f));
+        }
+
+        [[nodiscard]] std::optional<glm::mat4> cameraFrustumModelMatrix(
+            const lfs::core::Camera& camera,
+            const glm::mat4& visualizer_camera_to_world,
+            const float scale) {
+            const int image_width = camera.image_width() > 0 ? camera.image_width() : camera.camera_width();
+            const int image_height = camera.image_height() > 0 ? camera.image_height() : camera.camera_height();
+            if (image_width <= 0 || image_height <= 0 || scale <= 0.0f) {
+                return std::nullopt;
+            }
+
+            constexpr float kEquirectangularDisplayFov = 1.0472f;
+            const bool equirectangular =
+                camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+            if (!equirectangular && camera.focal_y() <= 0.0f) {
+                return std::nullopt;
+            }
+
+            const float aspect = static_cast<float>(image_width) / static_cast<float>(image_height);
+            const float fov_y = equirectangular
+                                    ? kEquirectangularDisplayFov
+                                    : lfs::core::focal2fov(camera.focal_y(), image_height);
+            const float half_height = std::tan(fov_y * 0.5f);
+            const float half_width = half_height * aspect;
+
+            const glm::mat4 fov_scale = glm::scale(
+                glm::mat4(1.0f),
+                glm::vec3(half_width * 2.0f * scale, half_height * 2.0f * scale, scale));
+            return visualizer_camera_to_world * fov_scale;
+        }
+
+        void appendPerspectiveCameraFrustum(VulkanViewportPassParams& params,
+                                            const VulkanGuidePanelTarget& panel,
+                                            const RenderSettings& settings,
+                                            const glm::mat4& model,
+                                            const glm::vec4& color) {
+            constexpr std::array local_points{
+                glm::vec3(-0.5f, -0.5f, -1.0f),
+                glm::vec3(0.5f, -0.5f, -1.0f),
+                glm::vec3(0.5f, 0.5f, -1.0f),
+                glm::vec3(-0.5f, 0.5f, -1.0f),
+                glm::vec3(0.0f, 0.0f, 0.0f),
+            };
+            constexpr std::array<std::pair<int, int>, 8> edges{{
+                {0, 1},
+                {1, 2},
+                {2, 3},
+                {3, 0},
+                {0, 4},
+                {1, 4},
+                {2, 4},
+                {3, 4},
+            }};
+
+            std::array<glm::vec3, local_points.size()> world_points{};
+            for (size_t i = 0; i < local_points.size(); ++i) {
+                world_points[i] = glm::vec3(model * glm::vec4(local_points[i], 1.0f));
+            }
+            for (const auto& [a, b] : edges) {
+                addProjectedOverlayLine(params.overlay_triangles,
+                                        params,
+                                        panel,
+                                        settings,
+                                        world_points[static_cast<size_t>(a)],
+                                        world_points[static_cast<size_t>(b)],
+                                        color,
+                                        1.5f);
+            }
+        }
+
+        void appendEquirectangularCameraFrustum(VulkanViewportPassParams& params,
+                                                const VulkanGuidePanelTarget& panel,
+                                                const RenderSettings& settings,
+                                                const glm::mat4& model,
+                                                const glm::vec4& color) {
+            constexpr int kLatSegments = 16;
+            constexpr int kLonSegments = 24;
+            constexpr float kRadius = 0.5f;
+
+            const auto point = [&](const int lat, const int lon) {
+                const float theta = static_cast<float>(lat) /
+                                    static_cast<float>(kLatSegments) * glm::pi<float>();
+                const float phi = static_cast<float>(lon) /
+                                  static_cast<float>(kLonSegments) * 2.0f * glm::pi<float>();
+                const float sin_theta = std::sin(theta);
+                const float cos_theta = std::cos(theta);
+                const glm::vec3 local(kRadius * sin_theta * std::sin(phi),
+                                      kRadius * cos_theta,
+                                      -kRadius * sin_theta * std::cos(phi));
+                return glm::vec3(model * glm::vec4(local, 1.0f));
+            };
+
+            for (int lat = 0; lat <= kLatSegments; lat += 4) {
+                glm::vec3 previous = point(lat, 0);
+                for (int lon = 1; lon <= kLonSegments; ++lon) {
+                    const glm::vec3 current = point(lat, lon);
+                    addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                                            previous, current, color, 1.5f);
+                    previous = current;
+                }
+            }
+            for (int lon = 0; lon < kLonSegments; lon += 4) {
+                glm::vec3 previous = point(0, lon);
+                for (int lat = 1; lat <= kLatSegments; ++lat) {
+                    const glm::vec3 current = point(lat, lon);
+                    addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                                            previous, current, color, 1.5f);
+                    previous = current;
+                }
+            }
+
+            const glm::vec3 apex = glm::vec3(model * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
+            for (int lon = 0; lon < kLonSegments; lon += kLonSegments / 4) {
+                addProjectedOverlayLine(params.overlay_triangles,
+                                        params,
+                                        panel,
+                                        settings,
+                                        apex,
+                                        point(kLatSegments / 2, lon),
+                                        color,
+                                        1.5f);
+            }
+        }
+
+        void appendCameraFrustumOverlays(VulkanViewportPassParams& params,
+                                         const VulkanGuidePanelTarget& panel,
+                                         const RenderSettings& settings,
+                                         RenderingManager& rendering_manager,
+                                         const SceneManager& scene_manager,
+                                         const SceneRenderState* scene_state) {
+            if (!settings.show_camera_frustums || settings.camera_frustum_scale <= 0.0f) {
+                return;
+            }
+
+            const auto cameras = scene_manager.getScene().getVisibleCameras();
+            if (cameras.empty()) {
+                cameraThumbnailCache().clear();
+                return;
+            }
+
+            const std::vector<glm::mat4> scene_transforms =
+                resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
+            const auto disabled_uids = scene_manager.getScene().getTrainingDisabledCameraUids();
+            const int hovered_camera_id = rendering_manager.getHoveredCameraId();
+            auto& thumbnail_cache = cameraThumbnailCache();
+            thumbnail_cache.beginFrame();
+
+            std::unordered_set<int> emphasized_uids;
+            std::unordered_set<int> active_camera_uids;
+            active_camera_uids.reserve(cameras.size());
+            for (const auto& name : scene_manager.getSelectedNodeNames()) {
+                const auto* node = scene_manager.getScene().getNode(name);
+                if (node && node->type == lfs::core::NodeType::CAMERA && node->camera_uid >= 0) {
+                    emphasized_uids.insert(node->camera_uid);
+                }
+            }
+            for (const auto& camera : cameras) {
+                if (camera && camera->uid() >= 0) {
+                    active_camera_uids.insert(camera->uid());
+                }
+            }
+            thumbnail_cache.pruneTo(active_camera_uids);
+            thumbnail_cache.processReadyUploads(4);
+
+            std::vector<glm::vec3> per_camera_colors;
+            if (const auto* trainer_manager = scene_manager.getTrainerManager()) {
+                if (const auto* trainer = trainer_manager->getTrainer()) {
+                    std::vector<std::array<float, 3>> loss_colors;
+                    if (trainer->fillCameraLossColors(cameras, loss_colors) &&
+                        loss_colors.size() == cameras.size()) {
+                        per_camera_colors.reserve(loss_colors.size());
+                        for (const auto& color : loss_colors) {
+                            per_camera_colors.emplace_back(color[0], color[1], color[2]);
+                        }
+                    }
+                }
+            }
+
+            constexpr float kMinRenderAlpha = 0.01f;
+            const glm::vec3 view_position = panel.viewport->getTranslation();
+            size_t background_thumbnail_requests = 0;
+            constexpr size_t kBackgroundThumbnailRequestsPerFrame = 16;
+            for (size_t i = 0; i < cameras.size(); ++i) {
+                const auto& camera = cameras[i];
+                if (!camera) {
+                    continue;
+                }
+
+                const auto visualizer_camera_to_world =
+                    cameraVisualizerTransform(*camera, scene_transforms[i]);
+                if (!visualizer_camera_to_world) {
+                    continue;
+                }
+
+                const bool disabled = disabled_uids.count(camera->uid()) > 0;
+                const float alpha = cameraFrustumVisibilityAlpha(
+                    glm::vec3((*visualizer_camera_to_world)[3]),
+                    view_position,
+                    settings.camera_frustum_scale,
+                    disabled);
+                if (alpha <= kMinRenderAlpha) {
+                    continue;
+                }
+
+                const glm::vec4 color = cameraFrustumColor(*camera,
+                                                           i,
+                                                           settings,
+                                                           per_camera_colors,
+                                                           alpha,
+                                                           camera->uid() == hovered_camera_id,
+                                                           disabled,
+                                                           emphasized_uids.count(camera->uid()) > 0);
+                if (color.a <= kMinRenderAlpha) {
+                    continue;
+                }
+
+                const auto model = cameraFrustumModelMatrix(*camera,
+                                                            *visualizer_camera_to_world,
+                                                            settings.camera_frustum_scale);
+                if (!model) {
+                    continue;
+                }
+
+                if (camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+                    appendEquirectangularCameraFrustum(params, panel, settings, *model, color);
+                } else {
+                    constexpr std::array image_corners{
+                        glm::vec3(-0.5f, -0.5f, -1.0f),
+                        glm::vec3(0.5f, -0.5f, -1.0f),
+                        glm::vec3(0.5f, 0.5f, -1.0f),
+                        glm::vec3(-0.5f, 0.5f, -1.0f),
+                    };
+                    std::array<glm::vec2, image_corners.size()> screen_points{};
+                    bool quad_visible = true;
+                    for (size_t corner = 0; corner < image_corners.size(); ++corner) {
+                        const glm::vec3 world_point =
+                            glm::vec3((*model) * glm::vec4(image_corners[corner], 1.0f));
+                        const auto projected = projectPointToPanelScreen(panel, settings, world_point);
+                        if (!projected) {
+                            quad_visible = false;
+                            break;
+                        }
+                        screen_points[corner] = *projected;
+                    }
+                    quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
+                    if (quad_visible) {
+                        thumbnail_cache.request(*camera);
+                    } else if (background_thumbnail_requests < kBackgroundThumbnailRequestsPerFrame &&
+                               thumbnail_cache.request(*camera)) {
+                        ++background_thumbnail_requests;
+                    }
+
+                    const auto placement = thumbnail_cache.placement(camera->uid());
+                    if (placement && quad_visible) {
+                        const float opacity = std::clamp(color.a * 0.8f, 0.0f, 0.8f);
+                        const float disabled_mix = disabled ? 0.5f : 0.0f;
+                        const float emphasis_mix = emphasized_uids.count(camera->uid()) > 0 ? 0.18f : 0.0f;
+                        appendTexturedOverlayQuad(params,
+                                                  placement->texture_id,
+                                                  screen_points,
+                                                  placement->uv_min,
+                                                  placement->uv_max,
+                                                  {color.r, color.g, color.b, opacity},
+                                                  {emphasis_mix, disabled_mix, 0.0f, 0.0f});
+                    }
+                    appendPerspectiveCameraFrustum(params, panel, settings, *model, color);
+                }
+            }
+
+            if (thumbnail_cache.hasPendingWork()) {
+                rendering_manager.markDirty(DirtyFlag::OVERLAY);
+            }
+        }
+
+        void appendProjectedEllipsoid(std::vector<VulkanViewportOverlayVertex>& out,
+                                      VulkanViewportPassParams& params,
+                                      const VulkanGuidePanelTarget& panel,
+                                      const RenderSettings& settings,
+                                      const glm::vec3& radii,
+                                      const glm::mat4& ellipsoid_to_world,
+                                      const glm::vec4& color,
+                                      const float thickness) {
+            constexpr int lat_segments = 24;
+            constexpr int lon_segments = 32;
+
+            const auto point = [&](const int lat, const int lon) {
+                const float theta = static_cast<float>(lat) /
+                                    static_cast<float>(lat_segments) * glm::pi<float>();
+                const float phi = static_cast<float>(lon) /
+                                  static_cast<float>(lon_segments) * 2.0f * glm::pi<float>();
+                const float sin_theta = std::sin(theta);
+                const glm::vec3 local(
+                    sin_theta * std::cos(phi) * radii.x,
+                    std::cos(theta) * radii.y,
+                    sin_theta * std::sin(phi) * radii.z);
+                return glm::vec3(ellipsoid_to_world * glm::vec4(local, 1.0f));
+            };
+
+            for (int lat = 0; lat < lat_segments; lat += 2) {
+                glm::vec3 previous = point(lat, 0);
+                for (int lon = 1; lon <= lon_segments; ++lon) {
+                    const glm::vec3 current = point(lat, lon % lon_segments);
+                    addProjectedOverlayLine(out, params, panel, settings, previous, current, color, thickness);
+                    previous = current;
+                }
+            }
+            for (int lon = 0; lon < lon_segments; lon += 2) {
+                glm::vec3 previous = point(0, lon);
+                for (int lat = 1; lat <= lat_segments; ++lat) {
+                    const glm::vec3 current = point(lat, lon);
+                    addProjectedOverlayLine(out, params, panel, settings, previous, current, color, thickness);
+                    previous = current;
+                }
+            }
+        }
+
+        void appendCropAndFilterOverlays(VulkanViewportPassParams& params,
+                                         const VulkanGuidePanelTarget& panel,
+                                         const RenderSettings& settings,
+                                         const SceneRenderState* scene_state,
+                                         const SceneManager* scene_manager,
+                                         const GizmoState& gizmo) {
+            if (settings.depth_filter_enabled) {
+                const glm::mat4 filter_to_world = settings.depth_filter_transform.toMat4();
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   settings.depth_filter_min,
+                                   settings.depth_filter_max,
+                                   filter_to_world,
+                                   glm::vec4(0.0f, 0.0f, 0.0f, 0.85f),
+                                   9.0f);
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   settings.depth_filter_min,
+                                   settings.depth_filter_max,
+                                   filter_to_world,
+                                   glm::vec4(1.0f, 1.0f, 1.0f, 0.90f),
+                                   6.0f);
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   settings.depth_filter_min,
+                                   settings.depth_filter_max,
+                                   filter_to_world,
+                                   glm::vec4(1.0f, 1.0f, 1.0f, 1.0f),
+                                   4.5f);
+            }
+
+            if (!scene_state || !scene_manager) {
+                return;
+            }
+
+            if (settings.show_crop_box) {
+                const core::NodeId selected_id = scene_manager->getSelectedNodeCropBoxId();
+                for (const auto& cb : scene_state->cropboxes) {
+                    if (!cb.data) {
+                        continue;
+                    }
+                    const bool selected = cb.node_id == selected_id;
+                    const bool use_pending = selected && gizmo.cropbox_active;
+                    const glm::vec3 box_min = use_pending ? gizmo.cropbox_min : cb.data->min;
+                    const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
+                    const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
+                    const float flash = selected ? std::clamp(cb.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
+                    appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                       box_min,
+                                       box_max,
+                                       world_transform,
+                                       cropGuideColor(cb.data->color, cb.data->inverse, flash),
+                                       cb.data->line_width + flash * 4.0f);
+                }
+            }
+
+            if (settings.show_ellipsoid) {
+                const core::NodeId selected_id = scene_manager->getSelectedNodeEllipsoidId();
+                for (const auto& el : scene_state->ellipsoids) {
+                    if (!el.data) {
+                        continue;
+                    }
+                    const bool selected = el.node_id == selected_id;
+                    const bool use_pending = selected && gizmo.ellipsoid_active;
+                    const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
+                    const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
+                    const float flash = selected ? std::clamp(el.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
+                    appendProjectedEllipsoid(params.overlay_triangles, params, panel, settings,
+                                             radii,
+                                             world_transform,
+                                             cropGuideColor(el.data->color, el.data->inverse, flash),
+                                             el.data->line_width + flash * 4.0f);
+                }
+            }
+        }
+
+        void appendPivotShaderOverlay(VulkanViewportPassParams& params,
+                                      const VulkanGuidePanelTarget& panel,
+                                      const RenderSettings& settings,
+                                      const glm::vec3& pivot_world,
+                                      const float opacity) {
+            constexpr float kPivotSizePx = 50.0f;
+            constexpr glm::vec3 kPivotColor{0.26f, 0.59f, 0.98f};
+
+            const glm::mat4 view =
+                lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(), panel.viewport->getTranslation());
+            const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+                panel.render_size,
+                settings.focal_length_mm,
+                settings.orthographic,
+                settings.ortho_scale,
+                lfs::rendering::DEFAULT_NEAR_PLANE,
+                settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
+            const glm::vec4 clip = projection * view * glm::vec4(pivot_world, 1.0f);
+            if (!std::isfinite(clip.x) || !std::isfinite(clip.y) || !std::isfinite(clip.w) ||
+                std::abs(clip.w) <= 1e-6f) {
+                return;
+            }
+
+            const glm::vec2 gl_ndc = glm::vec2(clip) / clip.w;
+            const glm::vec2 screen = panel.pos + glm::vec2(
+                                                     (gl_ndc.x * 0.5f + 0.5f) * panel.size.x,
+                                                     (1.0f - (gl_ndc.y * 0.5f + 0.5f)) * panel.size.y);
+            const glm::vec2 framebuffer_scale(
+                params.framebuffer_scale.x > 0.0f ? params.framebuffer_scale.x : 1.0f,
+                params.framebuffer_scale.y > 0.0f ? params.framebuffer_scale.y : 1.0f);
+            const glm::vec2 framebuffer_size = glm::max(params.viewport_size * framebuffer_scale,
+                                                        glm::vec2(1.0f));
+            params.pivot_overlays.push_back({
+                .center_ndc = screenToViewportNdc(screen, params.viewport_pos, params.viewport_size),
+                .size_ndc = (glm::vec2(kPivotSizePx) / framebuffer_size) * 2.0f,
+                .color = kPivotColor,
+                .opacity = std::clamp(opacity, 0.0f, 1.0f),
+            });
+        }
+
+        void appendVulkanSceneGuideOverlays(VulkanViewportPassParams& params,
+                                            const VisualizerImpl& viewer,
+                                            const ViewportLayout& viewport_layout,
+                                            const RenderSettings& settings,
+                                            RenderingManager& rendering_manager,
+                                            SceneManager* scene_manager,
+                                            const SceneRenderState* scene_state,
+                                            const GizmoState& gizmo) {
+            if (params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+                return;
+            }
+
+            const auto panels = collectVulkanGuidePanels(viewer, viewport_layout, rendering_manager);
+            if (panels.empty()) {
+                return;
+            }
+
+            constexpr std::array axis_colors{
+                glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
+                glm::vec4(0.0f, 1.0f, 0.0f, 1.0f),
+                glm::vec4(0.0f, 0.0f, 1.0f, 1.0f),
+            };
+            constexpr std::array axes{
+                glm::vec3(1.0f, 0.0f, 0.0f),
+                glm::vec3(0.0f, 1.0f, 0.0f),
+                glm::vec3(0.0f, 0.0f, 1.0f),
+            };
+
+            for (const auto& panel : panels) {
+                if (!panel.valid()) {
+                    continue;
+                }
+
+                appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo);
+                if (scene_manager) {
+                    appendCameraFrustumOverlays(params,
+                                                panel,
+                                                settings,
+                                                rendering_manager,
+                                                *scene_manager,
+                                                scene_state);
+                }
+
+                if (settings.show_coord_axes) {
+                    for (size_t axis = 0; axis < axes.size(); ++axis) {
+                        if (settings.axes_visibility[axis]) {
+                            addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                                                    glm::vec3(0.0f),
+                                                    axes[axis] * settings.axes_size,
+                                                    axis_colors[axis], 3.0f);
+                        }
+                    }
+                }
+
+                constexpr float kPivotDurationSec = 0.5f;
+                const float time_since_set = panel.viewport->camera.getSecondsSincePivotSet();
+                const bool pivot_animation_active = time_since_set < kPivotDurationSec;
+                if (pivot_animation_active) {
+                    const auto remaining_ms = static_cast<int>(
+                        (kPivotDurationSec - time_since_set) * 1000.0f);
+                    rendering_manager.setPivotAnimationEndTime(
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(remaining_ms));
+                }
+                if (settings.show_pivot || pivot_animation_active) {
+                    const float opacity = settings.show_pivot
+                                              ? 1.0f
+                                              : 1.0f - std::clamp(time_since_set / kPivotDurationSec, 0.0f, 1.0f);
+                    appendPivotShaderOverlay(params, panel, settings, panel.viewport->camera.getPivot(), opacity);
+                }
+            }
         }
 
         enum class DevResourceKind {
@@ -223,53 +2411,6 @@ namespace lfs::vis::gui {
             default:
                 return nullptr;
             }
-        }
-
-        void drawFrameTooltip(const std::string& tip, int screen_w, int screen_h) {
-            if (tip.empty())
-                return;
-
-            const auto& p = lfs::vis::theme().palette;
-            auto* font = ImGui::GetFont();
-            const float font_size = ImGui::GetFontSize();
-            const ImVec2 mouse = s_frame_input
-                                     ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
-                                     : ImVec2(0, 0);
-            const ImVec2 pad(8, 6);
-            const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, tip.c_str());
-            const float box_w = text_size.x + pad.x * 2;
-            const float box_h = text_size.y + pad.y * 2;
-
-            const float sw = static_cast<float>(screen_w);
-            const float sh = static_cast<float>(screen_h);
-            ImVec2 box_min(mouse.x + 14, mouse.y + 18);
-            if (box_min.x + box_w > sw)
-                box_min.x = mouse.x - 14 - box_w;
-            if (box_min.y + box_h > sh)
-                box_min.y = mouse.y - 18 - box_h;
-
-            const ImVec2 box_max(box_min.x + box_w, box_min.y + box_h);
-            const ImU32 col_bg = ImGui::ColorConvertFloat4ToU32(p.surface_bright);
-            const ImU32 col_border = ImGui::ColorConvertFloat4ToU32(p.border);
-            const ImU32 col_text = ImGui::ColorConvertFloat4ToU32(p.text);
-
-            ImDrawList dl(ImGui::GetDrawListSharedData());
-            dl._ResetForNewFrame();
-            dl.PushTextureID(ImGui::GetIO().Fonts->TexID);
-            dl.PushClipRectFullScreen();
-            dl.AddRectFilled(box_min, box_max, col_bg, 4.0f);
-            dl.AddRect(box_min, box_max, col_border, 4.0f);
-            dl.AddText(font, font_size,
-                       ImVec2(box_min.x + pad.x, box_min.y + pad.y), col_text, tip.c_str());
-            dl.PopClipRect();
-
-            ImDrawData draw_data{};
-            draw_data.DisplayPos = ImVec2(0.0f, 0.0f);
-            draw_data.DisplaySize = ImVec2(sw, sh);
-            draw_data.FramebufferScale = ImGui::GetIO().DisplayFramebufferScale;
-            draw_data.Valid = true;
-            draw_data.AddDrawList(&dl);
-            ImGui_ImplOpenGL3_RenderDrawData(&draw_data);
         }
 
         SDL_Cursor* loadColorCursorFromAsset(const std::string& asset_name, int hot_x, int hot_y) {
@@ -507,7 +2648,6 @@ namespace lfs::vis::gui {
     void GuiManager::rebuildFonts(float scale) {
         ImGuiIO& io = ImGui::GetIO();
 
-        ImGui_ImplOpenGL3_DestroyDeviceObjects();
         io.Fonts->Clear();
 
         const auto& t = theme();
@@ -522,6 +2662,11 @@ namespace lfs::vis::gui {
                 return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
             };
 
+            const std::string lang =
+                lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+            const bool needs_jp_zh = (lang == "ja" || lang == "zh");
+            const bool needs_kr = (lang == "ko");
+
             const auto load_font_latin_only =
                 [&](const std::filesystem::path& path, const float size) -> ImFont* {
                 if (!is_font_valid(path))
@@ -533,7 +2678,7 @@ namespace lfs::vis::gui {
             };
 
             const auto merge_cjk = [&](const float size) {
-                if (is_font_valid(japanese_path)) {
+                if (needs_jp_zh && is_font_valid(japanese_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
                     config.OversampleH = 1;
@@ -544,7 +2689,7 @@ namespace lfs::vis::gui {
                     io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
                                                  io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
                 }
-                if (is_font_valid(korean_path)) {
+                if (needs_kr && is_font_valid(korean_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
                     config.OversampleH = 1;
@@ -628,7 +2773,20 @@ namespace lfs::vis::gui {
         if (!io.Fonts->Build()) {
             LOG_ERROR("Font atlas build failed — CJK glyphs may be missing");
         }
-        ImGui_ImplOpenGL3_CreateDeviceObjects();
+
+        // Bake an independent FreeType atlas for ScreenOverlayRenderer Text commands.
+        // Kept separate from ImGui's font atlas: the Vulkan branch has no ImGui renderer
+        // backend, and reaching into io.Fonts trips the new RendererHasTextures contract.
+        try {
+            const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
+            const float atlas_size_px = std::round(t.fonts.large_size * scale);
+            if (!buildOverlayFontAtlas(regular_path, atlas_size_px)) {
+                LOG_WARN("Overlay font atlas not built; selection/tool labels won't render");
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Overlay font atlas: failed to resolve regular font path: {}", e.what());
+        }
+        lfs::rendering::ScreenOverlayRenderer::setTextMeasureFn(&measureOverlayText);
     }
 
     void GuiManager::applyUiScale(float scale) {
@@ -730,54 +2888,16 @@ namespace lfs::vis::gui {
             alloc_user_data);
         lfs::python::set_implot_context(ImPlot::GetCurrentContext());
 
-        lfs::python::set_gl_texture_service(
-            [](const unsigned char* data, const int w, const int h, const int channels) -> lfs::python::TextureResult {
-                if (!data || w <= 0 || h <= 0)
-                    return {0, 0, 0};
+        vulkan_gui_ = viewer_ && viewer_->getWindowManager() && viewer_->getWindowManager()->isVulkan();
 
-                GLuint tex = 0;
-                glGenTextures(1, &tex);
-                if (tex == 0)
-                    return {0, 0, 0};
-
-                glBindTexture(GL_TEXTURE_2D, tex);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-                GLenum format = GL_RGB;
-                GLenum internal_format = GL_RGB8;
-                if (channels == 1) {
-                    format = GL_RED;
-                    internal_format = GL_R8;
-                } else if (channels == 4) {
-                    format = GL_RGBA;
-                    internal_format = GL_RGBA8;
-                }
-
-                glTexImage2D(GL_TEXTURE_2D, 0, internal_format, w, h, 0, format, GL_UNSIGNED_BYTE, data);
-
-                if (channels == 1) {
-                    GLint swizzle[] = {GL_RED, GL_RED, GL_RED, GL_ONE};
-                    glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, swizzle);
-                }
-
-                glBindTexture(GL_TEXTURE_2D, 0);
-                return {tex, w, h};
+        lfs::python::set_ui_texture_service(
+            [](const unsigned char*, int, int, int) -> lfs::python::TextureResult {
+                return {0, 0, 0};
             },
-            [](const uint32_t tex) {
-                if (tex > 0) {
-                    const auto gl_tex = static_cast<GLuint>(tex);
-                    glDeleteTextures(1, &gl_tex);
-                }
-            },
+            [](uint64_t) {},
             []() -> int {
                 constexpr int FALLBACK_MAX_TEXTURE_SIZE = 4096;
-                GLint sz = 0;
-                glGetIntegerv(GL_MAX_TEXTURE_SIZE, &sz);
-                return sz > 0 ? sz : FALLBACK_MAX_TEXTURE_SIZE;
+                return FALLBACK_MAX_TEXTURE_SIZE;
             });
 
         ImGuiIO& io = ImGui::GetIO();
@@ -790,9 +2910,12 @@ namespace lfs::vis::gui {
         io.ConfigDragClickToInputText = true;
         loadImGuiSettings();
 
-        // Platform/Renderer initialization
-        ImGui_ImplSDL3_InitForOpenGL(viewer_->getWindow(), SDL_GL_GetCurrentContext());
-        ImGui_ImplOpenGL3_Init("#version 430");
+        // Platform initialization. Vulkan rendering is handled by the app-owned passes below.
+        auto* vulkan_context = viewer_->getWindowManager()->getVulkanContext();
+        if (!vulkan_context || !ImGui_ImplSDL3_InitForVulkan(viewer_->getWindow())) {
+            throw std::runtime_error("Failed to initialize ImGui SDL3 platform backend");
+        }
+        setVulkanUiTextureContext(vulkan_context);
 
         // Initialize localization system
         auto& loc = lfs::event::LocalizationManager::getInstance();
@@ -856,7 +2979,12 @@ namespace lfs::vis::gui {
             }
         });
 
-        rmlui_manager_.init(viewer_->getWindow(), current_ui_scale_);
+        {
+            auto* vulkan_context = viewer_->getWindowManager()->getVulkanContext();
+            if (!vulkan_context || !rmlui_manager_.initVulkan(viewer_->getWindow(), *vulkan_context, current_ui_scale_)) {
+                throw std::runtime_error("Failed to initialize RmlUI Vulkan backend");
+            }
+        }
         lfs::vis::setThemeChangeCallback([this](const std::string& theme_id) {
             rmlui_manager_.activateTheme(theme_id);
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
@@ -916,10 +3044,10 @@ namespace lfs::vis::gui {
                                     inline_rcss ? std::string(inline_rcss) : std::string{});
         };
         ops.destroy = [](void* host) {
-            if (lfs::python::on_gl_thread()) {
+            if (lfs::python::on_graphics_thread()) {
                 delete static_cast<RmlPanelHost*>(host);
             } else {
-                lfs::python::schedule_gl_callback([host]() {
+                lfs::python::schedule_graphics_callback([host]() {
                     delete static_cast<RmlPanelHost*>(host);
                 });
             }
@@ -1055,6 +3183,7 @@ namespace lfs::vis::gui {
         std::unordered_map<std::string, std::filesystem::file_time_type> next_times;
         bool rml_changed = false;
         bool locale_changed = false;
+        bool scan_failed = false;
 
         const auto scan_dir =
             [&](const std::filesystem::path& dir, const bool locale_dir) {
@@ -1062,46 +3191,65 @@ namespace lfs::vis::gui {
                     return;
 
                 std::error_code ec;
-                if (!std::filesystem::exists(dir, ec) || !std::filesystem::is_directory(dir, ec))
+                if (!std::filesystem::exists(dir, ec) || ec ||
+                    !std::filesystem::is_directory(dir, ec) || ec) {
+                    if (ec)
+                        scan_failed = true;
                     return;
+                }
 
-                std::filesystem::recursive_directory_iterator it(
-                    dir, std::filesystem::directory_options::skip_permission_denied, ec);
-                const std::filesystem::recursive_directory_iterator end;
-                for (; !ec && it != end; it.increment(ec)) {
-                    std::error_code entry_ec;
-                    if (!it->is_regular_file(entry_ec) || entry_ec)
-                        continue;
-
-                    const auto kind = devResourceKindForPath(it->path());
-                    const bool watched = locale_dir
-                                             ? kind == DevResourceKind::Locale
-                                             : kind == DevResourceKind::Rml;
-                    if (!watched)
-                        continue;
-
-                    const auto mtime = std::filesystem::last_write_time(it->path(), entry_ec);
-                    if (entry_ec)
-                        continue;
-
-                    const std::string key = lfs::core::path_to_utf8(it->path().lexically_normal());
-                    next_times[key] = mtime;
-
-                    if (!detect_changes)
-                        continue;
-
-                    const auto old = dev_resource_watch_.file_times.find(key);
-                    if (old == dev_resource_watch_.file_times.end() || old->second != mtime) {
-                        if (locale_dir)
-                            locale_changed = true;
-                        else
-                            rml_changed = true;
+                try {
+                    std::filesystem::recursive_directory_iterator it(
+                        dir, std::filesystem::directory_options::skip_permission_denied, ec);
+                    const std::filesystem::recursive_directory_iterator end;
+                    if (ec) {
+                        scan_failed = true;
+                        return;
                     }
+                    for (; !ec && it != end; it.increment(ec)) {
+                        std::error_code entry_ec;
+                        if (!it->is_regular_file(entry_ec) || entry_ec)
+                            continue;
+
+                        const auto kind = devResourceKindForPath(it->path());
+                        const bool watched = locale_dir
+                                                 ? kind == DevResourceKind::Locale
+                                                 : kind == DevResourceKind::Rml;
+                        if (!watched)
+                            continue;
+
+                        const auto mtime = std::filesystem::last_write_time(it->path(), entry_ec);
+                        if (entry_ec)
+                            continue;
+
+                        const std::string key = lfs::core::path_to_utf8(it->path().lexically_normal());
+                        next_times[key] = mtime;
+
+                        if (!detect_changes)
+                            continue;
+
+                        const auto old = dev_resource_watch_.file_times.find(key);
+                        if (old == dev_resource_watch_.file_times.end() || old->second != mtime) {
+                            if (locale_dir)
+                                locale_changed = true;
+                            else
+                                rml_changed = true;
+                        }
+                    }
+                    if (ec)
+                        scan_failed = true;
+                } catch (const std::filesystem::filesystem_error& e) {
+                    scan_failed = true;
+                    LOG_WARN("Resource hot reload scan skipped for '{}': {}",
+                             lfs::core::path_to_utf8(dir), e.what());
                 }
             };
 
         scan_dir(dev_resource_watch_.rml_dir, false);
         scan_dir(dev_resource_watch_.locale_dir, true);
+
+        if (scan_failed)
+            return {false, false};
 
         if (detect_changes) {
             for (const auto& [key, unused] : dev_resource_watch_.file_times) {
@@ -1174,6 +3322,8 @@ namespace lfs::vis::gui {
                 return true;
             }
         }
+        if (rmlui_manager_.wantsTextInput() || rmlui_manager_.anyItemActive())
+            return true;
 
         if (!ui_hidden_ && rml_menu_bar_.isOpen())
             return true;
@@ -1235,10 +3385,9 @@ namespace lfs::vis::gui {
         if (need_gil)
             lfs::python::acquire_gil_main_thread();
 
-        lfs::python::shutdown_python_gl_resources();
+        lfs::python::shutdown_python_ui_resources();
         lfs::python::set_modal_enqueue_callback({});
 
-        global_context_menu_->destroyGLResources();
         rml_modal_overlay_.reset();
         panels::ShutdownPythonConsoleRml();
         rml_status_bar_.shutdown();
@@ -1253,17 +3402,23 @@ namespace lfs::vis::gui {
         if (need_gil)
             lfs::python::release_gil_main_thread();
 
-        sequencer_ui_.destroyGLResources();
+        sequencer_ui_.destroyGraphicsResources();
         drag_drop_.shutdown();
         destroyCustomCursors();
+        lfs::rendering::ScreenOverlayRenderer::setTextMeasureFn({});
+        g_overlay_atlas = {};
+        setVulkanUiTextureContext(nullptr);
+        resetVulkanSceneInterop();
+        vulkan_scene_image_.reset();
+        vulkan_viewport_pass_.reset();
 
         if (ImGui::GetCurrentContext()) {
             saveImGuiSettings();
-            ImGui_ImplOpenGL3_Shutdown();
             ImGui_ImplSDL3_Shutdown();
             ImPlot::DestroyContext();
             ImGui::DestroyContext();
         }
+        vulkan_gui_ = false;
     }
 
     void GuiManager::registerNativePanels() {
@@ -1350,12 +3505,949 @@ namespace lfs::vis::gui {
                   PanelSpace::ViewportOverlay, 0);
     }
 
-    void GuiManager::render() {
-        if (auto* ri = rmlui_manager_.getRenderInterface()) {
-            auto* sm = viewer_->getSceneManager();
-            ri->set_scene_manager(sm);
-            ri->process_pending_preview_uploads();
+    void GuiManager::setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                         const glm::ivec2 size,
+                                         const bool flip_y,
+                                         const std::uint64_t generation) {
+        const bool target_changed =
+            vulkan_scene_image_.get() != image.get() ||
+            vulkan_scene_image_size_ != size;
+        if (target_changed) {
+            vulkan_scene_interop_disabled_ = false;
         }
+        vulkan_external_scene_image_ = VK_NULL_HANDLE;
+        vulkan_external_scene_image_view_ = VK_NULL_HANDLE;
+        vulkan_external_scene_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_external_scene_image_size_ = {0, 0};
+        vulkan_scene_image_ = std::move(image);
+        vulkan_scene_image_generation_ = generation;
+        vulkan_scene_image_size_ = size;
+        vulkan_scene_image_flip_y_ = flip_y;
+    }
+
+    void GuiManager::setVulkanExternalSceneImage(const VkImage image,
+                                                 const VkImageView image_view,
+                                                 const VkImageLayout layout,
+                                                 const glm::ivec2 size,
+                                                 const bool flip_y,
+                                                 const std::uint64_t generation) {
+        vulkan_scene_image_.reset();
+        vulkan_scene_image_size_ = size;
+        vulkan_scene_image_flip_y_ = flip_y;
+        vulkan_external_scene_image_ = image;
+        vulkan_external_scene_image_view_ = image_view;
+        vulkan_external_scene_image_layout_ = layout;
+        vulkan_external_scene_image_size_ = size;
+        vulkan_external_scene_image_flip_y_ = flip_y;
+        vulkan_external_scene_image_generation_ = generation;
+    }
+
+    void GuiManager::setVulkanSplitRightImage(std::shared_ptr<const lfs::core::Tensor> image,
+                                              const glm::ivec2 size,
+                                              const bool flip_y,
+                                              const std::uint64_t generation) {
+        const bool target_changed =
+            vulkan_split_right_image_.get() != image.get() ||
+            vulkan_split_right_image_size_ != size;
+        if (target_changed) {
+            vulkan_split_right_interop_disabled_ = false;
+        }
+        vulkan_split_right_image_ = std::move(image);
+        vulkan_split_right_image_generation_ = generation;
+        vulkan_split_right_image_size_ = size;
+        vulkan_split_right_image_flip_y_ = flip_y;
+    }
+
+    void GuiManager::clearVulkanSplitRightImage() {
+        vulkan_split_right_image_.reset();
+        vulkan_split_right_image_size_ = {0, 0};
+        vulkan_split_right_image_flip_y_ = false;
+        vulkan_split_right_image_generation_ = 0;
+        vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+        vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_split_right_external_image_generation_ = 0;
+    }
+
+    void GuiManager::setVulkanDepthBlitImage(std::shared_ptr<const lfs::core::Tensor> depth,
+                                             const glm::ivec2 size,
+                                             const std::uint64_t generation) {
+        const bool target_changed =
+            vulkan_depth_blit_image_.get() != depth.get() ||
+            vulkan_depth_blit_image_size_ != size;
+        if (target_changed) {
+            vulkan_depth_blit_interop_disabled_ = false;
+        }
+        vulkan_depth_blit_image_ = std::move(depth);
+        vulkan_depth_blit_image_generation_ = generation;
+        vulkan_depth_blit_image_size_ = size;
+    }
+
+    void GuiManager::clearVulkanDepthBlitImage() {
+        vulkan_depth_blit_image_.reset();
+        vulkan_depth_blit_image_size_ = {0, 0};
+        vulkan_depth_blit_image_generation_ = 0;
+        vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_depth_blit_external_image_generation_ = 0;
+    }
+
+    void GuiManager::resetVulkanSceneInterop() {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (vulkan_scene_interop_.empty()) {
+            return;
+        }
+        auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+        auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        // A previous frame's submit may still sample one of these slots; drain
+        // before vkDestroyImage to avoid VK_ERROR_DEVICE_LOST.
+        if (vulkan_context) {
+            (void)vulkan_context->waitForSubmittedFrames();
+        }
+        for (auto& target : vulkan_scene_interop_) {
+            if (!target) {
+                continue;
+            }
+            if (vulkan_context) {
+                target->destroy(*vulkan_context);
+            } else {
+                target->interop.reset();
+            }
+        }
+        vulkan_scene_interop_.clear();
+#else
+        vulkan_scene_interop_.clear();
+#endif
+    }
+
+    void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (vulkan_scene_interop_disabled_) {
+            return;
+        }
+        if (vulkan_external_scene_image_ != VK_NULL_HANDLE) {
+            return;
+        }
+
+        const auto fail_required_interop = [this](std::string message) -> void {
+            vulkan_scene_interop_disabled_ = true;
+            resetVulkanSceneInterop();
+            LOG_ERROR("Required Vulkan/CUDA viewport interop failed: {}", message);
+#ifndef NDEBUG
+            assert(false && "Required Vulkan/CUDA viewport interop failed");
+#endif
+            throw std::runtime_error(std::move(message));
+        };
+
+        if (!vulkan_scene_image_ ||
+            !vulkan_scene_image_->is_valid() ||
+            vulkan_scene_image_->device() != lfs::core::Device::CUDA ||
+            vulkan_scene_image_size_.x <= 0 ||
+            vulkan_scene_image_size_.y <= 0) {
+            if (!vulkan_scene_interop_.empty()) {
+                resetVulkanSceneInterop();
+            }
+            return;
+        }
+
+        const std::size_t frame_slot = context.currentFrameSlot();
+        const bool slot_array_resize_needed = vulkan_scene_interop_.size() != context.framesInFlight();
+
+        // Cache-HIT fast path: when nothing about the source image changed since the last
+        // upload into THIS slot's interop target, there's no work to do — and crucially no
+        // need to vkWaitForFences this slot. The previous unconditional wait was costing
+        // ~kFrameDuration ms per frame (10–12 ms with kFramesInFlight=1) for no reason on
+        // every renderer cache-HIT frame, which dominated gui_render time.
+        if (!slot_array_resize_needed && frame_slot < vulkan_scene_interop_.size()) {
+            const auto& target_ptr_const = vulkan_scene_interop_[frame_slot];
+            const glm::ivec2 target_size = vulkan_scene_image_size_;
+            const bool recreate_needed =
+                !target_ptr_const ||
+                target_ptr_const->size != target_size ||
+                !target_ptr_const->interop.valid();
+            if (!recreate_needed &&
+                vulkan_scene_image_generation_ != 0 &&
+                target_ptr_const->uploaded_source_generation == vulkan_scene_image_generation_ &&
+                target_ptr_const->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                LOG_PERF("interop slot={} cache-HIT-skip cur_gen={} layout={}",
+                         frame_slot, vulkan_scene_image_generation_,
+                         static_cast<int>(target_ptr_const->layout));
+                return;
+            }
+        }
+
+        // Slow path: we will write to the interop image (recreate, transition, or copy).
+        // Wait for any in-flight GPU use of this slot to finish before we touch it.
+        {
+            LOG_TIMER("interop.waitForCurrentFrameSlot");
+            if (!context.waitForCurrentFrameSlot()) {
+                fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
+            }
+        }
+
+        if (slot_array_resize_needed) {
+            resetVulkanSceneInterop();
+            vulkan_scene_interop_.resize(context.framesInFlight());
+        }
+        if (frame_slot >= vulkan_scene_interop_.size()) {
+            fail_required_interop(std::format("invalid frame slot {}", frame_slot));
+        }
+        auto& target_ptr = vulkan_scene_interop_[frame_slot];
+        const auto reset_frame_target = [&]() {
+            if (target_ptr) {
+                target_ptr->destroy(context);
+                target_ptr.reset();
+            }
+        };
+
+        const glm::ivec2 target_size = vulkan_scene_image_size_;
+        const bool recreate =
+            !target_ptr ||
+            target_ptr->size != target_size ||
+            !target_ptr->interop.valid();
+        LOG_PERF("interop slot={} recreate={} cur_gen={} uploaded_gen={} layout={}",
+                 frame_slot, recreate,
+                 vulkan_scene_image_generation_,
+                 target_ptr ? target_ptr->uploaded_source_generation : 0,
+                 target_ptr ? static_cast<int>(target_ptr->layout) : -1);
+        if (recreate) {
+            reset_frame_target();
+            auto target = std::make_unique<VulkanSceneInteropTarget>();
+            const VkExtent2D extent{
+                static_cast<std::uint32_t>(target_size.x),
+                static_cast<std::uint32_t>(target_size.y),
+            };
+            if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, target->image) ||
+                !context.createExternalTimelineSemaphore(0, target->semaphore)) {
+                const std::string error = std::format("target creation failed: {}", context.lastError());
+                if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
+                    target->destroy(context);
+                }
+                fail_required_interop(error);
+            }
+            if (!context.transitionImageLayoutImmediate(target->image.image,
+                                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                const std::string error = std::format("image initialization failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+
+            const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
+            const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
+            lfs::rendering::CudaVulkanExternalImageImport image_import{
+                .memory_handle = memory_handle,
+                .allocation_size = static_cast<std::size_t>(target->image.allocation_size),
+                .extent = {.width = extent.width, .height = extent.height},
+                .format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
+                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+            };
+            lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
+                .semaphore_handle = semaphore_handle,
+                .initial_value = 0,
+            };
+            if (!target->interop.init(image_import, semaphore_import)) {
+                const std::string error = std::format("CUDA import failed: {}", target->interop.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+            target->size = target_size;
+            target->layout = VK_IMAGE_LAYOUT_GENERAL;
+            target_ptr = std::move(target);
+            LOG_INFO("Vulkan/CUDA viewport interop target initialized for frame slot {}: {}x{}",
+                     frame_slot,
+                     target_size.x,
+                     target_size.y);
+        }
+
+        auto& target = *target_ptr;
+        // Skip the upload (and the queue-blocking layout transitions inside it)
+        // when this slot already holds the same content. Renderer cache-HIT
+        // frames keep image_generation stable while alternating tensor pointers,
+        // so identity-by-pointer is unsafe — use the source generation.
+        if (vulkan_scene_image_generation_ != 0 &&
+            target.uploaded_source_generation == vulkan_scene_image_generation_ &&
+            target.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            return;
+        }
+
+        if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            LOG_TIMER("interop.transition_to_GENERAL");
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        target.layout,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
+            }
+            target.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        {
+            LOG_TIMER("interop.copyTensorToSurface");
+            if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
+                fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
+            }
+        }
+        const std::uint64_t signal_value = ++target.timeline_value;
+        {
+            LOG_TIMER("interop.cuda_signal");
+            if (!target.interop.signal(signal_value)) {
+                fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
+            }
+        }
+        {
+            LOG_TIMER("interop.transition_to_READ_ONLY");
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        target.semaphore.semaphore,
+                                                        signal_value,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
+            }
+        }
+        target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        target.uploaded_source_generation = vulkan_scene_image_generation_;
+        ++target.generation;
+#else
+        (void)context;
+#endif
+    }
+
+    void GuiManager::resetVulkanSplitRightInterop() {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+        vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_split_right_external_image_generation_ = 0;
+        if (vulkan_split_right_interop_.empty()) {
+            return;
+        }
+        auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+        auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        if (vulkan_context) {
+            (void)vulkan_context->waitForSubmittedFrames();
+        }
+        for (auto& target : vulkan_split_right_interop_) {
+            if (!target) {
+                continue;
+            }
+            if (vulkan_context) {
+                target->destroy(*vulkan_context);
+            } else {
+                target->interop.reset();
+            }
+        }
+        vulkan_split_right_interop_.clear();
+#else
+        vulkan_split_right_interop_.clear();
+#endif
+    }
+
+    void GuiManager::prepareVulkanSplitRightInterop(VulkanContext& context) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (vulkan_split_right_interop_disabled_) {
+            return;
+        }
+
+        const auto fail_required_interop = [this](std::string message) -> void {
+            vulkan_split_right_interop_disabled_ = true;
+            resetVulkanSplitRightInterop();
+            LOG_ERROR("Required Vulkan/CUDA split-view interop failed: {}", message);
+#ifndef NDEBUG
+            assert(false && "Required Vulkan/CUDA split-view interop failed");
+#endif
+            throw std::runtime_error(std::move(message));
+        };
+
+        if (!vulkan_split_right_image_ ||
+            !vulkan_split_right_image_->is_valid() ||
+            vulkan_split_right_image_->device() != lfs::core::Device::CUDA ||
+            vulkan_split_right_image_size_.x <= 0 ||
+            vulkan_split_right_image_size_.y <= 0) {
+            if (!vulkan_split_right_interop_.empty()) {
+                resetVulkanSplitRightInterop();
+            }
+            vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+            vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+            vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_split_right_external_image_generation_ = 0;
+            return;
+        }
+
+        const std::size_t frame_slot = context.currentFrameSlot();
+        const bool slot_array_resize_needed =
+            vulkan_split_right_interop_.size() != context.framesInFlight();
+
+        if (!slot_array_resize_needed && frame_slot < vulkan_split_right_interop_.size()) {
+            const auto& target_ptr_const = vulkan_split_right_interop_[frame_slot];
+            const glm::ivec2 target_size = vulkan_split_right_image_size_;
+            const bool recreate_needed =
+                !target_ptr_const ||
+                target_ptr_const->size != target_size ||
+                !target_ptr_const->interop.valid();
+            if (!recreate_needed &&
+                vulkan_split_right_image_generation_ != 0 &&
+                target_ptr_const->uploaded_source_generation == vulkan_split_right_image_generation_ &&
+                target_ptr_const->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                vulkan_split_right_external_image_ = target_ptr_const->image.image;
+                vulkan_split_right_external_image_view_ = target_ptr_const->image.view;
+                vulkan_split_right_external_image_layout_ = target_ptr_const->layout;
+                vulkan_split_right_external_image_generation_ = target_ptr_const->generation;
+                return;
+            }
+        }
+
+        if (!context.waitForCurrentFrameSlot()) {
+            fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
+        }
+
+        if (slot_array_resize_needed) {
+            resetVulkanSplitRightInterop();
+            vulkan_split_right_interop_.resize(context.framesInFlight());
+        }
+        if (frame_slot >= vulkan_split_right_interop_.size()) {
+            fail_required_interop(std::format("invalid frame slot {}", frame_slot));
+        }
+        auto& target_ptr = vulkan_split_right_interop_[frame_slot];
+        const auto reset_frame_target = [&]() {
+            if (target_ptr) {
+                target_ptr->destroy(context);
+                target_ptr.reset();
+            }
+        };
+
+        const glm::ivec2 target_size = vulkan_split_right_image_size_;
+        const bool recreate =
+            !target_ptr ||
+            target_ptr->size != target_size ||
+            !target_ptr->interop.valid();
+        if (recreate) {
+            reset_frame_target();
+            auto target = std::make_unique<VulkanSceneInteropTarget>();
+            const VkExtent2D extent{
+                static_cast<std::uint32_t>(target_size.x),
+                static_cast<std::uint32_t>(target_size.y),
+            };
+            if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, target->image) ||
+                !context.createExternalTimelineSemaphore(0, target->semaphore)) {
+                const std::string error = std::format("target creation failed: {}", context.lastError());
+                if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
+                    target->destroy(context);
+                }
+                fail_required_interop(error);
+            }
+            if (!context.transitionImageLayoutImmediate(target->image.image,
+                                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                const std::string error = std::format("image initialization failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+
+            const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
+            const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
+            lfs::rendering::CudaVulkanExternalImageImport image_import{
+                .memory_handle = memory_handle,
+                .allocation_size = static_cast<std::size_t>(target->image.allocation_size),
+                .extent = {.width = extent.width, .height = extent.height},
+                .format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
+                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+            };
+            lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
+                .semaphore_handle = semaphore_handle,
+                .initial_value = 0,
+            };
+            if (!target->interop.init(image_import, semaphore_import)) {
+                const std::string error = std::format("CUDA import failed: {}", target->interop.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+            target->size = target_size;
+            target->layout = VK_IMAGE_LAYOUT_GENERAL;
+            target_ptr = std::move(target);
+            LOG_INFO("Vulkan/CUDA split-view right-panel interop initialized for slot {}: {}x{}",
+                     frame_slot, target_size.x, target_size.y);
+        }
+
+        auto& target = *target_ptr;
+        if (vulkan_split_right_image_generation_ != 0 &&
+            target.uploaded_source_generation == vulkan_split_right_image_generation_ &&
+            target.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            vulkan_split_right_external_image_ = target.image.image;
+            vulkan_split_right_external_image_view_ = target.image.view;
+            vulkan_split_right_external_image_layout_ = target.layout;
+            vulkan_split_right_external_image_generation_ = target.generation;
+            return;
+        }
+
+        if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        target.layout,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
+            }
+            target.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        if (!target.interop.copyTensorToSurface(*vulkan_split_right_image_)) {
+            fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
+        }
+        const std::uint64_t signal_value = ++target.timeline_value;
+        if (!target.interop.signal(signal_value)) {
+            fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
+        }
+        if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                    VK_IMAGE_LAYOUT_GENERAL,
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    target.semaphore.semaphore,
+                                                    signal_value,
+                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+            fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
+        }
+        target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        target.uploaded_source_generation = vulkan_split_right_image_generation_;
+        ++target.generation;
+        vulkan_split_right_external_image_ = target.image.image;
+        vulkan_split_right_external_image_view_ = target.image.view;
+        vulkan_split_right_external_image_layout_ = target.layout;
+        vulkan_split_right_external_image_generation_ = target.generation;
+#else
+        (void)context;
+#endif
+    }
+
+    void GuiManager::resetVulkanDepthBlitInterop() {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_depth_blit_external_image_generation_ = 0;
+        if (vulkan_depth_blit_interop_.empty()) {
+            return;
+        }
+        auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+        auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        if (vulkan_context) {
+            (void)vulkan_context->waitForSubmittedFrames();
+        }
+        for (auto& target : vulkan_depth_blit_interop_) {
+            if (!target) {
+                continue;
+            }
+            if (vulkan_context) {
+                target->destroy(*vulkan_context);
+            } else {
+                target->interop.reset();
+            }
+        }
+        vulkan_depth_blit_interop_.clear();
+#else
+        vulkan_depth_blit_interop_.clear();
+#endif
+    }
+
+    void GuiManager::prepareVulkanDepthBlitInterop(VulkanContext& context) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (vulkan_depth_blit_interop_disabled_) {
+            return;
+        }
+
+        const auto fail_required_interop = [this](std::string message) -> void {
+            vulkan_depth_blit_interop_disabled_ = true;
+            resetVulkanDepthBlitInterop();
+            LOG_ERROR("Required Vulkan/CUDA depth-blit interop failed: {}", message);
+#ifndef NDEBUG
+            assert(false && "Required Vulkan/CUDA depth-blit interop failed");
+#endif
+            throw std::runtime_error(std::move(message));
+        };
+
+        if (!vulkan_depth_blit_image_ ||
+            !vulkan_depth_blit_image_->is_valid() ||
+            vulkan_depth_blit_image_->device() != lfs::core::Device::CUDA ||
+            vulkan_depth_blit_image_size_.x <= 0 ||
+            vulkan_depth_blit_image_size_.y <= 0) {
+            if (!vulkan_depth_blit_interop_.empty()) {
+                resetVulkanDepthBlitInterop();
+            }
+            vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+            vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+            vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_depth_blit_external_image_generation_ = 0;
+            return;
+        }
+
+        const std::size_t frame_slot = context.currentFrameSlot();
+        const bool slot_array_resize_needed =
+            vulkan_depth_blit_interop_.size() != context.framesInFlight();
+
+        if (!slot_array_resize_needed && frame_slot < vulkan_depth_blit_interop_.size()) {
+            const auto& target_ptr_const = vulkan_depth_blit_interop_[frame_slot];
+            const glm::ivec2 target_size = vulkan_depth_blit_image_size_;
+            const bool recreate_needed =
+                !target_ptr_const ||
+                target_ptr_const->size != target_size ||
+                !target_ptr_const->interop.valid();
+            if (!recreate_needed &&
+                vulkan_depth_blit_image_generation_ != 0 &&
+                target_ptr_const->uploaded_source_generation == vulkan_depth_blit_image_generation_ &&
+                target_ptr_const->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+                vulkan_depth_blit_external_image_ = target_ptr_const->image.image;
+                vulkan_depth_blit_external_image_view_ = target_ptr_const->image.view;
+                vulkan_depth_blit_external_image_layout_ = target_ptr_const->layout;
+                vulkan_depth_blit_external_image_generation_ = target_ptr_const->generation;
+                return;
+            }
+        }
+
+        if (!context.waitForCurrentFrameSlot()) {
+            fail_required_interop(std::format("frame slot wait failed: {}", context.lastError()));
+        }
+
+        if (slot_array_resize_needed) {
+            resetVulkanDepthBlitInterop();
+            vulkan_depth_blit_interop_.resize(context.framesInFlight());
+        }
+        if (frame_slot >= vulkan_depth_blit_interop_.size()) {
+            fail_required_interop(std::format("invalid frame slot {}", frame_slot));
+        }
+        auto& target_ptr = vulkan_depth_blit_interop_[frame_slot];
+        const auto reset_frame_target = [&]() {
+            if (target_ptr) {
+                target_ptr->destroy(context);
+                target_ptr.reset();
+            }
+        };
+
+        const glm::ivec2 target_size = vulkan_depth_blit_image_size_;
+        const bool recreate =
+            !target_ptr ||
+            target_ptr->size != target_size ||
+            !target_ptr->interop.valid();
+        if (recreate) {
+            reset_frame_target();
+            auto target = std::make_unique<VulkanSceneInteropTarget>();
+            const VkExtent2D extent{
+                static_cast<std::uint32_t>(target_size.x),
+                static_cast<std::uint32_t>(target_size.y),
+            };
+            if (!context.createExternalImage(extent, VK_FORMAT_R32_SFLOAT, target->image) ||
+                !context.createExternalTimelineSemaphore(0, target->semaphore)) {
+                const std::string error = std::format("target creation failed: {}", context.lastError());
+                if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
+                    target->destroy(context);
+                }
+                fail_required_interop(error);
+            }
+            if (!context.transitionImageLayoutImmediate(target->image.image,
+                                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                const std::string error = std::format("image initialization failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+
+            const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
+            const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
+            lfs::rendering::CudaVulkanExternalImageImport image_import{
+                .memory_handle = memory_handle,
+                .allocation_size = static_cast<std::size_t>(target->image.allocation_size),
+                .extent = {.width = extent.width, .height = extent.height},
+                .format = lfs::rendering::CudaVulkanImageFormat::R32Sfloat,
+                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+            };
+            lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
+                .semaphore_handle = semaphore_handle,
+                .initial_value = 0,
+            };
+            if (!target->interop.init(image_import, semaphore_import)) {
+                const std::string error = std::format("CUDA import failed: {}", target->interop.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+            target->size = target_size;
+            target->layout = VK_IMAGE_LAYOUT_GENERAL;
+            target_ptr = std::move(target);
+            LOG_INFO("Vulkan/CUDA depth-blit interop initialized for slot {}: {}x{}",
+                     frame_slot, target_size.x, target_size.y);
+        }
+
+        auto& target = *target_ptr;
+        if (vulkan_depth_blit_image_generation_ != 0 &&
+            target.uploaded_source_generation == vulkan_depth_blit_image_generation_ &&
+            target.layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            vulkan_depth_blit_external_image_ = target.image.image;
+            vulkan_depth_blit_external_image_view_ = target.image.view;
+            vulkan_depth_blit_external_image_layout_ = target.layout;
+            vulkan_depth_blit_external_image_generation_ = target.generation;
+            return;
+        }
+
+        if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                        target.layout,
+                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
+            }
+            target.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+
+        if (!target.interop.copyTensorToSurface(*vulkan_depth_blit_image_)) {
+            fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
+        }
+        const std::uint64_t signal_value = ++target.timeline_value;
+        if (!target.interop.signal(signal_value)) {
+            fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
+        }
+        if (!context.transitionImageLayoutImmediate(target.image.image,
+                                                    VK_IMAGE_LAYOUT_GENERAL,
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    target.semaphore.semaphore,
+                                                    signal_value,
+                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+            fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
+        }
+        target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        target.uploaded_source_generation = vulkan_depth_blit_image_generation_;
+        ++target.generation;
+        vulkan_depth_blit_external_image_ = target.image.image;
+        vulkan_depth_blit_external_image_view_ = target.image.view;
+        vulkan_depth_blit_external_image_layout_ = target.layout;
+        vulkan_depth_blit_external_image_generation_ = target.generation;
+#else
+        (void)context;
+#endif
+    }
+
+    VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
+                                                                   const std::size_t frame_slot) const {
+        const bool has_viewport_layout =
+            viewport_layout_.size.x > 0.0f && viewport_layout_.size.y > 0.0f;
+
+        VulkanViewportPassParams params{};
+        params.frame_slot = frame_slot;
+        params.viewport_pos = has_viewport_layout ? viewport_layout_.pos : glm::vec2(0.0f, 0.0f);
+        params.viewport_size = has_viewport_layout
+                                   ? viewport_layout_.size
+                                   : glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
+        params.framebuffer_scale = {
+            ImGui::GetIO().DisplayFramebufferScale.x,
+            ImGui::GetIO().DisplayFramebufferScale.y,
+        };
+        params.scene_image = vulkan_scene_image_;
+        params.scene_image_size = vulkan_scene_image_size_;
+        params.scene_image_flip_y = vulkan_scene_image_flip_y_;
+        if (vulkan_external_scene_image_ != VK_NULL_HANDLE &&
+            vulkan_external_scene_image_view_ != VK_NULL_HANDLE &&
+            vulkan_external_scene_image_size_.x > 0 &&
+            vulkan_external_scene_image_size_.y > 0) {
+            params.scene_image_size = vulkan_external_scene_image_size_;
+            params.scene_image_flip_y = vulkan_external_scene_image_flip_y_;
+            params.external_scene_image = vulkan_external_scene_image_;
+            params.external_scene_image_view = vulkan_external_scene_image_view_;
+            params.external_scene_image_layout = vulkan_external_scene_image_layout_;
+            params.external_scene_image_generation = vulkan_external_scene_image_generation_;
+        }
+        if (params.external_scene_image == VK_NULL_HANDLE && frame_slot < vulkan_scene_interop_.size()) {
+            const auto& target = vulkan_scene_interop_[frame_slot];
+            if (target &&
+                target->interop.valid() &&
+                target->layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+                target->size == params.scene_image_size &&
+                vulkan_scene_image_generation_ != 0 &&
+                target->uploaded_source_generation == vulkan_scene_image_generation_) {
+                params.external_scene_image = target->image.image;
+                params.external_scene_image_view = target->image.view;
+                params.external_scene_image_layout = target->layout;
+                params.external_scene_image_generation = target->generation;
+            }
+        }
+
+        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            const auto settings = rendering_manager->getSettings();
+            params.background_color = settings.background_color;
+            params.grid_enabled =
+                settings.show_grid &&
+                !splitViewUsesComparisonPanels(settings.split_view_mode) &&
+                !settings.equirectangular &&
+                settings.grid_opacity > 0.0f;
+            params.grid_plane = std::clamp(settings.grid_plane, 0, 2);
+            params.grid_opacity = std::clamp(settings.grid_opacity, 0.0f, 1.0f);
+
+            if (params.grid_enabled && viewer_) {
+                const auto panels = collectVulkanGuidePanels(*viewer_, viewport_layout_, *rendering_manager);
+                params.grid_overlays.reserve(panels.size());
+                for (const auto& panel : panels) {
+                    if (!panel.valid()) {
+                        continue;
+                    }
+                    const glm::mat4 view =
+                        lfs::rendering::makeViewMatrix(panel.viewport->getRotationMatrix(),
+                                                       panel.viewport->getTranslation());
+                    const glm::mat4 proj = lfs::rendering::createProjectionMatrixFromFocal(
+                        panel.render_size,
+                        settings.focal_length_mm,
+                        settings.orthographic,
+                        settings.ortho_scale,
+                        lfs::rendering::DEFAULT_NEAR_PLANE,
+                        settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE);
+                    VulkanViewportGridOverlay grid{};
+                    grid.viewport_pos = panel.pos;
+                    grid.viewport_size = panel.size;
+                    grid.render_size = panel.render_size;
+                    grid.view = view;
+                    grid.projection = proj;
+                    grid.view_projection = proj * view;
+                    grid.view_position = panel.viewport->getTranslation();
+                    grid.plane = rendering_manager->getGridPlaneForPanel(panel.panel);
+                    grid.opacity = params.grid_opacity;
+                    grid.orthographic = settings.orthographic;
+                    params.grid_overlays.push_back(grid);
+                }
+                if (!params.grid_overlays.empty()) {
+                    const auto& first_grid = params.grid_overlays.front();
+                    params.grid_plane = first_grid.plane;
+                    params.grid_view = first_grid.view;
+                    params.grid_projection = first_grid.projection;
+                    params.grid_view_projection = first_grid.view_projection;
+                    params.grid_view_position = first_grid.view_position;
+                    params.grid_orthographic = first_grid.orthographic;
+                }
+            }
+
+            if (viewer_) {
+                SceneManager* const scene_manager = viewer_->getSceneManager();
+                std::optional<SceneRenderState> overlay_scene_state;
+                if (scene_manager && (settings.show_crop_box || settings.show_ellipsoid)) {
+                    overlay_scene_state = scene_manager->buildRenderState();
+                }
+                const GizmoState gizmo_state = rendering_manager->getGizmoState();
+                appendVulkanSceneGuideOverlays(params,
+                                               *viewer_,
+                                               viewport_layout_,
+                                               settings,
+                                               *rendering_manager,
+                                               scene_manager,
+                                               overlay_scene_state ? &*overlay_scene_state : nullptr,
+                                               gizmo_state);
+                appendVulkanViewportGizmoOverlay(params,
+                                                 *viewer_,
+                                                 viewport_layout_,
+                                                 *rendering_manager,
+                                                 ui_hidden_,
+                                                 gizmo_manager_.isViewportGizmoDragging());
+            }
+        }
+
+        appendLineRendererCommandOverlays(params);
+
+        if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
+
+            // Pull GPU mesh / environment frame populated by renderVulkanFrame. The
+            // vulkan_viewport_pass rasterizes these on the GPU instead of the legacy
+            // CPU rasterizer / env-sample paths.
+            auto mesh_frame = rendering_manager->getVulkanMeshFrame();
+            params.mesh_view_projection = mesh_frame.view_projection;
+            params.mesh_camera_position = mesh_frame.camera_position;
+            params.mesh_items = std::move(mesh_frame.items);
+            params.mesh_panels = std::move(mesh_frame.panels);
+            params.environment = std::move(mesh_frame.environment);
+            params.depth_blit = std::move(mesh_frame.depth_blit);
+            if (vulkan_depth_blit_external_image_view_ != VK_NULL_HANDLE) {
+                params.depth_blit.external_image_view = vulkan_depth_blit_external_image_view_;
+                params.depth_blit.external_image_generation = vulkan_depth_blit_external_image_generation_;
+            }
+            params.split_view = std::move(mesh_frame.split_view);
+            // Stitch in CUDA/Vulkan interop views: left reuses the existing scene
+            // interop slot; right has its own parallel slot. When set, the split-view
+            // pass binds these directly and skips the CPU staging upload.
+            if (params.split_view.enabled) {
+                if (params.external_scene_image_view != VK_NULL_HANDLE) {
+                    params.split_view.left.external_image_view = params.external_scene_image_view;
+                    params.split_view.left.external_image_generation = params.external_scene_image_generation;
+                }
+                if (vulkan_split_right_external_image_view_ != VK_NULL_HANDLE) {
+                    params.split_view.right.external_image_view = vulkan_split_right_external_image_view_;
+                    params.split_view.right.external_image_generation = vulkan_split_right_external_image_generation_;
+                }
+            }
+        }
+
+        // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay
+        // queueing and just before the GPU command buffer is recorded. Global polling hits
+        // the OS directly. ImGui::GetMousePos and SDL_GetMouseState both return the cached
+        // NewFrame-aligned value, so without this the cursor ring lags an extra event-pump
+        // behind the hardware pointer.
+        if (viewer_ && !ui_hidden_ && !guiFocusState().want_capture_mouse) {
+            if (auto* const sel = viewer_->getSelectionTool(); sel && sel->isEnabled()) {
+                SDL_Window* const window = viewer_->getWindow();
+                int win_x = 0;
+                int win_y = 0;
+                if (window) {
+                    SDL_GetWindowPosition(window, &win_x, &win_y);
+                }
+                float gx = 0.0f;
+                float gy = 0.0f;
+                SDL_GetGlobalMouseState(&gx, &gy);
+                const glm::vec2 mp{gx - static_cast<float>(win_x), gy - static_cast<float>(win_y)};
+                auto* const rm = viewer_->getRenderingManager();
+                const auto mode = rm ? rm->getSelectionPreviewMode()
+                                     : lfs::vis::SelectionPreviewMode::Centers;
+                const auto& palette = lfs::vis::theme().palette;
+                const glm::vec4 color{palette.primary.x * 0.85f, palette.primary.y * 0.85f,
+                                      palette.primary.z * 0.85f, 0.85f};
+                if (mode == lfs::vis::SelectionPreviewMode::Centers) {
+                    appendShapeOverlayCircleOutline(params.ui_shape_overlay_triangles, params,
+                                                    mp, sel->getBrushRadius(), color, 2.0f);
+                    appendShapeOverlayCircle(params.ui_shape_overlay_triangles, params,
+                                             mp, 3.0f, color);
+                } else {
+                    constexpr float CROSS = 8.0f;
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params,
+                                           {mp.x - CROSS, mp.y}, {mp.x + CROSS, mp.y}, color, 2.0f);
+                    appendShapeOverlayLine(params.ui_shape_overlay_triangles, params,
+                                           {mp.x, mp.y - CROSS}, {mp.x, mp.y + CROSS}, color, 2.0f);
+                }
+            }
+        }
+
+        const auto& vignette = lfs::vis::theme().vignette;
+        params.vignette_enabled = vignette.enabled && vignette.intensity > 0.0f;
+        params.vignette_intensity = vignette.intensity;
+        params.vignette_radius = vignette.radius;
+        params.vignette_softness = vignette.softness;
+
+        return params;
+    }
+
+    void GuiManager::recordVulkanViewport(VkCommandBuffer command_buffer,
+                                          VkExtent2D extent,
+                                          const VulkanViewportPassParams& params) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (!vulkan_viewport_pass_ || command_buffer == VK_NULL_HANDLE ||
+            extent.width == 0 || extent.height == 0) {
+            return;
+        }
+        vulkan_viewport_pass_->record(command_buffer, extent, params);
+#else
+        (void)command_buffer;
+        (void)extent;
+        (void)params;
+#endif
+    }
+
+    void GuiManager::render() {
+        auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        auto* vulkan_context = (vulkan_gui_ && window_manager) ? window_manager->getVulkanContext() : nullptr;
+        if (vulkan_gui_ && !vulkan_context)
+            return;
+#endif
 
         if (pending_cuda_warning_) {
             constexpr int MIN_MAJOR = lfs::core::MIN_CUDA_VERSION / 1000;
@@ -1384,26 +4476,36 @@ namespace lfs::vis::gui {
         }
 
         // Start frame
-        ImGui_ImplOpenGL3_NewFrame();
-
-        ImGui_ImplSDL3_NewFrame();
+        {
+            LOG_TIMER("gui_render.imgui_newFrame");
+            ImGui_ImplSDL3_NewFrame();
+            rmlui_manager_.clearVulkanQueue();
+        }
         const auto& sdl_input = viewer_->getWindowManager()->frameInput();
 
         // Check mouse state before ImGui::NewFrame() updates WantCaptureMouse
         const bool mouse_in_viewport = isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y);
 
-        ImGui::NewFrame();
+        {
+            LOG_TIMER("gui_render.imgui_NewFrame_call");
+            ImGui::NewFrame();
+        }
 
         {
             auto& focus = guiFocusState();
             focus.reset();
-            focus.want_capture_mouse = ImGui::GetIO().WantCaptureMouse;
-            focus.want_capture_keyboard = ImGui::GetIO().WantCaptureKeyboard;
-            focus.want_text_input = ImGui::GetIO().WantTextInput;
+            // Seed from ImGui only; RmlUi panels populate their own claims during
+            // processInput. Aggregating wantsCaptureMouse() here reads stale hover
+            // state from the previous frame, which becomes self-perpetuating once a
+            // panel sets a hover element — toolbar tools then cannot be activated.
+            const ImGuiIO& io = ImGui::GetIO();
+            focus.want_capture_mouse = io.WantCaptureMouse;
+            focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
+            focus.want_text_input = io.WantTextInput || rmlui_manager_.wantsTextInput();
         }
 
         // Run queued Python/UI mutations before panel registries take draw snapshots.
-        python::flush_gl_callbacks();
+        python::flush_graphics_callbacks();
 
         rmlui_manager_.beginFrameCursorTracking();
         const bool modal_overlay_open = rml_modal_overlay_->isOpen();
@@ -1574,14 +4676,13 @@ namespace lfs::vis::gui {
         PanelInputState raw_panel_input = panel_input;
         if (block_underlay_input)
             panel_input = maskInputForBlockedUi(std::move(panel_input));
-        RmlPanelHost::clearQueuedForegroundComposites();
         if (!modal_overlay_open)
             global_context_menu_->processInput(raw_panel_input);
 
         ScreenState screen;
         screen.work_pos = {mvp_input->WorkPos.x, mvp_input->WorkPos.y};
         screen.work_size = {mvp_input->WorkSize.x, mvp_input->WorkSize.y};
-        screen.any_item_active = ImGui::IsAnyItemActive();
+        screen.any_item_active = ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
@@ -1670,7 +4771,6 @@ namespace lfs::vis::gui {
                                     panel_input.screen_x, panel_input.screen_y,
                                     panel_input.screen_w, panel_input.screen_h);
         }
-
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
                                        window_states_, focus_panel_name_, panel_input, screen);
         panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
@@ -1690,7 +4790,10 @@ namespace lfs::vis::gui {
 
         PanelInputState floating_input = panel_input;
         floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
-        reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+        {
+            LOG_TIMER("gui_render.draw_panels.Floating");
+            reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+        }
 
         applyFrameInputCapture(&rml_right_panel_);
 
@@ -1791,10 +4894,13 @@ namespace lfs::vis::gui {
             }
         }
         if (overlay_renderer) {
-            overlay_renderer->beginFrame(panel_input.screen_w, panel_input.screen_h);
+            overlay_renderer->beginFrame();
         }
 
-        reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+        {
+            LOG_TIMER("gui_render.draw_panels.ViewportOverlay");
+            reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+        }
 
         if (overlay_renderer) {
             overlay_renderer->endFrame();
@@ -1810,6 +4916,7 @@ namespace lfs::vis::gui {
             show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
 
         if (!ui_hidden_) {
+            LOG_TIMER("gui_render.status_bar_and_StatusBar");
             const float status_bar_h =
                 PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
             rml_status_bar_.render(draw_ctx,
@@ -1822,11 +4929,16 @@ namespace lfs::vis::gui {
             reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
-        python::draw_python_modals(scene);
-        python::draw_python_popups(scene);
+        {
+            LOG_TIMER("gui_render.python_modals_and_popups");
+            python::draw_python_modals(scene);
+            python::draw_python_popups(scene);
+        }
 
-        rml_modal_overlay_->processInput(raw_panel_input);
-        rml_viewport_overlay_.compositeToScreen(panel_input.screen_w, panel_input.screen_h);
+        {
+            LOG_TIMER("gui_render.rml_modal_processInput");
+            rml_modal_overlay_->processInput(raw_panel_input);
+        }
         if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
             applyRmlCursorRequest(rmlui_manager_.consumeCursorRequest());
         apply_cursor(rml_right_panel_.getCursorRequest());
@@ -1835,69 +4947,103 @@ namespace lfs::vis::gui {
             SDL_SetCursor(cursor);
         syncWindowTextInput(viewer_->getWindow());
 
-        ImGui::Render();
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        guiFocusState().any_item_active |= ImGui::IsAnyItemActive();
-
-        // Clean up GL state after ImGui rendering (ImGui can leave VAO/shader bindings corrupted)
-        glBindVertexArray(0);
-        glUseProgram(0);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        // Clear any errors ImGui might have generated
-        while (glGetError() != GL_NO_ERROR) {}
-
-        RmlPanelHost::flushQueuedForegroundComposites(panel_input.screen_w, panel_input.screen_h);
-        sequencer_ui_.compositeOverlays(panel_input.screen_w, panel_input.screen_h);
-        drawFrameTooltip(frame_tooltip, panel_input.screen_w, panel_input.screen_h);
-
-        if (menu_bar_ && !ui_hidden_ && rml_menu_bar_.fbo().valid()) {
-            const float menu_height = rml_menu_bar_.isOpen()
-                                          ? static_cast<float>(panel_input.screen_h)
-                                          : rml_menu_bar_.barHeight();
-            rml_menu_bar_.fbo().blitToScreen(
-                0.0f, 0.0f,
-                static_cast<float>(panel_input.screen_w),
-                menu_height,
-                panel_input.screen_w, panel_input.screen_h);
-        }
-
-        global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
-                                     panel_input.screen_x, panel_input.screen_y);
-
-        {
-            const auto* mvp_modal = ImGui::GetMainViewport();
-            rml_modal_overlay_->render(static_cast<int>(mvp_modal->Size.x),
-                                       static_cast<int>(mvp_modal->Size.y),
-                                       mvp_modal->Pos.x, mvp_modal->Pos.y,
+        if (vulkan_gui_) {
+            LOG_TIMER("gui_render.menu_context_modal_render");
+            if (menu_bar_ && !ui_hidden_)
+                rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
+            global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
+                                         panel_input.screen_x, panel_input.screen_y);
+            rml_modal_overlay_->render(panel_input.screen_w,
+                                       panel_input.screen_h,
+                                       panel_input.screen_x, panel_input.screen_y,
                                        viewport_layout_.pos.x, viewport_layout_.pos.y,
                                        viewport_layout_.size.x, viewport_layout_.size.y);
         }
 
-        glBindVertexArray(0);
-        glUseProgram(0);
-        glBindTexture(GL_TEXTURE_2D, 0);
-        while (glGetError() != GL_NO_ERROR) {}
-
-        // Update and Render additional Platform Windows (for multi-viewport)
-        if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-            SDL_Window* backup_window = SDL_GL_GetCurrentWindow();
-            SDL_GLContext backup_context = SDL_GL_GetCurrentContext();
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-            SDL_GL_MakeCurrent(backup_window, backup_context);
-
-            // Clean up GL state after multi-viewport rendering too
-            glBindVertexArray(0);
-            glUseProgram(0);
-            glBindTexture(GL_TEXTURE_2D, 0);
-            while (glGetError() != GL_NO_ERROR) {}
+        // Was ImGui::Render(): the resulting ImDrawData was never submitted (no
+        // ImGui_ImplVulkan_RenderDrawData consumer), so building it was pure CPU waste.
+        // We still call EndFrame to keep the per-frame state machine balanced for the
+        // panels that exercise ImGui internally (py_ui, ui_widgets, theme, etc.).
+        {
+            LOG_TIMER("gui_render.imgui_EndFrame");
+            ImGui::EndFrame();
         }
 
-        if (!ui_layout_changed && ui_layout_settle_frames_ > 0)
-            --ui_layout_settle_frames_;
+        if (vulkan_gui_) {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+            guiFocusState().any_item_active |= ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
 
-        persistImGuiSettingsIfNeeded();
+            const auto& bg = lfs::vis::theme().menu_background();
+            VkClearValue clear_value{};
+            clear_value.color = VkClearColorValue{{bg.x, bg.y, bg.z, 1.0f}};
+
+            if (vulkan_context) {
+                LOG_TIMER("gui_render.prepareVulkanSceneInterop");
+                prepareVulkanSceneInterop(*vulkan_context);
+                prepareVulkanSplitRightInterop(*vulkan_context);
+                prepareVulkanDepthBlitInterop(*vulkan_context);
+            }
+
+            VulkanContext::Frame frame{};
+            bool begin_ok = false;
+            {
+                LOG_TIMER("gui_render.vulkan_beginFrame");
+                begin_ok = vulkan_context && vulkan_context->beginFrame(clear_value, frame);
+            }
+            if (begin_ok) {
+                VulkanViewportPassParams viewport_params{};
+                {
+                    LOG_TIMER("gui_render.buildVulkanViewportParams");
+                    viewport_params = buildVulkanViewportParams(frame.extent, frame.frame_slot);
+                }
+                bool viewport_pass_ready = false;
+                if (!vulkan_viewport_pass_) {
+                    vulkan_viewport_pass_ = std::make_unique<VulkanViewportPass>();
+                }
+                viewport_pass_ready = vulkan_viewport_pass_->init(*vulkan_context);
+                if (viewport_pass_ready) {
+                    LOG_TIMER("gui_render.viewport_pass_prepare_record");
+                    vulkan_viewport_pass_->prepare(*vulkan_context, viewport_params);
+                    recordVulkanViewport(frame.command_buffer, frame.extent, viewport_params);
+                }
+                {
+                    LOG_TIMER("gui_render.rmlui_record");
+                    if (rmlui_manager_.beginVulkanFrame(frame.command_buffer,
+                                                        frame.extent,
+                                                        frame.swapchain_image,
+                                                        frame.swapchain_image_view,
+                                                        frame.depth_stencil_image_view,
+                                                        frame.frame_slot)) {
+                        rmlui_manager_.renderQueuedVulkanContexts(false);
+                        rmlui_manager_.renderQueuedVulkanContexts(true);
+                        rmlui_manager_.endVulkanFrame();
+                    } else {
+                        rmlui_manager_.clearVulkanQueue();
+                    }
+                }
+                {
+                    LOG_TIMER("gui_render.vulkan_endFrame");
+                    if (!vulkan_context->endFrame()) {
+                        LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());
+                    }
+                }
+            } else if (vulkan_context) {
+                rmlui_manager_.clearVulkanQueue();
+                clearLineRendererCommands();
+                if (!vulkan_context->lastError().empty()) {
+                    LOG_WARN("Vulkan GUI frame begin failed: {}", vulkan_context->lastError());
+                }
+            }
+
+            if (!ui_layout_changed && ui_layout_settle_frames_ > 0)
+                --ui_layout_settle_frames_;
+
+            persistImGuiSettingsIfNeeded();
+            return;
+#else
+            return;
+#endif
+        }
     }
 
     void GuiManager::renderSelectionOverlays(const UIContext& ctx) {
@@ -2373,17 +5519,10 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isPositionInViewport(double x, double y) const {
-        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-
-        // Convert to window-relative coordinates
-        float rel_x = static_cast<float>(x) - main_viewport->WorkPos.x;
-        float rel_y = static_cast<float>(y) - main_viewport->WorkPos.y;
-
-        // Check if within viewport bounds
-        return (rel_x >= viewport_layout_.pos.x &&
-                rel_x < viewport_layout_.pos.x + viewport_layout_.size.x &&
-                rel_y >= viewport_layout_.pos.y &&
-                rel_y < viewport_layout_.pos.y + viewport_layout_.size.y);
+        return (x >= viewport_layout_.pos.x &&
+                x < viewport_layout_.pos.x + viewport_layout_.size.x &&
+                y >= viewport_layout_.pos.y &&
+                y < viewport_layout_.pos.y + viewport_layout_.size.y);
     }
 
     bool GuiManager::isPositionOverFloatingPanel(const double x, const double y) const {

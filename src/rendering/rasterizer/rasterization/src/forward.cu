@@ -202,8 +202,7 @@ __global__ void invalidate_outside_crop_kernel(
 }
 
 // Copy mean2d to screen positions, flipping Y to match window coordinates
-// The rasterizer's mean2d has Y increasing upward (OpenGL convention),
-// but window coordinates have Y increasing downward
+// The rasterizer's mean2d has Y increasing upward, but window coordinates have Y increasing downward.
 __global__ void copy_screen_positions_kernel(
     const float2* __restrict__ mean2d,
     float2* __restrict__ screen_positions_out,
@@ -214,7 +213,7 @@ __global__ void copy_screen_positions_kernel(
         return;
 
     float2 pos = mean2d[idx];
-    // Convert OpenGL-style rasterizer Y to window-space Y.
+    // Convert rasterizer Y-up output to window-space Y-down output.
     // Keep invalid markers as-is (they have large negative values)
     if (pos.y > kInvalidScreenPositionThreshold) {
         pos.y = height - pos.y;

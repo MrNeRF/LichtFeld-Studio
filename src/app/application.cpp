@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
-#include "app/splash_screen.hpp"
 #include "control/command_api.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda_version.hpp"
@@ -16,7 +15,6 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
-#include "rendering/framebuffer_factory.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/visualizer.hpp"
@@ -31,7 +29,9 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <future>
 #include <rasterization_api.h>
+#include <string_view>
 
 #ifdef WIN32
 #include <windows.h>
@@ -42,6 +42,24 @@ namespace lfs::app {
     namespace {
 
         bool checkCudaDriverVersion();
+
+        lfs::vis::GraphicsBackend viewerGraphicsBackendFromEnv() {
+            const char* const value = std::getenv("LFS_GRAPHICS_BACKEND");
+            if (!value || !*value)
+                return lfs::vis::GraphicsBackend::Vulkan;
+
+            const std::string_view backend(value);
+            if (backend == "vulkan" || backend == "Vulkan" || backend == "VK" || backend == "vk") {
+                LOG_INFO("Viewer graphics backend requested via LFS_GRAPHICS_BACKEND=vulkan");
+                return lfs::vis::GraphicsBackend::Vulkan;
+            }
+            if (backend == "opengl" || backend == "OpenGL" || backend == "GL" || backend == "gl") {
+                LOG_WARN("Viewer graphics backend requested via LFS_GRAPHICS_BACKEND=opengl; OpenGL is no longer an active viewer backend, using Vulkan");
+                return lfs::vis::GraphicsBackend::Vulkan;
+            }
+            LOG_WARN("Unknown LFS_GRAPHICS_BACKEND='{}'; using Vulkan", backend);
+            return lfs::vis::GraphicsBackend::Vulkan;
+        }
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
@@ -208,7 +226,12 @@ namespace lfs::app {
             return true;
         }
 
-        void warmupCuda() {
+        std::future<void>& cudaWarmupFuture() {
+            static std::future<void> fut;
+            return fut;
+        }
+
+        void warmupCudaSync() {
             checkCudaDriverVersion();
 
             cudaDeviceProp prop;
@@ -221,12 +244,22 @@ namespace lfs::app {
             fast_lfs::rasterization::warmup_kernels();
         }
 
-        int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->optimization.no_interop) {
-                LOG_INFO("CUDA-GL interop disabled");
-                lfs::rendering::disableInterop();
+        void warmupCudaAsync() {
+            checkCudaDriverVersion();
+
+            cudaDeviceProp prop;
+            if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
+                LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
+                         prop.totalGlobalMem / (1024 * 1024));
             }
 
+            LOG_INFO("Initializing CUDA (async)...");
+            cudaWarmupFuture() = std::async(std::launch::async, [] {
+                fast_lfs::rasterization::warmup_kernels();
+            });
+        }
+
+        int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             if (!params->python_scripts.empty()) {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
@@ -238,11 +271,7 @@ namespace lfs::app {
                 params->optimization.no_splash;
 #endif
 
-            if (disable_splash) {
-                warmupCuda();
-            } else {
-                SplashScreen::runWithDelay([]() { warmupCuda(); return 0; });
-            }
+            warmupCudaAsync();
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 
@@ -253,14 +282,15 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
+            const auto graphics_backend = viewerGraphicsBackendFromEnv();
             auto viewer = vis::Visualizer::create({
                 .title = "LichtFeld Studio",
                 .width = 1280,
                 .height = 720,
                 .antialiasing = false,
-                .enable_cuda_interop = true,
                 .show_startup_overlay = !disable_splash,
                 .gut = params->optimization.gut,
+                .graphics_backend = graphics_backend,
             });
 
             viewer->setParameters(*params);
@@ -274,6 +304,11 @@ namespace lfs::app {
             if (!params->dataset.data_path.empty() && !std::filesystem::exists(params->dataset.data_path)) {
                 LOG_ERROR("Dataset not found: {}", lfs::core::path_to_utf8(params->dataset.data_path));
                 return 1;
+            }
+
+            if (params->import_cameras_path || params->resume_checkpoint) {
+                if (auto& fut = cudaWarmupFuture(); fut.valid())
+                    fut.wait();
             }
 
             if (params->import_cameras_path) {

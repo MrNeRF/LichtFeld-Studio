@@ -244,7 +244,7 @@ namespace lfs::vis {
             };
             Mesh2SplatState mesh2splat_state_;
 
-            void executeMesh2SplatOnGlThread();
+            void executeMesh2SplatOnGraphicsThread();
             void applyMesh2SplatResult();
 
             struct SplatSimplifyState {

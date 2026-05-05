@@ -33,9 +33,6 @@ class AboutPanel(Panel):
         model.bind_func("commit", lambda: bi.commit)
         model.bind_func("build_type", lambda: bi.build_type)
         model.bind_func("platform", lambda: bi.platform)
-        model.bind_func("cuda_gl_interop",
-                         lambda: "@tr:about.interop.enabled" if bi.cuda_gl_interop
-                         else "@tr:about.interop.disabled")
         model.bind_func("repo_url", lambda: bi.repo_url)
         model.bind_func("website_url", lambda: bi.website_url)
 

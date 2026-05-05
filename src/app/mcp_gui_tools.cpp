@@ -43,8 +43,6 @@
 #include "visualizer/visualizer.hpp"
 #include "visualizer/visualizer_impl.hpp"
 
-#include <glad/glad.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -169,79 +167,6 @@ namespace lfs::app {
             return post_render_and_wait(viewer_impl, std::forward<F>(fn));
         }
 
-        std::expected<std::string, std::string> capture_default_framebuffer_region_to_base64(
-            int framebuffer_width,
-            int framebuffer_height,
-            int capture_x,
-            int capture_y_top,
-            int capture_width,
-            int capture_height,
-            int width = 0,
-            int height = 0,
-            std::string_view capture_target = "capture",
-            const GLenum read_buffer = GL_FRONT) {
-            if (framebuffer_width <= 0 || framebuffer_height <= 0)
-                return std::unexpected("Window framebuffer size is unavailable");
-            if (capture_x < 0 || capture_y_top < 0)
-                return std::unexpected(std::string(capture_target) + " bounds are invalid");
-            if (capture_width <= 0 || capture_height <= 0)
-                return std::unexpected(std::string(capture_target) + " size is empty");
-            if (capture_x + capture_width > framebuffer_width ||
-                capture_y_top + capture_height > framebuffer_height) {
-                return std::unexpected(std::string(capture_target) + " bounds exceed the framebuffer");
-            }
-
-            const int capture_y_bottom = framebuffer_height - capture_y_top - capture_height;
-            if (capture_y_bottom < 0)
-                return std::unexpected(std::string(capture_target) + " bounds are invalid");
-
-            std::vector<uint8_t> pixels(static_cast<size_t>(capture_width) * capture_height * 4u);
-
-            GLint previous_read_fbo = 0;
-            GLint previous_read_buffer = GL_BACK;
-            GLint previous_pack_alignment = 4;
-            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
-            glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
-            glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
-
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-            glReadBuffer(read_buffer);
-            glPixelStorei(GL_PACK_ALIGNMENT, 1);
-            glFinish();
-            glReadPixels(
-                capture_x,
-                capture_y_bottom,
-                capture_width,
-                capture_height,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                pixels.data());
-            const GLenum read_error = glGetError();
-
-            glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
-            glReadBuffer(static_cast<GLenum>(previous_read_buffer));
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
-
-            if (read_error != GL_NO_ERROR)
-                return std::unexpected("glReadPixels failed while capturing " + std::string(capture_target));
-
-            const size_t row_bytes = static_cast<size_t>(capture_width) * 4u;
-            std::vector<uint8_t> flipped(pixels.size());
-            for (int row = 0; row < capture_height; ++row) {
-                const size_t src_offset = static_cast<size_t>(capture_height - 1 - row) * row_bytes;
-                const size_t dst_offset = static_cast<size_t>(row) * row_bytes;
-                std::copy_n(pixels.data() + src_offset, row_bytes, flipped.data() + dst_offset);
-            }
-
-            return mcp::encode_pixels_to_base64(
-                flipped.data(),
-                capture_width,
-                capture_height,
-                4,
-                width,
-                height);
-        }
-
         std::expected<std::string, std::string> capture_live_viewport_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
@@ -250,67 +175,25 @@ namespace lfs::app {
             if (!viewer_impl)
                 return std::unexpected("Live viewport capture requires a GUI visualizer");
 
-            auto* const gui_manager = viewer_impl->getGuiManager();
-            auto* const window_manager = viewer_impl->getWindowManager();
-            if (!gui_manager || !window_manager)
+            auto* const rendering_manager = viewer_impl->getRenderingManager();
+            if (!rendering_manager)
                 return std::unexpected("Viewport capture is not initialized");
 
-            const glm::vec2 viewport_pos = gui_manager->getViewportPos();
-            const glm::vec2 viewport_size = gui_manager->getViewportSize();
-            const glm::ivec2 window_size = window_manager->getWindowSize();
-            const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
-            if (window_size.x <= 0 || window_size.y <= 0 ||
-                framebuffer_size.x <= 0 || framebuffer_size.y <= 0) {
-                return std::unexpected("Window framebuffer size is unavailable");
-            }
+            auto image = rendering_manager->captureViewportImage();
+            if (!image || !image->is_valid())
+                return std::unexpected("No rendered viewport image is available yet");
 
-            const float scale_x = static_cast<float>(framebuffer_size.x) / static_cast<float>(window_size.x);
-            const float scale_y = static_cast<float>(framebuffer_size.y) / static_cast<float>(window_size.y);
-
-            const int capture_x = std::max(0, static_cast<int>(viewport_pos.x * scale_x));
-            const int capture_y_top = std::max(0, static_cast<int>(viewport_pos.y * scale_y));
-            const int capture_width = std::min(
-                framebuffer_size.x - capture_x,
-                std::max(1, static_cast<int>(viewport_size.x * scale_x)));
-            const int capture_height = std::min(
-                framebuffer_size.y - capture_y_top,
-                std::max(1, static_cast<int>(viewport_size.y * scale_y)));
-            return capture_default_framebuffer_region_to_base64(
-                framebuffer_size.x,
-                framebuffer_size.y,
-                capture_x,
-                capture_y_top,
-                capture_width,
-                capture_height,
-                width,
-                height,
-                "the live viewport");
+            return mcp::encode_render_tensor_to_base64(*image, width, height);
         }
 
         std::expected<std::string, std::string> capture_full_window_to_base64(
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0) {
-            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
-            if (!viewer_impl)
-                return std::unexpected("Full-window capture requires a GUI visualizer");
-
-            auto* const window_manager = viewer_impl->getWindowManager();
-            if (!window_manager)
-                return std::unexpected("Window capture is not initialized");
-
-            const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
-            return capture_default_framebuffer_region_to_base64(
-                framebuffer_size.x,
-                framebuffer_size.y,
-                0,
-                0,
-                framebuffer_size.x,
-                framebuffer_size.y,
-                width,
-                height,
-                "the full window",
-                GL_BACK);
+            (void)viewer;
+            (void)width;
+            (void)height;
+            return std::unexpected("Full-window capture needs a Vulkan swapchain readback path; use render.capture for viewport capture");
         }
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {

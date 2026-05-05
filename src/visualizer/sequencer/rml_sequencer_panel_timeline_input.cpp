@@ -11,7 +11,6 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"

@@ -5,7 +5,10 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 
+#include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -16,7 +19,7 @@ namespace lfs::vis::gui {
     public:
         static IconCache& instance();
 
-        unsigned int getIcon(const std::string& name);
+        std::uintptr_t getIcon(const std::string& name);
         void clear();
 
     private:
@@ -25,10 +28,10 @@ namespace lfs::vis::gui {
         IconCache(const IconCache&) = delete;
         IconCache& operator=(const IconCache&) = delete;
 
-        unsigned int loadTexture(const std::string& icon_name);
+        std::unique_ptr<VulkanUiTexture> loadTexture(const std::string& icon_name);
 
         mutable std::mutex mutex_;
-        std::unordered_map<std::string, unsigned int> cache_;
+        std::unordered_map<std::string, std::unique_ptr<VulkanUiTexture>> cache_;
     };
 
 } // namespace lfs::vis::gui

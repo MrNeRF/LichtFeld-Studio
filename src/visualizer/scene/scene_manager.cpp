@@ -13,6 +13,7 @@
 #include "core/splat_data_transform.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
+#include "gui/gui_manager.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loader.hpp"
@@ -31,6 +32,8 @@
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/model_renderability.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_manager.hpp"
 #include <algorithm>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
@@ -141,32 +144,6 @@ namespace lfs::vis {
                 point_count += static_cast<size_t>(node->point_cloud->size());
             }
             return point_count;
-        }
-
-        [[nodiscard]] bool isTransformHelperName(const std::string& name) {
-            constexpr std::string_view suffix = "_transform";
-            return name.size() > suffix.size() && name.ends_with(suffix);
-        }
-
-        [[nodiscard]] const core::SceneNode* findTransformHelperChild(const core::Scene& scene,
-                                                                      const core::SceneNode& data_node) {
-            const std::string expected_name = data_node.name + "_transform";
-            for (const auto child_id : data_node.children) {
-                const auto* child = scene.getNodeById(child_id);
-                if (child && child->type == core::NodeType::GROUP && child->name == expected_name)
-                    return child;
-            }
-            return nullptr;
-        }
-
-        [[nodiscard]] const core::SceneNode* findDataParentForTransformHelper(const core::Scene& scene,
-                                                                              const core::SceneNode& transform_node) {
-            if (transform_node.parent_id == core::NULL_NODE || !isTransformHelperName(transform_node.name))
-                return nullptr;
-            const auto* parent = scene.getNodeById(transform_node.parent_id);
-            if (!parent || transform_node.name != parent->name + "_transform")
-                return nullptr;
-            return parent;
         }
 
         [[nodiscard]] std::shared_ptr<core::PointCloud> buildMergedVisiblePointCloud(
@@ -526,9 +503,7 @@ namespace lfs::vis {
             if (mesh_data && *mesh_data) {
                 LOG_INFO("Adding mesh '{}' ({} vertices, {} faces)", name,
                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
-                const std::string transform_name = name + "_transform";
-                const core::NodeId data_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE);
-                scene_.addGroup(transform_name, data_id);
+                scene_.addMesh(name, *mesh_data, core::NULL_NODE);
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -556,16 +531,6 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::MESH)}
                     .emit();
 
-                state::PLYAdded{
-                    .name = transform_name,
-                    .node_gaussians = 0,
-                    .total_gaussians = scene_.getTotalGaussianCount(),
-                    .is_visible = true,
-                    .parent_name = name,
-                    .is_group = true,
-                    .node_type = static_cast<int>(core::NodeType::GROUP)}
-                    .emit();
-
                 selectNode(name);
 
                 LOG_INFO("Loaded mesh '{}'", name);
@@ -579,13 +544,7 @@ namespace lfs::vis {
                 const size_t gaussian_count = (*splat_data)->size();
                 LOG_DEBUG("Adding '{}' to scene with {} gaussians", name, gaussian_count);
 
-                // Create parent-child hierarchy: raw SPLAT as parent, GROUP child as transform helper.
-                const std::string transform_name = name + "_transform";
-                const core::NodeId splat_id = scene_.addSplat(
-                    name,
-                    std::make_unique<lfs::core::SplatData>(std::move(**splat_data)),
-                    core::NULL_NODE);
-                scene_.addGroup(transform_name, splat_id);
+                scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
 
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
@@ -603,7 +562,6 @@ namespace lfs::vis {
 
                 python::set_application_scene(&scene_);
 
-                // Emit PLYAdded for the raw splat data node (parent).
                 state::PLYAdded{
                     .name = name,
                     .node_gaussians = gaussian_count,
@@ -614,40 +572,31 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::SPLAT)}
                     .emit();
 
-                // Emit PLYAdded for the transform helper node (child).
-                state::PLYAdded{
-                    .name = transform_name,
-                    .node_gaussians = 0,
-                    .total_gaussians = scene_.getTotalGaussianCount(),
-                    .is_visible = true,
-                    .parent_name = name,
-                    .is_group = true,
-                    .node_type = static_cast<int>(core::NodeType::GROUP)}
-                    .emit();
-
-                // Check for cropbox on the splat data node.
-                const core::NodeId cropbox_id = scene_.getCropBoxForSplat(splat_id);
-                if (cropbox_id != core::NULL_NODE) {
-                    const auto* cropbox_node = scene_.getNodeById(cropbox_id);
-                    if (cropbox_node) {
-                        LOG_DEBUG("Emitting PLYAdded for cropbox '{}'", cropbox_node->name);
-                        state::PLYAdded{
-                            .name = cropbox_node->name,
-                            .node_gaussians = 0,
-                            .total_gaussians = scene_.getTotalGaussianCount(),
-                            .is_visible = true,
-                            .parent_name = name,
-                            .is_group = false,
-                            .node_type = static_cast<int>(core::NodeType::CROPBOX)}
-                            .emit();
+                const auto* splat_for_cropbox = scene_.getNode(name);
+                if (splat_for_cropbox) {
+                    const core::NodeId cropbox_id = scene_.getCropBoxForSplat(splat_for_cropbox->id);
+                    if (cropbox_id != core::NULL_NODE) {
+                        const auto* cropbox_node = scene_.getNodeById(cropbox_id);
+                        if (cropbox_node) {
+                            LOG_DEBUG("Emitting PLYAdded for cropbox '{}'", cropbox_node->name);
+                            state::PLYAdded{
+                                .name = cropbox_node->name,
+                                .node_gaussians = 0,
+                                .total_gaussians = scene_.getTotalGaussianCount(),
+                                .is_visible = true,
+                                .parent_name = name,
+                                .is_group = false,
+                                .node_type = static_cast<int>(core::NodeType::CROPBOX)}
+                                .emit();
+                        }
                     }
                 }
 
-                if (cropbox_id != core::NULL_NODE) {
+                if (splat_for_cropbox &&
+                    scene_.getCropBoxForSplat(splat_for_cropbox->id) != core::NULL_NODE) {
                     updateCropBoxToFitScene(true);
                 }
 
-                // Select the transform helper node by default.
                 selectNode(name);
 
                 // Check for companion PPISP file
@@ -745,15 +694,13 @@ namespace lfs::vis {
             const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
             std::string name = base_name;
             int counter = 1;
-            while (scene_.getNode(name) != nullptr || scene_.getNode(name + "_transform") != nullptr) {
+            while (scene_.getNode(name) != nullptr) {
                 name = std::format("{}_{}", base_name, counter++);
             }
 
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
             if (mesh_data && *mesh_data) {
-                const std::string transform_name = name + "_transform";
-                const core::NodeId data_id = scene_.addMesh(name, *mesh_data, core::NULL_NODE);
-                scene_.addGroup(transform_name, data_id);
+                scene_.addMesh(name, *mesh_data, core::NULL_NODE);
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     splat_paths_[name] = path;
@@ -769,16 +716,6 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::MESH)}
                     .emit();
 
-                state::PLYAdded{
-                    .name = transform_name,
-                    .node_gaussians = 0,
-                    .total_gaussians = scene_.getTotalGaussianCount(),
-                    .is_visible = is_visible,
-                    .parent_name = name,
-                    .is_group = true,
-                    .node_type = static_cast<int>(core::NodeType::GROUP)}
-                    .emit();
-
                 selectNode(name);
 
                 LOG_INFO("Added mesh '{}' ({} vertices, {} faces)", name,
@@ -792,12 +729,7 @@ namespace lfs::vis {
             }
 
             const size_t gaussian_count = (*splat_data)->size();
-            const std::string transform_name = name + "_transform";
-            const core::NodeId splat_id = scene_.addSplat(
-                name,
-                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)),
-                core::NULL_NODE);
-            scene_.addGroup(transform_name, splat_id);
+            scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
@@ -813,33 +745,6 @@ namespace lfs::vis {
                 .is_group = false,
                 .node_type = static_cast<int>(core::NodeType::SPLAT)}
                 .emit();
-
-            state::PLYAdded{
-                .name = transform_name,
-                .node_gaussians = 0,
-                .total_gaussians = scene_.getTotalGaussianCount(),
-                .is_visible = is_visible,
-                .parent_name = name,
-                .is_group = true,
-                .node_type = static_cast<int>(core::NodeType::GROUP)}
-                .emit();
-
-            const core::NodeId cropbox_id = scene_.getCropBoxForSplat(splat_id);
-            if (cropbox_id != core::NULL_NODE) {
-                const auto* cropbox_node = scene_.getNodeById(cropbox_id);
-                if (cropbox_node) {
-                    state::PLYAdded{
-                        .name = cropbox_node->name,
-                        .node_gaussians = 0,
-                        .total_gaussians = scene_.getTotalGaussianCount(),
-                        .is_visible = is_visible,
-                        .parent_name = name,
-                        .is_group = false,
-                        .node_type = static_cast<int>(core::NodeType::CROPBOX)}
-                        .emit();
-                }
-                updateCropBoxToFitScene(true);
-            }
 
             selectNode(name);
 
@@ -872,6 +777,19 @@ namespace lfs::vis {
         selection_.clearNodeSelection();
         selection_.invalidateNodeMask();
         clearAppearanceModel();
+        // Scene clear can fire from a synchronous menu callback inside the current
+        // GUI render iteration. Drop the GUI's tensor pointer and drain the GPU
+        // before scene_.clear() frees the backing memory — otherwise this same
+        // iteration's prepareVulkanSceneInterop dispatches a CUDA copy from
+        // freed memory and the device faults asynchronously.
+        if (auto* const gui_mgr = services().guiOrNull()) {
+            gui_mgr->setVulkanSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
+        }
+        if (auto* const window_mgr = services().windowOrNull()) {
+            if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
+                (void)vulkan_ctx->deviceWaitIdle();
+            }
+        }
         scene_.clear();
         python::set_application_scene(&scene_);
 
@@ -1579,24 +1497,6 @@ namespace lfs::vis {
 
     void SceneManager::setNodeTransform(const std::string& name, const glm::mat4& transform) {
         scene_.setNodeTransform(name, transform);
-
-        const auto* node = scene_.getNode(name);
-        if (!node) {
-            return;
-        }
-
-        if (const auto* data_parent = findDataParentForTransformHelper(scene_, *node)) {
-            scene_.setNodeTransform(data_parent->name, transform);
-            return;
-        }
-
-        if (node->type == core::NodeType::SPLAT ||
-            node->type == core::NodeType::MESH ||
-            node->type == core::NodeType::POINTCLOUD) {
-            if (const auto* transform_child = findTransformHelperChild(scene_, *node)) {
-                scene_.setNodeTransform(transform_child->name, transform);
-            }
-        }
     }
 
     glm::mat4 SceneManager::getNodeTransform(const std::string& name) const {
@@ -2217,19 +2117,7 @@ namespace lfs::vis {
 
             {
                 core::Scene::Transaction txn(scene_);
-                std::string base_dataset_name = lfs::core::path_to_utf8(sparse_path.parent_path().filename());
-                if (base_dataset_name.empty()) {
-                    base_dataset_name = "Dataset";
-                }
-                std::string dataset_name = base_dataset_name;
-                int suffix = 1;
-                while (scene_.getNode(dataset_name) != nullptr ||
-                       scene_.getNode(dataset_name + "_transform") != nullptr) {
-                    dataset_name = std::format("{}_{}", base_dataset_name, suffix++);
-                }
-                const core::NodeId dataset_id = scene_.addDataset(dataset_name);
-                const core::NodeId dataset_transform_id = scene_.addGroup(dataset_name + "_transform", dataset_id);
-                const core::NodeId group_id = scene_.addCameraGroup("Imported Cameras", dataset_transform_id, cameras.size());
+                const core::NodeId group_id = scene_.addCameraGroup("Imported Cameras", core::NULL_NODE, cameras.size());
                 for (const auto& cam : cameras) {
                     scene_.addCamera(cam->image_name(), group_id, cam);
                 }

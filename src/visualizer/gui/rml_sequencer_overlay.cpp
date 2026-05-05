@@ -2,10 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_sequencer_overlay.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -15,7 +11,6 @@
 #include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
 #include "sequencer/keyframe.hpp"
@@ -56,7 +51,6 @@ namespace lfs::vis::gui {
 
     RmlSequencerOverlay::~RmlSequencerOverlay() {
         hidePreviewWindow();
-        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("sequencer_overlay");
     }
@@ -494,23 +488,19 @@ namespace lfs::vis::gui {
     void RmlSequencerOverlay::showPreviewWindow(const float left, const float top,
                                                 const float width, const float height,
                                                 const std::string& title, const bool playing,
-                                                const unsigned int texture_id) {
+                                                const std::uintptr_t texture_id) {
         if (!ensureContextReady() || texture_id == 0)
             return;
 
-        auto* render = rml_manager_ ? rml_manager_->getRenderInterface() : nullptr;
-        if (!render || !el_preview_window_ || !el_preview_title_ || !el_preview_image_)
+        (void)texture_id;
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface() ||
+            !el_preview_window_ || !el_preview_title_ || !el_preview_image_)
             return;
 
-        const std::string new_source = fmt::format("sequencer-preview://{}", texture_id);
-        if (!preview_source_.empty() && preview_source_ != new_source) {
+        if (!preview_source_.empty()) {
             el_preview_image_->SetAttribute("src", "");
-            render->unregister_external_texture(preview_source_);
+            preview_source_.clear();
         }
-
-        preview_source_ = new_source;
-        render->register_external_texture(preview_source_, texture_id,
-                                          static_cast<int>(width), static_cast<int>(height), true);
 
         el_preview_window_->SetProperty("left", fmt::format("{:.1f}px", left));
         el_preview_window_->SetProperty("top", fmt::format("{:.1f}px", top));
@@ -520,18 +510,12 @@ namespace lfs::vis::gui {
         el_preview_image_->SetProperty("width", fmt::format("{:.1f}px", width));
         el_preview_image_->SetProperty("height", fmt::format("{:.1f}px", height));
 
-        const auto current_source = el_preview_image_->GetAttribute<Rml::String>("src", "");
-        if (current_source != preview_source_)
-            el_preview_image_->SetAttribute("src", preview_source_);
-
         el_preview_window_->SetProperty("display", "block");
         preview_visible_ = true;
     }
 
     void RmlSequencerOverlay::hidePreviewWindow() {
         if (!preview_source_.empty()) {
-            if (auto* render = rml_manager_ ? rml_manager_->getRenderInterface() : nullptr)
-                render->unregister_external_texture(preview_source_);
             preview_source_.clear();
         }
 
@@ -692,58 +676,34 @@ namespace lfs::vis::gui {
         if (!ensureContextReady())
             return;
 
-        if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
-            if (rml_manager_)
-                rml_manager_->trackContextFrame(rml_context_, 0, 0);
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+            return;
 
-            const int w = screen_w;
-            const int h = screen_h;
+        rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
-            if (w <= 0 || h <= 0)
-                return;
+        const int w = screen_w;
+        const int h = screen_h;
 
-            if (w != width_ || h != height_) {
-                width_ = w;
-                height_ = h;
-                rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            }
+        if (w <= 0 || h <= 0)
+            return;
 
-            rml_context_->Update();
-
-            fbo_.ensure(w, h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render_iface = rml_manager_->getRenderInterface();
-            assert(render_iface);
-            render_iface->SetViewport(w, h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render_iface->SetTargetFramebuffer(fbo_.fbo());
-
-            render_iface->BeginFrame();
-            rml_context_->Render();
-            render_iface->EndFrame();
-
-            render_iface->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
+        if (w != width_ || h != height_) {
+            width_ = w;
+            height_ = h;
+            rml_context_->SetDimensions(Rml::Vector2i(w, h));
         }
+
+        rml_context_->Update();
+        rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true);
     }
 
     void RmlSequencerOverlay::compositeToScreen(const int screen_w, const int screen_h) const {
-        const bool anything_visible = context_menu_open_ || time_edit_active_ ||
-                                      focal_edit_active_ || edit_overlay_visible_ ||
-                                      preview_visible_;
-        if (!anything_visible || !fbo_.valid() || screen_w <= 0 || screen_h <= 0)
-            return;
-        fbo_.blitToScreen(0.0f, 0.0f, static_cast<float>(screen_w), static_cast<float>(screen_h),
-                          screen_w, screen_h);
+        (void)screen_w;
+        (void)screen_h;
     }
 
-    void RmlSequencerOverlay::destroyGLResources() {
+    void RmlSequencerOverlay::destroyGraphicsResources() {
         hidePreviewWindow();
-        fbo_.destroy();
     }
 
     std::optional<RmlSequencerOverlay::PendingAction> RmlSequencerOverlay::consumeAction() {

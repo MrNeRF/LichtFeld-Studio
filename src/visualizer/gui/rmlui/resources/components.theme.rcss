@@ -107,7 +107,6 @@ selectarrow {
 selectbox {
     background-color: @{surface};
     border-color: @{border};
-    box-shadow: @{layered_shadow.1};
 }
 
 selectbox option:hover {
@@ -214,7 +213,6 @@ progress fill {
 .context-menu {
     background-color: @{surface};
     border-color: @{border};
-    box-shadow: @{layered_shadow.3};
 }
 
 .context-menu-item {
