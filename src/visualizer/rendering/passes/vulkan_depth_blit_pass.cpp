@@ -65,6 +65,7 @@ namespace lfs::vis {
         // Last view bound to the descriptor (either our staging-uploaded view or an
         // external interop view). Tracked so we know when to rewrite the descriptor.
         VkImageView bound_view = VK_NULL_HANDLE;
+        std::uint64_t bound_generation = 0;
 
         // Persistent staging path: keep the upload buffer + transfer cmd between
         // frames so per-frame depth uploads don't allocate / map / submit-and-wait.
@@ -574,8 +575,8 @@ namespace lfs::vis {
             return true;
         }
 
-        void rebindDescriptor(VkImageView view) {
-            if (view == VK_NULL_HANDLE || view == bound_view) {
+        void rebindDescriptor(VkImageView view, const std::uint64_t generation = 0) {
+            if (view == VK_NULL_HANDLE || (view == bound_view && generation == bound_generation)) {
                 return;
             }
             VkDescriptorImageInfo di{};
@@ -591,6 +592,7 @@ namespace lfs::vis {
             w.pImageInfo = &di;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
             bound_view = view;
+            bound_generation = generation;
         }
 
         void prepare(const VulkanDepthBlitParams& params) {
@@ -598,13 +600,14 @@ namespace lfs::vis {
             // an external Vulkan image and transitioned it to SHADER_READ_ONLY. Just
             // bind that view directly.
             if (params.external_image_view != VK_NULL_HANDLE) {
-                rebindDescriptor(params.external_image_view);
+                rebindDescriptor(params.external_image_view, params.external_image_generation);
                 return;
             }
             if (!params.depth || !params.depth->is_valid()) {
                 if (image != VK_NULL_HANDLE)
                     destroyImage();
                 bound_view = VK_NULL_HANDLE;
+                bound_generation = 0;
                 return;
             }
             if (params.depth.get() == uploaded_tensor && image != VK_NULL_HANDLE) {

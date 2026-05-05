@@ -580,6 +580,32 @@ namespace lfs::vis {
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
 
+        const auto populate_independent_split_mesh_panels =
+            [&](VulkanMeshFrame& frame) {
+                if (!pending_split_view.enabled ||
+                    !splitViewUsesIndependentPanels(settings_.split_view_mode)) {
+                    return;
+                }
+                const auto layouts = split_view_service_.panelLayouts(settings_, render_size.x);
+                if (!layouts || render_size.y <= 0) {
+                    return;
+                }
+                frame.panels.clear();
+                const auto append_panel =
+                    [&](const Viewport& viewport, const std::size_t index) {
+                        const auto& layout = (*layouts)[index];
+                        const glm::ivec2 panel_size{std::max(layout.width, 1), render_size.y};
+                        const auto panel_view = frame_ctx.makeViewportData(viewport, panel_size);
+                        frame.panels.push_back(lfs::vis::VulkanMeshViewportPanel{
+                            .start_position = layout.start_position,
+                            .end_position = layout.end_position,
+                            .view_projection = panel_view.getProjectionMatrix() * panel_view.getViewMatrix(),
+                            .camera_position = panel_view.translation});
+                    };
+                append_panel(context.viewport, 0);
+                append_panel(split_view_service_.secondaryViewport(), 1);
+            };
+
         struct RenderedPanel {
             std::shared_ptr<lfs::core::Tensor> image;
             lfs::rendering::FrameMetadata metadata;
@@ -936,7 +962,9 @@ namespace lfs::vis {
                         // splat→mesh z-test, same as before this branch existed).
                         if (!frame_ctx.scene_state.meshes.empty() ||
                             environmentBackgroundEnabled(settings_)) {
-                            setVulkanMeshFrame(populateMeshFrame(frame_ctx, settings_, pending_split_view));
+                            auto mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
+                            populate_independent_split_mesh_panels(mesh_frame);
+                            setVulkanMeshFrame(std::move(mesh_frame));
                         } else {
                             clearVulkanMeshFrame();
                         }
@@ -978,6 +1006,7 @@ namespace lfs::vis {
             (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
+            populate_independent_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth → mesh-pass z-test source. Only meaningful when the splat
             // produced a depth tensor (CUDA rasterizer path; vksplat doesn't yet).

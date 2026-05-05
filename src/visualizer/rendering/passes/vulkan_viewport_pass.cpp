@@ -1116,7 +1116,9 @@ namespace lfs::vis {
             // Splat depth → framebuffer depth attachment. Lets the mesh draws that
             // follow depth-test against the splat surface so meshes occluded by
             // splats render correctly.
-            if (!params.mesh_items.empty() && depth_blit_pass.hasDepth()) {
+            const bool split_mesh_panels_active =
+                split_active && !params.mesh_items.empty() && !params.mesh_panels.empty();
+            if (!split_active && !params.mesh_items.empty() && depth_blit_pass.hasDepth()) {
                 depth_blit_pass.record(command_buffer,
                                        {static_cast<std::uint32_t>(rect.width),
                                         static_cast<std::uint32_t>(rect.height)},
@@ -1126,19 +1128,45 @@ namespace lfs::vis {
             }
             // Mesh sub-pass: GPU-rasterize meshes after the cached splat scene blit.
             if (!params.mesh_items.empty()) {
-                VulkanMeshPassParams mesh_params{
-                    .view_projection = params.mesh_view_projection,
-                    .camera_position = params.mesh_camera_position,
-                    .items = params.mesh_items,
-                };
-                const VkRect2D mesh_rect{
-                    .offset = {rect.x, rect.y},
-                    .extent = {static_cast<std::uint32_t>(rect.width),
-                               static_cast<std::uint32_t>(rect.height)},
-                };
-                mesh_pass.record(command_buffer, mesh_rect, mesh_params);
-                bindQuad(command_buffer);
-                bindViewport(command_buffer, rect);
+                VulkanMeshPassParams mesh_params{.items = params.mesh_items};
+                if (split_mesh_panels_active) {
+                    const int rect_min_x = rect.x;
+                    const int rect_max_x = rect.x + static_cast<int>(rect.width);
+                    for (const auto& panel : params.mesh_panels) {
+                        const int x0 = std::clamp(
+                            rect.x + static_cast<int>(std::lround(panel.start_position * static_cast<float>(rect.width))),
+                            rect_min_x,
+                            rect_max_x);
+                        const int x1 = std::clamp(
+                            rect.x + static_cast<int>(std::lround(panel.end_position * static_cast<float>(rect.width))),
+                            rect_min_x,
+                            rect_max_x);
+                        if (x1 <= x0) {
+                            continue;
+                        }
+                        mesh_params.view_projection = panel.view_projection;
+                        mesh_params.camera_position = panel.camera_position;
+                        const VkRect2D mesh_rect{
+                            .offset = {x0, rect.y},
+                            .extent = {static_cast<std::uint32_t>(x1 - x0),
+                                       static_cast<std::uint32_t>(rect.height)},
+                        };
+                        mesh_pass.record(command_buffer, mesh_rect, mesh_params);
+                        bindQuad(command_buffer);
+                        bindViewport(command_buffer, rect);
+                    }
+                } else if (!split_active) {
+                    mesh_params.view_projection = params.mesh_view_projection;
+                    mesh_params.camera_position = params.mesh_camera_position;
+                    const VkRect2D mesh_rect{
+                        .offset = {rect.x, rect.y},
+                        .extent = {static_cast<std::uint32_t>(rect.width),
+                                   static_cast<std::uint32_t>(rect.height)},
+                    };
+                    mesh_pass.record(command_buffer, mesh_rect, mesh_params);
+                    bindQuad(command_buffer);
+                    bindViewport(command_buffer, rect);
+                }
             }
 
             if (frame.textured_overlay.count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&

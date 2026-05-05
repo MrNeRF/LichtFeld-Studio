@@ -84,7 +84,7 @@ namespace lfs::vis {
             // Split-view right panel. The left panel reuses the `image` slot above
             // (rideshares the existing scene-image interop). When this is set, the
             // gui-side split interop slot uploads it in parallel to the left panel.
-            std::shared_ptr<const lfs::core::Tensor> split_right_image;
+            std::shared_ptr<const lfs::core::Tensor> split_right_image{};
             glm::ivec2 split_right_size{0, 0};
             bool split_right_flip_y = false;
         };
@@ -339,6 +339,7 @@ namespace lfs::vis {
             glm::mat4 view_projection{1.0f};
             glm::vec3 camera_position{0.0f};
             std::vector<lfs::vis::VulkanMeshDrawItem> items;
+            std::vector<lfs::vis::VulkanMeshViewportPanel> panels;
             lfs::vis::VulkanEnvironmentParams environment;
             lfs::vis::VulkanDepthBlitParams depth_blit;
             lfs::vis::VulkanSplitViewParams split_view;

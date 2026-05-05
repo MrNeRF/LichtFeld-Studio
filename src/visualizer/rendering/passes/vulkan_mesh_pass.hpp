@@ -51,6 +51,13 @@ namespace lfs::vis {
         std::vector<VulkanMeshDrawItem> items;
     };
 
+    struct VulkanMeshViewportPanel {
+        float start_position = 0.0f;
+        float end_position = 1.0f;
+        glm::mat4 view_projection{1.0f};
+        glm::vec3 camera_position{0.0f};
+    };
+
     class LFS_VIS_API VulkanMeshPass {
     public:
         VulkanMeshPass();

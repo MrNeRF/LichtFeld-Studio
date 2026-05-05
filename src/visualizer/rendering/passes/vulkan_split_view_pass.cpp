@@ -137,6 +137,7 @@ namespace lfs::vis {
             // Last bound view (either our staging-uploaded view or an external interop
             // view supplied via params). Used to detect descriptor-rebind needs.
             VkImageView bound_view = VK_NULL_HANDLE;
+            std::uint64_t bound_generation = 0;
 
             // Persistent staging: kept alive between frames so identical-size uploads
             // don't repeatedly allocate / map / unmap an 8 MB buffer at 1080p.
@@ -677,12 +678,23 @@ namespace lfs::vis {
             return true;
         }
 
-        void rebindDescriptorsIfDirty(VkImageView left_view, VkImageView right_view) {
-            const bool changed = left_view != left.bound_view || right_view != right.bound_view;
-            if (!descriptors_dirty && !changed) {
+        void rebindDescriptorsIfDirty(const VulkanSplitViewPanel& left_spec,
+                                      VkImageView left_view,
+                                      const VulkanSplitViewPanel& right_spec,
+                                      VkImageView right_view) {
+            if (left_view == VK_NULL_HANDLE || right_view == VK_NULL_HANDLE) {
                 return;
             }
-            if (left_view == VK_NULL_HANDLE || right_view == VK_NULL_HANDLE) {
+            const std::uint64_t left_generation =
+                left_spec.external_image_view != VK_NULL_HANDLE ? left_spec.external_image_generation : 0;
+            const std::uint64_t right_generation =
+                right_spec.external_image_view != VK_NULL_HANDLE ? right_spec.external_image_generation : 0;
+            const bool changed =
+                left_view != left.bound_view ||
+                right_view != right.bound_view ||
+                left_generation != left.bound_generation ||
+                right_generation != right.bound_generation;
+            if (!descriptors_dirty && !changed) {
                 return;
             }
             std::array<VkDescriptorImageInfo, 2> infos{};
@@ -705,7 +717,9 @@ namespace lfs::vis {
                                    writes.data(), 0, nullptr);
             descriptors_dirty = false;
             left.bound_view = left_view;
+            left.bound_generation = left_generation;
             right.bound_view = right_view;
+            right.bound_generation = right_generation;
         }
 
         // Returns the view to bind for one panel: the externally-supplied interop view
@@ -729,7 +743,7 @@ namespace lfs::vis {
             }
             const VkImageView left_view = resolvePanelView(left, params.left);
             const VkImageView right_view = resolvePanelView(right, params.right);
-            rebindDescriptorsIfDirty(left_view, right_view);
+            rebindDescriptorsIfDirty(params.left, left_view, params.right, right_view);
         }
 
         void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params) {

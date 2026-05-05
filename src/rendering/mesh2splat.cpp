@@ -340,11 +340,7 @@ void main() {
         UV = vUv[i];
         VertexColor = vVertexColor[i];
         Quaternion = quaternion;
-        vec2 clip = orthogonalUvs[i] * 2.0 - 1.0;
-        // Master used OpenGL clip/window conventions. Vulkan's framebuffer Y
-        // basis is opposite for the same clip coordinates, so flip Y here to
-        // keep the conversion samples in the same projected mesh space.
-        gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
+        gl_Position = vec4(orthogonalUvs[i] * 2.0 - 1.0, 0.0, 1.0);
         EmitVertex();
     }
     EndPrimitive();
@@ -354,10 +350,6 @@ void main() {
         constexpr std::string_view kFragmentShader = R"GLSL(
 #version 450
 
-layout(set = 0, binding = 0, std430) buffer GaussianBuffer {
-    vec4 data[];
-} gaussianBuffer;
-
 layout(set = 0, binding = 1, std430) buffer CounterBuffer {
     uint g_validCounter;
 };
@@ -365,6 +357,19 @@ layout(set = 0, binding = 1, std430) buffer CounterBuffer {
 layout(set = 0, binding = 2) uniform sampler2D albedoTexture;
 layout(set = 0, binding = 3) uniform sampler2D normalTexture;
 layout(set = 0, binding = 4) uniform sampler2D metallicRoughnessTexture;
+
+struct GaussianVertex {
+    vec4 position;
+    vec4 color;
+    vec4 scale;
+    vec4 normal;
+    vec4 rotation;
+    vec4 pbr;
+};
+
+layout(set = 0, binding = 0, std430) buffer GaussianBuffer {
+    GaussianVertex vertices[];
+} gaussianBuffer;
 
 layout(push_constant) uniform PushConstants {
     vec4 materialFactor;
@@ -381,16 +386,6 @@ layout(location = 3) in vec4 Tangent;
 layout(location = 4) in vec4 VertexColor;
 layout(location = 5) in vec3 Normal;
 layout(location = 6) flat in vec4 Quaternion;
-
-void storeGaussian(uint index, vec4 position, vec4 color, vec4 scale, vec4 normal, vec4 rotation, vec4 pbr) {
-    uint base = index * 6u;
-    gaussianBuffer.data[base + 0u] = position;
-    gaussianBuffer.data[base + 1u] = color;
-    gaussianBuffer.data[base + 2u] = scale;
-    gaussianBuffer.data[base + 3u] = normal;
-    gaussianBuffer.data[base + 4u] = rotation;
-    gaussianBuffer.data[base + 5u] = pbr;
-}
 
 void main() {
     uint index = atomicAdd(g_validCounter, 1u);
@@ -428,13 +423,12 @@ void main() {
     vec3 albedo = (out_Color * pc.materialFactor).rgb;
     vec3 color = pow(clamp(albedo, 0.0, 1.0), vec3(1.0 / 2.2));
 
-    storeGaussian(index,
-                  vec4(Position.xyz, 1.0),
-                  vec4(color, out_Color.a),
-                  vec4(Scale, 0.0),
-                  vec4(out_Normal, 0.0),
-                  Quaternion,
-                  vec4(metallic, roughness, 0.0, 1.0));
+    gaussianBuffer.vertices[index].position = vec4(Position.xyz, 1.0);
+    gaussianBuffer.vertices[index].color = vec4(color, out_Color.a);
+    gaussianBuffer.vertices[index].scale = vec4(Scale, 0.0);
+    gaussianBuffer.vertices[index].normal = vec4(out_Normal, 0.0);
+    gaussianBuffer.vertices[index].rotation = Quaternion;
+    gaussianBuffer.vertices[index].pbr = vec4(metallic, roughness, 0.0, 1.0);
 }
 )GLSL";
 

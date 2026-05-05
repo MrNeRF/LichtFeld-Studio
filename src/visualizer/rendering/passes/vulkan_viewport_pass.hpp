@@ -112,6 +112,7 @@ namespace lfs::vis {
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
         std::vector<VulkanMeshDrawItem> mesh_items;
+        std::vector<VulkanMeshViewportPanel> mesh_panels;
 
         // GPU-rendered equirect environment background. Replaces the old CPU
         // `renderEnvironmentBackground` per-pixel sampling loop.

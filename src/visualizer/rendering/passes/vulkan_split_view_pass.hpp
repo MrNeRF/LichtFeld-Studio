@@ -9,6 +9,7 @@
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "core/tensor.hpp"
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -27,6 +28,7 @@ namespace lfs::vis {
         // upload path. The view must outlive the frame's record/submit (gui_manager
         // owns the per-frame interop slot it points into).
         VkImageView external_image_view = VK_NULL_HANDLE;
+        std::uint64_t external_image_generation = 0;
     };
 
     struct VulkanSplitViewParams {

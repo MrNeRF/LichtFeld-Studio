@@ -1450,24 +1450,29 @@ namespace lfs::vis::gui {
         if (scene.getNode(node_name))
             scene.removeNode(node_name);
 
-        scene.addSplat(node_name, std::move(splat_data));
+        const std::string added_name =
+            scene_manager->addGeneratedSplatNode(std::move(splat_data), source_name, node_name, true);
+        if (added_name.empty()) {
+            LOG_ERROR("Mesh2Splat: failed to add splat node '{}'", node_name);
+            return;
+        }
 
         {
             const std::lock_guard lock(mesh2splat_state_.mutex);
             mesh2splat_state_.stage = "Complete";
         }
 
-        const auto* const added_node = scene.getNode(node_name);
+        const auto* const added_node = scene.getNode(added_name);
         const size_t num_gaussians =
             added_node && added_node->model ? added_node->model->size() : 0;
 
         lfs::core::events::state::Mesh2SplatCompleted{
             .source_name = source_name,
-            .node_name = node_name,
+            .node_name = added_name,
             .num_gaussians = num_gaussians}
             .emit();
 
-        LOG_INFO("Mesh2Splat: added splat node '{}'", node_name);
+        LOG_INFO("Mesh2Splat: added splat node '{}'", added_name);
     }
 
     void AsyncTaskManager::startSplatSimplify(const std::string& source_name,

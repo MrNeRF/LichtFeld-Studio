@@ -783,15 +783,15 @@ namespace lfs::vis {
             rendering_info.stencilAttachmentFormat = depth_format;
 
             // Build cull and no-cull variants by tweaking only the rasterization state.
-            // Vulkan NDC Y is flipped vs GL; we hand the shader the same glm
-            // GL-convention view_projection master uses, so CCW object-space winding
-            // ends up CW in Vulkan clip space. Front face must be CLOCKWISE here.
+            // Mesh vertices use the same GL-convention projection matrices as FastGS,
+            // then receive a clip-space Y correction before Vulkan's positive-height
+            // viewport. That preserves normal CCW winding for back-face culling.
             const auto build = [&](VkCullModeFlags cull, VkPipeline& out) -> bool {
                 VkPipelineRasterizationStateCreateInfo raster{};
                 raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
                 raster.polygonMode = VK_POLYGON_MODE_FILL;
                 raster.cullMode = cull;
-                raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+                raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
                 raster.lineWidth = 1.0f;
 
                 VkGraphicsPipelineCreateInfo pipeline_info{};
@@ -999,7 +999,7 @@ namespace lfs::vis {
             raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
             raster.polygonMode = VK_POLYGON_MODE_LINE;
             raster.cullMode = VK_CULL_MODE_NONE;
-            raster.frontFace = VK_FRONT_FACE_CLOCKWISE;
+            raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
             raster.lineWidth = 1.0f;
 
             VkPipelineMultisampleStateCreateInfo multisample{};
@@ -1598,6 +1598,10 @@ namespace lfs::vis {
             vkCmdSetViewport(cb, 0, 1, &viewport);
             vkCmdSetScissor(cb, 0, 1, &scissor);
 
+            glm::mat4 clip_y_flip(1.0f);
+            clip_y_flip[1][1] = -1.0f;
+            const glm::mat4 view_projection = clip_y_flip * params.view_projection;
+
             for (const auto& item : params.items) {
                 if (!item.mesh)
                     continue;
@@ -1628,7 +1632,7 @@ namespace lfs::vis {
                                         0, 1, &light_descriptor, 0, nullptr);
 
                 MeshPushConstants pc{};
-                const glm::mat4 mvp = params.view_projection * item.model;
+                const glm::mat4 mvp = view_projection * item.model;
                 std::memcpy(pc.mvp, &mvp[0][0], sizeof(pc.mvp));
                 std::memcpy(pc.model, &item.model[0][0], sizeof(pc.model));
                 vkCmdPushConstants(cb, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT,

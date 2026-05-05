@@ -9,6 +9,7 @@
 #ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "core/tensor.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <vulkan/vulkan.h>
 
@@ -25,6 +26,7 @@ namespace lfs::vis {
         // When set, the pass binds this VkImageView (a CUDA/Vulkan interop slot owned
         // by gui_manager) and skips the staging upload path.
         VkImageView external_image_view = VK_NULL_HANDLE;
+        std::uint64_t external_image_generation = 0;
     };
 
     // Writes a sampled depth value into the framebuffer's depth attachment via

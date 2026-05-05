@@ -3817,6 +3817,10 @@ namespace lfs::vis::gui {
 
     void GuiManager::resetVulkanSplitRightInterop() {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+        vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+        vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_split_right_external_image_generation_ = 0;
         if (vulkan_split_right_interop_.empty()) {
             return;
         }
@@ -3868,6 +3872,7 @@ namespace lfs::vis::gui {
             vulkan_split_right_external_image_ = VK_NULL_HANDLE;
             vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
             vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_split_right_external_image_generation_ = 0;
             return;
         }
 
@@ -4016,6 +4021,10 @@ namespace lfs::vis::gui {
 
     void GuiManager::resetVulkanDepthBlitInterop() {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+        vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+        vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_depth_blit_external_image_generation_ = 0;
         if (vulkan_depth_blit_interop_.empty()) {
             return;
         }
@@ -4067,6 +4076,7 @@ namespace lfs::vis::gui {
             vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
             vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
             vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_depth_blit_external_image_generation_ = 0;
             return;
         }
 
@@ -4345,10 +4355,12 @@ namespace lfs::vis::gui {
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
             params.mesh_items = std::move(mesh_frame.items);
+            params.mesh_panels = std::move(mesh_frame.panels);
             params.environment = std::move(mesh_frame.environment);
             params.depth_blit = std::move(mesh_frame.depth_blit);
             if (vulkan_depth_blit_external_image_view_ != VK_NULL_HANDLE) {
                 params.depth_blit.external_image_view = vulkan_depth_blit_external_image_view_;
+                params.depth_blit.external_image_generation = vulkan_depth_blit_external_image_generation_;
             }
             params.split_view = std::move(mesh_frame.split_view);
             // Stitch in CUDA/Vulkan interop views: left reuses the existing scene
@@ -4357,9 +4369,11 @@ namespace lfs::vis::gui {
             if (params.split_view.enabled) {
                 if (params.external_scene_image_view != VK_NULL_HANDLE) {
                     params.split_view.left.external_image_view = params.external_scene_image_view;
+                    params.split_view.left.external_image_generation = params.external_scene_image_generation;
                 }
                 if (vulkan_split_right_external_image_view_ != VK_NULL_HANDLE) {
                     params.split_view.right.external_image_view = vulkan_split_right_external_image_view_;
+                    params.split_view.right.external_image_generation = vulkan_split_right_external_image_generation_;
                 }
             }
         }
