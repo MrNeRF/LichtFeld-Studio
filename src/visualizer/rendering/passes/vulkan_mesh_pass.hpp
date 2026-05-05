@@ -75,7 +75,7 @@ namespace lfs::vis {
         // Caller must have transitioned the color attachment to
         // VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL and bound a depth attachment.
         void record(VkCommandBuffer command_buffer,
-                    VkExtent2D framebuffer_extent,
+                    VkRect2D viewport_rect,
                     const VulkanMeshPassParams& params);
 
         void shutdown();

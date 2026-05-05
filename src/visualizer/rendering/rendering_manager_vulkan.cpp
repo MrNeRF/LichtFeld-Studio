@@ -321,6 +321,83 @@ namespace lfs::vis {
                 .orthographic = left.valid ? left.orthographic : right.orthographic};
             return metadata;
         }
+
+        // Per-frame mesh-pass payload (without depth blit). Both the FastGs/Gut path
+        // and the VkSplat path must publish this every frame so the viewport pass
+        // sees the current camera; otherwise the mesh stays anchored to whichever
+        // frame last set it. Depth blit (splat→mesh z-test) is path-specific and
+        // attached by the caller.
+        [[nodiscard]] RenderingManager::VulkanMeshFrame populateMeshFrame(
+            const FrameContext& frame_ctx,
+            const RenderSettings& settings,
+            const VulkanSplitViewParams& split_view_params) {
+            RenderingManager::VulkanMeshFrame frame;
+            const auto vp_data = frame_ctx.makeViewportData();
+            frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
+            frame.camera_position = vp_data.translation;
+            frame.items.reserve(frame_ctx.scene_state.meshes.size());
+
+            const bool any_selected_mesh = std::any_of(
+                frame_ctx.scene_state.meshes.begin(),
+                frame_ctx.scene_state.meshes.end(),
+                [](const auto& mesh) { return mesh.is_selected; });
+            const bool any_selected_node = std::any_of(
+                frame_ctx.scene_state.selected_node_mask.begin(),
+                frame_ctx.scene_state.selected_node_mask.end(),
+                [](const bool selected) { return selected; });
+            const bool dim_non_emphasized =
+                settings.desaturate_unselected && (any_selected_mesh || any_selected_node);
+
+            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
+                                                ? glm::normalize(vp_data.translation)
+                                                : settings.mesh_light_dir;
+
+            for (const auto& mesh : frame_ctx.scene_state.meshes) {
+                if (!mesh.mesh) {
+                    continue;
+                }
+                lfs::vis::VulkanMeshDrawItem item{};
+                item.mesh = mesh.mesh;
+                item.model = mesh.transform;
+                item.light_dir = headlight_dir;
+                item.light_intensity = settings.mesh_light_intensity;
+                item.ambient = settings.mesh_ambient;
+                item.backface_culling = settings.mesh_backface_culling;
+                item.is_emphasized = mesh.is_selected;
+                item.dim_non_emphasized = dim_non_emphasized;
+                item.flash_intensity = frame_ctx.selection_flash_intensity;
+                item.wireframe_overlay = settings.mesh_wireframe;
+                item.wireframe_color = settings.mesh_wireframe_color;
+                item.wireframe_width = settings.mesh_wireframe_width;
+                item.shadow_enabled = settings.mesh_shadow_enabled;
+                item.shadow_map_resolution = settings.mesh_shadow_resolution;
+                frame.items.push_back(item);
+            }
+
+            const auto frame_view = frame_ctx.makeFrameView();
+            frame.environment.enabled = environmentBackgroundEnabled(settings);
+            frame.environment.map_path = settings.environment_map_path;
+            frame.environment.camera_to_world = vp_data.rotation;
+            frame.environment.viewport_size =
+                glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y));
+            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
+                const auto& intr = *frame_view.intrinsics_override;
+                frame.environment.intrinsics =
+                    glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
+            } else {
+                const auto [fx, fy] =
+                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
+                frame.environment.intrinsics =
+                    glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
+            }
+            frame.environment.exposure = settings.environment_exposure;
+            frame.environment.rotation_radians = glm::radians(settings.environment_rotation_degrees);
+            frame.environment.equirectangular_view = settings.equirectangular;
+
+            frame.split_view = split_view_params;
+
+            return frame;
+        }
     } // namespace
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
@@ -851,6 +928,19 @@ namespace lfs::vis {
                         queueCameraMetricsRefreshIfStale(scene_manager);
                         viewport_interaction_context_.scene_manager = scene_manager;
                         split_view_service_.updateInfo(FrameResources{});
+
+                        // VkSplat returns early before the shared mesh-frame setup
+                        // below. Republish it here so the viewport pass sees the
+                        // current camera; vksplat doesn't expose splat depth, so
+                        // depth_blit stays empty (mesh and splat composite without
+                        // splat→mesh z-test, same as before this branch existed).
+                        if (!frame_ctx.scene_state.meshes.empty() ||
+                            environmentBackgroundEnabled(settings_)) {
+                            setVulkanMeshFrame(populateMeshFrame(frame_ctx, settings_, pending_split_view));
+                        } else {
+                            clearVulkanMeshFrame();
+                        }
+
                         return {.image = {},
                                 .external_image = vulkan_external_viewport_image_,
                                 .external_image_view = vulkan_external_viewport_image_view_,
@@ -887,71 +977,7 @@ namespace lfs::vis {
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
             (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
-            VulkanMeshFrame gpu_mesh_frame;
-            const auto vp_data = frame_ctx.makeViewportData();
-            gpu_mesh_frame.view_projection = vp_data.getProjectionMatrix() * vp_data.getViewMatrix();
-            gpu_mesh_frame.camera_position = vp_data.translation;
-            gpu_mesh_frame.items.reserve(frame_ctx.scene_state.meshes.size());
-
-            const bool any_selected_mesh = std::any_of(
-                frame_ctx.scene_state.meshes.begin(),
-                frame_ctx.scene_state.meshes.end(),
-                [](const auto& mesh) { return mesh.is_selected; });
-            const bool any_selected_node = std::any_of(
-                frame_ctx.scene_state.selected_node_mask.begin(),
-                frame_ctx.scene_state.selected_node_mask.end(),
-                [](const bool selected) { return selected; });
-            const bool dim_non_emphasized =
-                settings_.desaturate_unselected && (any_selected_mesh || any_selected_node);
-
-            const glm::vec3 headlight_dir = glm::length(vp_data.translation) > 1e-6f
-                                                ? glm::normalize(vp_data.translation)
-                                                : settings_.mesh_light_dir;
-
-            for (const auto& mesh : frame_ctx.scene_state.meshes) {
-                if (!mesh.mesh) {
-                    continue;
-                }
-                lfs::vis::VulkanMeshDrawItem item{};
-                item.mesh = mesh.mesh;
-                item.model = mesh.transform;
-                item.light_dir = headlight_dir;
-                item.light_intensity = settings_.mesh_light_intensity;
-                item.ambient = settings_.mesh_ambient;
-                item.backface_culling = settings_.mesh_backface_culling;
-                item.is_emphasized = mesh.is_selected;
-                item.dim_non_emphasized = dim_non_emphasized;
-                item.flash_intensity = frame_ctx.selection_flash_intensity;
-                item.wireframe_overlay = settings_.mesh_wireframe;
-                item.wireframe_color = settings_.mesh_wireframe_color;
-                item.wireframe_width = settings_.mesh_wireframe_width;
-                item.shadow_enabled = settings_.mesh_shadow_enabled;
-                item.shadow_map_resolution = settings_.mesh_shadow_resolution;
-                gpu_mesh_frame.items.push_back(item);
-            }
-
-            const auto frame_view = frame_ctx.makeFrameView();
-            gpu_mesh_frame.environment.enabled = environmentBackgroundEnabled(settings_);
-            gpu_mesh_frame.environment.map_path = settings_.environment_map_path;
-            gpu_mesh_frame.environment.camera_to_world = vp_data.rotation;
-            gpu_mesh_frame.environment.viewport_size =
-                glm::vec2(static_cast<float>(frame_view.size.x), static_cast<float>(frame_view.size.y));
-            if (frame_view.intrinsics_override.has_value() && !frame_view.orthographic) {
-                const auto& intr = *frame_view.intrinsics_override;
-                gpu_mesh_frame.environment.intrinsics =
-                    glm::vec4(intr.focal_x, intr.focal_y, intr.center_x, intr.center_y);
-            } else {
-                const auto [fx, fy] =
-                    lfs::rendering::computePixelFocalLengths(frame_view.size, frame_view.focal_length_mm);
-                gpu_mesh_frame.environment.intrinsics =
-                    glm::vec4(fx, fy, frame_view.size.x * 0.5f, frame_view.size.y * 0.5f);
-            }
-            gpu_mesh_frame.environment.exposure = settings_.environment_exposure;
-            gpu_mesh_frame.environment.rotation_radians =
-                glm::radians(settings_.environment_rotation_degrees);
-            gpu_mesh_frame.environment.equirectangular_view = settings_.equirectangular;
-
-            gpu_mesh_frame.split_view = pending_split_view;
+            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
 
             // Splat depth → mesh-pass z-test source. Only meaningful when the splat
             // produced a depth tensor (CUDA rasterizer path; vksplat doesn't yet).

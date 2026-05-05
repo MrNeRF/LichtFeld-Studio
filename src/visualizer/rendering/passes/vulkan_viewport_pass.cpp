@@ -1131,8 +1131,12 @@ namespace lfs::vis {
                     .camera_position = params.mesh_camera_position,
                     .items = params.mesh_items,
                 };
-                mesh_pass.record(command_buffer, {static_cast<std::uint32_t>(rect.width), static_cast<std::uint32_t>(rect.height)},
-                                 mesh_params);
+                const VkRect2D mesh_rect{
+                    .offset = {rect.x, rect.y},
+                    .extent = {static_cast<std::uint32_t>(rect.width),
+                               static_cast<std::uint32_t>(rect.height)},
+                };
+                mesh_pass.record(command_buffer, mesh_rect, mesh_params);
                 bindQuad(command_buffer);
                 bindViewport(command_buffer, rect);
             }

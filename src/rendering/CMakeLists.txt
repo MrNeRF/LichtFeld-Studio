@@ -4,6 +4,9 @@
 
 add_subdirectory(rasterizer)
 
+# Local to this target: mesh2splat.cpp compiles GLSL → SPIR-V at runtime via glslang.
+find_package(glslang CONFIG REQUIRED)
+
 set(RENDERING_TENSOR_SOURCES
         cuda_vulkan_interop.cpp
         cuda_vulkan_interop.cu
@@ -11,7 +14,7 @@ set(RENDERING_TENSOR_SOURCES
         raster_rendering_engine.cpp
         cuda_interaction_kernels.cu
         point_cloud_raster.cu
-        mesh2splat_cpu.cpp
+        mesh2splat.cpp
         screen_overlay_renderer.cpp
 )
 
@@ -24,6 +27,10 @@ target_link_libraries(lfs_rendering_tensor
         lfs_rasterizer
         CUDA::cudart
         glm::glm
+        Vulkan::Vulkan
+        glslang::glslang
+        glslang::SPIRV
+        glslang::glslang-default-resource-limits
         OpenImageIO::OpenImageIO
         spdlog::spdlog
         TBB::tbb
