@@ -7,6 +7,7 @@
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "rendering_manager.hpp"
+#include <algorithm>
 
 namespace lfs::vis {
 
@@ -124,9 +125,9 @@ namespace lfs::vis {
 
     void RenderingManager::handleSplitPositionChanged(const float position) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.split_position = position;
+        settings_.split_position = std::clamp(position, 0.0f, 1.0f);
         LOG_TRACE("Split position changed to: {}", position);
-        markDirty(DirtyFlag::SPLIT_VIEW);
+        markDirty(DirtyFlag::SPLIT_VIEW | frame_lifecycle_service_.deferViewportRefresh());
     }
 
     void RenderingManager::handleRenderSettingsChanged(const ui::RenderSettingsChanged& event) {

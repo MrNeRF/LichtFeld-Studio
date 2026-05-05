@@ -3621,6 +3621,11 @@ namespace lfs::vis::gui {
 #endif
     }
 
+    bool GuiManager::shouldDeferVulkanInteropResize() const {
+        auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+        return rendering && rendering->isViewportResizeDeferring();
+    }
+
     void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_scene_interop_disabled_) {
@@ -3653,6 +3658,7 @@ namespace lfs::vis::gui {
 
         const std::size_t frame_slot = context.currentFrameSlot();
         const bool slot_array_resize_needed = vulkan_scene_interop_.size() != context.framesInFlight();
+        const bool resize_deferring = shouldDeferVulkanInteropResize();
 
         // Cache-HIT fast path: when nothing about the source image changed since the last
         // upload into THIS slot's interop target, there's no work to do — and crucially no
@@ -3675,6 +3681,11 @@ namespace lfs::vis::gui {
                          static_cast<int>(target_ptr_const->layout));
                 return;
             }
+            if (resize_deferring && recreate_needed) {
+                return;
+            }
+        } else if (resize_deferring) {
+            return;
         }
 
         // Slow path: we will write to the interop image (recreate, transition, or copy).
@@ -3879,6 +3890,13 @@ namespace lfs::vis::gui {
         const std::size_t frame_slot = context.currentFrameSlot();
         const bool slot_array_resize_needed =
             vulkan_split_right_interop_.size() != context.framesInFlight();
+        const auto clear_external_split_right = [this]() {
+            vulkan_split_right_external_image_ = VK_NULL_HANDLE;
+            vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
+            vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_split_right_external_image_generation_ = 0;
+        };
+        const bool resize_deferring = shouldDeferVulkanInteropResize();
 
         if (!slot_array_resize_needed && frame_slot < vulkan_split_right_interop_.size()) {
             const auto& target_ptr_const = vulkan_split_right_interop_[frame_slot];
@@ -3897,6 +3915,13 @@ namespace lfs::vis::gui {
                 vulkan_split_right_external_image_generation_ = target_ptr_const->generation;
                 return;
             }
+            if (resize_deferring && recreate_needed) {
+                clear_external_split_right();
+                return;
+            }
+        } else if (resize_deferring) {
+            clear_external_split_right();
+            return;
         }
 
         if (!context.waitForCurrentFrameSlot()) {
@@ -4083,6 +4108,13 @@ namespace lfs::vis::gui {
         const std::size_t frame_slot = context.currentFrameSlot();
         const bool slot_array_resize_needed =
             vulkan_depth_blit_interop_.size() != context.framesInFlight();
+        const auto clear_external_depth_blit = [this]() {
+            vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
+            vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
+            vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+            vulkan_depth_blit_external_image_generation_ = 0;
+        };
+        const bool resize_deferring = shouldDeferVulkanInteropResize();
 
         if (!slot_array_resize_needed && frame_slot < vulkan_depth_blit_interop_.size()) {
             const auto& target_ptr_const = vulkan_depth_blit_interop_[frame_slot];
@@ -4101,6 +4133,13 @@ namespace lfs::vis::gui {
                 vulkan_depth_blit_external_image_generation_ = target_ptr_const->generation;
                 return;
             }
+            if (resize_deferring && recreate_needed) {
+                clear_external_depth_blit();
+                return;
+            }
+        } else if (resize_deferring) {
+            clear_external_depth_blit();
+            return;
         }
 
         if (!context.waitForCurrentFrameSlot()) {

@@ -175,6 +175,7 @@ namespace lfs::vis {
             void resetVulkanSplitRightInterop();
             void prepareVulkanDepthBlitInterop(VulkanContext& context);
             void resetVulkanDepthBlitInterop();
+            [[nodiscard]] bool shouldDeferVulkanInteropResize() const;
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();

@@ -607,9 +607,7 @@ namespace lfs::vis {
             return {};
         }
 
-        if (frame_dirty == 0 && has_cached_viewport_output) {
-            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
-            render_lock.reset();
+        const auto cached_frame_result = [this]() -> VulkanFrameResult {
             if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
                 return {.image = {},
                         .external_image = vulkan_external_viewport_image_,
@@ -630,6 +628,45 @@ namespace lfs::vis {
                     .image_generation = vulkan_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
+        };
+        const auto update_cached_split_position = [this]() {
+            if (!split_view_service_.isActive(settings_)) {
+                return;
+            }
+
+            const float split_position = std::clamp(settings_.split_position, 0.0f, 1.0f);
+            std::lock_guard lock(vulkan_mesh_frame_mutex_);
+            if (!vulkan_mesh_frame_.split_view.enabled) {
+                return;
+            }
+
+            auto& split = vulkan_mesh_frame_.split_view;
+            split.split_position = split_position;
+            split.left.start_position = 0.0f;
+            split.left.end_position = split_position;
+            split.right.start_position = split_position;
+            split.right.end_position = 1.0f;
+
+            if (vulkan_mesh_frame_.panels.size() == 2) {
+                vulkan_mesh_frame_.panels[0].start_position = 0.0f;
+                vulkan_mesh_frame_.panels[0].end_position = split_position;
+                vulkan_mesh_frame_.panels[1].start_position = split_position;
+                vulkan_mesh_frame_.panels[1].end_position = 1.0f;
+            }
+        };
+
+        if (frame_lifecycle_service_.isResizeDeferring() && has_cached_viewport_output) {
+            update_cached_split_position();
+            dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+            LOG_PERF("renderVulkanFrame: resize defer (returning cached image)");
+            render_lock.reset();
+            return cached_frame_result();
+        }
+
+        if (frame_dirty == 0 && has_cached_viewport_output) {
+            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
+            render_lock.reset();
+            return cached_frame_result();
         }
 
         framerate_controller_.beginFrame();
