@@ -31,13 +31,14 @@ PACK_STRUCT(struct VulkanGSSelectionMaskUniforms {
     uint32_t num_model_transforms;
     uint32_t image_height;
     uint32_t image_width;
+    uint32_t camera_model;
     uint32_t pad0;
     uint32_t pad1;
-    uint32_t pad2;
     float fx;
     float fy;
     float cx;
     float cy;
+    float dist_coeffs[4];
     float world_view_transform[16];
 });
 
@@ -78,6 +79,8 @@ public:
                                  const _VulkanBuffer& selection_colors,
                                  const _VulkanBuffer& overlay_flags,
                                  const _VulkanBuffer& overlay_params,
+                                 const _VulkanBuffer& transform_indices,
+                                 const _VulkanBuffer& model_transforms,
                                  bool use_gut_rasterization = false);
     void executeSelectionMask(const VulkanGSSelectionMaskUniforms& uniforms,
                               VulkanGSPipelineBuffers& buffers,
@@ -98,7 +101,7 @@ protected:
 
     _ComputePipeline pipeline_projection_forward = _ComputePipeline(16);
     _ComputePipeline pipeline_projection_forward_gut = _ComputePipeline(16);
-    _ComputePipeline pipeline_selection_mask = _ComputePipeline(6);
+    _ComputePipeline pipeline_selection_mask = _ComputePipeline(8);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     // 3 bindings: sorted_keys, out_tile_ranges, index_buffer_offset (for num_isects).
     _ComputePipeline pipeline_compute_tile_ranges[2] = {
@@ -107,7 +110,7 @@ protected:
     // Indirect-dispatch setup: reads cumsum tail, writes VkDispatchIndirectCommand.
     _ComputePipeline pipeline_setup_dispatch_indirect = _ComputePipeline(2);
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(12);
-    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(15);
+    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(17);
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
         _ComputePipeline block_scan = _ComputePipeline(3);

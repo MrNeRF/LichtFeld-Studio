@@ -1653,10 +1653,16 @@ namespace lfs::vis {
             static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
         selection_uniforms.image_height = camera_uniforms.image_height;
         selection_uniforms.image_width = camera_uniforms.image_width;
+        selection_uniforms.camera_model = request.gut
+                                              ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift)
+                                              : 0u;
         selection_uniforms.fx = camera_uniforms.fx;
         selection_uniforms.fy = camera_uniforms.fy;
         selection_uniforms.cx = camera_uniforms.cx;
         selection_uniforms.cy = camera_uniforms.cy;
+        for (std::size_t i = 0; i < 4; ++i) {
+            selection_uniforms.dist_coeffs[i] = camera_uniforms.dist_coeffs[i];
+        }
         for (std::size_t i = 0; i < 16; ++i) {
             selection_uniforms.world_view_transform[i] = camera_uniforms.world_view_transform[i];
         }
@@ -1810,6 +1816,8 @@ namespace lfs::vis {
                                                   overlay_bindings->selection_colors,
                                                   buffers_.overlay_flags.deviceBuffer,
                                                   overlay_bindings->overlay_params,
+                                                  overlay_bindings->transform_indices,
+                                                  overlay_bindings->model_transforms,
                                                   request.gut);
             }
             // Record compose into the rasterizer's batch so the entire frame

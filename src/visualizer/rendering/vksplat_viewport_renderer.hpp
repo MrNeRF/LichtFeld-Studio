@@ -69,6 +69,7 @@ namespace lfs::vis {
             lfs::rendering::GaussianSceneState scene;
             SelectionMaskShape shape = SelectionMaskShape::Brush;
             std::vector<glm::vec4> primitives;
+            bool gut = false;
             bool equirectangular = false;
         };
 

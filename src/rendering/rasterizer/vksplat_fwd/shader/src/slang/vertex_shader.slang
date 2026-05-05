@@ -129,8 +129,15 @@ bool valid_gut_image_point(float3 projected, Camera cam) {
            image_point_in_image_bounds_margin(projected.xy, cam, 0.1f);
 }
 
-Splat_2D_Vertex project_gaussian_to_camera_gut(Gaussian_3D g, Camera cam, uint active_sh) {
-    float3 mean_vs = project_point(g.xyz_ws, cam);
+Splat_2D_Vertex project_gaussian_to_camera_gut(
+    Gaussian_3D g,
+    Camera cam,
+    uint active_sh,
+    float3 mean_ws,
+    StructuredBuffer<float4> model_transform_rows,
+    uint model_transform_base,
+    bool model_transform_enabled) {
+    float3 mean_vs = project_point(mean_ws, cam);
     if (mean_vs.z <= NEAR_CLIP || !isfinite(dot(mean_vs, mean_vs))) {
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
     }
@@ -150,12 +157,18 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(Gaussian_3D g, Camera cam, uint a
     // is evaluated against the pixel ray in the raster shader.
     float3x3 rotation = quat_to_rotmat(normalize(g.rotations));
     float3 sigma_points[NUM_SIGMA_POINTS];
-    sigma_points[0] = g.xyz_ws;
+    sigma_points[0] = mean_ws;
     for (uint i = 0u; i < D; ++i) {
         float scale_i = i == 0u ? g.scales.x : (i == 1u ? g.scales.y : g.scales.z);
         float3 delta = sigma_scale * scale_i * rotation_column(rotation, i);
-        sigma_points[1u + i] = g.xyz_ws + delta;
-        sigma_points[1u + D + i] = g.xyz_ws - delta;
+        float3 source_plus = g.xyz_ws + delta;
+        float3 source_minus = g.xyz_ws - delta;
+        sigma_points[1u + i] = model_transform_enabled
+                                    ? transform_point_rows(model_transform_rows, model_transform_base, source_plus)
+                                    : source_plus;
+        sigma_points[1u + D + i] = model_transform_enabled
+                                        ? transform_point_rows(model_transform_rows, model_transform_base, source_minus)
+                                        : source_minus;
     }
 
     float2 image_points[NUM_SIGMA_POINTS];
@@ -185,7 +198,13 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(Gaussian_3D g, Camera cam, uint a
 
     float4x3 mat = transpose(cam.world_view_transform);
     float3 cam_pos = -mul(float3x3(mat), mat[3]);
-    float3 dir = float3(normalize(g.xyz_ws - cam_pos));
+    float3 dir = float3(normalize(mean_ws - cam_pos));
+    if (model_transform_enabled) {
+        float3 r0, r1, r2;
+        if (extract_rotation_rows(model_transform_rows, model_transform_base, r0, r1, r2)) {
+            dir = transpose_mul_rows(r0, r1, r2, dir);
+        }
+    }
     float3 rgb = compute_color_from_sh_coeffs(g.sh_coeffs, dir, active_sh);
     float3 inv_cov_vs = compute_inverse(cov_vs.xyz);
     float opac = g.opacities * cov_vs.w;
@@ -440,7 +459,14 @@ void main(
   #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     // forward
   #if VKSPLAT_GUT_PROJECTION
-    Splat_2D_Vertex splat = project_gaussian_to_camera_gut(gauss, cam, active_sh);
+    Splat_2D_Vertex splat = project_gaussian_to_camera_gut(
+        gauss,
+        cam,
+        active_sh,
+        mean_ws,
+        model_transforms,
+        model_transform_base,
+        model_transform_enabled);
   #else
     Splat_2D_Vertex splat = project_gaussian_to_camera_model(
         gauss,

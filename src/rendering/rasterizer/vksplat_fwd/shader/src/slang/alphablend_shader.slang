@@ -297,12 +297,66 @@ layout(binding=11) ByteAddressBuffer preview_mask;
 layout(binding=12) StructuredBuffer<float4> selection_colors;
 layout(binding=13) StructuredBuffer<uint> gaussian_overlay_flags;
 layout(binding=14) StructuredBuffer<float4> overlay_params;
+layout(binding=15) ByteAddressBuffer transform_indices;
+layout(binding=16) StructuredBuffer<float4> model_transforms;
 #else
 layout(binding=7) ByteAddressBuffer selection_mask;
 layout(binding=8) ByteAddressBuffer preview_mask;
 layout(binding=9) StructuredBuffer<float4> selection_colors;
 layout(binding=10) StructuredBuffer<uint> gaussian_overlay_flags;
 layout(binding=11) StructuredBuffer<float4> overlay_params;
+#endif
+
+#if VKSPLAT_GUT_RASTERIZE
+[ForceInline]
+bool inverse_3x3(float3x3 m, out float3x3 inv_m)
+{
+    float3 r0 = float3(m[0][0], m[0][1], m[0][2]);
+    float3 r1 = float3(m[1][0], m[1][1], m[1][2]);
+    float3 r2 = float3(m[2][0], m[2][1], m[2][2]);
+    float3 c0 = cross(r1, r2);
+    float3 c1 = cross(r2, r0);
+    float3 c2 = cross(r0, r1);
+    float det = dot(r0, c0);
+    if (abs(det) <= 1.0e-8f) {
+        inv_m = float3x3(1.0f, 0.0f, 0.0f,
+                         0.0f, 1.0f, 0.0f,
+                         0.0f, 0.0f, 1.0f);
+        return false;
+    }
+
+    float inv_det = 1.0f / det;
+    inv_m = float3x3(c0.x * inv_det, c1.x * inv_det, c2.x * inv_det,
+                     c0.y * inv_det, c1.y * inv_det, c2.y * inv_det,
+                     c0.z * inv_det, c1.z * inv_det, c2.z * inv_det);
+    return true;
+}
+
+[ForceInline]
+Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
+    int32_t g_idx,
+    Uniforms uniforms)
+{
+    Splat_3D_GUT_AlphaBlend g =
+        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scales_opacs, rgb);
+
+    if (uniforms.step == 0u)
+        return g;
+
+    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
+    bool transform_indices_enabled = overlay_enabled(emphasis_flags.y);
+    int transform_idx = transform_indices_enabled ? read_int32(transform_indices, uint(g_idx)) : 0;
+    transform_idx = clamp(transform_idx, 0, int(uniforms.step) - 1);
+    uint transform_base = uint(transform_idx) * 4u;
+
+    g.xyz_ws = transform_point_rows(model_transforms, transform_base, g.xyz_ws);
+    float3x3 linear = linear_transform_rows(model_transforms, transform_base);
+    float3x3 inv_linear;
+    if (inverse_3x3(linear, inv_linear)) {
+        g.iscl_rot = mul(g.iscl_rot, inv_linear);
+    }
+    return g;
+}
 #endif
 
 [shader("compute")]
@@ -381,7 +435,7 @@ void main(
             #if SHARED_STRUCT
               #if VKSPLAT_GUT_RASTERIZE
                 collected_gut_splats[thread_rank] =
-                    load_splat_gut_alphablend(coll_id, xyz_ws, rotations, scales_opacs, rgb);
+                    load_transformed_splat_gut_alphablend(int32_t(coll_id), uniforms);
               #else
                 collected_splats[thread_rank] = load_splat_alphablend(coll_id, xy_vs, inv_cov_vs_opacity, rgb);
               #endif

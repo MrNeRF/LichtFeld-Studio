@@ -364,7 +364,7 @@ namespace lfs::vis {
             }
 
             const auto settings = rendering_manager->getSettings();
-            if (settings.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
+            if (lfs::rendering::isVkSplatBackend(settings.raster_backend)) {
                 LOG_DEBUG("SelectionService: VkSplat selection query unavailable, falling back to screen-position path: {}",
                           result.error());
             }

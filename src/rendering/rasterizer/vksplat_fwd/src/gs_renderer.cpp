@@ -262,6 +262,8 @@ void VulkanGSRenderer::executeRasterizeForward(
     const _VulkanBuffer& selection_colors,
     const _VulkanBuffer& overlay_flags,
     const _VulkanBuffer& overlay_params,
+    const _VulkanBuffer& transform_indices,
+    const _VulkanBuffer& model_transforms,
     bool use_gut_rasterization) {
     if (buffers.num_indices == 0)
         return;
@@ -280,6 +282,8 @@ void VulkanGSRenderer::executeRasterizeForward(
                             {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE},
                             {overlay_flags, COMPUTE_SHADER_WRITE},
                             {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
                         },
                         COMPUTE_SHADER_READ);
 
@@ -307,6 +311,8 @@ void VulkanGSRenderer::executeRasterizeForward(
                 selection_colors,
                 overlay_flags,
                 overlay_params,
+                transform_indices,
+                model_transforms,
             }));
     } else {
         executeCompute(
@@ -345,6 +351,8 @@ void VulkanGSRenderer::executeSelectionMask(
 
     bufferMemoryBarrier({
                             {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.scales_opacs.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
                             {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {primitives, TRANSFER_COMPUTE_SHADER_WRITE},
@@ -364,6 +372,8 @@ void VulkanGSRenderer::executeSelectionMask(
             node_mask,
             primitives,
             model_transforms,
+            buffers.rotations.deviceBuffer,
+            buffers.scales_opacs.deviceBuffer,
             selection_out,
         });
 

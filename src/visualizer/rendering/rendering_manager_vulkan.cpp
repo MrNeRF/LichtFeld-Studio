@@ -406,8 +406,8 @@ namespace lfs::vis {
         const VksplatSelectionMaskShape shape,
         const std::vector<glm::vec4>& primitives) {
         const auto settings = getSettings();
-        if (settings.raster_backend != lfs::rendering::GaussianRasterBackend::VkSplat) {
-            return std::unexpected("VkSplat selection query is available only when the VkSplat backend is active");
+        if (!lfs::rendering::isVkSplatBackend(settings.raster_backend)) {
+            return std::unexpected("VkSplat selection query is available only when a VkSplat backend is active");
         }
         if (!scene_manager.hasSplatFiles()) {
             return std::unexpected("VkSplat selection query is available only for loaded splat files");
@@ -454,6 +454,7 @@ namespace lfs::vis {
                  .node_visibility_mask = scene_state.node_visibility_mask},
             .shape = map_shape(shape),
             .primitives = primitives,
+            .gut = lfs::rendering::isGutBackend(settings.raster_backend),
             .equirectangular = equirectangular,
         };
 
