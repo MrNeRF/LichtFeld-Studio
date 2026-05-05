@@ -75,9 +75,6 @@ namespace lfs::vis {
             (has_renderable_content || splitViewEnabled(split_view_mode))) {
             dirty |= DirtyFlag::ALL;
         }
-        if (splitViewEnabled(split_view_mode)) {
-            dirty |= DirtyFlag::SPLIT_VIEW;
-        }
         return dirty;
     }
 

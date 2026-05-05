@@ -69,6 +69,10 @@ namespace lfs::vis {
             return ((value + alignment - 1) / alignment) * alignment;
         }
 
+        [[nodiscard]] constexpr std::size_t outputSlotIndex(const VksplatViewportRenderer::OutputSlot slot) {
+            return static_cast<std::size_t>(slot);
+        }
+
         template <std::size_t RegionCount>
         [[nodiscard]] std::size_t layoutRegions(const std::array<std::size_t, RegionCount>& region_bytes,
                                                 std::array<std::size_t, RegionCount>& region_offset,
@@ -646,18 +650,19 @@ namespace lfs::vis {
             timeline.value = 0;
         }
         if (context_) {
-            if (output_image_.image != VK_NULL_HANDLE) {
-                context_->imageBarriers().forgetImage(output_image_.image);
+            for (auto& slot : output_slots_) {
+                if (slot.image.image != VK_NULL_HANDLE) {
+                    context_->imageBarriers().forgetImage(slot.image.image);
+                }
+                context_->destroyExternalImage(slot.image);
+                slot = {};
             }
-            context_->destroyExternalImage(output_image_);
             if (compose_) {
                 compose_->destroy(context_->device());
             }
         }
         compose_.reset();
         buffers_ = {};
-        output_size_ = {0, 0};
-        output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         initialized_ = false;
         context_ = nullptr;
     }
@@ -1068,30 +1073,33 @@ namespace lfs::vis {
         return {};
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::ensureOutputImage(VulkanContext& context,
-                                                                                const glm::ivec2 size) {
-        if (output_image_.image != VK_NULL_HANDLE && output_size_ == size) {
+    std::expected<void, std::string> VksplatViewportRenderer::ensureOutputImage(
+        VulkanContext& context,
+        const glm::ivec2 size,
+        const OutputSlot output_slot) {
+        auto& slot = output_slots_[outputSlotIndex(output_slot)];
+        if (slot.image.image != VK_NULL_HANDLE && slot.size == size) {
             return {};
         }
-        if (output_image_.image != VK_NULL_HANDLE) {
-            context.imageBarriers().forgetImage(output_image_.image);
+        if (slot.image.image != VK_NULL_HANDLE) {
+            context.imageBarriers().forgetImage(slot.image.image);
         }
-        context.destroyExternalImage(output_image_);
-        output_size_ = {0, 0};
-        output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        context.destroyExternalImage(slot.image);
+        slot.size = {0, 0};
+        slot.layout = VK_IMAGE_LAYOUT_UNDEFINED;
         const VkExtent2D extent{
             .width = static_cast<std::uint32_t>(size.x),
             .height = static_cast<std::uint32_t>(size.y),
         };
-        if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, output_image_)) {
+        if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, slot.image)) {
             return std::unexpected(context.lastError());
         }
-        context.imageBarriers().registerImage(output_image_.image,
+        context.imageBarriers().registerImage(slot.image.image,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
                                               VK_IMAGE_LAYOUT_UNDEFINED,
                                               /*external=*/true);
-        output_size_ = size;
-        ++output_generation_;
+        slot.size = size;
+        ++slot.generation;
         return {};
     }
 
@@ -1166,17 +1174,19 @@ namespace lfs::vis {
         VulkanContext& context,
         VkCommandBuffer cmd,
         const VulkanGSRendererUniforms& uniforms,
-        const glm::vec3& background) {
+        const glm::vec3& background,
+        const OutputSlot output_slot) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return ok;
         }
+        auto& output = output_slots_[outputSlotIndex(output_slot)];
 
         const bool has_pixel_state = buffers_.num_indices > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
                                      buffers_.pixel_state.deviceBuffer.size > 0;
         if (!has_pixel_state) {
             context.imageBarriers().transitionImage(cmd,
-                                                    output_image_.image,
+                                                    output.image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             VkClearColorValue clear{{background.r, background.g, background.b, 1.0f}};
@@ -1185,17 +1195,17 @@ namespace lfs::vis {
             range.levelCount = 1;
             range.layerCount = 1;
             vkCmdClearColorImage(cmd,
-                                 output_image_.image,
+                                 output.image.image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  &clear,
                                  1,
                                  &range);
             context.imageBarriers().transitionImage(cmd,
-                                                    output_image_.image,
+                                                    output.image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            output_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            ++output_generation_;
+            output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            ++output.generation;
             return {};
         }
 
@@ -1203,7 +1213,7 @@ namespace lfs::vis {
         pixel_info.buffer = buffers_.pixel_state.deviceBuffer.buffer;
         pixel_info.range = buffers_.pixel_state.deviceBuffer.size;
         VkDescriptorImageInfo image_info{};
-        image_info.imageView = output_image_.view;
+        image_info.imageView = output.image.view;
         image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
         std::array<VkWriteDescriptorSet, 2> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1233,7 +1243,7 @@ namespace lfs::vis {
         pixel_dep.pBufferMemoryBarriers = &pixel_barrier;
         vkCmdPipelineBarrier2(cmd, &pixel_dep);
         context.imageBarriers().transitionImage(cmd,
-                                                output_image_.image,
+                                                output.image.image,
                                                 VK_IMAGE_ASPECT_COLOR_BIT,
                                                 VK_IMAGE_LAYOUT_GENERAL);
 
@@ -1260,11 +1270,11 @@ namespace lfs::vis {
                       _CEIL_DIV(uniforms.image_height, 16),
                       1);
         context.imageBarriers().transitionImage(cmd,
-                                                output_image_.image,
+                                                output.image.image,
                                                 VK_IMAGE_ASPECT_COLOR_BIT,
                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        output_layout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        ++output_generation_;
+        output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ++output.generation;
         return {};
     }
 
@@ -1475,7 +1485,8 @@ namespace lfs::vis {
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
         const lfs::rendering::ViewportRenderRequest& request,
-        const bool force_input_upload) {
+        const bool force_input_upload,
+        const OutputSlot output_slot) {
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
@@ -1512,7 +1523,7 @@ namespace lfs::vis {
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
         }
-        if (auto ok = ensureOutputImage(context, size); !ok) {
+        if (auto ok = ensureOutputImage(context, size, output_slot); !ok) {
             return std::unexpected(ok.error());
         }
 
@@ -1588,7 +1599,11 @@ namespace lfs::vis {
             // Record compose into the rasterizer's batch so the entire frame
             // submits and waits exactly once instead of fence-blocking twice.
             compose_status = composePixelState(
-                context, renderer_.activeCommandBuffer(), uniforms, request.frame_view.background_color);
+                context,
+                renderer_.activeCommandBuffer(),
+                uniforms,
+                request.frame_view.background_color,
+                output_slot);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
         }
@@ -1596,11 +1611,12 @@ namespace lfs::vis {
             return std::unexpected(compose_status.error());
         }
 
+        const auto& output = output_slots_[outputSlotIndex(output_slot)];
         return RenderResult{
-            .image = output_image_.image,
-            .image_view = output_image_.view,
-            .image_layout = output_layout_,
-            .generation = output_generation_,
+            .image = output.image.image,
+            .image_view = output.image.view,
+            .image_layout = output.layout,
+            .generation = output.generation,
             .size = size,
             .flip_y = false,
         };

@@ -840,6 +840,9 @@ namespace lfs::vis {
         EXPECT_EQ(
             service.requiredDirtyMask(false, false, SplitViewMode::PLYComparison),
             DirtyFlag::ALL | DirtyFlag::SPLIT_VIEW);
+        EXPECT_EQ(
+            service.requiredDirtyMask(true, true, SplitViewMode::PLYComparison),
+            0u);
     }
 
     TEST(ViewportRequestBuilderTest, CursorPreviewTargetsOnlyItsSplitPanel) {

@@ -58,6 +58,12 @@ namespace lfs::vis {
             Rectangle = 1,
         };
 
+        enum class OutputSlot : std::size_t {
+            Main = 0,
+            SplitLeft = 1,
+            SplitRight = 2,
+        };
+
         struct SelectionMaskRequest {
             lfs::rendering::FrameView frame_view;
             lfs::rendering::GaussianSceneState scene;
@@ -76,7 +82,8 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
-            bool force_input_upload);
+            bool force_input_upload,
+            OutputSlot output_slot = OutputSlot::Main);
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
@@ -110,13 +117,17 @@ namespace lfs::vis {
             std::size_t ring_slot);
         [[nodiscard]] bool inputsResident(const lfs::core::SplatData& splat_data,
                                           std::size_t ring_slot) const;
-        [[nodiscard]] std::expected<void, std::string> ensureOutputImage(VulkanContext& context, glm::ivec2 size);
+        [[nodiscard]] std::expected<void, std::string> ensureOutputImage(
+            VulkanContext& context,
+            glm::ivec2 size,
+            OutputSlot output_slot);
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
         [[nodiscard]] std::expected<void, std::string> composePixelState(
             VulkanContext& context,
             VkCommandBuffer cmd,
             const VulkanGSRendererUniforms& uniforms,
-            const glm::vec3& background);
+            const glm::vec3& background,
+            OutputSlot output_slot);
 
         // One coalesced CUDA-imported VkBuffer per ring slot, holding all four
         // input regions (xyz | rotations | scales+opacs | sh) packed back-to-back
@@ -167,10 +178,14 @@ namespace lfs::vis {
         VulkanGSRenderer renderer_;
         VulkanGSPipelineBuffers buffers_;
         std::unique_ptr<ComposePipeline> compose_;
-        VulkanContext::ExternalImage output_image_{};
-        glm::ivec2 output_size_{0, 0};
-        VkImageLayout output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        std::uint64_t output_generation_ = 0;
+        struct OutputImageSlot {
+            VulkanContext::ExternalImage image{};
+            glm::ivec2 size{0, 0};
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t generation = 0;
+        };
+        static constexpr std::size_t kOutputSlotCount = 3;
+        std::array<OutputImageSlot, kOutputSlotCount> output_slots_{};
 
         // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs),
         // ring-buffered per frame-in-flight. Each ring slot owns its own set of
