@@ -653,7 +653,7 @@ namespace lfs::vis {
                                 pending_split_view.split_position = settings_.split_position;
                                 pending_split_view.background = settings_.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
-                                pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, false};
+                                pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, true};
                                 pending_split_view.right = {rendered->image, settings_.split_position, 1.0f, false, !rendered->metadata.flip_y};
                                 rendered_metadata = rendered->metadata;
                                 rendered_image_contains_ground_truth = true;
