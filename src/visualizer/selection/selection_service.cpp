@@ -214,19 +214,59 @@ namespace lfs::vis {
             return true;
         }
 
+        [[nodiscard]] core::Tensor visibleNodeScopeMask(
+            lfs::core::Scene& scene,
+            const size_t visible_count,
+            const std::vector<bool>& node_mask) {
+            auto scope = core::Tensor::ones({visible_count}, core::Device::CUDA, core::DataType::Bool);
+            if (node_mask.empty()) {
+                return scope;
+            }
+
+            const auto transform_indices = scene.getTransformIndices();
+            if (!transform_indices || !transform_indices->is_valid() ||
+                transform_indices->numel() != visible_count) {
+                return {};
+            }
+
+            rendering::filter_selection_by_node_mask(scope, *transform_indices, node_mask);
+            return scope;
+        }
+
         [[nodiscard]] core::Tensor expandSelectionToSceneMask(
             SceneManager* const scene_manager,
             const core::Tensor& selection,
             const SelectionMode mode,
             const uint8_t group_id,
-            const core::Tensor* existing_mask) {
+            const core::Tensor* existing_mask,
+            const std::vector<bool>& node_mask) {
             if (!scene_manager || !selection.is_valid()) {
                 return {};
             }
 
             auto& scene = scene_manager->getScene();
             const size_t full_count = scene.getSelectionGaussianCount();
+            const bool preserves_active_group =
+                mode == SelectionMode::Replace &&
+                existing_mask && existing_mask->is_valid() &&
+                existing_mask->numel() == full_count;
+            const bool scoped_replace = preserves_active_group && !node_mask.empty();
+
             if (selection.numel() == full_count) {
+                if (scoped_replace) {
+                    const size_t visible_count = activeSelectionGaussianCount(scene_manager);
+                    if (visible_count == full_count) {
+                        auto scope = visibleNodeScopeMask(scene, visible_count, node_mask);
+                        if (!scope.is_valid()) {
+                            return {};
+                        }
+                        auto active_group = existing_mask->eq(group_id);
+                        if (active_group.device() != core::Device::CUDA) {
+                            active_group = active_group.cuda();
+                        }
+                        return selection.where(scope, active_group);
+                    }
+                }
                 return selection;
             }
 
@@ -242,9 +282,7 @@ namespace lfs::vis {
             }
 
             core::Tensor expanded;
-            if (mode == SelectionMode::Replace &&
-                existing_mask && existing_mask->is_valid() &&
-                existing_mask->numel() == full_count) {
+            if (preserves_active_group) {
                 expanded = existing_mask->eq(group_id);
                 if (expanded.device() != core::Device::CUDA) {
                     expanded = expanded.cuda();
@@ -252,7 +290,20 @@ namespace lfs::vis {
             } else {
                 expanded = core::Tensor::zeros({full_count}, core::Device::CUDA, core::DataType::Bool);
             }
-            expanded.index_copy_(0, *visible_indices, selection);
+
+            const core::Tensor* visible_selection = &selection;
+            core::Tensor scoped_selection;
+            if (scoped_replace) {
+                auto scope = visibleNodeScopeMask(scene, visible_count, node_mask);
+                if (!scope.is_valid()) {
+                    return {};
+                }
+                const auto active_group_visible = expanded.index_select(0, *visible_indices).contiguous();
+                scoped_selection = selection.where(scope, active_group_visible);
+                visible_selection = &scoped_selection;
+            }
+
+            expanded.index_copy_(0, *visible_indices, *visible_selection);
             return expanded;
         }
 
@@ -1263,7 +1314,8 @@ namespace lfs::vis {
         const uint8_t group_id = scene.getActiveSelectionGroup();
         auto scene_selection_mask = expandSelectionToSceneMask(
             scene_manager_, selection_mask, mode, group_id,
-            existing_mask && existing_mask->is_valid() ? existing_mask.get() : nullptr);
+            existing_mask && existing_mask->is_valid() ? existing_mask.get() : nullptr,
+            node_mask);
         if (!scene_selection_mask.is_valid()) {
             return {false, 0, "Selection size mismatch"};
         }

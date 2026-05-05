@@ -487,6 +487,8 @@ namespace lfs::core {
     void Scene::resizeSelectionIfSizeMismatch(const size_t expected_size) {
         std::shared_ptr<lfs::core::Tensor> replacement;
         bool changed = false;
+        bool has_selection = false;
+        int selection_count = 0;
         {
             std::unique_lock lock(selection_mutex_);
             if (selection_mask_ && selection_mask_->is_valid() &&
@@ -503,9 +505,14 @@ namespace lfs::core {
                     }
                     replacement = std::make_shared<lfs::core::Tensor>(std::move(normalized));
                     selection_mask_ = replacement;
-                    has_selection_ = selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar() > 0.0f;
+                    selection_count =
+                        static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
+                    has_selection = selection_count > 0;
+                    has_selection_ = has_selection;
                 } else {
                     selection_mask_.reset();
+                    selection_count = 0;
+                    has_selection = false;
                     has_selection_ = false;
                 }
                 changed = true;
@@ -515,8 +522,8 @@ namespace lfs::core {
         if (changed) {
             pending_mutations_ |= static_cast<uint32_t>(MutationType::SELECTION_CHANGED);
             events::state::SelectionChanged{
-                .has_selection = hasSelection(),
-                .count = replacement ? static_cast<int>(replacement->ne(0).to(core::DataType::Float32).sum_scalar()) : 0}
+                .has_selection = has_selection,
+                .count = selection_count}
                 .emit();
         }
     }

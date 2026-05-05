@@ -759,7 +759,9 @@ namespace lfs::vis {
         if (num_splats == 0) {
             return std::unexpected("VkSplat selection overlay cannot bind an empty model");
         }
-        assert(context.externalMemoryInteropEnabled());
+        if (!context.externalMemoryInteropEnabled()) {
+            return std::unexpected("VkSplat selection overlay requires CUDA/Vulkan external-memory interop");
+        }
         assert(ring_slot < cuda_overlays_.size());
         auto& slot = cuda_overlays_[ring_slot];
 
@@ -1040,7 +1042,9 @@ namespace lfs::vis {
             return std::unexpected("VkSplat cannot render an empty model");
         }
 
-        assert(context.externalMemoryInteropEnabled());
+        if (!context.externalMemoryInteropEnabled()) {
+            return std::unexpected("VkSplat input upload requires CUDA/Vulkan external-memory interop");
+        }
         assert(ring_slot < cuda_inputs_.size());
         auto& slot = cuda_inputs_[ring_slot];
 
@@ -1515,7 +1519,9 @@ namespace lfs::vis {
             request.primitives.size() > std::numeric_limits<std::uint32_t>::max()) {
             return std::unexpected("VkSplat selection query exceeds shader dispatch limits");
         }
-        assert(context.externalMemoryInteropEnabled());
+        if (!context.externalMemoryInteropEnabled()) {
+            return std::unexpected("VkSplat selection query requires CUDA/Vulkan external-memory interop");
+        }
 
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
@@ -1714,7 +1720,9 @@ namespace lfs::vis {
         if (request.equirectangular) {
             return std::unexpected("VkSplat forward path supports pinhole cameras, not equirectangular cameras");
         }
-        assert(context.externalMemoryInteropEnabled());
+        if (!context.externalMemoryInteropEnabled()) {
+            return std::unexpected("VkSplat forward path requires CUDA/Vulkan external-memory interop");
+        }
 
         const int active_sh_degree = std::clamp(request.sh_degree, 0, std::min(3, splat_data.get_max_sh_degree()));
         if (auto ok = ensureInitialized(context); !ok) {
