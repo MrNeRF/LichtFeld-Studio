@@ -5,6 +5,8 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(push_constant) uniform PushConstants {
     uint width;
     uint height;
+    uint transparent_background;
+    uint pad0;
     vec4 background;
 } pc;
 
@@ -23,6 +25,13 @@ void main() {
     const uint idx = gid.y * pc.width + gid.x;
     const vec4 state = pixel_state[idx];
     const float transmittance = clamp(state.a, 0.0, 1.0);
+    const float alpha = 1.0 - transmittance;
+    if (pc.transparent_background != 0u) {
+        const vec3 straight_rgb = alpha > 1e-6 ? state.rgb / alpha : vec3(0.0);
+        imageStore(out_image, ivec2(gid), vec4(clamp(straight_rgb, vec3(0.0), vec3(1.0)), alpha));
+        return;
+    }
+
     const vec3 rgb = clamp(state.rgb + transmittance * pc.background.rgb, vec3(0.0), vec3(1.0));
-    imageStore(out_image, ivec2(gid), vec4(rgb, 1.0 - transmittance));
+    imageStore(out_image, ivec2(gid), vec4(rgb, 1.0));
 }

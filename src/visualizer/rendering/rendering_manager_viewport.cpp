@@ -268,7 +268,7 @@ namespace lfs::vis {
             .sh_degree = 0,
             .raster_backend = settings_.raster_backend,
             .gut = settings_.gut ||
-                   settings_.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
+                   lfs::rendering::isGutBackend(settings_.raster_backend),
             .equirectangular = settings_.equirectangular,
             .scene =
                 {.model_transforms = &render_state.model_transforms,

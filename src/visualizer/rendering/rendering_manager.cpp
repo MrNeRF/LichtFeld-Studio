@@ -149,8 +149,11 @@ namespace lfs::vis {
             if (settings_.gut &&
                 settings_.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
                 settings_.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
+            } else if (settings_.gut &&
+                       settings_.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
+                settings_.raster_backend = lfs::rendering::GaussianRasterBackend::VkSplatGut;
             }
-            settings_.gut = settings_.raster_backend == lfs::rendering::GaussianRasterBackend::Gut;
+            settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {

@@ -33,6 +33,9 @@ namespace lfs::vis {
         using lfs::core::Device;
         using lfs::core::Tensor;
 
+        constexpr std::uint32_t kVkSplatProjectionModeShift = 8u;
+        constexpr std::uint32_t kVkSplatProjectionModeGut = 1u;
+
         [[nodiscard]] std::string vkError(const char* const operation, const VkResult result) {
             return std::format("{} failed: {}", operation, vkResultToString(result));
         }
@@ -41,11 +44,13 @@ namespace lfs::vis {
             const std::filesystem::path root{LFS_VKSPLAT_SPV_DIR};
             return {
                 {"projection_forward", (root / "generated/projection_forward.spv").string()},
+                {"projection_forward_gut", (root / "generated/projection_forward_gut.spv").string()},
                 {"selection_mask", (root / "generated/selection_mask.spv").string()},
                 {"generate_keys", (root / "generated/generate_keys.spv").string()},
                 {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
                 {"setup_dispatch_indirect", (root / "generated/setup_dispatch_indirect.spv").string()},
                 {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
+                {"rasterize_forward_gut", (root / "generated/rasterize_forward_gut.spv").string()},
                 {"cumsum_single_pass", (root / "generated/cumsum_single_pass.spv").string()},
                 {"cumsum_block_scan", (root / "generated/cumsum_block_scan.spv").string()},
                 {"cumsum_scan_block_sums", (root / "generated/cumsum_scan_block_sums.spv").string()},
@@ -596,7 +601,7 @@ namespace lfs::vis {
         struct ComposePushConstants {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
-            std::uint32_t pad0 = 0;
+            std::uint32_t transparent_background = 0;
             std::uint32_t pad1 = 0;
             glm::vec4 background{0.0f, 0.0f, 0.0f, 1.0f};
         };
@@ -1211,7 +1216,8 @@ namespace lfs::vis {
         VkCommandBuffer cmd,
         const VulkanGSRendererUniforms& uniforms,
         const glm::vec3& background,
-        const OutputSlot output_slot) {
+        const OutputSlot output_slot,
+        const bool transparent_background) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return ok;
         }
@@ -1293,6 +1299,7 @@ namespace lfs::vis {
         ComposePushConstants push{
             .width = uniforms.image_width,
             .height = uniforms.image_height,
+            .transparent_background = transparent_background ? 1u : 0u,
             .background = glm::vec4(background, 1.0f),
         };
         vkCmdPushConstants(cmd,
@@ -1739,7 +1746,9 @@ namespace lfs::vis {
         uniforms.num_splats = static_cast<std::uint32_t>(buffers_.num_splats);
         uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
         uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
-        uniforms.camera_model = 0;
+        uniforms.camera_model = request.gut
+                                    ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift)
+                                    : 0u;
 
         if (request.frame_view.intrinsics_override) {
             const auto& intrinsics = *request.frame_view.intrinsics_override;
@@ -1786,7 +1795,9 @@ namespace lfs::vis {
                                                overlay_bindings->transform_indices,
                                                overlay_bindings->node_mask,
                                                overlay_bindings->overlay_params,
-                                               overlay_bindings->model_transforms);
+                                               overlay_bindings->model_transforms,
+                                               0,
+                                               request.gut);
             renderer_.executeCalculateIndexBufferOffset(buffers_);
             if (buffers_.num_indices > 0) {
                 renderer_.executeGenerateKeys(uniforms, buffers_);
@@ -1798,7 +1809,8 @@ namespace lfs::vis {
                                                   overlay_bindings->preview_mask,
                                                   overlay_bindings->selection_colors,
                                                   buffers_.overlay_flags.deviceBuffer,
-                                                  overlay_bindings->overlay_params);
+                                                  overlay_bindings->overlay_params,
+                                                  request.gut);
             }
             // Record compose into the rasterizer's batch so the entire frame
             // submits and waits exactly once instead of fence-blocking twice.
@@ -1807,7 +1819,8 @@ namespace lfs::vis {
                 renderer_.activeCommandBuffer(),
                 uniforms,
                 request.frame_view.background_color,
-                output_slot);
+                output_slot,
+                request.transparent_background);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
         }

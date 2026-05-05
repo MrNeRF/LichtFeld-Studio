@@ -3,6 +3,10 @@
 import utils;
 import spherical_harmonics;
 
+#ifndef VKSPLAT_GUT_PROJECTION
+#define VKSPLAT_GUT_PROJECTION 0
+#endif
+
 
 struct Gaussian_3D : IDifferentiable
 {
@@ -109,6 +113,87 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     return { xyz_vs, rgb, cov_vs.xyz, float4(inv_cov_vs, opac), det };
 }
 
+[ForceInline]
+float3 rotation_column(float3x3 rotation, uint column) {
+    if (column == 0u)
+        return float3(rotation[0][0], rotation[1][0], rotation[2][0]);
+    if (column == 1u)
+        return float3(rotation[0][1], rotation[1][1], rotation[2][1]);
+    return float3(rotation[0][2], rotation[1][2], rotation[2][2]);
+}
+
+[ForceInline]
+bool valid_gut_image_point(float3 projected, Camera cam) {
+    return projected.z > 0.0f &&
+           isfinite(dot(projected, projected)) &&
+           image_point_in_image_bounds_margin(projected.xy, cam, 0.1f);
+}
+
+Splat_2D_Vertex project_gaussian_to_camera_gut(Gaussian_3D g, Camera cam, uint active_sh) {
+    float3 mean_vs = project_point(g.xyz_ws, cam);
+    if (mean_vs.z <= NEAR_CLIP || !isfinite(dot(mean_vs, mean_vs))) {
+        return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
+    }
+
+    static const uint D = 3u;
+    static const uint NUM_SIGMA_POINTS = 7u;
+    static const float UT_ALPHA = 0.1f;
+    static const float UT_BETA = 2.0f;
+    static const float UT_KAPPA = 0.0f;
+    float lambda = UT_ALPHA * UT_ALPHA * (float(D) + UT_KAPPA) - float(D);
+    float sigma_scale = sqrt(float(D) + lambda);
+    float weight_mean_0 = lambda / (float(D) + lambda);
+    float weight_cov_0 = weight_mean_0 + (1.0f - UT_ALPHA * UT_ALPHA + UT_BETA);
+    float weight_sigma = 1.0f / (2.0f * (float(D) + lambda));
+
+    // 3DGUT uses the unscented transform for screen-space binning; final alpha
+    // is evaluated against the pixel ray in the raster shader.
+    float3x3 rotation = quat_to_rotmat(normalize(g.rotations));
+    float3 sigma_points[NUM_SIGMA_POINTS];
+    sigma_points[0] = g.xyz_ws;
+    for (uint i = 0u; i < D; ++i) {
+        float scale_i = i == 0u ? g.scales.x : (i == 1u ? g.scales.y : g.scales.z);
+        float3 delta = sigma_scale * scale_i * rotation_column(rotation, i);
+        sigma_points[1u + i] = g.xyz_ws + delta;
+        sigma_points[1u + D + i] = g.xyz_ws - delta;
+    }
+
+    float2 image_points[NUM_SIGMA_POINTS];
+    float2 mean2d = float2(0.0);
+    for (uint i = 0u; i < NUM_SIGMA_POINTS; ++i) {
+        float3 projected = project_point(sigma_points[i], cam);
+        if (!valid_gut_image_point(projected, cam)) {
+            return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
+        }
+        image_points[i] = projected.xy;
+        float weight = i == 0u ? weight_mean_0 : weight_sigma;
+        mean2d += weight * image_points[i];
+    }
+
+    float3 cov2d = float3(0.0);
+    for (uint i = 0u; i < NUM_SIGMA_POINTS; ++i) {
+        float2 d = image_points[i] - mean2d;
+        float weight = i == 0u ? weight_cov_0 : weight_sigma;
+        cov2d += weight * float3(d.x * d.x, d.x * d.y, d.y * d.y);
+    }
+
+    float4 cov_vs = add_blur_to_covariance2d(cov2d);
+    float det = compute_det(cov_vs.xyz);
+    if (!isfinite(det) || det <= 0.0f) {
+        return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
+    }
+
+    float4x3 mat = transpose(cam.world_view_transform);
+    float3 cam_pos = -mul(float3x3(mat), mat[3]);
+    float3 dir = float3(normalize(g.xyz_ws - cam_pos));
+    float3 rgb = compute_color_from_sh_coeffs(g.sh_coeffs, dir, active_sh);
+    float3 inv_cov_vs = compute_inverse(cov_vs.xyz);
+    float opac = g.opacities * cov_vs.w;
+    float3 xyz_vs = float3(mean2d - 0.5f, mean_vs.z);
+
+    return { xyz_vs, rgb, cov_vs.xyz, float4(inv_cov_vs, opac), det };
+}
+
 
 rectangle get_rectangle_tile_space(
     float2 ndc_xy,
@@ -201,7 +286,7 @@ void main(
     const uint image_width = uniforms.image_width;
     const uint grid_height = uniforms.grid_height;
     const uint grid_width = uniforms.grid_width;
-    const uint camera_model = uniforms.camera_model;
+    const uint camera_model = base_camera_model(uniforms.camera_model);
     const float4x4 world_view_transform = (uniforms.world_view_transform);
 
     uint g_idx = dispatchThreadID.x;
@@ -354,6 +439,9 @@ void main(
     // projection (differentiable)
   #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     // forward
+  #if VKSPLAT_GUT_PROJECTION
+    Splat_2D_Vertex splat = project_gaussian_to_camera_gut(gauss, cam, active_sh);
+  #else
     Splat_2D_Vertex splat = project_gaussian_to_camera_model(
         gauss,
         cam,
@@ -362,6 +450,7 @@ void main(
         model_transforms,
         model_transform_base,
         model_transform_enabled);
+  #endif
   #else
     // backward
     float2 v_out_xy_vs = is_zero_grad ? float2(0) : v_output_xy_vs[g_idx];

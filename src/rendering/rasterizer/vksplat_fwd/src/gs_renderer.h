@@ -67,7 +67,8 @@ public:
                                   const _VulkanBuffer& node_mask,
                                   const _VulkanBuffer& overlay_params,
                                   const _VulkanBuffer& model_transforms,
-                                  size_t alloc_reserve = 0);
+                                  size_t alloc_reserve = 0,
+                                  bool use_gut_projection = false);
     void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms,
@@ -76,7 +77,8 @@ public:
                                  const _VulkanBuffer& preview_mask,
                                  const _VulkanBuffer& selection_colors,
                                  const _VulkanBuffer& overlay_flags,
-                                 const _VulkanBuffer& overlay_params);
+                                 const _VulkanBuffer& overlay_params,
+                                 bool use_gut_rasterization = false);
     void executeSelectionMask(const VulkanGSSelectionMaskUniforms& uniforms,
                               VulkanGSPipelineBuffers& buffers,
                               const _VulkanBuffer& transform_indices,
@@ -95,6 +97,7 @@ protected:
         Buffer<int32_t>& output_buffer);
 
     _ComputePipeline pipeline_projection_forward = _ComputePipeline(16);
+    _ComputePipeline pipeline_projection_forward_gut = _ComputePipeline(16);
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(6);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     // 3 bindings: sorted_keys, out_tile_ranges, index_buffer_offset (for num_isects).
@@ -104,6 +107,7 @@ protected:
     // Indirect-dispatch setup: reads cumsum tail, writes VkDispatchIndirectCommand.
     _ComputePipeline pipeline_setup_dispatch_indirect = _ComputePipeline(2);
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(12);
+    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(15);
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
         _ComputePipeline block_scan = _ComputePipeline(3);

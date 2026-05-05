@@ -1499,7 +1499,7 @@ namespace lfs::vis {
             .sh_degree = scene_state.combined_model->get_active_sh_degree(),
             .raster_backend = settings.raster_backend,
             .gut = settings.gut ||
-                   settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
+                   lfs::rendering::isGutBackend(settings.raster_backend),
             .equirectangular = settings.equirectangular,
             .scene =
                 {.model_transforms = &scene_state.model_transforms,

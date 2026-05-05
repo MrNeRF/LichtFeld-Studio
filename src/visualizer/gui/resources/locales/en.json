@@ -845,7 +845,7 @@
     "scale_camera": "Scale",
     "sh_degree": "SH coefficients used for rendering (0-3)",
     "equirectangular": "Render as 360° panorama",
-    "raster_backend": "Gaussian rasterizer: fast_gs, 3dgut, or vksplat",
+    "raster_backend": "Gaussian rasterizer: fast_gs, 3dgut, vksplat, or vksplat 3dgut",
     "fov": "Camera field of view in degrees",
     "focal_length": "Focal length in mm (35mm full-frame equivalent)",
     "background": "Viewer background color",

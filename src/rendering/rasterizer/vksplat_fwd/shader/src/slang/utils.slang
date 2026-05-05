@@ -29,6 +29,20 @@ enum CameraModel {
     FISHEYE = 2,
 };
 
+static const uint CAMERA_MODEL_MASK = 0xffu;
+static const uint PROJECTION_MODE_SHIFT = 8u;
+static const uint PROJECTION_MODE_GUT = 1u;
+
+[ForceInline]
+uint base_camera_model(uint packed_camera_model) {
+    return packed_camera_model & CAMERA_MODEL_MASK;
+}
+
+[ForceInline]
+bool is_gut_projection_mode(uint packed_camera_model) {
+    return ((packed_camera_model >> PROJECTION_MODE_SHIFT) & CAMERA_MODEL_MASK) == PROJECTION_MODE_GUT;
+}
+
 [ForceInline]
 [Differentiable]
 float read_t1_float(uint32_t idx, StructuredBuffer<float> t1) {
@@ -391,6 +405,63 @@ float3x3 compute_jacobian(float3 xyz_ws, Camera cam) {
 }
 
 [ForceInline]
+bool image_point_in_image_bounds_margin(float2 image_point, Camera cam, float margin_factor) {
+    float margin_x = float(cam.W) * margin_factor;
+    float margin_y = float(cam.H) * margin_factor;
+    return (-margin_x <= image_point.x && image_point.x < float(cam.W) + margin_x) &&
+           (-margin_y <= image_point.y && image_point.y < float(cam.H) + margin_y);
+}
+
+[ForceInline]
+float3 safe_normalize(float3 v) {
+    float l2 = dot(v, v);
+    return l2 > 0.0f ? v * rsqrt(l2) : v;
+}
+
+struct WorldRay
+{
+    float3 origin;
+    float3 direction;
+    bool valid;
+};
+
+[ForceInline]
+WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
+    float2 uv = (pixel - float2(cam.cx, cam.cy)) / float2(cam.fx, cam.fy);
+    if (cam.model == int(CameraModel::FISHEYE)) {
+        uv = undistort_fisheye(uv, cam.dist_coeffs);
+    } else if (cam.model == int(CameraModel::OPENCV)) {
+        uv = undistort_point_kkpp(uv, cam.dist_coeffs);
+    }
+
+    float3 ray_camera = safe_normalize(float3(uv, 1.0f));
+    float4x3 world_view_t = transpose(cam.world_view_transform);
+    float3x3 view_to_world_rotation = float3x3(world_view_t);
+    float3 origin = -mul(view_to_world_rotation, world_view_t[3]);
+    float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
+    return { origin, direction, isfinite(dot(origin, origin)) && isfinite(dot(direction, direction)) };
+}
+
+[ForceInline]
+[Differentiable]
+float4 add_blur_to_covariance2d(float3 cov_vs) {
+    float4 result = float4(cov_vs, 1.0);
+
+    #if ANTIALIASE_MODE == 0
+        result.x += AA_EPS2D;
+        result.z += AA_EPS2D;
+    #elif ANTIALIASE_MODE == 1
+        float old_det = compute_det(result.xyz);
+        result.x += AA_EPS2D;
+        result.z += AA_EPS2D;
+        float new_det = compute_det(result.xyz);
+        result.w = sqrt(max(0.f, old_det / new_det));
+    #endif
+
+    return result;
+}
+
+[ForceInline]
 float2 undistort_fisheye(float2 uv) {
     float theta = length(uv);
     float r = tan(theta);
@@ -414,20 +485,7 @@ float4 covariance_3d_to_2d(Camera cam, float3 xyz_ws, float3x3 cov_ws) {
     float3x3 J = compute_jacobian(xyz_ws, cam);
     float3x3 cov_vs = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
 
-    float4 result = float4(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1], 1.0);
-
-    #if ANTIALIASE_MODE == 0
-        result.x += AA_EPS2D;
-        result.z += AA_EPS2D;
-    #elif ANTIALIASE_MODE == 1
-        float old_det = compute_det(result.xyz);
-        result.x += AA_EPS2D;
-        result.z += AA_EPS2D;
-        float new_det = compute_det(result.xyz);
-        result.w = sqrt(max(0.f, old_det / new_det));
-    #endif
-
-    return result;
+    return add_blur_to_covariance2d(float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]));
 }
 
 
@@ -469,6 +527,14 @@ struct Splat_2D_AlphaBlend : IDifferentiable
     float3 rgb;
 };
 
+struct Splat_3D_GUT_AlphaBlend
+{
+    float3 xyz_ws;
+    float3x3 iscl_rot;
+    float opacity;
+    float3 rgb;
+};
+
 [ForceInline]
 [Differentiable]
 Splat_2D_AlphaBlend load_splat_alphablend(
@@ -482,6 +548,29 @@ Splat_2D_AlphaBlend load_splat_alphablend(
     float4 g_inv_cov_opac = inv_cov_vs_opacity[g_idx];
 
     return { g_inv_cov_opac, g_xy_vs, g_rgb };
+}
+
+[ForceInline]
+Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
+    int32_t g_idx,
+    StructuredBuffer<float> xyz_ws,
+    StructuredBuffer<float4> rotations,
+    StructuredBuffer<float4> scales_opacs,
+    StructuredBuffer<float> rgb
+) {
+    float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
+    float4 g_rotation = rotations[g_idx];
+    float4 g_scale_opac = scales_opacs[g_idx];
+    float3 g_rgb = read_t3_float3(g_idx, rgb);
+    float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
+    float3 safe_scale = max(g_scale_opac.xyz, float3(1e-8f));
+    float3x3 inv_scale = float3x3(
+        1.0f / safe_scale.x, 0.0f, 0.0f,
+        0.0f, 1.0f / safe_scale.y, 0.0f,
+        0.0f, 0.0f, 1.0f / safe_scale.z
+    );
+    float3x3 iscl_rot = mul(inv_scale, transpose(rotation));
+    return { g_xyz_ws, iscl_rot, g_scale_opac.w, g_rgb };
 }
 
 [ForceInline]
@@ -586,6 +675,19 @@ float4 evaluate_splat(Splat_2D_AlphaBlend g,
     float3 premult_rgb = g_rgb * alpha;
     
     return float4(premult_rgb, alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction)
+{
+    // Same world-space 3DGUT alpha test as the CUDA path: transform the pixel
+    // ray into the Gaussian's normalized local frame and measure ray distance.
+    float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
+    float3 gcrod = cross(grd, gro);
+    float power = -0.5f * dot(gcrod, gcrod);
+    float alpha = float(clipOpacity(g.opacity * exp(power)));
+    return float4(g.rgb * alpha, alpha);
 }
 
 [ForceInline]

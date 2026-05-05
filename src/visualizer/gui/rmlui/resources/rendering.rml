@@ -268,6 +268,7 @@
           <option value="fast_gs">fast_gs</option>
           <option value="3dgut">3dgut</option>
           <option value="vksplat" data-if="vksplat_available">vksplat (experimental)</option>
+          <option value="vksplat_3dgut" data-if="vksplat_available">vksplat 3dgut (experimental)</option>
         </select>
       </div>
     </div>

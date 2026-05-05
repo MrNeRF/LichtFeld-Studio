@@ -2348,7 +2348,7 @@ namespace lfs::rendering {
 
             try {
                 if (request.gut ||
-                    request.raster_backend == GaussianRasterBackend::Gut ||
+                    isGutBackend(request.raster_backend) ||
                     request.equirectangular) {
                     const auto camera_model = request.equirectangular
                                                   ? GutCameraModel::EQUIRECTANGULAR

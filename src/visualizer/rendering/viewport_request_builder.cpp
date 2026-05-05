@@ -121,7 +121,7 @@ namespace lfs::vis {
             .sh_degree = ctx.settings.sh_degree,
             .raster_backend = ctx.settings.raster_backend,
             .gut = ctx.settings.gut ||
-                   ctx.settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
+                   lfs::rendering::isGutBackend(ctx.settings.raster_backend),
             .equirectangular = ctx.settings.equirectangular,
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,
@@ -189,7 +189,7 @@ namespace lfs::vis {
             .sh_degree = ctx.settings.sh_degree,
             .raster_backend = ctx.settings.raster_backend,
             .gut = ctx.settings.gut ||
-                   ctx.settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
+                   lfs::rendering::isGutBackend(ctx.settings.raster_backend),
             .equirectangular = ctx.settings.equirectangular,
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,

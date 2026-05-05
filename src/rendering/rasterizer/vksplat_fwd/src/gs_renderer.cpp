@@ -106,11 +106,13 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         external_allocator);
 
     createComputePipeline(pipeline_projection_forward, spirv_paths.at("projection_forward"));
+    createComputePipeline(pipeline_projection_forward_gut, spirv_paths.at("projection_forward_gut"));
     createComputePipeline(pipeline_selection_mask, spirv_paths.at("selection_mask"));
     createComputePipeline(pipeline_generate_keys, spirv_paths.at("generate_keys"));
     for (int i = 0; i < 2; ++i) {
         createComputePipeline(pipeline_compute_tile_ranges[i], spirv_paths.at("compute_tile_ranges"));
         createComputePipeline(pipeline_rasterize_forward[i], spirv_paths.at("rasterize_forward"));
+        createComputePipeline(pipeline_rasterize_forward_gut[i], spirv_paths.at("rasterize_forward_gut"));
     }
     createComputePipeline(pipeline_setup_dispatch_indirect,
                           spirv_paths.at("setup_dispatch_indirect"));
@@ -133,7 +135,8 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer& node_mask,
     const _VulkanBuffer& overlay_params,
     const _VulkanBuffer& model_transforms,
-    size_t alloc_reserve) {
+    size_t alloc_reserve,
+    bool use_gut_projection) {
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
@@ -155,7 +158,7 @@ void VulkanGSRenderer::executeProjectionForward(
     executeCompute(
         {{num_splats, SUBGROUP_SIZE}},
         &uniforms, sizeof(uniforms),
-        pipeline_projection_forward,
+        use_gut_projection ? pipeline_projection_forward_gut : pipeline_projection_forward,
         {
             // inputs
             buffers.xyz_ws.deviceBuffer,
@@ -258,7 +261,8 @@ void VulkanGSRenderer::executeRasterizeForward(
     const _VulkanBuffer& preview_mask,
     const _VulkanBuffer& selection_colors,
     const _VulkanBuffer& overlay_flags,
-    const _VulkanBuffer& overlay_params) {
+    const _VulkanBuffer& overlay_params,
+    bool use_gut_rasterization) {
     if (buffers.num_indices == 0)
         return;
 
@@ -279,27 +283,54 @@ void VulkanGSRenderer::executeRasterizeForward(
                         },
                         COMPUTE_SHADER_READ);
 
-    executeCompute(
-        {{uniforms.image_width, TILE_WIDTH}, {uniforms.image_height, TILE_HEIGHT}},
-        &uniforms, sizeof(uniforms),
-        pipeline_rasterize_forward[buffers.is_unsorted_1],
-        std::vector<_VulkanBuffer>({
-            // inputs
-            buffers.sorted_gauss_idx().deviceBuffer,
-            buffers.tile_ranges.deviceBuffer,
-            buffers.xy_vs.deviceBuffer,
-            buffers.inv_cov_vs_opacity.deviceBuffer,
-            buffers.rgb.deviceBuffer,
-            // outputs
-            resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
-            resizeDeviceBuffer(buffers.n_contributors, num_pixels),
-            // selection overlay inputs
-            selection_mask,
-            preview_mask,
-            selection_colors,
-            overlay_flags,
-            overlay_params,
-        }));
+    if (use_gut_rasterization) {
+        executeCompute(
+            {{uniforms.image_width, TILE_WIDTH}, {uniforms.image_height, TILE_HEIGHT}},
+            &uniforms, sizeof(uniforms),
+            pipeline_rasterize_forward_gut[buffers.is_unsorted_1],
+            std::vector<_VulkanBuffer>({
+                // inputs
+                buffers.sorted_gauss_idx().deviceBuffer,
+                buffers.tile_ranges.deviceBuffer,
+                buffers.xy_vs.deviceBuffer,
+                buffers.inv_cov_vs_opacity.deviceBuffer,
+                buffers.rgb.deviceBuffer,
+                buffers.xyz_ws.deviceBuffer,
+                buffers.rotations.deviceBuffer,
+                buffers.scales_opacs.deviceBuffer,
+                // outputs
+                resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
+                resizeDeviceBuffer(buffers.n_contributors, num_pixels),
+                // selection overlay inputs
+                selection_mask,
+                preview_mask,
+                selection_colors,
+                overlay_flags,
+                overlay_params,
+            }));
+    } else {
+        executeCompute(
+            {{uniforms.image_width, TILE_WIDTH}, {uniforms.image_height, TILE_HEIGHT}},
+            &uniforms, sizeof(uniforms),
+            pipeline_rasterize_forward[buffers.is_unsorted_1],
+            std::vector<_VulkanBuffer>({
+                // inputs
+                buffers.sorted_gauss_idx().deviceBuffer,
+                buffers.tile_ranges.deviceBuffer,
+                buffers.xy_vs.deviceBuffer,
+                buffers.inv_cov_vs_opacity.deviceBuffer,
+                buffers.rgb.deviceBuffer,
+                // outputs
+                resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
+                resizeDeviceBuffer(buffers.n_contributors, num_pixels),
+                // selection overlay inputs
+                selection_mask,
+                preview_mask,
+                selection_colors,
+                overlay_flags,
+                overlay_params,
+            }));
+    }
 }
 
 void VulkanGSRenderer::executeSelectionMask(
