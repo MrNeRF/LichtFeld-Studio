@@ -767,3 +767,63 @@ struct Uniforms {
     float4 dist_coeffs;
     float4x4 world_view_transform;
 }
+
+static const uint OVERLAY_FLAG_DIM = 1;
+static const uint OVERLAY_FLAG_NONSELECTABLE = 2;
+static const uint OVERLAY_FLAG_FLASH = 4;
+
+static const uint OVERLAY_PARAM_CROP_FLAGS = 0;
+static const uint OVERLAY_PARAM_CROP_MIN = 1;
+static const uint OVERLAY_PARAM_CROP_MAX = 2;
+static const uint OVERLAY_PARAM_CROP_TRANSFORM = 3;
+static const uint OVERLAY_PARAM_ELLIPSOID_FLAGS = 7;
+static const uint OVERLAY_PARAM_ELLIPSOID_RADII = 8;
+static const uint OVERLAY_PARAM_ELLIPSOID_TRANSFORM = 9;
+static const uint OVERLAY_PARAM_VIEW_FLAGS = 13;
+static const uint OVERLAY_PARAM_VIEW_MIN = 14;
+static const uint OVERLAY_PARAM_VIEW_MAX = 15;
+static const uint OVERLAY_PARAM_VIEW_TRANSFORM = 16;
+static const uint OVERLAY_PARAM_EMPHASIS_FLAGS = 20;
+static const uint OVERLAY_PARAM_CURSOR_FLAGS = 21;
+static const uint OVERLAY_PARAM_MARKER_FLAGS = 22;
+static const uint OVERLAY_PARAM_MODEL_TRANSFORM = 23;
+static const uint OVERLAY_PARAM_SELECTION_CURSOR = 27;
+static const uint OVERLAY_PARAM_SELECTION_FLAGS = 28;
+static const uint OVERLAY_PARAM_COUNT = 29;
+
+[ForceInline]
+bool overlay_enabled(float value)
+{
+    return value > 0.5f;
+}
+
+[ForceInline]
+int overlay_int(float value)
+{
+    return int(round(value));
+}
+
+[ForceInline]
+uint read_byte(ByteAddressBuffer buffer, uint idx)
+{
+    uint aligned_idx = idx & ~3u;
+    uint shift = (idx & 3u) * 8u;
+    return (buffer.Load(aligned_idx) >> shift) & 0xffu;
+}
+
+[ForceInline]
+int read_int32(ByteAddressBuffer buffer, uint idx)
+{
+    return int(buffer.Load(idx * 4u));
+}
+
+[ForceInline]
+float3 transform_point_rows(StructuredBuffer<float4> params, uint base_idx, float3 p)
+{
+    float4 r0 = params[base_idx + 0];
+    float4 r1 = params[base_idx + 1];
+    float4 r2 = params[base_idx + 2];
+    return float3(dot(r0.xyz, p) + r0.w,
+                  dot(r1.xyz, p) + r1.w,
+                  dot(r2.xyz, p) + r2.w);
+}

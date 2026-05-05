@@ -157,6 +157,20 @@ namespace lfs::vis {
                                                  : -1}},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings)};
 
+        request.overlay.selection_colors[0] = glm::vec4(ctx.settings.selection_color_center_marker, 1.0f);
+        request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex] =
+            glm::vec4(ctx.settings.selection_color_preview, 1.0f);
+        if (ctx.scene_manager) {
+            for (const auto& group : ctx.scene_manager->getScene().getSelectionGroups()) {
+                const auto index = static_cast<std::size_t>(group.id);
+                if (index < lfs::rendering::kSelectionGroupColorCount) {
+                    request.overlay.selection_colors[index] = glm::vec4(group.color, 1.0f);
+                }
+            }
+        } else {
+            request.overlay.selection_colors[1] = glm::vec4(ctx.settings.selection_color_committed, 1.0f);
+        }
+
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
         applyGaussianViewVolume(request.filters, ctx);

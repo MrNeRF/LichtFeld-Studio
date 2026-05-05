@@ -41,10 +41,21 @@ public:
     // densification step, etc.) to keep the deferred readback correct.
     void resetNumIndicesEstimate();
 
-    void executeProjectionForward(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, size_t alloc_reserve = 0);
+    void executeProjectionForward(const VulkanGSRendererUniforms& uniforms,
+                                  VulkanGSPipelineBuffers& buffers,
+                                  const _VulkanBuffer& transform_indices,
+                                  const _VulkanBuffer& node_mask,
+                                  const _VulkanBuffer& overlay_params,
+                                  size_t alloc_reserve = 0);
     void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
-    void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
+    void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms,
+                                 VulkanGSPipelineBuffers& buffers,
+                                 const _VulkanBuffer& selection_mask,
+                                 const _VulkanBuffer& preview_mask,
+                                 const _VulkanBuffer& selection_colors,
+                                 const _VulkanBuffer& overlay_flags,
+                                 const _VulkanBuffer& overlay_params);
 
     void executeCalculateIndexBufferOffset(VulkanGSPipelineBuffers& buffers);
     void executeSort(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, int num_bits);
@@ -55,7 +66,7 @@ protected:
         Buffer<int32_t>& input_buffer,
         Buffer<int32_t>& output_buffer);
 
-    _ComputePipeline pipeline_projection_forward = _ComputePipeline(11);
+    _ComputePipeline pipeline_projection_forward = _ComputePipeline(15);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     // 3 bindings: sorted_keys, out_tile_ranges, index_buffer_offset (for num_isects).
     _ComputePipeline pipeline_compute_tile_ranges[2] = {
@@ -63,7 +74,7 @@ protected:
         _ComputePipeline(3)};
     // Indirect-dispatch setup: reads cumsum tail, writes VkDispatchIndirectCommand.
     _ComputePipeline pipeline_setup_dispatch_indirect = _ComputePipeline(2);
-    _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(7);
+    _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(12);
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
         _ComputePipeline block_scan = _ComputePipeline(3);

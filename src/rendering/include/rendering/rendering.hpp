@@ -8,6 +8,7 @@
 #include "frame_contract.hpp"
 #include "render_constants.hpp"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -124,10 +125,35 @@ namespace lfs::rendering {
         int focused_gaussian_id = -1;
     };
 
+    inline constexpr std::size_t kSelectionGroupColorCount = 256;
+    inline constexpr std::size_t kSelectionPreviewColorIndex = kSelectionGroupColorCount;
+    inline constexpr std::size_t kSelectionColorTableCount = kSelectionGroupColorCount + 1;
+
+    [[nodiscard]] inline std::array<glm::vec4, kSelectionColorTableCount> defaultSelectionColorTable() {
+        std::array<glm::vec4, kSelectionColorTableCount> colors{};
+        colors[0] = glm::vec4(0.0f, 0.604f, 0.733f, 1.0f);
+        constexpr std::array<glm::vec3, 8> palette{{
+            {1.0f, 0.3f, 0.3f},
+            {0.3f, 1.0f, 0.3f},
+            {0.3f, 0.5f, 1.0f},
+            {1.0f, 1.0f, 0.3f},
+            {1.0f, 0.5f, 0.0f},
+            {0.8f, 0.3f, 1.0f},
+            {0.3f, 1.0f, 1.0f},
+            {1.0f, 0.5f, 0.8f},
+        }};
+        for (std::size_t group = 1; group < kSelectionGroupColorCount; ++group) {
+            colors[group] = glm::vec4(palette[(group - 1) % palette.size()], 1.0f);
+        }
+        colors[kSelectionPreviewColorIndex] = glm::vec4(0.0f, 0.871f, 0.298f, 1.0f);
+        return colors;
+    }
+
     struct GaussianOverlayState {
         GaussianMarkerOverlayState markers;
         GaussianCursorOverlayState cursor;
         GaussianEmphasisOverlayState emphasis;
+        std::array<glm::vec4, kSelectionColorTableCount> selection_colors = defaultSelectionColorTable();
     };
 
     struct ViewportRenderRequest {

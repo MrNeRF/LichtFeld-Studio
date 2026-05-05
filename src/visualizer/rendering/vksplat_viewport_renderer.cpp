@@ -11,8 +11,10 @@
 #include "vksplat_input_packer.hpp"
 #include "window/vulkan_result.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -75,6 +77,354 @@ namespace lfs::vis {
                 }
             }
             return result;
+        }
+
+        [[nodiscard]] std::size_t alignUp(const std::size_t value, const std::size_t alignment) {
+            return ((value + alignment - 1) / alignment) * alignment;
+        }
+
+        template <std::size_t RegionCount>
+        [[nodiscard]] std::size_t layoutRegions(const std::array<std::size_t, RegionCount>& region_bytes,
+                                                std::array<std::size_t, RegionCount>& region_offset,
+                                                const std::size_t alignment) {
+            std::size_t cursor = 0;
+            for (std::size_t i = 0; i < RegionCount; ++i) {
+                region_offset[i] = cursor;
+                cursor += alignUp(region_bytes[i], alignment);
+            }
+            return cursor;
+        }
+
+        [[nodiscard]] _VulkanBuffer makeRegionView(const VulkanContext::ExternalBuffer& buffer,
+                                                   const std::size_t offset,
+                                                   const std::size_t bytes) {
+            _VulkanBuffer view{};
+            view.buffer = buffer.buffer;
+            view.allocation = VK_NULL_HANDLE;
+            view.allocSize = static_cast<std::size_t>(buffer.allocation_size);
+            view.offset = offset;
+            view.size = bytes;
+            return view;
+        }
+
+        [[nodiscard]] std::expected<void, std::string> ensureCudaInteropBuffer(
+            VulkanContext& context,
+            VulkanContext::ExternalBuffer& buffer,
+            lfs::rendering::CudaVulkanBufferInterop& interop,
+            const std::size_t required_bytes,
+            const char* const debug_name,
+            const std::string_view label) {
+            if (required_bytes == 0) {
+                return std::unexpected(std::format("VkSplat {} slot '{}' requested zero-byte allocation",
+                                                   label,
+                                                   debug_name));
+            }
+            if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation_size >= required_bytes) {
+                return {};
+            }
+
+            interop.reset();
+            context.destroyExternalBuffer(buffer);
+
+            const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+            if (!context.createExternalBuffer(static_cast<VkDeviceSize>(required_bytes), usage, buffer)) {
+                return std::unexpected(std::format("VkSplat external {} buffer '{}' allocation failed: {}",
+                                                   label,
+                                                   debug_name,
+                                                   context.lastError()));
+            }
+            const auto native = context.releaseExternalBufferNativeHandle(buffer);
+            if (!VulkanContext::externalNativeHandleValid(native)) {
+                context.destroyExternalBuffer(buffer);
+                return std::unexpected(std::format("VkSplat external {} buffer '{}' returned invalid native handle",
+                                                   label,
+                                                   debug_name));
+            }
+            lfs::rendering::CudaVulkanExternalBufferImport import{
+                .memory_handle = native,
+                .allocation_size = static_cast<std::size_t>(buffer.allocation_size),
+                .size = static_cast<std::size_t>(buffer.size),
+                .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+            };
+            if (!interop.init(import)) {
+                const std::string err = interop.lastError();
+                context.destroyExternalBuffer(buffer);
+                return std::unexpected(std::format("VkSplat external {} buffer '{}' CUDA import failed: {}",
+                                                   label,
+                                                   debug_name,
+                                                   err));
+            }
+            return {};
+        }
+
+        enum InputRegion : std::size_t {
+            InputXyzWs = 0,
+            InputRotations = 1,
+            InputScalesOpacs = 2,
+            InputShCoeffs = 3,
+        };
+
+        enum OverlayRegion : std::size_t {
+            OverlaySelectionMask = 0,
+            OverlayPreviewMask = 1,
+            OverlaySelectionColors = 2,
+            OverlayTransformIndices = 3,
+            OverlayNodeMask = 4,
+            OverlayParams = 5,
+        };
+
+        [[nodiscard]] bool hasOverlayTensor(const Tensor* const tensor, const std::size_t num_splats) {
+            return tensor && tensor->is_valid() && tensor->numel() >= num_splats && num_splats > 0;
+        }
+
+        [[nodiscard]] bool hasOverlayTensor(const std::shared_ptr<Tensor>& tensor, const std::size_t num_splats) {
+            return tensor && hasOverlayTensor(tensor.get(), num_splats);
+        }
+
+        [[nodiscard]] std::expected<Tensor, std::string> prepareOverlayMaskTensor(
+            Tensor tensor,
+            const std::size_t num_splats,
+            const std::string_view label) {
+            if (!tensor.is_valid() || tensor.numel() < num_splats) {
+                return std::unexpected(std::format(
+                    "VkSplat selection overlay expected {} mask with at least {} entries",
+                    label,
+                    num_splats));
+            }
+            try {
+                if (tensor.dtype() != DataType::UInt8 && tensor.dtype() != DataType::Bool) {
+                    tensor = tensor.to(DataType::UInt8);
+                }
+                if (tensor.device() != Device::CUDA) {
+                    tensor = tensor.to(Device::CUDA);
+                }
+                if (!tensor.is_contiguous()) {
+                    tensor = tensor.contiguous();
+                }
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to prepare {} mask: {}", label, e.what()));
+            }
+            if (tensor.bytes() < num_splats) {
+                return std::unexpected(std::format(
+                    "VkSplat {} mask has {} bytes, expected at least {}",
+                    label,
+                    tensor.bytes(),
+                    num_splats));
+            }
+            return tensor;
+        }
+
+        [[nodiscard]] std::expected<Tensor, std::string> makeSelectionColorTableTensor(
+            const lfs::rendering::GaussianOverlayState& overlay) {
+            try {
+                Tensor cpu = Tensor::empty(
+                    {lfs::rendering::kSelectionColorTableCount, std::size_t{4}},
+                    Device::CPU,
+                    DataType::Float32);
+                float* const dst = cpu.ptr<float>();
+                if (!dst) {
+                    return std::unexpected("VkSplat selection color table allocation returned a null pointer");
+                }
+                for (std::size_t i = 0; i < lfs::rendering::kSelectionColorTableCount; ++i) {
+                    const glm::vec4 color = overlay.selection_colors[i];
+                    dst[i * 4 + 0] = color.r;
+                    dst[i * 4 + 1] = color.g;
+                    dst[i * 4 + 2] = color.b;
+                    dst[i * 4 + 3] = color.a;
+                }
+                return cpu.to(Device::CUDA).contiguous();
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to stage selection color table: {}", e.what()));
+            }
+        }
+
+        enum OverlayParamIndex : std::size_t {
+            CropFlags = 0,
+            CropMin = 1,
+            CropMax = 2,
+            CropTransform = 3,
+            EllipsoidFlags = 7,
+            EllipsoidRadii = 8,
+            EllipsoidTransform = 9,
+            ViewFlags = 13,
+            ViewMin = 14,
+            ViewMax = 15,
+            ViewTransform = 16,
+            EmphasisFlags = 20,
+            CursorFlags = 21,
+            MarkerFlags = 22,
+            ModelTransform = 23,
+            SelectionCursor = 27,
+            SelectionFlags = 28,
+            ParamCount = 29,
+        };
+
+        [[nodiscard]] bool hasTransformIndices(const std::shared_ptr<Tensor>& tensor,
+                                               const std::size_t num_splats) {
+            return tensor && tensor->is_valid() && tensor->numel() >= num_splats;
+        }
+
+        [[nodiscard]] std::expected<Tensor, std::string> prepareTransformIndicesTensor(
+            const std::shared_ptr<Tensor>& tensor,
+            const std::size_t num_splats) {
+            try {
+                if (!hasTransformIndices(tensor, num_splats)) {
+                    return Tensor::zeros({std::size_t{1}}, Device::CUDA, DataType::Int32);
+                }
+                Tensor prepared = *tensor;
+                if (prepared.dtype() != DataType::Int32) {
+                    prepared = prepared.to(DataType::Int32);
+                }
+                if (prepared.device() != Device::CUDA) {
+                    prepared = prepared.to(Device::CUDA);
+                }
+                if (!prepared.is_contiguous()) {
+                    prepared = prepared.contiguous();
+                }
+                return prepared;
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to stage transform indices: {}", e.what()));
+            }
+        }
+
+        [[nodiscard]] std::expected<Tensor, std::string> makeNodeMaskTensor(const std::vector<bool>& mask) {
+            try {
+                const std::size_t count = std::max<std::size_t>(mask.size(), 1);
+                Tensor cpu = Tensor::zeros({count}, Device::CPU, DataType::UInt8);
+                auto* const dst = cpu.ptr<std::uint8_t>();
+                if (!dst) {
+                    return std::unexpected("VkSplat node mask allocation returned a null pointer");
+                }
+                for (std::size_t i = 0; i < mask.size(); ++i) {
+                    dst[i] = mask[i] ? 1u : 0u;
+                }
+                return cpu.to(Device::CUDA).contiguous();
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to stage node mask: {}", e.what()));
+            }
+        }
+
+        void writeVec4(float* dst, const std::size_t index, const glm::vec4& value) {
+            dst[index * 4 + 0] = value.x;
+            dst[index * 4 + 1] = value.y;
+            dst[index * 4 + 2] = value.z;
+            dst[index * 4 + 3] = value.w;
+        }
+
+        void writeMat4Rows(float* dst, const std::size_t index, const glm::mat4& matrix) {
+            for (int row = 0; row < 4; ++row) {
+                writeVec4(dst,
+                          index + static_cast<std::size_t>(row),
+                          glm::vec4(matrix[0][row],
+                                    matrix[1][row],
+                                    matrix[2][row],
+                                    matrix[3][row]));
+            }
+        }
+
+        [[nodiscard]] glm::mat4 firstModelTransform(const lfs::rendering::ViewportRenderRequest& request) {
+            if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
+                return request.scene.model_transforms->front();
+            }
+            return glm::mat4(1.0f);
+        }
+
+        [[nodiscard]] std::expected<Tensor, std::string> makeOverlayParamsTensor(
+            const lfs::rendering::ViewportRenderRequest& request,
+            const bool selection_enabled,
+            const bool preview_enabled,
+            const bool transform_indices_enabled,
+            const std::size_t node_mask_count) {
+            try {
+                Tensor cpu = Tensor::zeros({static_cast<std::size_t>(ParamCount), std::size_t{4}},
+                                           Device::CPU,
+                                           DataType::Float32);
+                float* const dst = cpu.ptr<float>();
+                if (!dst) {
+                    return std::unexpected("VkSplat overlay parameter allocation returned a null pointer");
+                }
+
+                if (request.filters.crop_region) {
+                    const auto& crop = *request.filters.crop_region;
+                    writeVec4(dst,
+                              CropFlags,
+                              glm::vec4(1.0f,
+                                        crop.inverse ? 1.0f : 0.0f,
+                                        crop.desaturate ? 1.0f : 0.0f,
+                                        static_cast<float>(crop.parent_node_index)));
+                    writeVec4(dst, CropMin, glm::vec4(crop.bounds.min, 0.0f));
+                    writeVec4(dst, CropMax, glm::vec4(crop.bounds.max, 0.0f));
+                    writeMat4Rows(dst, CropTransform, crop.bounds.transform);
+                }
+
+                if (request.filters.ellipsoid_region) {
+                    const auto& ellipsoid = *request.filters.ellipsoid_region;
+                    writeVec4(dst,
+                              EllipsoidFlags,
+                              glm::vec4(1.0f,
+                                        ellipsoid.inverse ? 1.0f : 0.0f,
+                                        ellipsoid.desaturate ? 1.0f : 0.0f,
+                                        static_cast<float>(ellipsoid.parent_node_index)));
+                    writeVec4(dst, EllipsoidRadii, glm::vec4(ellipsoid.bounds.radii, 0.0f));
+                    writeMat4Rows(dst, EllipsoidTransform, ellipsoid.bounds.transform);
+                }
+
+                if (request.filters.view_volume) {
+                    writeVec4(dst,
+                              ViewFlags,
+                              glm::vec4(1.0f,
+                                        request.filters.cull_outside_view_volume ? 1.0f : 0.0f,
+                                        0.0f,
+                                        0.0f));
+                    writeVec4(dst, ViewMin, glm::vec4(request.filters.view_volume->min, 0.0f));
+                    writeVec4(dst, ViewMax, glm::vec4(request.filters.view_volume->max, 0.0f));
+                    writeMat4Rows(dst, ViewTransform, request.filters.view_volume->transform);
+                }
+
+                writeVec4(dst,
+                          EmphasisFlags,
+                          glm::vec4(request.overlay.emphasis.dim_non_emphasized ? 1.0f : 0.0f,
+                                    transform_indices_enabled ? 1.0f : 0.0f,
+                                    static_cast<float>(node_mask_count),
+                                    request.overlay.emphasis.flash_intensity));
+                writeVec4(dst,
+                          CursorFlags,
+                          glm::vec4(request.overlay.cursor.enabled ? 1.0f : 0.0f,
+                                    request.overlay.cursor.saturation_preview ? 1.0f : 0.0f,
+                                    request.overlay.cursor.saturation_amount,
+                                    request.overlay.markers.ring_width));
+                writeVec4(dst,
+                          MarkerFlags,
+                          glm::vec4(request.overlay.markers.show_rings ? 1.0f : 0.0f,
+                                    request.overlay.markers.show_center_markers ? 1.0f : 0.0f,
+                                    0.0f,
+                                    0.0f));
+                writeMat4Rows(dst, ModelTransform, firstModelTransform(request));
+                const bool cursor_selection_enabled =
+                    !request.overlay.cursor.saturation_preview &&
+                    request.overlay.cursor.enabled &&
+                    request.overlay.cursor.radius > 0.0f;
+                writeVec4(dst,
+                          SelectionCursor,
+                          glm::vec4(request.overlay.cursor.cursor.x,
+                                    request.overlay.cursor.cursor.y,
+                                    std::max(request.overlay.cursor.radius, 0.0f),
+                                    cursor_selection_enabled ? 1.0f : 0.0f));
+                writeVec4(dst,
+                          SelectionFlags,
+                          glm::vec4(selection_enabled ? 1.0f : 0.0f,
+                                    preview_enabled ? 1.0f : 0.0f,
+                                    request.overlay.emphasis.transient_mask.additive ? 1.0f : 0.0f,
+                                    request.overlay.emphasis.focused_gaussian_id >= 0
+                                        ? static_cast<float>(request.overlay.emphasis.focused_gaussian_id)
+                                        : -1.0f));
+
+                return cpu.to(Device::CUDA).contiguous();
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to stage overlay parameters: {}", e.what()));
+            }
         }
 
         [[nodiscard]] VksplatViewportRenderer::ModelInputSnapshot makeModelInputSnapshot(
@@ -172,10 +522,25 @@ namespace lfs::vis {
             }
             slot = {};
         }
+        for (auto& slot : cuda_overlays_) {
+            slot.interop.reset();
+            if (context_) {
+                context_->destroyExternalBuffer(slot.buffer);
+            }
+            slot = {};
+        }
         for (auto& snap : ring_uploaded_) {
             snap = {};
         }
         for (auto& timeline : upload_timelines_) {
+            timeline.cuda_semaphore.reset();
+            if (context_) {
+                context_->destroyExternalSemaphore(timeline.vk_semaphore);
+            }
+            timeline.vk_semaphore = {};
+            timeline.value = 0;
+        }
+        for (auto& timeline : overlay_upload_timelines_) {
             timeline.cuda_semaphore.reset();
             if (context_) {
                 context_->destroyExternalSemaphore(timeline.vk_semaphore);
@@ -221,75 +586,199 @@ namespace lfs::vis {
         // (offset, size) differs per binding. allocation is left null because the
         // CudaInputSlot owns it.
         const auto plug = [&](_VulkanBuffer& dev, std::size_t region) {
-            dev.buffer = slot.buffer.buffer;
-            dev.allocation = VK_NULL_HANDLE;
-            dev.allocSize = static_cast<std::size_t>(slot.buffer.allocation_size);
-            dev.offset = slot.region_offset[region];
-            dev.size = slot.region_bytes[region];
+            dev = makeRegionView(slot.buffer, slot.region_offset[region], slot.region_bytes[region]);
         };
-        plug(buffers_.xyz_ws.deviceBuffer, 0);
-        plug(buffers_.rotations.deviceBuffer, 1);
-        plug(buffers_.scales_opacs.deviceBuffer, 2);
-        plug(buffers_.sh_coeffs.deviceBuffer, 3);
+        plug(buffers_.xyz_ws.deviceBuffer, InputXyzWs);
+        plug(buffers_.rotations.deviceBuffer, InputRotations);
+        plug(buffers_.scales_opacs.deviceBuffer, InputScalesOpacs);
+        plug(buffers_.sh_coeffs.deviceBuffer, InputShCoeffs);
 
         // Resize host-shadow vectors so the rasterizer's bookkeeping (which
         // calls byteLength()) keeps matching the device-side payload. The host
         // vectors are not read by the rasterizer; only their size() matters
         // when the renderer cross-checks element counts.
-        buffers_.xyz_ws.resize(slot.region_bytes[0] / sizeof(float));
-        buffers_.rotations.resize(slot.region_bytes[1] / sizeof(float));
-        buffers_.scales_opacs.resize(slot.region_bytes[2] / sizeof(float));
-        buffers_.sh_coeffs.resize(slot.region_bytes[3] / sizeof(float));
+        buffers_.xyz_ws.resize(slot.region_bytes[InputXyzWs] / sizeof(float));
+        buffers_.rotations.resize(slot.region_bytes[InputRotations] / sizeof(float));
+        buffers_.scales_opacs.resize(slot.region_bytes[InputScalesOpacs] / sizeof(float));
+        buffers_.sh_coeffs.resize(slot.region_bytes[InputShCoeffs] / sizeof(float));
 
         buffers_.num_splats = num_splats;
         buffers_.num_indices = 0;
         buffers_.is_unsorted_1 = true;
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::ensureCudaInputSlot(
+    std::expected<VksplatViewportRenderer::OverlayBindingViews, std::string>
+    VksplatViewportRenderer::uploadSelectionOverlay(
         VulkanContext& context,
-        CudaInputSlot& slot,
-        const std::size_t required_bytes,
-        const char* const debug_name) {
-        if (required_bytes == 0) {
-            return std::unexpected(std::format("VkSplat slot '{}' requested zero-byte allocation", debug_name));
+        const lfs::rendering::ViewportRenderRequest& request,
+        const std::size_t num_splats,
+        const std::size_t ring_slot) {
+        if (num_splats == 0) {
+            return std::unexpected("VkSplat selection overlay cannot bind an empty model");
         }
-        if (slot.buffer.buffer != VK_NULL_HANDLE && slot.buffer.allocation_size >= required_bytes) {
-            return {};
-        }
-        // Re-allocate. The old VkBuffer is still referenced by buffers_ via the
-        // four offset views — those are reset by the caller after this returns.
-        slot.interop.reset();
-        context.destroyExternalBuffer(slot.buffer);
+        assert(context.externalMemoryInteropEnabled());
+        assert(ring_slot < cuda_overlays_.size());
+        auto& slot = cuda_overlays_[ring_slot];
 
-        const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        if (!context.createExternalBuffer(static_cast<VkDeviceSize>(required_bytes), usage, slot.buffer)) {
-            return std::unexpected(std::format("VkSplat external buffer '{}' allocation failed: {}",
-                                               debug_name,
-                                               context.lastError()));
+        const bool selection_enabled =
+            !request.overlay.cursor.saturation_preview &&
+            hasOverlayTensor(request.overlay.emphasis.mask, num_splats);
+        const bool preview_enabled =
+            !request.overlay.cursor.saturation_preview &&
+            hasOverlayTensor(request.overlay.emphasis.transient_mask.mask, num_splats);
+        const bool transform_indices_enabled = hasTransformIndices(request.scene.transform_indices, num_splats);
+
+        const std::size_t mask_region_bytes = alignUp(std::max<std::size_t>(num_splats, 1), 4);
+        const std::size_t color_region_bytes =
+            lfs::rendering::kSelectionColorTableCount * 4 * sizeof(float);
+        const std::size_t transform_region_bytes =
+            std::max<std::size_t>(transform_indices_enabled ? num_splats * sizeof(std::int32_t)
+                                                            : sizeof(std::int32_t),
+                                  sizeof(std::int32_t));
+        const std::size_t node_mask_region_bytes =
+            alignUp(std::max<std::size_t>(request.overlay.emphasis.emphasized_node_mask.size(), 1), 4);
+        const std::size_t overlay_params_region_bytes =
+            static_cast<std::size_t>(ParamCount) * 4 * sizeof(float);
+        std::array<std::size_t, kOverlayRegionCount> region_bytes{};
+        region_bytes[OverlaySelectionMask] = mask_region_bytes;
+        region_bytes[OverlayPreviewMask] = mask_region_bytes;
+        region_bytes[OverlaySelectionColors] = color_region_bytes;
+        region_bytes[OverlayTransformIndices] = transform_region_bytes;
+        region_bytes[OverlayNodeMask] = node_mask_region_bytes;
+        region_bytes[OverlayParams] = overlay_params_region_bytes;
+        std::array<std::size_t, kOverlayRegionCount> region_offset{};
+        const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
+
+        if (auto ok = ensureCudaInteropBuffer(context,
+                                              slot.buffer,
+                                              slot.interop,
+                                              total_bytes,
+                                              "vksplat_selection_overlay",
+                                              "selection overlay");
+            !ok) {
+            return std::unexpected(ok.error());
         }
-        const auto native = context.releaseExternalBufferNativeHandle(slot.buffer);
-        if (!VulkanContext::externalNativeHandleValid(native)) {
-            context.destroyExternalBuffer(slot.buffer);
-            return std::unexpected(std::format("VkSplat external buffer '{}' returned invalid native handle",
-                                               debug_name));
+        slot.region_offset = region_offset;
+        slot.region_bytes = region_bytes;
+
+        if (selection_enabled) {
+            auto prepared = prepareOverlayMaskTensor(*request.overlay.emphasis.mask, num_splats, "selection");
+            if (!prepared) {
+                return std::unexpected(prepared.error());
+            }
+            slot.selection_source = std::move(*prepared);
+        } else {
+            slot.selection_source = {};
         }
-        lfs::rendering::CudaVulkanExternalBufferImport import{
-            .memory_handle = native,
-            .allocation_size = static_cast<std::size_t>(slot.buffer.allocation_size),
-            .size = static_cast<std::size_t>(slot.buffer.size),
-            .dedicated_allocation = context.externalMemoryDedicatedAllocationEnabled(),
+        if (preview_enabled) {
+            auto prepared = prepareOverlayMaskTensor(*request.overlay.emphasis.transient_mask.mask,
+                                                     num_splats,
+                                                     "preview selection");
+            if (!prepared) {
+                return std::unexpected(prepared.error());
+            }
+            slot.preview_source = std::move(*prepared);
+        } else {
+            slot.preview_source = {};
+        }
+        auto color_table = makeSelectionColorTableTensor(request.overlay);
+        if (!color_table) {
+            return std::unexpected(color_table.error());
+        }
+        slot.color_table_source = std::move(*color_table);
+        auto transform_indices = prepareTransformIndicesTensor(request.scene.transform_indices, num_splats);
+        if (!transform_indices) {
+            return std::unexpected(transform_indices.error());
+        }
+        slot.transform_indices_source = std::move(*transform_indices);
+        auto node_mask = makeNodeMaskTensor(request.overlay.emphasis.emphasized_node_mask);
+        if (!node_mask) {
+            return std::unexpected(node_mask.error());
+        }
+        slot.node_mask_source = std::move(*node_mask);
+        auto overlay_params = makeOverlayParamsTensor(request,
+                                                      selection_enabled,
+                                                      preview_enabled,
+                                                      transform_indices_enabled,
+                                                      request.overlay.emphasis.emphasized_node_mask.size());
+        if (!overlay_params) {
+            return std::unexpected(overlay_params.error());
+        }
+        slot.overlay_params_source = std::move(*overlay_params);
+
+        cudaStream_t stream = slot.color_table_source.stream();
+        if (selection_enabled) {
+            stream = slot.selection_source.stream();
+        } else if (preview_enabled) {
+            stream = slot.preview_source.stream();
+        }
+
+        if (selection_enabled &&
+            !slot.interop.copyFromTensor(slot.selection_source,
+                                         num_splats,
+                                         slot.region_offset[OverlaySelectionMask],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat selection mask upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (preview_enabled &&
+            !slot.interop.copyFromTensor(slot.preview_source,
+                                         num_splats,
+                                         slot.region_offset[OverlayPreviewMask],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat preview selection mask upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.color_table_source,
+                                         slot.region_bytes[OverlaySelectionColors],
+                                         slot.region_offset[OverlaySelectionColors],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat selection color upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.transform_indices_source,
+                                         slot.region_bytes[OverlayTransformIndices],
+                                         slot.region_offset[OverlayTransformIndices],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat transform-index upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.node_mask_source,
+                                         slot.node_mask_source.bytes(),
+                                         slot.region_offset[OverlayNodeMask],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat node-mask upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.overlay_params_source,
+                                         slot.region_bytes[OverlayParams],
+                                         slot.region_offset[OverlayParams],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat overlay parameter upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+
+        auto& timeline = overlay_upload_timelines_[ring_slot];
+        const std::uint64_t signal_value = ++timeline.value;
+        if (!timeline.cuda_semaphore.cudaSignal(signal_value, stream)) {
+            return std::unexpected(std::format("VkSplat selection overlay upload signal failed: {}",
+                                               timeline.cuda_semaphore.lastError()));
+        }
+        context.addFrameTimelineWait(timeline.vk_semaphore.semaphore,
+                                     signal_value,
+                                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+        const auto view = [&](const std::size_t region) {
+            return makeRegionView(slot.buffer, slot.region_offset[region], slot.region_bytes[region]);
         };
-        if (!slot.interop.init(import)) {
-            const std::string err = slot.interop.lastError();
-            context.destroyExternalBuffer(slot.buffer);
-            return std::unexpected(std::format("VkSplat external buffer '{}' CUDA import failed: {}",
-                                               debug_name,
-                                               err));
-        }
-        return {};
+        return OverlayBindingViews{
+            .selection_mask = view(OverlaySelectionMask),
+            .preview_mask = view(OverlayPreviewMask),
+            .selection_colors = view(OverlaySelectionColors),
+            .transform_indices = view(OverlayTransformIndices),
+            .node_mask = view(OverlayNodeMask),
+            .overlay_params = view(OverlayParams),
+        };
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::ensureInitialized(VulkanContext& context) {
@@ -347,6 +836,28 @@ namespace lfs::vis {
             }
             timeline.value = 0;
         }
+        for (auto& timeline : overlay_upload_timelines_) {
+            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
+                return std::unexpected(std::format(
+                    "VkSplat selection overlay timeline semaphore creation failed: {}",
+                    context.lastError()));
+            }
+            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
+            if (!VulkanContext::externalNativeHandleValid(handle)) {
+                context.destroyExternalSemaphore(timeline.vk_semaphore);
+                return std::unexpected("VkSplat selection overlay timeline semaphore export failed");
+            }
+            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
+            import.semaphore_handle = handle;
+            import.initial_value = timeline.vk_semaphore.initial_value;
+            if (!timeline.cuda_semaphore.init(import)) {
+                std::string err = timeline.cuda_semaphore.lastError();
+                context.destroyExternalSemaphore(timeline.vk_semaphore);
+                return std::unexpected(std::format(
+                    "VkSplat selection overlay timeline semaphore CUDA import failed: {}", err));
+            }
+            timeline.value = 0;
+        }
 
         initialized_ = true;
         return {};
@@ -363,9 +874,7 @@ namespace lfs::vis {
     std::expected<void, std::string> VksplatViewportRenderer::uploadInputs(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
-        const int active_sh_degree,
         const std::size_t ring_slot) {
-        (void)active_sh_degree;
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -380,33 +889,31 @@ namespace lfs::vis {
             return std::unexpected(packed.error());
         }
 
-        const std::array<std::size_t, kInputRegionCount> region_bytes{
-            static_cast<std::size_t>(packed->xyz_ws.bytes()),
-            static_cast<std::size_t>(packed->rotations.bytes()),
-            static_cast<std::size_t>(packed->scales_opacs.bytes()),
-            static_cast<std::size_t>(packed->sh_coeffs.bytes()),
-        };
+        std::array<std::size_t, kInputRegionCount> region_bytes{};
+        region_bytes[InputXyzWs] = static_cast<std::size_t>(packed->xyz_ws.bytes());
+        region_bytes[InputRotations] = static_cast<std::size_t>(packed->rotations.bytes());
+        region_bytes[InputScalesOpacs] = static_cast<std::size_t>(packed->scales_opacs.bytes());
+        region_bytes[InputShCoeffs] = static_cast<std::size_t>(packed->sh_coeffs.bytes());
 
         // Lay out the four regions back-to-back, padding each to kRegionAlignment
         // so the resulting offsets are valid for VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
         // bindings on every conformant device. Driver-required alignment is at
         // most 256 bytes (often less) — overshooting here costs ≤ 1 KiB per ring.
         std::array<std::size_t, kInputRegionCount> region_offset{};
-        std::size_t cursor = 0;
-        for (std::size_t i = 0; i < kInputRegionCount; ++i) {
-            region_offset[i] = cursor;
-            const std::size_t aligned = (region_bytes[i] + kRegionAlignment - 1) /
-                                        kRegionAlignment * kRegionAlignment;
-            cursor += aligned;
-        }
-        const std::size_t total_bytes = cursor;
+        const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
 
-        if (auto ok = ensureCudaInputSlot(context, slot, total_bytes, "vksplat_inputs"); !ok)
+        if (auto ok = ensureCudaInteropBuffer(context,
+                                              slot.buffer,
+                                              slot.interop,
+                                              total_bytes,
+                                              "vksplat_inputs",
+                                              "input");
+            !ok) {
             return std::unexpected(ok.error());
+        }
 
         slot.region_offset = region_offset;
         slot.region_bytes = region_bytes;
-        slot.total_live_bytes = total_bytes;
 
         // Single CUDA-imported VkBuffer — four offset-targeted memcpys. Half the
         // setup cost (1 import / 1 mapped pointer) of the prior 4-buffer scheme;
@@ -415,10 +922,10 @@ namespace lfs::vis {
         const auto copy_region = [&](std::size_t i, const lfs::core::Tensor& t) {
             return slot.interop.copyFromTensor(t, region_bytes[i], region_offset[i], stream);
         };
-        if (!copy_region(0, packed->xyz_ws) ||
-            !copy_region(1, packed->rotations) ||
-            !copy_region(2, packed->scales_opacs) ||
-            !copy_region(3, packed->sh_coeffs)) {
+        if (!copy_region(InputXyzWs, packed->xyz_ws) ||
+            !copy_region(InputRotations, packed->rotations) ||
+            !copy_region(InputScalesOpacs, packed->scales_opacs) ||
+            !copy_region(InputShCoeffs, packed->sh_coeffs)) {
             return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
                                                slot.interop.lastError()));
         }
@@ -666,7 +1173,7 @@ namespace lfs::vis {
         assert(context.framesInFlight() == kInputRingSize);
 
         if (force_input_upload || !inputsResident(splat_data, ring_slot)) {
-            if (auto ok = uploadInputs(context, splat_data, active_sh_degree, ring_slot); !ok) {
+            if (auto ok = uploadInputs(context, splat_data, ring_slot); !ok) {
                 return std::unexpected(ok.error());
             }
             // Drop the deferred-readback high-water-mark whenever the model identity
@@ -676,6 +1183,11 @@ namespace lfs::vis {
             renderer_.resetNumIndicesEstimate();
         }
         plugRingInputs(ring_slot, static_cast<std::size_t>(splat_data.size()));
+        auto overlay_bindings = uploadSelectionOverlay(
+            context, request, static_cast<std::size_t>(splat_data.size()), ring_slot);
+        if (!overlay_bindings) {
+            return std::unexpected(overlay_bindings.error());
+        }
         if (auto ok = ensureOutputImage(context, size); !ok) {
             return std::unexpected(ok.error());
         }
@@ -739,13 +1251,23 @@ namespace lfs::vis {
         std::expected<void, std::string> compose_status;
         try {
             auto batch = DeviceGuard(&renderer_);
-            renderer_.executeProjectionForward(uniforms, buffers_);
+            renderer_.executeProjectionForward(uniforms,
+                                               buffers_,
+                                               overlay_bindings->transform_indices,
+                                               overlay_bindings->node_mask,
+                                               overlay_bindings->overlay_params);
             renderer_.executeCalculateIndexBufferOffset(buffers_);
             if (buffers_.num_indices > 0) {
                 renderer_.executeGenerateKeys(uniforms, buffers_);
                 renderer_.executeSort(uniforms, buffers_, -1);
                 renderer_.executeComputeTileRanges(uniforms, buffers_);
-                renderer_.executeRasterizeForward(uniforms, buffers_);
+                renderer_.executeRasterizeForward(uniforms,
+                                                  buffers_,
+                                                  overlay_bindings->selection_mask,
+                                                  overlay_bindings->preview_mask,
+                                                  overlay_bindings->selection_colors,
+                                                  buffers_.overlay_flags.deviceBuffer,
+                                                  overlay_bindings->overlay_params);
             }
             // Record compose into the rasterizer's batch so the entire frame
             // submits and waits exactly once instead of fence-blocking twice.

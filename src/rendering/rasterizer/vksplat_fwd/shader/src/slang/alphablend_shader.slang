@@ -43,6 +43,163 @@ float4 undo_pixel_state(float4 pixel_state_t_n, float4 gauss_rgba_t_n)
     return float4(color_t_nm1, transmittance_t_nm1);
 }
 
+static const uint SELECTION_PREVIEW_FLAG = 0x80;
+static const uint SELECTION_GROUP_MASK = 0x7F;
+static const uint SELECTION_PREVIEW_COLOR_INDEX = 256;
+static const float SELECTION_PREVIEW_BLEND = 0.9f;
+static const float SELECTION_COMMITTED_BLEND = 0.8f;
+
+[ForceInline]
+bool overlay_cursor_hit(float2 gaussian_xy, StructuredBuffer<float4> overlay_params)
+{
+    float4 cursor = overlay_params[OVERLAY_PARAM_SELECTION_CURSOR];
+    float2 delta = gaussian_xy - cursor.xy;
+    return dot(delta, delta) <= cursor.z * cursor.z;
+}
+
+[ForceInline]
+float4 replace_unpremultiplied_color(float4 gauss_rgba, float3 color)
+{
+    return float4(color * gauss_rgba.a, gauss_rgba.a);
+}
+
+[ForceInline]
+float3 unpremultiplied_color(float4 gauss_rgba)
+{
+    return gauss_rgba.a > eps ? gauss_rgba.rgb / gauss_rgba.a : float3(0.0f);
+}
+
+[ForceInline]
+uint selection_status(
+    float2 gaussian_xy,
+    uint splat_id,
+    uint flags,
+    ByteAddressBuffer selection_mask,
+    ByteAddressBuffer preview_mask,
+    StructuredBuffer<float4> overlay_params)
+{
+    if (overlay_enabled(overlay_params[OVERLAY_PARAM_CURSOR_FLAGS].y)) {
+        return 0u;
+    }
+    bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
+    float4 selection_flags = overlay_params[OVERLAY_PARAM_SELECTION_FLAGS];
+    uint group_id = 0;
+    if (overlay_enabled(selection_flags.x)) {
+        group_id = read_byte(selection_mask, splat_id) & SELECTION_GROUP_MASK;
+    }
+    bool is_committed = group_id > 0;
+    bool is_in_preview = false;
+    if (overlay_enabled(selection_flags.y)) {
+        is_in_preview = read_byte(preview_mask, splat_id) != 0;
+    }
+    bool under_brush = false;
+    if (overlay_enabled(overlay_params[OVERLAY_PARAM_SELECTION_CURSOR].w) && selectable) {
+        under_brush = overlay_cursor_hit(gaussian_xy, overlay_params);
+    }
+    bool add_mode = overlay_enabled(selection_flags.z);
+    bool is_ring_highlight = selectable && overlay_int(selection_flags.w) == int(splat_id);
+    bool is_preview = (is_in_preview && !is_committed && add_mode) ||
+                      (is_in_preview && is_committed && !add_mode) ||
+                      (under_brush && selectable && add_mode && !is_committed) ||
+                      (under_brush && selectable && !add_mode && is_committed) ||
+                      is_ring_highlight;
+
+    return (group_id & SELECTION_GROUP_MASK) | (is_preview ? SELECTION_PREVIEW_FLAG : 0u);
+}
+
+[ForceInline]
+float4 apply_projection_overlay_color(
+    float4 gauss_rgba,
+    float2 gaussian_xy,
+    uint flags,
+    StructuredBuffer<float4> overlay_params)
+{
+    float3 color = unpremultiplied_color(gauss_rgba);
+    bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
+    float4 cursor_flags = overlay_params[OVERLAY_PARAM_CURSOR_FLAGS];
+    if (overlay_enabled(cursor_flags.x) && overlay_enabled(cursor_flags.y) && selectable &&
+        overlay_cursor_hit(gaussian_xy, overlay_params)) {
+        float lum = 0.2126f * color.x + 0.7152f * color.y + 0.0722f * color.z;
+        float sat = 1.0f + cursor_flags.z;
+        color = clamp(lum + sat * (color - lum), 0.0f, 1.0f);
+    }
+    if ((flags & OVERLAY_FLAG_DIM) != 0u) {
+        const float DEPTH_FILTER_BRIGHTNESS = 0.25f;
+        float lum = 0.2126f * color.x + 0.7152f * color.y + 0.0722f * color.z;
+        color = float3(lum * DEPTH_FILTER_BRIGHTNESS);
+    }
+    return replace_unpremultiplied_color(gauss_rgba, color);
+}
+
+[ForceInline]
+float4 apply_ring_overlay(
+    float4 gauss_rgba,
+    Splat_2D_AlphaBlend g,
+    float2 pix_coord,
+    uint flags,
+    StructuredBuffer<float4> overlay_params)
+{
+    bool show_rings = overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].x);
+    bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
+    if (!show_rings || !selectable) {
+        return gauss_rgba;
+    }
+    float ring_width = overlay_params[OVERLAY_PARAM_CURSOR_FLAGS].w;
+    float2 d = pix_coord - g.xy_vs;
+    float3 inv_cov = g.inv_cov_vs_opacity.xyz;
+    float sigma_over_2 = 0.5f * (inv_cov.x * d.x * d.x + inv_cov.z * d.y * d.y) + inv_cov.y * d.x * d.y;
+    float gaussian = exp(-sigma_over_2);
+    float boundary_gaussian = ALPHA_THRESHOLD / max(g.inv_cov_vs_opacity.w, eps);
+    float ring_outer = boundary_gaussian * (1.0f + ring_width * 10.0f);
+    float ring_inner = boundary_gaussian * (1.0f - ring_width * 10.0f);
+    if (gaussian < ring_outer && gaussian > ring_inner) {
+        float3 color = unpremultiplied_color(gauss_rgba);
+        float alpha = min(0.8f, ALPHA_BLEND_MAX_OPACITY);
+        return float4(color * alpha, alpha);
+    }
+    return gauss_rgba;
+}
+
+[ForceInline]
+float4 apply_selection_overlay(
+    float4 gauss_rgba,
+    uint sel_status,
+    StructuredBuffer<float4> selection_colors)
+{
+    uint group_id = sel_status & SELECTION_GROUP_MASK;
+    bool is_preview = (sel_status & SELECTION_PREVIEW_FLAG) != 0u;
+    if (!is_preview && group_id == 0u) {
+        return gauss_rgba;
+    }
+
+    float3 color = unpremultiplied_color(gauss_rgba);
+    if (is_preview) {
+        color = lerp(color, selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz, SELECTION_PREVIEW_BLEND);
+    } else if (group_id > 0u) {
+        color = lerp(color, selection_colors[group_id].xyz, SELECTION_COMMITTED_BLEND);
+    }
+    return replace_unpremultiplied_color(gauss_rgba, color);
+}
+
+[ForceInline]
+float4 apply_flash_overlay(
+    float4 gauss_rgba,
+    uint flags,
+    StructuredBuffer<float4> overlay_params)
+{
+    if ((flags & OVERLAY_FLAG_FLASH) == 0u) {
+        return gauss_rgba;
+    }
+    float intensity = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS].w;
+    if (intensity <= 0.0f) {
+        return gauss_rgba;
+    }
+    float3 color = unpremultiplied_color(gauss_rgba);
+    const float3 flash_color = float3(1.0f, 0.95f, 0.6f);
+    color = lerp(color, flash_color, intensity * 0.5f);
+    return replace_unpremultiplied_color(gauss_rgba, color);
+}
+
 #if SUBTILE_SIZE > 0
 
 [ForceInline]
@@ -102,6 +259,7 @@ groupshared float4 collected_inv_cov_vs_opacity[TILE_SIZE];
 #endif
 
 groupshared uint32_t collected_idx[TILE_SIZE];
+groupshared uint32_t collected_gauss_idx[TILE_SIZE];
 
 #if SUBTILE_SIZE > 0
 groupshared uint32_t subtile_overlap_bitmasks[TILE_SIZE];
@@ -116,6 +274,11 @@ layout(binding=4) StructuredBuffer<float> rgb;
 
 layout(binding=5) RWStructuredBuffer<float4> final_pixel_state;
 layout(binding=6) RWStructuredBuffer<int32_t> n_contributors;
+layout(binding=7) ByteAddressBuffer selection_mask;
+layout(binding=8) ByteAddressBuffer preview_mask;
+layout(binding=9) StructuredBuffer<float4> selection_colors;
+layout(binding=10) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=11) StructuredBuffer<float4> overlay_params;
 
 [shader("compute")]
 [numthreads(TILE_WIDTH, TILE_HEIGHT, 1)]
@@ -180,10 +343,11 @@ void main(
             uint32_t coll_id = uint32_t(sorted_gauss_idx[tile_idx_start + splat_pointer_offset]);
             #if SHARED_STRUCT
             collected_splats[thread_rank] = load_splat_alphablend(coll_id, xy_vs, inv_cov_vs_opacity, rgb);
+            collected_gauss_idx[thread_rank] = coll_id;
             #else
             collected_xy_vs[thread_rank] = read_t2_float2(coll_id, xy_vs);
             collected_inv_cov_vs_opacity[thread_rank] = read_t4_float4(coll_id, inv_cov_vs_opacity);
-            collected_idx[thread_rank] = coll_id;
+            collected_gauss_idx[thread_rank] = coll_id;
             #endif
         }
         GroupMemoryBarrierWithGroupSync();
@@ -221,6 +385,8 @@ void main(
             #if SHARED_STRUCT
  
                 Splat_2D_AlphaBlend g = collected_splats[j];
+                uint32_t splat_id = collected_gauss_idx[j];
+                uint flags = gaussian_overlay_flags[splat_id];
                 float4 gauss_rgba = evaluate_splat(g, center_pix_coord);
                 if (gauss_rgba.a < ALPHA_THRESHOLD)
                     continue;
@@ -236,11 +402,50 @@ void main(
                 if (alpha < ALPHA_THRESHOLD)
                     continue;
 
-                uint32_t id = collected_idx[j];
-                float3 rgb = read_t3_float3(id, rgb);
-                float4 gauss_rgba = float4(rgb*alpha, alpha);
+                uint32_t splat_id = collected_gauss_idx[j];
+                uint flags = gaussian_overlay_flags[splat_id];
+                float3 splat_rgb = read_t3_float3(splat_id, rgb);
+                Splat_2D_AlphaBlend g = { g_inv_cov_opacity, g_xy, splat_rgb };
+                float4 gauss_rgba = float4(splat_rgb*alpha, alpha);
 
             #endif
+
+                uint sel_status = selection_status(g.xy_vs,
+                                                   splat_id,
+                                                   flags,
+                                                   selection_mask,
+                                                   preview_mask,
+                                                   overlay_params);
+                bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
+                gauss_rgba = apply_projection_overlay_color(gauss_rgba,
+                                                            g.xy_vs,
+                                                            flags,
+                                                            overlay_params);
+                gauss_rgba = apply_ring_overlay(gauss_rgba, g, center_pix_coord, flags, overlay_params);
+
+                if (overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y) && selectable) {
+                    const float INNER_RADIUS_SQ = 2.25f;
+                    const float OUTER_RADIUS_SQ = 6.25f;
+                    const float OUTLINE_DARKEN = 0.4f;
+                    float2 marker_delta = g.xy_vs - center_pix_coord;
+                    float dist_sq = dot(marker_delta, marker_delta);
+                    if (dist_sq > OUTER_RADIUS_SQ)
+                        continue;
+
+                    uint group_id = sel_status & SELECTION_GROUP_MASK;
+                    bool is_preview = (sel_status & SELECTION_PREVIEW_FLAG) != 0u;
+                    float3 marker_color = is_preview ? selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz
+                                                     : selection_colors[group_id].xyz;
+                    if (dist_sq > INNER_RADIUS_SQ)
+                        marker_color *= OUTLINE_DARKEN;
+
+                    curr_pixel_state = float4(marker_color, 0.0f);
+                    thread_active = false;
+                    break;
+                }
+
+                gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
+                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
                 if (new_pixel_state.a < 0.0001f) {
@@ -288,4 +493,3 @@ void main(
 #endif
 
 #endif
-

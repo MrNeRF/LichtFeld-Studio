@@ -73,7 +73,19 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> uploadInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
-            int active_sh_degree,
+            std::size_t ring_slot);
+        struct OverlayBindingViews {
+            _VulkanBuffer selection_mask{};
+            _VulkanBuffer preview_mask{};
+            _VulkanBuffer selection_colors{};
+            _VulkanBuffer transform_indices{};
+            _VulkanBuffer node_mask{};
+            _VulkanBuffer overlay_params{};
+        };
+        [[nodiscard]] std::expected<OverlayBindingViews, std::string> uploadSelectionOverlay(
+            VulkanContext& context,
+            const lfs::rendering::ViewportRenderRequest& request,
+            std::size_t num_splats,
             std::size_t ring_slot);
         [[nodiscard]] bool inputsResident(const lfs::core::SplatData& splat_data,
                                           std::size_t ring_slot) const;
@@ -92,22 +104,29 @@ namespace lfs::vis {
         // setup costs into 1×, and surfacing the regions to the rasterizer through
         // _VulkanBuffer offset views (no descriptor-side cost).
         static constexpr std::size_t kInputRegionCount = 4;
+        static constexpr std::size_t kOverlayRegionCount = 6;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaInputSlot {
             VulkanContext::ExternalBuffer buffer{};
             lfs::rendering::CudaVulkanBufferInterop interop{};
             std::array<std::size_t, kInputRegionCount> region_offset{};
             std::array<std::size_t, kInputRegionCount> region_bytes{};
-            std::size_t total_live_bytes = 0;
+        };
+        struct CudaOverlaySlot {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::array<std::size_t, kOverlayRegionCount> region_offset{};
+            std::array<std::size_t, kOverlayRegionCount> region_bytes{};
+            lfs::core::Tensor selection_source;
+            lfs::core::Tensor preview_source;
+            lfs::core::Tensor color_table_source;
+            lfs::core::Tensor transform_indices_source;
+            lfs::core::Tensor node_mask_source;
+            lfs::core::Tensor overlay_params_source;
         };
 
         void detachManagedBuffers();
         void plugRingInputs(std::size_t ring_slot, std::size_t num_splats);
-        [[nodiscard]] std::expected<void, std::string> ensureCudaInputSlot(
-            VulkanContext& context,
-            CudaInputSlot& slot,
-            std::size_t required_bytes,
-            const char* debug_name);
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -127,6 +146,7 @@ namespace lfs::vis {
         // at runtime).
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
+        std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
@@ -140,6 +160,7 @@ namespace lfs::vis {
             std::uint64_t value = 0;
         };
         std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
+        std::array<UploadTimeline, kInputRingSize> overlay_upload_timelines_{};
     };
 
 } // namespace lfs::vis

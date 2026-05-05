@@ -122,6 +122,7 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(depths)
     _(inv_cov_vs_opacity)
     _(rgb)
+    _(overlay_flags)
     _(index_buffer_offset)
     _(sorting_keys_1)
     _(sorting_keys_2)

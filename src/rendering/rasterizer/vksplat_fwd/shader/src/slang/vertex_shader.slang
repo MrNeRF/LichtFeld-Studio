@@ -113,6 +113,10 @@ layout(binding=7) RWStructuredBuffer<float2> out_xy_vs;
 layout(binding=8) RWStructuredBuffer<float> out_depths;
 layout(binding=9) RWStructuredBuffer<float4> out_inv_cov_vs;
 layout(binding=10) RWStructuredBuffer<float> out_rgb;
+layout(binding=11) RWStructuredBuffer<uint> out_overlay_flags;
+layout(binding=12) ByteAddressBuffer transform_indices;
+layout(binding=13) ByteAddressBuffer node_mask;
+layout(binding=14) StructuredBuffer<float4> overlay_params;
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
 
@@ -203,6 +207,103 @@ void main(
         active_sh
       );
 
+#if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    uint overlay_flags = 0;
+    bool active = true;
+    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
+    bool node_data_enabled = overlay_enabled(emphasis_flags.y);
+    int node_count = overlay_int(emphasis_flags.z);
+    int node_idx = node_data_enabled ? read_int32(transform_indices, g_idx) : -1;
+    float3 mean_ws = transform_point_rows(overlay_params, OVERLAY_PARAM_MODEL_TRANSFORM, gauss.xyz_ws);
+
+    float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
+    if (overlay_enabled(crop_flags.x)) {
+        int parent_node_idx = overlay_int(crop_flags.w);
+        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+        if (applies) {
+            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_CROP_TRANSFORM, mean_ws);
+            float3 bmin = overlay_params[OVERLAY_PARAM_CROP_MIN].xyz;
+            float3 bmax = overlay_params[OVERLAY_PARAM_CROP_MAX].xyz;
+            bool inside = local.x >= bmin.x && local.x <= bmax.x &&
+                          local.y >= bmin.y && local.y <= bmax.y &&
+                          local.z >= bmin.z && local.z <= bmax.z;
+            bool outside = inside == overlay_enabled(crop_flags.y);
+            if (outside) {
+                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+                if (overlay_enabled(crop_flags.z)) {
+                    overlay_flags |= OVERLAY_FLAG_DIM;
+                } else {
+                    active = false;
+                }
+            }
+        }
+    }
+
+    float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
+    if (active && overlay_enabled(ellipsoid_flags.x)) {
+        int parent_node_idx = overlay_int(ellipsoid_flags.w);
+        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+        if (applies) {
+            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_ELLIPSOID_TRANSFORM, mean_ws);
+            float3 radii = overlay_params[OVERLAY_PARAM_ELLIPSOID_RADII].xyz;
+            float norm = (local.x * local.x) / (radii.x * radii.x) +
+                         (local.y * local.y) / (radii.y * radii.y) +
+                         (local.z * local.z) / (radii.z * radii.z);
+            bool inside = norm <= 1.0f;
+            bool outside = inside == overlay_enabled(ellipsoid_flags.y);
+            if (outside) {
+                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+                if (overlay_enabled(ellipsoid_flags.z)) {
+                    overlay_flags |= OVERLAY_FLAG_DIM;
+                } else {
+                    active = false;
+                }
+            }
+        }
+    }
+
+    float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
+    if (active && overlay_enabled(view_flags.x)) {
+        float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_VIEW_TRANSFORM, mean_ws);
+        float3 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN].xyz;
+        float3 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX].xyz;
+        bool inside = local.x >= vmin.x && local.x <= vmax.x &&
+                      local.y >= vmin.y && local.y <= vmax.y &&
+                      local.z >= vmin.z && local.z <= vmax.z;
+        if (!inside) {
+            overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+            if (overlay_enabled(view_flags.y)) {
+                active = false;
+            }
+        }
+    }
+
+    if (active && overlay_enabled(emphasis_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+        if (read_byte(node_mask, uint(node_idx)) == 0) {
+            overlay_flags |= (OVERLAY_FLAG_DIM | OVERLAY_FLAG_NONSELECTABLE);
+        }
+    }
+
+    if (active && emphasis_flags.w > 0.0f && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+        if (read_byte(node_mask, uint(node_idx)) != 0) {
+            overlay_flags |= OVERLAY_FLAG_FLASH;
+        }
+    }
+
+    if (!active) {
+        out_overlay_flags[g_idx] = overlay_flags;
+        out_radii[g_idx] = 0;
+        out_tiles_touched[g_idx] = 0;
+      #if USE_EMULATED_INT64
+        out_rect_tile_space[2*g_idx+0] = 0;
+        out_rect_tile_space[2*g_idx+1] = 0;
+      #else
+        out_rect_tile_space[g_idx] = int64_t(0);
+      #endif
+        return;
+    }
+#endif
+
     // projection (differentiable)
   #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     // forward
@@ -236,6 +337,7 @@ void main(
         splat.det <= 0.0
     ) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+            out_overlay_flags[g_idx] = overlay_flags;
             out_radii[g_idx] = 0;
             out_tiles_touched[g_idx] = 0;
           #if USE_EMULATED_INT64
@@ -265,6 +367,7 @@ void main(
     int32_t n_tiles = int32_t(rect_tile_space.max_x - rect_tile_space.min_x) * int32_t(rect_tile_space.max_y - rect_tile_space.min_y);
     if (n_tiles == 0) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+            out_overlay_flags[g_idx] = overlay_flags;
             out_radii[g_idx] = 0;
             out_tiles_touched[g_idx] = 0;
           #if USE_EMULATED_INT64
@@ -294,8 +397,10 @@ void main(
     out_rect_tile_space[g_idx] = reinterpret<int64_t>(rect_tile_space);
   #endif
 
-    if (n_tiles == 0)
+    if (n_tiles == 0) {
+        out_overlay_flags[g_idx] = overlay_flags;
         return;
+    }
 
 #endif  // EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
 
@@ -305,6 +410,7 @@ void main(
     out_depths[g_idx] = splat.xyz_vs.z;
     out_inv_cov_vs[g_idx] = splat.inv_cov_vs_opac;
     write_t3_float3(splat.rgb, g_idx, out_rgb);
+    out_overlay_flags[g_idx] = overlay_flags;
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
 

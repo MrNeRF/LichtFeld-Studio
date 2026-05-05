@@ -128,6 +128,9 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
 void VulkanGSRenderer::executeProjectionForward(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
+    const _VulkanBuffer& transform_indices,
+    const _VulkanBuffer& node_mask,
+    const _VulkanBuffer& overlay_params,
     size_t alloc_reserve) {
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
@@ -139,6 +142,9 @@ void VulkanGSRenderer::executeProjectionForward(
                             {buffers.sh_coeffs.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {buffers.scales_opacs.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
                         },
                         COMPUTE_SHADER_READ);
 
@@ -161,6 +167,10 @@ void VulkanGSRenderer::executeProjectionForward(
             resizeDeviceBuffer(buffers.depths, alloc_size),
             resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size),
             resizeDeviceBuffer(buffers.rgb, 3 * alloc_size),
+            resizeDeviceBuffer(buffers.overlay_flags, alloc_size),
+            transform_indices,
+            node_mask,
+            overlay_params,
         });
 }
 
@@ -239,7 +249,12 @@ void VulkanGSRenderer::executeComputeTileRanges(
 
 void VulkanGSRenderer::executeRasterizeForward(
     const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers) {
+    VulkanGSPipelineBuffers& buffers,
+    const _VulkanBuffer& selection_mask,
+    const _VulkanBuffer& preview_mask,
+    const _VulkanBuffer& selection_colors,
+    const _VulkanBuffer& overlay_flags,
+    const _VulkanBuffer& overlay_params) {
     if (buffers.num_indices == 0)
         return;
 
@@ -252,6 +267,11 @@ void VulkanGSRenderer::executeRasterizeForward(
                             {buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
                             {buffers.tile_ranges.deviceBuffer, COMPUTE_SHADER_WRITE},
                             {buffers.rgb.deviceBuffer, COMPUTE_SHADER_WRITE},
+                            {selection_mask, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {preview_mask, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {overlay_flags, COMPUTE_SHADER_WRITE},
+                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
                         },
                         COMPUTE_SHADER_READ);
 
@@ -269,6 +289,12 @@ void VulkanGSRenderer::executeRasterizeForward(
             // outputs
             resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
             resizeDeviceBuffer(buffers.n_contributors, num_pixels),
+            // selection overlay inputs
+            selection_mask,
+            preview_mask,
+            selection_colors,
+            overlay_flags,
+            overlay_params,
         }));
 }
 
