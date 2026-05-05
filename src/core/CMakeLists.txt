@@ -106,7 +106,7 @@ target_link_libraries(lfs_core
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(lfs_core PRIVATE OpenMP::OpenMP_CXX)
-    message(STATUS "✓ OpenMP support enabled for lfs_core")
+    message(STATUS "[ok] OpenMP support enabled for lfs_core")
 endif()
 
 # Platform-specific settings

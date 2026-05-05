@@ -197,19 +197,19 @@ namespace lfs::vis {
         VkPipelineLayout pivot_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pivot_pipeline = VK_NULL_HANDLE;
 
-        [[nodiscard]] bool init(VulkanContext& context) {
+        [[nodiscard]] bool init(VulkanContext& ctx) {
             if (device != VK_NULL_HANDLE) {
                 return true;
             }
-            this->context = &context;
-            device = context.device();
-            allocator = context.allocator();
-            pipeline_cache = context.pipelineCache();
-            graphics_queue = context.graphicsQueue();
-            graphics_queue_family = context.graphicsQueueFamily();
-            color_format = context.swapchainFormat();
-            depth_stencil_format = context.depthStencilFormat();
-            frames_in_flight = std::max<std::size_t>(1, context.framesInFlight());
+            this->context = &ctx;
+            device = ctx.device();
+            allocator = ctx.allocator();
+            pipeline_cache = ctx.pipelineCache();
+            graphics_queue = ctx.graphicsQueue();
+            graphics_queue_family = ctx.graphicsQueueFamily();
+            color_format = ctx.swapchainFormat();
+            depth_stencil_format = ctx.depthStencilFormat();
+            frames_in_flight = std::max<std::size_t>(1, ctx.framesInFlight());
             frame_resources.resize(frames_in_flight);
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE || color_format == VK_FORMAT_UNDEFINED ||
@@ -219,28 +219,28 @@ namespace lfs::vis {
                 return false;
             }
 
-            if (!createSampler() || !scene_image_uploader.init(context, scene_sampler) ||
+            if (!createSampler() || !scene_image_uploader.init(ctx, scene_sampler) ||
                 !createSceneDescriptors() || !createGridResources() ||
                 !createQuadBuffer() || !createPipelines()) {
                 reset();
                 return false;
             }
-            if (!mesh_pass.init(context, color_format, depth_stencil_format)) {
+            if (!mesh_pass.init(ctx, color_format, depth_stencil_format)) {
                 LOG_ERROR("Vulkan viewport pass: mesh sub-pass init failed");
                 reset();
                 return false;
             }
-            if (!environment_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
+            if (!environment_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
                 LOG_ERROR("Vulkan viewport pass: environment sub-pass init failed");
                 reset();
                 return false;
             }
-            if (!depth_blit_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
+            if (!depth_blit_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
                 LOG_ERROR("Vulkan viewport pass: depth-blit sub-pass init failed");
                 reset();
                 return false;
             }
-            if (!split_view_pass.init(context, color_format, depth_stencil_format, quad_buffer)) {
+            if (!split_view_pass.init(ctx, color_format, depth_stencil_format, quad_buffer)) {
                 LOG_ERROR("Vulkan viewport pass: split-view sub-pass init failed");
                 reset();
                 return false;

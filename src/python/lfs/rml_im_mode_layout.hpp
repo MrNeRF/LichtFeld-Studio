@@ -485,10 +485,10 @@ namespace lfs::python {
         void text_disabled(const std::string& t) { parent_->text_disabled(t); }
         void bullet_text(const std::string& t) { parent_->bullet_text(t); }
 
-        bool button(const std::string& l, std::tuple<float, float> s = {0, 0}) { return parent_->button(l, s); }
-        bool button_callback(const std::string& l, nb::object cb, std::tuple<float, float> s = {0, 0}) { return parent_->button_callback(l, cb, s); }
+        bool button(const std::string& l, std::tuple<float, float> s = {0.0f, 0.0f}) { return parent_->button(l, s); }
+        bool button_callback(const std::string& l, nb::object cb, std::tuple<float, float> s = {0.0f, 0.0f}) { return parent_->button_callback(l, cb, s); }
         bool small_button(const std::string& l) { return parent_->small_button(l); }
-        bool button_styled(const std::string& l, const std::string& st, std::tuple<float, float> s = {0, 0}) { return parent_->button_styled(l, st, s); }
+        bool button_styled(const std::string& l, const std::string& st, std::tuple<float, float> s = {0.0f, 0.0f}) { return parent_->button_styled(l, st, s); }
         std::tuple<bool, bool> checkbox(const std::string& l, bool v) { return parent_->checkbox(l, v); }
         std::tuple<bool, int> radio_button(const std::string& l, int c, int v) { return parent_->radio_button(l, c, v); }
 
