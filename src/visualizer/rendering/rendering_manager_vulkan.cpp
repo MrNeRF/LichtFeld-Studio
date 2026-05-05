@@ -830,7 +830,7 @@ namespace lfs::vis {
                 context.vulkan_context != nullptr &&
                 scene_manager != nullptr &&
                 scene_manager->hasSplatFiles() &&
-                request.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat &&
+                lfs::rendering::isVkSplatBackend(request.raster_backend) &&
                 !request.frame_view.orthographic &&
                 !request.equirectangular;
             if (vksplat_panel_supported) {
