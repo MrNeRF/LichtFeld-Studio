@@ -591,7 +591,8 @@ namespace lfs::vis {
             return RenderedPanel{.image = std::move(result->image), .metadata = std::move(result->metadata)};
         };
 
-        if (splitViewUsesGTComparison(settings_.split_view_mode) && scene_manager && has_renderable_model) {
+        if (splitViewUsesGTComparison(settings_.split_view_mode) && scene_manager &&
+            (has_renderable_model || has_point_cloud)) {
             std::shared_ptr<lfs::core::Camera> camera;
             const auto cameras = scene_manager->getScene().getAllCameras();
             if (frame_ctx.current_camera_id >= 0) {
@@ -636,16 +637,57 @@ namespace lfs::vis {
                                 request.equirectangular = render_camera->equirectangular;
                             }
 
-                            auto rendered = engine_->renderGaussiansImage(*model, request);
-                            if (rendered && rendered->image) {
-                                rendered->image = applyViewportAppearanceCorrection(
-                                    std::move(rendered->image),
+                            std::shared_ptr<lfs::core::Tensor> compare_image;
+                            lfs::rendering::FrameMetadata compare_metadata{};
+                            std::string compare_error;
+
+                            const bool use_point_cloud_compare =
+                                settings_.point_cloud_mode || !has_renderable_model;
+                            if (use_point_cloud_compare && has_renderable_model) {
+                                auto point_request = buildPointCloudRenderRequest(
+                                    frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
+                                point_request.frame_view = request.frame_view;
+                                auto rendered = engine_->renderPointCloudImage(*model, point_request);
+                                if (rendered && rendered->image) {
+                                    compare_image = std::move(rendered->image);
+                                    compare_metadata = std::move(rendered->metadata);
+                                } else {
+                                    compare_error = rendered ? "Point-cloud GT comparison render returned no image"
+                                                             : rendered.error();
+                                }
+                            } else if (use_point_cloud_compare && has_point_cloud) {
+                                const std::vector<glm::mat4> point_cloud_transforms = {
+                                    frame_ctx.scene_state.point_cloud_transform};
+                                auto point_request = buildPointCloudRenderRequest(
+                                    frame_ctx, gt_size, point_cloud_transforms);
+                                point_request.frame_view = request.frame_view;
+                                auto rendered = engine_->renderPointCloudImage(
+                                    *frame_ctx.scene_state.point_cloud, point_request);
+                                if (rendered && rendered->image) {
+                                    compare_image = std::move(rendered->image);
+                                    compare_metadata = std::move(rendered->metadata);
+                                } else {
+                                    compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
+                                                             : rendered.error();
+                                }
+                            } else if (has_renderable_model) {
+                                auto rendered = engine_->renderGaussiansImage(*model, request);
+                                if (rendered && rendered->image) {
+                                    compare_image = std::move(rendered->image);
+                                    compare_metadata = std::move(rendered->metadata);
+                                } else {
+                                    compare_error = rendered ? "GT comparison render returned no image" : rendered.error();
+                                }
+                            } else {
+                                compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
+                            }
+
+                            if (compare_image) {
+                                compare_image = applyViewportAppearanceCorrection(
+                                    std::move(compare_image),
                                     scene_manager,
                                     settings_,
                                     camera->uid());
-                            }
-
-                            if (rendered && rendered->image) {
                                 auto gt_image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(render_size, true, gt_size);
@@ -654,8 +696,8 @@ namespace lfs::vis {
                                 pending_split_view.background = settings_.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
                                 pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, true};
-                                pending_split_view.right = {rendered->image, settings_.split_position, 1.0f, false, !rendered->metadata.flip_y};
-                                rendered_metadata = rendered->metadata;
+                                pending_split_view.right = {compare_image, settings_.split_position, 1.0f, false, !compare_metadata.flip_y};
+                                rendered_metadata = compare_metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
                                 rendered_split_info = SplitViewInfo{
@@ -665,7 +707,7 @@ namespace lfs::vis {
                                     .left_name = "Ground Truth",
                                     .right_name = "Rendered"};
                             } else {
-                                render_error = rendered ? "GT comparison render returned no image" : rendered.error();
+                                render_error = compare_error;
                             }
                         }
                     }
