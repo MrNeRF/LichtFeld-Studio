@@ -183,6 +183,13 @@ namespace lfs::rendering {
                                           std::size_t byte_count,
                                           std::size_t dst_offset,
                                           cudaStream_t stream) const;
+        [[nodiscard]] bool copyToTensor(lfs::core::Tensor& tensor,
+                                        std::size_t byte_count,
+                                        cudaStream_t stream = nullptr) const;
+        [[nodiscard]] bool copyToTensor(lfs::core::Tensor& tensor,
+                                        std::size_t byte_count,
+                                        std::size_t src_offset,
+                                        cudaStream_t stream) const;
 
     private:
         [[nodiscard]] bool fail(std::string message) const;

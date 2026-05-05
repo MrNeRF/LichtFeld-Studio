@@ -400,9 +400,76 @@ namespace lfs::vis {
         }
     } // namespace
 
+    std::expected<lfs::core::Tensor, std::string> RenderingManager::buildVksplatSelectionMask(
+        SceneManager& scene_manager,
+        const lfs::rendering::FrameView& frame_view,
+        const bool equirectangular,
+        const VksplatSelectionMaskShape shape,
+        const std::vector<glm::vec4>& primitives) {
+        const auto settings = getSettings();
+        if (settings.raster_backend != lfs::rendering::GaussianRasterBackend::VkSplat) {
+            return std::unexpected("VkSplat selection query is available only when the VkSplat backend is active");
+        }
+        if (!scene_manager.hasSplatFiles()) {
+            return std::unexpected("VkSplat selection query is available only for loaded splat files");
+        }
+        if (!last_vulkan_context_) {
+            return std::unexpected("VkSplat selection query requires an active Vulkan context");
+        }
+        if (!last_vulkan_context_->externalMemoryInteropEnabled()) {
+            return std::unexpected("VkSplat selection query requires CUDA/Vulkan external-memory interop");
+        }
+        if (settings.point_cloud_mode) {
+            return std::unexpected("VkSplat selection query is disabled in point-cloud mode");
+        }
+        if (primitives.empty()) {
+            return std::unexpected("VkSplat selection query requires at least one primitive");
+        }
+
+        auto render_lock = acquireLiveModelRenderLock(&scene_manager);
+        auto scene_state = scene_manager.buildRenderState();
+        const lfs::core::SplatData* const model = scene_state.combined_model;
+        if (!hasRenderableGaussians(model)) {
+            return std::unexpected("VkSplat selection query found no renderable Gaussian model");
+        }
+
+        if (!vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        }
+
+        const auto map_shape = [](const VksplatSelectionMaskShape value) {
+            switch (value) {
+            case VksplatSelectionMaskShape::Brush:
+                return VksplatViewportRenderer::SelectionMaskShape::Brush;
+            case VksplatSelectionMaskShape::Rectangle:
+                return VksplatViewportRenderer::SelectionMaskShape::Rectangle;
+            }
+            return VksplatViewportRenderer::SelectionMaskShape::Brush;
+        };
+
+        VksplatViewportRenderer::SelectionMaskRequest request{
+            .frame_view = frame_view,
+            .scene =
+                {.model_transforms = &scene_state.model_transforms,
+                 .transform_indices = scene_state.transform_indices,
+                 .node_visibility_mask = scene_state.node_visibility_mask},
+            .shape = map_shape(shape),
+            .primitives = primitives,
+            .equirectangular = equirectangular,
+        };
+
+        const bool force_input_upload =
+            (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::SPLATS) != 0;
+        return vksplat_viewport_renderer_->buildSelectionMask(
+            *last_vulkan_context_, *model, request, force_input_upload);
+    }
+
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
         SceneManager* const scene_manager = context.scene_manager;
+        if (context.vulkan_context) {
+            last_vulkan_context_ = context.vulkan_context;
+        }
 
         if (!engine_) {
             engine_ = lfs::rendering::RenderingEngine::createRasterOnly();

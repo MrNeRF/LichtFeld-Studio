@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -52,6 +53,19 @@ namespace lfs::vis {
                                                  const ModelInputSnapshot& b) = default;
         };
 
+        enum class SelectionMaskShape : std::uint32_t {
+            Brush = 0,
+            Rectangle = 1,
+        };
+
+        struct SelectionMaskRequest {
+            lfs::rendering::FrameView frame_view;
+            lfs::rendering::GaussianSceneState scene;
+            SelectionMaskShape shape = SelectionMaskShape::Brush;
+            std::vector<glm::vec4> primitives;
+            bool equirectangular = false;
+        };
+
         VksplatViewportRenderer();
         ~VksplatViewportRenderer();
 
@@ -63,6 +77,11 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload);
+        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
+            VulkanContext& context,
+            const lfs::core::SplatData& splat_data,
+            const SelectionMaskRequest& request,
+            bool force_input_upload);
 
         void reset();
 
@@ -73,7 +92,8 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> uploadInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
-            std::size_t ring_slot);
+            std::size_t ring_slot,
+            bool synchronize_upload = false);
         struct OverlayBindingViews {
             _VulkanBuffer selection_mask{};
             _VulkanBuffer preview_mask{};
@@ -81,6 +101,7 @@ namespace lfs::vis {
             _VulkanBuffer transform_indices{};
             _VulkanBuffer node_mask{};
             _VulkanBuffer overlay_params{};
+            _VulkanBuffer model_transforms{};
         };
         [[nodiscard]] std::expected<OverlayBindingViews, std::string> uploadSelectionOverlay(
             VulkanContext& context,
@@ -104,7 +125,8 @@ namespace lfs::vis {
         // setup costs into 1×, and surfacing the regions to the rasterizer through
         // _VulkanBuffer offset views (no descriptor-side cost).
         static constexpr std::size_t kInputRegionCount = 4;
-        static constexpr std::size_t kOverlayRegionCount = 6;
+        static constexpr std::size_t kOverlayRegionCount = 7;
+        static constexpr std::size_t kSelectionQueryRegionCount = 5;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaInputSlot {
             VulkanContext::ExternalBuffer buffer{};
@@ -123,6 +145,18 @@ namespace lfs::vis {
             lfs::core::Tensor transform_indices_source;
             lfs::core::Tensor node_mask_source;
             lfs::core::Tensor overlay_params_source;
+            lfs::core::Tensor model_transforms_source;
+        };
+        struct CudaSelectionQuerySlot {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
+            std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
+            lfs::core::Tensor transform_indices_source;
+            lfs::core::Tensor node_mask_source;
+            lfs::core::Tensor primitive_source;
+            lfs::core::Tensor model_transforms_source;
+            lfs::core::Tensor output_tensor;
         };
 
         void detachManagedBuffers();
@@ -147,6 +181,7 @@ namespace lfs::vis {
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
+        CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the

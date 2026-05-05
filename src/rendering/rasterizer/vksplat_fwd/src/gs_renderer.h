@@ -21,6 +21,26 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     float world_view_transform[16];
 });
 
+PACK_STRUCT(struct VulkanGSSelectionMaskUniforms {
+    uint32_t num_splats;
+    uint32_t primitive_count;
+    uint32_t mode;
+    uint32_t transform_indices_enabled;
+    uint32_t node_visibility_enabled;
+    uint32_t node_visibility_count;
+    uint32_t num_model_transforms;
+    uint32_t image_height;
+    uint32_t image_width;
+    uint32_t pad0;
+    uint32_t pad1;
+    uint32_t pad2;
+    float fx;
+    float fy;
+    float cx;
+    float cy;
+    float world_view_transform[16];
+});
+
 class VulkanGSRenderer : public VulkanGSPipeline {
 public:
     VulkanGSRenderer();
@@ -46,6 +66,7 @@ public:
                                   const _VulkanBuffer& transform_indices,
                                   const _VulkanBuffer& node_mask,
                                   const _VulkanBuffer& overlay_params,
+                                  const _VulkanBuffer& model_transforms,
                                   size_t alloc_reserve = 0);
     void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
@@ -56,6 +77,13 @@ public:
                                  const _VulkanBuffer& selection_colors,
                                  const _VulkanBuffer& overlay_flags,
                                  const _VulkanBuffer& overlay_params);
+    void executeSelectionMask(const VulkanGSSelectionMaskUniforms& uniforms,
+                              VulkanGSPipelineBuffers& buffers,
+                              const _VulkanBuffer& transform_indices,
+                              const _VulkanBuffer& node_mask,
+                              const _VulkanBuffer& primitives,
+                              const _VulkanBuffer& model_transforms,
+                              const _VulkanBuffer& selection_out);
 
     void executeCalculateIndexBufferOffset(VulkanGSPipelineBuffers& buffers);
     void executeSort(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, int num_bits);
@@ -66,7 +94,8 @@ protected:
         Buffer<int32_t>& input_buffer,
         Buffer<int32_t>& output_buffer);
 
-    _ComputePipeline pipeline_projection_forward = _ComputePipeline(15);
+    _ComputePipeline pipeline_projection_forward = _ComputePipeline(16);
+    _ComputePipeline pipeline_selection_mask = _ComputePipeline(6);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     // 3 bindings: sorted_keys, out_tile_ranges, index_buffer_offset (for num_isects).
     _ComputePipeline pipeline_compute_tile_ranges[2] = {

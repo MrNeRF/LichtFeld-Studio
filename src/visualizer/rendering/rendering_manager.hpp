@@ -25,6 +25,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -99,6 +100,17 @@ namespace lfs::vis {
         // Main render function
         void renderFrame(const RenderContext& context);
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
+
+        enum class VksplatSelectionMaskShape : std::uint32_t {
+            Brush = 0,
+            Rectangle = 1,
+        };
+        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildVksplatSelectionMask(
+            SceneManager& scene_manager,
+            const lfs::rendering::FrameView& frame_view,
+            bool equirectangular,
+            VksplatSelectionMaskShape shape,
+            const std::vector<glm::vec4>& primitives);
 
         // Render preview image without touching the shared viewport presentation textures.
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(SceneManager* scene_manager,
@@ -444,6 +456,7 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
+        VulkanContext* last_vulkan_context_ = nullptr;
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;

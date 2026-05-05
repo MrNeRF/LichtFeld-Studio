@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <format>
 #include <glm/glm.hpp>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string_view>
@@ -39,6 +40,7 @@ namespace lfs::vis {
             const std::filesystem::path root{LFS_VKSPLAT_SPV_DIR};
             return {
                 {"projection_forward", (root / "generated/projection_forward.spv").string()},
+                {"selection_mask", (root / "generated/selection_mask.spv").string()},
                 {"generate_keys", (root / "generated/generate_keys.spv").string()},
                 {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
                 {"setup_dispatch_indirect", (root / "generated/setup_dispatch_indirect.spv").string()},
@@ -61,22 +63,6 @@ namespace lfs::vis {
                 }
             }
             return row_major;
-        }
-
-        [[nodiscard]] std::array<float, 16> multiplyRowMajorMat4(const std::array<float, 16>& a,
-                                                                 const std::array<float, 16>& b) {
-            std::array<float, 16> result{};
-            for (int row = 0; row < 4; ++row) {
-                for (int col = 0; col < 4; ++col) {
-                    float value = 0.0f;
-                    for (int k = 0; k < 4; ++k) {
-                        value += a[static_cast<std::size_t>(row * 4 + k)] *
-                                 b[static_cast<std::size_t>(k * 4 + col)];
-                    }
-                    result[static_cast<std::size_t>(row * 4 + col)] = value;
-                }
-            }
-            return result;
         }
 
         [[nodiscard]] std::size_t alignUp(const std::size_t value, const std::size_t alignment) {
@@ -173,6 +159,15 @@ namespace lfs::vis {
             OverlayTransformIndices = 3,
             OverlayNodeMask = 4,
             OverlayParams = 5,
+            OverlayModelTransforms = 6,
+        };
+
+        enum SelectionQueryRegion : std::size_t {
+            SelectionQueryOutput = 0,
+            SelectionQueryTransformIndices = 1,
+            SelectionQueryNodeMask = 2,
+            SelectionQueryPrimitives = 3,
+            SelectionQueryModelTransforms = 4,
         };
 
         [[nodiscard]] bool hasOverlayTensor(const Tensor* const tensor, const std::size_t num_splats) {
@@ -255,10 +250,9 @@ namespace lfs::vis {
             EmphasisFlags = 20,
             CursorFlags = 21,
             MarkerFlags = 22,
-            ModelTransform = 23,
-            SelectionCursor = 27,
-            SelectionFlags = 28,
-            ParamCount = 29,
+            SelectionCursor = 23,
+            SelectionFlags = 24,
+            ParamCount = 25,
         };
 
         [[nodiscard]] bool hasTransformIndices(const std::shared_ptr<Tensor>& tensor,
@@ -306,6 +300,58 @@ namespace lfs::vis {
             }
         }
 
+        [[nodiscard]] std::expected<Tensor, std::string> makeSelectionPrimitiveTensor(
+            const std::vector<glm::vec4>& primitives) {
+            try {
+                if (primitives.empty()) {
+                    return std::unexpected("VkSplat selection query requires at least one primitive");
+                }
+                Tensor cpu = Tensor::empty({primitives.size(), std::size_t{4}},
+                                           Device::CPU,
+                                           DataType::Float32);
+                float* const dst = cpu.ptr<float>();
+                if (!dst) {
+                    return std::unexpected("VkSplat selection primitive allocation returned a null pointer");
+                }
+                for (std::size_t i = 0; i < primitives.size(); ++i) {
+                    dst[i * 4 + 0] = primitives[i].x;
+                    dst[i * 4 + 1] = primitives[i].y;
+                    dst[i * 4 + 2] = primitives[i].z;
+                    dst[i * 4 + 3] = primitives[i].w;
+                }
+                return cpu.to(Device::CUDA).contiguous();
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to stage selection primitives: {}", e.what()));
+            }
+        }
+
+        [[nodiscard]] std::size_t modelTransformCount(const std::vector<glm::mat4>* const transforms) {
+            return transforms && !transforms->empty() ? transforms->size() : std::size_t{1};
+        }
+
+        [[nodiscard]] std::expected<Tensor, std::string> makeModelTransformsTensor(
+            const std::vector<glm::mat4>* const transforms) {
+            try {
+                const std::size_t count = modelTransformCount(transforms);
+                Tensor cpu = Tensor::empty({count * std::size_t{4}, std::size_t{4}},
+                                           Device::CPU,
+                                           DataType::Float32);
+                float* const dst = cpu.ptr<float>();
+                if (!dst) {
+                    return std::unexpected("VkSplat model-transform allocation returned a null pointer");
+                }
+                for (std::size_t i = 0; i < count; ++i) {
+                    const glm::mat4 transform =
+                        transforms && i < transforms->size() ? (*transforms)[i] : glm::mat4(1.0f);
+                    const auto rows = rowMajorMat4(transform);
+                    std::memcpy(dst + i * 16, rows.data(), rows.size() * sizeof(float));
+                }
+                return cpu.to(Device::CUDA).contiguous();
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("VkSplat failed to stage model transforms: {}", e.what()));
+            }
+        }
+
         void writeVec4(float* dst, const std::size_t index, const glm::vec4& value) {
             dst[index * 4 + 0] = value.x;
             dst[index * 4 + 1] = value.y;
@@ -322,13 +368,6 @@ namespace lfs::vis {
                                     matrix[2][row],
                                     matrix[3][row]));
             }
-        }
-
-        [[nodiscard]] glm::mat4 firstModelTransform(const lfs::rendering::ViewportRenderRequest& request) {
-            if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
-                return request.scene.model_transforms->front();
-            }
-            return glm::mat4(1.0f);
         }
 
         [[nodiscard]] std::expected<Tensor, std::string> makeOverlayParamsTensor(
@@ -401,7 +440,6 @@ namespace lfs::vis {
                                     request.overlay.markers.show_center_markers ? 1.0f : 0.0f,
                                     0.0f,
                                     0.0f));
-                writeMat4Rows(dst, ModelTransform, firstModelTransform(request));
                 const bool cursor_selection_enabled =
                     !request.overlay.cursor.saturation_preview &&
                     request.overlay.cursor.enabled &&
@@ -459,6 +497,60 @@ namespace lfs::vis {
                 .sh0_bytes = tensor_bytes(sh0),
                 .shn_bytes = tensor_bytes(shn),
             };
+        }
+
+        void populateVksplatCameraUniforms(
+            VulkanGSRendererUniforms& uniforms,
+            const lfs::rendering::FrameView& frame_view,
+            const lfs::rendering::GaussianSceneState& scene,
+            const int active_sh_degree,
+            const std::size_t num_splats) {
+            (void)scene;
+            uniforms = {};
+            uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
+            uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
+            uniforms.grid_width = _CEIL_DIV(uniforms.image_width, TILE_WIDTH);
+            uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
+            uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
+            uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
+            uniforms.camera_model = 0;
+
+            if (frame_view.intrinsics_override) {
+                const auto& intrinsics = *frame_view.intrinsics_override;
+                uniforms.fx = intrinsics.focal_x;
+                uniforms.fy = intrinsics.focal_y;
+                uniforms.cx = intrinsics.center_x;
+                uniforms.cy = intrinsics.center_y;
+            } else {
+                const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
+                    frame_view.size, frame_view.focal_length_mm);
+                uniforms.fx = fx;
+                uniforms.fy = fy;
+                uniforms.cx = static_cast<float>(frame_view.size.x) * 0.5f;
+                uniforms.cy = static_cast<float>(frame_view.size.y) * 0.5f;
+            }
+
+            const glm::mat3 camera_to_world =
+                lfs::rendering::dataCameraToWorldFromVisualizerRotation(frame_view.rotation);
+            const glm::mat3 world_to_camera = glm::transpose(camera_to_world);
+            const glm::vec3 translation = -world_to_camera * frame_view.translation;
+
+            std::array<float, 16> row_major_view{};
+            row_major_view[15] = 1.0f;
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 3; ++col) {
+                    row_major_view[static_cast<std::size_t>(row * 4 + col)] = world_to_camera[col][row];
+                }
+            }
+            row_major_view[3] = translation.x;
+            row_major_view[7] = translation.y;
+            row_major_view[11] = translation.z;
+            for (int row = 0; row < 4; ++row) {
+                for (int col = 0; col < 4; ++col) {
+                    uniforms.world_view_transform[4 * row + col] =
+                        row_major_view[static_cast<std::size_t>(4 * col + row)];
+                }
+            }
         }
 
         struct ComposePushConstants {
@@ -529,6 +621,11 @@ namespace lfs::vis {
             }
             slot = {};
         }
+        cuda_selection_query_.interop.reset();
+        if (context_) {
+            context_->destroyExternalBuffer(cuda_selection_query_.buffer);
+        }
+        cuda_selection_query_ = {};
         for (auto& snap : ring_uploaded_) {
             snap = {};
         }
@@ -639,6 +736,8 @@ namespace lfs::vis {
             alignUp(std::max<std::size_t>(request.overlay.emphasis.emphasized_node_mask.size(), 1), 4);
         const std::size_t overlay_params_region_bytes =
             static_cast<std::size_t>(ParamCount) * 4 * sizeof(float);
+        const std::size_t model_transforms_region_bytes =
+            modelTransformCount(request.scene.model_transforms) * 16 * sizeof(float);
         std::array<std::size_t, kOverlayRegionCount> region_bytes{};
         region_bytes[OverlaySelectionMask] = mask_region_bytes;
         region_bytes[OverlayPreviewMask] = mask_region_bytes;
@@ -646,6 +745,7 @@ namespace lfs::vis {
         region_bytes[OverlayTransformIndices] = transform_region_bytes;
         region_bytes[OverlayNodeMask] = node_mask_region_bytes;
         region_bytes[OverlayParams] = overlay_params_region_bytes;
+        region_bytes[OverlayModelTransforms] = model_transforms_region_bytes;
         std::array<std::size_t, kOverlayRegionCount> region_offset{};
         const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
 
@@ -705,6 +805,11 @@ namespace lfs::vis {
             return std::unexpected(overlay_params.error());
         }
         slot.overlay_params_source = std::move(*overlay_params);
+        auto model_transforms = makeModelTransformsTensor(request.scene.model_transforms);
+        if (!model_transforms) {
+            return std::unexpected(model_transforms.error());
+        }
+        slot.model_transforms_source = std::move(*model_transforms);
 
         cudaStream_t stream = slot.color_table_source.stream();
         if (selection_enabled) {
@@ -757,6 +862,13 @@ namespace lfs::vis {
             return std::unexpected(std::format("VkSplat overlay parameter upload failed: {}",
                                                slot.interop.lastError()));
         }
+        if (!slot.interop.copyFromTensor(slot.model_transforms_source,
+                                         slot.region_bytes[OverlayModelTransforms],
+                                         slot.region_offset[OverlayModelTransforms],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat model-transform upload failed: {}",
+                                               slot.interop.lastError()));
+        }
 
         auto& timeline = overlay_upload_timelines_[ring_slot];
         const std::uint64_t signal_value = ++timeline.value;
@@ -778,6 +890,7 @@ namespace lfs::vis {
             .transform_indices = view(OverlayTransformIndices),
             .node_mask = view(OverlayNodeMask),
             .overlay_params = view(OverlayParams),
+            .model_transforms = view(OverlayModelTransforms),
         };
     }
 
@@ -874,7 +987,8 @@ namespace lfs::vis {
     std::expected<void, std::string> VksplatViewportRenderer::uploadInputs(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
-        const std::size_t ring_slot) {
+        const std::size_t ring_slot,
+        const bool synchronize_upload) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -928,6 +1042,13 @@ namespace lfs::vis {
             !copy_region(InputShCoeffs, packed->sh_coeffs)) {
             return std::unexpected(std::format("VkSplat CUDA buffer copy failed: {}",
                                                slot.interop.lastError()));
+        }
+        if (synchronize_upload) {
+            if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat CUDA input upload sync failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
         }
 
         // Cross-API handoff: signal CUDA-side after the memcpys complete, queue
@@ -1147,6 +1268,209 @@ namespace lfs::vis {
         return {};
     }
 
+    std::expected<lfs::core::Tensor, std::string> VksplatViewportRenderer::buildSelectionMask(
+        VulkanContext& context,
+        const lfs::core::SplatData& splat_data,
+        const SelectionMaskRequest& request,
+        const bool force_input_upload) {
+        const glm::ivec2 size = request.frame_view.size;
+        if (size.x <= 0 || size.y <= 0) {
+            return std::unexpected("VkSplat selection query received an invalid viewport size");
+        }
+        if (request.frame_view.orthographic) {
+            return std::unexpected("VkSplat selection query supports pinhole cameras, not orthographic cameras");
+        }
+        if (request.equirectangular) {
+            return std::unexpected("VkSplat selection query supports pinhole cameras, not equirectangular cameras");
+        }
+        if (request.primitives.empty()) {
+            return std::unexpected("VkSplat selection query requires at least one primitive");
+        }
+        const std::size_t num_splats = static_cast<std::size_t>(splat_data.size());
+        if (num_splats == 0) {
+            return std::unexpected("VkSplat selection query cannot run on an empty model");
+        }
+        if (num_splats > std::numeric_limits<std::uint32_t>::max() ||
+            request.primitives.size() > std::numeric_limits<std::uint32_t>::max()) {
+            return std::unexpected("VkSplat selection query exceeds shader dispatch limits");
+        }
+        assert(context.externalMemoryInteropEnabled());
+
+        if (auto ok = ensureInitialized(context); !ok) {
+            return std::unexpected(ok.error());
+        }
+
+        const std::size_t ring_slot = context.currentFrameSlot() % kInputRingSize;
+        assert(context.framesInFlight() == kInputRingSize);
+
+        if (force_input_upload || !inputsResident(splat_data, ring_slot)) {
+            if (auto ok = uploadInputs(context, splat_data, ring_slot, true); !ok) {
+                return std::unexpected(ok.error());
+            }
+            renderer_.resetNumIndicesEstimate();
+        }
+        plugRingInputs(ring_slot, num_splats);
+
+        auto& slot = cuda_selection_query_;
+        const bool transform_indices_enabled = hasTransformIndices(request.scene.transform_indices, num_splats);
+        const bool node_visibility_enabled = !request.scene.node_visibility_mask.empty();
+
+        const std::size_t output_region_bytes = alignUp(std::max<std::size_t>(num_splats, 1), 4);
+        const std::size_t transform_region_bytes =
+            std::max<std::size_t>(transform_indices_enabled ? num_splats * sizeof(std::int32_t)
+                                                            : sizeof(std::int32_t),
+                                  sizeof(std::int32_t));
+        const std::size_t node_mask_region_bytes =
+            alignUp(std::max<std::size_t>(request.scene.node_visibility_mask.size(), 1), 4);
+        const std::size_t primitive_region_bytes = request.primitives.size() * 4 * sizeof(float);
+        const std::size_t model_transforms_region_bytes =
+            modelTransformCount(request.scene.model_transforms) * 16 * sizeof(float);
+        std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
+        region_bytes[SelectionQueryOutput] = output_region_bytes;
+        region_bytes[SelectionQueryTransformIndices] = transform_region_bytes;
+        region_bytes[SelectionQueryNodeMask] = node_mask_region_bytes;
+        region_bytes[SelectionQueryPrimitives] = primitive_region_bytes;
+        region_bytes[SelectionQueryModelTransforms] = model_transforms_region_bytes;
+        std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
+        const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
+
+        if (auto ok = ensureCudaInteropBuffer(context,
+                                              slot.buffer,
+                                              slot.interop,
+                                              total_bytes,
+                                              "vksplat_selection_query",
+                                              "selection query");
+            !ok) {
+            return std::unexpected(ok.error());
+        }
+        slot.region_offset = region_offset;
+        slot.region_bytes = region_bytes;
+
+        auto transform_indices = prepareTransformIndicesTensor(request.scene.transform_indices, num_splats);
+        if (!transform_indices) {
+            return std::unexpected(transform_indices.error());
+        }
+        slot.transform_indices_source = std::move(*transform_indices);
+        auto node_mask = makeNodeMaskTensor(request.scene.node_visibility_mask);
+        if (!node_mask) {
+            return std::unexpected(node_mask.error());
+        }
+        slot.node_mask_source = std::move(*node_mask);
+        auto primitive_source = makeSelectionPrimitiveTensor(request.primitives);
+        if (!primitive_source) {
+            return std::unexpected(primitive_source.error());
+        }
+        slot.primitive_source = std::move(*primitive_source);
+        auto model_transforms = makeModelTransformsTensor(request.scene.model_transforms);
+        if (!model_transforms) {
+            return std::unexpected(model_transforms.error());
+        }
+        slot.model_transforms_source = std::move(*model_transforms);
+
+        const cudaStream_t stream = slot.primitive_source.stream();
+        if (!slot.interop.copyFromTensor(slot.transform_indices_source,
+                                         slot.region_bytes[SelectionQueryTransformIndices],
+                                         slot.region_offset[SelectionQueryTransformIndices],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat selection transform-index upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.node_mask_source,
+                                         slot.node_mask_source.bytes(),
+                                         slot.region_offset[SelectionQueryNodeMask],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat selection node-mask upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.primitive_source,
+                                         slot.region_bytes[SelectionQueryPrimitives],
+                                         slot.region_offset[SelectionQueryPrimitives],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat selection primitive upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (!slot.interop.copyFromTensor(slot.model_transforms_source,
+                                         slot.region_bytes[SelectionQueryModelTransforms],
+                                         slot.region_offset[SelectionQueryModelTransforms],
+                                         stream)) {
+            return std::unexpected(std::format("VkSplat selection model-transform upload failed: {}",
+                                               slot.interop.lastError()));
+        }
+        auto* const output_ptr =
+            static_cast<std::uint8_t*>(slot.interop.devicePointer()) + slot.region_offset[SelectionQueryOutput];
+        if (const cudaError_t status = cudaMemsetAsync(output_ptr, 0, output_region_bytes, stream);
+            status != cudaSuccess) {
+            return std::unexpected(std::format("VkSplat selection output clear failed: {} ({})",
+                                               cudaGetErrorName(status),
+                                               cudaGetErrorString(status)));
+        }
+        if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
+            return std::unexpected(std::format("VkSplat selection upload sync failed: {} ({})",
+                                               cudaGetErrorName(status),
+                                               cudaGetErrorString(status)));
+        }
+
+        const auto view = [&](const std::size_t region) {
+            return makeRegionView(slot.buffer, slot.region_offset[region], slot.region_bytes[region]);
+        };
+
+        VulkanGSRendererUniforms camera_uniforms{};
+        populateVksplatCameraUniforms(camera_uniforms,
+                                      request.frame_view,
+                                      request.scene,
+                                      0,
+                                      num_splats);
+        VulkanGSSelectionMaskUniforms selection_uniforms{};
+        selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
+        selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
+        selection_uniforms.mode = static_cast<std::uint32_t>(request.shape);
+        selection_uniforms.transform_indices_enabled = transform_indices_enabled ? 1u : 0u;
+        selection_uniforms.node_visibility_enabled = node_visibility_enabled ? 1u : 0u;
+        selection_uniforms.node_visibility_count =
+            static_cast<std::uint32_t>(request.scene.node_visibility_mask.size());
+        selection_uniforms.num_model_transforms =
+            static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
+        selection_uniforms.image_height = camera_uniforms.image_height;
+        selection_uniforms.image_width = camera_uniforms.image_width;
+        selection_uniforms.fx = camera_uniforms.fx;
+        selection_uniforms.fy = camera_uniforms.fy;
+        selection_uniforms.cx = camera_uniforms.cx;
+        selection_uniforms.cy = camera_uniforms.cy;
+        for (std::size_t i = 0; i < 16; ++i) {
+            selection_uniforms.world_view_transform[i] = camera_uniforms.world_view_transform[i];
+        }
+
+        try {
+            auto batch = DeviceGuard(&renderer_);
+            renderer_.executeSelectionMask(selection_uniforms,
+                                           buffers_,
+                                           view(SelectionQueryTransformIndices),
+                                           view(SelectionQueryNodeMask),
+                                           view(SelectionQueryPrimitives),
+                                           view(SelectionQueryModelTransforms),
+                                           view(SelectionQueryOutput));
+        } catch (const std::exception& e) {
+            return std::unexpected(std::format("VkSplat selection query failed: {}", e.what()));
+        }
+
+        slot.output_tensor = Tensor::empty({num_splats}, Device::CUDA, DataType::Bool);
+        if (!slot.interop.copyToTensor(slot.output_tensor,
+                                       num_splats,
+                                       slot.region_offset[SelectionQueryOutput],
+                                       slot.output_tensor.stream())) {
+            return std::unexpected(std::format("VkSplat selection output download failed: {}",
+                                               slot.interop.lastError()));
+        }
+        if (const cudaError_t status = cudaStreamSynchronize(slot.output_tensor.stream());
+            status != cudaSuccess) {
+            return std::unexpected(std::format("VkSplat selection output sync failed: {} ({})",
+                                               cudaGetErrorName(status),
+                                               cudaGetErrorString(status)));
+        }
+
+        return slot.output_tensor;
+    }
+
     std::expected<VksplatViewportRenderer::RenderResult, std::string> VksplatViewportRenderer::render(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
@@ -1199,6 +1523,7 @@ namespace lfs::vis {
         uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
         uniforms.num_splats = static_cast<std::uint32_t>(buffers_.num_splats);
         uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
+        uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
         uniforms.camera_model = 0;
 
         if (request.frame_view.intrinsics_override) {
@@ -1231,16 +1556,6 @@ namespace lfs::vis {
         row_major_view[3] = translation.x;
         row_major_view[7] = translation.y;
         row_major_view[11] = translation.z;
-        // VkSplat doesn't yet rebake per-gaussian transform indices, so it can
-        // only fold a single model transform into the view matrix. With one or
-        // more visible nodes, apply the first transform — the data→visualizer
-        // axes correction is identical across paste-cloned nodes, so this keeps
-        // the typical multi-node case (paste, same-source duplicates) oriented
-        // correctly. Truly heterogeneous per-node transforms still need a CUDA
-        // backend until vksplat grows transform indexing.
-        if (request.scene.model_transforms && !request.scene.model_transforms->empty()) {
-            row_major_view = multiplyRowMajorMat4(row_major_view, rowMajorMat4(request.scene.model_transforms->front()));
-        }
         for (int row = 0; row < 4; ++row) {
             for (int col = 0; col < 4; ++col) {
                 uniforms.world_view_transform[4 * row + col] =
@@ -1255,7 +1570,8 @@ namespace lfs::vis {
                                                buffers_,
                                                overlay_bindings->transform_indices,
                                                overlay_bindings->node_mask,
-                                               overlay_bindings->overlay_params);
+                                               overlay_bindings->overlay_params,
+                                               overlay_bindings->model_transforms);
             renderer_.executeCalculateIndexBufferOffset(buffers_);
             if (buffers_.num_indices > 0) {
                 renderer_.executeGenerateKeys(uniforms, buffers_);

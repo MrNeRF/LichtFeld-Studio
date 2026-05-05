@@ -248,6 +248,8 @@ namespace lfs::core {
         size_t consolidateNodeModels();
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
         [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
 
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> createMergedModelWithTransforms() const;
         [[nodiscard]] static std::unique_ptr<lfs::core::SplatData> mergeSplatsWithTransforms(
@@ -331,6 +333,7 @@ namespace lfs::core {
 
         size_t getNodeCount() const { return nodes_.size(); }
         size_t getTotalGaussianCount() const;
+        size_t getSelectionGaussianCount() const;
         std::vector<const SceneNode*> getNodes() const;
         const SceneNode* getNode(const std::string& name) const;
         SceneNode* getMutableNode(const std::string& name);
@@ -352,6 +355,7 @@ namespace lfs::core {
             model_cache_valid_.store(false, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
             cached_transform_indices_.reset();
+            cached_visible_selection_indices_.reset();
         }
         void invalidateTransformCache() { transform_cache_valid_.store(false, std::memory_order_release); }
         void markDirty() { invalidateCache(); }
@@ -371,6 +375,7 @@ namespace lfs::core {
         mutable std::atomic<int> export_pin_count_{0};
         mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
+        mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;
         mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
 
@@ -393,6 +398,8 @@ namespace lfs::core {
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(const std::string& name, bool keep_children, bool force);
         void setNodeVisibilityById(NodeId id, bool visible);
+        [[nodiscard]] size_t currentSelectionCapacity() const;
+        void resizeSelectionIfSizeMismatch(size_t expected_size);
 
         SelectionGroup* findGroup(uint8_t id);
         const SelectionGroup* findGroup(uint8_t id) const;

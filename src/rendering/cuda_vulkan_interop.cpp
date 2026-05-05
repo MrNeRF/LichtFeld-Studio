@@ -798,6 +798,47 @@ namespace lfs::rendering {
         return failCuda("cudaMemcpyAsync(CUDA tensor -> Vulkan buffer)", status);
     }
 
+    bool CudaVulkanBufferInterop::copyToTensor(lfs::core::Tensor& tensor,
+                                               const std::size_t byte_count,
+                                               const cudaStream_t stream) const {
+        return copyToTensor(tensor, byte_count, 0, stream);
+    }
+
+    bool CudaVulkanBufferInterop::copyToTensor(lfs::core::Tensor& tensor,
+                                               const std::size_t byte_count,
+                                               const std::size_t src_offset,
+                                               const cudaStream_t stream) const {
+        last_error_.clear();
+        if (!valid()) {
+            return fail("CUDA/Vulkan external buffer is not initialized");
+        }
+        if (byte_count == 0 || src_offset > size_ || byte_count > size_ - src_offset) {
+            return fail(std::format(
+                "CUDA/Vulkan buffer copy [{}, {}+{}) exceeds source {}",
+                src_offset, src_offset, byte_count, size_));
+        }
+        if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+            return fail("CUDA/Vulkan buffer copy received an invalid destination tensor");
+        }
+        if (tensor.device() != lfs::core::Device::CUDA) {
+            return fail("CUDA/Vulkan buffer copy destination must be a CUDA tensor");
+        }
+        if (!tensor.is_contiguous()) {
+            return fail("CUDA/Vulkan buffer copy destination must be contiguous");
+        }
+        if (byte_count > tensor.bytes()) {
+            return fail(std::format("CUDA/Vulkan buffer copy requested {} bytes into {} byte tensor",
+                                    byte_count,
+                                    tensor.bytes()));
+        }
+
+        const cudaStream_t copy_stream = stream ? stream : tensor.stream();
+        auto* const src = static_cast<std::uint8_t*>(device_ptr_) + src_offset;
+        const cudaError_t status = cudaMemcpyAsync(
+            tensor.data_ptr(), src, byte_count, cudaMemcpyDeviceToDevice, copy_stream);
+        return failCuda("cudaMemcpyAsync(Vulkan buffer -> CUDA tensor)", status);
+    }
+
     bool CudaVulkanBufferInterop::fail(std::string message) const {
         last_error_ = std::move(message);
         return false;

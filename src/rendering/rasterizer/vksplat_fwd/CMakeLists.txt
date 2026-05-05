@@ -139,6 +139,9 @@ _vks_add_slang_shader(setup_dispatch_indirect   setup_dispatch_indirect.slang)
 # vertex_shader.slang → projection_forward
 _vks_add_slang_shader(projection_forward        vertex_shader.slang EXPORT_MODE=0)
 
+# selection_mask.slang → compact 1-byte-per-splat brush/rectangle masks
+_vks_add_slang_shader(selection_mask            selection_mask.slang)
+
 # alphablend_shader.slang → forward only
 _vks_add_slang_shader(rasterize_forward         alphablend_shader.slang EXPORT_MODE=0)
 
