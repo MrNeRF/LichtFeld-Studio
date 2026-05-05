@@ -84,6 +84,9 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
             OutputSlot output_slot = OutputSlot::Main);
+        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+            VulkanContext& context,
+            OutputSlot output_slot = OutputSlot::Main) const;
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,

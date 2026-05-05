@@ -245,12 +245,11 @@ namespace lfs::vis {
             }
 
             auto tensor = lfs::core::Tensor::from_vector(
-                              output,
-                              {static_cast<std::size_t>(3),
-                               static_cast<std::size_t>(height),
-                               static_cast<std::size_t>(width)},
-                              lfs::core::Device::CPU)
-                              .cuda();
+                output,
+                {static_cast<std::size_t>(3),
+                 static_cast<std::size_t>(height),
+                 static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
 
@@ -1132,7 +1131,25 @@ namespace lfs::vis {
                         vulkan_viewport_image_size_ = render_result->size;
                         vulkan_viewport_image_flip_y_ = render_result->flip_y;
                         vulkan_gt_comparison_content_size_ = {0, 0};
-                        viewport_artifact_service_.clearViewportOutput();
+                        lfs::rendering::FrameMetadata metadata{};
+                        metadata.valid = true;
+                        metadata.flip_y = render_result->flip_y;
+                        viewport_artifact_service_.setLazyCapture(
+                            [this]() -> std::shared_ptr<lfs::core::Tensor> {
+                                if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+                                    return {};
+                                }
+                                auto image = vksplat_viewport_renderer_->readOutputImage(
+                                    *last_vulkan_context_,
+                                    VksplatViewportRenderer::OutputSlot::Main);
+                                if (!image) {
+                                    LOG_ERROR("Failed to capture VkSplat viewport image: {}", image.error());
+                                    return {};
+                                }
+                                return std::move(*image);
+                            },
+                            metadata,
+                            render_result->size);
 
                         if (resize_result.completed) {
                             frame_lifecycle_service_.noteResizeCompleted();
@@ -1237,10 +1254,39 @@ namespace lfs::vis {
             }
             split_view_service_.updateInfo(split_info_resources);
 
-            if (pending_split_view.enabled && pending_split_view.left.image && pending_split_view.right.image) {
+            if (pending_split_view.enabled) {
                 viewport_artifact_service_.setLazyCapture(
-                    [params = pending_split_view, render_size]() {
-                        return composeSplitViewCpu(params, render_size);
+                    [this, params = pending_split_view, render_size]()
+                        -> std::shared_ptr<lfs::core::Tensor> {
+                        VulkanSplitViewParams capture_params = params;
+                        const auto read_panel = [this](const VksplatViewportRenderer::OutputSlot slot)
+                            -> std::shared_ptr<lfs::core::Tensor> {
+                            if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+                                return {};
+                            }
+                            auto image = vksplat_viewport_renderer_->readOutputImage(
+                                *last_vulkan_context_,
+                                slot);
+                            if (!image) {
+                                LOG_ERROR("Failed to capture VkSplat split-view panel: {}", image.error());
+                                return {};
+                            }
+                            return std::move(*image);
+                        };
+                        if (!capture_params.left.image &&
+                            capture_params.left.external_image_view != VK_NULL_HANDLE) {
+                            capture_params.left.image =
+                                read_panel(VksplatViewportRenderer::OutputSlot::SplitLeft);
+                        }
+                        if (!capture_params.right.image &&
+                            capture_params.right.external_image_view != VK_NULL_HANDLE) {
+                            capture_params.right.image =
+                                read_panel(VksplatViewportRenderer::OutputSlot::SplitRight);
+                        }
+                        if (!capture_params.left.image || !capture_params.right.image) {
+                            return {};
+                        }
+                        return composeSplitViewCpu(capture_params, render_size);
                     },
                     rendered_metadata,
                     render_size);

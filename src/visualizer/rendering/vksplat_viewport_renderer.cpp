@@ -21,6 +21,7 @@
 #include <glm/glm.hpp>
 #include <limits>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -72,6 +73,41 @@ namespace lfs::vis {
         [[nodiscard]] constexpr std::size_t outputSlotIndex(const VksplatViewportRenderer::OutputSlot slot) {
             return static_cast<std::size_t>(slot);
         }
+
+        struct ScopedStagingBuffer {
+            VmaAllocator allocator = VK_NULL_HANDLE;
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VmaAllocationInfo allocation_info{};
+
+            ~ScopedStagingBuffer() {
+                if (allocator != VK_NULL_HANDLE && buffer != VK_NULL_HANDLE) {
+                    vmaDestroyBuffer(allocator, buffer, allocation);
+                }
+            }
+        };
+
+        struct ScopedCommandPool {
+            VkDevice device = VK_NULL_HANDLE;
+            VkCommandPool pool = VK_NULL_HANDLE;
+
+            ~ScopedCommandPool() {
+                if (device != VK_NULL_HANDLE && pool != VK_NULL_HANDLE) {
+                    vkDestroyCommandPool(device, pool, nullptr);
+                }
+            }
+        };
+
+        struct ScopedFence {
+            VkDevice device = VK_NULL_HANDLE;
+            VkFence fence = VK_NULL_HANDLE;
+
+            ~ScopedFence() {
+                if (device != VK_NULL_HANDLE && fence != VK_NULL_HANDLE) {
+                    vkDestroyFence(device, fence, nullptr);
+                }
+            }
+        };
 
         template <std::size_t RegionCount>
         [[nodiscard]] std::size_t layoutRegions(const std::array<std::size_t, RegionCount>& region_bytes,
@@ -1276,6 +1312,174 @@ namespace lfs::vis {
         output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         ++output.generation;
         return {};
+    }
+
+    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
+    VksplatViewportRenderer::readOutputImage(VulkanContext& context, const OutputSlot output_slot) const {
+        if (!context_) {
+            return std::unexpected("VkSplat output readback requested before renderer initialization");
+        }
+        if (&context != context_) {
+            return std::unexpected("VkSplat output readback received a different Vulkan context");
+        }
+
+        const auto& output = output_slots_[outputSlotIndex(output_slot)];
+        if (output.image.image == VK_NULL_HANDLE ||
+            output.size.x <= 0 ||
+            output.size.y <= 0) {
+            return std::unexpected("VkSplat output readback requested for an empty output slot");
+        }
+        if (output.image.format != VK_FORMAT_R8G8B8A8_UNORM) {
+            return std::unexpected("VkSplat output readback only supports RGBA8 output images");
+        }
+
+        if (!context.waitForSubmittedFrames()) {
+            return std::unexpected(context.lastError());
+        }
+
+        const VkDevice device = context.device();
+        const VkDeviceSize byte_count =
+            static_cast<VkDeviceSize>(output.size.x) *
+            static_cast<VkDeviceSize>(output.size.y) *
+            static_cast<VkDeviceSize>(4);
+        if (byte_count == 0) {
+            return std::unexpected("VkSplat output readback has zero bytes");
+        }
+
+        ScopedStagingBuffer staging{.allocator = context.allocator()};
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = byte_count;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc_info{};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        alloc_info.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkResult result = vmaCreateBuffer(
+            staging.allocator,
+            &buffer_info,
+            &alloc_info,
+            &staging.buffer,
+            &staging.allocation,
+            &staging.allocation_info);
+        if (result != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
+            return std::unexpected(vkError("vmaCreateBuffer(VkSplat readback)", result));
+        }
+        if (staging.allocation_info.pMappedData == nullptr) {
+            return std::unexpected("VkSplat readback staging buffer is not host-mapped");
+        }
+
+        ScopedCommandPool command_pool{.device = device};
+        VkCommandPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pool_info.queueFamilyIndex = context.graphicsQueueFamily();
+        result = vkCreateCommandPool(device, &pool_info, nullptr, &command_pool.pool);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkCreateCommandPool(VkSplat readback)", result));
+        }
+
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo command_info{};
+        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        command_info.commandPool = command_pool.pool;
+        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        command_info.commandBufferCount = 1;
+        result = vkAllocateCommandBuffers(device, &command_info, &command_buffer);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkAllocateCommandBuffers(VkSplat readback)", result));
+        }
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        result = vkBeginCommandBuffer(command_buffer, &begin_info);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat readback)", result));
+        }
+
+        const VkImageLayout restore_layout =
+            output.layout != VK_IMAGE_LAYOUT_UNDEFINED
+                ? output.layout
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        context.imageBarriers().transitionImage(
+            command_buffer,
+            output.image.image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        VkBufferImageCopy copy_region{};
+        copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.imageSubresource.layerCount = 1;
+        copy_region.imageExtent = {
+            static_cast<std::uint32_t>(output.size.x),
+            static_cast<std::uint32_t>(output.size.y),
+            1};
+        vkCmdCopyImageToBuffer(command_buffer,
+                               output.image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               staging.buffer,
+                               1,
+                               &copy_region);
+
+        context.imageBarriers().transitionImage(
+            command_buffer,
+            output.image.image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            restore_layout);
+
+        result = vkEndCommandBuffer(command_buffer);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkEndCommandBuffer(VkSplat readback)", result));
+        }
+
+        ScopedFence fence{.device = device};
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        result = vkCreateFence(device, &fence_info, nullptr, &fence.fence);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkCreateFence(VkSplat readback)", result));
+        }
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, fence.fence);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkQueueSubmit(VkSplat readback)", result));
+        }
+        result = vkWaitForFences(device, 1, &fence.fence, VK_TRUE, UINT64_MAX);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkWaitForFences(VkSplat readback)", result));
+        }
+
+        result = vmaInvalidateAllocation(staging.allocator, staging.allocation, 0, byte_count);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat readback)", result));
+        }
+
+        const auto* const rgba =
+            static_cast<const std::uint8_t*>(staging.allocation_info.pMappedData);
+        const int width = output.size.x;
+        const int height = output.size.y;
+        const std::size_t pixel_count =
+            static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
+        std::vector<float> chw(pixel_count * 3u);
+        for (std::size_t i = 0; i < pixel_count; ++i) {
+            const std::size_t src = i * 4u;
+            chw[i] = static_cast<float>(rgba[src]) / 255.0f;
+            chw[pixel_count + i] = static_cast<float>(rgba[src + 1u]) / 255.0f;
+            chw[pixel_count * 2u + i] = static_cast<float>(rgba[src + 2u]) / 255.0f;
+        }
+
+        auto tensor = lfs::core::Tensor::from_vector(
+            chw,
+            {3u, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+            lfs::core::Device::CPU);
+        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
     std::expected<lfs::core::Tensor, std::string> VksplatViewportRenderer::buildSelectionMask(
