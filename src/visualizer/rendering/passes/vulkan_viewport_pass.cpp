@@ -1119,10 +1119,12 @@ namespace lfs::vis {
             const bool split_mesh_panels_active =
                 split_active && !params.mesh_items.empty() && !params.mesh_panels.empty();
             if (!split_active && !params.mesh_items.empty() && depth_blit_pass.hasDepth()) {
-                depth_blit_pass.record(command_buffer,
-                                       {static_cast<std::uint32_t>(rect.width),
-                                        static_cast<std::uint32_t>(rect.height)},
-                                       params.depth_blit);
+                const VkRect2D depth_rect{
+                    .offset = {rect.x, rect.y},
+                    .extent = {static_cast<std::uint32_t>(rect.width),
+                               static_cast<std::uint32_t>(rect.height)},
+                };
+                depth_blit_pass.record(command_buffer, depth_rect, params.depth_blit);
                 bindQuad(command_buffer);
                 bindViewport(command_buffer, rect);
             }

@@ -52,6 +52,7 @@ static const uint SELECTION_GROUP_MASK = 0x7F;
 static const uint SELECTION_PREVIEW_COLOR_INDEX = 256;
 static const float SELECTION_PREVIEW_BLEND = 0.9f;
 static const float SELECTION_COMMITTED_BLEND = 0.8f;
+static const float FAR_DEPTH = 1.0e10f;
 
 [ForceInline]
 bool overlay_cursor_hit(float2 gaussian_xy, StructuredBuffer<float4> overlay_params)
@@ -279,32 +280,35 @@ layout(binding=1) StructuredBuffer<int32_t> tile_ranges;
 layout(binding=2) StructuredBuffer<float2> xy_vs;
 layout(binding=3) StructuredBuffer<float4> inv_cov_vs_opacity;
 layout(binding=4) StructuredBuffer<float> rgb;
+layout(binding=5) StructuredBuffer<float> depths;
 
 #if VKSPLAT_GUT_RASTERIZE
-layout(binding=5) StructuredBuffer<float> xyz_ws;
-layout(binding=6) StructuredBuffer<float4> rotations;
-layout(binding=7) StructuredBuffer<float4> scales_opacs;
+layout(binding=6) StructuredBuffer<float> xyz_ws;
+layout(binding=7) StructuredBuffer<float4> rotations;
+layout(binding=8) StructuredBuffer<float4> scales_opacs;
 
-layout(binding=8) RWStructuredBuffer<float4> final_pixel_state;
-layout(binding=9) RWStructuredBuffer<int32_t> n_contributors;
+layout(binding=9) RWStructuredBuffer<float4> final_pixel_state;
+layout(binding=10) RWStructuredBuffer<float> final_pixel_depth;
+layout(binding=11) RWStructuredBuffer<int32_t> n_contributors;
 #else
-layout(binding=5) RWStructuredBuffer<float4> final_pixel_state;
-layout(binding=6) RWStructuredBuffer<int32_t> n_contributors;
+layout(binding=6) RWStructuredBuffer<float4> final_pixel_state;
+layout(binding=7) RWStructuredBuffer<float> final_pixel_depth;
+layout(binding=8) RWStructuredBuffer<int32_t> n_contributors;
 #endif
 #if VKSPLAT_GUT_RASTERIZE
-layout(binding=10) ByteAddressBuffer selection_mask;
-layout(binding=11) ByteAddressBuffer preview_mask;
-layout(binding=12) StructuredBuffer<float4> selection_colors;
-layout(binding=13) StructuredBuffer<uint> gaussian_overlay_flags;
-layout(binding=14) StructuredBuffer<float4> overlay_params;
-layout(binding=15) ByteAddressBuffer transform_indices;
-layout(binding=16) StructuredBuffer<float4> model_transforms;
+layout(binding=12) ByteAddressBuffer selection_mask;
+layout(binding=13) ByteAddressBuffer preview_mask;
+layout(binding=14) StructuredBuffer<float4> selection_colors;
+layout(binding=15) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=16) StructuredBuffer<float4> overlay_params;
+layout(binding=17) ByteAddressBuffer transform_indices;
+layout(binding=18) StructuredBuffer<float4> model_transforms;
 #else
-layout(binding=7) ByteAddressBuffer selection_mask;
-layout(binding=8) ByteAddressBuffer preview_mask;
-layout(binding=9) StructuredBuffer<float4> selection_colors;
-layout(binding=10) StructuredBuffer<uint> gaussian_overlay_flags;
-layout(binding=11) StructuredBuffer<float4> overlay_params;
+layout(binding=9) ByteAddressBuffer selection_mask;
+layout(binding=10) ByteAddressBuffer preview_mask;
+layout(binding=11) StructuredBuffer<float4> selection_colors;
+layout(binding=12) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=13) StructuredBuffer<float4> overlay_params;
 #endif
 
 #if VKSPLAT_GUT_RASTERIZE
@@ -357,6 +361,30 @@ Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
     }
     return g;
 }
+
+[ForceInline]
+float gut_splat_view_depth(
+    Splat_3D_GUT_AlphaBlend g,
+    float3 ray_origin,
+    float3 ray_direction,
+    Camera cam)
+{
+    float3 local_origin = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 local_direction = mul(g.iscl_rot, ray_direction);
+    float denom = dot(local_direction, local_direction);
+    if (denom <= 1.0e-12f) {
+        return FAR_DEPTH;
+    }
+
+    float t = -dot(local_direction, local_origin) / denom;
+    if (t <= 0.0f || !isfinite(t)) {
+        return FAR_DEPTH;
+    }
+
+    float3 closest_ws = ray_origin + t * ray_direction;
+    float depth = geom_transform_points(closest_ws, cam.world_view_transform).z;
+    return depth > NEAR_CLIP && isfinite(depth) ? depth : FAR_DEPTH;
+}
 #endif
 
 [shader("compute")]
@@ -385,6 +413,7 @@ void main(
         decodeThreadToSubtiles(thread_rank, pix_coord, subgrid_idx, pixel_rank);
     #endif
     float4 curr_pixel_state = float4(0, 0, 0, 1);
+    float median_depth = FAR_DEPTH;
     bool is_inside = (pix_coord.x < W && pix_coord.y < H);
     bool thread_active = is_inside;
 
@@ -485,6 +514,7 @@ void main(
             #if SHARED_STRUCT
                 uint32_t splat_id = collected_gauss_idx[j];
                 uint flags = gaussian_overlay_flags[splat_id];
+                float splat_depth = read_t1_float(splat_id, depths);
                 float4 gauss_rgba;
                 Splat_2D_AlphaBlend overlay_splat;
               #if VKSPLAT_GUT_RASTERIZE
@@ -499,6 +529,10 @@ void main(
                 if (gauss_rgba.a < ALPHA_THRESHOLD)
                     continue;
 
+              #if VKSPLAT_GUT_RASTERIZE
+                splat_depth = gut_splat_view_depth(g, ray_origin, ray_direction, cam);
+              #endif
+
             #else
 
                 float2 g_xy = collected_xy_vs[j];
@@ -512,6 +546,7 @@ void main(
 
                 uint32_t splat_id = collected_gauss_idx[j];
                 uint flags = gaussian_overlay_flags[splat_id];
+                float splat_depth = read_t1_float(splat_id, depths);
                 float3 splat_rgb = read_t3_float3(splat_id, rgb);
                 Splat_2D_AlphaBlend g = { g_inv_cov_opacity, g_xy, splat_rgb };
                 Splat_2D_AlphaBlend overlay_splat = g;
@@ -548,6 +583,9 @@ void main(
                     if (dist_sq > INNER_RADIUS_SQ)
                         marker_color *= OUTLINE_DARKEN;
 
+                    if (curr_pixel_state.a > 0.5f) {
+                        median_depth = splat_depth;
+                    }
                     curr_pixel_state = float4(marker_color, 0.0f);
                     thread_active = false;
                     break;
@@ -557,6 +595,9 @@ void main(
                 gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
+                if (median_depth >= FAR_DEPTH && curr_pixel_state.a > 0.5f && new_pixel_state.a <= 0.5f) {
+                    median_depth = splat_depth;
+                }
                 if (new_pixel_state.a < 0.0001f) {
                     // This Splat never registred so we subtract it before we break.
                     local_n_contrib--;
@@ -574,6 +615,7 @@ void main(
         int pix_id = pix_coord.y*W+pix_coord.x;
         n_contributors[pix_id] = local_n_contrib;
         final_pixel_state[pix_id] = curr_pixel_state;
+        final_pixel_depth[pix_id] = median_depth;
     }
 }
 

@@ -27,6 +27,10 @@ namespace lfs::vis {
             VkImageView image_view = VK_NULL_HANDLE;
             VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t generation = 0;
+            VkImage depth_image = VK_NULL_HANDLE;
+            VkImageView depth_image_view = VK_NULL_HANDLE;
+            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
         };
@@ -121,7 +125,7 @@ namespace lfs::vis {
             std::size_t ring_slot);
         [[nodiscard]] bool inputsResident(const lfs::core::SplatData& splat_data,
                                           std::size_t ring_slot) const;
-        [[nodiscard]] std::expected<void, std::string> ensureOutputImage(
+        [[nodiscard]] std::expected<void, std::string> ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
             OutputSlot output_slot);
@@ -185,8 +189,10 @@ namespace lfs::vis {
         std::unique_ptr<ComposePipeline> compose_;
         struct OutputImageSlot {
             VulkanContext::ExternalImage image{};
+            VulkanContext::ExternalImage depth_image{};
             glm::ivec2 size{0, 0};
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t generation = 0;
         };
         static constexpr std::size_t kOutputSlotCount = 3;

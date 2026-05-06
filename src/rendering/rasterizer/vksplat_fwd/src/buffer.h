@@ -116,6 +116,7 @@ struct VulkanGSPipelineBuffers {
 
     // pixels
     Buffer<float> pixel_state;      // (H, W, 4)
+    Buffer<float> pixel_depth;      // (H, W, 1), median view-space depth
     Buffer<int32_t> n_contributors; // (H, W, 1)
 
     // intermediate buffers

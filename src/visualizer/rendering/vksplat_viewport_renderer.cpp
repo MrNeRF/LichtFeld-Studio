@@ -695,7 +695,11 @@ namespace lfs::vis {
                 if (slot.image.image != VK_NULL_HANDLE) {
                     context_->imageBarriers().forgetImage(slot.image.image);
                 }
+                if (slot.depth_image.image != VK_NULL_HANDLE) {
+                    context_->imageBarriers().forgetImage(slot.depth_image.image);
+                }
                 context_->destroyExternalImage(slot.image);
+                context_->destroyExternalImage(slot.depth_image);
                 slot = {};
             }
             if (compose_) {
@@ -1118,20 +1122,26 @@ namespace lfs::vis {
         return {};
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::ensureOutputImage(
+    std::expected<void, std::string> VksplatViewportRenderer::ensureOutputImages(
         VulkanContext& context,
         const glm::ivec2 size,
         const OutputSlot output_slot) {
         auto& slot = output_slots_[outputSlotIndex(output_slot)];
-        if (slot.image.image != VK_NULL_HANDLE && slot.size == size) {
+        if (slot.image.image != VK_NULL_HANDLE && slot.depth_image.image != VK_NULL_HANDLE &&
+            slot.size == size) {
             return {};
         }
         if (slot.image.image != VK_NULL_HANDLE) {
             context.imageBarriers().forgetImage(slot.image.image);
         }
+        if (slot.depth_image.image != VK_NULL_HANDLE) {
+            context.imageBarriers().forgetImage(slot.depth_image.image);
+        }
         context.destroyExternalImage(slot.image);
+        context.destroyExternalImage(slot.depth_image);
         slot.size = {0, 0};
         slot.layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        slot.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         const VkExtent2D extent{
             .width = static_cast<std::uint32_t>(size.x),
             .height = static_cast<std::uint32_t>(size.y),
@@ -1139,7 +1149,16 @@ namespace lfs::vis {
         if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, slot.image)) {
             return std::unexpected(context.lastError());
         }
+        if (!context.createExternalImage(extent, VK_FORMAT_R32_SFLOAT, slot.depth_image)) {
+            const std::string error = context.lastError();
+            context.destroyExternalImage(slot.image);
+            return std::unexpected(error);
+        }
         context.imageBarriers().registerImage(slot.image.image,
+                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                              VK_IMAGE_LAYOUT_UNDEFINED,
+                                              /*external=*/true);
+        context.imageBarriers().registerImage(slot.depth_image.image,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
                                               VK_IMAGE_LAYOUT_UNDEFINED,
                                               /*external=*/true);
@@ -1165,15 +1184,23 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkCreateShaderModule(VkSplat compose)", result));
         }
 
-        std::array<VkDescriptorSetLayoutBinding, 2> bindings{};
+        std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[0].descriptorCount = 1;
         bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
         bindings[1].binding = 1;
-        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[2].binding = 2;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        bindings[3].binding = 3;
+        bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        bindings[3].descriptorCount = 1;
+        bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
         VkDescriptorSetLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -1229,13 +1256,20 @@ namespace lfs::vis {
 
         const bool has_pixel_state = buffers_.num_indices > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
-                                     buffers_.pixel_state.deviceBuffer.size > 0;
+                                     buffers_.pixel_state.deviceBuffer.size > 0 &&
+                                     buffers_.pixel_depth.deviceBuffer.buffer != VK_NULL_HANDLE &&
+                                     buffers_.pixel_depth.deviceBuffer.size > 0;
         if (!has_pixel_state) {
             context.imageBarriers().transitionImage(cmd,
                                                     output.image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            context.imageBarriers().transitionImage(cmd,
+                                                    output.depth_image.image,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
             VkClearColorValue clear{{background.r, background.g, background.b, 1.0f}};
+            VkClearColorValue depth_clear{{1.0e10f, 0.0f, 0.0f, 0.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             range.levelCount = 1;
@@ -1246,11 +1280,22 @@ namespace lfs::vis {
                                  &clear,
                                  1,
                                  &range);
+            vkCmdClearColorImage(cmd,
+                                 output.depth_image.image,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 &depth_clear,
+                                 1,
+                                 &range);
             context.imageBarriers().transitionImage(cmd,
                                                     output.image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            context.imageBarriers().transitionImage(cmd,
+                                                    output.depth_image.image,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            output.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             ++output.generation;
             return {};
         }
@@ -1258,10 +1303,16 @@ namespace lfs::vis {
         VkDescriptorBufferInfo pixel_info{};
         pixel_info.buffer = buffers_.pixel_state.deviceBuffer.buffer;
         pixel_info.range = buffers_.pixel_state.deviceBuffer.size;
+        VkDescriptorBufferInfo depth_info{};
+        depth_info.buffer = buffers_.pixel_depth.deviceBuffer.buffer;
+        depth_info.range = buffers_.pixel_depth.deviceBuffer.size;
         VkDescriptorImageInfo image_info{};
         image_info.imageView = output.image.view;
         image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-        std::array<VkWriteDescriptorSet, 2> writes{};
+        VkDescriptorImageInfo depth_image_info{};
+        depth_image_info.imageView = output.depth_image.view;
+        depth_image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        std::array<VkWriteDescriptorSet, 4> writes{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstBinding = 0;
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -1269,27 +1320,44 @@ namespace lfs::vis {
         writes[0].pBufferInfo = &pixel_info;
         writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &image_info;
+        writes[1].pBufferInfo = &depth_info;
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &image_info;
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[3].descriptorCount = 1;
+        writes[3].pImageInfo = &depth_image_info;
 
-        VkBufferMemoryBarrier2 pixel_barrier{};
-        pixel_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
-        pixel_barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        pixel_barrier.srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
-        pixel_barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        pixel_barrier.dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
-        pixel_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        pixel_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        pixel_barrier.buffer = buffers_.pixel_state.deviceBuffer.buffer;
-        pixel_barrier.size = buffers_.pixel_state.deviceBuffer.size;
+        std::array<VkBufferMemoryBarrier2, 2> pixel_barriers{};
+        pixel_barriers[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        pixel_barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        pixel_barriers[0].srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        pixel_barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        pixel_barriers[0].dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        pixel_barriers[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pixel_barriers[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pixel_barriers[0].buffer = buffers_.pixel_state.deviceBuffer.buffer;
+        pixel_barriers[0].size = buffers_.pixel_state.deviceBuffer.size;
+        pixel_barriers[1] = pixel_barriers[0];
+        pixel_barriers[1].buffer = buffers_.pixel_depth.deviceBuffer.buffer;
+        pixel_barriers[1].size = buffers_.pixel_depth.deviceBuffer.size;
         VkDependencyInfo pixel_dep{};
         pixel_dep.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
-        pixel_dep.bufferMemoryBarrierCount = 1;
-        pixel_dep.pBufferMemoryBarriers = &pixel_barrier;
+        pixel_dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(pixel_barriers.size());
+        pixel_dep.pBufferMemoryBarriers = pixel_barriers.data();
         vkCmdPipelineBarrier2(cmd, &pixel_dep);
         context.imageBarriers().transitionImage(cmd,
                                                 output.image.image,
+                                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                                VK_IMAGE_LAYOUT_GENERAL);
+        context.imageBarriers().transitionImage(cmd,
+                                                output.depth_image.image,
                                                 VK_IMAGE_ASPECT_COLOR_BIT,
                                                 VK_IMAGE_LAYOUT_GENERAL);
 
@@ -1320,7 +1388,12 @@ namespace lfs::vis {
                                                 output.image.image,
                                                 VK_IMAGE_ASPECT_COLOR_BIT,
                                                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        context.imageBarriers().transitionImage(cmd,
+                                                output.depth_image.image,
+                                                VK_IMAGE_ASPECT_COLOR_BIT,
+                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        output.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         ++output.generation;
         return {};
     }
@@ -1748,7 +1821,7 @@ namespace lfs::vis {
         if (!overlay_bindings) {
             return std::unexpected(overlay_bindings.error());
         }
-        if (auto ok = ensureOutputImage(context, size, output_slot); !ok) {
+        if (auto ok = ensureOutputImages(context, size, output_slot); !ok) {
             return std::unexpected(ok.error());
         }
 
@@ -1850,6 +1923,10 @@ namespace lfs::vis {
             .image_view = output.image.view,
             .image_layout = output.layout,
             .generation = output.generation,
+            .depth_image = output.depth_image.image,
+            .depth_image_view = output.depth_image.view,
+            .depth_image_layout = output.depth_layout,
+            .depth_generation = output.generation,
             .size = size,
             .flip_y = false,
         };

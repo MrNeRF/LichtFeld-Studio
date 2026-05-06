@@ -277,6 +277,7 @@ void VulkanGSRenderer::executeRasterizeForward(
                             {buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
                             {buffers.tile_ranges.deviceBuffer, COMPUTE_SHADER_WRITE},
                             {buffers.rgb.deviceBuffer, COMPUTE_SHADER_WRITE},
+                            {buffers.depths.deviceBuffer, COMPUTE_SHADER_WRITE},
                             {selection_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {preview_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE},
@@ -299,11 +300,13 @@ void VulkanGSRenderer::executeRasterizeForward(
                 buffers.xy_vs.deviceBuffer,
                 buffers.inv_cov_vs_opacity.deviceBuffer,
                 buffers.rgb.deviceBuffer,
+                buffers.depths.deviceBuffer,
                 buffers.xyz_ws.deviceBuffer,
                 buffers.rotations.deviceBuffer,
                 buffers.scales_opacs.deviceBuffer,
                 // outputs
                 resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
+                resizeDeviceBuffer(buffers.pixel_depth, num_pixels),
                 resizeDeviceBuffer(buffers.n_contributors, num_pixels),
                 // selection overlay inputs
                 selection_mask,
@@ -326,8 +329,10 @@ void VulkanGSRenderer::executeRasterizeForward(
                 buffers.xy_vs.deviceBuffer,
                 buffers.inv_cov_vs_opacity.deviceBuffer,
                 buffers.rgb.deviceBuffer,
+                buffers.depths.deviceBuffer,
                 // outputs
                 resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
+                resizeDeviceBuffer(buffers.pixel_depth, num_pixels),
                 resizeDeviceBuffer(buffers.n_contributors, num_pixels),
                 // selection overlay inputs
                 selection_mask,

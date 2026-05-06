@@ -109,8 +109,8 @@ protected:
         _ComputePipeline(3)};
     // Indirect-dispatch setup: reads cumsum tail, writes VkDispatchIndirectCommand.
     _ComputePipeline pipeline_setup_dispatch_indirect = _ComputePipeline(2);
-    _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(12);
-    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(17);
+    _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(14);
+    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(19);
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
         _ComputePipeline block_scan = _ComputePipeline(3);

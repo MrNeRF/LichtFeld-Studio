@@ -130,6 +130,7 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(sorting_gauss_idx_2)
     _(tile_ranges)
     _(pixel_state)
+    _(pixel_depth)
     _(n_contributors)
     _(_cumsum_blockSums)
     _(_cumsum_blockSums2)

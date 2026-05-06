@@ -44,7 +44,7 @@ namespace lfs::vis {
         [[nodiscard]] bool init(VulkanContext& context, VkFormat color_format,
                                 VkFormat depth_format, VkBuffer screen_quad_buffer);
         void prepare(const VulkanDepthBlitParams& params);
-        void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanDepthBlitParams& params);
+        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanDepthBlitParams& params);
         void shutdown();
 
         [[nodiscard]] bool hasDepth() const;
