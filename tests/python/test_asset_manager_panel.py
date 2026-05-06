@@ -122,7 +122,6 @@ def _make_asset():
         "video_metadata": {},
         "project_id": "p1",
         "scene_id": "s1",
-        "run_id": None,
         "created_at": "2026-02-15T21:52:45.881056",
         "modified_at": "2026-04-28T14:48:57.606369",
         "is_favorite": False,
@@ -146,7 +145,6 @@ def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
         asset,
         project_name="tandt",
         scene_name="truck",
-        run_name="",
     )
 
     assert fields["display_name"] == "train"
@@ -176,8 +174,6 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
     assert "{{asset.display_name}}" in rml
     assert "{{selected_asset_name}}" in rml
     assert "{{selected_asset_dataset_image_count}}" in rml
-    assert "{{selected_asset_iterations}}" in rml
-    assert 'data-if="selected_asset_has_training_provenance"' in rml
 
 
 def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
@@ -187,7 +183,6 @@ def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
         assets={"a1": _make_asset()},
         projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
         scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
-        runs={},
         tags={},
         collections={},
     )
@@ -208,7 +203,6 @@ def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_pa
         assets={"a1": _make_asset()},
         projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
         scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
-        runs={},
         tags={},
         collections={},
     )
@@ -227,7 +221,6 @@ def test_dom_card_click_selects_asset_from_stable_parent(asset_manager_panel_mod
         assets={"a1": _make_asset()},
         projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
         scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
-        runs={},
         tags={},
         collections={},
     )
@@ -259,7 +252,6 @@ def test_dom_card_ctrl_click_adds_to_multi_selection(asset_manager_panel_module)
         assets={"a1": first, "a2": second},
         projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
         scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
-        runs={},
         tags={},
         collections={},
     )
@@ -296,7 +288,6 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     asset = index.create_asset(
         project_id=project.id,
         scene_id=scene.id,
-        run_id=None,
         name="train",
         type="dataset",
         role="source_dataset",
@@ -321,63 +312,4 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     assert panel.get_selected_count() == 0
 
 
-def test_trained_asset_parameters_resolve_from_run(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    panel._handle = _HandleStub()
-    asset = _make_asset()
-    asset["id"] = "trained-1"
-    asset["name"] = "model_final.ply"
-    asset["type"] = "ply"
-    asset["role"] = "trained_output"
-    asset["run_id"] = "r1"
-    asset["dataset_metadata"] = {}
-    asset["geometry_metadata"] = {"gaussian_count": 1234}
 
-    dataset = _make_asset()
-    dataset["id"] = "dataset-1"
-    dataset["scene_id"] = "s1"
-
-    panel._asset_index = SimpleNamespace(
-        assets={"trained-1": asset, "dataset-1": dataset},
-        projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
-        scenes={
-            "s1": {
-                "id": "s1",
-                "name": "bicycle",
-                "project_id": "p1",
-                "dataset_asset_id": "dataset-1",
-            }
-        },
-        runs={
-            "r1": {
-                "id": "r1",
-                "scene_id": "s1",
-                "project_id": "p1",
-                "created_at": "2026-04-28T14:00:00",
-                "completed_at": "2026-04-28T14:30:00",
-                "parameters": {
-                    "strategy": "mcmc",
-                    "iterations": 30000,
-                    "sh_degree": 3,
-                    "optimizer": "mcmc",
-                    "steps_scaler": 1.0,
-                    "learning_rate": 0.00016,
-                },
-                "metrics": {"final_gaussians": 1234},
-            }
-        },
-        tags={},
-        collections={},
-    )
-
-    panel.toggle_asset_selection(None, None, ["trained-1"])
-
-    assert panel.get_selected_asset_source_dataset() == "bicycle"
-    assert panel.get_selected_asset_iterations() == "30000"
-    assert panel.get_selected_asset_sh_degree() == "3"
-    assert panel.get_selected_asset_optimizer() == "mcmc"
-    assert panel.get_selected_asset_learning_rate() == "0.000160"
-    assert panel.get_selected_asset_gaussian_count() == "1,234"
-    assert panel.get_selected_asset_image_count() == "194"
-    assert panel.get_selected_asset_strategy() == "mcmc"
-    assert panel.get_selected_asset_steps_scaler() == "1.00"
