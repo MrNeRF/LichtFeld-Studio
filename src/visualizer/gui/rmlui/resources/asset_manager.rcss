@@ -1039,7 +1039,7 @@
     padding: 2dp 6dp;
 }
 
-.asset-artifact-row {
+.scene-asset-row {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
@@ -1050,11 +1050,11 @@
     cursor: pointer;
 }
 
-.asset-artifact-row:hover {
+.scene-asset-row:hover {
     color: #9be0ca;
 }
 
-.asset-artifact-name {
+.scene-asset-name {
     color: #f0ebe2;
 }
 

@@ -323,8 +323,8 @@ gi                  <div class="asset-card-overlay">
             <div class="asset-info-section">
               <div class="asset-info-section-title">{{scene_assets_title}}</div>
               <div data-for="scene_asset : selected_scene_assets">
-                <div class="asset-artifact-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
-                  <span class="asset-artifact-name">{{scene_asset.name}}</span>
+                <div class="scene-asset-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
+                  <span class="scene-asset-name">{{scene_asset.name}}</span>
                   <span class="asset-artifact-type">{{scene_asset.type}}</span>
                 </div>
               </div>
