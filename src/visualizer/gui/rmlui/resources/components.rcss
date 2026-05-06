@@ -240,6 +240,7 @@ selectbox {
 }
 
 selectbox option {
+    display: block;
     padding: 2dp 6dp;
     font-size: 11dp;
     transition: background-color 0.1s quadratic-out;
