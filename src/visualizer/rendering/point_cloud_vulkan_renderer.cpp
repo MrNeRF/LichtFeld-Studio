@@ -873,6 +873,12 @@ namespace lfs::vis {
             // size change would otherwise destroy images the in-flight submit
             // is still sampling.
             vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+            // Also wait for the VulkanContext's in-flight frame fence. pcFence signals
+            // when CB1 (point cloud render) finishes, but the VulkanContext's CB2
+            // (which reads the output image) may still be executing. If ensureOutputImages
+            // destroys the slot on a resize while CB2 is in-flight, the GPU reads freed
+            // memory → VK_ERROR_DEVICE_LOST.
+            context->waitForSubmittedFrames();
             vkResetFences(device, 1, &fence);
 
             auto& slot = slots[slot_idx];
