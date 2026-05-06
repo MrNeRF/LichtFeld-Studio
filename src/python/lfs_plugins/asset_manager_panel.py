@@ -98,6 +98,9 @@ class AssetManagerPanel(Panel):
         self._updating_selection_details: bool = False
         self._pending_transform_applications: List[Dict[str, Any]] = []
 
+        # New project menu state
+        self._new_project_menu_open: bool = False
+
         # Panel resize drag state
         self._sidebar_dragging: bool = False
         self._sidebar_drag_start_x: float = 0.0
@@ -140,23 +143,7 @@ class AssetManagerPanel(Panel):
         # Basic properties
         model.bind_func("panel_label", lambda: "Asset Manager")
         model.bind_func("search_query", self.get_search_query)
-        model.bind_func("asset_count", self.get_asset_count)
-        model.bind_func("selected_count", self.get_selected_count)
-        model.bind_func("selected_total_size", self.get_selected_total_size)
-        model.bind_func("has_selection", lambda: self.get_selected_count() > 0)
-        model.bind_func("has_multi_selection", lambda: self.get_selected_count() > 1)
-        model.bind_func("has_loadable_selection", self.get_has_loadable_selection)
-        model.bind_func("project_count", self.get_project_count)
-        model.bind_func("scene_count", self.get_scene_count)
         model.bind_func("collection_count", self.get_collection_count)
-
-        # Formatted strings for display (must be bound before getting handle)
-        model.bind_func(
-            "selected_count_text", lambda: f"{self.get_selected_count()} selected"
-        )
-        model.bind_func(
-            "selected_total_text", lambda: f"Total: {self.get_selected_total_size()}"
-        )
 
         # View state
         model.bind_func("view_mode", self.get_view_mode)
@@ -185,6 +172,10 @@ class AssetManagerPanel(Panel):
 
         # Import menu state
         model.bind_func("import_menu_open", self.get_import_menu_open)
+
+        # New project menu state
+        model.bind_func("new_project_menu_open", self.get_new_project_menu_open)
+        model.bind_func("create_new_project_label", lambda: tr("asset_manager.action.create_new_project"))
 
         # Move menu projects list (for hover submenu)
         model.bind_record_list("move_menu_projects")
@@ -312,10 +303,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("import_asset_label", lambda: tr("asset_manager.import_menu.import_asset"))
         model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
         model.bind_func("import_checkpoint_label", lambda: tr("asset_manager.import_menu.import_checkpoint"))
-        model.bind_func("summary_assets_label", lambda: tr("asset_manager.summary.assets"))
-        model.bind_func("summary_projects_label", lambda: tr("asset_manager.summary.projects"))
-        model.bind_func("summary_scenes_label", lambda: tr("asset_manager.summary.scenes"))
-        model.bind_func("summary_selected_label", lambda: tr("asset_manager.summary.selected"))
+
         model.bind_func("projects_title", lambda: tr("asset_manager.sidebar.projects"))
         model.bind_func("scenes_title", lambda: tr("asset_manager.sidebar.scenes"))
         model.bind_func("filters_title", lambda: tr("asset_manager.sidebar.filters"))
@@ -379,7 +367,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("project_pill_label", lambda: tr("asset_manager.type.project"))
         model.bind_func("project_details_title", lambda: tr("asset_manager.info_panel.project_details"))
         model.bind_func("prop_scenes_label", lambda: tr("asset_manager.property.scenes"))
-        model.bind_func("prop_total_assets_label", lambda: tr("asset_manager.summary.total"))
         model.bind_func("scenes_list_title", lambda: tr("asset_manager.sidebar.scenes"))
         model.bind_func("multi_select_hint", lambda: tr("asset_manager.hint.multi_select"))
 
@@ -429,70 +416,19 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_sidebar_resize_start", self.on_sidebar_resize_start)
         model.bind_event("on_right_panel_resize_start", self.on_right_panel_resize_start)
 
+        # New project event handlers
+        model.bind_event("toggle_new_project_menu", self.toggle_new_project_menu)
+        model.bind_event("on_create_project_dialog", self.on_create_project_dialog)
+
     # ── Data Retrieval Methods ─────────────────────────────────
 
     def get_search_query(self) -> str:
         return self._search_query
 
-    def get_asset_count(self) -> int:
-        return len(self.get_filtered_assets())
-
-    def get_project_count(self) -> int:
-        if self._asset_index and hasattr(self._asset_index, "projects"):
-            return sum(
-                1
-                for project_id in self._asset_index.projects
-                if self._project_has_content(project_id)
-            )
-        return 0
-
-    def get_scene_count(self) -> int:
-        if self._asset_index and hasattr(self._asset_index, "scenes"):
-            return sum(
-                1
-                for scene_id, scene in self._asset_index.scenes.items()
-                if self._scene_has_content(scene_id)
-                and (
-                    not self._selected_project_id
-                    or scene.get("project_id") == self._selected_project_id
-                )
-            )
-        return 0
-
     def get_collection_count(self) -> int:
         if self._asset_index and hasattr(self._asset_index, "collections"):
             return len(self._asset_index.collections)
         return 0
-
-    def get_selected_count(self) -> int:
-        self._reconcile_selection()
-        return len(self._selected_asset_ids)
-
-    def get_selected_total_size(self) -> str:
-        if not self._asset_index or not hasattr(self._asset_index, "assets"):
-            return "0 MB"
-
-        self._reconcile_selection()
-        total_bytes = 0
-        for asset_id in self._selected_asset_ids:
-            asset = self._asset_index.assets.get(asset_id)
-            if asset:
-                total_bytes += asset.get("file_size_bytes", 0)
-        return self._format_size(total_bytes)
-
-    def get_has_loadable_selection(self) -> bool:
-        if not self._selected_asset_ids or not self._asset_index:
-            return False
-        assets = getattr(self._asset_index, "assets", {})
-        for asset_id in self._selected_asset_ids:
-            asset = assets.get(asset_id)
-            if (
-                asset
-                and asset.get("exists", True)
-                and asset.get("type") in self.LOADABLE_TYPES
-            ):
-                return True
-        return False
 
     def get_view_mode(self) -> str:
         return self._view_mode
@@ -516,6 +452,9 @@ class AssetManagerPanel(Panel):
 
     def get_import_menu_open(self) -> bool:
         return self._import_menu_open
+
+    def get_new_project_menu_open(self) -> bool:
+        return self._new_project_menu_open
 
     def get_move_menu_projects(self) -> List[Dict[str, str]]:
         """Get projects for the currently open move menu."""
@@ -635,6 +574,14 @@ class AssetManagerPanel(Panel):
                 self._log_info(tr("asset_manager.msg.created_default"))
             except Exception as e:
                 self._log_error(tr("asset_manager.msg.failed_create_default"), e)
+
+    def _format_display_name(self, name: str, max_length: int = 15) -> str:
+        """Format a name for display, truncating with ... if too long."""
+        if not name:
+            return name
+        if len(name) > max_length:
+            return name[:max_length] + "..."
+        return name
 
     def _get_asset_relationship_names(self, asset: Dict[str, Any]):
         project_name = ""
@@ -905,10 +852,12 @@ class AssetManagerPanel(Panel):
         for project_id, project in self._asset_index.projects.items():
             # Show all projects, even empty ones (user must manually delete)
             asset_count = self._project_asset_count(project_id)
+            display_name = self._format_display_name(project.get("name", tr("asset_manager.unnamed_project")))
             projects.append(
                 {
                     "id": project_id,
-                    "name": project.get("name", tr("asset_manager.unnamed_project")),
+                    "name": display_name,
+                    "full_name": project.get("name", tr("asset_manager.unnamed_project")),
                     "description": project.get("description", ""),
                     "scene_count": asset_count,  # Now shows asset count instead of scene count
                     "is_selected": project_id == self._selected_project_id,
@@ -1389,7 +1338,7 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         project_name, _scene_name = self._get_asset_relationship_names(asset)
-        return project_name
+        return self._format_display_name(project_name)
 
     def get_selected_asset_scene_name(self) -> str:
         asset = self._get_selected_asset()
@@ -1740,7 +1689,8 @@ class AssetManagerPanel(Panel):
         if not project_id or not self._asset_index:
             return ""
         project = getattr(self._asset_index, "projects", {}).get(project_id)
-        return project.get("name", "") if project else ""
+        name = project.get("name", "") if project else ""
+        return self._format_display_name(name)
 
     def get_selected_scene_asset_count(self) -> int:
         scene = self._get_selected_scene()
@@ -1781,7 +1731,8 @@ class AssetManagerPanel(Panel):
 
     def get_selected_project_name(self) -> str:
         project = self._get_selected_project()
-        return project.get("name", "") if project else ""
+        name = project.get("name", "") if project else ""
+        return self._format_display_name(name)
 
     def get_selected_project_scene_count(self) -> int:
         project = self._get_selected_project()
@@ -1883,15 +1834,20 @@ class AssetManagerPanel(Panel):
     def _ensure_import_project(
         self, default_name: str = "Default"
     ) -> Optional[str]:
-        # Always import to "Default" project, never create a new one automatically
+        # Import to currently selected project if one is selected, otherwise use Default
         if not self._asset_index:
             return None
-        # Ensure Default project exists
+        
+        # If a project is currently selected, use that
+        if self._selected_project_id:
+            project = self._asset_index.projects.get(self._selected_project_id)
+            if project:
+                return self._selected_project_id
+        
+        # Fall back to Default project
         self._ensure_default_project()
-        # Find the Default project
         for pid, proj in self._asset_index.projects.items():
             if proj.get("name") == "Default":
-                self._selected_project_id = pid
                 return pid
         return None
 
@@ -2208,6 +2164,46 @@ class AssetManagerPanel(Panel):
         self._asset_index.remove_tag_from_asset(asset["id"], tag)
         self.refresh_catalog()
         self._dirty_model("tags", "assets", "selected_asset_tags")
+
+    # ── New Project Handlers ──────────────────────────────────
+
+    def toggle_new_project_menu(self, _handle, _ev, _args):
+        """Toggle the new project dropdown menu visibility."""
+        self._new_project_menu_open = not self._new_project_menu_open
+        self._dirty_model("new_project_menu_open")
+
+    def on_create_project_dialog(self, _handle, _ev, _args):
+        """Open system dialog to create a new project."""
+        # Close the dropdown menu
+        self._new_project_menu_open = False
+        self._dirty_model("new_project_menu_open")
+
+        def _on_project_name_entered(name):
+            if not name or not name.strip():
+                return
+
+            name = name.strip()
+
+            try:
+                # Create new project
+                project = self._asset_index.create_project(name=name)
+                if not project:
+                    self._log_error("Failed to create project")
+                    return
+
+                # Refresh the catalog to show the new project
+                self.refresh_catalog()
+                self._log_info("Created new project: %s", name)
+
+            except Exception as e:
+                self._log_error("Failed to create new project: %s", e)
+
+        lf.ui.input_dialog(
+            "Create New Project",
+            "Enter project name",
+            "",
+            _on_project_name_entered
+        )
 
     # ── Panel Resize Handlers ─────────────────────────────────
 
@@ -3233,9 +3229,11 @@ class AssetManagerPanel(Panel):
             if not name or not name.strip():
                 return
 
+            name = name.strip()
+
             try:
                 # Create new project
-                project = self._asset_index.create_project(name=name.strip())
+                project = self._asset_index.create_project(name=name)
                 if not project:
                     self._log_error("Failed to create project")
                     return
@@ -3248,7 +3246,7 @@ class AssetManagerPanel(Panel):
                 )
                 self._asset_index.save()
                 self.refresh_catalog()
-                self._log_info("Created project '%s' and moved asset to it", name.strip())
+                self._log_info("Created project '%s' and moved asset to it", name)
 
             except Exception as e:
                 self._log_error("Failed to create project and move asset: %s", e)
@@ -3310,11 +3308,12 @@ class AssetManagerPanel(Panel):
 
         def _on_rename_result(new_name):
             if new_name and new_name.strip() and new_name.strip() != current_name:
+                new_name = new_name.strip()
                 try:
-                    self._asset_index.update_project(project_id, name=new_name.strip())
+                    self._asset_index.update_project(project_id, name=new_name)
                     self._asset_index.save()
                     self.refresh_catalog()
-                    self._log_info("Renamed project to: %s", new_name.strip())
+                    self._log_info("Renamed project to: %s", new_name)
                 except Exception as e:
                     self._log_error("Failed to rename project: %s", e)
 
@@ -3343,6 +3342,12 @@ class AssetManagerPanel(Panel):
 
         project = self._asset_index.projects.get(project_id)
         if not project:
+            return
+
+        # Prevent deletion of the Default project
+        project_name = project.get("name", "")
+        if project_name.lower() == "default":
+            self._log_warn("Cannot delete the Default project")
             return
 
         # Close the menu

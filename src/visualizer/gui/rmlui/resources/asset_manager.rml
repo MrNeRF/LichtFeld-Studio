@@ -31,18 +31,19 @@
       </div>
     </div>
 
-    <div id="asset-popup-summary">
-      <span><span>{{asset_count}}</span> {{summary_assets_label}}</span>
-      <span><span>{{project_count}}</span> {{summary_projects_label}}</span>
-      <span><span>{{scene_count}}</span> {{summary_scenes_label}}</span>
-      <span><span>{{selected_count}}</span> {{summary_selected_label}}</span>
-    </div>
-
     <div id="asset-popup-content">
       <div id="asset-sidebar" data-value="sidebar_width">
         <div class="asset-sidebar-inner">
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title">{{projects_title}}</div>
+          <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>{{projects_title}}</span>
+            <div style="position: relative;">
+              <button class="asset-project-menu" data-event-click="toggle_new_project_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <div class="asset-project-dropdown" data-class-is-visible="new_project_menu_open" style="position: absolute; top: 100%; right: 0; z-index: 100; margin-top: 4px; min-width: 140px; white-space: nowrap;">
+                <div class="asset-dropdown-item" data-event-click="on_create_project_dialog">{{create_new_project_label}}</div>
+              </div>
+            </div>
+          </div>
           <div data-for="project : projects">
             <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
               <span class="asset-row-label">{{project.name}}</span>
