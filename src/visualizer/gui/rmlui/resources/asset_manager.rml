@@ -9,7 +9,7 @@
     <div id="asset-popup-toolbar">
       <div class="asset-search-box">
         <span class="asset-search-icon">{{search_icon_label}}</span>
-        <input type="text" placeholder="{{search_placeholder}}" data-value="search_query" data-event-change="on_search" />
+        <input type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
       </div>
 
       <button class="asset-sort-button" data-event-click="cycle_sort_mode">
@@ -288,7 +288,7 @@
                 </div>
               </div>
               <div class="asset-tag-editor">
-                <input type="text" placeholder="{{add_tag_placeholder}}" data-value="pending_tag_name" data-event-change="on_pending_tag_change" />
+                <input type="text" placeholder="{{add_tag_placeholder}}" data-event-change="on_pending_tag_change" />
                 <button class="asset-info-button" data-event-click="on_add_tag">{{add_tag_button_label}}</button>
               </div>
             </div>

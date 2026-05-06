@@ -68,8 +68,7 @@
     border-width: 0;
     color: #d8d0c3;
     font-size: 11dp;
-    padding: 0;
-    height: 100%;
+    padding: 0 0 0 6dp;
 }
 
 .asset-search-box input[type="text"]:focus {

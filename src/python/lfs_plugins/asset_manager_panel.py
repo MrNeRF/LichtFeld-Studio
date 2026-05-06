@@ -142,7 +142,7 @@ class AssetManagerPanel(Panel):
 
         # Basic properties
         model.bind_func("panel_label", lambda: "Asset Manager")
-        model.bind_func("search_query", self.get_search_query)
+        model.bind("search_query", self.get_search_query, self.set_search_query)
         model.bind_func("collection_count", self.get_collection_count)
 
         # View state
@@ -183,6 +183,12 @@ class AssetManagerPanel(Panel):
         # Selected IDs for UI conditionals
         model.bind_func("selected_project_id", self.get_selected_project_id)
         model.bind_func("selected_scene_id", self.get_selected_scene_id)
+
+        # Selection count and state
+        model.bind_func("selected_count", self.get_selected_count)
+        model.bind_func("selected_count_text", self.get_selected_count_text)
+        model.bind_func("has_selection", self.get_has_selection)
+        model.bind_func("has_multi_selection", self.get_has_multi_selection)
 
         # Selected asset properties (flattened bind_func pattern)
         model.bind_func("selected_asset_name", self.get_selected_asset_name)
@@ -425,6 +431,11 @@ class AssetManagerPanel(Panel):
     def get_search_query(self) -> str:
         return self._search_query
 
+    def set_search_query(self, value: str) -> None:
+        self._search_query = value
+        # Trigger asset list refresh when search query changes
+        self._dirty_model("search_query", "assets", "asset_count")
+
     def get_collection_count(self) -> int:
         if self._asset_index and hasattr(self._asset_index, "collections"):
             return len(self._asset_index.collections)
@@ -475,6 +486,27 @@ class AssetManagerPanel(Panel):
 
     def get_selected_scene_id(self) -> Optional[str]:
         return self._selected_scene_id
+
+    def get_selected_count(self) -> int:
+        """Return the number of selected assets."""
+        return len(self._selected_asset_ids)
+
+    def get_selected_count_text(self) -> str:
+        """Return formatted text showing selected count."""
+        count = len(self._selected_asset_ids)
+        if count == 0:
+            return tr("asset_manager.status.select_item")
+        if count == 1:
+            return tr("asset_manager.status.one_item_selected")
+        return tr("asset_manager.status.multi_items_selected", count=count)
+
+    def get_has_selection(self) -> bool:
+        """Return True if any assets are selected."""
+        return len(self._selected_asset_ids) > 0
+
+    def get_has_multi_selection(self) -> bool:
+        """Return True if multiple assets are selected."""
+        return len(self._selected_asset_ids) > 1
 
     def _format_size(self, file_size_bytes: int) -> str:
         if file_size_bytes >= 1024**3:
@@ -696,6 +728,7 @@ class AssetManagerPanel(Panel):
                 if not matches_filter:
                     continue
 
+            # Check search query - simple string match
             if self._search_query and not self._asset_matches_query(
                 asset, self._search_query
             ):
@@ -706,26 +739,32 @@ class AssetManagerPanel(Panel):
         return self._sort_assets(assets)
 
     def _asset_matches_query(self, asset: Dict[str, Any], query: str) -> bool:
+        """Fuzzy search by asset name only.
+        
+        Matches if all characters in query appear in the asset name in order.
+        Example: 'pt' matches 'points3D', 'tester', 'point_cloud'
+        """
         query_l = query.strip().lower()
         if not query_l:
             return True
 
-        project_name, scene_name = self._get_asset_relationship_names(asset)
+        asset_name = asset.get("name", "").lower()
+        if not asset_name:
+            return False
 
-        searchable = " ".join(
-            [
-                asset.get("name", ""),
-                asset.get("type", ""),
-                asset.get("role", ""),
-                asset.get("path", ""),
-                asset.get("absolute_path", ""),
-                asset.get("notes", ""),
-                " ".join(asset.get("tags", [])),
-                project_name,
-                scene_name,
-            ]
-        ).lower()
-        return query_l in searchable
+        # Fuzzy match: each query char must appear in name in order
+        query_idx = 0
+        name_idx = 0
+        query_len = len(query_l)
+        name_len = len(asset_name)
+
+        while query_idx < query_len and name_idx < name_len:
+            if query_l[query_idx] == asset_name[name_idx]:
+                query_idx += 1
+            name_idx += 1
+
+        # Match if we found all query characters in order
+        return query_idx == query_len
 
     def _sort_assets(self, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Sort assets based on current sort mode."""
@@ -2130,7 +2169,7 @@ class AssetManagerPanel(Panel):
             self._selection_type = "multiple"
 
     def on_search(self, _handle, _ev, args):
-        """Handle search input change."""
+        """Handle search input changes (real-time)."""
         if args and len(args) > 0:
             self._search_query = str(args[0])
         self._dirty_model("search_query", "assets", "asset_count")
