@@ -142,7 +142,6 @@
     "info_panel.project_details": "프로젝트 세부정보",
     "info_panel.scene_details": "장면 세부정보",
     "info_panel.scenes": "Sceny",
-    "info_panel.training_summary": "Podsumowanie Treningu",
     "info_panel.transform_information": "Informacje o Transformacji",
     "msg.created_default": "Utworzono projekt domyślny",
     "msg.failed_create_default": "Nie udało się utworzyć projektu domyślnego: {error}",

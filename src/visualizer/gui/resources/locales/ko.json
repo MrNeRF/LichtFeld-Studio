@@ -142,7 +142,6 @@
     "info_panel.project_details": "프로젝트 세부정보",
     "info_panel.scene_details": "장면 세부정보",
     "info_panel.scenes": "장면",
-    "info_panel.training_summary": "훈련 요약",
     "info_panel.transform_information": "변환 정보",
     "msg.created_default": "기본 프로젝트 생성됨",
     "msg.failed_create_default": "기본 프로젝트 생성 실패: {error}",

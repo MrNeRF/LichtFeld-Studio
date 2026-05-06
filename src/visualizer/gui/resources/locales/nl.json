@@ -140,7 +140,6 @@
     "info_panel.project_details": "Project Details",
     "info_panel.scene_details": "Scène Details",
     "info_panel.scenes": "Scènes",
-    "info_panel.training_summary": "Training Samenvatting",
     "info_panel.transform_information": "Transformatie Informatie",
     "msg.created_default": "Standaard project aangemaakt",
     "msg.failed_create_default": "Standaard project aanmaken mislukt: {error}",

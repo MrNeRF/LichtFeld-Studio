@@ -140,7 +140,6 @@
     "info_panel.project_details": "Projekt-Details",
     "info_panel.scene_details": "Szenen-Details",
     "info_panel.scenes": "Szenen",
-    "info_panel.training_summary": "Trainingszusammenfassung",
     "info_panel.transform_information": "Transformationsinformationen",
     "msg.created_default": "Standardprojekt erstellt",
     "msg.failed_create_default": "Fehler beim Erstellen des Standardprojekts: {error}",

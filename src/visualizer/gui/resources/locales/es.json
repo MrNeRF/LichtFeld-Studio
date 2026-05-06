@@ -142,7 +142,6 @@
     "info_panel.project_details": "Detalles del Proyecto",
     "info_panel.scene_details": "Detalles de Escena",
     "info_panel.scenes": "Escenas",
-    "info_panel.training_summary": "Resumen de Entrenamiento",
     "info_panel.transform_information": "Información de Transformación",
     "msg.created_default": "Proyecto predeterminado creado",
     "msg.failed_create_default": "Error al crear proyecto predeterminado: {error}",

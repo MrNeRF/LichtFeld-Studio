@@ -142,7 +142,6 @@
     "info_panel.project_details": "プロジェクト詳細",
     "info_panel.scene_details": "シーン詳細",
     "info_panel.scenes": "シーン",
-    "info_panel.training_summary": "トレーニング概要",
     "info_panel.transform_information": "変換情報",
     "msg.created_default": "デフォルトプロジェクトを作成しました",
     "msg.failed_create_default": "デフォルトプロジェクトの作成に失敗しました: {error}",

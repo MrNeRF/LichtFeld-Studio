@@ -142,7 +142,6 @@
     "info_panel.project_details": "프로젝트 세부정보",
     "info_panel.scene_details": "장면 세부정보",
     "info_panel.scenes": "Scene",
-    "info_panel.training_summary": "Riepilogo Allenamento",
     "info_panel.transform_information": "Informazioni Trasformazione",
     "msg.created_default": "Progetto predefinito creato",
     "msg.failed_create_default": "Creazione progetto predefinito fallita: {error}",

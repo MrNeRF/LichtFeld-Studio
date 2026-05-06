@@ -1080,7 +1080,6 @@
     "info_panel.project_details": "项目详情",
     "info_panel.scene_details": "场景详情",
     "info_panel.scenes": "场景",
-    "info_panel.training_summary": "训练摘要",
     "info_panel.transform_information": "变换信息",
     "msg.created_default": "已创建默认项目",
     "msg.failed_create_default": "创建默认项目失败：{error}",
