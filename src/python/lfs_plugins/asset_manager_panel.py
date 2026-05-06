@@ -154,8 +154,8 @@ class AssetManagerPanel(Panel):
         model.bind_func("pending_tag_name", self.get_pending_tag_name)
 
         # Panel widths for resizable sidebar and info panel
-        model.bind_func("sidebar_width", lambda: f"{self._sidebar_width}px")
-        model.bind_func("right_panel_width", lambda: f"{self._right_panel_width}px")
+        model.bind_func("sidebar_width", lambda: f"{self._sidebar_width}dp")
+        model.bind_func("right_panel_width", lambda: f"{self._right_panel_width}dp")
 
         # Active states
         model.bind_func("active_filters", self.get_active_filters)
@@ -436,7 +436,7 @@ class AssetManagerPanel(Panel):
     def set_search_query(self, value: str) -> None:
         self._search_query = value
         # Trigger asset list refresh when search query changes
-        self._dirty_model("search_query", "assets", "asset_count")
+        self._dirty_model("search_query", "assets")
 
     def get_collection_count(self) -> int:
         if self._asset_index and hasattr(self._asset_index, "collections"):
@@ -1881,22 +1881,19 @@ class AssetManagerPanel(Panel):
                         "asset": self._format_asset_for_ui(asset),
                     }
 
+        # Multiple assets selected - compute total size
+        total_size = 0
+        if self._asset_index and hasattr(self._asset_index, "assets"):
+            for asset_id in self._selected_asset_ids:
+                asset = self._asset_index.assets.get(asset_id)
+                if asset:
+                    total_size += asset.get("file_size_bytes", 0)
+
         return {
             "type": "multiple",
             "count": len(self._selected_asset_ids),
-            "total_size": self.get_selected_total_size(),
+            "total_size": self._format_size(total_size),
         }
-        if key == "sh_degree":
-            return params.get("sh_degree")
-        if key == "strategy":
-            return (
-                params.get("strategy")
-                or params.get("optimizer")
-                or params.get("opt_type")
-            )
-        if key == "steps_scaler":
-            return params.get("steps_scaler")
-        return None
 
     def _ensure_import_project(
         self, default_name: str = "Default"
@@ -2100,7 +2097,7 @@ class AssetManagerPanel(Panel):
             self._active_filters.add(filter_id)
 
         self._dirty_model(
-            "active_filters", "filters", "assets", "asset_count"
+            "active_filters", "filters", "assets"
         )
 
     def set_view_mode(self, _handle, _ev, args):
@@ -2136,7 +2133,7 @@ class AssetManagerPanel(Panel):
             self._asset_index.delete_asset(pid)
         self._asset_index.save()
         self._log_info("Pruned %d missing asset(s) from catalog", len(prune_ids))
-        self._dirty_model("assets", "asset_count")
+        self._dirty_model("assets")
 
     def toggle_asset_selection(self, _handle, _ev, args):
         """Toggle selection state of an asset."""
@@ -2160,7 +2157,6 @@ class AssetManagerPanel(Panel):
             "show_selection_multiple",
             "has_selection",
             "has_multi_selection",
-            "has_loadable_selection",
         )
 
     def _select_asset_id(
@@ -2218,7 +2214,7 @@ class AssetManagerPanel(Panel):
         """Handle search input changes (real-time)."""
         if args and len(args) > 0:
             self._search_query = str(args[0])
-        self._dirty_model("search_query", "assets", "asset_count")
+        self._dirty_model("search_query", "assets")
 
     def on_pending_tag_change(self, _handle, _ev, args):
         """Update the pending tag input buffer."""
@@ -2296,15 +2292,8 @@ class AssetManagerPanel(Panel):
         """Start dragging the sidebar resize handle."""
         self._sidebar_dragging = True
         self._sidebar_drag_start_x = float(event.get_parameter("mouse_x", "0"))
-        sidebar = self._doc.get_element_by_id("asset-sidebar") if self._doc else None
-        if sidebar:
-            width_str = sidebar.get_attribute("data-value", "176")
-            try:
-                self._sidebar_start_width = float(width_str)
-            except (ValueError, TypeError):
-                self._sidebar_start_width = 176.0
-        else:
-            self._sidebar_start_width = 176.0
+        # Use the current width from instance variable
+        self._sidebar_start_width = self._sidebar_width
         event.stop_propagation()
 
     def on_sidebar_resize_delta(self, mouse_x: float) -> None:
@@ -2316,10 +2305,7 @@ class AssetManagerPanel(Panel):
         # Enforce minimum width of 160dp
         new_width = max(160.0, new_width)
         self._sidebar_width = new_width
-        sidebar = self._doc.get_element_by_id("asset-sidebar") if self._doc else None
-        if sidebar:
-            sidebar.set_property("width", f"{int(new_width)}dp")
-            sidebar.set_attribute("data-value", str(int(new_width)))
+        # The width is bound via data-style-width, so just dirty the model
         self._dirty_model("sidebar_width")
 
     def on_sidebar_resize_end(self) -> None:
@@ -2330,15 +2316,8 @@ class AssetManagerPanel(Panel):
         """Start dragging the right panel resize handle."""
         self._right_panel_dragging = True
         self._right_panel_drag_start_x = float(event.get_parameter("mouse_x", "0"))
-        panel = self._doc.get_element_by_id("asset-info-panel") if self._doc else None
-        if panel:
-            width_str = panel.get_attribute("data-value", "300")
-            try:
-                self._right_panel_start_width = float(width_str)
-            except (ValueError, TypeError):
-                self._right_panel_start_width = 300.0
-        else:
-            self._right_panel_start_width = 300.0
+        # Use the current width from instance variable
+        self._right_panel_start_width = self._right_panel_width
         event.stop_propagation()
 
     def on_right_panel_resize_delta(self, mouse_x: float) -> None:
@@ -2350,10 +2329,7 @@ class AssetManagerPanel(Panel):
         # Enforce minimum width of 200dp
         new_width = max(200.0, new_width)
         self._right_panel_width = new_width
-        panel = self._doc.get_element_by_id("asset-info-panel") if self._doc else None
-        if panel:
-            panel.set_property("width", f"{int(new_width)}dp")
-            panel.set_attribute("data-value", str(int(new_width)))
+        # The width is bound via data-style-width, so just dirty the model
         self._dirty_model("right_panel_width")
 
     def on_right_panel_resize_end(self) -> None:
@@ -2592,9 +2568,6 @@ class AssetManagerPanel(Panel):
             "projects",
             "scenes",
             "assets",
-            "asset_count",
-            "scene_count",
-            "project_count",
             "selected_count",
             "selected_total_size",
             "selection_type",
@@ -3614,16 +3587,8 @@ class AssetManagerPanel(Panel):
         if content:
             content.add_event_listener("click", self._on_asset_manager_click)
 
-        # Bind resize handle events
-        sidebar_handle = doc.get_element_by_id("sidebar-resize-handle")
-        if sidebar_handle:
-            sidebar_handle.add_event_listener("mousedown", self._on_sidebar_handle_mousedown)
-
-        right_handle = doc.get_element_by_id("right-panel-resize-handle")
-        if right_handle:
-            right_handle.add_event_listener("mousedown", self._on_right_panel_handle_mousedown)
-
-        # Bind document-level mouse events for dragging
+        # Resize-start is bound declaratively in RML via data-event-mousedown.
+        # Only keep document-level listeners here for active drag tracking.
         doc.add_event_listener("mousemove", self._on_resize_mousemove)
         doc.add_event_listener("mouseup", self._on_resize_mouseup)
 
@@ -3963,7 +3928,6 @@ class AssetManagerPanel(Panel):
                 "selected_total_text",
                 "has_selection",
                 "has_multi_selection",
-                "has_loadable_selection",
                 "selection_type",
                 "show_selection_none",
                 "show_selection_asset",

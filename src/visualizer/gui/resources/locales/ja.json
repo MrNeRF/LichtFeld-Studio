@@ -185,6 +185,8 @@
     "status.file_missing": "ファイル欠落",
     "status.missing": "欠落",
     "status.select_item": "詳細を表示するには項目を選択してください",
+    "status.one_item_selected": "1 項目選択中",
+    "status.multi_items_selected": "{count} 項目選択中",
 
     "title": "アセットマネージャー",
     "toolbar.import": "インポート",

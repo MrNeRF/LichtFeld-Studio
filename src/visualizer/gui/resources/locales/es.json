@@ -188,6 +188,8 @@
     "status.file_missing": "Archivo Faltante",
     "status.missing": "Faltante",
     "status.select_item": "Seleccione un elemento para ver detalles",
+    "status.one_item_selected": "1 elemento seleccionado",
+    "status.multi_items_selected": "{count} elementos seleccionados",
     "toolbar.import": "Importar",
     "toolbar.clean_missing": "Limpiar",
     "toolbar.search_icon": "Buscar",

@@ -1131,6 +1131,8 @@
     "status.file_missing": "文件缺失",
     "status.missing": "缺失",
     "status.select_item": "选择项目以查看详情",
+    "status.one_item_selected": "已选择 1 个项目",
+    "status.multi_items_selected": "已选择 {count} 个项目",
     "toolbar.import": "导入",
     "toolbar.clean_missing": "清理",
     "toolbar.search_icon": "搜索",

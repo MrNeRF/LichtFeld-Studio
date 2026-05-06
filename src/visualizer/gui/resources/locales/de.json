@@ -182,6 +182,8 @@
     "status.file_missing": "Datei fehlt",
     "status.missing": "Fehlt",
     "status.select_item": "Wählen Sie ein Element aus, um Details anzuzeigen",
+    "status.one_item_selected": "1 Element ausgewählt",
+    "status.multi_items_selected": "{count} Elemente ausgewählt",
 
     "title": "Asset Manager",
     "toolbar.import": "Importieren",

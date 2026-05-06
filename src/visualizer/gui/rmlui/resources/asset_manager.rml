@@ -36,7 +36,7 @@
     </div>
 
     <div id="asset-popup-content">
-      <div id="asset-sidebar" data-value="sidebar_width">
+      <div id="asset-sidebar" data-style-width="sidebar_width">
         <div class="asset-sidebar-inner">
         <div class="asset-sidebar-section">
           <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center;">
@@ -167,7 +167,7 @@
 
       <div id="right-panel-resize-handle" data-event-mousedown="on_right_panel_resize_start"></div>
 
-      <div id="asset-info-panel" data-value="right_panel_width">
+      <div id="asset-info-panel" data-style-width="right_panel_width">
         <div class="asset-info-tabs">
           <div class="asset-info-tab" data-class-is-active="true">{{info_tab_label}}</div>
         </div>
