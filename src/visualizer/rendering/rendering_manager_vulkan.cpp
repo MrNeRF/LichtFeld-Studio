@@ -1272,7 +1272,10 @@ namespace lfs::vis {
                 rendered_metadata.depth_panels[0].depth->is_valid()) {
                 gpu_mesh_frame.depth_blit.depth = rendered_metadata.depth_panels[0].depth;
                 gpu_mesh_frame.depth_blit.depth_is_ndc = rendered_metadata.depth_is_ndc;
-                gpu_mesh_frame.depth_blit.flip_y = !rendered_metadata.flip_y;
+                // Depth and color tensors share storage orientation; the viewport
+                // pass already flips the screen quad's UVs for the color image,
+                // so the depth-blit pass inherits that flip and needs no extra one.
+                gpu_mesh_frame.depth_blit.flip_y = false;
                 gpu_mesh_frame.depth_blit.near_plane = rendered_metadata.near_plane > 0.0f
                                                            ? rendered_metadata.near_plane
                                                            : 0.1f;

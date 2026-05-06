@@ -317,6 +317,11 @@ find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
+# Vulkan-native depth: glm::perspective/ortho/frustum must emit clip-space z in
+# [0, 1], not OpenGL's [-1, 1]. Keeps gl_FragDepth, the grid pass, the depth-
+# blit pass and the CPU-side NDC bound checks on a single convention.
+target_compile_definitions(glm::glm INTERFACE GLM_FORCE_DEPTH_ZERO_TO_ONE)
+
 # TORCH_CUDA_ARCH_LIST is already defined by Torch
 # use it here as the global default CUDA architecture list too
 if(LichtFeld-Studio_CUDA_ARCH)

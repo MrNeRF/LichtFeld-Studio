@@ -142,7 +142,7 @@ namespace lfs::rendering::pcraster {
                 if (!isfinite(ndc_x) || !isfinite(ndc_y) || !isfinite(ndc_z) ||
                     ndc_x < -1.0f || ndc_x > 1.0f ||
                     ndc_y < -1.0f || ndc_y > 1.0f ||
-                    ndc_z < -1.0f || ndc_z > 1.0f) {
+                    ndc_z < 0.0f || ndc_z > 1.0f) {
                     return;
                 }
                 pixel_x = (ndc_x * 0.5f + 0.5f) * static_cast<float>(params.width - 1);

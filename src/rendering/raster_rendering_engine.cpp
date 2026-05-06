@@ -797,7 +797,7 @@ namespace lfs::rendering {
             if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(ndc.z) ||
                 ndc.x < -1.0f || ndc.x > 1.0f ||
                 ndc.y < -1.0f || ndc.y > 1.0f ||
-                ndc.z < -1.0f || ndc.z > 1.0f) {
+                ndc.z < 0.0f || ndc.z > 1.0f) {
                 return std::nullopt;
             }
 
@@ -1070,7 +1070,7 @@ namespace lfs::rendering {
             if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(ndc.z) ||
                 ndc.x < -1.0f || ndc.x > 1.0f ||
                 ndc.y < -1.0f || ndc.y > 1.0f ||
-                ndc.z < -1.0f || ndc.z > 1.0f) {
+                ndc.z < 0.0f || ndc.z > 1.0f) {
                 return std::nullopt;
             }
             const float x = (ndc.x * 0.5f + 0.5f) * static_cast<float>(viewport.size.x - 1);
@@ -1424,13 +1424,13 @@ namespace lfs::rendering {
             if (!std::isfinite(ndc.x) || !std::isfinite(ndc.y) || !std::isfinite(ndc.z) ||
                 ndc.x < -1.0f || ndc.x > 1.0f ||
                 ndc.y < -1.0f || ndc.y > 1.0f ||
-                ndc.z < -1.0f || ndc.z > 1.0f) {
+                ndc.z < 0.0f || ndc.z > 1.0f) {
                 return std::nullopt;
             }
             return glm::vec3(
                 (ndc.x * 0.5f + 0.5f) * static_cast<float>(size - 1),
                 (ndc.y * 0.5f + 0.5f) * static_cast<float>(size - 1),
-                ndc.z * 0.5f + 0.5f);
+                ndc.z);
         }
 
         void rasterizeShadowTriangle(SoftwareShadowMap& shadow,
