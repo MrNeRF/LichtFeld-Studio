@@ -26,14 +26,14 @@ namespace lfs::vis::gui {
         struct AxisVisual {
             ScaleGizmoHandle handle = ScaleGizmoHandle::None;
             glm::vec3 direction{0.0f};
-            ImU32 color = IM_COL32_WHITE;
+            OverlayColor color = OVERLAY_COL32_WHITE;
         };
 
         struct PlaneVisual {
             ScaleGizmoHandle handle = ScaleGizmoHandle::None;
             int axis_a = 0;
             int axis_b = 1;
-            ImU32 color = IM_COL32_WHITE;
+            OverlayColor color = OVERLAY_COL32_WHITE;
         };
 
         struct ProjectedPlane {
@@ -109,12 +109,12 @@ namespace lfs::vis::gui {
                 glm::vec3(0.0f, 1.0f, 0.0f));
         }
 
-        [[nodiscard]] ImU32 withAlpha(const ImU32 color, const float alpha) {
+        [[nodiscard]] OverlayColor withAlpha(const OverlayColor color, const float alpha) {
             const int r = static_cast<int>(color & 0xFF);
             const int g = static_cast<int>((color >> 8) & 0xFF);
             const int b = static_cast<int>((color >> 16) & 0xFF);
             const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-            return IM_COL32(r, g, b, a);
+            return overlayColor(r, g, b, a);
         }
 
         [[nodiscard]] bool projectPoint(const glm::mat4& view_projection,
@@ -281,7 +281,7 @@ namespace lfs::vis::gui {
             return projected;
         }
 
-        void drawPlaneHandle(ImDrawList& draw_list,
+        void drawPlaneHandle(NativeOverlayDrawList& draw_list,
                              const ProjectedPlane& projected,
                              const bool emphasized,
                              const bool active) {
@@ -289,20 +289,20 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            const ImVec2 points[4] = {
-                ImVec2(projected.quad[0].x, projected.quad[0].y),
-                ImVec2(projected.quad[1].x, projected.quad[1].y),
-                ImVec2(projected.quad[2].x, projected.quad[2].y),
-                ImVec2(projected.quad[3].x, projected.quad[3].y),
+            const glm::vec2 points[4] = {
+                glm::vec2(projected.quad[0].x, projected.quad[0].y),
+                glm::vec2(projected.quad[1].x, projected.quad[1].y),
+                glm::vec2(projected.quad[2].x, projected.quad[2].y),
+                glm::vec2(projected.quad[3].x, projected.quad[3].y),
             };
             draw_list.AddConvexPolyFilled(points, 4,
                                           withAlpha(projected.plane.color, active ? 0.36f : (emphasized ? 0.25f : 0.12f)));
-            draw_list.AddPolyline(points, 4, IM_COL32(0, 0, 0, active ? 165 : 95), ImDrawFlags_Closed, active ? 2.6f : 2.0f);
+            draw_list.AddPolyline(points, 4, overlayColor(0, 0, 0, active ? 165 : 95), true, active ? 2.6f : 2.0f);
             draw_list.AddPolyline(points, 4, withAlpha(projected.plane.color, active ? 0.95f : 0.68f),
-                                  ImDrawFlags_Closed, active ? 1.8f : 1.2f);
+                                  true, active ? 1.8f : 1.2f);
         }
 
-        void drawAxisHandle(ImDrawList& draw_list,
+        void drawAxisHandle(NativeOverlayDrawList& draw_list,
                             const ProjectedAxis& projected,
                             const bool emphasized,
                             const bool active) {
@@ -314,9 +314,9 @@ namespace lfs::vis::gui {
             const glm::vec2 normal(-dir.y, dir.x);
             const float line_width = active ? 4.0f : (emphasized ? 3.2f : 2.2f);
             const float alpha = active || emphasized ? 1.0f : 0.78f;
-            draw_list.AddLine(ImVec2(projected.start.x, projected.start.y), ImVec2(projected.end.x, projected.end.y),
-                              IM_COL32(0, 0, 0, active ? 185 : 115), line_width + 3.0f);
-            draw_list.AddLine(ImVec2(projected.start.x, projected.start.y), ImVec2(projected.end.x, projected.end.y),
+            draw_list.AddLine(glm::vec2(projected.start.x, projected.start.y), glm::vec2(projected.end.x, projected.end.y),
+                              overlayColor(0, 0, 0, active ? 185 : 115), line_width + 3.0f);
+            draw_list.AddLine(glm::vec2(projected.start.x, projected.start.y), glm::vec2(projected.end.x, projected.end.y),
                               withAlpha(projected.axis.color, alpha), line_width);
 
             const float half = active ? AXIS_BOX_HALF_PX + 1.4f : (emphasized ? AXIS_BOX_HALF_PX + 0.8f : AXIS_BOX_HALF_PX);
@@ -332,37 +332,37 @@ namespace lfs::vis::gui {
                 projected.end - dir * half - normal * half,
                 projected.end + dir * half - normal * half,
             };
-            const ImVec2 shadow_points[4] = {
-                ImVec2(shadow[0].x, shadow[0].y),
-                ImVec2(shadow[1].x, shadow[1].y),
-                ImVec2(shadow[2].x, shadow[2].y),
-                ImVec2(shadow[3].x, shadow[3].y),
+            const glm::vec2 shadow_points[4] = {
+                glm::vec2(shadow[0].x, shadow[0].y),
+                glm::vec2(shadow[1].x, shadow[1].y),
+                glm::vec2(shadow[2].x, shadow[2].y),
+                glm::vec2(shadow[3].x, shadow[3].y),
             };
-            const ImVec2 box_points[4] = {
-                ImVec2(box[0].x, box[0].y),
-                ImVec2(box[1].x, box[1].y),
-                ImVec2(box[2].x, box[2].y),
-                ImVec2(box[3].x, box[3].y),
+            const glm::vec2 box_points[4] = {
+                glm::vec2(box[0].x, box[0].y),
+                glm::vec2(box[1].x, box[1].y),
+                glm::vec2(box[2].x, box[2].y),
+                glm::vec2(box[3].x, box[3].y),
             };
-            draw_list.AddConvexPolyFilled(shadow_points, 4, IM_COL32(0, 0, 0, active ? 185 : 125));
+            draw_list.AddConvexPolyFilled(shadow_points, 4, overlayColor(0, 0, 0, active ? 185 : 125));
             draw_list.AddConvexPolyFilled(box_points, 4, withAlpha(projected.axis.color, alpha));
         }
 
-        void drawCenterHandle(ImDrawList& draw_list,
+        void drawCenterHandle(NativeOverlayDrawList& draw_list,
                               const glm::vec2& pivot_screen,
                               const bool emphasized,
                               const bool active) {
             const float half = active ? 7.5f : (emphasized ? 7.0f : 6.0f);
-            const ImVec2 min(pivot_screen.x - half, pivot_screen.y - half);
-            const ImVec2 max(pivot_screen.x + half, pivot_screen.y + half);
-            draw_list.AddRectFilled(ImVec2(min.x - 2.0f, min.y - 2.0f),
-                                    ImVec2(max.x + 2.0f, max.y + 2.0f),
-                                    IM_COL32(0, 0, 0, active ? 185 : 135),
+            const glm::vec2 min(pivot_screen.x - half, pivot_screen.y - half);
+            const glm::vec2 max(pivot_screen.x + half, pivot_screen.y + half);
+            draw_list.AddRectFilled(glm::vec2(min.x - 2.0f, min.y - 2.0f),
+                                    glm::vec2(max.x + 2.0f, max.y + 2.0f),
+                                    overlayColor(0, 0, 0, active ? 185 : 135),
                                     2.0f);
             draw_list.AddRectFilled(min, max,
-                                    active ? IM_COL32(255, 214, 119, 245)
-                                           : (emphasized ? IM_COL32(255, 235, 170, 238)
-                                                         : IM_COL32(245, 248, 255, 220)),
+                                    active ? overlayColor(255, 214, 119, 245)
+                                           : (emphasized ? overlayColor(255, 235, 170, 238)
+                                                         : overlayColor(245, 248, 255, 220)),
                                     2.0f);
         }
 
@@ -492,7 +492,7 @@ namespace lfs::vis::gui {
         glm::vec2 pivot_screen;
         if (!projectPoint(view_projection, draw_config.viewport_pos, draw_config.viewport_size,
                           draw_config.pivot_world, pivot_screen)) {
-            if (g_active.active && g_active.id == config.id && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            if (g_active.active && g_active.id == config.id && !config.input.mouse_left_down) {
                 g_active = ActiveState{};
             }
             return result;
@@ -502,29 +502,28 @@ namespace lfs::vis::gui {
         const float world_per_pixel = 1.0f / std::max(pixels_per_world, 0.000001f);
         const std::array<AxisVisual, 3> axes = {
             AxisVisual{ScaleGizmoHandle::X, axisFromConfig(draw_config.orientation_world, 0),
-                       IM_COL32(245, 82, 96, 255)},
+                       overlayColor(245, 82, 96, 255)},
             AxisVisual{ScaleGizmoHandle::Y, axisFromConfig(draw_config.orientation_world, 1),
-                       IM_COL32(74, 208, 119, 255)},
+                       overlayColor(74, 208, 119, 255)},
             AxisVisual{ScaleGizmoHandle::Z, axisFromConfig(draw_config.orientation_world, 2),
-                       IM_COL32(80, 151, 255, 255)},
+                       overlayColor(80, 151, 255, 255)},
         };
         const std::array<PlaneVisual, 3> planes = {
-            PlaneVisual{ScaleGizmoHandle::XY, 0, 1, IM_COL32(245, 215, 84, 255)},
-            PlaneVisual{ScaleGizmoHandle::YZ, 1, 2, IM_COL32(78, 222, 210, 255)},
-            PlaneVisual{ScaleGizmoHandle::ZX, 2, 0, IM_COL32(205, 132, 255, 255)},
+            PlaneVisual{ScaleGizmoHandle::XY, 0, 1, overlayColor(245, 215, 84, 255)},
+            PlaneVisual{ScaleGizmoHandle::YZ, 1, 2, overlayColor(78, 222, 210, 255)},
+            PlaneVisual{ScaleGizmoHandle::ZX, 2, 0, overlayColor(205, 132, 255, 255)},
         };
         const auto projected_planes = projectPlanes(draw_config, view_projection, axes, planes, world_per_pixel);
         const auto projected_axes = projectAxes(draw_config, view_projection, axes, world_per_pixel);
 
-        const ImGuiIO& io = ImGui::GetIO();
-        const glm::vec2 mouse(io.MousePos.x, io.MousePos.y);
+        const glm::vec2 mouse = config.input.mouse_pos;
         ScaleGizmoHandle hovered_handle = ScaleGizmoHandle::None;
         if (isInViewport(draw_config, mouse) && (!g_active.active || g_active.id == config.id)) {
             hovered_handle = nearestHandle(projected_axes, projected_planes, mouse, pivot_screen);
         }
 
         if (g_active.active && g_active.id == config.id) {
-            result.active = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            result.active = config.input.mouse_left_down;
             if (!result.active) {
                 g_active = ActiveState{};
             }
@@ -532,7 +531,7 @@ namespace lfs::vis::gui {
 
         if (!g_active.active && config.input_enabled &&
             hovered_handle != ScaleGizmoHandle::None &&
-            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            config.input.mouse_left_clicked) {
             beginDrag(draw_config, view_projection, axes, hovered_handle, mouse, pivot_screen, world_per_pixel);
             result.active = true;
         }
@@ -548,7 +547,6 @@ namespace lfs::vis::gui {
             result.total_scale = g_active.applied_scale;
             result.active = true;
             result.active_handle = g_active.handle;
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         }
 
         result.hovered_handle = hovered_handle;

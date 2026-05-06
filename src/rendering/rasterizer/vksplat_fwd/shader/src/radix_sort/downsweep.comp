@@ -1,0 +1,243 @@
+#version 460 core
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_KHR_shader_subgroup_basic: enable
+#extension GL_KHR_shader_subgroup_arithmetic: enable
+#extension GL_KHR_shader_subgroup_ballot: enable
+
+#extension GL_ARB_shading_language_include : require
+#include "./config.glsl"
+
+layout (local_size_x = WORKGROUP_SIZE) in;
+
+layout (std430, binding = 0) readonly buffer GlobalHistogram {
+  uint32_t data[];  // (8, R)
+} globalHistogram;
+
+layout (std430, binding = 1) readonly buffer PartitionHistogram {
+  uint32_t data[];  // (P, R)
+} partitionHistogram;
+
+layout (std430, binding = 2) readonly buffer KeysIn {
+  keyType data[];  // (N)
+} keysIn;
+
+layout (std430, binding = 3) readonly buffer ValuesIn {
+  uint32_t data[];  // (N)
+} valuesIn;
+
+layout (std430, binding = 4) writeonly buffer KeysOut {
+  keyType data[];  // (N)
+} keysOut;
+
+layout (std430, binding = 5) writeonly buffer ValuesOut {
+  uint32_t data[];  // (N)
+} valuesOut;
+
+layout (push_constant) uniform PushConstant {
+  uint32_t pass;
+  uint32_t elementCount;
+} uniforms;
+
+const uint SHMEM_SIZE = PARTITION_SIZE;
+
+shared uint32_t localHistogram[(KEY_BITS/32)*SHMEM_SIZE];  // (R, S=16)=4096, (P) for alias. take maximum.
+shared uint32_t localHistogramSum[RADIX];
+
+void storeLocalHistogramAlias(uint idx, keyType x) {
+  #if KEY_BITS == 64
+    localHistogram[2*idx+0] = uint32_t(x);
+    localHistogram[2*idx+1] = uint32_t(x >> 32);
+  #else
+    localHistogram[idx] = uint32_t(x);
+  #endif
+}
+
+keyType loadLocalHistogramAlias(uint idx) {
+  #if KEY_BITS == 64
+    uint32_t c0 = localHistogram[2*idx+0];
+    uint32_t c1 = localHistogram[2*idx+1];
+    return (keyType(c1) << 32) | keyType(c0);
+  #else
+    return localHistogram[idx];
+  #endif
+}
+
+// returns 0b00000....11111, where msb is id-1.
+uvec4 GetExclusiveSubgroupMask(uint id) {
+  return uvec4(
+    (1 << id) - 1,
+    (1 << (id - 32)) - 1,
+    (1 << (id - 64)) - 1,
+    (1 << (id - 96)) - 1
+  );
+}
+
+uint GetBitCount(uvec4 value) {
+  uvec4 result = bitCount(value);
+  return result[0] + result[1] + result[2] + result[3];
+}
+
+void main() {
+  uint threadIndex = gl_SubgroupInvocationID;  // 0..31
+  uint subgroupIndex = gl_SubgroupID;  // 0..15
+  uint index = subgroupIndex * gl_SubgroupSize + threadIndex;
+  uvec4 subgroupMask = GetExclusiveSubgroupMask(threadIndex);
+
+  uint partitionIndex = gl_WorkGroupID.x;
+  uint partitionStart = partitionIndex * PARTITION_SIZE;
+
+  uint elementCount = uniforms.elementCount;
+  int pass = int(uniforms.pass);
+
+  if (partitionStart >= elementCount) return;
+
+  if (index < RADIX) {
+    for (int i = 0; i < gl_NumSubgroups; ++i) {
+      localHistogram[gl_NumSubgroups * index + i] = 0;
+    }
+  }
+  barrier();
+
+  // load from global memory, local histogram and offset
+  keyType localKeys[PARTITION_DIVISION];
+  uint32_t localValues[PARTITION_DIVISION];
+  uint localRadix[PARTITION_DIVISION];
+  uint localOffsets[PARTITION_DIVISION];
+  uint32_t subgroupHistogram[PARTITION_DIVISION];
+
+  for (int i = 0; i < PARTITION_DIVISION; ++i) {
+    uint keyIndex = partitionStart + (PARTITION_DIVISION * gl_SubgroupSize) * subgroupIndex + i * gl_SubgroupSize + threadIndex;
+    keyType key = keyIndex < elementCount ? keysIn.data[keyIndex] : keyType(-1);
+    localKeys[i] = key;
+    
+    localValues[i] = keyIndex < elementCount ? valuesIn.data[keyIndex] : 0;
+
+    uint radix = uint(key >> keyType(pass * 8)) & 255;
+    localRadix[i] = radix;
+
+    // mask per digit
+    uvec4 mask = subgroupBallot(true);
+    #pragma unroll
+    for (int j = 0; j < 8; ++j) {
+      uint digit = (radix >> j) & 1;
+      uvec4 ballot = subgroupBallot(digit == 1);
+      // digit - 1 is 0 or 0xffffffff. xor to flip.
+      mask &= uvec4(digit - 1) ^ ballot;
+    }
+
+    // subgroup level offset for radix
+    uint subgroupOffset = GetBitCount(subgroupMask & mask);
+    uint radixCount = GetBitCount(mask);
+
+    // elect a representative per radix, add to histogram
+    if (subgroupOffset == 0) {
+      // accumulate to local histogram
+      atomicAdd(localHistogram[gl_NumSubgroups * radix + subgroupIndex], radixCount);
+      subgroupHistogram[i] = radixCount;
+    } else {
+      subgroupHistogram[i] = 0;
+    }
+
+    localOffsets[i] = subgroupOffset;
+  }
+  barrier();
+  
+  // local histogram reduce 4096
+  for (uint i = index; i < RADIX * gl_NumSubgroups; i += WORKGROUP_SIZE) {
+    uint v = localHistogram[i];
+    uint sum = subgroupAdd(v);
+    uint excl = subgroupExclusiveAdd(v);
+    localHistogram[i] = excl;
+    if (threadIndex == 0) {
+      localHistogramSum[i / gl_SubgroupSize] = sum;
+    }
+  }
+  barrier();
+
+  // local histogram reduce 128
+  uint intermediateOffset0 = RADIX * gl_NumSubgroups / gl_SubgroupSize;
+  if (index < intermediateOffset0) {
+    uint v = localHistogramSum[index];
+    uint sum = subgroupAdd(v);
+    uint excl = subgroupExclusiveAdd(v);
+    localHistogramSum[index] = excl;
+    if (threadIndex == 0) {
+      localHistogramSum[intermediateOffset0 + index / gl_SubgroupSize] = sum;
+    }
+  }
+  barrier();
+
+  // local histogram reduce 4
+  uint intermediateSize1 = RADIX * gl_NumSubgroups / gl_SubgroupSize / gl_SubgroupSize;
+  if (index < intermediateSize1) {
+    uint v = localHistogramSum[intermediateOffset0 + index];
+    uint excl = subgroupExclusiveAdd(v);
+    localHistogramSum[intermediateOffset0 + index] = excl;
+  }
+  barrier();
+
+  // local histogram add 128
+  if (index < intermediateOffset0) {
+    localHistogramSum[index] += localHistogramSum[intermediateOffset0 + index / gl_SubgroupSize];
+  }
+  barrier();
+
+  // local histogram add 4096
+  for (uint i = index; i < RADIX * gl_NumSubgroups; i += WORKGROUP_SIZE) {
+    localHistogram[i] += localHistogramSum[i / gl_SubgroupSize];
+  }
+  barrier();
+
+  // post-scan stage
+  for (int i = 0; i < PARTITION_DIVISION; ++i) {
+    uint radix = localRadix[i];
+    localOffsets[i] += localHistogram[gl_NumSubgroups * radix + subgroupIndex];
+
+    barrier();
+    if (subgroupHistogram[i] > 0) {
+      atomicAdd(localHistogram[gl_NumSubgroups * radix + subgroupIndex], subgroupHistogram[i]);
+    }
+    barrier();
+  }
+
+  // after atomicAdd, localHistogram contains inclusive sum
+  if (index < RADIX) {
+    uint v = index == 0 ? 0 : localHistogram[gl_NumSubgroups * index - 1];
+    localHistogramSum[index] = globalHistogram.data[RADIX * pass + index] + partitionHistogram.data[RADIX * partitionIndex + index] - v;
+  }
+  barrier();
+
+  // rearrange keys. grouping keys together makes dstOffset to be almost sequential, grants huge speed boost.
+  // now localHistogram is unused, so alias memory.
+  for (int i = 0; i < PARTITION_DIVISION; ++i) {
+    // localHistogram[localOffsets[i]] = localKeys[i];
+    storeLocalHistogramAlias(localOffsets[i], localKeys[i]);
+  }
+  barrier();
+
+  // binning
+  uint32_t localOffsets1[PARTITION_DIVISION];
+  for (uint i = index; i < PARTITION_SIZE; i += WORKGROUP_SIZE) {
+    // keyType key = localHistogram[i];
+    keyType key = loadLocalHistogramAlias(i);
+    uint radix = uint(key >> keyType(pass * 8)) & 255;
+    uint32_t dstOffset = localHistogramSum[radix] + i;
+    if (dstOffset < elementCount) {
+      keysOut.data[dstOffset] = key;
+    }
+    localOffsets1[i / WORKGROUP_SIZE] = dstOffset;
+  }
+  barrier();
+
+  for (int i = 0; i < PARTITION_DIVISION; ++i) {
+    localHistogram[localOffsets[i]] = localValues[i];
+  }
+  barrier();
+
+  for (uint i = index; i < PARTITION_SIZE; i += WORKGROUP_SIZE) {
+    uint32_t value = localHistogram[i];
+    valuesOut.data[localOffsets1[i / WORKGROUP_SIZE]] = value;
+  }
+}

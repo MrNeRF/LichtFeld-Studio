@@ -8,7 +8,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr float LOOP_KEYFRAME_OFFSET = 1.0f;
         constexpr float KEYFRAME_SEEK_EPS = 1e-4f;
     } // namespace
 
@@ -39,7 +38,7 @@ namespace lfs::vis {
     }
 
     void SequencerController::seek(const float time) {
-        playhead_ = timeline_.empty() ? 0.0f : std::clamp(time, timeline_.startTime(), timeline_.endTime());
+        playhead_ = std::clamp(time, 0.0f, timeline_.clipDuration());
     }
 
     void SequencerController::seekToFirstKeyframe() {
@@ -111,6 +110,17 @@ namespace lfs::vis {
         }
     }
 
+    void SequencerController::setClipDuration(const float duration) {
+        const float previous = timeline_.clipDuration();
+        timeline_.setClipDuration(duration);
+        if (timeline_.clipDuration() == previous)
+            return;
+        if (playhead_ > timeline_.clipDuration())
+            playhead_ = timeline_.clipDuration();
+        rebuildLoopKeyframe();
+        markTimelineChanged();
+    }
+
     void SequencerController::setLoopMode(const LoopMode mode) {
         if (loop_mode_ == mode)
             return;
@@ -170,7 +180,7 @@ namespace lfs::vis {
 
         sequencer::Keyframe loop_kf = *first_it;
         loop_kf.id = sequencer::INVALID_KEYFRAME_ID;
-        loop_kf.time = timeline_.realEndTime() + LOOP_KEYFRAME_OFFSET;
+        loop_kf.time = timeline_.clipDuration();
         loop_kf.is_loop_point = true;
         timeline_.addKeyframe(loop_kf);
     }
@@ -180,7 +190,7 @@ namespace lfs::vis {
     }
 
     void SequencerController::scrub(const float time) {
-        playhead_ = std::clamp(time, timeline_.startTime(), timeline_.endTime());
+        playhead_ = std::clamp(time, 0.0f, timeline_.clipDuration());
     }
 
     void SequencerController::endScrub() {
@@ -192,8 +202,10 @@ namespace lfs::vis {
             return false;
         }
 
-        const float start = timeline_.startTime();
-        const float end = timeline_.endTime();
+        // Playback runs across the full clip [0, clipDuration]. interpolateSpline clamps to
+        // the keyframe range, so non-loop modes naturally hold the last pose past the final
+        // real keyframe until the clip end.
+        const float end = timeline_.clipDuration();
         const float delta = delta_seconds * playback_speed_ * (reverse_direction_ ? -1.0f : 1.0f);
 
         playhead_ += delta;
@@ -203,17 +215,17 @@ namespace lfs::vis {
             if (playhead_ >= end) {
                 playhead_ = end;
                 state_ = PlaybackState::STOPPED;
-            } else if (playhead_ < start) {
-                playhead_ = start;
+            } else if (playhead_ < 0.0f) {
+                playhead_ = 0.0f;
                 state_ = PlaybackState::STOPPED;
             }
             break;
 
         case LoopMode::LOOP:
             if (playhead_ >= end) {
-                playhead_ = start + (playhead_ - end);
-            } else if (playhead_ < start) {
-                playhead_ = end - (start - playhead_);
+                playhead_ -= end;
+            } else if (playhead_ < 0.0f) {
+                playhead_ += end;
             }
             break;
 
@@ -221,8 +233,8 @@ namespace lfs::vis {
             if (playhead_ >= end) {
                 playhead_ = end - (playhead_ - end);
                 reverse_direction_ = true;
-            } else if (playhead_ < start) {
-                playhead_ = start + (start - playhead_);
+            } else if (playhead_ < 0.0f) {
+                playhead_ = -playhead_;
                 reverse_direction_ = false;
             }
             break;

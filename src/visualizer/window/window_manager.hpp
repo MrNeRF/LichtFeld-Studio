@@ -6,25 +6,27 @@
 
 #include "input/frame_input_buffer.hpp"
 #include "input/input_router.hpp"
+#include "visualizer/visualizer.hpp"
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
 struct SDL_Window;
-struct SDL_GLContextState;
-typedef SDL_GLContextState* SDL_GLContext;
 union SDL_Event;
 
 namespace lfs::vis {
 
     class InputController;
+    class VulkanContext;
 
     class WindowManager {
     public:
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
-                      int monitor_width = 0, int monitor_height = 0);
+                      int monitor_width = 0, int monitor_height = 0,
+                      GraphicsBackend graphics_backend = GraphicsBackend::Vulkan);
         ~WindowManager();
 
         WindowManager(const WindowManager&) = delete;
@@ -43,11 +45,13 @@ namespace lfs::vis {
         void wakeEventLoop();
 
         SDL_Window* getWindow() const { return window_; }
-        SDL_GLContext getGLContext() const { return gl_context_; }
+        VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
         glm::ivec2 getFramebufferSize() const { return framebuffer_size_; }
         bool isFullscreen() const { return is_fullscreen_; }
         void toggleFullscreen();
+        GraphicsBackend graphicsBackend() const { return graphics_backend_; }
+        bool isVulkan() const { return true; }
 
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic);
@@ -58,7 +62,8 @@ namespace lfs::vis {
         void processEvent(const ::SDL_Event& event);
 
         SDL_Window* window_ = nullptr;
-        SDL_GLContext gl_context_ = nullptr;
+        std::unique_ptr<VulkanContext> vulkan_context_;
+        GraphicsBackend graphics_backend_ = GraphicsBackend::Vulkan;
         std::string title_;
         glm::ivec2 window_size_;
         glm::ivec2 framebuffer_size_;

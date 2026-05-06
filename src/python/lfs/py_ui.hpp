@@ -477,7 +477,7 @@ namespace lfs::python {
         void begin_disabled(bool disabled = true);
         void end_disabled();
 
-        // Images (texture_id is OpenGL texture handle as uint64)
+        // Images (texture_id is an opaque ImGui backend texture handle as uint64)
         void image(uint64_t texture_id, std::tuple<float, float> size,
                    nb::object tint = nb::none());
         void image_uv(uint64_t texture_id, std::tuple<float, float> size,

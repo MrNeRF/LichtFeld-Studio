@@ -12,7 +12,6 @@
 #include <optional>
 #include <rendering/frame_contract.hpp>
 #include <rendering/rendering.hpp>
-#include <shared_mutex>
 #include <vector>
 
 namespace lfs::core {
@@ -179,20 +178,6 @@ namespace lfs::vis {
         return metadata;
     }
 
-    // Pass execution order (defined in RenderingManager constructor):
-    //   [pre] SplatRasterPass  — GT comparison pre-render (before loop, at GT dimensions)
-    //   [0]   EnvironmentPass  — Clear scene target and render background
-    //   [1]   SplitViewPass    — Side-by-side views (blocks scene raster passes if active)
-    //   [2]   SplatRasterPass  — Render splats to offscreen FBO
-    //   [3]   PointCloudPass   — Pre-training point cloud (mutually exclusive with splats)
-    //   [4]   PresentPass      — Present cached GPU frame over the environment
-    //   [5]   MeshPass         — Render meshes, composite with splats
-    //   [6]   OverlayPass      — Grid, crop boxes, frustums, pivot, axes
-    //
-    // Inter-pass coordination flags:
-    //   split_view_executed — Set by SplitViewPass. Skips SplatRaster/PointCloud/Mesh.
-    //   splats_presented    — Set by PresentPass/PointCloudPass. Tells MeshPass to composite.
-    //   splat_pre_rendered  — Set by GT pre-render. Skips SplatRasterPass in the loop.
     struct FrameResources {
         CachedRenderMetadata cached_metadata;
         std::optional<lfs::rendering::GpuFrame> cached_gpu_frame;
@@ -225,23 +210,5 @@ namespace lfs::vis {
         frame_view.ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
         equirectangular = render_camera.equirectangular;
     }
-
-    std::optional<std::shared_lock<std::shared_mutex>> acquireRenderLock(const FrameContext& ctx);
-
-    class RenderPass {
-    public:
-        virtual ~RenderPass() = default;
-        [[nodiscard]] virtual const char* name() const = 0;
-        [[nodiscard]] virtual DirtyMask sensitivity() const = 0;
-
-        [[nodiscard]] virtual bool shouldExecute(DirtyMask frame_dirty,
-                                                 const FrameContext& /*ctx*/) const {
-            return (frame_dirty & sensitivity()) != 0;
-        }
-
-        virtual void execute(lfs::rendering::RenderingEngine& engine,
-                             const FrameContext& ctx,
-                             FrameResources& res) = 0;
-    };
 
 } // namespace lfs::vis

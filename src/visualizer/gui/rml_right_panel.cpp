@@ -2,10 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_right_panel.hpp"
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
@@ -13,7 +9,6 @@
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
@@ -99,7 +94,6 @@ namespace lfs::vis::gui {
         tab_model_ = {};
         tabs_.clear();
         active_tab_.clear();
-        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("right_panel");
         rml_context_ = nullptr;
@@ -518,6 +512,8 @@ namespace lfs::vis::gui {
                                const std::string& active_tab,
                                float screen_x, float screen_y,
                                int screen_w, int screen_h) {
+        (void)screen_w;
+        (void)screen_h;
         if (!rml_context_ || !document_)
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
@@ -544,7 +540,7 @@ namespace lfs::vis::gui {
         const bool needs_render = render_needed_ || theme_changed || layout_changed ||
                                   tabs_changed || dims_changed || input_dirty_;
 
-        if (needs_render && !rml_manager_->shouldDeferFboUpdate(fbo_)) {
+        if (needs_render) {
             const float dp_ratio = rml_manager_->getDpRatio();
             const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dp_ratio;
 
@@ -579,25 +575,6 @@ namespace lfs::vis::gui {
             }
             syncTabNavigation();
 
-            fbo_.ensure(w, h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render = rml_manager_->getRenderInterface();
-            assert(render);
-            render->SetViewport(w, h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render->SetTargetFramebuffer(fbo_.fbo());
-
-            render->BeginFrame();
-            rml_context_->Render();
-            render->EndFrame();
-
-            render->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
-
             last_fbo_w_ = w;
             last_fbo_h_ = h;
             last_scene_h_ = layout.scene_h;
@@ -606,11 +583,18 @@ namespace lfs::vis::gui {
             input_dirty_ = false;
         }
 
-        if (fbo_.valid())
-            fbo_.blitToScreen(layout.pos.x - screen_x,
-                              layout.pos.y - screen_y,
-                              layout.size.x, layout.size.y,
-                              screen_w, screen_h);
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+            return;
+
+        rml_manager_->queueVulkanContext(rml_context_,
+                                         layout.pos.x - screen_x,
+                                         layout.pos.y - screen_y,
+                                         false,
+                                         true,
+                                         layout.pos.x - screen_x,
+                                         layout.pos.y - screen_y,
+                                         layout.pos.x - screen_x + static_cast<float>(w),
+                                         layout.pos.y - screen_y + static_cast<float>(h));
     }
 
 } // namespace lfs::vis::gui

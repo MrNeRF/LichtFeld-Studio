@@ -11,7 +11,6 @@
 #include <optional>
 
 namespace lfs::vis {
-    class GTTextureCache;
     class SceneManager;
     struct FrameResources;
 } // namespace lfs::vis
@@ -67,13 +66,6 @@ namespace lfs::vis {
         [[nodiscard]] Viewport& secondaryViewport() { return secondary_viewport_; }
         [[nodiscard]] const Viewport& secondaryViewport() const { return secondary_viewport_; }
         void updateInfo(const FrameResources& resources);
-        void prepareGTComparisonContext(SceneManager* scene_manager,
-                                        const RenderSettings& settings,
-                                        int current_camera_id,
-                                        bool has_renderable_content,
-                                        bool has_viewport_output,
-                                        GTTextureCache& texture_cache,
-                                        bool& request_viewport_prerender);
 
     private:
         enum class GTExitBehavior {

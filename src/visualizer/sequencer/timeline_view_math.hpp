@@ -10,13 +10,8 @@
 
 namespace lfs::vis::sequencer_ui {
 
-    inline constexpr float DEFAULT_TIMELINE_DURATION = 10.0f;
-    inline constexpr float TIMELINE_END_PADDING = 1.0f;
-
     [[nodiscard]] inline float unzoomedEndTime(const lfs::sequencer::Timeline& timeline) {
-        return timeline.size() < 2
-                   ? DEFAULT_TIMELINE_DURATION
-                   : std::max(timeline.endTime() + TIMELINE_END_PADDING, DEFAULT_TIMELINE_DURATION);
+        return timeline.clipDuration();
     }
 
     [[nodiscard]] inline float displayEndTime(const lfs::sequencer::Timeline& timeline, const float zoom_level) {

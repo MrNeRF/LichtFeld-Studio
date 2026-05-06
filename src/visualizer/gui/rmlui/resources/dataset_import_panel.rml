@@ -32,7 +32,13 @@
     <div class="impdlg-info-row">
       <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.sparse_dir</span>
       <div class="impdlg-info-main">
-        <span class="impdlg-value text-default">{{sparse_path}}</span>
+        <div class="impdlg-control-row">
+          <span class="impdlg-value text-default">{{sparse_path}}</span>
+          <label class="impdlg-checkbox-label">
+            <input type="checkbox" data-checked="apply_auto_crop" />
+            <span class="text-muted">@tr:load_dataset_popup.apply_auto_crop</span>
+          </label>
+        </div>
       </div>
     </div>
 
@@ -86,6 +92,20 @@
             <option value="by_cameras">@tr:load_dataset_popup.centralize_by_cameras</option>
           </select>
         </div>
+      </div>
+    </div>
+
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.max_width</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input" data-value="max_width_str" />
+          <label class="impdlg-checkbox-label">
+            <input type="checkbox" data-checked="max_width_disabled" />
+            <span class="text-muted">@tr:load_dataset_popup.max_width_disable</span>
+          </label>
+        </div>
+        <span class="impdlg-meta text-muted">@tr:load_dataset_popup.max_width_hint</span>
       </div>
     </div>
 

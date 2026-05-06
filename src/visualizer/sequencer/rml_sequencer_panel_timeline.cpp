@@ -3,12 +3,8 @@
 
 #include "core/events.hpp"
 #include "gui/film_strip_renderer.hpp"
-#include "gui/rmlui/rml_input_utils.hpp"
-#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
-#include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "sequencer/interpolation.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/timeline_view_math.hpp"
@@ -16,7 +12,6 @@
 #include <RmlUi/Core.h>
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <fmt/format.h>
 
 namespace lfs::vis {
@@ -27,61 +22,6 @@ namespace lfs::vis {
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
         constexpr float PLAYHEAD_HIT_RADIUS = 6.0f;
         constexpr float PLAYHEAD_HANDLE_WIDTH = 8.0f;
-
-        [[nodiscard]] std::string formatTime(const float seconds) {
-            const int mins = static_cast<int>(seconds) / 60;
-            const float secs = seconds - static_cast<float>(mins * 60);
-            return fmt::format("{}:{:05.2f}", mins, secs);
-        }
-
-        [[nodiscard]] bool hasSelectedKeyframe(const std::vector<sequencer::KeyframeId>& selected_keyframes,
-                                               const sequencer::KeyframeId id) {
-            return std::find(selected_keyframes.begin(), selected_keyframes.end(), id) !=
-                   selected_keyframes.end();
-        }
-
-        void addSelectedKeyframe(std::vector<sequencer::KeyframeId>& selected_keyframes,
-                                 const sequencer::KeyframeId id) {
-            if (!hasSelectedKeyframe(selected_keyframes, id))
-                selected_keyframes.push_back(id);
-        }
-
-        void removeSelectedKeyframe(std::vector<sequencer::KeyframeId>& selected_keyframes,
-                                    const sequencer::KeyframeId id) {
-            if (const auto it = std::find(selected_keyframes.begin(), selected_keyframes.end(), id);
-                it != selected_keyframes.end()) {
-                selected_keyframes.erase(it);
-            }
-        }
-
-        [[nodiscard]] float clampCenteredSpan(const float center,
-                                              const float extent,
-                                              const float span) {
-            if (extent <= 0.0f)
-                return 0.0f;
-
-            const float half_span = std::max(span * 0.5f, 0.0f);
-            if (extent <= span)
-                return extent * 0.5f;
-
-            return std::clamp(center, half_span, extent - half_span);
-        }
-
-        void forwardFocusedKeyboardInput(Rml::Context* const context,
-                                         const PanelInputState& input) {
-            const int mods = gui::sdlModsToRml(input.key_ctrl, input.key_shift,
-                                               input.key_alt, input.key_super);
-            for (const int sc : input.keys_pressed) {
-                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN)
-                    context->ProcessKeyDown(rml_key, mods);
-            }
-            for (const int sc : input.keys_released) {
-                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-                if (rml_key != Rml::Input::KI_UNKNOWN)
-                    context->ProcessKeyUp(rml_key, mods);
-            }
-        }
     } // namespace
 
     using namespace panel_config;
@@ -250,14 +190,6 @@ namespace lfs::vis {
     }
 
     void RmlSequencerPanel::unregisterFilmStripSources() {
-        auto* render = rml_manager_ ? rml_manager_->getRenderInterface() : nullptr;
-        if (!render) {
-            registered_film_strip_sources_.clear();
-            return;
-        }
-
-        for (const auto& source : registered_film_strip_sources_)
-            render->unregister_external_texture(source);
         registered_film_strip_sources_.clear();
     }
 
@@ -396,9 +328,6 @@ namespace lfs::vis {
         el_film_strip_gaps_->SetInnerRML(gaps_html);
 
         ensureFilmThumbPool(film_strip.thumbs().size());
-        auto* render = rml_manager_ ? rml_manager_->getRenderInterface() : nullptr;
-        if (!render)
-            unregisterFilmStripSources();
         std::set<std::string> active_sources;
         for (size_t i = 0; i < film_thumb_elements_.size(); ++i) {
             auto* thumb_el = film_thumb_elements_[i];
@@ -406,28 +335,23 @@ namespace lfs::vis {
             if (!thumb_el || !image_el)
                 continue;
 
-            if (i >= film_strip.thumbs().size()) {
+            const auto clear_thumb = [&] {
                 thumb_el->SetProperty("display", "none");
-                image_el->SetAttribute("src", "");
+                if (!image_el->GetAttribute<Rml::String>("src", "").empty())
+                    image_el->SetAttribute("src", "");
+            };
+
+            if (i >= film_strip.thumbs().size()) {
+                clear_thumb();
                 continue;
             }
 
             const auto& thumb = film_strip.thumbs()[i];
-            const unsigned int texture_id = film_strip.textureIdForSlot(thumb.slot_idx);
-            if (texture_id == 0) {
-                thumb_el->SetProperty("display", "none");
-                image_el->SetAttribute("src", "");
+            std::string src = film_strip.srcUrlForSlot(thumb.slot_idx);
+            if (src.empty()) {
+                clear_thumb();
                 continue;
             }
-
-            const std::string source =
-                fmt::format("sequencer-film-slot://{}-{}", thumb.slot_idx, texture_id);
-            if (render)
-                render->register_external_texture(source, texture_id,
-                                                  gui::FilmStripRenderer::THUMB_WIDTH,
-                                                  gui::FilmStripRenderer::THUMB_HEIGHT,
-                                                  true);
-            active_sources.insert(source);
 
             thumb_el->SetProperty("display", "block");
             thumb_el->SetProperty("left", fmt::format("{:.1f}px", thumb.screen_x - groove_origin_x));
@@ -437,15 +361,14 @@ namespace lfs::vis {
             thumb_el->SetClass("contains-selected", thumb.contains_selected);
             thumb_el->SetClass("contains-hovered-keyframe", thumb.contains_hovered_keyframe);
             thumb_el->SetClass("stale", thumb.stale);
-
-            const auto current_source = image_el->GetAttribute<Rml::String>("src", "");
-            if (current_source != source)
-                image_el->SetAttribute("src", source);
+            // The src URL embeds the underlying VkImageView pointer; setting only when it changes
+            // avoids RmlUi re-resolving the texture each frame.
+            if (image_el->GetAttribute<Rml::String>("src", "") != src)
+                image_el->SetAttribute("src", src);
+            active_sources.insert(std::move(src));
         }
 
         for (auto it = registered_film_strip_sources_.begin(); it != registered_film_strip_sources_.end();) {
-            if (!active_sources.contains(*it) && render)
-                render->unregister_external_texture(*it);
             if (!active_sources.contains(*it))
                 it = registered_film_strip_sources_.erase(it);
             else

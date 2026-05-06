@@ -5,6 +5,7 @@
 #include "gui/native_panels.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
+#include "gui/line_renderer.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -13,14 +14,15 @@
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "theme/theme.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui.h>
 
 namespace lfs::vis::gui::native_panels {
 
@@ -59,8 +61,8 @@ namespace lfs::vis::gui::native_panels {
         : gui_(gui) {}
 
     void ViewportDecorationsPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
         gui_->renderViewportDecorations();
+        (void)ctx;
     }
 
     SequencerPanel::SequencerPanel(SequencerUIManager* seq, const PanelLayoutManager* layout)
@@ -193,9 +195,18 @@ namespace lfs::vis::gui::native_panels {
         const glm::vec3 forward = lfs::rendering::cameraForward(vp.camera.R);
         const float cam_fwd[] = {forward.x, forward.y, forward.z};
 
+        lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
+        if (rm) {
+            if (auto* const engine = rm->getRenderingEngineIfInitialized()) {
+                overlay = engine->getScreenOverlayRenderer();
+            }
+        }
+
+        NativeOverlayDrawList draw_list;
         python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
                                         vp_pos, vp_size, cam_pos, cam_fwd,
-                                        ImGui::GetBackgroundDrawList());
+                                        overlay,
+                                        &draw_list);
     }
 
 } // namespace lfs::vis::gui::native_panels

@@ -16,7 +16,6 @@
       ]
     },
     "freetype",
-    "glad",
     "glm",
     "gtest",
     {
@@ -24,7 +23,6 @@
       "features": [
         "docking-experimental",
         "freetype",
-        "opengl3-binding",
         "sdl3-binding"
       ]
     },
@@ -52,9 +50,32 @@
         "svg"
       ]
     },
-    "sdl3",
+    {
+      "name": "sdl3",
+      "features": [
+        "vulkan"
+      ]
+    },
     "spdlog",
     "tbb",
+    "vulkan",
+    {
+      "name": "vulkan-loader",
+      "features": [
+        "xcb",
+        "xlib"
+      ],
+      "platform": "linux"
+    },
+    "vulkan-memory-allocator",
+    "volk",
+    {
+      "name": "glslang",
+      "features": [
+        "tools"
+      ]
+    },
+    "shader-slang",
     "usd"
   ],
   "overrides": [
@@ -77,10 +98,6 @@
     {
       "name": "freetype",
       "version": "2.13.3"
-    },
-    {
-      "name": "glad",
-      "version": "0.1.36"
     },
     {
       "name": "sdl3",
@@ -131,6 +148,18 @@
       "version": "2022.3.0"
     },
     {
+      "name": "vulkan",
+      "version-date": "2023-12-17"
+    },
+    {
+      "name": "vulkan-memory-allocator",
+      "version": "3.3.0"
+    },
+    {
+      "name": "volk",
+      "version": "1.4.341.0"
+    },
+    {
       "name": "usd",
       "version": "26.3"
     },
@@ -149,6 +178,14 @@
     {
       "name": "rmlui",
       "version": "6.2"
+    },
+    {
+      "name": "glslang",
+      "version": "16.2.0"
+    },
+    {
+      "name": "shader-slang",
+      "version": "2026.5"
     }
   ]
 }

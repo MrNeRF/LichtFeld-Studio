@@ -97,7 +97,6 @@ namespace lfs::training {
                 }
 
                 const auto dataset_id = scene.addDataset(dataset_name);
-                const auto dataset_transform_id = scene.addGroup(dataset_name + "_transform", dataset_id);
 
                 if (params.init_path.has_value()) {
                     const std::filesystem::path init_file = lfs::core::utf8_to_path(params.init_path.value());
@@ -120,7 +119,7 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Initialized {} Gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_transform_id);
+                        scene.addSplat("Model", std::move(model), dataset_id);
                         scene.setTrainingModelNode("Model");
                     } else {
                         auto loader = lfs::io::Loader::create();
@@ -139,7 +138,7 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} Gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_transform_id);
+                            scene.addSplat("Model", std::move(model), dataset_id);
                             scene.setTrainingModelNode("Model");
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
@@ -148,12 +147,12 @@ namespace lfs::training {
                 } else {
                     if (data.point_cloud && data.point_cloud->size() > 0) {
                         LOG_INFO("Adding {} points to scene", data.point_cloud->size());
-                        scene.addPointCloud("PointCloud", data.point_cloud, dataset_transform_id);
+                        scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
                     } else {
                         LOG_INFO("No point cloud, using random initialization");
                         auto pc = createRandomPointCloud();
                         LOG_INFO("Adding {} random points to scene", pc->size());
-                        scene.addPointCloud("PointCloud", pc, dataset_transform_id);
+                        scene.addPointCloud("PointCloud", pc, dataset_id);
                     }
                 }
 
@@ -177,7 +176,7 @@ namespace lfs::training {
                     }
                 }
 
-                const auto cameras_group_id = scene.addGroup("Cameras", dataset_transform_id);
+                const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
 
                 const auto train_cameras_id = scene.addCameraGroup(
                     std::format("Training ({})", train_count),
@@ -420,7 +419,6 @@ namespace lfs::training {
                 }
 
                 const auto dataset_id = scene.addDataset(dataset_name);
-                const auto dataset_transform_id = scene.addGroup(dataset_name + "_transform", dataset_id);
 
                 if (params.init_path.has_value()) {
                     const std::filesystem::path init_file = lfs::core::utf8_to_path(params.init_path.value());
@@ -449,7 +447,7 @@ namespace lfs::training {
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Init {} gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                        scene.addSplat("Model", std::move(model), dataset_transform_id);
+                        scene.addSplat("Model", std::move(model), dataset_id);
                         scene.setTrainingModelNode("Model");
                     } else {
                         auto loader = lfs::io::Loader::create();
@@ -467,16 +465,16 @@ namespace lfs::training {
 
                             LOG_INFO("Loaded {} gaussians from {} (sh={})",
                                      model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
-                            scene.addSplat("Model", std::move(model), dataset_transform_id);
+                            scene.addSplat("Model", std::move(model), dataset_id);
                             scene.setTrainingModelNode("Model");
                         } catch (const std::bad_variant_access&) {
                             return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
                     }
                 } else if (data.point_cloud && data.point_cloud->size() > 0) {
-                    scene.addPointCloud("PointCloud", data.point_cloud, dataset_transform_id);
+                    scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
                 } else {
-                    scene.addPointCloud("PointCloud", createRandomPointCloud(), dataset_transform_id);
+                    scene.addPointCloud("PointCloud", createRandomPointCloud(), dataset_id);
                 }
 
                 const auto& cameras = data.cameras;
@@ -492,7 +490,7 @@ namespace lfs::training {
                         ++mask_count;
                 }
 
-                const auto cameras_group_id = scene.addGroup("Cameras", dataset_transform_id);
+                const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
                 const auto train_cameras_id = scene.addCameraGroup(
                     std::format("Training ({})", train_count), cameras_group_id, train_count);
 

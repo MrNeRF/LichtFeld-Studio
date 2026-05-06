@@ -29,9 +29,6 @@
 #include "tools/brush_tool.hpp"
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
 #include <SDL3/SDL_events.h>
 #include <algorithm>
 #include <cassert>
@@ -67,7 +64,8 @@ namespace lfs::vis {
           viewport_(options.width, options.height),
           window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height,
                                                           options.monitor_x, options.monitor_y,
-                                                          options.monitor_width, options.monitor_height)) {
+                                                          options.monitor_width, options.monitor_height,
+                                                          options.graphics_backend)) {
         viewer_thread_id_ = std::this_thread::get_id();
 
         LOG_DEBUG("Creating visualizer with window size {}x{}", options.width, options.height);
@@ -89,6 +87,9 @@ namespace lfs::vis {
         RenderSettings initial_settings;
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.gut = options.gut;
+        initial_settings.raster_backend = options.gut
+                                              ? lfs::rendering::GaussianRasterBackend::Gut
+                                              : lfs::rendering::GaussianRasterBackend::FastGs;
         rendering_manager_->updateSettings(initial_settings);
 
         // Create data loading service
@@ -188,7 +189,6 @@ namespace lfs::vis {
             selection_tool_.reset();
         } else if (input_controller_) {
             input_controller_->setSelectionTool(selection_tool_);
-            selection_tool_->setInputBindings(&input_controller_->getBindings());
         }
 
         tools_initialized_ = true;
@@ -926,23 +926,6 @@ namespace lfs::vis {
                       viewport_.windowSize.x, viewport_.windowSize.y);
         }
 
-        // Initialize rendering early so we can show a frame before font atlas build
-        if (!rendering_manager_->isInitialized()) {
-            rendering_manager_->initialize();
-        }
-
-        // Render one frame (grid + background) before the expensive GUI/font init
-        {
-            RenderingManager::RenderContext ctx{
-                .viewport = viewport_,
-                .settings = rendering_manager_->getSettings(),
-                .logical_screen_size = window_manager_->getWindowSize(),
-                .viewport_region = nullptr,
-                .scene_manager = scene_manager_.get()};
-            rendering_manager_->renderFrame(ctx);
-            window_manager_->swapBuffers();
-        }
-
         // Initialize GUI (sets up ImGui, builds font atlas)
         if (!gui_initialized_) {
             gui_manager_->init();
@@ -1055,10 +1038,16 @@ namespace lfs::vis {
             }
         } else if (!pending_dataset_path_.empty()) {
             auto path = std::exchange(pending_dataset_path_, {});
-            LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
-            if (const auto result = data_loader_->loadDataset(path); !result) {
-                LOG_ERROR("Failed to load dataset: {}", result.error());
+            LOG_INFO("Queueing dataset import: {}", lfs::core::path_to_utf8(path));
+            const auto& params = data_loader_->getParameters();
+            cmd::LoadFile{
+                .path = path,
+                .is_dataset = true,
+                .output_path = params.dataset.output_path,
+                .init_path = params.init_path.value_or(std::string{}),
+                .centralize_dataset = params.dataset.centralize_dataset,
             }
+                .emit();
         }
 
         // Auto-start training if --train flag was passed
@@ -1067,6 +1056,32 @@ namespace lfs::vis {
             LOG_INFO("Auto-starting training (--train flag)");
             cmd::StartTraining{}.emit();
         }
+    }
+
+    void VisualizerImpl::processRenderWorkQueue() {
+        std::vector<WorkItem> render_work;
+        {
+            std::lock_guard lock(work_queue_mutex_);
+            render_work.swap(render_work_queue_);
+        }
+        if (render_work.empty())
+            return;
+
+        processing_render_work_ = true;
+        for (size_t i = 0; i < render_work.size(); ++i) {
+            try {
+                if (render_work[i].run)
+                    render_work[i].run();
+            } catch (...) {
+                for (size_t j = i + 1; j < render_work.size(); ++j) {
+                    if (render_work[j].cancel)
+                        render_work[j].cancel();
+                }
+                processing_render_work_ = false;
+                throw;
+            }
+        }
+        processing_render_work_ = false;
     }
 
     void VisualizerImpl::render() {
@@ -1107,7 +1122,8 @@ namespace lfs::vis {
             input_controller_->update(delta_time);
         }
 
-        // Get viewport region from GUI
+        // Get viewport region from GUI. This accounts for menu/tool/status panels and must be
+        // shared by every graphics backend so camera aspect and render resolution match the viewport.
         ViewportRegion viewport_region;
         bool has_viewport_region = false;
         if (gui_manager_) {
@@ -1122,65 +1138,80 @@ namespace lfs::vis {
             has_viewport_region = true;
         }
 
-        // viewport_region accounts for toolbar offset - required for all render modes
         RenderingManager::RenderContext context{
             .viewport = viewport_,
             .settings = rendering_manager_->getSettings(),
             .logical_screen_size = window_manager_->getWindowSize(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
-            .scene_manager = scene_manager_.get()};
+            .scene_manager = scene_manager_.get(),
+            .vulkan_context = window_manager_->getVulkanContext()};
 
         if (gui_manager_) {
             rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
-        rendering_manager_->renderFrame(context);
-
-        gui_manager_->render();
-
-        const bool resize_done = rendering_manager_->consumeResizeCompleted();
-        if (resize_done)
-            glFinish();
-
-        {
-            std::vector<WorkItem> render_work;
-            {
-                std::lock_guard lock(work_queue_mutex_);
-                render_work.swap(render_work_queue_);
+        const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+        if (gui_manager_) {
+            if (vulkan_frame.external_image != VK_NULL_HANDLE) {
+                gui_manager_->setVulkanExternalSceneImage(vulkan_frame.external_image,
+                                                          vulkan_frame.external_image_view,
+                                                          vulkan_frame.external_image_layout,
+                                                          vulkan_frame.size,
+                                                          vulkan_frame.flip_y,
+                                                          vulkan_frame.external_image_generation);
+            } else {
+                gui_manager_->setVulkanSceneImage(
+                    vulkan_frame.image,
+                    vulkan_frame.size,
+                    vulkan_frame.flip_y,
+                    vulkan_frame.image_generation);
             }
-            if (!render_work.empty()) {
-                processing_render_work_ = true;
-                for (size_t i = 0; i < render_work.size(); ++i) {
-                    try {
-                        if (render_work[i].run)
-                            render_work[i].run();
-                    } catch (...) {
-                        for (size_t j = i + 1; j < render_work.size(); ++j) {
-                            if (render_work[j].cancel)
-                                render_work[j].cancel();
-                        }
-                        processing_render_work_ = false;
-                        throw;
-                    }
-                }
-                processing_render_work_ = false;
+            if (vulkan_frame.split_right_image) {
+                gui_manager_->setVulkanSplitRightImage(
+                    vulkan_frame.split_right_image,
+                    vulkan_frame.split_right_size,
+                    vulkan_frame.split_right_flip_y,
+                    vulkan_frame.image_generation);
+            } else {
+                gui_manager_->clearVulkanSplitRightImage();
+            }
+
+            // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
+            const auto mesh_frame = rendering_manager_->getVulkanMeshFrame();
+            if (mesh_frame.depth_blit.depth && mesh_frame.depth_blit.depth->is_valid() &&
+                mesh_frame.depth_blit.depth->ndim() == 3 &&
+                mesh_frame.depth_blit.depth->size(0) == 1) {
+                const auto& d = *mesh_frame.depth_blit.depth;
+                gui_manager_->setVulkanDepthBlitImage(
+                    mesh_frame.depth_blit.depth,
+                    glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
+                    vulkan_frame.image_generation);
+            } else {
+                gui_manager_->clearVulkanDepthBlitImage();
             }
         }
+        if (gui_manager_) {
+            LOG_TIMER("VisualizerImpl::render.gui_render");
+            gui_manager_->render();
+        }
 
-        window_manager_->swapBuffers();
-
+        processRenderWorkQueue();
         python::flush_signals();
         gui_frame_rendered_ = true;
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
-        const bool needs_render = rendering_manager_->pollDirtyState();
+        const bool needs_render = rendering_manager_ && rendering_manager_->pollDirtyState();
         const bool continuous_input = input_controller_ && input_controller_->isContinuousInputActive();
         const bool has_python_animation = python::has_frame_callback();
         const bool has_python_overlay = python::has_viewport_draw_handlers();
         const bool has_python_redraw = python::consume_redraw_request();
         const bool needs_gui_animation = gui_manager_ && gui_manager_->needsAnimationFrame();
+
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={}",
+                 needs_render, continuous_input, has_python_animation, has_python_overlay,
+                 has_python_redraw, needs_gui_animation);
 
         if (needs_render || continuous_input || has_python_animation || has_python_overlay ||
             has_python_redraw || needs_gui_animation) {

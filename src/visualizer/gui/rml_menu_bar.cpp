@@ -2,16 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_menu_bar.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
@@ -253,7 +248,6 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         dropdown_items_.clear();
         open_menu_idname_.clear();
-        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
@@ -553,7 +547,7 @@ namespace lfs::vis::gui {
     void RmlMenuBar::draw(int screen_w, int screen_h) {
         if (!rml_context_ || !document_)
             return;
-        if (rml_manager_->shouldDeferFboUpdate(fbo_))
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
         const bool theme_changed = updateTheme();
 
@@ -571,8 +565,13 @@ namespace lfs::vis::gui {
 
         const bool size_changed = (ctx_w != last_ctx_w_ || ctx_h != last_ctx_h_);
         const bool needs_render = render_needed_ || theme_changed || size_changed;
-        if (!needs_render)
+        if (!needs_render) {
+            rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true,
+                                             true, 0.0f, 0.0f,
+                                             static_cast<float>(screen_w),
+                                             static_cast<float>(ctx_h));
             return;
+        }
 
         rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
         if (ctx_h != last_document_h_) {
@@ -581,25 +580,10 @@ namespace lfs::vis::gui {
         }
         rml_context_->Update();
 
-        fbo_.ensure(ctx_w, ctx_h);
-        if (!fbo_.valid())
-            return;
-
-        auto* render = rml_manager_->getRenderInterface();
-        assert(render);
-        render->SetViewport(ctx_w, ctx_h);
-
-        GLint prev_fbo = 0;
-        fbo_.bind(&prev_fbo);
-        render->SetTargetFramebuffer(fbo_.fbo());
-
-        render->BeginFrame();
-        rml_context_->Render();
-        render->EndFrame();
-
-        render->SetTargetFramebuffer(0);
-        fbo_.unbind(prev_fbo);
-
+        rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true,
+                                         true, 0.0f, 0.0f,
+                                         static_cast<float>(screen_w),
+                                         static_cast<float>(ctx_h));
         last_ctx_w_ = ctx_w;
         last_ctx_h_ = ctx_h;
         render_needed_ = false;

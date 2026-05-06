@@ -50,13 +50,12 @@ namespace lfs::gui {
 
     VideoExtractorDialog::~VideoExtractorDialog() {
         joinExtractionThread();
-        if (preview_texture_ != 0) {
-            glDeleteTextures(1, &preview_texture_);
-        }
+        preview_texture_.reset();
     }
 
     void VideoExtractorDialog::shutdown() {
         joinExtractionThread();
+        preview_texture_.reset();
     }
 
     void VideoExtractorDialog::startExtraction(const VideoExtractionParams& params) {
@@ -222,31 +221,18 @@ namespace lfs::gui {
         const int width = player_->width();
         const int height = player_->height();
 
-        // Create texture if needed
-        if (preview_texture_ == 0) {
-            glGenTextures(1, &preview_texture_);
-            glBindTexture(GL_TEXTURE_2D, preview_texture_);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glBindTexture(GL_TEXTURE_2D, 0);
+        if (!preview_texture_) {
+            preview_texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
         }
 
-        glBindTexture(GL_TEXTURE_2D, preview_texture_);
-
-        // Allocate or reallocate if size changed
-        if (preview_texture_width_ != width || preview_texture_height_ != height) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE,
-                         data);
+        if (preview_texture_->upload(data, width, height, 3)) {
             preview_texture_width_ = width;
             preview_texture_height_ = height;
         } else {
-            // Direct upload - fast enough for 720p on modern GPUs
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, data);
+            preview_texture_.reset();
+            preview_texture_width_ = 0;
+            preview_texture_height_ = 0;
         }
-
-        glBindTexture(GL_TEXTURE_2D, 0);
         texture_needs_update_ = false;
     }
 
@@ -271,7 +257,7 @@ namespace lfs::gui {
         ImGui::BeginChild("##preview_area", ImVec2(0, preview_height),
                           ImGuiChildFlags_Borders | ImGuiChildFlags_FrameStyle);
 
-        if (player_->isOpen() && preview_texture_ != 0) {
+        if (player_->isOpen() && preview_texture_ && preview_texture_->valid()) {
             const ImVec2 region = ImGui::GetContentRegionAvail();
             const float video_aspect =
                 static_cast<float>(player_->width()) / static_cast<float>(player_->height());
@@ -291,7 +277,7 @@ namespace lfs::gui {
 
             ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + offset_x,
                                        ImGui::GetCursorPosY() + offset_y));
-            ImGui::Image(static_cast<ImTextureID>(preview_texture_),
+            ImGui::Image(static_cast<ImTextureID>(preview_texture_->textureId()),
                          ImVec2(display_width, display_height));
         } else {
             const char* hint = LOC(VideoExtractor::SELECT_PREVIEW);

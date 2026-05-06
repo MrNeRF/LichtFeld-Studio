@@ -324,7 +324,7 @@ namespace lfs::vis::gui {
                                    ? toU32WithAlpha(t.palette.text, 1.0f)
                                    : toU32WithAlpha(t.palette.text_dim, 0.40f);
 
-        const unsigned int icon_tex = IconCache::instance().getIcon(item.icon_name);
+        const unsigned int icon_tex = static_cast<unsigned int>(IconCache::instance().getIcon(item.icon_name));
         const float icon_sz = ICON_SIZE * scale;
 
         if (icon_tex != 0) {
@@ -402,7 +402,7 @@ namespace lfs::vis::gui {
             const auto& submode = item.submodes[si];
 
             const unsigned int sm_icon =
-                submode.icon_name.empty() ? 0 : IconCache::instance().getIcon(submode.icon_name);
+                submode.icon_name.empty() ? 0 : static_cast<unsigned int>(IconCache::instance().getIcon(submode.icon_name));
             if (sm_icon != 0) {
                 const float sm_icon_sz = (sm_outer - sm_inner) * 0.65f;
                 const ImVec2 icon_min = {sm_center.x - sm_icon_sz * 0.5f,

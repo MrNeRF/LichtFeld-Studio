@@ -58,7 +58,7 @@ MAX_SIMPLIFY_KNN_K = 64
 BOOL_PROPS = [
     "show_coord_axes", "show_pivot", "show_grid", "show_camera_frustums",
     "point_cloud_mode", "desaturate_unselected", "desaturate_cropping", "hide_outside_depth_box",
-    "equirectangular", "gut", "mip_filter",
+    "equirectangular", "mip_filter",
     "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
     "apply_appearance_correction", "ppisp_vignette_enabled",
 ]
@@ -102,8 +102,9 @@ SCRUB_FIELD_DEFS = {
 }
 
 SELECT_PROPS = [
-    "grid_plane", "sh_degree", "camera_metrics_mode", "mesh_shadow_resolution",
+    "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
+GUT_RASTER_BACKENDS = {"3dgut", "vksplat_3dgut"}
 
 ENVIRONMENT_PRESET_PATHS = (
     "environments/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
@@ -147,6 +148,7 @@ LOCALE_KEY = {
     "desaturate_cropping": "main_panel.desaturate_cropping",
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
     "equirectangular": "main_panel.equirectangular",
+    "raster_backend": "main_panel.raster_backend",
     "gut": "main_panel.gut_mode",
     "mip_filter": "main_panel.mip_filter",
     "axes_size": "main_panel.axes_size",
@@ -188,7 +190,7 @@ def _prop_label(prop_id):
     key = LOCALE_KEY.get(prop_id)
     if key:
         label = lf.ui.tr(key)
-        if label:
+        if label and label != key:
             return _entry_label(label)
     s = lf.get_render_settings()
     if s:
@@ -310,9 +312,14 @@ class RenderingPanel(Panel):
                        lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
 
         for prop_id in SELECT_PROPS:
-            model.bind(prop_id,
-                       lambda p=prop_id: str(getattr(s(), p, "")),
-                       lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+            if prop_id == "raster_backend":
+                model.bind(prop_id,
+                           lambda p=prop_id: str(getattr(s(), p, "")),
+                           lambda v: self._set_raster_backend(v))
+            else:
+                model.bind(prop_id,
+                           lambda p=prop_id: str(getattr(s(), p, "")),
+                           lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
 
         model.bind("environment_mode",
                    lambda: str(getattr(s(), "environment_mode", "")),
@@ -331,6 +338,14 @@ class RenderingPanel(Panel):
 
         model.bind_func("environment_enabled",
                         lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
+
+        # vksplat is editing/viewing-only — hide the option from the raster
+        # backend dropdown as soon as a trainer is attached, regardless of
+        # training state (ready, paused, running). Its persistent Vulkan-side
+        # sort buffers grow unbounded under densification, which is intolerable
+        # when a dataset is in the loop.
+        model.bind_func("vksplat_available",
+                        lambda: not lf.has_trainer())
 
         all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + [
             "environment_mode", "environment_map_path", "ppisp_mode"
@@ -535,6 +550,14 @@ class RenderingPanel(Panel):
             return
         settings.environment_mode = value
         self._sync_environment_state()
+
+    def _set_raster_backend(self, value):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+        backend = str(value)
+        settings.raster_backend = backend
+        settings.gut = backend in GUT_RASTER_BACKENDS
 
     def _environment_map_is_custom(self):
         settings = lf.get_render_settings()

@@ -1,10 +1,6 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -12,11 +8,9 @@
 #include "gui/film_strip_renderer.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
-#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -35,8 +29,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <fmt/format.h>
-#include <imgui_impl_opengl3.h>
-#include <imgui.h>
 
 namespace lfs::vis {
 
@@ -130,6 +122,7 @@ namespace lfs::vis {
         assert(rml_manager_);
         transport_listener_.panel = this;
         quality_scrub_listener_.panel = this;
+        duration_listener_.panel = this;
     }
 
     RmlSequencerPanel::~RmlSequencerPanel() = default;
@@ -256,7 +249,7 @@ namespace lfs::vis {
         return req;
     }
 
-    void RmlSequencerPanel::destroyGLResources() {
+    void RmlSequencerPanel::destroyGraphicsResources() {
         clearPendingComposite();
         unregisterFilmStripSources();
         clearFilmThumbPool();
@@ -270,15 +263,9 @@ namespace lfs::vis {
             el_film_strip_sprockets_top_->SetInnerRML("");
         if (el_film_strip_sprockets_bottom_)
             el_film_strip_sprockets_bottom_->SetInnerRML("");
-        fbo_.destroy();
     }
 
     void RmlSequencerPanel::clearPendingComposite() {
-        pending_foreground_composite_ = false;
-        pending_composite_x_ = 0.0f;
-        pending_composite_y_ = 0.0f;
-        pending_composite_width_ = 0.0f;
-        pending_composite_height_ = 0.0f;
     }
 
     void RmlSequencerPanel::clearElementCache() {
@@ -326,6 +313,9 @@ namespace lfs::vis {
         el_quality_fill_ = nullptr;
         el_quality_display_ = nullptr;
         el_quality_input_ = nullptr;
+        el_duration_field_ = nullptr;
+        el_duration_input_ = nullptr;
+        duration_editing_ = false;
         el_btn_equirect_ = nullptr;
         el_btn_save_ = nullptr;
         el_btn_load_ = nullptr;
@@ -388,37 +378,8 @@ namespace lfs::vis {
     }
 
     void RmlSequencerPanel::compositeToScreen(const int screen_w, const int screen_h) {
-        if (!pending_foreground_composite_ || !fbo_.valid() || screen_w <= 0 || screen_h <= 0) {
-            clearPendingComposite();
-            return;
-        }
-
-        ImDrawList draw_list(ImGui::GetDrawListSharedData());
-        draw_list._ResetForNewFrame();
-        draw_list.PushTextureID(ImGui::GetIO().Fonts->TexID);
-        draw_list.PushClipRectFullScreen();
-        gui::widgets::DrawFloatingWindowShadow(
-            &draw_list,
-            {pending_composite_x_, pending_composite_y_},
-            {pending_composite_width_, pending_composite_height_},
-            theme().sizes.window_rounding);
-        draw_list.PopClipRect();
-
-        if (!draw_list.CmdBuffer.empty() && !draw_list.VtxBuffer.empty()) {
-            ImDrawData draw_data{};
-            draw_data.DisplayPos = ImVec2(0.0f, 0.0f);
-            draw_data.DisplaySize = ImVec2(static_cast<float>(screen_w),
-                                           static_cast<float>(screen_h));
-            draw_data.FramebufferScale = ImGui::GetIO().DisplayFramebufferScale;
-            draw_data.Valid = true;
-            draw_data.AddDrawList(&draw_list);
-            ImGui_ImplOpenGL3_RenderDrawData(&draw_data);
-        }
-
-        fbo_.blitToScreen(pending_composite_x_, pending_composite_y_,
-                          pending_composite_width_, pending_composite_height_,
-                          screen_w, screen_h);
-        clearPendingComposite();
+        (void)screen_w;
+        (void)screen_h;
     }
 
     void RmlSequencerPanel::initContext(const int width, const int height) {
@@ -491,6 +452,8 @@ namespace lfs::vis {
         el_quality_fill_ = document_->GetElementById("quality-fill");
         el_quality_display_ = document_->GetElementById("quality-display");
         el_quality_input_ = document_->GetElementById("quality-input");
+        el_duration_field_ = document_->GetElementById("duration-field");
+        el_duration_input_ = document_->GetElementById("duration-input");
         el_btn_equirect_ = document_->GetElementById("btn-equirect");
         el_btn_save_ = document_->GetElementById("btn-save-path");
         el_btn_load_ = document_->GetElementById("btn-load-path");
@@ -542,6 +505,13 @@ namespace lfs::vis {
         if (el_quality_input_) {
             el_quality_input_->AddEventListener(Rml::EventId::Change, &quality_scrub_listener_);
             el_quality_input_->AddEventListener(Rml::EventId::Blur, &quality_scrub_listener_);
+        }
+
+        if (el_duration_field_)
+            el_duration_field_->AddEventListener(Rml::EventId::Click, &duration_listener_);
+        if (el_duration_input_) {
+            el_duration_input_->AddEventListener(Rml::EventId::Change, &duration_listener_);
+            el_duration_input_->AddEventListener(Rml::EventId::Blur, &duration_listener_);
         }
     }
 
@@ -605,11 +575,7 @@ namespace lfs::vis {
             return;
 
         el_current_time_->SetInnerRML(formatTime(controller_.playhead()));
-
-        const float end = controller_.timeline().empty()
-                              ? sequencer_ui::DEFAULT_TIMELINE_DURATION
-                              : controller_.timeline().endTime();
-        el_duration_->SetInnerRML(" / " + formatTime(end));
+        syncDurationDisplay();
     }
 
     void RmlSequencerPanel::rebuildKeyframes() {
@@ -951,55 +917,34 @@ namespace lfs::vis {
             updateTimelineGuides(timeline_pos.x, tl_width, film_strip);
         }
 
-        if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
-            if (rml_manager_) {
-                rml_manager_->trackContextFrame(rml_context_,
-                                                static_cast<int>(panel_x - input.screen_x),
-                                                static_cast<int>(panel_y - input.screen_y));
-            }
-            rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            rml_context_->Update();
-
-            fbo_.ensure(w, h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render_iface = rml_manager_->getRenderInterface();
-            assert(render_iface);
-            render_iface->SetViewport(w, h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render_iface->SetTargetFramebuffer(fbo_.fbo());
-
-            if (!floating_) {
-                const auto& shell_bg = theme().menu_background();
-                glClearColor(shell_bg.x, shell_bg.y, shell_bg.z, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT);
-            }
-
-            render_iface->BeginFrame();
-            rml_context_->Render();
-            render_iface->EndFrame();
-
-            render_iface->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
-        }
-
-        if (!fbo_.valid())
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
 
-        if (floating_) {
-            pending_foreground_composite_ = true;
-            pending_composite_x_ = panel_x;
-            pending_composite_y_ = panel_y;
-            pending_composite_width_ = panel_width;
-            pending_composite_height_ = cached_total_height_;
-            return;
+        if (document_) {
+            Rml::Element* body = document_->GetElementById("body");
+            if (!body)
+                body = document_;
+            const int local_mx = static_cast<int>(input.mouse_x - cached_panel_x_);
+            const int local_my = static_cast<int>(input.mouse_y - cached_panel_y_);
+            tooltip_.apply(body, local_mx, local_my, w, h);
         }
 
-        fbo_.blitToScreen(panel_x, panel_y, panel_width, cached_total_height_,
-                          input.screen_w, input.screen_h);
+        const float context_x = panel_x - input.screen_x;
+        const float context_y = panel_y - input.screen_y;
+        rml_manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(context_x),
+                                        static_cast<int>(context_y));
+        rml_context_->SetDimensions(Rml::Vector2i(w, h));
+        rml_context_->Update();
+        rml_manager_->queueVulkanContext(rml_context_,
+                                         context_x,
+                                         context_y,
+                                         floating_,
+                                         true,
+                                         context_x,
+                                         context_y,
+                                         context_x + panel_width,
+                                         context_y + cached_total_height_);
     }
 
     // ── Quality Scrub Field ──────────────────────────────────
@@ -1105,6 +1050,62 @@ namespace lfs::vis {
         if (el_quality_scrub_)
             el_quality_scrub_->SetClass("is-editing", false);
         syncQualityScrub();
+    }
+
+    // ── Clip Duration Field ─────────────────────────────────
+
+    void RmlSequencerPanel::DurationEditListener::ProcessEvent(Rml::Event& event) {
+        assert(panel);
+        const auto event_id = event.GetId();
+        auto* el = event.GetCurrentElement();
+        if (!el)
+            return;
+
+        if (event_id == Rml::EventId::Click && el->GetId() == "duration-field") {
+            if (event.GetParameter<int>("button", 0) != 0)
+                return;
+            panel->enterDurationEdit();
+            event.StopPropagation();
+        } else if (event_id == Rml::EventId::Change && el->GetId() == "duration-input") {
+            if (event.GetParameter<bool>("linebreak", false))
+                panel->exitDurationEdit(true);
+        } else if (event_id == Rml::EventId::Blur && el->GetId() == "duration-input") {
+            panel->exitDurationEdit(true);
+        }
+    }
+
+    void RmlSequencerPanel::syncDurationDisplay() {
+        if (!el_duration_ || duration_editing_)
+            return;
+        el_duration_->SetInnerRML(" / " + formatTime(controller_.clipDuration()));
+    }
+
+    void RmlSequencerPanel::enterDurationEdit() {
+        if (!el_duration_field_ || !el_duration_input_ || duration_editing_)
+            return;
+
+        duration_editing_ = true;
+        el_duration_field_->SetClass("is-editing", true);
+        el_duration_input_->SetAttribute("value", fmt::format("{:.2f}", controller_.clipDuration()));
+        el_duration_input_->Focus();
+    }
+
+    void RmlSequencerPanel::exitDurationEdit(const bool commit) {
+        if (!duration_editing_)
+            return;
+
+        if (commit && el_duration_input_) {
+            const auto text = el_duration_input_->GetAttribute<Rml::String>("value", "");
+            char* end = nullptr;
+            const float parsed = std::strtof(text.c_str(), &end);
+            if (end != text.c_str())
+                controller_.setClipDuration(parsed);
+        }
+
+        duration_editing_ = false;
+        if (el_duration_field_)
+            el_duration_field_->SetClass("is-editing", false);
+        syncDurationDisplay();
     }
 
 } // namespace lfs::vis

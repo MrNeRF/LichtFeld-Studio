@@ -19,11 +19,9 @@ def test_viewer_equirectangular_rasterizer_uses_y_up_screen_mapping():
     assert "auto elevation = PI * (image_point.y / static_cast<float>(parameters.resolution[1]) - 0.5);" in source
 
 
-def test_viewer_equirectangular_shaders_use_y_down_ndc_mapping():
-    point_cloud = _read("src/rendering/resources/shaders/point_cloud.vert")
-    frustum = _read("src/rendering/resources/shaders/camera_frustum.vert")
-    axes = _read("src/rendering/resources/shaders/coordinate_axes.vert")
+def test_viewer_equirectangular_software_projection_uses_rasterizer_mapping():
+    source = _read("src/rendering/raster_rendering_engine.cpp")
 
-    assert "gl_Position = vec4(v_ndc_x, -phi / (PI * 0.5), -1.0 / depth, 1.0);" in point_cloud
-    assert "gl_Position = vec4(ndcX, -phi / (PI * 0.5), -1.0 / depth, 1.0);" in frustum
-    assert "gl_Position = vec4(v_ndc_x, -phi / (PI * 0.5), -1.0 / depth, 1.0);" in axes
+    assert "const float u = 0.5f + std::atan2(dir.x, -dir.z) / (2.0f * glm::pi<float>());" in source
+    assert "const float v = 0.5f + std::asin(std::clamp(dir.y, -1.0f, 1.0f)) / glm::pi<float>();" in source
+    assert "const float py = v * static_cast<float>(height - 1);" in source

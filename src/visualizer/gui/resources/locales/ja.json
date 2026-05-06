@@ -66,7 +66,6 @@
     "build_info.commit": "コミット",
     "build_info.build_type": "ビルドタイプ",
     "build_info.platform": "プラットフォーム",
-    "build_info.cuda_gl_interop": "CUDA-GL相互運用",
     "build_type.debug": "デバッグ",
     "build_type.release": "リリース",
     "platform.windows": "Windows",
@@ -189,6 +188,7 @@
 
     "title": "アセットマネージャー",
     "toolbar.import": "インポート",
+    "toolbar.clean_missing": "クリーン",
     "toolbar.search_icon": "検索",
     "toolbar.search_placeholder": "アセットを検索...",
     "toolbar.sort_by": "並べ替え: 最新",
@@ -420,7 +420,7 @@
       "bg_image_browse": "背景画像を参照",
       "bg_image_clear": "選択した背景画像をクリア",
       "dataset_path": "読み込まれたデータセットのパス",
-      "dataset_images": "データセット内の画像数",
+      "dataset_images": "データセット内の画像サブフォルダ名 (例: images, images_4)",
       "dataset_output": "学習済み成果物の出力ディレクトリ",
       "opt_strategy_display": "アクティブな高密度化戦略",
       "bilateral_grid_x": "バイラテラルグリッドの X 解像度",
@@ -852,6 +852,7 @@
     "seq_loop_off": "ループ再生を有効にする",
     "seq_loop_on": "ループ再生を無効にする",
     "seq_add": "現在の位置にキーフレームを追加",
+    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
     "seq_speed": "再生速度（クリックで切替）",
     "seq_snap": "キーフレームをグリッドにスナップ（右クリックでオプション）",
     "seq_follow": "再生中にプレイヘッドを追従",
@@ -952,7 +953,11 @@
     "centralize_dataset": "データセットを中心に配置",
     "centralize_off": "オフ",
     "centralize_by_pointcloud": "点群を基準",
-    "centralize_by_cameras": "カメラを基準"
+    "centralize_by_cameras": "カメラを基準",
+    "max_width": "最大幅 (px)",
+    "max_width_disable": "ダウンスケーリングを無効化",
+    "max_width_hint": "これより幅の大きい画像は縮小されます。0で制限なし。",
+    "apply_auto_crop": "自動クロップを適用"
   },
   "notification": {
     "cannot_open": "開けません",
@@ -1440,6 +1445,8 @@
     "log_scale": "対数スケール",
     "samples": "Samples",
     "range": "Range",
+    "range_of_interest": "対象範囲:",
+    "reset": "リセット",
     "mean": "Mean",
     "median": "Median",
     "p95": "P95",
@@ -1507,6 +1514,10 @@
       "no_visible_values": {
         "title": "No visible values",
         "message": "The selected metric does not contain any visible finite samples to visualize."
+      },
+      "no_selected_values": {
+        "title": "No samples in selection",
+        "message": "The selected models contain no finite samples for this metric."
       }
     },
     "metric": {

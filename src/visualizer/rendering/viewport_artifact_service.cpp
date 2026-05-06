@@ -7,8 +7,6 @@
 #include "rendering/rendering.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
-#include <glad/glad.h>
-#include <limits>
 
 namespace lfs::vis {
 
@@ -40,18 +38,14 @@ namespace lfs::vis {
 
     } // namespace
 
-    ViewportArtifactService::~ViewportArtifactService() {
-        if (depth_readback_fbo_ != 0) {
-            glDeleteFramebuffers(1, &depth_readback_fbo_);
-        }
-    }
+    ViewportArtifactService::~ViewportArtifactService() = default;
 
     bool ViewportArtifactService::hasGpuFrame() const {
         return gpu_frame_ && gpu_frame_->valid();
     }
 
     bool ViewportArtifactService::hasViewportOutput() const {
-        return hasGpuFrame();
+        return hasGpuFrame() || (captured_image_ && captured_image_->is_valid());
     }
 
     bool ViewportArtifactService::hasOutputArtifacts() const {
@@ -83,6 +77,7 @@ namespace lfs::vis {
         metadata_ = {};
         gpu_frame_.reset();
         rendered_size_ = {0, 0};
+        lazy_capture_ = {};
         invalidateCapture();
     }
 
@@ -96,9 +91,45 @@ namespace lfs::vis {
         }
     }
 
+    void ViewportArtifactService::updateFromImageOutput(std::shared_ptr<lfs::core::Tensor> image,
+                                                        const lfs::rendering::FrameMetadata& metadata,
+                                                        const glm::ivec2& rendered_size,
+                                                        const bool viewport_output_updated) {
+        metadata_ = makeCachedRenderMetadata(metadata);
+        gpu_frame_.reset();
+        rendered_size_ = rendered_size;
+        lazy_capture_ = {};
+        if (viewport_output_updated) {
+            invalidateCapture();
+        }
+        storeCapturedImage(std::move(image));
+    }
+
     void ViewportArtifactService::storeCapturedImage(std::shared_ptr<lfs::core::Tensor> image) {
         captured_image_ = std::move(image);
-        captured_artifact_generation_ = artifact_generation_;
+        captured_artifact_generation_ = captured_image_ ? artifact_generation_ : 0;
+    }
+
+    void ViewportArtifactService::setLazyCapture(LazyCaptureFn fn,
+                                                 const lfs::rendering::FrameMetadata& metadata,
+                                                 const glm::ivec2& rendered_size) {
+        metadata_ = makeCachedRenderMetadata(metadata);
+        gpu_frame_.reset();
+        rendered_size_ = rendered_size;
+        invalidateCapture();
+        lazy_capture_ = std::move(fn);
+    }
+
+    std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::resolveLazyCapture() {
+        if (!lazy_capture_) {
+            return {};
+        }
+        if (captured_image_ && captured_artifact_generation_ == artifact_generation_) {
+            return captured_image_;
+        }
+        auto image = lazy_capture_();
+        storeCapturedImage(image);
+        return image;
     }
 
     float ViewportArtifactService::sampleLinearDepthAt(
@@ -188,10 +219,8 @@ namespace lfs::vis {
                     scaled_x = panel_local_x;
                 }
 
-                // The CUDA rasterizer outputs depth in OpenGL-style pixel coordinates
-                // (origin at bottom-left). Tools operate in window coordinates
-                // (origin at top-left), so flip Y to match existing getDepthAtPixel()
-                // semantics (which already flip for OpenGL glReadPixels paths).
+                // The CUDA rasterizer outputs depth with a bottom-left origin. Tools operate
+                // in window coordinates with a top-left origin, so flip Y before sampling.
                 scaled_y = (depth_height - 1) - scaled_y;
 
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
@@ -204,77 +233,11 @@ namespace lfs::vis {
             }
         }
 
-        if (splat_depth <= 0.0f && gpu_frame_ && gpu_frame_->valid() && gpu_frame_->depth.valid()) {
-            splat_depth = readLinearDepth(*gpu_frame_, x, y, viewport_height);
-        }
-
-        float mesh_depth = -1.0f;
-        if (engine && engine->hasMeshRender()) {
-            const GLuint mesh_fbo = engine->getMeshFramebuffer();
-            if (mesh_fbo != 0 && x >= 0 && x < viewport_width && y >= 0 && y < viewport_height) {
-                float ndc_depth = 1.0f;
-                glBindFramebuffer(GL_READ_FRAMEBUFFER, mesh_fbo);
-                glReadPixels(x, viewport_height - 1 - y, 1, 1,
-                             GL_DEPTH_COMPONENT, GL_FLOAT, &ndc_depth);
-                glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
-
-                constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
-                if (ndc_depth < DEPTH_BG_THRESHOLD) {
-                    mesh_depth = linearizeDepthSample(
-                        ndc_depth, active_near_plane, active_far_plane, active_orthographic, true);
-                }
-            }
-        }
-
-        if (splat_depth > 0.0f && mesh_depth > 0.0f) {
-            return std::min(splat_depth, mesh_depth);
-        }
         if (splat_depth > 0.0f) {
             return splat_depth;
         }
-        if (mesh_depth > 0.0f) {
-            return mesh_depth;
-        }
+        (void)engine;
         return -1.0f;
-    }
-
-    float ViewportArtifactService::readLinearDepth(const lfs::rendering::GpuFrame& frame,
-                                                   const int x,
-                                                   const int y,
-                                                   const int viewport_height) const {
-        if (!frame.valid() || !frame.depth.valid() || x < 0 || y < 0 || y >= viewport_height) {
-            return -1.0f;
-        }
-
-        if (depth_readback_fbo_ == 0) {
-            glGenFramebuffers(1, &depth_readback_fbo_);
-        }
-        if (depth_readback_fbo_ == 0) {
-            return -1.0f;
-        }
-
-        GLint saved_fbo = 0;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, depth_readback_fbo_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, frame.depth.id, 0);
-        glDrawBuffer(GL_NONE);
-        glReadBuffer(GL_NONE);
-
-        float linear_depth = -1.0f;
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
-            float raw_depth = frame.depth_is_ndc ? 1.0f : std::numeric_limits<float>::infinity();
-            glReadPixels(x, viewport_height - 1 - y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &raw_depth);
-            linear_depth = linearizeDepthSample(
-                raw_depth,
-                frame.near_plane,
-                frame.far_plane,
-                frame.orthographic,
-                frame.depth_is_ndc);
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
-        return linear_depth;
     }
 
 } // namespace lfs::vis

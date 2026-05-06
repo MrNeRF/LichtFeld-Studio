@@ -104,6 +104,7 @@ namespace lfs::vis {
         bool show_pivot = false;
         int split_view_mode = 0;
         float split_position = 0.5f;
+        int raster_backend = 0;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;

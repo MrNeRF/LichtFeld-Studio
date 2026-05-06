@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "gui/rmlui/rml_fbo.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/EventListener.h>
 #include <core/export.hpp>
@@ -54,7 +53,7 @@ namespace lfs::vis::gui {
 
         void processInput(const PanelInputState& input);
         void render(int screen_w, int screen_h, float screen_x, float screen_y);
-        void destroyGLResources();
+        void releaseRendererResources();
         void reloadResources();
 
     private:
@@ -72,7 +71,6 @@ namespace lfs::vis::gui {
         Rml::Context* ctx_ = nullptr;
         Rml::ElementDocument* doc_ = nullptr;
         Rml::DataModelHandle menu_model_;
-        RmlFBO fbo_;
         EventListener listener_;
 
         Rml::Element* el_backdrop_ = nullptr;

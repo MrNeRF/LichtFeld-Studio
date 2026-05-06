@@ -4,12 +4,10 @@
 
 #include "gui/panel_layout.hpp"
 #include "gui/panels/python_console_panel.hpp"
-#include "gui/rmlui/rml_fbo.hpp"
 #include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -62,7 +60,6 @@ namespace lfs::vis::gui {
             return false;
 
         tab_scroll_offset_ = 0.0f;
-        tab_scrollbar_dragging_ = false;
         background_preload_index_ = 0;
         return true;
     }
@@ -159,7 +156,6 @@ namespace lfs::vis::gui {
         if (active_tab_id_.empty()) {
             tab_content_total_h_ = 0.0f;
             tab_scroll_offset_ = 0.0f;
-            tab_scrollbar_dragging_ = false;
             return;
         }
 
@@ -178,91 +174,24 @@ namespace lfs::vis::gui {
             std::max(0.0f, preloaded_total_h - tab_content_h);
         tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
 
-        const auto& t = lfs::vis::theme();
-        const float scrollbar_w = t.sizes.scrollbar_size;
-        const float scrollbar_pad = 2.0f;
-        const float scrollbar_gutter =
-            (preloaded_max_scroll > 0.0f && tab_content_h > 0.0f)
-                ? (scrollbar_w + scrollbar_pad * 2.0f)
-                : 0.0f;
-        const float content_draw_w = std::max(0.0f, content_w - scrollbar_gutter);
         const bool over_tab_content =
             masked_panel_input.mouse_x >= content_x &&
             masked_panel_input.mouse_x < content_x + content_w &&
             masked_panel_input.mouse_y >= tab_content_y &&
             masked_panel_input.mouse_y < tab_content_y + tab_content_h;
 
-        bool suppress_content_input = false;
-        if (!masked_panel_input.mouse_down[0])
-            tab_scrollbar_dragging_ = false;
-
-        if (preloaded_max_scroll > 0.0f && tab_content_h > 0.0f) {
-            const float track_y = tab_content_y;
-            const float track_h = tab_content_h;
-            const float ratio = tab_content_h / preloaded_total_h;
-            const float thumb_h = std::max(t.sizes.grab_min_size, track_h * ratio);
-            const float thumb_range = std::max(0.0f, track_h - thumb_h);
-            const float scroll_frac = preloaded_max_scroll > 0.0f
-                                          ? (tab_scroll_offset_ / preloaded_max_scroll)
-                                          : 0.0f;
-            const float thumb_y = track_y + scroll_frac * thumb_range;
-            const bool over_scrollbar =
-                masked_panel_input.mouse_x >= content_x + content_draw_w &&
-                masked_panel_input.mouse_x < content_x + content_w &&
-                masked_panel_input.mouse_y >= track_y &&
-                masked_panel_input.mouse_y < track_y + track_h;
-
-            if (tab_scrollbar_dragging_) {
-                suppress_content_input = true;
-                if (thumb_range > 0.0f) {
-                    const float clamped_thumb_y = std::clamp(
-                        masked_panel_input.mouse_y - tab_scrollbar_drag_offset_,
-                        track_y,
-                        track_y + thumb_range);
-                    const float next_frac = (clamped_thumb_y - track_y) / thumb_range;
-                    tab_scroll_offset_ = next_frac * preloaded_max_scroll;
-                }
-            } else if (over_scrollbar && masked_panel_input.mouse_clicked[0]) {
-                suppress_content_input = true;
-                if (masked_panel_input.mouse_y >= thumb_y &&
-                    masked_panel_input.mouse_y <= thumb_y + thumb_h) {
-                    tab_scrollbar_dragging_ = true;
-                    tab_scrollbar_drag_offset_ = masked_panel_input.mouse_y - thumb_y;
-                } else if (thumb_range > 0.0f) {
-                    const float target_thumb_y = std::clamp(
-                        masked_panel_input.mouse_y - thumb_h * 0.5f,
-                        track_y,
-                        track_y + thumb_range);
-                    const float next_frac = (target_thumb_y - track_y) / thumb_range;
-                    tab_scroll_offset_ = next_frac * preloaded_max_scroll;
-                    tab_scrollbar_dragging_ = true;
-                    tab_scrollbar_drag_offset_ = masked_panel_input.mouse_y - target_thumb_y;
-                }
-            }
-        } else {
-            tab_scrollbar_dragging_ = false;
-        }
-
         if (over_tab_content && masked_panel_input.mouse_wheel != 0.0f) {
             tab_scroll_offset_ -= masked_panel_input.mouse_wheel * 30.0f;
             tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
         }
 
-        PanelInputState content_input = masked_panel_input;
-        if (tab_scrollbar_dragging_ || suppress_content_input) {
-            content_input.mouse_down[0] = false;
-            content_input.mouse_clicked[0] = false;
-            content_input.mouse_released[0] = false;
-            content_input.mouse_wheel = 0.0f;
-        }
-
         const float y_cursor = tab_content_y - tab_scroll_offset_;
         const float main_h = reg.draw_single_panel_direct(active_tab_id_,
-                                                          content_x, y_cursor, content_draw_w, kPreloadMaxHeight, draw_ctx,
-                                                          clip_y_min, clip_y_max, &content_input);
+                                                          content_x, y_cursor, content_w, kPreloadMaxHeight, draw_ctx,
+                                                          clip_y_min, clip_y_max, &masked_panel_input);
         const float child_h = reg.draw_child_panels_direct(active_tab_id_,
-                                                           content_x, y_cursor + main_h, content_draw_w, kPreloadMaxHeight, draw_ctx,
-                                                           clip_y_min, clip_y_max, &content_input);
+                                                           content_x, y_cursor + main_h, content_w, kPreloadMaxHeight, draw_ctx,
+                                                           clip_y_min, clip_y_max, &masked_panel_input);
 
         for (size_t attempt = 0; attempt < main_tabs.size(); ++attempt) {
             const size_t idx = (background_preload_index_ + attempt) % main_tabs.size();
@@ -270,7 +199,7 @@ namespace lfs::vis::gui {
             if (tab.id == active_tab_id_)
                 continue;
 
-            reg.preload_single_panel_direct(tab.id, content_draw_w, tab_content_h, draw_ctx,
+            reg.preload_single_panel_direct(tab.id, content_w, tab_content_h, draw_ctx,
                                             clip_y_min, clip_y_max, &masked_panel_input);
             background_preload_index_ = idx + 1;
             break;
@@ -280,40 +209,6 @@ namespace lfs::vis::gui {
 
         const float max_scroll = std::max(0.0f, tab_content_total_h_ - tab_content_h);
         tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, max_scroll);
-
-        if (max_scroll > 0.0f && tab_content_h > 0.0f) {
-            auto* dl = static_cast<ImDrawList*>(input.bg_draw_list);
-            const float track_x = content_x + content_draw_w + scrollbar_pad;
-            const float track_y = tab_content_y;
-            const float track_h = tab_content_h;
-
-            const float ratio = tab_content_h / tab_content_total_h_;
-            const float thumb_h = std::max(t.sizes.grab_min_size, track_h * ratio);
-            const float scroll_frac = tab_scroll_offset_ / max_scroll;
-            const float thumb_y = track_y + scroll_frac * (track_h - thumb_h);
-
-            const float rounding = std::max(t.sizes.scrollbar_rounding, scrollbar_w * 0.5f);
-            const bool over_scrollbar =
-                masked_panel_input.mouse_x >= content_x + content_draw_w &&
-                masked_panel_input.mouse_x < content_x + content_w &&
-                masked_panel_input.mouse_y >= track_y &&
-                masked_panel_input.mouse_y < track_y + track_h;
-
-            const ImU32 track_col = ImGui::ColorConvertFloat4ToU32(
-                withAlpha(t.palette.background, 0.5f));
-            const ImU32 thumb_col = ImGui::ColorConvertFloat4ToU32(
-                withAlpha(tab_scrollbar_dragging_
-                              ? t.palette.primary
-                              : (over_scrollbar ? t.palette.primary_dim : t.palette.text_dim),
-                          tab_scrollbar_dragging_ ? 0.9f : (over_scrollbar ? 0.78f : 0.63f)));
-
-            dl->AddRectFilled(ImVec2(track_x, track_y),
-                              ImVec2(track_x + scrollbar_w, track_y + track_h),
-                              track_col, rounding);
-            dl->AddRectFilled(ImVec2(track_x, thumb_y),
-                              ImVec2(track_x + scrollbar_w, thumb_y + thumb_h),
-                              thumb_col, rounding);
-        }
     }
 
     void PanelLayoutManager::renderBottomDock(const PanelDrawContext& draw_ctx,
@@ -410,16 +305,6 @@ namespace lfs::vis::gui {
         bottom_dock_top_y_ = bottom_dock_visible_ ? panel_y : -1.0f;
         if (!bottom_dock_visible_)
             return;
-
-        if (auto* dl = static_cast<ImDrawList*>(input.bg_draw_list)) {
-            const auto& t = lfs::vis::theme();
-            const ImU32 line_col = ImGui::ColorConvertFloat4ToU32(withAlpha(t.palette.border, 0.7f));
-            const float grip_y = panel_y;
-            dl->AddLine(ImVec2(screen.work_pos.x, grip_y),
-                        ImVec2(screen.work_pos.x + panel_w, grip_y),
-                        line_col,
-                        1.0f);
-        }
 
         reg.draw_panels_direct(PanelSpace::BottomDock,
                                screen.work_pos.x,

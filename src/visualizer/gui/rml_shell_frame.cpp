@@ -2,16 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_shell_frame.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
@@ -53,7 +48,6 @@ namespace lfs::vis::gui {
     }
 
     void RmlShellFrame::shutdown() {
-        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("shell_frame");
         rml_context_ = nullptr;
@@ -144,32 +138,12 @@ namespace lfs::vis::gui {
             status_region_->SetProperty("height", std::format("{:.0f}px", regions.status.h));
         }
 
-        if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
-            rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            rml_context_->Update();
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
+            return;
 
-            fbo_.ensure(w, h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render = rml_manager_->getRenderInterface();
-            assert(render);
-            render->SetViewport(w, h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render->SetTargetFramebuffer(fbo_.fbo());
-
-            render->BeginFrame();
-            rml_context_->Render();
-            render->EndFrame();
-
-            render->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
-        }
-
-        if (fbo_.valid())
-            fbo_.blitToScreen(0.0f, 0.0f, full_w, full_h, w, h);
+        rml_context_->SetDimensions(Rml::Vector2i(w, h));
+        rml_context_->Update();
+        rml_manager_->queueVulkanContext(rml_context_);
     }
 
 } // namespace lfs::vis::gui

@@ -2,20 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/rml_viewport_overlay.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
-#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
@@ -28,7 +22,6 @@
 #include <cassert>
 #include <format>
 #include <vector>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -66,7 +59,6 @@ namespace lfs::vis::gui {
             lfs::python::unregister_rml_document("viewport_overlay");
         doc_registered_ = false;
 
-        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
@@ -313,7 +305,7 @@ namespace lfs::vis::gui {
                 rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), mods);
             }
 
-            RmlPanelHost::setFrameTooltip(resolveRmlTooltip(hover), hover);
+            tooltip_.setHover(resolveRmlTooltip(hover), hover);
         }
     }
 
@@ -382,6 +374,15 @@ namespace lfs::vis::gui {
         applyGTMetricsOverlay();
     }
 
+    bool RmlViewportOverlay::applyFrameTooltip() {
+        if (!document_)
+            return false;
+        return tooltip_.apply(document_->GetElementById("overlay-body"),
+                              last_mouse_x_, last_mouse_y_,
+                              static_cast<int>(vp_size_.x),
+                              static_cast<int>(vp_size_.y));
+    }
+
     void RmlViewportOverlay::render() {
         if (!rml_context_ || !document_)
             return;
@@ -393,7 +394,7 @@ namespace lfs::vis::gui {
             doc_registered_ = true;
         }
 
-        if (rml_manager_->shouldDeferFboUpdate(fbo_))
+        if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
 
         const bool theme_changed = updateTheme();
@@ -411,52 +412,42 @@ namespace lfs::vis::gui {
         auto* body = document_->GetElementById("overlay-body");
         ensureBodyDataModelBound(body);
         updateToolbarRoots();
+        const bool tooltip_changed = applyFrameTooltip();
 
         const bool needs_render = render_needed_ || animation_active_ || run_document_hooks ||
-                                  theme_changed || size_changed;
-        if (!needs_render)
+                                  theme_changed || size_changed || tooltip_changed;
+        if (!needs_render) {
+            rml_manager_->queueVulkanContext(rml_context_,
+                                             vp_pos_.x - screen_origin_.x,
+                                             vp_pos_.y - screen_origin_.y,
+                                             true,
+                                             true,
+                                             vp_pos_.x - screen_origin_.x,
+                                             vp_pos_.y - screen_origin_.y,
+                                             vp_pos_.x - screen_origin_.x + vp_size_.x,
+                                             vp_pos_.y - screen_origin_.y + vp_size_.y);
             return;
-
-        if (rml_manager_) {
-            rml_manager_->trackContextFrame(rml_context_,
-                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
-                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
         }
+
+        rml_manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                        static_cast<int>(vp_pos_.y - screen_origin_.y));
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
 
-        fbo_.ensure(w, h);
-        if (!fbo_.valid())
-            return;
-
-        auto* render = rml_manager_->getRenderInterface();
-        assert(render);
-        render->SetViewport(w, h);
-
-        GLint prev_fbo = 0;
-        fbo_.bind(&prev_fbo);
-        render->SetTargetFramebuffer(fbo_.fbo());
-
-        render->BeginFrame();
-        rml_context_->Render();
-        render->EndFrame();
-
-        render->SetTargetFramebuffer(0);
-        fbo_.unbind(prev_fbo);
-
+        rml_manager_->queueVulkanContext(rml_context_,
+                                         vp_pos_.x - screen_origin_.x,
+                                         vp_pos_.y - screen_origin_.y,
+                                         true,
+                                         true,
+                                         vp_pos_.x - screen_origin_.x,
+                                         vp_pos_.y - screen_origin_.y,
+                                         vp_pos_.x - screen_origin_.x + vp_size_.x,
+                                         vp_pos_.y - screen_origin_.y + vp_size_.y);
         animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
         render_needed_ = false;
         last_render_w_ = w;
         last_render_h_ = h;
-    }
-
-    void RmlViewportOverlay::compositeToScreen(const int screen_w, const int screen_h) const {
-        if (!fbo_.valid() || screen_w <= 0 || screen_h <= 0)
-            return;
-        fbo_.blitToScreen(vp_pos_.x - screen_origin_.x,
-                          vp_pos_.y - screen_origin_.y,
-                          vp_size_.x, vp_size_.y,
-                          screen_w, screen_h);
     }
 
 } // namespace lfs::vis::gui

@@ -66,7 +66,6 @@
     "build_info.commit": "Commit",
     "build_info.build_type": "Build-Typ",
     "build_info.platform": "Plattform",
-    "build_info.cuda_gl_interop": "CUDA-GL Interop",
     "build_type.debug": "Debug",
     "build_type.release": "Release",
     "platform.windows": "Windows",
@@ -186,6 +185,7 @@
 
     "title": "Asset Manager",
     "toolbar.import": "Importieren",
+    "toolbar.clean_missing": "Bereinigen",
     "toolbar.search_icon": "Suche",
     "toolbar.search_placeholder": "Assets suchen...",
     "toolbar.sort_by": "Sortieren nach: Neueste",
@@ -417,7 +417,7 @@
       "bg_image_browse": "Nach Hintergrundbild suchen",
       "bg_image_clear": "Ausgewähltes Hintergrundbild entfernen",
       "dataset_path": "Pfad zum geladenen Datensatz",
-      "dataset_images": "Anzahl der Bilder im Datensatz",
+      "dataset_images": "Name des Bildunterordners im Datensatz (z. B. images, images_4)",
       "dataset_output": "Ausgabeverzeichnis für trainierte Artefakte",
       "opt_strategy_display": "Aktive Verdichtungsstrategie",
       "bilateral_grid_x": "Bilaterales Gitter: X-Auflösung",
@@ -849,6 +849,7 @@
     "seq_loop_off": "Schleifenwiedergabe aktivieren",
     "seq_loop_on": "Schleifenwiedergabe deaktivieren",
     "seq_add": "Keyframe an aktueller Position hinzufügen",
+    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
     "seq_speed": "Wiedergabegeschwindigkeit (Klick zum Wechseln)",
     "seq_snap": "Keyframes am Raster einrasten (Rechtsklick für Optionen)",
     "seq_follow": "Abspielkopf bei Wiedergabe folgen",
@@ -949,7 +950,11 @@
     "centralize_dataset": "Datensatz zentrieren",
     "centralize_off": "Aus",
     "centralize_by_pointcloud": "Nach Punktwolke",
-    "centralize_by_cameras": "Nach Kameras"
+    "centralize_by_cameras": "Nach Kameras",
+    "max_width": "Max. Breite (px)",
+    "max_width_disable": "Herunterskalierung deaktivieren",
+    "max_width_hint": "Breitere Bilder werden herunterskaliert. 0 deaktiviert die Begrenzung.",
+    "apply_auto_crop": "Auto-Zuschnitt anwenden"
   },
   "notification": {
     "cannot_open": "Kann nicht öffnen",
@@ -1437,6 +1442,8 @@
     "log_scale": "Logarithmische Skala",
     "samples": "Samples",
     "range": "Range",
+    "range_of_interest": "Bereich von Interesse:",
+    "reset": "Zurücksetzen",
     "mean": "Mean",
     "median": "Median",
     "p95": "P95",
@@ -1504,6 +1511,10 @@
       "no_visible_values": {
         "title": "No visible values",
         "message": "The selected metric does not contain any visible finite samples to visualize."
+      },
+      "no_selected_values": {
+        "title": "No samples in selection",
+        "message": "The selected models contain no finite samples for this metric."
       }
     },
     "metric": {

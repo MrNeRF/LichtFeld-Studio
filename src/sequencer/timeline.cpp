@@ -13,7 +13,7 @@
 namespace lfs::sequencer {
 
     namespace {
-        constexpr int JSON_VERSION = 3;
+        constexpr int JSON_VERSION = 4;
 
         [[nodiscard]] float clampFocalLength(const float focal_length_mm) {
             return std::clamp(focal_length_mm,
@@ -32,6 +32,8 @@ namespace lfs::sequencer {
 
         keyframes_.push_back(inserted);
         sortKeyframes();
+        if (!inserted.is_loop_point && inserted.time > clip_duration_)
+            clip_duration_ = inserted.time;
         return inserted.id;
     }
 
@@ -123,6 +125,7 @@ namespace lfs::sequencer {
         keyframes_.clear();
         clip_.reset();
         next_keyframe_id_ = 1;
+        clip_duration_ = DEFAULT_CLIP_DURATION_SECONDS;
     }
 
     size_t Timeline::realKeyframeCount() const {
@@ -149,6 +152,10 @@ namespace lfs::sequencer {
 
     float Timeline::endTime() const {
         return keyframes_.empty() ? 0.0f : keyframes_.back().time;
+    }
+
+    void Timeline::setClipDuration(const float duration) {
+        clip_duration_ = std::max({MIN_CLIP_DURATION_SECONDS, duration, realEndTime()});
     }
 
     CameraState Timeline::evaluate(const float time) const {
@@ -192,6 +199,7 @@ namespace lfs::sequencer {
             const std::filesystem::path path_fs = lfs::core::utf8_to_path(path);
             nlohmann::json j;
             j["version"] = JSON_VERSION;
+            j["clip_duration"] = clip_duration_;
             j["keyframes"] = nlohmann::json::array();
 
             for (const auto& kf : keyframes_) {
@@ -263,6 +271,10 @@ namespace lfs::sequencer {
             clip_ = std::move(loaded_clip);
             next_keyframe_id_ = next_keyframe_id;
             sortKeyframes();
+            // Pre-v4 fallback: setClipDuration floors to realEndTime() so loaded keyframes
+            // outside the default 30s clip remain visible.
+            const float loaded_duration = j.value("clip_duration", 0.0f);
+            setClipDuration(loaded_duration > 0.0f ? loaded_duration : DEFAULT_CLIP_DURATION_SECONDS);
             LOG_INFO("Loaded {} keyframes from {}", keyframes_.size(), path);
             return true;
         } catch (const std::exception& e) {

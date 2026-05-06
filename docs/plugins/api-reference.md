@@ -912,7 +912,7 @@ ui.image_texture(tex, (256, 256))
 
 ### DynamicTexture
 
-GPU tensor to OpenGL texture bridge via CUDA-GL interop.
+GPU tensor to UI texture bridge. In the Vulkan viewer this uses the backend's opaque ImGui texture handle.
 
 ```python
 tex = lf.ui.DynamicTexture()          # Empty
@@ -922,14 +922,14 @@ tex = lf.ui.DynamicTexture(tensor)    # From tensor
 | Method / Property  | Returns              | Description                                    |
 |--------------------|----------------------|------------------------------------------------|
 | `update(tensor)`   | `None`               | Upload `[H, W, 3\|4]` tensor (auto-converts CPU→CUDA, uint8→float32) |
-| `destroy()`        | `None`               | Release GL resources                           |
-| `id`               | `int`                | OpenGL texture ID                              |
+| `destroy()`        | `None`               | Release UI texture resources                   |
+| `id`               | `int`                | Opaque ImGui backend texture handle            |
 | `width`            | `int`                | Current width in pixels                        |
 | `height`           | `int`                | Current height in pixels                       |
 | `valid`            | `bool`               | `True` if texture is initialized               |
 | `uv1`             | `tuple[float, float]` | UV scale factors for power-of-2 padding        |
 
-Calling `update()` with a different resolution automatically recreates the GL texture. Textures are freed on plugin unload via `lf.ui.free_plugin_textures(name)`.
+Calling `update()` with a different resolution automatically recreates the backend texture. Textures are freed on plugin unload via `lf.ui.free_plugin_textures(name)`.
 
 ### Drag & Drop
 
@@ -1582,7 +1582,7 @@ from lfs_plugins.icon_manager import get_icon, get_ui_icon, get_scene_icon, get_
 | `get_scene_icon(name)`                      | `int`   | Load `assets/icon/scene/{name}.png`      |
 | `get_plugin_icon(name, plugin_path, plugin_name)` | `int` | Load `{plugin_path}/icons/{name}.png` with fallback |
 
-All return OpenGL texture ID (0 on failure). Icons are cached by C++.
+All return opaque UI texture handles (0 on failure). Icons are cached by C++.
 
 Direct loading:
 ```python

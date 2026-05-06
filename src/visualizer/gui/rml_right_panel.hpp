@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "gui/rmlui/rml_fbo.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <cstddef>
 #include <cstdint>
@@ -86,7 +85,6 @@ namespace lfs::vis::gui {
         Rml::Element* tab_strip_viewport_el_ = nullptr;
         Rml::Element* tab_separator_el_ = nullptr;
 
-        RmlFBO fbo_;
         Rml::DataModelHandle tab_model_;
         std::vector<TabSnapshot> tabs_;
         Rml::String active_tab_;

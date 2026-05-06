@@ -147,6 +147,7 @@ namespace lfs::vis::gui {
         bool setDropTarget(core::NodeId node_id);
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
+        bool isModelsHeaderTarget(Rml::Element* target) const;
         std::vector<std::string> deletableSelectedNodeNames() const;
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
@@ -190,6 +191,7 @@ namespace lfs::vis::gui {
         size_t last_training_model_gaussian_count_ = std::numeric_limits<size_t>::max();
         size_t last_visible_start_ = kUnsetVisibleRange;
         size_t last_visible_end_ = kUnsetVisibleRange;
+        float last_bound_dp_ratio_ = -1.0f;
         float last_client_height_ = -1.0f;
         float last_content_height_ = -1.0f;
         std::string last_header_text_;

@@ -619,10 +619,14 @@ namespace lfs::python {
     }
 
     std::optional<PySceneNode> PyScene::get_node(const std::string& name) {
-        auto* node = scene_->getMutableNode(name);
+        // Use the const lookup + const_cast so we don't blow the combined-model
+        // cache on every read. Actual mutations go through SceneNode property
+        // setters whose callbacks trigger Scene::notifyMutation, which still
+        // invalidates the cache — same pattern as get_nodes/get_visible_nodes.
+        const auto* node = scene_->getNode(name);
         if (!node)
             return std::nullopt;
-        return PySceneNode(node, scene_);
+        return PySceneNode(const_cast<core::SceneNode*>(node), scene_);
     }
 
     std::vector<PySceneNode> PyScene::get_nodes() {

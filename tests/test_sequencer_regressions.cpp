@@ -180,6 +180,7 @@ namespace {
         SequencerController controller;
         const auto first_id = controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 30.0f));
         controller.addKeyframe(makeKeyframe(2.0f, {4.0f, 5.0f, 6.0f}, 50.0f));
+        controller.setClipDuration(8.0f);
 
         controller.toggleLoop();
 
@@ -190,7 +191,7 @@ namespace {
         const auto* loop_point = controller.timeline().getKeyframe(2);
         ASSERT_NE(loop_point, nullptr);
         EXPECT_TRUE(loop_point->is_loop_point);
-        EXPECT_FLOAT_EQ(loop_point->time, 3.0f);
+        EXPECT_FLOAT_EQ(loop_point->time, 8.0f);
         expectVec3Eq(loop_point->position, {1.0f, 2.0f, 3.0f});
         EXPECT_FLOAT_EQ(loop_point->focal_length_mm, 30.0f);
 
@@ -202,13 +203,20 @@ namespace {
         loop_point = controller.timeline().getKeyframe(controller.timeline().size() - 1);
         ASSERT_NE(loop_point, nullptr);
         EXPECT_TRUE(loop_point->is_loop_point);
-        EXPECT_FLOAT_EQ(loop_point->time, 3.0f);
+        // Loop keyframe is anchored to clipDuration, not realEndTime, so reordering keyframes
+        // doesn't move it.
+        EXPECT_FLOAT_EQ(loop_point->time, 8.0f);
 
         ASSERT_TRUE(controller.updateKeyframeById(first_id, {7.0f, 8.0f, 9.0f}, glm::quat(1.0f, 0.0f, 0.0f, 0.0f), 45.0f));
         loop_point = controller.timeline().getKeyframe(controller.timeline().size() - 1);
         ASSERT_NE(loop_point, nullptr);
         expectVec3Eq(loop_point->position, {7.0f, 8.0f, 9.0f});
         EXPECT_FLOAT_EQ(loop_point->focal_length_mm, 45.0f);
+
+        controller.setClipDuration(12.0f);
+        loop_point = controller.timeline().getKeyframe(controller.timeline().size() - 1);
+        ASSERT_NE(loop_point, nullptr);
+        EXPECT_FLOAT_EQ(loop_point->time, 12.0f);
     }
 
     TEST(SequencerControllerRegressionTest, PreviewKeyframeTimeDefersSortAndLoopRebuildUntilCommit) {
@@ -216,6 +224,7 @@ namespace {
         controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 0.0f, 0.0f}));
         const auto middle_id = controller.addKeyframe(makeKeyframe(2.0f, {2.0f, 0.0f, 0.0f}));
         controller.addKeyframe(makeKeyframe(4.0f, {3.0f, 0.0f, 0.0f}));
+        controller.setClipDuration(10.0f);
         controller.toggleLoop();
 
         const auto timeline_revision_before = controller.timelineRevision();
@@ -235,7 +244,7 @@ namespace {
         const auto* loop_point = controller.timeline().getKeyframe(3);
         ASSERT_NE(loop_point, nullptr);
         EXPECT_TRUE(loop_point->is_loop_point);
-        EXPECT_FLOAT_EQ(loop_point->time, 6.0f);
+        EXPECT_FLOAT_EQ(loop_point->time, 10.0f);
     }
 
     TEST(SequencerControllerRegressionTest, SeekToLastKeyframeSkipsSyntheticLoopPoint) {

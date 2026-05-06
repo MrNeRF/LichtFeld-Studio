@@ -5,13 +5,8 @@
 #pragma once
 
 #include "tool_base.hpp"
-#include "tools/selection_operation.hpp"
 #include <algorithm>
 #include <glm/glm.hpp>
-
-namespace lfs::vis::input {
-    class InputBindings;
-}
 
 namespace lfs::vis::tools {
 
@@ -45,9 +40,6 @@ namespace lfs::vis::tools {
         void setCropFilterEnabled(bool enabled);
         void toggleCropFilter() { setCropFilterEnabled(!crop_filter_enabled_); }
 
-        // Input bindings
-        void setInputBindings(const input::InputBindings* bindings) { input_bindings_ = bindings; }
-
     protected:
         void onEnabledChanged(bool enabled) override;
 
@@ -62,9 +54,6 @@ namespace lfs::vis::tools {
         glm::vec2 last_mouse_pos_{0.0f};
         float brush_radius_ = 20.0f;
         const ToolContext* tool_context_ = nullptr;
-
-        // Determine operation from modifier keys
-        SelectionOp getOpFromModifiers(int mods) const;
 
         // Depth filter
         bool depth_filter_enabled_ = false;
@@ -81,13 +70,9 @@ namespace lfs::vis::tools {
         static constexpr float DEFAULT_DEPTH_FAR = 5.3f;
         static constexpr float DEFAULT_FRUSTUM_HALF_WIDTH = 1.35f;
 
-        void drawDepthFrustum(const ToolContext& ctx) const;
         void applySelectionFilterSettings(const ToolContext& ctx) const;
         void clearSelectionRenderState(const ToolContext& ctx) const;
         void syncDepthFilterRenderMode(const ToolContext& ctx);
-
-        // Input bindings
-        const input::InputBindings* input_bindings_ = nullptr;
     };
 
 } // namespace lfs::vis::tools

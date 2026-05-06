@@ -4,9 +4,8 @@
 
 #include "gui/ui_widgets.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "core/image_io.hpp"
+#include "gui/icon_cache.hpp"
 #include "gui/string_keys.hpp"
-#include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
@@ -17,7 +16,6 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstring>
-#include <glad/glad.h>
 #include <imgui_internal.h>
 #include <implot.h>
 #include <string>
@@ -33,12 +31,6 @@ namespace lfs::vis::gui::widgets {
         constexpr float SCRUB_STYLE_ROUNDING = 6.0f;
         constexpr const char* MULTI_COMPONENT_LABELS[4] = {"##X", "##Y", "##Z", "##W"};
 
-        struct WidgetIcons {
-            unsigned int reset = 0;
-            bool initialized = false;
-        };
-
-        WidgetIcons g_icons;
         ImGuiID g_pending_cancel_id = 0;
         int g_snapshot_cleanup_frame = -1;
 
@@ -51,26 +43,6 @@ namespace lfs::vis::gui::widgets {
         };
 
         std::unordered_map<ImGuiID, EditSnapshot> g_edit_snapshots;
-
-        void ensureIconsLoaded() {
-            if (g_icons.initialized)
-                return;
-
-            try {
-                const auto path = lfs::vis::getAssetPath("icon/reset.png");
-                const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
-
-                glGenTextures(1, &g_icons.reset);
-                glBindTexture(GL_TEXTURE_2D, g_icons.reset);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-            } catch (...) {
-                g_icons.reset = 0;
-            }
-
-            g_icons.initialized = true;
-        }
 
         ImVec4 getIconTint() {
             return theme().isLightTheme() ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f} : ImVec4{1.0f, 1.0f, 1.0f, 0.9f};
@@ -187,7 +159,7 @@ namespace lfs::vis::gui::widgets {
                 return;
 
             const ImGuiIO& io = ImGui::GetIO();
-            const bool primary_shortcut_pressed = io.KeyCtrl || (io.ConfigMacOSXBehaviors && io.KeySuper);
+            const bool primary_shortcut_pressed = io.KeyCtrl;
             if (!primary_shortcut_pressed || !ImGui::IsKeyPressed(ImGuiKey_A, false))
                 return;
 
@@ -441,8 +413,6 @@ namespace lfs::vis::gui::widgets {
 
     bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,
                          const char* tooltip, const char* format) {
-        ensureIconsLoaded();
-
         bool changed = SliderFloat(label, v, min, max, format);
         bool slider_hovered = ImGui::IsItemHovered();
 
@@ -452,9 +422,10 @@ namespace lfs::vis::gui::widgets {
         const float btn_size = ImGui::GetFrameHeight();
         const ImVec2 icon_size(btn_size - 4, btn_size - 4);
         const ImVec4 icon_tint = getIconTint();
+        const ImTextureID reset_icon = static_cast<ImTextureID>(IconCache::instance().getIcon("reset"));
 
-        if (g_icons.reset) {
-            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size,
+        if (reset_icon) {
+            if (ImGui::ImageButton("##reset", reset_icon, icon_size,
                                    ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), icon_tint)) {
                 *v = reset_value;
                 changed = true;
@@ -480,8 +451,6 @@ namespace lfs::vis::gui::widgets {
 
     bool DragFloat3WithReset(const char* label, float* v, float speed, float reset_value,
                              const char* tooltip) {
-        ensureIconsLoaded();
-
         bool changed = DragFloat3(label, v, speed);
         bool drag_hovered = ImGui::IsItemHovered();
 
@@ -491,9 +460,10 @@ namespace lfs::vis::gui::widgets {
         const float btn_size = ImGui::GetFrameHeight();
         const ImVec2 icon_size(btn_size - 4, btn_size - 4);
         const ImVec4 icon_tint = getIconTint();
+        const ImTextureID reset_icon = static_cast<ImTextureID>(IconCache::instance().getIcon("reset"));
 
-        if (g_icons.reset) {
-            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size,
+        if (reset_icon) {
+            if (ImGui::ImageButton("##reset", reset_icon, icon_size,
                                    ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), icon_tint)) {
                 v[0] = v[1] = v[2] = reset_value;
                 changed = true;
@@ -791,7 +761,7 @@ namespace lfs::vis::gui::widgets {
         DrawFloatingWindowShadow(pos, size, rounding);
     }
 
-    bool IconButton(const char* id, const unsigned int texture, const ImVec2& size,
+    bool IconButton(const char* id, const ImTextureID texture, const ImVec2& size,
                     const bool selected, const char* fallback_label) {
         constexpr float ACTIVE_DARKEN = 0.1f;
         constexpr float TINT_BASE = 0.7f;
@@ -817,7 +787,7 @@ namespace lfs::vis::gui::widgets {
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, bg_active);
 
         const bool clicked = texture
-                                 ? ImGui::ImageButton(id, static_cast<ImTextureID>(texture), size, {0, 0}, {1, 1}, {0, 0, 0, 0}, tint)
+                                 ? ImGui::ImageButton(id, texture, size, {0, 0}, {1, 1}, {0, 0, 0, 0}, tint)
                                  : ImGui::Button(fallback_label, {size.x + FALLBACK_PADDING, size.y + FALLBACK_PADDING});
 
         ImGui::PopStyleColor(3);

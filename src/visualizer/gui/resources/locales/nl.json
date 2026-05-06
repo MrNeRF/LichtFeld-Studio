@@ -66,7 +66,6 @@
     "build_info.commit": "Commit",
     "build_info.build_type": "Build Type",
     "build_info.platform": "Platform",
-    "build_info.cuda_gl_interop": "CUDA-GL Interop",
     "build_type.debug": "Debug",
     "build_type.release": "Release",
     "platform.windows": "Windows",
@@ -186,6 +185,7 @@
 
     "title": "Asset Manager",
     "toolbar.import": "Importeren",
+    "toolbar.clean_missing": "Opruimen",
     "toolbar.search_icon": "Zoeken",
     "toolbar.search_placeholder": "Zoek assets...",
     "toolbar.sort_by": "Sorteren op: Recent",
@@ -417,7 +417,7 @@
       "bg_image_browse": "Bladeren naar een achtergrondafbeelding",
       "bg_image_clear": "Geselecteerde achtergrondafbeelding wissen",
       "dataset_path": "Pad naar de geladen dataset",
-      "dataset_images": "Aantal afbeeldingen in de dataset",
+      "dataset_images": "Naam van de afbeeldingssubmap in de dataset (bijv. images, images_4)",
       "dataset_output": "Uitvoermap voor getrainde artefacten",
       "opt_strategy_display": "Actieve verdichtingsstrategie",
       "bilateral_grid_x": "X-resolutie van bilateraal raster",
@@ -849,6 +849,7 @@
     "seq_loop_off": "Herhaald afspelen inschakelen",
     "seq_loop_on": "Herhaald afspelen uitschakelen",
     "seq_add": "Keyframe toevoegen op huidige positie",
+    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
     "seq_speed": "Afspeelsnelheid (klik om te wisselen)",
     "seq_snap": "Keyframes uitlijnen op raster (rechtsklik voor opties)",
     "seq_follow": "Afspeelkop volgen tijdens afspelen",
@@ -949,7 +950,11 @@
     "centralize_dataset": "Dataset centreren",
     "centralize_off": "Uit",
     "centralize_by_pointcloud": "Op puntenwolk",
-    "centralize_by_cameras": "Op camera's"
+    "centralize_by_cameras": "Op camera's",
+    "max_width": "Max. breedte (px)",
+    "max_width_disable": "Verkleinen uitschakelen",
+    "max_width_hint": "Bredere afbeeldingen worden verkleind. 0 schakelt de limiet uit.",
+    "apply_auto_crop": "Automatisch bijsnijden toepassen"
   },
   "notification": {
     "cannot_open": "Kan niet openen",
@@ -1437,6 +1442,8 @@
     "log_scale": "Logaritmische schaal",
     "samples": "Samples",
     "range": "Range",
+    "range_of_interest": "Interessegebied:",
+    "reset": "Herstellen",
     "mean": "Mean",
     "median": "Median",
     "p95": "P95",
@@ -1504,6 +1511,10 @@
       "no_visible_values": {
         "title": "No visible values",
         "message": "The selected metric does not contain any visible finite samples to visualize."
+      },
+      "no_selected_values": {
+        "title": "No samples in selection",
+        "message": "The selected models contain no finite samples for this metric."
       }
     },
     "metric": {

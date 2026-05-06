@@ -5,6 +5,7 @@
 #pragma once
 
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/EventListener.h>
 
 namespace lfs::vis::editor {
     class PythonEditor;
@@ -26,8 +27,18 @@ namespace lfs::vis::gui {
         bool GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) override;
 
     private:
+        class DragEndListener final : public Rml::EventListener {
+        public:
+            explicit DragEndListener(PythonEditorElement& owner) : owner_(owner) {}
+            void ProcessEvent(Rml::Event& event) override;
+
+        private:
+            PythonEditorElement& owner_;
+        };
+
         editor::PythonEditor* editor_ = nullptr;
         float font_size_px_ = 14.0f;
+        DragEndListener drag_end_listener_;
     };
 
 } // namespace lfs::vis::gui

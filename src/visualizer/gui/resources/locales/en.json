@@ -66,7 +66,6 @@
     "build_info.commit": "Commit",
     "build_info.build_type": "Build Type",
     "build_info.platform": "Platform",
-    "build_info.cuda_gl_interop": "CUDA-GL Interop",
     "build_info.property": "Property",
     "build_info.value": "Value",
     "build_type.debug": "Debug",
@@ -95,6 +94,7 @@
     "toolbar.view_gallery": "Gallery",
     "toolbar.view_list": "List",
     "toolbar.import": "Import",
+    "toolbar.clean_missing": "Clean",
     "import_menu.import_asset": "Import Asset...",
     "import_menu.import_dataset": "Import Dataset...",
     "import_menu.import_checkpoint": "Import Checkpoint...",
@@ -420,7 +420,7 @@
       "bg_image_browse": "Browse for a background image",
       "bg_image_clear": "Clear the selected background image",
       "dataset_path": "Path to the loaded dataset",
-      "dataset_images": "Number of images in the dataset",
+      "dataset_images": "Image subfolder name within the dataset (e.g. images, images_4)",
       "dataset_output": "Output directory for trained artifacts",
       "opt_strategy_display": "Active densification strategy",
       "bilateral_grid_x": "Bilateral grid X resolution",
@@ -664,6 +664,7 @@
     "fov_info": "FOV",
     "sh_degree": "SH Degree",
     "equirectangular": "Equirectangular",
+    "raster_backend": "Raster Backend",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
     "camera_metrics": "Camera Metrics",
@@ -832,6 +833,7 @@
     "scale_camera": "Scale",
     "sh_degree": "SH coefficients used for rendering (0-3)",
     "equirectangular": "Render as 360° panorama",
+    "raster_backend": "Gaussian rasterizer: fast_gs, 3dgut, vksplat, or vksplat 3dgut",
     "fov": "Camera field of view in degrees",
     "focal_length": "Focal length in mm (35mm full-frame equivalent)",
     "background": "Viewer background color",
@@ -855,6 +857,7 @@
     "seq_loop_on": "Disable loop playback",
     "seq_add": "Add keyframe at current position",
     "seq_speed": "Playback speed (click to cycle)",
+    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
     "seq_snap": "Snap keyframes to grid (right-click for options)",
     "seq_follow": "Follow playhead during playback",
     "seq_film_strip": "Show film strip below timeline",
@@ -966,7 +969,11 @@
     "centralize_dataset": "Centralize Dataset",
     "centralize_off": "Off",
     "centralize_by_pointcloud": "By PointCloud",
-    "centralize_by_cameras": "By Cameras"
+    "centralize_by_cameras": "By Cameras",
+    "max_width": "Max Width (px)",
+    "max_width_disable": "Disable downscaling",
+    "max_width_hint": "Images wider than this are downscaled. 0 disables the cap.",
+    "apply_auto_crop": "Apply Auto Crop"
   },
   "notification": {
     "cannot_open": "Cannot Open",
@@ -1442,6 +1449,8 @@
     "log_scale": "Log Scale",
     "samples": "Samples",
     "range": "Range",
+    "range_of_interest": "Range of Interest:",
+    "reset": "Reset",
     "mean": "Mean",
     "median": "Median",
     "p95": "P95",
@@ -1509,6 +1518,10 @@
       "no_visible_values": {
         "title": "No visible values",
         "message": "The selected metric does not contain any visible finite samples to visualize."
+      },
+      "no_selected_values": {
+        "title": "No samples in selection",
+        "message": "The selected models contain no finite samples for this metric."
       }
     },
     "metric": {

@@ -71,12 +71,14 @@ def _install_lf_stub(monkeypatch, tmp_path):
     lf_stub.detect_dataset_info = lambda path: state.dataset_infos[str(path)]
     lf_stub.is_dataset_path = lambda path: str(path) in state.dataset_infos
     lf_stub.optimization_params = lambda: None
-    lf_stub.load_file = lambda path, is_dataset=False, output_path="", init_path="": state.load_file_calls.append(
+    lf_stub.load_file = lambda path, is_dataset=False, output_path="", init_path="", centralize_dataset="off", max_width=None: state.load_file_calls.append(
         {
             "path": path,
             "is_dataset": is_dataset,
             "output_path": output_path,
             "init_path": init_path,
+            "centralize_dataset": centralize_dataset,
+            "max_width": max_width,
         }
     )
     lf_stub.read_checkpoint_header = lambda _path: state.checkpoint_header
@@ -181,6 +183,8 @@ def test_dataset_import_panel_show_and_load(import_dialog_module):
             "is_dataset": True,
             "output_path": "/tmp/custom_output",
             "init_path": "/tmp/seed_points.ply",
+            "centralize_dataset": "off",
+            "max_width": 3840,
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
@@ -212,6 +216,8 @@ def test_dataset_import_panel_preserves_unicode_paths(import_dialog_module):
             "is_dataset": True,
             "output_path": "/tmp/出力フォルダ",
             "init_path": "/tmp/初期化ポイント.ply",
+            "centralize_dataset": "off",
+            "max_width": 3840,
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
@@ -245,6 +251,8 @@ def test_dataset_import_panel_loads_updated_dataset_path(import_dialog_module, t
             "is_dataset": True,
             "output_path": str(second_base / "output"),
             "init_path": "",
+            "centralize_dataset": "off",
+            "max_width": 3840,
         }
     ]
 
@@ -283,6 +291,8 @@ def test_dataset_import_panel_clears_init_and_sidecar_on_dataset_change(import_d
             "is_dataset": True,
             "output_path": str(second_base / "output"),
             "init_path": "",
+            "centralize_dataset": "off",
+            "max_width": 3840,
         }
     ]
 
@@ -382,6 +392,8 @@ def test_dataset_import_panel_binds_enter_and_escape(import_dialog_module):
             "is_dataset": True,
             "output_path": str(Path(state.dataset_info.base_path) / "output"),
             "init_path": "",
+            "centralize_dataset": "off",
+            "max_width": 3840,
         }
     ]
     assert enter_event.propagation_stopped is True

@@ -20,7 +20,7 @@ namespace lfs::rendering {
 
     // Single coordinate-conversion boundary for the application.
     //
-    // Visualizer cameras use OpenGL-style local axes:
+    // Visualizer cameras use local axes:
     //   +X = right, +Y = up, +Z = back, -Z = forward.
     //
     // Dataset / import / export cameras keep the existing local axes:

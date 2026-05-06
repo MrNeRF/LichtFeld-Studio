@@ -16,6 +16,30 @@
     min-height: 0;
 }
 
+.dock-drag-handle {
+    flex: 0 0 auto;
+    height: 8dp;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding-top: 3dp;
+}
+
+.dock-drag-handle-bar {
+    width: 36dp;
+    height: 3dp;
+    background-color: rgba(108, 112, 134, 160);
+    border-radius: 2dp;
+}
+
+.dock-drag-handle:hover .dock-drag-handle-bar {
+    background-color: rgba(137, 180, 250, 220);
+}
+
+.dock-drag-handle.hidden {
+    display: none;
+}
+
 #histogram-shell {
     flex: 1;
     padding: 8dp 10dp 12dp;
@@ -372,13 +396,14 @@
 
 #histogram-stats {
     display: flex;
-    flex-wrap: wrap;
     gap: 6dp;
     flex-shrink: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
 }
 
 .stat-card {
-    flex: 1;
+    flex: 0 0 auto;
     min-width: 112dp;
     padding: 8dp 10dp;
     display: flex;
@@ -439,6 +464,55 @@
     letter-spacing: 0.8dp;
     text-transform: uppercase;
     color: #a6adc8;
+}
+
+#histogram-range-of-interest {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    flex-shrink: 0;
+}
+
+.range-of-interest-label {
+    font-size: 9dp;
+    font-weight: 600;
+    letter-spacing: 0.3dp;
+    color: #bac2de;
+}
+
+.range-input {
+    width: 84dp;
+    min-width: 60dp;
+}
+
+.range-separator {
+    color: rgba(186, 194, 222, 180);
+    font-size: 11dp;
+}
+
+.range-reset {
+    min-width: 56dp;
+    margin-left: 4dp;
+}
+
+.range-reset:disabled {
+    color: rgba(186, 194, 222, 100);
+}
+
+#compare-range-of-interest {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6dp;
+    flex-shrink: 0;
+}
+
+.compare-axis-marker {
+    font-size: 10dp;
+    font-weight: 700;
+    letter-spacing: 0.4dp;
+    color: #a6adc8;
+    margin-left: 6dp;
 }
 
 #histogram-chart {

@@ -2,10 +2,6 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// clang-format off
-#include <glad/glad.h>
-// clang-format on
-
 #include "gui/global_context_menu.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -13,7 +9,6 @@
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
-#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
@@ -38,7 +33,6 @@ namespace lfs::vis::gui {
         menu_model_ = {};
         items_.clear();
         pending_items_.clear();
-        fbo_.destroy();
         if (ctx_ && mgr_)
             mgr_->destroyContext("global_context_menu");
     }
@@ -283,47 +277,26 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
-        if (!mgr_->shouldDeferFboUpdate(fbo_)) {
-            if (w != width_ || h != height_) {
-                width_ = w;
-                height_ = h;
-                ctx_->SetDimensions(Rml::Vector2i(w, h));
-            }
+        if (!mgr_ || !mgr_->getVulkanRenderInterface())
+            return;
 
-            ctx_->Update();
-            if (focus_first_item_) {
-                focusFirstItem();
-                focus_first_item_ = false;
-                ctx_->Update();
-            }
-
-            fbo_.ensure(w, h);
-            if (!fbo_.valid())
-                return;
-
-            auto* render_iface = mgr_->getRenderInterface();
-            assert(render_iface);
-            render_iface->SetViewport(w, h);
-
-            GLint prev_fbo = 0;
-            fbo_.bind(&prev_fbo);
-            render_iface->SetTargetFramebuffer(fbo_.fbo());
-
-            render_iface->BeginFrame();
-            ctx_->Render();
-            render_iface->EndFrame();
-
-            render_iface->SetTargetFramebuffer(0);
-            fbo_.unbind(prev_fbo);
+        if (w != width_ || h != height_) {
+            width_ = w;
+            height_ = h;
+            ctx_->SetDimensions(Rml::Vector2i(w, h));
         }
 
-        if (fbo_.valid())
-            fbo_.blitToScreen(0.0f, 0.0f, static_cast<float>(screen_w), static_cast<float>(screen_h),
-                              screen_w, screen_h);
+        ctx_->Update();
+        if (focus_first_item_) {
+            focusFirstItem();
+            focus_first_item_ = false;
+            ctx_->Update();
+        }
+
+        mgr_->queueVulkanContext(ctx_, 0.0f, 0.0f, true);
     }
 
-    void GlobalContextMenu::destroyGLResources() {
-        fbo_.destroy();
+    void GlobalContextMenu::releaseRendererResources() {
     }
 
     void GlobalContextMenu::EventListener::ProcessEvent(Rml::Event& event) {

@@ -5,10 +5,10 @@
 #pragma once
 
 #include "core/modal_request.hpp"
-#include "gui/rmlui/rml_fbo.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 
 #include <RmlUi/Core/EventListener.h>
+#include <core/export.hpp>
 #include <cstddef>
 #include <deque>
 #include <mutex>
@@ -42,7 +42,7 @@ namespace lfs::vis::gui {
         void render(int screen_w, int screen_h,
                     float screen_x, float screen_y,
                     float vp_x, float vp_y, float vp_w, float vp_h);
-        void destroyGLResources();
+        void releaseRendererResources();
         void reloadResources();
 
         [[nodiscard]] bool isOpen() const;
@@ -70,7 +70,6 @@ namespace lfs::vis::gui {
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
-        RmlFBO fbo_;
 
         Rml::Element* el_backdrop_ = nullptr;
         Rml::Element* el_dialog_ = nullptr;

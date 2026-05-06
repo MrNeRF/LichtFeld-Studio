@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 
+#include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_video.h>
 #include <nfd.h>
 
@@ -233,7 +234,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] nfdwindowhandle_t currentParentWindowHandle() {
             nfdwindowhandle_t handle{};
-            SDL_Window* const window = SDL_GL_GetCurrentWindow();
+            SDL_Window* const window = SDL_GetKeyboardFocus();
             if (!window) {
                 return handle;
             }

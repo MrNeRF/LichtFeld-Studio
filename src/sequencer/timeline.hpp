@@ -16,6 +16,8 @@
 namespace lfs::sequencer {
 
     inline constexpr int DEFAULT_PATH_SAMPLES = 20;
+    inline constexpr float DEFAULT_CLIP_DURATION_SECONDS = 30.0f;
+    inline constexpr float MIN_CLIP_DURATION_SECONDS = 0.1f;
 
     class Timeline {
     public:
@@ -46,6 +48,11 @@ namespace lfs::sequencer {
         [[nodiscard]] float startTime() const;
         [[nodiscard]] float endTime() const;
 
+        // User-editable clip length. The setter floors to max(MIN_CLIP_DURATION_SECONDS,
+        // realEndTime()) so it cannot truncate existing keyframes.
+        [[nodiscard]] float clipDuration() const { return clip_duration_; }
+        void setClipDuration(float duration);
+
         [[nodiscard]] CameraState evaluate(float time) const;
         [[nodiscard]] std::vector<glm::vec3> generatePath(int samples_per_segment = DEFAULT_PATH_SAMPLES) const;
         [[nodiscard]] std::vector<glm::vec3> generatePathAtTimeStep(float sample_step_seconds) const;
@@ -69,6 +76,7 @@ namespace lfs::sequencer {
         std::vector<Keyframe> keyframes_;
         std::unique_ptr<AnimationClip> clip_;
         KeyframeId next_keyframe_id_ = 1;
+        float clip_duration_ = DEFAULT_CLIP_DURATION_SECONDS;
     };
 
 } // namespace lfs::sequencer

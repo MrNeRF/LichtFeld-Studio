@@ -66,7 +66,6 @@
     "build_info.commit": "Commit",
     "build_info.build_type": "Tipo di Build",
     "build_info.platform": "Piattaforma",
-    "build_info.cuda_gl_interop": "Interop CUDA-GL",
     "build_type.debug": "Debug",
     "build_type.release": "Release",
     "platform.windows": "Windows",
@@ -189,6 +188,7 @@
 
     "title": "에셋 매니저",
     "toolbar.import": "가져오기",
+    "toolbar.clean_missing": "Pulisci",
     "toolbar.search_icon": "Cerca",
     "toolbar.search_placeholder": "에셋 검색...",
     "toolbar.sort_by": "정렬: 최근",
@@ -419,7 +419,7 @@
       "bg_image_browse": "Sfoglia per un'immagine di sfondo",
       "bg_image_clear": "Rimuovi l'immagine di sfondo selezionata",
       "dataset_path": "Percorso del dataset caricato",
-      "dataset_images": "Numero di immagini nel dataset",
+      "dataset_images": "Nome della sottocartella delle immagini nel dataset (es. images, images_4)",
       "dataset_output": "Directory di output per gli artefatti addestrati",
       "opt_strategy_display": "Strategia di densificazione attiva",
       "bilateral_grid_x": "Risoluzione X della griglia bilaterale",
@@ -851,6 +851,7 @@
     "seq_loop_off": "Attiva la riproduzione in loop",
     "seq_loop_on": "Disattiva la riproduzione in loop",
     "seq_add": "Aggiungi keyframe alla posizione attuale",
+    "seq_clip_duration": "Clip duration (click to edit, in seconds)",
     "seq_speed": "Velocità di riproduzione (clic per cambiare)",
     "seq_snap": "Allinea i keyframe alla griglia (clic destro per le opzioni)",
     "seq_follow": "Segui la testina durante la riproduzione",
@@ -951,7 +952,11 @@
     "centralize_dataset": "Centralizza dataset",
     "centralize_off": "Disattivato",
     "centralize_by_pointcloud": "Per nuvola di punti",
-    "centralize_by_cameras": "Per telecamere"
+    "centralize_by_cameras": "Per telecamere",
+    "max_width": "Larghezza max. (px)",
+    "max_width_disable": "Disattiva ridimensionamento",
+    "max_width_hint": "Le immagini più larghe vengono ridimensionate. 0 disattiva il limite.",
+    "apply_auto_crop": "Applica ritaglio automatico"
   },
   "notification": {
     "cannot_open": "Impossibile aprire",
@@ -1439,6 +1444,8 @@
     "log_scale": "Scala logaritmica",
     "samples": "Samples",
     "range": "Range",
+    "range_of_interest": "Intervallo di interesse:",
+    "reset": "Reimposta",
     "mean": "Mean",
     "median": "Median",
     "p95": "P95",
@@ -1506,6 +1513,10 @@
       "no_visible_values": {
         "title": "No visible values",
         "message": "The selected metric does not contain any visible finite samples to visualize."
+      },
+      "no_selected_values": {
+        "title": "No samples in selection",
+        "message": "The selected models contain no finite samples for this metric."
       }
     },
     "metric": {

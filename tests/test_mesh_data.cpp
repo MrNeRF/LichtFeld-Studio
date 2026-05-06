@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/mesh_data.hpp"
+#include "rendering/mesh2splat.hpp"
+#include "rendering/rendering.hpp"
 #include <gtest/gtest.h>
 
 using namespace lfs::core;
@@ -188,4 +190,141 @@ TEST_F(MeshDataTest, MaterialsAndSubmeshes) {
     EXPECT_EQ(mesh.submeshes[0].start_index, 0u);
     EXPECT_EQ(mesh.submeshes[0].index_count, 6u);
     EXPECT_EQ(mesh.submeshes[0].material_index, 0u);
+}
+
+TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {
+    auto mesh = make_triangle();
+
+    Mesh2SplatOptions options;
+    options.resolution_target = Mesh2SplatOptions::kMinResolution;
+
+    auto result = lfs::rendering::mesh_to_splat(mesh, options);
+
+    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_NE(*result, nullptr);
+    EXPECT_GT((*result)->size(), 0u);
+    EXPECT_EQ((*result)->get_max_sh_degree(), 0);
+    EXPECT_EQ((*result)->means_raw().device(), Device::CUDA);
+    EXPECT_EQ((*result)->means_raw().size(1), size_t{3});
+    EXPECT_EQ((*result)->sh0_raw().size(1), size_t{1});
+    EXPECT_EQ((*result)->sh0_raw().size(2), size_t{3});
+    EXPECT_EQ((*result)->opacity_raw().size(1), size_t{1});
+}
+
+TEST_F(MeshDataTest, RasterVideoCompositeUsesSubmeshMaterialsTexturesAndVertexColors) {
+    auto mesh = make_quad();
+
+    mesh.vertices = Tensor::from_vector(
+        {-1.0f, -1.0f, -3.0f,
+         0.0f, -1.0f, -3.0f,
+         0.0f, 1.0f, -3.0f,
+         -1.0f, 1.0f, -3.0f,
+         0.0f, -1.0f, -3.0f,
+         1.0f, -1.0f, -3.0f,
+         1.0f, 1.0f, -3.0f,
+         0.0f, 1.0f, -3.0f},
+        {size_t{8}, size_t{3}},
+        Device::CPU);
+    mesh.indices = Tensor::from_vector(
+        {0, 1, 2,
+         0, 2, 3,
+         4, 5, 6,
+         4, 6, 7},
+        {size_t{4}, size_t{3}},
+        Device::CPU);
+    mesh.normals = Tensor::from_vector(
+        {0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f,
+         0.0f, 0.0f, 1.0f},
+        {size_t{8}, size_t{3}},
+        Device::CPU);
+    mesh.texcoords = Tensor::from_vector(
+        {0.0f, 0.0f,
+         1.0f, 0.0f,
+         1.0f, 1.0f,
+         0.0f, 1.0f,
+         0.0f, 0.0f,
+         1.0f, 0.0f,
+         1.0f, 1.0f,
+         0.0f, 1.0f},
+        {size_t{8}, size_t{2}},
+        Device::CPU);
+    mesh.colors = Tensor::from_vector(
+        {1.0f, 0.0f, 0.0f, 1.0f,
+         1.0f, 0.0f, 0.0f, 1.0f,
+         1.0f, 0.0f, 0.0f, 1.0f,
+         1.0f, 0.0f, 0.0f, 1.0f,
+         1.0f, 1.0f, 1.0f, 1.0f,
+         1.0f, 1.0f, 1.0f, 1.0f,
+         1.0f, 1.0f, 1.0f, 1.0f,
+         1.0f, 1.0f, 1.0f, 1.0f},
+        {size_t{8}, size_t{4}},
+        Device::CPU);
+
+    Material vertex_color_material;
+    vertex_color_material.base_color = glm::vec4(1.0f);
+    Material textured_material;
+    textured_material.base_color = glm::vec4(1.0f);
+    textured_material.albedo_tex = 1;
+    mesh.materials = {vertex_color_material, textured_material};
+    mesh.submeshes = {{0, 6, 0}, {6, 6, 1}};
+    lfs::core::TextureImage green_texture;
+    green_texture.width = 2;
+    green_texture.height = 2;
+    green_texture.channels = 4;
+    green_texture.pixels = {
+        0, 255, 0, 255, 0, 255, 0, 255,
+        0, 255, 0, 255, 0, 255, 0, 255};
+    mesh.texture_images = {std::move(green_texture)};
+
+    auto engine = lfs::rendering::RenderingEngine::createRasterOnly();
+    auto init = engine->initializeRasterOnly();
+    ASSERT_TRUE(init.has_value()) << init.error();
+
+    const lfs::rendering::ViewportData viewport{
+        .rotation = glm::mat3(1.0f),
+        .translation = glm::vec3(0.0f),
+        .size = {64, 64},
+        .focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM,
+        .orthographic = true,
+        .ortho_scale = 24.0f};
+    const lfs::rendering::FrameView frame_view{
+        .rotation = viewport.rotation,
+        .translation = viewport.translation,
+        .size = viewport.size,
+        .focal_length_mm = viewport.focal_length_mm,
+        .orthographic = viewport.orthographic,
+        .ortho_scale = viewport.ortho_scale,
+        .background_color = glm::vec3(0.0f)};
+    lfs::rendering::VideoCompositeFrameRequest request{
+        .viewport = viewport,
+        .frame_view = frame_view,
+        .background_color = glm::vec3(0.0f),
+        .meshes = {lfs::rendering::MeshFrameItem{
+            .mesh = &mesh,
+            .transform = glm::mat4(1.0f),
+            .options = {
+                .light_intensity = 0.0f,
+                .ambient = 2.0f,
+                .backface_culling = false}}}};
+
+    auto rendered = engine->renderVideoCompositeFrame(std::nullopt, request);
+    ASSERT_TRUE(rendered.has_value()) << rendered.error();
+    auto image = rendered->cpu().contiguous();
+    ASSERT_EQ(image.ndim(), 3);
+    ASSERT_EQ(image.size(0), size_t{3});
+    auto acc = image.accessor<float, 3>();
+
+    const glm::vec3 left(acc(0, 32, 20), acc(1, 32, 20), acc(2, 32, 20));
+    const glm::vec3 right(acc(0, 32, 44), acc(1, 32, 44), acc(2, 32, 44));
+
+    EXPECT_GT(left.r, left.g + 0.2f);
+    EXPECT_GT(left.r, left.b + 0.2f);
+    EXPECT_GT(right.g, right.r + 0.2f);
+    EXPECT_GT(right.g, right.b + 0.2f);
 }

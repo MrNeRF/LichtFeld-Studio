@@ -80,6 +80,16 @@ namespace lfs::core {
             break;
         }
 
+        switch (type) {
+        case MutationType::NODE_ADDED:
+        case MutationType::NODE_REMOVED:
+        case MutationType::MODEL_CHANGED:
+            resizeSelectionIfSizeMismatch(currentSelectionCapacity());
+            break;
+        default:
+            break;
+        }
+
         if (transaction_depth_ == 0) {
             flushMutations();
         }
@@ -316,6 +326,7 @@ namespace lfs::core {
 
         cached_combined_.reset();
         cached_transform_indices_.reset();
+        cached_visible_selection_indices_.reset();
         cached_transforms_.clear();
         model_cache_valid_.store(false, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
@@ -456,11 +467,69 @@ namespace lfs::core {
     size_t Scene::getTotalGaussianCount() const {
         size_t total = 0;
         for (const auto& node : nodes_) {
-            if (node->visible) {
+            if (node->type == NodeType::SPLAT && isNodeEffectivelyVisible(node->id)) {
                 total += node->gaussian_count.load(std::memory_order_acquire);
             }
         }
         return total;
+    }
+
+    size_t Scene::getSelectionGaussianCount() const {
+        size_t total = 0;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::SPLAT) {
+                total += node->gaussian_count.load(std::memory_order_acquire);
+            }
+        }
+        return total;
+    }
+
+    void Scene::resizeSelectionIfSizeMismatch(const size_t expected_size) {
+        std::shared_ptr<lfs::core::Tensor> replacement;
+        bool changed = false;
+        bool has_selection = false;
+        int selection_count = 0;
+        {
+            std::unique_lock lock(selection_mutex_);
+            if (selection_mask_ && selection_mask_->is_valid() &&
+                selection_mask_->numel() != expected_size) {
+                LOG_WARN("Resizing selection_mask after topology change: scene has {}, mask has {}",
+                         expected_size, selection_mask_->numel());
+                if (expected_size > 0) {
+                    auto normalized = lfs::core::Tensor::zeros(
+                        {expected_size}, selection_mask_->device(), selection_mask_->dtype());
+                    const size_t copy_count = std::min(expected_size, selection_mask_->numel());
+                    if (copy_count > 0 && selection_mask_->ndim() == 1) {
+                        normalized.slice(0, 0, copy_count) =
+                            selection_mask_->slice(0, 0, copy_count);
+                    }
+                    replacement = std::make_shared<lfs::core::Tensor>(std::move(normalized));
+                    selection_mask_ = replacement;
+                    selection_count =
+                        static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
+                    has_selection = selection_count > 0;
+                    has_selection_ = has_selection;
+                } else {
+                    selection_mask_.reset();
+                    selection_count = 0;
+                    has_selection = false;
+                    has_selection_ = false;
+                }
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            pending_mutations_ |= static_cast<uint32_t>(MutationType::SELECTION_CHANGED);
+            events::state::SelectionChanged{
+                .has_selection = has_selection,
+                .count = selection_count}
+                .emit();
+        }
+    }
+
+    size_t Scene::currentSelectionCapacity() const {
+        return getSelectionGaussianCount();
     }
 
     std::vector<const SceneNode*> Scene::getNodes() const {
@@ -542,6 +611,7 @@ namespace lfs::core {
             return;
 
         if (consolidated_ && cached_combined_) {
+            cached_visible_selection_indices_.reset();
             model_cache_valid_.store(true, std::memory_order_release);
             return;
         }
@@ -551,10 +621,21 @@ namespace lfs::core {
         single_node_model_ = nullptr;
 
         std::vector<const SceneNode*> visible_nodes;
+        std::vector<size_t> visible_selection_offsets;
+        size_t full_selection_count = 0;
         for (const auto& node : nodes_) {
+            if (node->type != NodeType::SPLAT) {
+                continue;
+            }
+
+            const size_t node_size = node->model
+                                         ? static_cast<size_t>(node->model->size())
+                                         : node->gaussian_count.load(std::memory_order_acquire);
             if (node->model && isNodeEffectivelyVisible(node->id)) {
                 visible_nodes.push_back(node.get());
+                visible_selection_offsets.push_back(full_selection_count);
             }
+            full_selection_count += node_size;
         }
 
         LOG_DEBUG("rebuildModelCache: {} visible of {} nodes", visible_nodes.size(), nodes_.size());
@@ -562,6 +643,7 @@ namespace lfs::core {
         if (visible_nodes.empty()) {
             cached_combined_.reset();
             cached_transform_indices_.reset();
+            cached_visible_selection_indices_.reset();
             model_cache_valid_.store(true, std::memory_order_release);
             transform_cache_valid_.store(false, std::memory_order_release);
             return;
@@ -575,6 +657,18 @@ namespace lfs::core {
             const size_t n = node->model->size();
             cached_transform_indices_ = std::make_shared<lfs::core::Tensor>(
                 lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
+            if (n == full_selection_count && visible_selection_offsets[0] == 0) {
+                cached_visible_selection_indices_.reset();
+            } else {
+                std::vector<int> visible_indices(n);
+                for (size_t i = 0; i < n; ++i) {
+                    visible_indices[i] = static_cast<int>(visible_selection_offsets[0] + i);
+                }
+                cached_visible_selection_indices_ = std::make_shared<lfs::core::Tensor>(
+                    lfs::core::Tensor::from_vector(
+                        visible_indices, {n}, lfs::core::Device::CPU)
+                        .cuda());
+            }
 
             LOG_DEBUG("Single node: {} ({} gaussians)", node->name, n);
             model_cache_valid_.store(true, std::memory_order_release);
@@ -670,6 +764,22 @@ namespace lfs::core {
 
         cached_transform_indices_ = std::make_shared<Tensor>(
             Tensor::from_vector(transform_indices_data, {stats.total_gaussians}, lfs::core::Device::CPU).cuda());
+        if (stats.total_gaussians == full_selection_count) {
+            cached_visible_selection_indices_.reset();
+        } else {
+            std::vector<int> visible_indices(stats.total_gaussians);
+            size_t visible_offset = 0;
+            for (size_t i = 0; i < visible_nodes.size(); ++i) {
+                const size_t global_offset = visible_selection_offsets[i];
+                const size_t size = cached_sizes[i];
+                for (size_t j = 0; j < size; ++j) {
+                    visible_indices[visible_offset + j] = static_cast<int>(global_offset + j);
+                }
+                visible_offset += size;
+            }
+            cached_visible_selection_indices_ = std::make_shared<Tensor>(
+                Tensor::from_vector(visible_indices, {stats.total_gaussians}, lfs::core::Device::CPU).cuda());
+        }
 
         cached_combined_ = std::make_unique<lfs::core::SplatData>(
             stats.max_sh_degree,
@@ -715,6 +825,30 @@ namespace lfs::core {
     std::shared_ptr<lfs::core::Tensor> Scene::getTransformIndices() const {
         rebuildCacheIfNeeded();
         return cached_transform_indices_;
+    }
+
+    std::shared_ptr<lfs::core::Tensor> Scene::getVisibleSelectionIndices() const {
+        rebuildCacheIfNeeded();
+        return cached_visible_selection_indices_;
+    }
+
+    std::shared_ptr<lfs::core::Tensor> Scene::getVisibleSelectionMask() const {
+        const auto selection = getSelectionMask();
+        if (!selection || !selection->is_valid()) {
+            return nullptr;
+        }
+
+        const auto* model = getCombinedModel();
+        if (!model || static_cast<size_t>(model->size()) == selection->numel()) {
+            return selection;
+        }
+
+        const auto visible_indices = getVisibleSelectionIndices();
+        if (!visible_indices || !visible_indices->is_valid() ||
+            visible_indices->numel() != static_cast<size_t>(model->size())) {
+            return nullptr;
+        }
+        return std::make_shared<lfs::core::Tensor>(selection->index_select(0, *visible_indices).contiguous());
     }
 
     int Scene::getVisibleNodeIndex(const std::string& name) const {
@@ -826,15 +960,20 @@ namespace lfs::core {
     }
 
     std::shared_ptr<lfs::core::Tensor> Scene::getSelectionMask() const {
+        const size_t expected_size = currentSelectionCapacity();
         std::shared_lock lock(selection_mutex_);
         if (!has_selection_) {
+            return nullptr;
+        }
+        if (!selection_mask_ || !selection_mask_->is_valid() ||
+            selection_mask_->numel() != expected_size) {
             return nullptr;
         }
         return selection_mask_;
     }
 
     void Scene::setSelection(const std::vector<size_t>& selected_indices) {
-        const size_t total = getTotalGaussianCount();
+        const size_t total = currentSelectionCapacity();
         if (total == 0) {
             clearSelection();
             return;
@@ -878,6 +1017,22 @@ namespace lfs::core {
     void Scene::setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask) {
         int count = 0;
         bool has_selection = false;
+        const size_t expected_size = currentSelectionCapacity();
+        if (mask && mask->is_valid() && mask->numel() > 0 &&
+            mask->numel() != expected_size) {
+            const auto* visible_model = getCombinedModel();
+            const auto visible_indices = getVisibleSelectionIndices();
+            if (visible_model && static_cast<size_t>(visible_model->size()) == mask->numel() &&
+                visible_indices && visible_indices->is_valid() && visible_indices->numel() == mask->numel()) {
+                auto expanded = lfs::core::Tensor::zeros({expected_size}, mask->device(), mask->dtype());
+                expanded.index_copy_(0, *visible_indices, *mask);
+                mask = std::make_shared<lfs::core::Tensor>(std::move(expanded));
+            } else {
+                LOG_WARN("Ignoring selection_mask with stale size: scene has {}, mask has {}",
+                         expected_size, mask->numel());
+                mask.reset();
+            }
+        }
         {
             std::unique_lock lock(selection_mutex_);
             selection_mask_ = std::move(mask);
@@ -909,16 +1064,12 @@ namespace lfs::core {
     }
 
     bool Scene::hasSelection() const {
-        std::shared_lock lock(selection_mutex_);
-        return has_selection_;
+        return getSelectionMask() != nullptr;
     }
 
     Scene::SelectionStateMetadata Scene::captureSelectionStateMetadata() const {
         SelectionStateMetadata metadata;
-        {
-            std::shared_lock lock(selection_mutex_);
-            metadata.has_selection = has_selection_;
-        }
+        metadata.has_selection = hasSelection();
         metadata.groups = selection_groups_;
         metadata.active_group_id = active_selection_group_;
         metadata.next_group_id = next_group_id_;
@@ -927,12 +1078,9 @@ namespace lfs::core {
 
     Scene::SelectionStateSnapshot Scene::captureSelectionState() const {
         SelectionStateSnapshot snapshot;
-        {
-            std::shared_lock lock(selection_mutex_);
-            snapshot.has_selection = has_selection_;
-            if (selection_mask_ && selection_mask_->is_valid()) {
-                snapshot.mask = std::make_shared<lfs::core::Tensor>(selection_mask_->clone());
-            }
+        if (const auto mask = getSelectionMask(); mask && mask->is_valid()) {
+            snapshot.has_selection = true;
+            snapshot.mask = std::make_shared<lfs::core::Tensor>(mask->clone());
         }
         const auto metadata = captureSelectionStateMetadata();
         snapshot.groups = metadata.groups;
@@ -944,8 +1092,15 @@ namespace lfs::core {
 
     void Scene::restoreSelectionState(const SelectionStateSnapshot& snapshot) {
         int count = 0;
+        const size_t expected_size = currentSelectionCapacity();
         const bool has_selection =
-            snapshot.has_selection && snapshot.mask && snapshot.mask->is_valid() && snapshot.mask->numel() > 0;
+            snapshot.has_selection && snapshot.mask && snapshot.mask->is_valid() &&
+            snapshot.mask->numel() > 0 && snapshot.mask->numel() == expected_size;
+        if (snapshot.has_selection && snapshot.mask && snapshot.mask->is_valid() &&
+            snapshot.mask->numel() > 0 && snapshot.mask->numel() != expected_size) {
+            LOG_WARN("Ignoring restored selection_mask with stale size: scene has {}, mask has {}",
+                     expected_size, snapshot.mask->numel());
+        }
 
         {
             std::unique_lock lock(selection_mutex_);

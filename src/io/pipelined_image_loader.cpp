@@ -186,6 +186,19 @@ namespace lfs::io {
             return signature[0] == 0xFF && signature[1] == 0xD8 && signature[2] == 0xFF;
         }
 
+        [[nodiscard]] bool is_regular_file_no_throw(const std::filesystem::path& path) {
+            if (path.empty()) {
+                return false;
+            }
+            std::error_code ec;
+            const bool exists = std::filesystem::exists(path, ec);
+            if (ec || !exists) {
+                return false;
+            }
+            const bool regular = std::filesystem::is_regular_file(path, ec);
+            return !ec && regular;
+        }
+
         [[nodiscard]] lfs::core::Tensor decode_cached_rgb_tensor(
             const std::shared_ptr<NvCodecImageLoader>& nvcodec,
             const std::shared_ptr<std::vector<uint8_t>>& jpeg_data,
@@ -580,7 +593,7 @@ namespace lfs::io {
         const auto fs_path = get_fs_cache_path(cache_key);
         auto done_path = fs_path;
         done_path += ".done";
-        if (!std::filesystem::exists(fs_path) || !std::filesystem::exists(done_path))
+        if (!is_regular_file_no_throw(fs_path) || !is_regular_file_no_throw(done_path))
             return {};
 
         try {
@@ -733,6 +746,34 @@ namespace lfs::io {
                     request.mask_path.has_value() || request.extract_alpha_as_mask;
             }
 
+            auto fail_image_request = [&] {
+                {
+                    std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                    pending_pairs_.erase(request.sequence_id);
+                }
+                in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+            };
+
+            auto mark_mask_unavailable = [&] {
+                std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
+                    it->second.mask_expected = false;
+                    if (it->second.image.has_value()) {
+                        output_queue_.push({request.sequence_id,
+                                            std::move(*it->second.image),
+                                            std::nullopt,
+                                            it->second.stream});
+                        pending_pairs_.erase(it);
+                    }
+                }
+            };
+
+            if (!is_regular_file_no_throw(request.path)) {
+                LOG_DEBUG("[PipelinedImageLoader] Skipping missing image {}", lfs::core::path_to_utf8(request.path));
+                fail_image_request();
+                continue;
+            }
+
             if (request.extract_alpha_as_mask) {
                 const auto rgb_key = make_cache_key(request.path, request.params);
                 const auto alpha_key = make_mask_cache_key(request.path, request.params);
@@ -824,15 +865,17 @@ namespace lfs::io {
             } catch (const std::exception& e) {
                 LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());
                 // Clean up pending_pairs_ entry to prevent memory leak
-                {
-                    std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                    pending_pairs_.erase(request.sequence_id);
-                }
-                in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                fail_image_request();
                 continue; // Skip mask processing if image failed
             }
 
             if (request.mask_path) {
+                if (!is_regular_file_no_throw(*request.mask_path)) {
+                    LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
+                    mark_mask_unavailable();
+                    continue;
+                }
+
                 PrefetchedImage mask_result;
                 mask_result.sequence_id = request.sequence_id;
                 mask_result.path = *request.mask_path;
@@ -853,7 +896,11 @@ namespace lfs::io {
                         const auto fs_path = get_fs_cache_path(mask_result.cache_key);
                         auto done_path = fs_path;
                         done_path += ".done";
-                        if (std::filesystem::exists(fs_path) && std::filesystem::exists(done_path)) {
+                        std::error_code cache_ec;
+                        const bool cache_ready =
+                            std::filesystem::exists(fs_path, cache_ec) && !cache_ec &&
+                            std::filesystem::exists(done_path, cache_ec) && !cache_ec;
+                        if (cache_ready) {
                             auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
                             put_in_jpeg_cache(mask_result.cache_key, data);
                             mask_result.jpeg_data = data;
@@ -894,17 +941,7 @@ namespace lfs::io {
                 } catch (const std::exception& e) {
                     LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
                              lfs::core::path_to_utf8(*request.mask_path), e.what());
-                    std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                    if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
-                        it->second.mask_expected = false;
-                        if (it->second.image.has_value()) {
-                            output_queue_.push({request.sequence_id,
-                                                std::move(*it->second.image),
-                                                std::nullopt,
-                                                it->second.stream});
-                            pending_pairs_.erase(it);
-                        }
-                    }
+                    mark_mask_unavailable();
                 }
             }
         }

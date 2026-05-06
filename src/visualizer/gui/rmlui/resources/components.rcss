@@ -1072,3 +1072,19 @@ crf-curve {
     color: #1e1e2e;
     background-color: #89b4fa;
 }
+
+.frame-tooltip {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    border-width: 1dp;
+    border-radius: 3dp;
+    padding: 4dp 8dp;
+    font-size: 12dp;
+    max-width: 320dp;
+    pointer-events: none;
+}
+
+.frame-tooltip.visible {
+    display: block;
+}

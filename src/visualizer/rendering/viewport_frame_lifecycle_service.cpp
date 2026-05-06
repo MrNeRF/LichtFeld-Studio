@@ -7,20 +7,24 @@
 
 namespace lfs::vis {
 
+    namespace {
+        constexpr int kResizeDebounceFrames = 3;
+    }
+
     ViewportFrameLifecycleService::ResizeResult
     ViewportFrameLifecycleService::handleViewportResize(const glm::ivec2& current_size) {
-        constexpr int kResizeDebounceFrames = 3;
-
         ResizeResult result;
         const bool resize_is_active = resize_active_.load(std::memory_order_relaxed);
 
         if (current_size != last_viewport_size_) {
+            const bool had_viewport_size = last_viewport_size_.x > 0 && last_viewport_size_.y > 0;
             last_viewport_size_ = current_size;
-            if (resize_is_active) {
-                result.dirty = DirtyFlag::OVERLAY;
-                resize_debounce_ = kResizeDebounceFrames;
-            } else {
+            if (!had_viewport_size) {
+                resize_debounce_ = 0;
                 result.dirty = DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY;
+            } else {
+                resize_debounce_ = kResizeDebounceFrames;
+                result.dirty = DirtyFlag::OVERLAY;
             }
             return result;
         }
@@ -75,9 +79,6 @@ namespace lfs::vis {
             (has_renderable_content || splitViewEnabled(split_view_mode))) {
             dirty |= DirtyFlag::ALL;
         }
-        if (splitViewEnabled(split_view_mode)) {
-            dirty |= DirtyFlag::SPLIT_VIEW;
-        }
         return dirty;
     }
 
@@ -92,6 +93,11 @@ namespace lfs::vis {
         }
 
         return DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY;
+    }
+
+    DirtyMask ViewportFrameLifecycleService::deferViewportRefresh() {
+        resize_debounce_ = kResizeDebounceFrames;
+        return DirtyFlag::OVERLAY;
     }
 
 } // namespace lfs::vis

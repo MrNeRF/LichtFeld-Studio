@@ -41,6 +41,10 @@ namespace lfs::vis {
 
 #ifdef PROJECT_ROOT_PATH
         search_paths.push_back(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/gui/assets" / asset_name);
+        if (asset_name == "fonts/JetBrainsMono-Regular.ttf") {
+            search_paths.push_back(std::filesystem::path(PROJECT_ROOT_PATH) /
+                                   "src/rendering/resources/assets/JetBrainsMono-Regular.ttf");
+        }
 #endif
 
         // Try each path
@@ -57,37 +61,6 @@ namespace lfs::vis {
         }
         error_msg += "\nExecutable directory: " + lfs::core::path_to_utf8(lfs::core::getExecutableDir());
 
-        throw std::runtime_error(error_msg);
-    }
-
-    inline std::filesystem::path getShaderPath(const std::string& shader_name) {
-        std::vector<std::filesystem::path> search_paths;
-
-        // Primary: Use runtime-detected resource directory
-        search_paths.push_back(lfs::core::getShadersDir() / shader_name);
-
-#ifdef VISUALIZER_SHADER_PATH
-        search_paths.push_back(std::filesystem::path(VISUALIZER_SHADER_PATH) / shader_name);
-#endif
-
-#ifdef VISUALIZER_SOURCE_SHADER_PATH
-        search_paths.push_back(std::filesystem::path(VISUALIZER_SOURCE_SHADER_PATH) / shader_name);
-#endif
-
-#ifdef PROJECT_ROOT_PATH
-        search_paths.push_back(std::filesystem::path(PROJECT_ROOT_PATH) / "src/visualizer/resources/shaders" / shader_name);
-#endif
-
-        for (const auto& path : search_paths) {
-            if (std::filesystem::exists(path)) {
-                return path;
-            }
-        }
-
-        std::string error_msg = "Cannot find shader: " + shader_name + "\nSearched in:\n";
-        for (const auto& path : search_paths) {
-            error_msg += "  - " + lfs::core::path_to_utf8(path) + "\n";
-        }
         throw std::runtime_error(error_msg);
     }
 

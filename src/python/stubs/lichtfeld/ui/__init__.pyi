@@ -1633,7 +1633,7 @@ class UILayout:
         """End a disabled UI region"""
 
     def image(self, texture_id: int, size: tuple[float, float], tint: object | None = None) -> None:
-        """Draw an image from a GL texture ID"""
+        """Draw an image from a UI texture ID"""
 
     def image_uv(self, texture_id: int, size: tuple[float, float], uv0: tuple[float, float], uv1: tuple[float, float], tint: object | None = None) -> None:
         """Draw an image with custom UV coordinates"""
@@ -1648,7 +1648,7 @@ class UILayout:
         """Draw a DynamicTexture with automatic UV scaling"""
 
     def image_tensor(self, label: str, tensor: lichtfeld.Tensor, size: tuple[float, float], tint: object | None = None) -> None:
-        """Draw a tensor as an image, caching the GL texture by label"""
+        """Draw a tensor as an image, caching the UI texture by label"""
 
     def begin_drag_drop_source(self) -> bool:
         """Begin a drag-drop source on the last item, returns True if dragging"""
@@ -2162,15 +2162,15 @@ def save_node_to_disk(node_name: str) -> None:
     """
 
 def load_image_texture(path: str) -> tuple:
-    """Load image as GL texture, returns (texture_id, width, height)"""
+    """Load image as UI texture, returns (texture_id, width, height)"""
 
 def load_thumbnail(path: str, max_size: int) -> tuple:
     """
-    Load downscaled image as GL texture, returns (texture_id, width, height)
+    Load downscaled image as UI texture, returns (texture_id, width, height)
     """
 
 def release_texture(texture_id: int) -> None:
-    """Release an OpenGL texture"""
+    """Release a UI texture"""
 
 def get_image_info(path: str) -> tuple:
     """
@@ -2189,7 +2189,7 @@ def is_preload_ready(path: str) -> bool:
     """Check if preloaded image is ready"""
 
 def get_preloaded_texture(path: str) -> tuple:
-    """Get preloaded image as GL texture, returns (texture_id, width, height)"""
+    """Get preloaded image as UI texture, returns (texture_id, width, height)"""
 
 def cancel_preload(path: str) -> None:
     """Cancel a pending preload"""
@@ -2391,7 +2391,7 @@ def is_thumbnail_ready(video_id: str) -> bool:
     """Check if a thumbnail is ready to be displayed"""
 
 def get_thumbnail_texture(video_id: str) -> int:
-    """Get the OpenGL texture ID for a downloaded thumbnail (0 if not ready)"""
+    """Get the UI texture ID for a downloaded thumbnail (0 if not ready)"""
 
 def load_icon(name: str) -> int:
     """Load icon by name (e.g., 'selection.png'), returns texture ID"""

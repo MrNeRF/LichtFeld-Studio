@@ -29,10 +29,6 @@
       <span class="info-key">@tr:about.build_info.platform</span>
       <span class="info-val">{{platform}}</span>
     </div>
-    <div class="info-row">
-      <span class="info-key">@tr:about.build_info.cuda_gl_interop</span>
-      <span class="info-val">{{cuda_gl_interop}}</span>
-    </div>
   </div>
 
   <span class="section-label">@tr:about.links</span>

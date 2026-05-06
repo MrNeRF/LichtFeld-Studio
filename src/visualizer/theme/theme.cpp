@@ -9,6 +9,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
@@ -877,8 +878,15 @@ namespace lfs::vis {
         void loadThemesFromFiles() {
             g_theme_presets = loadThemeCatalogFromManifest();
 
+            std::vector<std::future<void>> jobs;
+            jobs.reserve(g_theme_presets.size());
             for (auto& preset : g_theme_presets) {
-                loadThemePreset(preset);
+                jobs.emplace_back(std::async(std::launch::async, [&preset]() {
+                    loadThemePreset(preset);
+                }));
+            }
+            for (auto& job : jobs) {
+                job.get();
             }
 
             g_themes_loaded = true;

@@ -34,6 +34,7 @@ namespace lfs::vis {
                                                   bool has_renderable_content,
                                                   SplitViewMode split_view_mode) const;
         [[nodiscard]] DirtyMask setViewportResizeActive(bool active);
+        [[nodiscard]] DirtyMask deferViewportRefresh();
         [[nodiscard]] bool isResizeDeferring() const {
             return resize_active_.load(std::memory_order_relaxed) || resize_debounce_ > 0;
         }

@@ -4,13 +4,10 @@
 
 #include "core/logger.hpp"
 #include "model_renderability.hpp"
-#include "rendering/gl_state_guard.hpp"
-#include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
-#include <glad/glad.h>
 #include <shared_mutex>
 
 namespace lfs::vis {
@@ -27,76 +24,23 @@ namespace lfs::vis {
             return lock;
         }
 
-        [[nodiscard]] bool uploadPreviewImageToTexture(const lfs::core::Tensor& image,
-                                                       const unsigned int texture,
-                                                       const glm::ivec2 expected_size) {
-            if (texture == 0 || !image.is_valid() || image.ndim() != 3) {
-                return false;
-            }
-
-            const auto layout = lfs::rendering::detectImageLayout(image);
-            if (layout == lfs::rendering::ImageLayout::Unknown) {
-                LOG_ERROR("Preview upload received unsupported tensor shape [{}, {}, {}]",
-                          image.size(0), image.size(1), image.size(2));
-                return false;
-            }
-
-            lfs::core::Tensor formatted = (layout == lfs::rendering::ImageLayout::HWC)
-                                              ? image
-                                              : image.permute({1, 2, 0}).contiguous();
-            if (formatted.device() == lfs::core::Device::CUDA) {
-                formatted = formatted.cpu();
-            }
-            formatted = formatted.contiguous();
-
-            if (formatted.dtype() != lfs::core::DataType::UInt8) {
-                formatted = (formatted.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8);
-                formatted = formatted.contiguous();
-            }
-
-            const int height = static_cast<int>(formatted.size(0));
-            const int width = static_cast<int>(formatted.size(1));
-            const int channels = static_cast<int>(formatted.size(2));
-            if (width != expected_size.x || height != expected_size.y || !formatted.ptr<unsigned char>()) {
-                LOG_ERROR("Preview upload dimension mismatch: {}x{} vs {}x{}",
-                          width, height, expected_size.x, expected_size.y);
-                return false;
-            }
-
-            const GLenum format = (channels == 1)   ? GL_RED
-                                  : (channels == 4) ? GL_RGBA
-                                                    : GL_RGB;
-            if (channels != 1 && channels != 3 && channels != 4) {
-                LOG_ERROR("Preview upload received unsupported channel count {}", channels);
-                return false;
-            }
-
-            const lfs::rendering::GLStateGuard state_guard;
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, texture);
-            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
-                            format, GL_UNSIGNED_BYTE, formatted.ptr<unsigned char>());
-
-            if (const GLenum gl_error = glGetError(); gl_error != GL_NO_ERROR) {
-                LOG_ERROR("Preview texture upload failed with GL error {}", static_cast<unsigned int>(gl_error));
-                return false;
-            }
-
-            return true;
-        }
     } // namespace
 
     RenderingManager::ContentBounds RenderingManager::getContentBounds(const glm::ivec2& viewport_size) const {
         ContentBounds bounds{0.0f, 0.0f, static_cast<float>(viewport_size.x), static_cast<float>(viewport_size.y), false};
 
         if (split_view_service_.isGTComparisonActive(settings_)) {
-            const auto content_dims = split_view_service_.gtContentDimensions();
-            if (!content_dims) {
+            glm::ivec2 content_dims{0, 0};
+            if (const auto service_dims = split_view_service_.gtContentDimensions()) {
+                content_dims = *service_dims;
+            } else {
+                content_dims = vulkan_gt_comparison_content_size_;
+            }
+            if (content_dims.x <= 0 || content_dims.y <= 0) {
                 return bounds;
             }
 
-            const float content_aspect = static_cast<float>(content_dims->x) / content_dims->y;
+            const float content_aspect = static_cast<float>(content_dims.x) / content_dims.y;
             const float viewport_aspect = static_cast<float>(viewport_size.x) / viewport_size.y;
 
             if (content_aspect > viewport_aspect) {
@@ -241,6 +185,10 @@ namespace lfs::vis {
             return image;
         }
 
+        if (viewport_artifact_service_.hasLazyCapture()) {
+            return viewport_artifact_service_.resolveLazyCapture();
+        }
+
         if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {
             return {};
         }
@@ -283,100 +231,21 @@ namespace lfs::vis {
         return hovered_camera;
     }
 
-    bool RenderingManager::renderPreviewFrame(SceneManager* const scene_manager,
-                                              const glm::mat3& rotation,
-                                              const glm::vec3& position,
-                                              const float focal_length_mm,
-                                              const unsigned int fbo,
-                                              [[maybe_unused]] const unsigned int texture,
-                                              const int width, const int height) {
-        if (!initialized_ || !engine_) {
-            return false;
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(SceneManager* const scene_manager,
+                                                                            const glm::mat3& rotation,
+                                                                            const glm::vec3& position,
+                                                                            const float focal_length_mm,
+                                                                            const int width,
+                                                                            const int height) {
+        if (!initialized_ || !engine_ || width <= 0 || height <= 0) {
+            return {};
         }
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
         if (!hasRenderableGaussians(model)) {
-            return false;
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glViewport(0, 0, width, height);
-        const auto& bg = settings_.background_color;
-        glClearColor(bg.r, bg.g, bg.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        const lfs::rendering::FrameView frame_view{
-            .rotation = rotation,
-            .translation = position,
-            .size = {width, height},
-            .focal_length_mm = focal_length_mm,
-            .intrinsics_override = std::nullopt,
-            .background_color = bg};
-
-        bool rendered = false;
-        if (settings_.point_cloud_mode) {
-            const lfs::rendering::PointCloudRenderRequest request{
-                .frame_view = frame_view,
-                .render =
-                    {.scaling_modifier = settings_.scaling_modifier,
-                     .voxel_size = settings_.voxel_size,
-                     .equirectangular = settings_.equirectangular},
-                .scene =
-                    {.model_transforms = &render_state.model_transforms,
-                     .transform_indices = render_state.transform_indices},
-                .filters = {}};
-
-            if (const auto result = engine_->renderPointCloudGpuFrame(*model, request)) {
-                engine_->presentGpuFrame(*result, {0, 0}, {width, height});
-                rendered = true;
-            }
-        } else {
-            const lfs::rendering::ViewportRenderRequest request{
-                .frame_view = frame_view,
-                .scaling_modifier = settings_.scaling_modifier,
-                .antialiasing = false,
-                .sh_degree = 0,
-                .gut = settings_.gut,
-                .equirectangular = settings_.equirectangular,
-                .scene =
-                    {.model_transforms = &render_state.model_transforms,
-                     .transform_indices = render_state.transform_indices,
-                     .node_visibility_mask = render_state.node_visibility_mask},
-                .filters = {},
-                .overlay = {}};
-
-            if (const auto result = engine_->renderGaussiansGpuFrame(*model, request)) {
-                engine_->presentGpuFrame(result->frame, {0, 0}, {width, height});
-                rendered = true;
-            }
-        }
-
-        if (rendered) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            return true;
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        return false;
-    }
-
-    bool RenderingManager::renderPreviewTexture(SceneManager* const scene_manager,
-                                                const glm::mat3& rotation,
-                                                const glm::vec3& position,
-                                                const float focal_length_mm,
-                                                const unsigned int texture,
-                                                const int width, const int height) {
-        if (!initialized_ || !engine_ || texture == 0) {
-            return false;
-        }
-
-        auto render_lock = acquireLiveModelRenderLock(scene_manager);
-        const auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
-        const auto* const model = render_state.combined_model;
-        if (!hasRenderableGaussians(model)) {
-            return false;
+            return {};
         }
 
         const auto& bg = settings_.background_color;
@@ -389,21 +258,7 @@ namespace lfs::vis {
             .background_color = bg};
 
         if (settings_.point_cloud_mode) {
-            const lfs::rendering::PointCloudRenderRequest request{
-                .frame_view = frame_view,
-                .render =
-                    {.scaling_modifier = settings_.scaling_modifier,
-                     .voxel_size = settings_.voxel_size,
-                     .equirectangular = settings_.equirectangular},
-                .scene =
-                    {.model_transforms = &render_state.model_transforms,
-                     .transform_indices = render_state.transform_indices},
-                .filters = {}};
-
-            auto result = engine_->renderPointCloudImage(*model, request);
-            render_lock.reset();
-            return result && result->image &&
-                   uploadPreviewImageToTexture(*result->image, texture, {width, height});
+            LOG_TRACE("Preview image point-cloud mode is served by the legacy renderer; using Gaussian raster preview");
         }
 
         const lfs::rendering::ViewportRenderRequest request{
@@ -411,7 +266,9 @@ namespace lfs::vis {
             .scaling_modifier = settings_.scaling_modifier,
             .antialiasing = false,
             .sh_degree = 0,
-            .gut = settings_.gut,
+            .raster_backend = settings_.raster_backend,
+            .gut = settings_.gut ||
+                   lfs::rendering::isGutBackend(settings_.raster_backend),
             .equirectangular = settings_.equirectangular,
             .scene =
                 {.model_transforms = &render_state.model_transforms,
@@ -422,8 +279,7 @@ namespace lfs::vis {
 
         auto result = engine_->renderGaussiansImage(*model, request);
         render_lock.reset();
-        return result && result->image &&
-               uploadPreviewImageToTexture(*result->image, texture, {width, height});
+        return result ? result->image : nullptr;
     }
 
     float RenderingManager::getDepthAtPixel(const int x, const int y,

@@ -8,12 +8,13 @@
 #include "io/video_frame_extractor.hpp"
 #include "io/video_player.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
+#include "visualizer/gui/vulkan_ui_texture.hpp"
 
 #include <array>
 #include <atomic>
 #include <filesystem>
 #include <functional>
-#include <glad/glad.h>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -112,7 +113,7 @@ namespace lfs::gui {
         bool show_completion_message_ = false;
 
         std::unique_ptr<io::VideoPlayer> player_;
-        GLuint preview_texture_ = 0;
+        std::unique_ptr<lfs::vis::gui::VulkanUiTexture> preview_texture_;
         int preview_texture_width_ = 0;
         int preview_texture_height_ = 0;
         bool texture_needs_update_ = true;

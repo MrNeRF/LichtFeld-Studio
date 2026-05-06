@@ -20,7 +20,7 @@ namespace {
 
 } // namespace
 
-TEST(ArgumentParserTest, TrainingDefaultsDoNotApplyMaxWidthCap) {
+TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     const auto data_path = make_test_path("lfs_arg_parser_default_data");
     const auto output_path = make_test_path("lfs_arg_parser_default_output");
 
@@ -35,7 +35,7 @@ TEST(ArgumentParserTest, TrainingDefaultsDoNotApplyMaxWidthCap) {
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
-    EXPECT_EQ((*parsed)->dataset.max_width, 0);
+    EXPECT_EQ((*parsed)->dataset.max_width, 3840);
     EXPECT_EQ((*parsed)->dataset.resize_factor, 1);
 }
 

@@ -18,6 +18,7 @@
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include "gui/vulkan_ui_texture.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "py_command.hpp"
@@ -33,7 +34,6 @@
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
-#include "rendering/cuda_gl_interop.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/panel_registry.hpp"
@@ -108,7 +108,7 @@ namespace lfs::python {
         }
 
         // Icon cache for Python toolbar
-        std::unordered_map<std::string, unsigned int> g_icon_cache;
+        std::unordered_map<std::string, uint64_t> g_icon_cache;
         std::mutex g_icon_cache_mutex;
 
         // Plugin icon ownership tracking
@@ -116,7 +116,7 @@ namespace lfs::python {
         std::mutex g_plugin_icons_mutex;
 
         // Dynamic texture tracking
-        std::atomic<bool> g_gl_alive{true};
+        std::atomic<bool> g_texture_service_alive{true};
         std::mutex g_dynamic_textures_mutex;
 
         class PyDynamicTexture;
@@ -177,55 +177,51 @@ namespace lfs::python {
                 const int w = t.size(1);
                 const int h = t.size(0);
 
-                if (!interop_ || width_ != w || height_ != h) {
-                    interop_ = std::make_unique<rendering::CudaGLInteropTexture>();
-                    auto r = interop_->init(w, h);
-                    if (!r.has_value())
-                        throw std::runtime_error("Failed to initialize GL interop texture");
+                if (!texture_) {
+                    texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
                 }
 
-                auto r = interop_->updateFromTensor(t);
-                if (!r.has_value())
-                    throw std::runtime_error("Failed to update GL interop texture");
+                if (!texture_->upload(t, w, h) || !texture_->valid())
+                    throw std::runtime_error("Failed to update UI texture");
                 width_ = w;
                 height_ = h;
             }
 
             void destroy() {
-                if (!interop_)
+                if (!texture_)
                     return;
-                if (!g_gl_alive) {
-                    interop_.release();
-                } else if (lfs::python::on_gl_thread()) {
-                    interop_.reset();
+                if (!g_texture_service_alive) {
+                    texture_.release();
+                } else if (lfs::python::on_graphics_thread()) {
+                    texture_.reset();
                 } else {
-                    auto* raw = interop_.release();
-                    lfs::python::schedule_gl_callback([raw]() { delete raw; });
+                    auto* raw = texture_.release();
+                    lfs::python::schedule_graphics_callback([raw]() { delete raw; });
                 }
                 width_ = height_ = 0;
             }
 
-            std::unique_ptr<rendering::CudaGLInteropTexture> release_interop() {
+            std::unique_ptr<lfs::vis::gui::VulkanUiTexture> release_texture() {
                 width_ = height_ = 0;
-                return std::move(interop_);
+                return std::move(texture_);
             }
 
             uint64_t texture_id() const {
-                return interop_ ? static_cast<uint64_t>(interop_->getTextureID()) : 0;
+                return texture_ ? static_cast<uint64_t>(texture_->textureId()) : 0;
             }
 
             int width() const { return width_; }
             int height() const { return height_; }
-            bool valid() const { return interop_ != nullptr && width_ > 0 && height_ > 0; }
+            bool valid() const { return texture_ != nullptr && texture_->valid() && width_ > 0 && height_ > 0; }
 
             std::tuple<float, float> uv1() const {
-                if (!interop_)
+                if (!texture_)
                     return {1.0f, 1.0f};
-                return {interop_->getTexcoordScaleX(), interop_->getTexcoordScaleY()};
+                return {1.0f, 1.0f};
             }
 
         private:
-            std::unique_ptr<rendering::CudaGLInteropTexture> interop_;
+            std::unique_ptr<lfs::vis::gui::VulkanUiTexture> texture_;
             std::string plugin_name_;
             int width_ = 0;
             int height_ = 0;
@@ -347,10 +343,10 @@ namespace lfs::python {
             vis::op::undoHistory().push(std::move(entry));
         }
 
-        unsigned int load_icon_from_path(const std::filesystem::path& path, const std::string& cache_key) {
+        uint64_t load_icon_from_path(const std::filesystem::path& path, const std::string& cache_key) {
             const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
 
-            const auto result = lfs::python::create_gl_texture(data, width, height, channels);
+            const auto result = lfs::python::create_ui_texture(data, width, height, channels);
             lfs::core::free_image(data);
             const auto texture_id = result.texture_id;
 
@@ -364,7 +360,7 @@ namespace lfs::python {
 
         constexpr const char* DEFAULT_ICON = "default.png";
 
-        unsigned int load_default_icon() {
+        uint64_t load_default_icon() {
             {
                 std::lock_guard lock(g_icon_cache_mutex);
                 auto it = g_icon_cache.find(DEFAULT_ICON);
@@ -380,7 +376,7 @@ namespace lfs::python {
             }
         }
 
-        unsigned int load_icon_texture(const std::string& icon_name) {
+        uint64_t load_icon_texture(const std::string& icon_name) {
             {
                 std::lock_guard lock(g_icon_cache_mutex);
                 auto it = g_icon_cache.find(icon_name);
@@ -397,7 +393,7 @@ namespace lfs::python {
             }
         }
 
-        unsigned int load_scene_icon(const std::string& icon_name) {
+        uint64_t load_scene_icon(const std::string& icon_name) {
             const std::string cache_key = "scene/" + icon_name + ".png";
             {
                 std::lock_guard lock(g_icon_cache_mutex);
@@ -415,9 +411,9 @@ namespace lfs::python {
             }
         }
 
-        unsigned int load_plugin_icon(const std::string& icon_name,
-                                      const std::string& plugin_path,
-                                      const std::string& plugin_name) {
+        uint64_t load_plugin_icon(const std::string& icon_name,
+                                  const std::string& plugin_path,
+                                  const std::string& plugin_name) {
             const std::string cache_key = "plugin:" + plugin_name + ":" + icon_name;
 
             {
@@ -460,7 +456,7 @@ namespace lfs::python {
                 }
             }
 
-            std::vector<uint32_t> tex_ids;
+            std::vector<uint64_t> tex_ids;
             {
                 std::lock_guard lock(g_icon_cache_mutex);
                 for (const auto& key : keys_to_free) {
@@ -475,39 +471,39 @@ namespace lfs::python {
             if (tex_ids.empty())
                 return;
 
-            if (lfs::python::on_gl_thread()) {
+            if (lfs::python::on_graphics_thread()) {
                 for (auto id : tex_ids)
-                    lfs::python::delete_gl_texture(id);
+                    lfs::python::delete_ui_texture(id);
             } else {
-                lfs::python::schedule_gl_callback([ids = std::move(tex_ids)]() {
+                lfs::python::schedule_graphics_callback([ids = std::move(tex_ids)]() {
                     for (auto id : ids)
-                        lfs::python::delete_gl_texture(id);
+                        lfs::python::delete_ui_texture(id);
                 });
             }
         }
 
         void free_plugin_textures(const std::string& plugin_name) {
-            const bool gl = lfs::python::on_gl_thread();
-            std::vector<rendering::CudaGLInteropTexture*> deferred;
+            const bool graphics_thread = lfs::python::on_graphics_thread();
+            std::vector<lfs::vis::gui::VulkanUiTexture*> deferred;
             {
                 std::lock_guard lock(g_dynamic_textures_mutex);
                 auto it = g_plugin_textures.find(plugin_name);
                 if (it == g_plugin_textures.end())
                     return;
                 for (auto* tex : it->second) {
-                    if (gl) {
+                    if (graphics_thread) {
                         tex->destroy();
                     } else {
-                        auto interop = tex->release_interop();
-                        if (interop)
-                            deferred.push_back(interop.release());
+                        auto texture = tex->release_texture();
+                        if (texture)
+                            deferred.push_back(texture.release());
                     }
                     g_all_dynamic_textures.erase(tex);
                 }
                 g_plugin_textures.erase(it);
             }
             if (!deferred.empty()) {
-                lfs::python::schedule_gl_callback([ptrs = std::move(deferred)]() {
+                lfs::python::schedule_graphics_callback([ptrs = std::move(deferred)]() {
                     for (auto* p : ptrs)
                         delete p;
                 });
@@ -573,13 +569,13 @@ namespace lfs::python {
                 g_max_texture_size = lfs::python::get_max_texture_size();
         }
 
-        std::tuple<uint64_t, int, int> create_gl_texture_from_data(unsigned char* data, const int width, const int height, const int channels) {
+        std::tuple<uint64_t, int, int> create_ui_texture_from_data(unsigned char* data, const int width, const int height, const int channels) {
             if (!data || width <= 0 || height <= 0)
                 return {0, 0, 0};
 
             ensure_max_texture_size();
 
-            const auto result = lfs::python::create_gl_texture(data, width, height, channels);
+            const auto result = lfs::python::create_ui_texture(data, width, height, channels);
             return {static_cast<uint64_t>(result.texture_id), result.width, result.height};
         }
 
@@ -2670,7 +2666,7 @@ namespace lfs::python {
         }
 
         const bool clicked = lfs::vis::gui::widgets::IconButton(
-            id.c_str(), static_cast<unsigned int>(texture_id), btn_size, selected, id.c_str());
+            id.c_str(), static_cast<ImTextureID>(texture_id), btn_size, selected, id.c_str());
 
         if (disabled) {
             ImGui::EndDisabled();
@@ -3218,8 +3214,8 @@ namespace lfs::python {
     }
 
     void shutdown_dynamic_textures() {
-        assert(lfs::python::on_gl_thread());
-        lfs::python::flush_gl_callbacks();
+        assert(lfs::python::on_graphics_thread());
+        lfs::python::flush_graphics_callbacks();
         decltype(g_tensor_cache) cache_to_destroy;
         {
             std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3228,7 +3224,7 @@ namespace lfs::python {
             }
             g_all_dynamic_textures.clear();
             g_plugin_textures.clear();
-            g_gl_alive = false;
+            g_texture_service_alive = false;
             cache_to_destroy = std::move(g_tensor_cache);
         }
         // ~PyDynamicTexture destructors run here without holding the mutex
@@ -3288,7 +3284,8 @@ namespace lfs::python {
 
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
-        lfs::python::set_gl_thread_id(std::this_thread::get_id());
+        lfs::python::set_graphics_thread_id(std::this_thread::get_id());
+        g_texture_service_alive = true;
 
         // Call sub-registration functions
         register_ui_context(m);
@@ -3323,7 +3320,7 @@ namespace lfs::python {
                 Py_DECREF(obj);
             });
 
-            lfs::python::schedule_gl_callback([callable_ref]() {
+            lfs::python::schedule_graphics_callback([callable_ref]() {
                 if (!lfs::python::can_acquire_gil()) {
                     LOG_ERROR("Unable to run scheduled Python UI callback: Python GIL is unavailable");
                     return;
@@ -3625,7 +3622,7 @@ namespace lfs::python {
             .def("end_disabled", &PyUILayout::end_disabled, "End a disabled UI region")
             // Images
             .def("image", &PyUILayout::image, nb::arg("texture_id"), nb::arg("size"),
-                 nb::arg("tint") = nb::none(), "Draw an image from a GL texture ID")
+                 nb::arg("tint") = nb::none(), "Draw an image from a UI texture ID")
             .def("image_uv", &PyUILayout::image_uv, nb::arg("texture_id"), nb::arg("size"),
                  nb::arg("uv0"), nb::arg("uv1"),
                  nb::arg("tint") = nb::none(), "Draw an image with custom UV coordinates")
@@ -3664,7 +3661,7 @@ namespace lfs::python {
                     auto [u1, v1] = tex.uv1();
                     const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
                     ImGui::Image(static_cast<ImTextureID>(tex.texture_id()),
-                                 {std::get<0>(size), std::get<1>(size)}, {0, 0}, {u1, v1}, t, {0, 0, 0, 0}); }, nb::arg("label"), nb::arg("tensor"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a tensor as an image, caching the GL texture by label")
+                                 {std::get<0>(size), std::get<1>(size)}, {0, 0}, {u1, v1}, t, {0, 0, 0, 0}); }, nb::arg("label"), nb::arg("tensor"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a tensor as an image, caching the UI texture by label")
             // Drag-drop
             .def("begin_drag_drop_source", &PyUILayout::begin_drag_drop_source, "Begin a drag-drop source on the last item, returns True if dragging")
             .def("set_drag_drop_payload", &PyUILayout::set_drag_drop_payload, nb::arg("type"), nb::arg("data"), "Set the drag-drop payload type and data string")
@@ -4455,7 +4452,7 @@ namespace lfs::python {
                     if (!data)
                         return nb::make_tuple(0, 0, 0);
 
-                    auto [tex_id, width, height] = create_gl_texture_from_data(data, w, h, channels);
+                    auto [tex_id, width, height] = create_ui_texture_from_data(data, w, h, channels);
                     lfs::core::free_image(data);
                     return nb::make_tuple(tex_id, width, height);
                 } catch (const std::exception& e) {
@@ -4463,7 +4460,7 @@ namespace lfs::python {
                     return nb::make_tuple(0, 0, 0);
                 }
             },
-            nb::arg("path"), "Load image as GL texture, returns (texture_id, width, height)");
+            nb::arg("path"), "Load image as UI texture, returns (texture_id, width, height)");
 
         m.def(
             "load_thumbnail",
@@ -4473,7 +4470,7 @@ namespace lfs::python {
                     if (!data)
                         return nb::make_tuple(0, 0, 0);
 
-                    auto [tex_id, width, height] = create_gl_texture_from_data(data, w, h, channels);
+                    auto [tex_id, width, height] = create_ui_texture_from_data(data, w, h, channels);
                     lfs::core::free_image(data);
                     return nb::make_tuple(tex_id, width, height);
                 } catch (const std::exception& e) {
@@ -4481,15 +4478,15 @@ namespace lfs::python {
                     return nb::make_tuple(0, 0, 0);
                 }
             },
-            nb::arg("path"), nb::arg("max_size"), "Load downscaled image as GL texture, returns (texture_id, width, height)");
+            nb::arg("path"), nb::arg("max_size"), "Load downscaled image as UI texture, returns (texture_id, width, height)");
 
         m.def(
             "release_texture",
             [](const uint64_t tex_id) {
                 if (tex_id > 0)
-                    lfs::python::delete_gl_texture(static_cast<uint32_t>(tex_id));
+                    lfs::python::delete_ui_texture(tex_id);
             },
-            nb::arg("texture_id"), "Release an OpenGL texture");
+            nb::arg("texture_id"), "Release a UI texture");
 
         m.def(
             "get_image_info",
@@ -4588,11 +4585,11 @@ namespace lfs::python {
                 if (!data)
                     return nb::make_tuple(0, 0, 0);
 
-                auto [tex_id, width, height] = create_gl_texture_from_data(data, w, h, channels);
+                auto [tex_id, width, height] = create_ui_texture_from_data(data, w, h, channels);
                 lfs::core::free_image(data);
                 return nb::make_tuple(tex_id, width, height);
             },
-            nb::arg("path"), "Get preloaded image as GL texture, returns (texture_id, width, height)");
+            nb::arg("path"), "Get preloaded image as UI texture, returns (texture_id, width, height)");
 
         m.def(
             "cancel_preload",
@@ -4845,7 +4842,7 @@ namespace lfs::python {
         m.def("is_thumbnail_ready", &is_thumbnail_ready, nb::arg("video_id"),
               "Check if a thumbnail is ready to be displayed");
         m.def("get_thumbnail_texture", &get_thumbnail_texture, nb::arg("video_id"),
-              "Get the OpenGL texture ID for a downloaded thumbnail (0 if not ready)");
+              "Get the UI texture ID for a downloaded thumbnail (0 if not ready)");
 
         // Icon loading for data-driven toolbar
         m.def(
@@ -5081,7 +5078,7 @@ namespace lfs::python {
         if (const auto& enqueue_cb = get_modal_enqueue_callback())
             PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
         bridge.has_toolbar = []() { return true; }; // Always true - Python ToolRegistry has builtin tools
-        bridge.shutdown_gl_resources = []() { shutdown_dynamic_textures(); };
+        bridge.shutdown_ui_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
             PyPanelRegistry::instance().unregister_all();
             PyUIHookRegistry::instance().clear_all();

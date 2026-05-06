@@ -72,7 +72,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* COMMIT = "about.build_info.commit";
             inline constexpr const char* BUILD_TYPE = "about.build_info.build_type";
             inline constexpr const char* PLATFORM = "about.build_info.platform";
-            inline constexpr const char* CUDA_GL_INTEROP = "about.build_info.cuda_gl_interop";
         } // namespace BuildInfo
 
         namespace BuildType {

@@ -1,9 +1,10 @@
 .vscode
 .claude
+CLAUDE.md
 build/
 cmake-build-debug/
 cmake-build-release/
-external/libtorch/
+external/libtorch
 external/release/libtorch/
 external/debug/libtorch/
 output*

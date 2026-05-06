@@ -630,7 +630,7 @@ TEST_F(TensorBenchmarkTest, SummaryReport) {
     std::cout << "  2. Clamp [0,1]:        Target < 0.2ms" << std::endl;
     std::cout << "  3. Multiply by 255:    Target < 0.2ms" << std::endl;
     std::cout << "  4. Float32->UInt8:     Target < 0.2ms" << std::endl;
-    std::cout << "  5. cudaMemcpy2DArray:  ~0.1ms (OpenGL interop)" << std::endl;
+    std::cout << "  5. cudaMemcpy2DArray:  ~0.1ms (legacy GPU texture interop)" << std::endl;
     std::cout << "\n✅ Run individual benchmarks above to see detailed performance" << std::endl;
     std::cout << std::string(100, '=') << std::endl;
 }

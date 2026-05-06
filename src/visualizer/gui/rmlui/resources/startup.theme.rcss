@@ -9,6 +9,11 @@
     @{startup.box_shadow}
 }
 
+body.vulkan-compat #overlay-box {
+    border-radius: 0;
+    box-shadow: none;
+}
+
 .dim-text,
 .social-link span,
 #lang-label {

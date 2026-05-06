@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/elements/python_editor_element.hpp"
 #include "gui/rmlui/elements/terminal_element.hpp"
@@ -32,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -441,6 +443,54 @@ namespace {
         SDL_SetClipboardText(text.c_str());
     }
 
+    void show_terminal_context_menu(lfs::vis::terminal::TerminalWidget& terminal,
+                                    const float screen_x,
+                                    const float screen_y) {
+        auto* gui = lfs::vis::services().guiOrNull();
+        if (!gui)
+            return;
+
+        const std::string selection = terminal.getSelection();
+        const bool has_selection = !selection.empty();
+        const bool read_only = terminal.isReadOnly();
+
+        std::vector<lfs::vis::gui::ContextMenuItem> items;
+        if (has_selection) {
+            items.push_back(lfs::vis::gui::ContextMenuItem{.label = "Copy", .action = "copy"});
+        }
+        items.push_back(lfs::vis::gui::ContextMenuItem{
+            .label = "Copy All",
+            .action = "copy-all",
+            .separator_before = has_selection,
+        });
+        if (!read_only) {
+            items.push_back(lfs::vis::gui::ContextMenuItem{
+                .label = "Paste",
+                .action = "paste",
+                .separator_before = !items.empty(),
+            });
+        }
+
+        auto* terminal_ptr = &terminal;
+        gui->globalContextMenu().request(
+            std::move(items),
+            screen_x,
+            screen_y,
+            [terminal_ptr](const std::string_view action) {
+                if (action == "copy") {
+                    const std::string current_selection = terminal_ptr->getSelection();
+                    if (!current_selection.empty())
+                        set_clipboard_text(current_selection);
+                } else if (action == "copy-all") {
+                    const std::string text = terminal_ptr->getAllText();
+                    if (!text.empty())
+                        set_clipboard_text(text);
+                } else if (action == "paste" && !terminal_ptr->isReadOnly()) {
+                    terminal_ptr->paste(get_clipboard_text());
+                }
+            });
+    }
+
     bool can_stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         return lfs::python::has_frame_callback() ||
                state.isScriptRunning() ||
@@ -802,6 +852,12 @@ namespace {
                 const auto [row, col] = mouse_cell();
                 terminal.beginSelection(row, col);
             }
+        }
+
+        if (hovered && input->mouse_clicked[1]) {
+            terminal.setFocused(true);
+            show_terminal_context_menu(terminal, input->mouse_x, input->mouse_y);
+            return;
         }
 
         if (terminal.isFocused() && input->mouse_down[0]) {

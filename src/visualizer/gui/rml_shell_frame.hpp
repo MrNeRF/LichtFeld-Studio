@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "gui/rmlui/rml_fbo.hpp"
 #include <cstddef>
 #include <string>
 
@@ -52,8 +51,6 @@ namespace lfs::vis::gui {
         Rml::Element* menu_region_ = nullptr;
         Rml::Element* right_panel_region_ = nullptr;
         Rml::Element* status_region_ = nullptr;
-
-        RmlFBO fbo_;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;

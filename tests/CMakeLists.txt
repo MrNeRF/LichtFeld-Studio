@@ -288,6 +288,9 @@ set(TEST_FILES
     test_tensor_stream.cpp
     test_tensor_memory_planner.cpp
 )
+if(ENABLE_VULKAN_VIEWER)
+    list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
+endif()
 
 # Build test sources list
 set(TEST_SOURCES test_main.cpp)
@@ -336,7 +339,6 @@ target_include_directories(lichtfeld_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/external/spz   # SPZ library headers
     ${NB_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
-    ${OPENGL_INCLUDE_DIRS}
 )
 
 # Define TEST_DATA_DIR and PROJECT_ROOT_PATH for tests
@@ -376,7 +378,6 @@ target_link_libraries(lichtfeld_tests PRIVATE
     imgui::imgui
     implot::implot
     ${TORCH_LIBRARIES}
-    ${OPENGL_LIBRARIES}
     OpenImageIO::OpenImageIO
     OpenMeshCore
     assimp::assimp
@@ -389,6 +390,10 @@ target_link_libraries(lichtfeld_tests PRIVATE
     # System libraries
     spdlog::spdlog
 )
+
+if(ENABLE_VULKAN_VIEWER)
+    target_link_libraries(lichtfeld_tests PRIVATE lfs_vksplat_fwd Vulkan::Vulkan)
+endif()
 
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE
@@ -420,7 +425,6 @@ target_include_directories(lichtfeld_benchmarks PRIVATE
     ${CMAKE_SOURCE_DIR}/external/spz
     ${NB_DIR}/include
     ${CUDAToolkit_INCLUDE_DIRS}
-    ${OPENGL_INCLUDE_DIRS}
 )
 
 target_compile_definitions(lichtfeld_benchmarks PRIVATE
@@ -450,7 +454,6 @@ target_link_libraries(lichtfeld_benchmarks PRIVATE
 
     GTest::gtest
     ${TORCH_LIBRARIES}
-    ${OPENGL_LIBRARIES}
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand

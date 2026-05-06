@@ -177,6 +177,43 @@ TEST_F(SelectionCommandDispatchTest, SelectBrushCommandsRespectReplaceAddAndRemo
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
 }
 
+TEST_F(SelectionCommandDispatchTest, ReplaceWithSelectedNodePreservesOtherVisibleNodes) {
+    scene_manager_->getScene().addNode(
+        "other",
+        make_test_splat({
+            0.0f,
+            1.0f,
+            0.0f,
+            1.0f,
+            1.0f,
+            0.0f,
+        }));
+    scene_manager_->selectNode("test");
+    set_initial_selection({1, 1, 1, 1});
+    service().setTestingScreenPositions(make_screen_positions({
+        10.0f,
+        10.0f,
+        80.0f,
+        80.0f,
+        10.0f,
+        10.0f,
+        80.0f,
+        80.0f,
+    }));
+
+    SelectRect{
+        .x0 = 0.0f,
+        .y0 = 0.0f,
+        .x1 = 30.0f,
+        .y1 = 30.0f,
+        .camera_index = 0,
+        .mode = "replace",
+    }
+        .emit();
+
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0, 1, 1}));
+}
+
 TEST_F(SelectionCommandDispatchTest, SelectPolygonCommandRoutesThroughSceneManager) {
     service().setTestingScreenPositions(make_screen_positions({
         80.0f,

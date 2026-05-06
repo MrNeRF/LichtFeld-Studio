@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include "gui/vulkan_ui_texture.hpp"
 #include "python/python_runtime.hpp"
 
 #include <functional>
 #include <future>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -35,10 +37,11 @@ namespace lfs::vis::gui {
         void processThumbnails();
         bool isThumbnailReady(const std::string& video_id) const;
         uint64_t getThumbnailTexture(const std::string& video_id) const;
+        void clearThumbnails();
 
     private:
         struct Thumbnail {
-            unsigned int texture = 0;
+            std::unique_ptr<VulkanUiTexture> texture;
             enum class State { PENDING,
                                LOADING,
                                READY,
