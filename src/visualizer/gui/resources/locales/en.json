@@ -124,7 +124,6 @@
     "info_panel.geometry_metadata": "Geometry Metadata",
     "info_panel.transform_information": "Transform Information",
     "info_panel.file_not_found": "File Not Found",
-    "info_panel.artifacts": "Artifacts",
     "info_panel.scenes": "Scenes",
     "property.type": "Type",
     "property.role": "Role",

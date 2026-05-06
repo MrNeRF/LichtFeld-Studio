@@ -132,7 +132,6 @@
     "import_menu.import_asset": "アセットをインポート...",
     "import_menu.import_checkpoint": "チェックポイントをインポート...",
     "import_menu.import_dataset": "データセットをインポート...",
-    "info_panel.artifacts": "アーティファクト",
     "info_panel.asset_details": "アセット詳細",
     "info_panel.dataset_details": "データセット詳細",
     "info_panel.file_not_found": "ファイルが見つかりません",

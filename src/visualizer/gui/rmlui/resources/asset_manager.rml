@@ -94,7 +94,7 @@
             <div data-for="asset : assets">
               <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
                 <div data-attr-class="'asset-card-thumb ' + asset.thumb_class">
-                  <div class="asset-card-overlay">
+gi                  <div class="asset-card-overlay">
                     <span data-attr-class="'asset-pill ' + asset.pill_class">{{asset.type_label}}</span>
                   </div>
                 </div>

@@ -132,7 +132,6 @@
     "import_menu.import_asset": "에셋 가져오기...",
     "import_menu.import_checkpoint": "체크포인트 가져오기...",
     "import_menu.import_dataset": "데이터셋 가져오기...",
-    "info_panel.artifacts": "Artefacts",
     "info_panel.asset_details": "에셋 세부정보",
     "info_panel.dataset_details": "Détails du Dataset",
     "info_panel.file_not_found": "Fichier Non Trouvé",

@@ -130,7 +130,6 @@
     "import_menu.import_asset": "Asset importieren...",
     "import_menu.import_checkpoint": "Checkpoint importieren...",
     "import_menu.import_dataset": "Dataset importieren...",
-    "info_panel.artifacts": "Artefakte",
     "info_panel.asset_details": "Asset-Details",
     "info_panel.dataset_details": "Dataset-Details",
     "info_panel.file_not_found": "Datei nicht gefunden",

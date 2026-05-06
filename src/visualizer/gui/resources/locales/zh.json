@@ -1070,7 +1070,6 @@
     "import_menu.import_asset": "导入资源...",
     "import_menu.import_checkpoint": "导入检查点...",
     "import_menu.import_dataset": "导入数据集...",
-    "info_panel.artifacts": "产物",
     "info_panel.asset_details": "资源详情",
     "info_panel.dataset_details": "数据集详情",
     "info_panel.file_not_found": "未找到文件",

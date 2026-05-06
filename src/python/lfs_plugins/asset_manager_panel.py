@@ -3641,7 +3641,7 @@ class AssetManagerPanel(Panel):
                     self._log_warn("No project_id found on action element")
                 self._stop_event(event)
                 return
-            elif action in ("select", "artifact", "scene_asset"):
+            elif action in ("select", "scene_asset"):
                 # Close any open menu when selecting an asset
                 if self._open_menu_asset_id:
                     self._open_menu_asset_id = None

@@ -132,7 +132,6 @@
     "import_menu.import_asset": "Importar Activo...",
     "import_menu.import_checkpoint": "Importar Checkpoint...",
     "import_menu.import_dataset": "Importar Dataset...",
-    "info_panel.artifacts": "Artefactos",
     "info_panel.asset_details": "Detalles del Activo",
     "info_panel.dataset_details": "Detalles del Dataset",
     "info_panel.file_not_found": "Archivo no encontrado",
