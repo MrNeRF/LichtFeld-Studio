@@ -7,6 +7,7 @@ add_library(lfs_vksplat_fwd STATIC
         src/gs_pipeline.cpp
         src/gs_renderer.cpp
         src/perf_timer.cpp
+        src/vma_implementation.cpp
 )
 
 target_include_directories(lfs_vksplat_fwd

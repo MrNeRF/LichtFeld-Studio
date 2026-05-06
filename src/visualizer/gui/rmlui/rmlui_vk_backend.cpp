@@ -3837,5 +3837,4 @@ void RenderInterface_VK::MemoryPool::Free_GeometryHandle_ShaderDataOnly(geometry
     p_valid_geometry_handle->m_p_shader_allocation = nullptr;
 }
 
-#define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>
