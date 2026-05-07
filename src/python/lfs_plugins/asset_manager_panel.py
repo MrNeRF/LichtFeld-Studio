@@ -141,17 +141,12 @@ class AssetManagerPanel(Panel):
             return
 
         # Basic properties
-        model.bind_func("panel_label", lambda: "Asset Manager")
         model.bind("search_query", self.get_search_query, self.set_search_query)
-        model.bind_func("collection_count", self.get_collection_count)
 
         # View state
-        model.bind_func("view_mode", self.get_view_mode)
         model.bind_func("is_gallery_view", lambda: self._view_mode == "gallery")
         model.bind_func("is_list_view", lambda: self._view_mode == "list")
-        model.bind_func("sort_mode", self.get_sort_mode)
         model.bind_func("sort_label", self.get_sort_label)
-        model.bind_func("pending_tag_name", self.get_pending_tag_name)
 
         # Panel widths for resizable sidebar and info panel
         model.bind_func("sidebar_width", lambda: f"{self._sidebar_width}dp")
@@ -193,7 +188,6 @@ class AssetManagerPanel(Panel):
         # Selected asset properties (flattened bind_func pattern)
         model.bind_func("selected_asset_name", self.get_selected_asset_name)
         model.bind_func("selected_asset_type", self.get_selected_asset_type)
-        model.bind_func("selected_asset_role", self.get_selected_asset_role)
         model.bind_func(
             "selected_asset_project_name", self.get_selected_asset_project_name
         )
@@ -229,16 +223,8 @@ class AssetManagerPanel(Panel):
             self.get_selected_asset_dataset_masks,
         )
         model.bind_func(
-            "selected_asset_dataset_sparse_model",
-            self.get_selected_asset_dataset_sparse_model,
-        )
-        model.bind_func(
             "selected_asset_dataset_camera_count",
             self.get_selected_asset_dataset_camera_count,
-        )
-        model.bind_func(
-            "selected_asset_dataset_database",
-            self.get_selected_asset_dataset_database,
         )
         model.bind_func(
             "selected_asset_dataset_initial_points",
@@ -268,12 +254,6 @@ class AssetManagerPanel(Panel):
         model.bind_func(
             "selected_asset_expected_path", self.get_selected_asset_expected_path
         )
-        model.bind_func(
-            "selected_asset_preview_class", self.get_selected_asset_preview_class
-        )
-        model.bind_func(
-            "selected_asset_preview_label", self.get_selected_asset_preview_label
-        )
         model.bind_func("selected_asset_pill_class", self.get_selected_asset_pill_class)
         model.bind_func("selected_asset_type_label", self.get_selected_asset_type_label)
 
@@ -290,13 +270,6 @@ class AssetManagerPanel(Panel):
 
         # Selected project properties (flattened)
         model.bind_func("selected_project_name", self.get_selected_project_name)
-        model.bind_func(
-            "selected_project_scene_count", self.get_selected_project_scene_count
-        )
-        model.bind_func(
-            "selected_project_total_assets", self.get_selected_project_total_assets
-        )
-        model.bind_func("selected_project_path", self.get_selected_project_path)
         model.bind_func("selected_project_created", self.get_selected_project_created)
         model.bind_func("selected_project_modified", self.get_selected_project_modified)
 
@@ -314,7 +287,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("projects_title", lambda: tr("asset_manager.sidebar.projects"))
         model.bind_func("scenes_title", lambda: tr("asset_manager.sidebar.scenes"))
         model.bind_func("filters_title", lambda: tr("asset_manager.sidebar.filters"))
-        model.bind_func("filter_hint", lambda: tr("asset_manager.sidebar.filter_hint"))
         model.bind_func("gallery_title", lambda: tr("asset_manager.toolbar.view_gallery"))
         model.bind_func("list_title", lambda: tr("asset_manager.toolbar.view_list"))
         model.bind_func("rename_project_label", lambda: tr("asset_manager.action.rename_project"))
@@ -327,9 +299,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
         model.bind_func("col_name_label", lambda: tr("asset_manager.property.name"))
         model.bind_func("col_type_label", lambda: tr("asset_manager.property.type"))
-        model.bind_func("col_role_label", lambda: tr("asset_manager.property.role"))
         model.bind_func("col_project_label", lambda: tr("asset_manager.property.project"))
-        model.bind_func("col_scene_label", lambda: tr("asset_manager.property.scene"))
         model.bind_func("col_size_label", lambda: tr("asset_manager.property.size"))
         model.bind_func("col_modified_label", lambda: tr("asset_manager.property.modified"))
         model.bind_func("info_tab_label", lambda: tr("asset_manager.info_panel.info"))
@@ -375,20 +345,16 @@ class AssetManagerPanel(Panel):
         model.bind_func("project_details_title", lambda: tr("asset_manager.info_panel.project_details"))
         model.bind_func("prop_scenes_label", lambda: tr("asset_manager.property.scenes"))
         model.bind_func("scenes_list_title", lambda: tr("asset_manager.sidebar.scenes"))
-        model.bind_func("multi_select_hint", lambda: tr("asset_manager.hint.multi_select"))
 
         # Record lists for data-for loops (main lists)
         model.bind_record_list("projects")
         model.bind_record_list("scenes")
         model.bind_record_list("filters")
-        model.bind_record_list("tags")
-        model.bind_record_list("collections")
         model.bind_record_list("assets")
         model.bind_record_list("selected_asset_tags")
 
         # Record lists for nested struct lists
         model.bind_record_list("selected_scene_assets")
-        model.bind_record_list("selected_project_scenes")
 
         self._handle = model.get_handle()
 
@@ -438,17 +404,6 @@ class AssetManagerPanel(Panel):
         # Trigger asset list refresh when search query changes
         self._dirty_model("search_query", "assets")
 
-    def get_collection_count(self) -> int:
-        if self._asset_index and hasattr(self._asset_index, "collections"):
-            return len(self._asset_index.collections)
-        return 0
-
-    def get_view_mode(self) -> str:
-        return self._view_mode
-
-    def get_sort_mode(self) -> str:
-        return self._sort_mode
-
     def get_sort_label(self) -> str:
         labels = {
             "name": tr("asset_manager.toolbar.sort_by_name"),
@@ -479,9 +434,6 @@ class AssetManagerPanel(Panel):
             return []
 
         return self._get_available_projects_for_asset(asset)
-
-    def get_pending_tag_name(self) -> str:
-        return self._pending_tag_name
 
     def get_selected_project_id(self) -> Optional[str]:
         return self._selected_project_id
@@ -1037,24 +989,6 @@ class AssetManagerPanel(Panel):
 
         return sorted(tags, key=lambda t: t["label"].lower())
 
-    def get_collection_list(self) -> List[Dict[str, Any]]:
-        """Return list of collections with counts."""
-        if not self._asset_index or not hasattr(self._asset_index, "collections"):
-            return []
-
-        collections = []
-        for coll_id, coll_data in self._asset_index.collections.items():
-            collections.append(
-                {
-                    "id": f"collection:{coll_id}",
-                    "label": coll_data.get("name", tr("asset_manager.unnamed")),
-                    "count": len(coll_data.get("asset_ids", [])),
-                    "is_selected": f"collection:{coll_id}" in self._active_filters,
-                }
-            )
-
-        return sorted(collections, key=lambda c: c["label"].lower())
-
     def get_selected_asset_struct(self) -> Dict[str, Any]:
         """Return selected asset as a struct for RML data binding."""
         if not self._selected_asset_ids or len(self._selected_asset_ids) != 1:
@@ -1395,11 +1329,6 @@ class AssetManagerPanel(Panel):
         asset_type = asset.get("type", "") if asset else ""
         return asset_type.upper() if asset_type else ""
 
-    def get_selected_asset_role(self) -> str:
-        asset = self._get_selected_asset()
-        role = asset.get("role", "") if asset else ""
-        return role.replace("_", " ").title() if role else ""
-
     def get_selected_asset_project_name(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -1517,13 +1446,6 @@ class AssetManagerPanel(Panel):
         mask_count = dataset_meta.get("mask_count", 0)
         return str(mask_count)
 
-    def get_selected_asset_dataset_sparse_model(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return ""
-        dataset_meta = asset.get("dataset_metadata", {}) or {}
-        return "Yes" if dataset_meta.get("sparse_model") else "No"
-
     def get_selected_asset_dataset_camera_count(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -1533,13 +1455,6 @@ class AssetManagerPanel(Panel):
         if camera_count is None:
             return "--"
         return str(camera_count)
-
-    def get_selected_asset_dataset_database(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return ""
-        dataset_meta = asset.get("dataset_metadata", {}) or {}
-        return "Yes" if dataset_meta.get("database_present") else "No"
 
     def get_selected_asset_dataset_initial_points(self) -> str:
         asset = self._get_selected_asset()
@@ -1667,45 +1582,6 @@ class AssetManagerPanel(Panel):
             return ""
         return asset.get("absolute_path") or asset.get("path", "")
 
-    def get_selected_asset_preview_class(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return "asset-thumb-default"
-        asset_type = asset.get("type", "")
-        thumb_classes = {
-            "ply_3dgs": "asset-thumb-splat",
-            "ply_pcl": "asset-thumb-splat",
-            "ply": "asset-thumb-splat",
-            "rad": "asset-thumb-splat",
-            "sog": "asset-thumb-splat",
-            "spz": "asset-thumb-splat",
-            "checkpoint": "asset-thumb-checkpoint",
-            "mp4": "asset-thumb-video",
-            "mov": "asset-thumb-video",
-            "video": "asset-thumb-video",
-            "dataset": "asset-thumb-dataset",
-        }
-        return thumb_classes.get(asset_type, "asset-thumb-default")
-
-    def get_selected_asset_preview_label(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return "Asset"
-        asset_type = asset.get("type", "")
-        type_labels = {
-            "ply_3dgs": "Splat",
-            "ply_pcl": "PointCloud",
-            "ply": "Splat",
-            "rad": "RAD",
-            "sog": "SOG",
-            "spz": "SPZ",
-            "checkpoint": "CKPT",
-            "dataset": "Dataset",
-            "mesh": "Mesh",
-            "usd": "USD"
-        }
-        return type_labels.get(asset_type, asset_type.upper() if asset_type else "Asset")
-
     def get_selected_asset_pill_class(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -1800,29 +1676,6 @@ class AssetManagerPanel(Panel):
         project = self._get_selected_project()
         name = project.get("name", "") if project else ""
         return self._format_display_name(name)
-
-    def get_selected_project_scene_count(self) -> int:
-        project = self._get_selected_project()
-        if not project:
-            return 0
-        return len(project.get("scene_ids", []))
-
-    def get_selected_project_total_assets(self) -> int:
-        project = self._get_selected_project()
-        if not project or not self._asset_index:
-            return 0
-        scene_ids = set(project.get("scene_ids", []))
-        if not scene_ids or not hasattr(self._asset_index, "assets"):
-            return 0
-        return sum(
-            1
-            for asset in self._asset_index.assets.values()
-            if asset.get("scene_id") in scene_ids
-        )
-
-    def get_selected_project_path(self) -> str:
-        project = self._get_selected_project()
-        return project.get("path", "") if project else ""
 
     def get_selected_project_created(self) -> str:
         project = self._get_selected_project()
@@ -2219,7 +2072,6 @@ class AssetManagerPanel(Panel):
     def on_pending_tag_change(self, _handle, _ev, args):
         """Update the pending tag input buffer."""
         self._pending_tag_name = str(args[0]) if args else ""
-        self._dirty_model("pending_tag_name")
 
     def on_add_tag(self, _handle, _ev, args):
         """Add the pending tag to the currently selected asset."""
@@ -2232,7 +2084,7 @@ class AssetManagerPanel(Panel):
         self._asset_index.add_tag_to_asset(asset["id"], tag)
         self._pending_tag_name = ""
         self.refresh_catalog()
-        self._dirty_model("pending_tag_name", "tags", "assets", "selected_asset_tags")
+        self._dirty_model("tags", "assets", "selected_asset_tags")
 
     def on_remove_tag(self, _handle, _ev, args):
         """Remove a tag from the currently selected asset."""
@@ -3919,13 +3771,8 @@ class AssetManagerPanel(Panel):
         self._update_all_record_lists()
         if self._handle:
             for field in (
-                "asset_count",
-                "project_count",
-                "scene_count",
                 "selected_count",
-                "selected_total_size",
                 "selected_count_text",
-                "selected_total_text",
                 "has_selection",
                 "has_multi_selection",
                 "selection_type",
@@ -3973,7 +3820,6 @@ class AssetManagerPanel(Panel):
         self._handle.update_record_list("scenes", self.get_scene_list())
         self._handle.update_record_list("filters", self.get_filter_list())
         self._handle.update_record_list("tags", self.get_tag_list())
-        self._handle.update_record_list("collections", self.get_collection_list())
         self._handle.update_record_list("assets", self.get_filtered_assets())
 
         # Update selection-specific record lists
@@ -4046,7 +3892,6 @@ class AssetManagerPanel(Panel):
                 for field in (
                     "selected_asset_name",
                     "selected_asset_type",
-                    "selected_asset_role",
                     "selected_asset_project_name",
                     "selected_asset_scene_name",
                     "selected_asset_path",
@@ -4062,20 +3907,15 @@ class AssetManagerPanel(Panel):
                     "selected_asset_dataset_image_count",
                     "selected_asset_dataset_image_root",
                     "selected_asset_dataset_masks",
-                    "selected_asset_dataset_sparse_model",
                     "selected_asset_dataset_camera_count",
-                    "selected_asset_dataset_database",
                     "selected_asset_dataset_initial_points",
                     "selected_asset_bounding_box",
                     "selected_asset_center",
                     "selected_asset_scale",
                     "selected_asset_file_missing",
                     "selected_asset_expected_path",
-                    "selected_asset_preview_class",
-                    "selected_asset_preview_label",
                     "selected_asset_pill_class",
                     "selected_asset_type_label",
-                    "pending_tag_name",
                 ):
                     self._handle.dirty(field)
             self._handle.dirty_all()
@@ -4098,7 +3938,6 @@ class AssetManagerPanel(Panel):
             "selected_asset",
             "selected_asset_name",
             "selected_asset_type",
-            "selected_asset_role",
             "selected_asset_path",
             "selected_scene",
             "selected_scene_name",
@@ -4107,9 +3946,6 @@ class AssetManagerPanel(Panel):
             "selected_scene_assets",
             "selected_project",
             "selected_project_name",
-            "selected_project_scene_count",
-            "selected_project_total_assets",
-            "selected_project_scenes",
             "selected_asset_tags",
             "show_selection_none",
             "show_selection_asset",
@@ -4127,7 +3963,6 @@ class AssetManagerPanel(Panel):
                 "scenes",
                 "filters",
                 "tags",
-                "collections",
                 "assets",
                 "selected_asset_tags",
             ):
@@ -4136,7 +3971,6 @@ class AssetManagerPanel(Panel):
                     "scenes": self.get_scene_list,
                     "filters": self.get_filter_list,
                     "tags": self.get_tag_list,
-                    "collections": self.get_collection_list,
                     "assets": self.get_filtered_assets,
                     "selected_asset_tags": lambda: [
                         {"value": tag}
