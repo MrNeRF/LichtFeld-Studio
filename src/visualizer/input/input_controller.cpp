@@ -492,12 +492,16 @@ namespace lfs::vis {
         }
 
         // Forward to GUI for mouse capture (rebinding)
-        if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
-            std::optional<int> chord_key;
-            if (!held_keys_.empty()) {
-                chord_key = held_keys_.back();
+        if (gui && gui->isCapturingInput()) {
+            if (action == input::ACTION_PRESS) {
+                std::optional<int> chord_key;
+                if (!held_keys_.empty()) {
+                    chord_key = held_keys_.back();
+                }
+                gui->captureMouseButton(button, getModifierKeys(), x, y, chord_key);
+            } else if (action == input::ACTION_RELEASE) {
+                gui->captureMouseButtonRelease(button);
             }
-            gui->captureMouseButton(button, getModifierKeys(), chord_key);
             return;
         }
 
@@ -961,6 +965,12 @@ namespace lfs::vis {
         LOG_PERF("InputController::handleMouseMove pos=({},{}) drag_mode={}",
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
+
+        if (gui && gui->isCapturingInput()) {
+            gui->captureMouseMove(x, y);
+            last_mouse_pos_ = {x, y};
+            return;
+        }
 
         // Forward to pie menu if open — consume event to prevent viewport interaction
         if (gui && gui->gizmo().isPieMenuOpen()) {

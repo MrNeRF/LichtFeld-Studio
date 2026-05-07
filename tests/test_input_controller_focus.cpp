@@ -11,12 +11,12 @@
 #include "internal/viewport.hpp"
 #include "rendering/coordinate_conventions.hpp"
 
-#include <glm/gtc/constants.hpp>
-#include <gtest/gtest.h>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/constants.hpp>
+#include <gtest/gtest.h>
 #include <optional>
 #include <variant>
 #include <imgui.h>
@@ -492,6 +492,72 @@ namespace lfs::vis {
         ASSERT_NE(mouse_trigger, nullptr);
         EXPECT_EQ(mouse_trigger->button, input::MouseButton::RIGHT);
         EXPECT_EQ(mouse_trigger->modifiers, input::MODIFIER_NONE);
+        EXPECT_FALSE(mouse_trigger->double_click);
+        EXPECT_FALSE(bindings.isCapturing());
+    }
+
+    TEST_F(InputControllerFocusTest, NavigationMouseCaptureDragMovementFinalizesToDragBinding) {
+        input::InputBindings bindings;
+        bindings.startCapture(input::ToolMode::GLOBAL, input::Action::CAMERA_ORBIT);
+        bindings.captureMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                    input::MODIFIER_NONE,
+                                    40.0,
+                                    50.0);
+
+        bindings.captureMouseMove(40.0 + input::CaptureState::DRAG_CAPTURE_THRESHOLD_PX + 1.0, 50.0);
+
+        const auto captured = bindings.getAndClearCaptured();
+        ASSERT_TRUE(captured.has_value());
+
+        const auto* drag_trigger = std::get_if<input::MouseDragTrigger>(&*captured);
+        ASSERT_NE(drag_trigger, nullptr);
+        EXPECT_EQ(drag_trigger->button, input::MouseButton::RIGHT);
+        EXPECT_EQ(drag_trigger->modifiers, input::MODIFIER_NONE);
+        EXPECT_FALSE(bindings.isCapturing());
+    }
+
+    TEST_F(InputControllerFocusTest, NavigationMouseCaptureHeldButtonWaitsForDragBeforeSingleClick) {
+        input::InputBindings bindings;
+        bindings.startCapture(input::ToolMode::GLOBAL, input::Action::CAMERA_ORBIT);
+        bindings.captureMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                    input::MODIFIER_NONE,
+                                    40.0,
+                                    50.0);
+
+        auto& capture_state = const_cast<input::CaptureState&>(bindings.getCaptureState());
+        capture_state.first_click_time -= std::chrono::milliseconds(500);
+        bindings.updateCapture();
+        EXPECT_TRUE(bindings.isCapturing());
+        EXPECT_FALSE(bindings.getAndClearCaptured().has_value());
+
+        bindings.captureMouseMove(40.0 + input::CaptureState::DRAG_CAPTURE_THRESHOLD_PX + 1.0, 50.0);
+
+        const auto captured = bindings.getAndClearCaptured();
+        ASSERT_TRUE(captured.has_value());
+        EXPECT_NE(std::get_if<input::MouseDragTrigger>(&*captured), nullptr);
+        EXPECT_FALSE(bindings.isCapturing());
+    }
+
+    TEST_F(InputControllerFocusTest, NavigationMouseCaptureReleaseBeforeMoveKeepsSingleClickBinding) {
+        input::InputBindings bindings;
+        bindings.startCapture(input::ToolMode::GLOBAL, input::Action::CAMERA_ORBIT);
+        bindings.captureMouseButton(static_cast<int>(input::MouseButton::RIGHT),
+                                    input::MODIFIER_NONE,
+                                    40.0,
+                                    50.0);
+        bindings.captureMouseButtonRelease(static_cast<int>(input::MouseButton::RIGHT));
+        bindings.captureMouseMove(80.0, 50.0);
+
+        auto& capture_state = const_cast<input::CaptureState&>(bindings.getCaptureState());
+        capture_state.first_click_time -= std::chrono::milliseconds(500);
+        bindings.updateCapture();
+
+        const auto captured = bindings.getAndClearCaptured();
+        ASSERT_TRUE(captured.has_value());
+
+        const auto* mouse_trigger = std::get_if<input::MouseButtonTrigger>(&*captured);
+        ASSERT_NE(mouse_trigger, nullptr);
+        EXPECT_EQ(mouse_trigger->button, input::MouseButton::RIGHT);
         EXPECT_FALSE(mouse_trigger->double_click);
         EXPECT_FALSE(bindings.isCapturing());
     }

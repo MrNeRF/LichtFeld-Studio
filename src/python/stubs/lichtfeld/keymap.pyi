@@ -234,8 +234,14 @@ def get_key_for_action(action: Action, mode: ToolMode = ToolMode.GLOBAL) -> int:
 def get_trigger_description(action: Action, mode: ToolMode = ToolMode.GLOBAL) -> str:
     """Get human-readable description of action's trigger"""
 
+def get_trigger(action: Action, mode: ToolMode = ToolMode.GLOBAL) -> object:
+    """Get action's trigger as a serializable dict"""
+
 def set_binding(mode: ToolMode, action: Action, key: int, modifiers: int = 0) -> None:
     """Bind a key to an action in given mode"""
+
+def set_trigger_binding(mode: ToolMode, action: Action, trigger: dict) -> bool:
+    """Bind a key, mouse button, scroll, or drag trigger dict to an action"""
 
 def clear_binding(mode: ToolMode, action: Action) -> None:
     """Remove binding for an action in given mode"""

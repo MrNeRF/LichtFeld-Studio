@@ -95,7 +95,22 @@ def _install_lf_stub(monkeypatch):
         capturing=[False],
         waiting_double=[False],
         conflict=[None],
+        captured=[],
+        triggers={},
+        cleared=[],
+        set_triggers=[],
     )
+
+    def get_captured_trigger():
+        if not state.captured:
+            return None
+        state.capturing[0] = False
+        return state.captured.pop(0)
+
+    def set_trigger_binding(mode, action_value, trigger):
+        state.set_triggers.append((mode, action_value, trigger))
+        state.triggers[(mode, action_value)] = trigger
+        return True
 
     keymap = SimpleNamespace(
         ToolMode=tool_mode,
@@ -105,6 +120,8 @@ def _install_lf_stub(monkeypatch):
         get_tool_mode_name=lambda mode: f"Mode {mode.name}",
         get_action_name=lambda value: f"Action {value.name}",
         get_trigger_description=lambda value, mode: f"{mode.name}:{value.name}",
+        get_trigger=lambda action_value, mode: state.triggers.get((mode, action_value)),
+        set_trigger_binding=set_trigger_binding,
         find_conflict_for_action=lambda _mode, _action: state.conflict[0],
         is_capturing=lambda: state.capturing[0],
         is_waiting_for_double_click=lambda: state.waiting_double[0],
@@ -115,7 +132,8 @@ def _install_lf_stub(monkeypatch):
         import_profile=lambda _path: None,
         start_capture=lambda _mode, _action: None,
         cancel_capture=lambda: None,
-        get_captured_trigger=lambda: None,
+        clear_binding=lambda mode, action_value: state.cleared.append((mode, action_value)),
+        get_captured_trigger=get_captured_trigger,
     )
 
     lf_stub = ModuleType("lichtfeld")
@@ -161,9 +179,27 @@ class _HandleStub:
         self.dirty_all_calls += 1
 
 
+class _ElementStub:
+    def __init__(self):
+        self.classes = {}
+        self.text = ""
+
+    def set_class(self, name, value):
+        self.classes[name] = value
+
+    def set_text(self, value):
+        self.text = value
+
+
 class _DocStub:
-    def get_element_by_id(self, _element_id):
-        return None
+    def __init__(self, with_conflict_overlay=False):
+        self.elements = {}
+        if with_conflict_overlay:
+            self.elements["binding-conflict-overlay"] = _ElementStub()
+            self.elements["binding-conflict-message"] = _ElementStub()
+
+    def get_element_by_id(self, element_id):
+        return self.elements.get(element_id)
 
 
 def test_input_settings_builds_profile_and_mode_records(input_settings_module):
@@ -244,6 +280,68 @@ def test_input_settings_marks_conflicting_binding_rows(input_settings_module):
     )
     assert orbit_row["desc_text"] == "GLOBAL:CAMERA_ORBIT  ⚠ also: Action CAMERA_ZOOM"
     assert orbit_row["desc_class"] == "is-binding-desc is-conflict"
+
+
+def test_input_settings_capture_conflict_prompts_to_replace(input_settings_module):
+    module, state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+    doc = _DocStub(with_conflict_overlay=True)
+
+    old_trigger = {"type": "drag", "button": 2, "modifiers": 0}
+    state.triggers[(module.lf.keymap.ToolMode.GLOBAL, module.lf.keymap.Action.CAMERA_ORBIT)] = old_trigger
+    state.capturing[0] = False
+    state.captured.append({"type": "drag", "button": 1, "modifiers": 0})
+    state.conflict[0] = {
+        "other_action": module.lf.keymap.Action.CAMERA_PAN,
+        "other_mode": module.lf.keymap.ToolMode.GLOBAL,
+    }
+    panel._rebinding_action = module.lf.keymap.Action.CAMERA_ORBIT
+    panel._rebinding_mode = module.lf.keymap.ToolMode.GLOBAL
+    panel._previous_trigger = old_trigger
+
+    panel.on_update(doc)
+
+    assert panel._pending_conflict["action"] == module.lf.keymap.Action.CAMERA_ORBIT
+    assert panel._pending_conflict["other_action"] == module.lf.keymap.Action.CAMERA_PAN
+    assert doc.elements["binding-conflict-overlay"].classes["hidden"] is False
+    assert "Action CAMERA_PAN" in doc.elements["binding-conflict-message"].text
+
+    panel._on_replace_conflict(None, None, None)
+
+    assert state.cleared == [
+        (module.lf.keymap.ToolMode.GLOBAL, module.lf.keymap.Action.CAMERA_PAN)
+    ]
+    assert panel._pending_conflict is None
+    assert doc.elements["binding-conflict-overlay"].classes["hidden"] is True
+
+
+def test_input_settings_capture_conflict_cancel_restores_previous_trigger(input_settings_module):
+    module, state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+    doc = _DocStub(with_conflict_overlay=True)
+
+    old_trigger = {"type": "drag", "button": 2, "modifiers": 0}
+    panel._doc = doc
+    panel._pending_conflict = {
+        "mode": module.lf.keymap.ToolMode.GLOBAL,
+        "action": module.lf.keymap.Action.CAMERA_ORBIT,
+        "other_mode": module.lf.keymap.ToolMode.GLOBAL,
+        "other_action": module.lf.keymap.Action.CAMERA_PAN,
+        "previous_trigger": old_trigger,
+    }
+
+    panel._on_cancel_conflict(None, None, None)
+
+    assert state.cleared == [
+        (module.lf.keymap.ToolMode.GLOBAL, module.lf.keymap.Action.CAMERA_ORBIT)
+    ]
+    assert state.set_triggers == [
+        (module.lf.keymap.ToolMode.GLOBAL, module.lf.keymap.Action.CAMERA_ORBIT, old_trigger)
+    ]
+    assert panel._pending_conflict is None
+    assert doc.elements["binding-conflict-overlay"].classes["hidden"] is True
 
 
 def test_input_settings_language_change_rebuilds_and_dirties_all(input_settings_module):

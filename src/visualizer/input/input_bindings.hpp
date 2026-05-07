@@ -238,8 +238,13 @@ namespace lfs::vis::input {
         int pending_button = -1;
         int pending_mods = 0;
         std::optional<int> pending_chord_key;
+        bool pending_button_down = false;
+        bool has_pending_mouse_position = false;
+        double pending_mouse_x = 0.0;
+        double pending_mouse_y = 0.0;
         std::chrono::steady_clock::time_point first_click_time;
         static constexpr double DOUBLE_CLICK_WAIT_TIME = 0.4;
+        static constexpr double DRAG_CAPTURE_THRESHOLD_PX = 4.0;
     };
 
     class LFS_VIS_API InputBindings {
@@ -290,6 +295,9 @@ namespace lfs::vis::input {
         void captureKey(int key, int mods);
         void captureKey(int physical_key, int logical_key, int mods);
         void captureMouseButton(int button, int mods, std::optional<int> chord_key = std::nullopt);
+        void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
+        void captureMouseButtonRelease(int button);
+        void captureMouseMove(double x, double y);
         void captureScroll(int mods, std::optional<int> chord_key = std::nullopt);
         void updateCapture();
         bool isCapturing() const { return capture_state_.active; }

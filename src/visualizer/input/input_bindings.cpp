@@ -1080,6 +1080,11 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::captureMouseButton(int button, int mods, std::optional<int> chord_key) {
+        captureMouseButton(button, mods, 0.0, 0.0, chord_key);
+        capture_state_.has_pending_mouse_position = false;
+    }
+
+    void InputBindings::captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key) {
         if (!capture_state_.active)
             return;
 
@@ -1100,6 +1105,8 @@ namespace lfs::vis::input {
                 capture_state_.active = false;
                 capture_state_.waiting_for_double_click = false;
                 capture_state_.pending_button = -1;
+                capture_state_.pending_button_down = false;
+                capture_state_.has_pending_mouse_position = false;
                 capture_state_.pending_chord_key.reset();
                 return;
             }
@@ -1109,7 +1116,53 @@ namespace lfs::vis::input {
         capture_state_.pending_button = button;
         capture_state_.pending_mods = mods;
         capture_state_.pending_chord_key = chord_key;
+        capture_state_.pending_button_down = true;
+        capture_state_.has_pending_mouse_position = true;
+        capture_state_.pending_mouse_x = x;
+        capture_state_.pending_mouse_y = y;
         capture_state_.first_click_time = std::chrono::steady_clock::now();
+    }
+
+    void InputBindings::captureMouseButtonRelease(int button) {
+        if (!capture_state_.active || !capture_state_.waiting_for_double_click)
+            return;
+
+        if (button == capture_state_.pending_button) {
+            capture_state_.pending_button_down = false;
+        }
+    }
+
+    void InputBindings::captureMouseMove(double x, double y) {
+        if (!capture_state_.active ||
+            !capture_state_.waiting_for_double_click ||
+            !capture_state_.pending_button_down ||
+            !capture_state_.has_pending_mouse_position) {
+            return;
+        }
+
+        const auto& descriptor = describe(capture_state_.action);
+        if (!(descriptor.allowed_kinds & TRIGGER_KIND_MOUSE_DRAG)) {
+            return;
+        }
+
+        const double dx = x - capture_state_.pending_mouse_x;
+        const double dy = y - capture_state_.pending_mouse_y;
+        const double threshold = CaptureState::DRAG_CAPTURE_THRESHOLD_PX;
+        if (dx * dx + dy * dy < threshold * threshold) {
+            return;
+        }
+
+        const auto mouse_btn = static_cast<MouseButton>(capture_state_.pending_button);
+        const MouseDragTrigger trigger{mouse_btn, capture_state_.pending_mods,
+                                       capture_state_.pending_chord_key};
+        setBinding(capture_state_.mode, capture_state_.action, trigger);
+        capture_state_.captured = trigger;
+        capture_state_.active = false;
+        capture_state_.waiting_for_double_click = false;
+        capture_state_.pending_button = -1;
+        capture_state_.pending_button_down = false;
+        capture_state_.has_pending_mouse_position = false;
+        capture_state_.pending_chord_key.reset();
     }
 
     void InputBindings::captureScroll(int mods, std::optional<int> chord_key) {
@@ -1136,6 +1189,11 @@ namespace lfs::vis::input {
             const auto& descriptor = describe(capture_state_.action);
             const bool can_button = descriptor.allowed_kinds & TRIGGER_KIND_MOUSE_BUTTON;
             const bool can_drag = descriptor.allowed_kinds & TRIGGER_KIND_MOUSE_DRAG;
+            if (capture_state_.pending_button_down &&
+                capture_state_.has_pending_mouse_position &&
+                can_drag) {
+                return;
+            }
             const bool produce_button = can_button && (!can_drag || descriptor.prefers_single_click);
 
             if (produce_button) {
@@ -1151,6 +1209,8 @@ namespace lfs::vis::input {
             capture_state_.active = false;
             capture_state_.waiting_for_double_click = false;
             capture_state_.pending_button = -1;
+            capture_state_.pending_button_down = false;
+            capture_state_.has_pending_mouse_position = false;
             capture_state_.pending_chord_key.reset();
         }
     }

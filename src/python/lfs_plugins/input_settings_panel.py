@@ -96,7 +96,10 @@ class InputSettingsPanel(Panel):
         self._selected_mode_idx = 0
         self._rebinding_action = None
         self._rebinding_mode = None
+        self._previous_trigger = None
+        self._pending_conflict = None
         self._handle = None
+        self._doc = None
         self._last_profiles = []
         self._last_state_key = None
         self._last_lang = ""
@@ -130,6 +133,8 @@ class InputSettingsPanel(Panel):
         model.bind_event("reset_default", self._on_reset_default)
         model.bind_event("export_profile", self._on_export_profile)
         model.bind_event("import_profile", self._on_import_profile)
+        model.bind_event("replace_conflict", self._on_replace_conflict)
+        model.bind_event("cancel_conflict", self._on_cancel_conflict)
         model.bind_record_list("profiles")
         model.bind_record_list("tool_modes")
         model.bind_record_list("binding_rows")
@@ -148,6 +153,7 @@ class InputSettingsPanel(Panel):
             return
         profiles = lf.keymap.get_available_profiles()
         if 0 <= idx < len(profiles):
+            self._clear_pending_conflict()
             lf.keymap.load_profile(profiles[idx])
             self._last_state_key = None
 
@@ -166,6 +172,7 @@ class InputSettingsPanel(Panel):
         lf.keymap.save_profile(lf.keymap.get_current_profile())
 
     def _on_reset_default(self, _handle, _ev, _args):
+        self._clear_pending_conflict()
         lf.keymap.reset_to_default()
         self._last_state_key = None
 
@@ -179,13 +186,38 @@ class InputSettingsPanel(Panel):
         tr = lf.ui.tr
         path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
         if path:
+            self._clear_pending_conflict()
             lf.keymap.import_profile(path)
             self._last_state_key = None
+
+    def _on_replace_conflict(self, _handle, _ev, _args):
+        if not self._pending_conflict:
+            return
+        other_mode = self._pending_conflict["other_mode"]
+        other_action = self._pending_conflict["other_action"]
+        lf.keymap.clear_binding(other_mode, other_action)
+        self._clear_pending_conflict()
+        self._last_state_key = None
+        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
+
+    def _on_cancel_conflict(self, _handle, _ev, _args):
+        if not self._pending_conflict:
+            return
+        mode = self._pending_conflict["mode"]
+        action = self._pending_conflict["action"]
+        previous_trigger = self._pending_conflict.get("previous_trigger")
+        lf.keymap.clear_binding(mode, action)
+        if previous_trigger is not None:
+            lf.keymap.set_trigger_binding(mode, action, previous_trigger)
+        self._clear_pending_conflict()
+        self._last_state_key = None
+        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
 
     # ── Lifecycle ─────────────────────────────────────────────
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._doc = doc
         self._last_lang = lf.ui.get_current_language()
         self._last_current_profile = lf.keymap.get_current_profile()
 
@@ -196,8 +228,10 @@ class InputSettingsPanel(Panel):
         table_el = doc.get_element_by_id("bindings-table")
         if table_el:
             table_el.add_event_listener("click", self._on_table_click)
+        self._hide_conflict_overlay()
 
     def on_update(self, doc):
+        self._doc = doc
         self._update_max_height(doc)
 
         current_lang = lf.ui.get_current_language()
@@ -210,11 +244,32 @@ class InputSettingsPanel(Panel):
         is_capturing = lf.keymap.is_capturing()
         mode = self.TOOL_MODES[self._selected_mode_idx]
 
-        if is_capturing and self._rebinding_action is not None:
+        if self._rebinding_action is not None:
             trigger = lf.keymap.get_captured_trigger()
             if trigger is not None:
+                action = self._rebinding_action
+                mode = self._rebinding_mode
+                previous_trigger = self._previous_trigger
                 self._rebinding_action = None
                 self._rebinding_mode = None
+                self._previous_trigger = None
+                conflict = lf.keymap.find_conflict_for_action(mode, action)
+                if conflict is not None:
+                    self._pending_conflict = {
+                        "mode": mode,
+                        "action": action,
+                        "other_mode": lf.keymap.ToolMode(conflict["other_mode"]),
+                        "other_action": lf.keymap.Action(conflict["other_action"]),
+                        "previous_trigger": previous_trigger,
+                    }
+                    self._show_conflict_overlay(doc)
+                else:
+                    self._hide_conflict_overlay()
+                is_capturing = lf.keymap.is_capturing()
+            elif not is_capturing:
+                self._rebinding_action = None
+                self._rebinding_mode = None
+                self._previous_trigger = None
 
         current_profile = lf.keymap.get_current_profile()
         state_key = (
@@ -266,6 +321,38 @@ class InputSettingsPanel(Panel):
             return
         for field in fields:
             self._handle.dirty(field)
+
+    def _clear_pending_conflict(self):
+        self._pending_conflict = None
+        self._previous_trigger = None
+        self._hide_conflict_overlay()
+
+    def _hide_conflict_overlay(self):
+        if not self._doc:
+            return
+        overlay = self._doc.get_element_by_id("binding-conflict-overlay")
+        if overlay:
+            overlay.set_class("hidden", True)
+
+    def _show_conflict_overlay(self, doc):
+        if not doc or not self._pending_conflict:
+            return
+        action = self._pending_conflict["action"]
+        mode = self._pending_conflict["mode"]
+        other_action = self._pending_conflict["other_action"]
+
+        trigger_desc = lf.keymap.get_trigger_description(action, mode)
+        message = (
+            f"{trigger_desc} is already assigned to "
+            f"{lf.keymap.get_action_name(other_action)}. Replace that binding?"
+        )
+
+        msg_el = doc.get_element_by_id("binding-conflict-message")
+        if msg_el:
+            msg_el.set_text(message)
+        overlay = doc.get_element_by_id("binding-conflict-overlay")
+        if overlay:
+            overlay.set_class("hidden", False)
 
     def _get_bindings_hint(self):
         tr = lf.ui.tr
@@ -425,12 +512,14 @@ class InputSettingsPanel(Panel):
         if btn_action == "rebind":
             self._rebinding_action = action
             self._rebinding_mode = mode
+            self._previous_trigger = lf.keymap.get_trigger(action, mode)
             lf.keymap.start_capture(mode, action)
             self._last_state_key = None
         elif btn_action == "cancel":
             lf.keymap.cancel_capture()
             self._rebinding_action = None
             self._rebinding_mode = None
+            self._previous_trigger = None
             self._last_state_key = None
 
     def _find_btn_action(self, element):
