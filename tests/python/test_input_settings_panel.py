@@ -26,6 +26,7 @@ ACTION_NAMES = (
     "CAMERA_ORBIT",
     "CAMERA_PAN",
     "CAMERA_ZOOM",
+    "CAMERA_ROLL",
     "CAMERA_SET_PIVOT",
     "CAMERA_MOVE_FORWARD",
     "CAMERA_MOVE_BACKWARD",
@@ -93,6 +94,7 @@ def _install_lf_stub(monkeypatch):
         current_profile=["Default"],
         capturing=[False],
         waiting_double=[False],
+        conflict=[None],
     )
 
     keymap = SimpleNamespace(
@@ -103,6 +105,7 @@ def _install_lf_stub(monkeypatch):
         get_tool_mode_name=lambda mode: f"Mode {mode.name}",
         get_action_name=lambda value: f"Action {value.name}",
         get_trigger_description=lambda value, mode: f"{mode.name}:{value.name}",
+        find_conflict_for_action=lambda _mode, _action: state.conflict[0],
         is_capturing=lambda: state.capturing[0],
         is_waiting_for_double_click=lambda: state.waiting_double[0],
         load_profile=lambda name: state.current_profile.__setitem__(0, name),
@@ -220,6 +223,27 @@ def test_input_settings_builds_binding_rows_with_capture_state(input_settings_mo
     assert pan_row["button_action"] == "rebind"
     assert pan_row["button_label"] == "input_settings.rebind"
     assert pan_row["button_class"] == "btn--primary"
+
+
+def test_input_settings_marks_conflicting_binding_rows(input_settings_module):
+    module, state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+    state.conflict[0] = {
+        "other_action": module.lf.keymap.Action.CAMERA_ZOOM,
+        "other_mode": module.lf.keymap.ToolMode.GLOBAL,
+    }
+
+    panel._rebuild_binding_rows(module.lf.keymap.ToolMode.GLOBAL)
+
+    rows = panel._handle.records["binding_rows"]
+    orbit_row = next(
+        row for row in rows
+        if not row["is_section"]
+        and row["action_id"] == str(module.lf.keymap.Action.CAMERA_ORBIT.value)
+    )
+    assert orbit_row["desc_text"] == "GLOBAL:CAMERA_ORBIT  ⚠ also: Action CAMERA_ZOOM"
+    assert orbit_row["desc_class"] == "is-binding-desc is-conflict"
 
 
 def test_input_settings_language_change_rebuilds_and_dirties_all(input_settings_module):

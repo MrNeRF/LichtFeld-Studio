@@ -121,7 +121,7 @@ namespace lfs::vis {
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
             void captureKey(int physical_key, int logical_key, int mods);
-            void captureMouseButton(int button, int mods);
+            void captureMouseButton(int button, int mods, std::optional<int> chord_key = std::nullopt);
 
             // Thumbnail system (delegates to MenuBar)
             void requestThumbnail(const std::string& video_id);

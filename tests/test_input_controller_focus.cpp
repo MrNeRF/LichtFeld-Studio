@@ -13,6 +13,11 @@
 
 #include <glm/gtc/constants.hpp>
 #include <gtest/gtest.h>
+#include <cstdlib>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <optional>
 #include <variant>
 #include <imgui.h>
 
@@ -22,6 +27,7 @@ namespace lfs::vis {
         class InputControllerFocusTest : public ::testing::Test {
         protected:
             void SetUp() override {
+                isolateInputProfileHome();
                 services().clear();
                 gui::guiFocusState().reset();
 
@@ -34,6 +40,38 @@ namespace lfs::vis {
 
                 gui::guiFocusState().reset();
                 services().clear();
+                restoreHome();
+            }
+
+        private:
+            std::optional<std::string> old_home_;
+            std::filesystem::path temp_home_;
+
+            void isolateInputProfileHome() {
+#ifndef _WIN32
+                if (const char* home = std::getenv("HOME")) {
+                    old_home_ = home;
+                }
+                temp_home_ = std::filesystem::temp_directory_path() /
+                             ("lfs_input_focus_home_" +
+                              std::to_string(reinterpret_cast<std::uintptr_t>(this)));
+                std::filesystem::create_directories(temp_home_);
+                setenv("HOME", temp_home_.string().c_str(), 1);
+#endif
+            }
+
+            void restoreHome() {
+#ifndef _WIN32
+                if (old_home_) {
+                    setenv("HOME", old_home_->c_str(), 1);
+                } else {
+                    unsetenv("HOME");
+                }
+                if (!temp_home_.empty()) {
+                    std::error_code ec;
+                    std::filesystem::remove_all(temp_home_, ec);
+                }
+#endif
             }
         };
     } // namespace
@@ -475,6 +513,74 @@ namespace lfs::vis {
         EXPECT_EQ(drag_trigger->button, input::MouseButton::LEFT);
         EXPECT_EQ(drag_trigger->modifiers, input::MODIFIER_NONE);
         EXPECT_FALSE(bindings.isCapturing());
+    }
+
+    TEST_F(InputControllerFocusTest, ReloadingCurrentProfileDoesNotRestoreClearedZoomBinding) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_no_zoom.json";
+        std::filesystem::remove(profile_path);
+
+        input::InputBindings bindings;
+        bindings.clearBinding(input::ToolMode::GLOBAL, input::Action::CAMERA_ZOOM);
+        ASSERT_TRUE(bindings.saveProfileToFile(profile_path));
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+
+        EXPECT_EQ(loaded.getActionForScroll(input::ToolMode::GLOBAL, input::MODIFIER_NONE),
+                  input::Action::NONE);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedScrollDefaults) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v5.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "Legacy",
+  "version": 5,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 3,
+      "description": "Zoom",
+      "trigger_type": "scroll",
+      "modifiers": 0
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+
+        EXPECT_EQ(loaded.getActionForScroll(input::ToolMode::GLOBAL, input::MODIFIER_NONE,
+                                            std::vector<int>{input::KEY_R}),
+                  input::Action::CAMERA_ROLL);
+        EXPECT_EQ(loaded.getActionForMouseButton(input::ToolMode::GLOBAL,
+                                                 input::MouseButton::RIGHT,
+                                                 input::MODIFIER_NONE),
+                  input::Action::NONE);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, ClearedZoomBindingStopsViewportScrollZoom) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        controller.getBindings().clearBinding(input::ToolMode::GLOBAL, input::Action::CAMERA_ZOOM);
+
+        const glm::vec3 start_t = viewport.camera.t;
+        const glm::mat3 start_r = viewport.camera.R;
+
+        controller.handleScroll(0.0, 1.0);
+
+        EXPECT_NEAR(glm::distance(viewport.camera.t, start_t), 0.0f, 1e-6f);
+        for (int col = 0; col < 3; ++col) {
+            EXPECT_NEAR(glm::distance(viewport.camera.R[col], start_r[col]), 0.0f, 1e-6f);
+        }
     }
 
 } // namespace lfs::vis

@@ -5784,9 +5784,9 @@ namespace lfs::vis::gui {
         }
     }
 
-    void GuiManager::captureMouseButton(int button, int mods) {
+    void GuiManager::captureMouseButton(int button, int mods, std::optional<int> chord_key) {
         if (auto* input_controller = viewer_->getInputController()) {
-            input_controller->getBindings().captureMouseButton(button, mods);
+            input_controller->getBindings().captureMouseButton(button, mods, chord_key);
         }
     }
 

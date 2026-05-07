@@ -240,6 +240,11 @@ def set_binding(mode: ToolMode, action: Action, key: int, modifiers: int = 0) ->
 def clear_binding(mode: ToolMode, action: Action) -> None:
     """Remove binding for an action in given mode"""
 
+def find_conflict_for_action(mode: ToolMode, action: Action) -> object:
+    """
+    Return {other_action, other_mode} if another action shares this action's trigger, else None
+    """
+
 def get_action_name(action: Action) -> str:
     """Get display name for an action"""
 
@@ -272,6 +277,9 @@ def start_capture(mode: ToolMode, action: Action) -> None:
 
 def cancel_capture() -> None:
     """Cancel active capture"""
+
+def capture_scroll(modifiers: int = 0, chord_key: int | None = None) -> None:
+    """Forward a scroll-wheel event into the active capture"""
 
 def is_capturing() -> bool:
     """Check if capture mode is active"""

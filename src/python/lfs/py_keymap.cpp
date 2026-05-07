@@ -187,6 +187,26 @@ namespace lfs::python {
             "Remove binding for an action in given mode");
 
         keymap.def(
+            "find_conflict_for_action",
+            [](ToolMode mode, Action action) -> nb::object {
+                auto* bindings = get_keymap_bindings();
+                if (!bindings)
+                    return nb::none();
+                const auto trigger = bindings->getTriggerForAction(action, mode);
+                if (!trigger)
+                    return nb::none();
+                const auto conflict = bindings->findConflict(mode, *trigger, action);
+                if (!conflict)
+                    return nb::none();
+                nb::dict d;
+                d["other_action"] = conflict->other_action;
+                d["other_mode"] = conflict->other_mode;
+                return d;
+            },
+            nb::arg("mode"), nb::arg("action"),
+            "Return {other_action, other_mode} if another action shares this action's trigger, else None");
+
+        keymap.def(
             "get_action_name",
             [](Action action) { return getActionName(action); },
             nb::arg("action"),
@@ -283,6 +303,15 @@ namespace lfs::python {
             "Cancel active capture");
 
         keymap.def(
+            "capture_scroll",
+            [](int modifiers, std::optional<int> chord_key) {
+                if (get_keymap_bindings())
+                    get_keymap_bindings()->captureScroll(modifiers, chord_key);
+            },
+            nb::arg("modifiers") = 0, nb::arg("chord_key") = nb::none(),
+            "Forward a scroll-wheel event into the active capture");
+
+        keymap.def(
             "is_capturing",
             []() {
                 if (!get_keymap_bindings())
@@ -324,10 +353,16 @@ namespace lfs::python {
                     } else if constexpr (std::is_same_v<T, MouseScrollTrigger>) {
                         result["type"] = "scroll";
                         result["modifiers"] = t.modifiers;
+                        if (t.chord_key.has_value()) {
+                            result["chord_key"] = *t.chord_key;
+                        }
                     } else if constexpr (std::is_same_v<T, MouseDragTrigger>) {
                         result["type"] = "drag";
                         result["button"] = static_cast<int>(t.button);
                         result["modifiers"] = t.modifiers;
+                        if (t.chord_key.has_value()) {
+                            result["chord_key"] = *t.chord_key;
+                        }
                     }
                 },
                            *trigger);

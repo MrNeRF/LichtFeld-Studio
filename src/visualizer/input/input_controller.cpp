@@ -368,12 +368,20 @@ namespace lfs::vis {
     }
 
     void InputController::refreshMovementKeyCache() {
-        movement_keys_.forward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_FORWARD);
-        movement_keys_.backward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_BACKWARD);
-        movement_keys_.left = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_LEFT);
-        movement_keys_.right = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_RIGHT);
-        movement_keys_.up = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_UP);
-        movement_keys_.down = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_DOWN);
+        for (size_t i = 0; i < input::kToolModeCount; ++i) {
+            const auto mode = static_cast<input::ToolMode>(i);
+            auto& mk = movement_keys_per_mode_[i];
+            mk.forward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_FORWARD, mode);
+            mk.backward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_BACKWARD, mode);
+            mk.left = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_LEFT, mode);
+            mk.right = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_RIGHT, mode);
+            mk.up = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_UP, mode);
+            mk.down = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_DOWN, mode);
+        }
+    }
+
+    const InputController::MovementKeys& InputController::currentMovementKeys() const {
+        return movement_keys_per_mode_[static_cast<size_t>(getCurrentToolMode())];
     }
 
     void InputController::setCameraNavigationMode(const CameraNavigationMode mode) {
@@ -395,6 +403,7 @@ namespace lfs::vis {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
+        held_keys_.clear();
     }
 
     bool InputController::hasViewportKeyboardFocus() const {
@@ -484,7 +493,11 @@ namespace lfs::vis {
 
         // Forward to GUI for mouse capture (rebinding)
         if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
-            gui->captureMouseButton(button, getModifierKeys());
+            std::optional<int> chord_key;
+            if (!held_keys_.empty()) {
+                chord_key = held_keys_.back();
+            }
+            gui->captureMouseButton(button, getModifierKeys(), chord_key);
             return;
         }
 
@@ -579,7 +592,7 @@ namespace lfs::vis {
             bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, true);
         }
         if (bound_action == input::Action::NONE) {
-            bound_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods);
+            bound_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
         }
         if (bound_action == input::Action::NONE) {
             bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
@@ -789,7 +802,7 @@ namespace lfs::vis {
                 const input::Action pick_action = bindings_.getActionForMouseButton(
                     input_mode, input::MouseButton::LEFT, mods);
                 const input::Action drag_action = bindings_.getActionForDrag(
-                    input_mode, input::MouseButton::LEFT, mods);
+                    input_mode, input::MouseButton::LEFT, mods, held_keys_);
                 const bool has_node_binding = (pick_action == input::Action::NODE_PICK ||
                                                drag_action == input::Action::NODE_RECT_SELECT);
 
@@ -1139,6 +1152,17 @@ namespace lfs::vis {
     }
 
     void InputController::handleScroll([[maybe_unused]] double xoff, double yoff) {
+        // Capture mode (input settings panel) consumes scroll first so the user
+        // can rebind scroll-only actions like Camera Zoom or chord-style Roll.
+        if (bindings_.isCapturing()) {
+            std::optional<int> chord_key;
+            if (!held_keys_.empty()) {
+                chord_key = held_keys_.back();
+            }
+            bindings_.captureScroll(getModifierKeys(), chord_key);
+            return;
+        }
+
         float fx, fy;
         SDL_GetMouseState(&fx, &fy);
         double mouse_x = fx, mouse_y = fy;
@@ -1159,7 +1183,7 @@ namespace lfs::vis {
         }
 
         const int mods = getModifierKeys();
-        const input::Action scroll_action = bindings_.getActionForScroll(getCurrentToolMode(), mods);
+        const input::Action scroll_action = bindings_.getActionForScroll(getCurrentToolMode(), mods, held_keys_);
         if (selection_tool_ && selection_tool_->isEnabled()) {
             if (scroll_action == input::Action::DEPTH_ADJUST_FAR &&
                 selection_tool_->isDepthFilterEnabled()) {
@@ -1169,9 +1193,7 @@ namespace lfs::vis {
         }
 
         // Brush radius adjustment for selection/brush tools
-        const bool ctrl = (mods & input::KEYMOD_CTRL) != 0;
-        const bool shift = (mods & input::KEYMOD_SHIFT) != 0;
-        if ((ctrl || shift) && !op::operators().hasModalOperator()) {
+        if (scroll_action == input::Action::BRUSH_RESIZE && !op::operators().hasModalOperator()) {
             if (selection_tool_ && selection_tool_->isEnabled()) {
                 const float scale = (yoff > 0) ? 1.1f : 0.9f;
                 selection_tool_->setBrushRadius(selection_tool_->getBrushRadius() * scale);
@@ -1201,9 +1223,9 @@ namespace lfs::vis {
         if (std::abs(delta) < 0.01f)
             return;
 
-        if (key_r_pressed_) {
+        if (scroll_action == input::Action::CAMERA_ROLL) {
             target_viewport.camera.rotate_roll(delta);
-        } else {
+        } else if (scroll_action == input::Action::CAMERA_ZOOM) {
             // In orthographic mode, adjust ortho_scale instead of camera position
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
@@ -1220,6 +1242,8 @@ namespace lfs::vis {
             } else {
                 target_viewport.camera.zoom(delta);
             }
+        } else {
+            return;
         }
 
         onCameraMovementStart();
@@ -1240,8 +1264,17 @@ namespace lfs::vis {
         if (physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT) {
             key_alt_pressed_ = (action != input::ACTION_RELEASE);
         }
-        if (logical_key == input::KEY_R) {
-            key_r_pressed_ = (action != input::ACTION_RELEASE);
+        const bool is_modifier_key =
+            physical_key == input::KEY_LEFT_SHIFT || physical_key == input::KEY_RIGHT_SHIFT ||
+            physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
+            physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
+            physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
+        if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+            if (action == input::ACTION_RELEASE) {
+                std::erase(held_keys_, logical_key);
+            } else if (!std::ranges::contains(held_keys_, logical_key)) {
+                held_keys_.push_back(logical_key);
+            }
         }
 
         if (lfs::python::has_keyboard_capture_request()) {
@@ -1532,19 +1565,19 @@ namespace lfs::vis {
         if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
             return;
 
-        // Use cached movement key bindings
+        const auto& mk = currentMovementKeys();
         const bool pressed = (action != input::ACTION_RELEASE);
-        if (physical_key == movement_keys_.forward) {
+        if (physical_key == mk.forward) {
             keys_movement_[0] = pressed;
-        } else if (physical_key == movement_keys_.left) {
+        } else if (physical_key == mk.left) {
             keys_movement_[1] = pressed;
-        } else if (physical_key == movement_keys_.backward) {
+        } else if (physical_key == mk.backward) {
             keys_movement_[2] = pressed;
-        } else if (physical_key == movement_keys_.right) {
+        } else if (physical_key == mk.right) {
             keys_movement_[3] = pressed;
-        } else if (physical_key == movement_keys_.down) {
+        } else if (physical_key == mk.down) {
             keys_movement_[5] = pressed;
-        } else if (physical_key == movement_keys_.up) {
+        } else if (physical_key == mk.up) {
             keys_movement_[4] = pressed;
         }
     }
@@ -1641,7 +1674,7 @@ namespace lfs::vis {
         }
 
         // Sync movement key states with actual keyboard (using cached keys)
-        const auto& mk = movement_keys_;
+        const auto& mk = currentMovementKeys();
         if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
             keys_movement_[0] = false;
         }

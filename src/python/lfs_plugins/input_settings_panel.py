@@ -33,6 +33,7 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.CAMERA_ORBIT,
             lf.keymap.Action.CAMERA_PAN,
             lf.keymap.Action.CAMERA_ZOOM,
+            lf.keymap.Action.CAMERA_ROLL,
             lf.keymap.Action.CAMERA_SET_PIVOT,
             lf.keymap.Action.CAMERA_MOVE_FORWARD,
             lf.keymap.Action.CAMERA_MOVE_BACKWARD,
@@ -382,6 +383,11 @@ class InputSettingsPanel(Panel):
         else:
             desc_text = lf.keymap.get_trigger_description(action, mode)
             desc_class = "is-binding-desc"
+            conflict = lf.keymap.find_conflict_for_action(mode, action)
+            if conflict is not None:
+                other_name = lf.keymap.get_action_name(conflict["other_action"])
+                desc_text = f"{desc_text}  ⚠ also: {other_name}"
+                desc_class = "is-binding-desc is-conflict"
             button_action = "rebind"
             button_label = tr("input_settings.rebind")
             button_class = "btn--primary"

@@ -11,6 +11,7 @@
 #include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -230,15 +231,22 @@ namespace lfs::vis {
         } pending_camera_context_menu_;
 
         // Key states
-        bool key_r_pressed_ = false;
         bool key_ctrl_pressed_ = false;
         bool key_alt_pressed_ = false;
+        // Non-modifier keys currently held in press order (logical keycodes).
+        // Used to resolve chord-bound scroll/drag triggers, e.g. R+Scroll for
+        // Camera Roll. Newest held key wins when multiple chords are possible.
+        std::vector<int> held_keys_;
         bool keys_movement_[6] = {false, false, false, false, false, false}; // fwd, left, back, right, up, down
 
-        // Cached movement key bindings (refreshed when bindings change)
+        // Cached movement key bindings, indexed by ToolMode. Refreshed on
+        // binding change; read site picks the cache for the current tool mode
+        // so a key rebound only in GLOBAL doesn't leak into Selection/Brush/etc.
         struct MovementKeys {
             int forward = -1, backward = -1, left = -1, right = -1, up = -1, down = -1;
-        } movement_keys_;
+        };
+        std::array<MovementKeys, input::kToolModeCount> movement_keys_per_mode_{};
+        [[nodiscard]] const MovementKeys& currentMovementKeys() const;
         void refreshMovementKeyCache();
 
         // Special modes
