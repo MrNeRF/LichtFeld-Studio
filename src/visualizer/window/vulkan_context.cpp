@@ -636,7 +636,10 @@ namespace lfs::vis {
         frame_index_ = (frame_index_ + 1) % kFramesInFlight;
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || frame_suboptimal_) {
             frame_suboptimal_ = false;
-            return recreateSwapchain();
+            // A silent false (empty error) means the surface reported 0×0 extent (window minimized);
+            // treat as success so the caller doesn't log a spurious warning. framebuffer_resized_
+            // stays true, so recreation is retried each frame until the window is restored.
+            return recreateSwapchain() || last_error_.empty();
         }
         frame_suboptimal_ = false;
         if (result != VK_SUCCESS) {
@@ -2063,6 +2066,11 @@ namespace lfs::vis {
         const VkSurfaceFormatKHR surface_format = chooseSurfaceFormat(support.formats);
         const VkPresentModeKHR present_mode = choosePresentMode(support.present_modes);
         const VkExtent2D extent = chooseSwapchainExtent(support.capabilities, framebuffer_width, framebuffer_height);
+        if (extent.width == 0 || extent.height == 0) {
+            // Surface reports zero extent (window minimized); skip creation and retry next frame.
+            last_error_.clear();
+            return false;
+        }
 
         if ((support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0) {
             return fail("Vulkan swapchain does not support color attachment usage");
