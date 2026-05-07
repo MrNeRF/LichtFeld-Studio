@@ -72,6 +72,27 @@ namespace lfs::vis {
             return ext == ".hdr" || ext == ".exr";
         }
 
+        [[nodiscard]] bool isSelectionModalAction(const input::Action action) {
+            return action == input::Action::CONFIRM_POLYGON ||
+                   action == input::Action::CANCEL_POLYGON ||
+                   action == input::Action::UNDO_POLYGON_VERTEX;
+        }
+
+        bool dispatchSelectionActionToModal(const input::Action action, const int mods,
+                                            const double x, const double y) {
+            if (!isSelectionModalAction(action)) {
+                return false;
+            }
+            if (op::operators().activeModalId() != op::to_string(op::BuiltinOp::SelectionStroke)) {
+                return false;
+            }
+
+            op::ModalEvent evt{};
+            evt.type = op::ModalEvent::Type::ACTION;
+            evt.data = op::ActionEvent{action, mods, {x, y}};
+            return op::operators().dispatchModalEvent(evt) != op::OperatorResult::PASS_THROUGH;
+        }
+
         void applyDroppedEnvironmentMap(const std::filesystem::path& environment_map_path) {
             auto* const rendering_manager = services().renderingOrNull();
             if (!rendering_manager) {
@@ -497,6 +518,7 @@ namespace lfs::vis {
         const bool over_gui = isPointerOverBlockingUi(x, y);
         const bool over_gui_hover = isPointerOverUiHover(x, y);
         const bool over_transform_gizmo = isTransformGizmoOverOrUsing();
+        const int mods = getModifierKeys();
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
@@ -513,15 +535,27 @@ namespace lfs::vis {
                 if (!held_keys_.empty()) {
                     chord_key = held_keys_.back();
                 }
-                gui->captureMouseButton(button, getModifierKeys(), x, y, chord_key);
+                gui->captureMouseButton(button, mods, x, y, chord_key);
             } else if (action == input::ACTION_RELEASE) {
                 gui->captureMouseButtonRelease(button);
             }
             return;
         }
 
+        if (action == input::ACTION_PRESS) {
+            const auto mouse_btn = static_cast<input::MouseButton>(button);
+            const auto tool_mode = getCurrentToolMode();
+            auto modal_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
+            if (!isSelectionModalAction(modal_action)) {
+                modal_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
+            }
+            if (dispatchSelectionActionToModal(modal_action, mods, x, y)) {
+                return;
+            }
+        }
+
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseButtonToModals(button, action, getModifierKeys(), x, y, over_gui_hover)) {
+        if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
             return;
         }
 
@@ -588,7 +622,6 @@ namespace lfs::vis {
         }
 
         // Single binding lookup with current tool mode
-        const int mods = getModifierKeys();
         const auto mouse_btn = static_cast<input::MouseButton>(button);
         const auto tool_mode = getCurrentToolMode();
 
@@ -1394,6 +1427,12 @@ namespace lfs::vis {
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
+        const auto tool_mode = getCurrentToolMode();
+        const auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        if (action == input::ACTION_PRESS &&
+            dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+            return;
+        }
         if (dispatchKeyToModals(logical_key, scancode, action, mods, mx, my, over_gui_hover)) {
             return;
         }
@@ -1425,9 +1464,6 @@ namespace lfs::vis {
 
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
-
-        const auto tool_mode = getCurrentToolMode();
-        const auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
 
         if (modal_open)
             return;
@@ -1529,6 +1565,9 @@ namespace lfs::vis {
                 return;
 
             case input::Action::CANCEL_POLYGON:
+                if (dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+                    return;
+                }
                 if (op::operators().hasModalOperator()) {
                     op::operators().cancelModalOperator();
                     return;
@@ -1545,13 +1584,8 @@ namespace lfs::vis {
                 return;
 
             case input::Action::CONFIRM_POLYGON:
-                if (op::operators().hasModalOperator()) {
-                    op::ModalEvent evt{};
-                    evt.type = op::ModalEvent::Type::KEY;
-                    evt.data = KeyEvent{input::KEY_ENTER, 0, input::ACTION_PRESS, mods};
-                    if (op::operators().dispatchModalEvent(evt) != op::OperatorResult::PASS_THROUGH) {
-                        return;
-                    }
+                if (dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+                    return;
                 }
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
@@ -1574,13 +1608,18 @@ namespace lfs::vis {
                 return;
 
             case input::Action::UNDO_POLYGON_VERTEX:
+                if (dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+                    return;
+                }
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
                         if (auto* selection_service = sm->getSelectionService();
                             selection_service &&
                             selection_service->isInteractiveSelectionActive() &&
                             selection_service->getInteractiveSelectionShape() == SelectionShape::Polygon) {
-                            (void)selection_service->undoInteractivePolygonVertex();
+                            if (!selection_service->undoInteractivePolygonVertex()) {
+                                selection_service->cancelInteractiveSelection();
+                            }
                             return;
                         }
                     }

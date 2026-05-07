@@ -123,6 +123,18 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.SEQUENCER_PLAY_PAUSE,
         ],
     }
+    SCENE_NODE_MODES = (
+        lf.keymap.ToolMode.GLOBAL,
+        lf.keymap.ToolMode.TRANSLATE,
+        lf.keymap.ToolMode.ROTATE,
+        lf.keymap.ToolMode.SCALE,
+    )
+    GAUSSIAN_SELECTION_MODES = (
+        lf.keymap.ToolMode.SELECTION,
+        lf.keymap.ToolMode.BRUSH,
+        lf.keymap.ToolMode.ALIGN,
+        lf.keymap.ToolMode.CROP_BOX,
+    )
 
     def __init__(self):
         self._selected_mode_idx = 0
@@ -431,24 +443,27 @@ class InputSettingsPanel(Panel):
         tr = lf.ui.tr
         rows = []
 
-        self._append_binding_section(
-            rows, tr("input_settings.section.navigation"),
-            self.BINDING_SECTIONS["navigation"], mode)
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            self._append_binding_section(
+                rows, tr("input_settings.section.navigation"),
+                self.BINDING_SECTIONS["navigation"], mode)
 
-        for action in self.BINDING_SECTIONS["navigation_global"]:
-            rows.append(self._binding_row_record(action, mode))
+            for action in self.BINDING_SECTIONS["navigation_global"]:
+                rows.append(self._binding_row_record(action, mode))
 
         if mode in (lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
+            selection_actions = list(self.BINDING_SECTIONS["selection"])
+            if mode == lf.keymap.ToolMode.SELECTION:
+                selection_actions.extend(self.BINDING_SECTIONS["selection_modal"])
+            selection_actions.append(lf.keymap.Action.DELETE_SELECTED)
             self._append_binding_section(
                 rows, tr("input_settings.section.selection"),
-                self.BINDING_SECTIONS["selection"], mode)
+                selection_actions, mode)
 
             if mode == lf.keymap.ToolMode.SELECTION:
-                for action in self.BINDING_SECTIONS["selection_modal"]:
-                    rows.append(self._binding_row_record(action, mode))
-
-                for action in self.BINDING_SECTIONS["depth"]:
-                    rows.append(self._binding_row_record(action, mode))
+                self._append_binding_section(
+                    rows, tr("input_settings.section.depth"),
+                    self.BINDING_SECTIONS["depth"], mode)
 
         if mode == lf.keymap.ToolMode.GLOBAL:
             self._append_binding_section(
@@ -465,24 +480,30 @@ class InputSettingsPanel(Panel):
                 rows, tr("input_settings.section.crop_box"),
                 self.BINDING_SECTIONS["crop_box"], mode)
 
-        if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
-                    lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
+        if mode in self.SCENE_NODE_MODES:
+            scene_node_actions = list(self.BINDING_SECTIONS["node_picking"])
+            scene_node_actions.append(lf.keymap.Action.DELETE_NODE)
             self._append_binding_section(
                 rows, tr("input_settings.section.node_picking"),
-                self.BINDING_SECTIONS["node_picking"], mode)
+                scene_node_actions, mode)
 
-        rows.append({
-            "is_section": True,
-            "section_title": tr("input_settings.section.editing"),
-        })
-        if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
-                    lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
-            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_NODE, mode))
-        else:
-            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_SELECTED, mode))
+        editing_rows = []
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            for action in self.BINDING_SECTIONS["editing"]:
+                editing_rows.append(self._binding_row_record(action, mode))
+        elif mode in self.GAUSSIAN_SELECTION_MODES and mode not in (
+                lf.keymap.ToolMode.SELECTION,
+                lf.keymap.ToolMode.BRUSH):
+            self._append_binding_section(
+                rows, tr("input_settings.section.selection"),
+                [lf.keymap.Action.DELETE_SELECTED], mode)
 
-        for action in self.BINDING_SECTIONS["editing"]:
-            rows.append(self._binding_row_record(action, mode))
+        if editing_rows:
+            rows.append({
+                "is_section": True,
+                "section_title": tr("input_settings.section.editing"),
+            })
+            rows.extend(editing_rows)
 
         if mode == lf.keymap.ToolMode.GLOBAL:
             self._append_binding_section(

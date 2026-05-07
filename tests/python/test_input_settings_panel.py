@@ -421,12 +421,19 @@ def test_input_settings_selection_mode_shows_only_streamlined_depth_actions(inpu
         for row in panel._handle.records["binding_rows"]
         if not row["is_section"]
     }
+    section_titles = {
+        row["section_title"]
+        for row in panel._handle.records["binding_rows"]
+        if row["is_section"]
+    }
 
     assert str(module.lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER.value) in action_ids
     assert str(module.lf.keymap.Action.DEPTH_ADJUST_FAR.value) in action_ids
     assert str(module.lf.keymap.Action.CONFIRM_POLYGON.value) in action_ids
     assert str(module.lf.keymap.Action.CANCEL_POLYGON.value) in action_ids
     assert str(module.lf.keymap.Action.UNDO_POLYGON_VERTEX.value) in action_ids
+    assert str(module.lf.keymap.Action.DELETE_SELECTED.value) in action_ids
+    assert "input_settings.section.depth" in section_titles
     assert str(module.lf.keymap.Action.TOGGLE_DEPTH_MODE.value) not in action_ids
     assert str(module.lf.keymap.Action.DEPTH_ADJUST_NEAR.value) not in action_ids
     assert str(module.lf.keymap.Action.DEPTH_ADJUST_SIDE.value) not in action_ids
@@ -453,6 +460,11 @@ def test_input_settings_transform_mode_exposes_node_picking(input_settings_modul
     assert "input_settings.section.node_picking" in section_titles
     assert str(module.lf.keymap.Action.NODE_PICK.value) in action_ids
     assert str(module.lf.keymap.Action.NODE_RECT_SELECT.value) in action_ids
+    assert str(module.lf.keymap.Action.DELETE_NODE.value) in action_ids
+    assert str(module.lf.keymap.Action.CAMERA_ORBIT.value) not in action_ids
+    assert str(module.lf.keymap.Action.CAMERA_PAN.value) not in action_ids
+    assert str(module.lf.keymap.Action.UNDO.value) not in action_ids
+    assert "input_settings.section.editing" not in section_titles
 
 
 def test_input_settings_global_mode_exposes_system_sections(input_settings_module):

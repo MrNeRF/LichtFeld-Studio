@@ -21,7 +21,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 9; // Version 9 routes polygon confirm through key bindings.
+        constexpr int PROFILE_VERSION = 10; // Version 10 routes polygon secondary click through key bindings.
         constexpr std::array<ToolMode, 8> ALL_MODES = {
             ToolMode::GLOBAL,
             ToolMode::SELECTION,
@@ -418,7 +418,8 @@ namespace lfs::vis::input {
             const bool should_add =
                 (version < 6 && def.action == Action::CAMERA_ROLL) ||
                 (version < 7 && def.action == Action::BRUSH_RESIZE) ||
-                (version < 9 && def.action == Action::CONFIRM_POLYGON);
+                (version < 9 && def.action == Action::CONFIRM_POLYGON) ||
+                (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX);
             if (!should_add) {
                 continue;
             }
@@ -920,6 +921,10 @@ namespace lfs::vis::input {
                                     Action::CONFIRM_POLYGON,
                                     "Confirm polygon"});
         profile.bindings.push_back({ToolMode::SELECTION,
+                                    MouseButtonTrigger{MouseButton::RIGHT, MODIFIER_NONE},
+                                    Action::UNDO_POLYGON_VERTEX,
+                                    "Undo polygon/cancel selection"});
+        profile.bindings.push_back({ToolMode::SELECTION,
                                     KeyTrigger{KEY_X, MODIFIER_NONE},
                                     Action::TOGGLE_SELECTION_DEPTH_FILTER,
                                     "Depth box"});
@@ -1010,7 +1015,7 @@ namespace lfs::vis::input {
         case Action::CYCLE_BRUSH_MODE: return "Cycle Brush Mode";
         case Action::CONFIRM_POLYGON: return "Confirm Polygon";
         case Action::CANCEL_POLYGON: return "Cancel Polygon";
-        case Action::UNDO_POLYGON_VERTEX: return "Undo Polygon Vertex";
+        case Action::UNDO_POLYGON_VERTEX: return "Undo Polygon Vertex / Cancel Selection";
         case Action::CYCLE_SELECTION_VIS: return "Cycle Selection Visualization";
         case Action::SELECTION_REPLACE: return "Selection: Replace";
         case Action::SELECTION_ADD: return "Selection: Add";
@@ -1456,6 +1461,21 @@ namespace lfs::vis::input {
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .ui_section = ActionSection::Editing,
         };
+        static constexpr ActionDescriptor d_selection_modal_local_control{
+            .allowed_kinds = K::TRIGGER_KIND_KEY |
+                             K::TRIGGER_KIND_MOUSE_BUTTON |
+                             K::TRIGGER_KIND_MOUSE_DRAG,
+            .allows_extra_modifiers = true,
+            .ui_section = ActionSection::SelectionGlobal,
+        };
+        static constexpr ActionDescriptor d_selection_modal_inherit_control{
+            .allowed_kinds = K::TRIGGER_KIND_KEY |
+                             K::TRIGGER_KIND_MOUSE_BUTTON |
+                             K::TRIGGER_KIND_MOUSE_DRAG,
+            .allows_extra_modifiers = true,
+            .inherits_from_global = true,
+            .ui_section = ActionSection::SelectionGlobal,
+        };
         static constexpr ActionDescriptor d_polygon_confirm{
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .allows_extra_modifiers = true,
@@ -1504,13 +1524,6 @@ namespace lfs::vis::input {
         static constexpr ActionDescriptor d_node_rect{
             .allowed_kinds = K::TRIGGER_KIND_MOUSE_DRAG,
             .ui_section = ActionSection::NodePicking,
-        };
-
-        // Polygon cancel inherits from GLOBAL (e.g. ESC works in any tool).
-        static constexpr ActionDescriptor d_cancel_inherit{
-            .allowed_kinds = K::TRIGGER_KIND_KEY,
-            .inherits_from_global = true,
-            .ui_section = ActionSection::Editing,
         };
 
         switch (action) {
@@ -1581,9 +1594,9 @@ namespace lfs::vis::input {
         case Action::CONFIRM_POLYGON:
             return d_polygon_confirm;
         case Action::UNDO_POLYGON_VERTEX:
-            return d_editing_local;
+            return d_selection_modal_local_control;
         case Action::CANCEL_POLYGON:
-            return d_cancel_inherit;
+            return d_selection_modal_inherit_control;
 
         case Action::SELECTION_REPLACE:
         case Action::SELECTION_ADD:

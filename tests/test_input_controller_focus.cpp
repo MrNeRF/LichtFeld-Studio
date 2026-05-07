@@ -646,7 +646,7 @@ namespace lfs::vis {
         std::filesystem::remove(profile_path);
     }
 
-    TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedScrollDefaults) {
+    TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedModalDefaults) {
         const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v5.json";
         std::filesystem::remove(profile_path);
         {
@@ -677,6 +677,10 @@ namespace lfs::vis {
                                                  input::MouseButton::RIGHT,
                                                  input::MODIFIER_NONE),
                   input::Action::NONE);
+        EXPECT_EQ(loaded.getActionForMouseButton(input::ToolMode::SELECTION,
+                                                 input::MouseButton::RIGHT,
+                                                 input::MODIFIER_NONE),
+                  input::Action::UNDO_POLYGON_VERTEX);
 
         std::filesystem::remove(profile_path);
     }
@@ -759,6 +763,10 @@ namespace lfs::vis {
                                            input::KEY_ENTER,
                                            input::MODIFIER_CTRL),
                   input::Action::CONFIRM_POLYGON);
+        EXPECT_EQ(bindings.getActionForMouseButton(input::ToolMode::SELECTION,
+                                                   input::MouseButton::RIGHT,
+                                                   input::MODIFIER_NONE),
+                  input::Action::UNDO_POLYGON_VERTEX);
     }
 
     TEST_F(InputControllerFocusTest, ClearedZoomBindingStopsViewportScrollZoom) {

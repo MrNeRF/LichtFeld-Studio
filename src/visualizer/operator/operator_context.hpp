@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "input/input_bindings.hpp"
 #include "input/input_types.hpp"
 #include <glm/glm.hpp>
 #include <memory>
@@ -18,6 +19,12 @@ namespace lfs::vis {
 
 namespace lfs::vis::op {
 
+    struct ActionEvent {
+        input::Action action = input::Action::NONE;
+        int mods = input::MODIFIER_NONE;
+        glm::dvec2 position{0.0, 0.0};
+    };
+
     struct ModalEvent {
         enum class Type : uint8_t {
             NONE,
@@ -25,10 +32,11 @@ namespace lfs::vis::op {
             MOUSE_MOVE,
             MOUSE_SCROLL,
             KEY,
+            ACTION,
         };
 
         Type type = Type::NONE;
-        std::variant<std::monostate, MouseButtonEvent, MouseMoveEvent, MouseScrollEvent, KeyEvent> data;
+        std::variant<std::monostate, MouseButtonEvent, MouseMoveEvent, MouseScrollEvent, KeyEvent, ActionEvent> data;
 
         template <typename T>
         [[nodiscard]] const T* as() const {

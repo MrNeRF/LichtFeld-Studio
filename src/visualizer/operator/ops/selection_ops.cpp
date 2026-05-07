@@ -29,6 +29,16 @@ namespace lfs::vis::op {
             }
         }
 
+        [[nodiscard]] lfs::vis::SelectionMode selectionModeFromModifiers(const int mods) {
+            if (mods & input::KEYMOD_SHIFT) {
+                return lfs::vis::SelectionMode::Add;
+            }
+            if (mods & input::KEYMOD_CTRL) {
+                return lfs::vis::SelectionMode::Remove;
+            }
+            return lfs::vis::SelectionMode::Replace;
+        }
+
     } // namespace
 
     const OperatorDescriptor SelectionStrokeOperator::DESCRIPTOR = {
@@ -103,9 +113,6 @@ namespace lfs::vis::op {
             }
 
             const bool is_stroke_button = mb->button == stroke_button_;
-            const bool is_cancel_button =
-                mb->button == static_cast<int>(input::AppMouseButton::RIGHT) &&
-                mb->button != stroke_button_;
 
             if (shape_ == lfs::vis::SelectionShape::Polygon) {
                 if (is_stroke_button && mb->action == input::ACTION_PRESS) {
@@ -133,23 +140,12 @@ namespace lfs::vis::op {
                     return OperatorResult::RUNNING_MODAL;
                 }
 
-                if (is_cancel_button && mb->action == input::ACTION_PRESS) {
-                    if (!service->undoInteractivePolygonVertex()) {
-                        return OperatorResult::CANCELLED;
-                    }
-                    return OperatorResult::RUNNING_MODAL;
-                }
-
                 return OperatorResult::PASS_THROUGH;
             }
 
             if (is_stroke_button && mb->action == input::ACTION_RELEASE) {
                 const auto result = service->finishInteractiveSelection();
                 return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
-            }
-
-            if (is_cancel_button && mb->action == input::ACTION_PRESS) {
-                return OperatorResult::CANCELLED;
             }
         }
 
@@ -158,25 +154,46 @@ namespace lfs::vis::op {
             return OperatorResult::PASS_THROUGH;
         }
 
-        if (event->type == ModalEvent::Type::KEY) {
-            const auto* key = event->as<KeyEvent>();
-            if (!key || key->action != input::ACTION_PRESS) {
+        if (event->type == ModalEvent::Type::ACTION) {
+            const auto* action = event->as<ActionEvent>();
+            if (!action) {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (shape_ == lfs::vis::SelectionShape::Polygon && key->key == input::KEY_ENTER) {
-                if (key->mods & input::KEYMOD_SHIFT) {
-                    mode_ = lfs::vis::SelectionMode::Add;
-                } else if (key->mods & input::KEYMOD_CTRL) {
-                    mode_ = lfs::vis::SelectionMode::Remove;
-                } else {
-                    mode_ = lfs::vis::SelectionMode::Replace;
+            switch (action->action) {
+            case input::Action::CONFIRM_POLYGON: {
+                if (shape_ != lfs::vis::SelectionShape::Polygon) {
+                    return OperatorResult::PASS_THROUGH;
                 }
+
+                mode_ = selectionModeFromModifiers(action->mods);
                 service->setInteractiveSelectionMode(mode_);
                 const auto result = service->finishInteractiveSelection();
                 return result.success ? OperatorResult::FINISHED : OperatorResult::RUNNING_MODAL;
             }
 
+            case input::Action::UNDO_POLYGON_VERTEX:
+                if (shape_ == lfs::vis::SelectionShape::Polygon) {
+                    if (!service->undoInteractivePolygonVertex()) {
+                        return OperatorResult::CANCELLED;
+                    }
+                    return OperatorResult::RUNNING_MODAL;
+                }
+                return OperatorResult::CANCELLED;
+
+            case input::Action::CANCEL_POLYGON:
+                return OperatorResult::CANCELLED;
+
+            default:
+                return OperatorResult::PASS_THROUGH;
+            }
+        }
+
+        if (event->type == ModalEvent::Type::KEY) {
+            const auto* key = event->as<KeyEvent>();
+            if (!key) {
+                return OperatorResult::RUNNING_MODAL;
+            }
             return OperatorResult::PASS_THROUGH;
         }
 

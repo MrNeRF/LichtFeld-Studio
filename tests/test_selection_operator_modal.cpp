@@ -26,6 +26,7 @@ using lfs::vis::KeyEvent;
 using lfs::vis::MouseButtonEvent;
 using lfs::vis::MouseMoveEvent;
 using lfs::vis::MouseScrollEvent;
+using lfs::vis::op::ActionEvent;
 using lfs::vis::op::ModalEvent;
 using lfs::vis::op::OperatorContext;
 using lfs::vis::op::OperatorProperties;
@@ -118,6 +119,18 @@ namespace {
                 .scancode = 0,
                 .action = lfs::vis::input::ACTION_PRESS,
                 .mods = mods,
+            },
+        };
+    }
+
+    ModalEvent modal_action(const lfs::vis::input::Action action, const int mods = 0,
+                            const double x = 0.0, const double y = 0.0) {
+        return ModalEvent{
+            .type = ModalEvent::Type::ACTION,
+            .data = ActionEvent{
+                .action = action,
+                .mods = mods,
+                .position = {x, y},
             },
         };
     }
@@ -220,7 +233,7 @@ TEST_F(SelectionOperatorModalTest, RectangleOperatorCommitsOnLeftRelease) {
     EXPECT_FALSE(service().isInteractiveSelectionActive());
 }
 
-TEST_F(SelectionOperatorModalTest, RectangleOperatorCancelsOnRightPress) {
+TEST_F(SelectionOperatorModalTest, RectangleOperatorCancelsOnBoundAction) {
     set_initial_selection({1, 0});
     service().setTestingScreenPositions(make_screen_positions({
         10.0f,
@@ -240,6 +253,10 @@ TEST_F(SelectionOperatorModalTest, RectangleOperatorCancelsOnRightPress) {
     EXPECT_EQ(dispatch(op,
                        mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT),
                                     lfs::vis::input::ACTION_PRESS, 10.0, 10.0),
+                       props),
+              OperatorResult::PASS_THROUGH);
+    EXPECT_EQ(dispatch(op,
+                       modal_action(lfs::vis::input::Action::UNDO_POLYGON_VERTEX),
                        props),
               OperatorResult::CANCELLED);
     op.cancel(*context_);
@@ -276,7 +293,7 @@ TEST_F(SelectionOperatorModalTest, RectangleOperatorCommitsOnConfiguredRightRele
     EXPECT_FALSE(service().isInteractiveSelectionActive());
 }
 
-TEST_F(SelectionOperatorModalTest, PolygonOperatorPassesThroughNavigationAndCommitsWithShiftEnterAddMode) {
+TEST_F(SelectionOperatorModalTest, PolygonOperatorPassesThroughNavigationAndCommitsWithBoundConfirmAction) {
     set_initial_selection({1, 0});
     service().setTestingScreenPositions(make_screen_positions({
         80.0f,
@@ -310,13 +327,18 @@ TEST_F(SelectionOperatorModalTest, PolygonOperatorPassesThroughNavigationAndComm
               OperatorResult::RUNNING_MODAL);
 
     EXPECT_EQ(dispatch(op, key_press(lfs::vis::input::KEY_ENTER, lfs::vis::input::KEYMOD_SHIFT), props),
+              OperatorResult::PASS_THROUGH);
+    EXPECT_EQ(dispatch(op,
+                       modal_action(lfs::vis::input::Action::CONFIRM_POLYGON,
+                                    lfs::vis::input::KEYMOD_SHIFT),
+                       props),
               OperatorResult::FINISHED);
 
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 1}));
     EXPECT_FALSE(service().isInteractiveSelectionActive());
 }
 
-TEST_F(SelectionOperatorModalTest, PolygonOperatorRightClickUndoesAndUnboundEscapePassesThrough) {
+TEST_F(SelectionOperatorModalTest, PolygonOperatorUndoesOnlyFromBoundActionAndUnboundKeysPassThrough) {
     set_initial_selection({1, 0});
     service().setTestingScreenPositions(make_screen_positions({
         80.0f,
@@ -341,6 +363,10 @@ TEST_F(SelectionOperatorModalTest, PolygonOperatorRightClickUndoesAndUnboundEsca
     EXPECT_EQ(dispatch(op,
                        mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT),
                                     lfs::vis::input::ACTION_PRESS, 30.0, 0.0),
+                       props),
+              OperatorResult::PASS_THROUGH);
+    EXPECT_EQ(dispatch(op,
+                       modal_action(lfs::vis::input::Action::UNDO_POLYGON_VERTEX),
                        props),
               OperatorResult::RUNNING_MODAL);
     EXPECT_TRUE(service().isInteractiveSelectionActive());
