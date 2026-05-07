@@ -378,6 +378,18 @@ namespace lfs::vis::gui {
             return {makeFilter("CSV Files", {".csv"})};
         }
 
+        [[nodiscard]] std::vector<DialogFilter> lasFilters() {
+            return {makeFilter("LAS Point Cloud Files", {".las"})};
+        }
+
+        [[nodiscard]] std::vector<DialogFilter> lazFilters() {
+            return {makeFilter("LAZ Compressed Point Cloud Files", {".laz"})};
+        }
+
+        [[nodiscard]] std::vector<DialogFilter> lasLazFilters() {
+            return {makeFilter("LAS/LAZ Point Cloud Files", {".las", ".laz"})};
+        }
+
         [[nodiscard]] std::vector<DialogFilter> videoFilters() {
             return {makeFilter("Video Files", {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})};
         }
@@ -449,6 +461,26 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenCsvFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(csvFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenLasFileDialog(const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(lasLazFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path SaveLasFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(lasFilters(), defaultPath, defaultName, ".las"), result);
+        return result;
+    }
+
+    std::filesystem::path SaveLazFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(lazFilters(), defaultPath, defaultName, ".laz"), result);
         return result;
     }
 
