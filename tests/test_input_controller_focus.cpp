@@ -9,6 +9,7 @@
 #include "input/input_router.hpp"
 #include "input/key_codes.hpp"
 #include "internal/viewport.hpp"
+#include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 
 #include <cstdint>
@@ -94,6 +95,26 @@ namespace lfs::vis {
         controller.handleKey(input::KEY_RIGHT, input::ACTION_PRESS, input::KEYMOD_NONE);
 
         EXPECT_EQ(goto_cam_view_count, 0);
+    }
+
+    TEST_F(InputControllerFocusTest, RebindingKeyCaptureBypassesPythonKeyboardCapture) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        controller.getBindings().startCapture(input::ToolMode::BRUSH,
+                                              input::Action::CYCLE_BRUSH_MODE);
+        lfs::python::request_keyboard_capture("input-controller-focus-test");
+        controller.handleKey(input::KEY_B, input::ACTION_PRESS, input::KEYMOD_NONE);
+        lfs::python::release_keyboard_capture("input-controller-focus-test");
+
+        const auto captured = controller.getBindings().getAndClearCaptured();
+        ASSERT_TRUE(captured.has_value());
+
+        const auto* key_trigger = std::get_if<input::KeyTrigger>(&*captured);
+        ASSERT_NE(key_trigger, nullptr);
+        EXPECT_EQ(key_trigger->key, input::KEY_B);
+        EXPECT_EQ(key_trigger->modifiers, input::MODIFIER_NONE);
+        EXPECT_FALSE(controller.getBindings().isCapturing());
     }
 
     TEST_F(InputControllerFocusTest, ViewportViewHotkeysDoNotBypassGuiKeyboardFocus) {
@@ -258,6 +279,33 @@ namespace lfs::vis {
         EXPECT_EQ(controller.getBindings().getActionForDrag(
                       input::ToolMode::GLOBAL, input::MouseButton::RIGHT, input::KEYMOD_SHIFT),
                   input::Action::CAMERA_PAN);
+    }
+
+    TEST_F(InputControllerFocusTest, GlobalCameraBindingsFallBackToToolModes) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(bindings.getActionForDrag(
+                      input::ToolMode::SELECTION, input::MouseButton::RIGHT, input::KEYMOD_NONE),
+                  input::Action::CAMERA_PAN);
+
+        bindings.setBinding(input::ToolMode::SELECTION,
+                            input::Action::CAMERA_ORBIT,
+                            input::MouseDragTrigger{input::MouseButton::RIGHT, input::MODIFIER_NONE});
+
+        EXPECT_EQ(bindings.getActionForDrag(
+                      input::ToolMode::SELECTION, input::MouseButton::RIGHT, input::KEYMOD_NONE),
+                  input::Action::CAMERA_ORBIT);
+        EXPECT_EQ(bindings.getActionForDrag(
+                      input::ToolMode::BRUSH, input::MouseButton::RIGHT, input::KEYMOD_NONE),
+                  input::Action::CAMERA_PAN);
+    }
+
+    TEST_F(InputControllerFocusTest, TransformModeLeftDragUsesNodeSelectionNotSelectionStroke) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(bindings.getActionForDrag(
+                      input::ToolMode::TRANSLATE, input::MouseButton::LEFT, input::KEYMOD_NONE),
+                  input::Action::NODE_RECT_SELECT);
     }
 
     TEST_F(InputControllerFocusTest, StaleMouseCaptureDoesNotRequireSecondViewportClick) {
@@ -631,6 +679,86 @@ namespace lfs::vis {
                   input::Action::NONE);
 
         std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionSevenProfileCollapsesCopiedGlobalDefaults) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v7.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "CopiedDefaults",
+  "version": 7,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 2,
+      "description": "Custom global pan",
+      "trigger_type": "drag",
+      "button": 2,
+      "modifiers": 0
+    },
+    {
+      "mode": 1,
+      "action": 2,
+      "description": "Stale copied pan",
+      "trigger_type": "drag",
+      "button": 1,
+      "modifiers": 0
+    },
+    {
+      "mode": 3,
+      "action": 44,
+      "description": "Stale transform selection",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    },
+    {
+      "mode": 1,
+      "action": 44,
+      "description": "Selection",
+      "trigger_type": "drag",
+      "button": 0,
+      "modifiers": 0
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+
+        EXPECT_FALSE(loaded.getTriggerForAction(
+            input::Action::CAMERA_PAN, input::ToolMode::SELECTION).has_value());
+        EXPECT_EQ(loaded.getActionForDrag(input::ToolMode::SELECTION,
+                                          input::MouseButton::MIDDLE,
+                                          input::MODIFIER_NONE),
+                  input::Action::CAMERA_PAN);
+        EXPECT_NE(loaded.getActionForDrag(input::ToolMode::TRANSLATE,
+                                          input::MouseButton::LEFT,
+                                          input::MODIFIER_NONE),
+                  input::Action::SELECTION_REPLACE);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, PolygonConfirmBindingAcceptsSelectionModifiers) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::SELECTION,
+                                           input::KEY_ENTER,
+                                           input::MODIFIER_NONE),
+                  input::Action::CONFIRM_POLYGON);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::SELECTION,
+                                           input::KEY_ENTER,
+                                           input::MODIFIER_SHIFT),
+                  input::Action::CONFIRM_POLYGON);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::SELECTION,
+                                           input::KEY_ENTER,
+                                           input::MODIFIER_CTRL),
+                  input::Action::CONFIRM_POLYGON);
     }
 
     TEST_F(InputControllerFocusTest, ClearedZoomBindingStopsViewportScrollZoom) {

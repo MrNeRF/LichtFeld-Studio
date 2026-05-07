@@ -57,6 +57,7 @@ namespace lfs::vis::op {
         shape_ = toSelectionShape(props.get_or<int>("mode", 0));
         mode_ = toSelectionMode(props.get_or<int>("op", 0));
         brush_radius_ = props.get_or<float>("brush_radius", 20.0f);
+        stroke_button_ = props.get_or<int>("button", static_cast<int>(input::AppMouseButton::LEFT));
         filters_.crop_filter = props.get_or<bool>("use_crop_filter", false);
         filters_.depth_filter = props.get_or<bool>("use_depth_filter", false);
         filters_.restrict_to_selected_nodes = props.get_or<bool>("restrict_to_selected_nodes", true);
@@ -101,9 +102,13 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
+            const bool is_stroke_button = mb->button == stroke_button_;
+            const bool is_cancel_button =
+                mb->button == static_cast<int>(input::AppMouseButton::RIGHT) &&
+                mb->button != stroke_button_;
+
             if (shape_ == lfs::vis::SelectionShape::Polygon) {
-                if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) &&
-                    mb->action == input::ACTION_PRESS) {
+                if (is_stroke_button && mb->action == input::ACTION_PRESS) {
                     if (service->isInteractiveSelectionClosed()) {
                         if (mb->mods & input::KEYMOD_SHIFT) {
                             (void)service->insertInteractivePolygonVertex(glm::vec2(mb->position));
@@ -122,15 +127,13 @@ namespace lfs::vis::op {
                     return OperatorResult::RUNNING_MODAL;
                 }
 
-                if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) &&
-                    mb->action == input::ACTION_RELEASE &&
+                if (is_stroke_button && mb->action == input::ACTION_RELEASE &&
                     service->isInteractivePolygonVertexDragActive()) {
                     service->endInteractivePolygonVertexDrag();
                     return OperatorResult::RUNNING_MODAL;
                 }
 
-                if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) &&
-                    mb->action == input::ACTION_PRESS) {
+                if (is_cancel_button && mb->action == input::ACTION_PRESS) {
                     if (!service->undoInteractivePolygonVertex()) {
                         return OperatorResult::CANCELLED;
                     }
@@ -140,14 +143,12 @@ namespace lfs::vis::op {
                 return OperatorResult::PASS_THROUGH;
             }
 
-            if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) &&
-                mb->action == input::ACTION_RELEASE) {
+            if (is_stroke_button && mb->action == input::ACTION_RELEASE) {
                 const auto result = service->finishInteractiveSelection();
                 return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
             }
 
-            if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) &&
-                mb->action == input::ACTION_PRESS) {
+            if (is_cancel_button && mb->action == input::ACTION_PRESS) {
                 return OperatorResult::CANCELLED;
             }
         }
@@ -163,10 +164,6 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (key->key == input::KEY_ESCAPE) {
-                return OperatorResult::CANCELLED;
-            }
-
             if (shape_ == lfs::vis::SelectionShape::Polygon && key->key == input::KEY_ENTER) {
                 if (key->mods & input::KEYMOD_SHIFT) {
                     mode_ = lfs::vis::SelectionMode::Add;
@@ -180,9 +177,7 @@ namespace lfs::vis::op {
                 return result.success ? OperatorResult::FINISHED : OperatorResult::RUNNING_MODAL;
             }
 
-            if (shape_ == lfs::vis::SelectionShape::Polygon) {
-                return OperatorResult::PASS_THROUGH;
-            }
+            return OperatorResult::PASS_THROUGH;
         }
 
         return OperatorResult::RUNNING_MODAL;

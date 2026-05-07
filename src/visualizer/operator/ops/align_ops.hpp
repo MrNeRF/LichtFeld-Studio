@@ -22,6 +22,7 @@ namespace lfs::vis::op {
 
     private:
         std::vector<glm::vec3> picked_points_;
+        int pick_button_ = 0;
 
         glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y) const;
         void applyAlignment(OperatorContext& ctx);

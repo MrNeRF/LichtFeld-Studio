@@ -253,6 +253,15 @@ namespace lfs::vis {
             lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
             return true;
         }
+
+        [[nodiscard]] bool shouldDeferClickActionForDrag(const input::Action action) {
+            switch (action) {
+            case input::Action::CAMERA_SET_PIVOT:
+                return true;
+            default:
+                return false;
+            }
+        }
     } // namespace
 
     InputController* InputController::instance_ = nullptr;
@@ -404,6 +413,12 @@ namespace lfs::vis {
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
+        pending_click_drag_ = {};
+        forced_mouse_press_action_ = input::Action::NONE;
+        is_node_rect_dragging_ = false;
+        node_rect_button_ = -1;
+        node_point_pick_enabled_ = false;
+        node_rect_select_enabled_ = false;
     }
 
     bool InputController::hasViewportKeyboardFocus() const {
@@ -590,16 +605,27 @@ namespace lfs::vis {
         last_general_click_pos_ = {x, y};
         last_general_click_button_ = button;
 
-        // Check double-click bindings first, then drag bindings
-        auto bound_action = input::Action::NONE;
-        if (is_general_double_click) {
-            bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, true);
+        // Check double-click bindings first, then drag bindings.
+        const auto double_click_action = is_general_double_click
+                                             ? bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, true)
+                                             : input::Action::NONE;
+        const auto drag_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
+        const auto single_click_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
+        auto bound_action = double_click_action;
+        if (bound_action == input::Action::NONE) {
+            if (single_click_action == input::Action::NODE_PICK &&
+                drag_action == input::Action::NODE_RECT_SELECT) {
+                bound_action = input::Action::NODE_PICK;
+            } else {
+                bound_action = drag_action;
+            }
         }
         if (bound_action == input::Action::NONE) {
-            bound_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
+            bound_action = single_click_action;
         }
-        if (bound_action == input::Action::NONE) {
-            bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
+        if (action == input::ACTION_PRESS &&
+            forced_mouse_press_action_ != input::Action::NONE) {
+            bound_action = forced_mouse_press_action_;
         }
 
         const bool is_right_button = button == static_cast<int>(input::AppMouseButton::RIGHT);
@@ -624,6 +650,35 @@ namespace lfs::vis {
             if (!isInViewport(x, y)) {
                 return;
             }
+
+            if (forced_mouse_press_action_ == input::Action::NONE &&
+                double_click_action == input::Action::NONE &&
+                shouldDeferClickActionForDrag(single_click_action) &&
+                drag_action != input::Action::NONE &&
+                drag_action != single_click_action) {
+                pending_click_drag_ = {
+                    .active = true,
+                    .button = button,
+                    .mods = mods,
+                    .click_action = single_click_action,
+                    .drag_action = drag_action,
+                    .press_pos = {x, y},
+                };
+                return;
+            }
+
+            const auto begin_node_selection_tracking = [&](const bool point_pick_enabled,
+                                                           const bool rect_select_enabled) {
+                if (!over_gui && !over_gizmo && tool_context_ && !over_transform_gizmo) {
+                    is_node_rect_dragging_ = true;
+                    node_rect_button_ = button;
+                    node_point_pick_enabled_ = point_pick_enabled;
+                    node_rect_select_enabled_ = rect_select_enabled;
+                    node_rect_panel_ = splitPanelForScreenX(x);
+                    node_rect_start_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
+                    node_rect_end_ = node_rect_start_;
+                }
+            };
 
             switch (bound_action) {
             case input::Action::CAMERA_PAN:
@@ -750,6 +805,8 @@ namespace lfs::vis {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
+                        props.set("button", button);
+                        props.set("modifiers", mods);
                         props.set("mode", sub_mode);
                         props.set("op", selection_op);
                         props.set("brush_radius", selection_tool_->getBrushRadius());
@@ -770,6 +827,8 @@ namespace lfs::vis {
                             op::OperatorProperties props;
                             props.set("x", x);
                             props.set("y", y);
+                            props.set("button", button);
+                            props.set("modifiers", mods);
                             props.set("mode", brush_mode);
                             props.set("action", brush_action);
                             props.set("brush_radius", brush_tool_->getBrushRadius());
@@ -781,6 +840,8 @@ namespace lfs::vis {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
+                        props.set("button", button);
+                        props.set("modifiers", mods);
                         const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
                         if (result.status != op::OperatorResult::CANCELLED) {
                             return;
@@ -789,37 +850,41 @@ namespace lfs::vis {
                 }
                 break;
 
+            case input::Action::NODE_PICK:
+                begin_node_selection_tracking(true, drag_action == input::Action::NODE_RECT_SELECT);
+                break;
+
+            case input::Action::NODE_RECT_SELECT:
+                begin_node_selection_tracking(false, true);
+                break;
+
             case input::Action::NONE:
             default:
                 if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
+                    props.set("button", button);
+                    props.set("modifiers", mods);
                     const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
                     if (result.status != op::OperatorResult::CANCELLED) {
                         return;
                     }
                 }
-
-                // Node picking (controlled by bindings, skips if a transform gizmo is active)
-                const input::ToolMode input_mode = getCurrentToolMode();
-                const input::Action pick_action = bindings_.getActionForMouseButton(
-                    input_mode, input::MouseButton::LEFT, mods);
-                const input::Action drag_action = bindings_.getActionForDrag(
-                    input_mode, input::MouseButton::LEFT, mods, held_keys_);
-                const bool has_node_binding = (pick_action == input::Action::NODE_PICK ||
-                                               drag_action == input::Action::NODE_RECT_SELECT);
-
-                if (!over_gui && !over_gizmo && is_left_button && tool_context_ &&
-                    !over_transform_gizmo && has_node_binding) {
-                    is_node_rect_dragging_ = true;
-                    node_rect_panel_ = splitPanelForScreenX(x);
-                    node_rect_start_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
-                    node_rect_end_ = node_rect_start_;
-                }
                 break;
             }
         } else if (action == input::ACTION_RELEASE) {
+            if (pending_click_drag_.active &&
+                pending_click_drag_.button == button) {
+                const auto pending = pending_click_drag_;
+                pending_click_drag_ = {};
+                forced_mouse_press_action_ = pending.click_action;
+                handleMouseButton(button, input::ACTION_PRESS,
+                                  pending.press_pos.x, pending.press_pos.y);
+                forced_mouse_press_action_ = input::Action::NONE;
+                return;
+            }
+
             if (is_right_button && pending_camera_context_menu_.active) {
                 pending_camera_context_menu_.released = true;
                 pending_camera_context_menu_.release_pos = {x, y};
@@ -877,22 +942,30 @@ namespace lfs::vis {
                     !over_transform_gizmo) {
                     selectCameraByUid(pressed_camera_frustum_id);
                 }
-                if (is_left_button) {
+                if (button == node_rect_button_) {
                     is_node_rect_dragging_ = false;
+                    node_rect_button_ = -1;
+                    node_point_pick_enabled_ = false;
+                    node_rect_select_enabled_ = false;
                 }
                 return;
             }
 
             // Node picking on release
-            if (is_node_rect_dragging_ && is_left_button) {
+            if (is_node_rect_dragging_ && button == node_rect_button_) {
+                const bool point_pick_enabled = node_point_pick_enabled_;
+                const bool rect_select_enabled = node_rect_select_enabled_;
                 is_node_rect_dragging_ = false;
+                node_rect_button_ = -1;
+                node_point_pick_enabled_ = false;
+                node_rect_select_enabled_ = false;
                 if (!press_consumed_camera_frustum && tool_context_ && !isPointerOverBlockingUi(x, y)) {
                     auto* scene_manager = tool_context_->getSceneManager();
                     if (scene_manager) {
                         constexpr float CLICK_THRESHOLD_PX = 5.0f;
                         const float drag_dist = glm::length(node_rect_end_ - node_rect_start_);
 
-                        if (drag_dist < CLICK_THRESHOLD_PX) {
+                        if (drag_dist < CLICK_THRESHOLD_PX && point_pick_enabled) {
                             // Point pick via ray-AABB intersection
                             const auto [ray_origin, ray_dir] = computePickRay(x, y);
                             const std::string picked = scene_manager->pickNodeByRay(ray_origin, ray_dir);
@@ -903,7 +976,7 @@ namespace lfs::vis {
                             } else {
                                 (void)cap::clearNodeSelection(*scene_manager);
                             }
-                        } else {
+                        } else if (drag_dist >= CLICK_THRESHOLD_PX && rect_select_enabled) {
                             // Rectangle selection — convert window coords to viewport-local
                             glm::vec2 vp_offset(0.0f);
                             if (auto* gm = services().guiOrNull())
@@ -1002,6 +1075,20 @@ namespace lfs::vis {
 
         const bool over_viewport_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
         const bool over_transform_gizmo = isTransformGizmoOverOrUsing();
+
+        if (pending_click_drag_.active) {
+            if (!isMouseButtonPressed(pending_click_drag_.button)) {
+                pending_click_drag_ = {};
+            } else if (glm::length(current_pos - pending_click_drag_.press_pos) >=
+                       DOUBLE_CLICK_DISTANCE) {
+                const auto pending = pending_click_drag_;
+                pending_click_drag_ = {};
+                forced_mouse_press_action_ = pending.drag_action;
+                handleMouseButton(pending.button, input::ACTION_PRESS,
+                                  pending.press_pos.x, pending.press_pos.y);
+                forced_mouse_press_action_ = input::Action::NONE;
+            }
+        }
 
         if (drag_mode_ == DragMode::Splitter && services().renderingOrNull()) {
             const auto viewport_size = glm::ivec2(static_cast<int>(viewport_bounds_.width),
@@ -1118,6 +1205,9 @@ namespace lfs::vis {
         if (is_node_rect_dragging_) {
             if (isTransformGizmoUsing()) {
                 is_node_rect_dragging_ = false;
+                node_rect_button_ = -1;
+                node_point_pick_enabled_ = false;
+                node_rect_select_enabled_ = false;
             } else {
                 node_rect_end_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
                 if (tool_context_)
@@ -1287,6 +1377,14 @@ namespace lfs::vis {
             }
         }
 
+        auto* gui = services().guiOrNull();
+
+        // Forward to binding capture before Python panels or modal operators consume keys.
+        if (action == input::ACTION_PRESS && bindings_.isCapturing()) {
+            bindings_.captureKey(physical_key, logical_key, mods);
+            return;
+        }
+
         if (lfs::python::has_keyboard_capture_request()) {
             return;
         }
@@ -1297,14 +1395,6 @@ namespace lfs::vis {
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         if (dispatchKeyToModals(logical_key, scancode, action, mods, mx, my, over_gui_hover)) {
-            return;
-        }
-
-        auto* gui = services().guiOrNull();
-
-        // Forward to GUI for key capture (rebinding)
-        if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
-            gui->captureKey(physical_key, logical_key, mods);
             return;
         }
 
@@ -1439,11 +1529,58 @@ namespace lfs::vis {
                 return;
 
             case input::Action::CANCEL_POLYGON:
+                if (op::operators().hasModalOperator()) {
+                    op::operators().cancelModalOperator();
+                    return;
+                }
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
                         if (auto* selection_service = sm->getSelectionService();
                             selection_service && selection_service->isInteractiveSelectionActive()) {
                             selection_service->cancelInteractiveSelection();
+                            return;
+                        }
+                    }
+                }
+                return;
+
+            case input::Action::CONFIRM_POLYGON:
+                if (op::operators().hasModalOperator()) {
+                    op::ModalEvent evt{};
+                    evt.type = op::ModalEvent::Type::KEY;
+                    evt.data = KeyEvent{input::KEY_ENTER, 0, input::ACTION_PRESS, mods};
+                    if (op::operators().dispatchModalEvent(evt) != op::OperatorResult::PASS_THROUGH) {
+                        return;
+                    }
+                }
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager()) {
+                        if (auto* selection_service = sm->getSelectionService();
+                            selection_service &&
+                            selection_service->isInteractiveSelectionActive() &&
+                            selection_service->getInteractiveSelectionShape() == SelectionShape::Polygon) {
+                            if (mods & input::KEYMOD_SHIFT) {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Add);
+                            } else if (mods & input::KEYMOD_CTRL) {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Remove);
+                            } else {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Replace);
+                            }
+                            (void)selection_service->finishInteractiveSelection();
+                            return;
+                        }
+                    }
+                }
+                return;
+
+            case input::Action::UNDO_POLYGON_VERTEX:
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager()) {
+                        if (auto* selection_service = sm->getSelectionService();
+                            selection_service &&
+                            selection_service->isInteractiveSelectionActive() &&
+                            selection_service->getInteractiveSelectionShape() == SelectionShape::Polygon) {
+                            (void)selection_service->undoInteractivePolygonVertex();
                             return;
                         }
                     }
@@ -2221,6 +2358,12 @@ namespace lfs::vis {
         drag_button_ = -1;
         drag_viewport_ = nullptr;
         drag_split_panel_ = SplitViewPanelId::Left;
+        pending_click_drag_ = {};
+        forced_mouse_press_action_ = input::Action::NONE;
+        is_node_rect_dragging_ = false;
+        node_rect_button_ = -1;
+        node_point_pick_enabled_ = false;
+        node_rect_select_enabled_ = false;
         clearSelectedCameraContextMenuGesture();
         press_selected_camera_frustum_ = false;
         pressed_camera_frustum_id_ = -1;

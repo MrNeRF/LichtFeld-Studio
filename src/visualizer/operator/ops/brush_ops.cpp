@@ -115,6 +115,7 @@ namespace lfs::vis::op {
 
         brush_radius_ = props.get_or<float>("brush_radius", 20.0f);
         saturation_amount_ = props.get_or<float>("saturation_amount", 0.5f);
+        stroke_button_ = props.get_or<int>("button", static_cast<int>(input::AppMouseButton::LEFT));
 
         const auto x = props.get_or<double>("x", 0.0);
         const auto y = props.get_or<double>("y", 0.0);
@@ -171,7 +172,7 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) && mb->action == input::ACTION_RELEASE) {
+            if (mb->button == stroke_button_ && mb->action == input::ACTION_RELEASE) {
                 if (mode_ == BrushMode::Select) {
                     finalizeSelectionStroke(ctx);
                 } else {
@@ -181,15 +182,17 @@ namespace lfs::vis::op {
                 return OperatorResult::FINISHED;
             }
 
-            if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) && mb->action == input::ACTION_PRESS) {
+            if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) &&
+                mb->button != stroke_button_ &&
+                mb->action == input::ACTION_PRESS) {
                 return OperatorResult::CANCELLED;
             }
         }
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
-            if (ke && ke->key == input::KEY_ESCAPE && ke->action == input::ACTION_PRESS) {
-                return OperatorResult::CANCELLED;
+            if (ke && ke->action == input::ACTION_PRESS) {
+                return OperatorResult::PASS_THROUGH;
             }
         }
 

@@ -15,32 +15,58 @@ TOOL_MODE_NAMES = (
     "GLOBAL",
     "SELECTION",
     "BRUSH",
-    "ALIGN",
-    "CROP_BOX",
     "TRANSLATE",
     "ROTATE",
     "SCALE",
+    "ALIGN",
+    "CROP_BOX",
 )
 
 ACTION_NAMES = (
+    "NONE",
     "CAMERA_ORBIT",
     "CAMERA_PAN",
     "CAMERA_ZOOM",
     "CAMERA_ROLL",
-    "CAMERA_SET_PIVOT",
     "CAMERA_MOVE_FORWARD",
     "CAMERA_MOVE_BACKWARD",
     "CAMERA_MOVE_LEFT",
     "CAMERA_MOVE_RIGHT",
     "CAMERA_MOVE_UP",
     "CAMERA_MOVE_DOWN",
+    "CAMERA_RESET_HOME",
+    "CAMERA_FOCUS_SELECTION",
+    "CAMERA_SET_PIVOT",
+    "CAMERA_NEXT_VIEW",
+    "CAMERA_PREV_VIEW",
     "CAMERA_SPEED_UP",
     "CAMERA_SPEED_DOWN",
     "ZOOM_SPEED_UP",
     "ZOOM_SPEED_DOWN",
-    "CAMERA_RESET_HOME",
-    "CAMERA_NEXT_VIEW",
-    "CAMERA_PREV_VIEW",
+    "TOGGLE_SPLIT_VIEW",
+    "TOGGLE_INDEPENDENT_SPLIT_VIEW",
+    "TOGGLE_GT_COMPARISON",
+    "TOGGLE_DEPTH_MODE",
+    "CYCLE_PLY",
+    "DELETE_SELECTED",
+    "DELETE_NODE",
+    "UNDO",
+    "REDO",
+    "INVERT_SELECTION",
+    "DESELECT_ALL",
+    "SELECT_ALL",
+    "COPY_SELECTION",
+    "PASTE_SELECTION",
+    "DEPTH_ADJUST_FAR",
+    "DEPTH_ADJUST_SIDE",
+    "TOGGLE_SELECTION_DEPTH_FILTER",
+    "TOGGLE_SELECTION_CROP_FILTER",
+    "BRUSH_RESIZE",
+    "CYCLE_BRUSH_MODE",
+    "CONFIRM_POLYGON",
+    "CANCEL_POLYGON",
+    "UNDO_POLYGON_VERTEX",
+    "CYCLE_SELECTION_VIS",
     "SELECTION_REPLACE",
     "SELECTION_ADD",
     "SELECTION_REMOVE",
@@ -49,28 +75,23 @@ ACTION_NAMES = (
     "SELECT_MODE_POLYGON",
     "SELECT_MODE_LASSO",
     "SELECT_MODE_RINGS",
-    "TOGGLE_DEPTH_MODE",
-    "TOGGLE_SELECTION_DEPTH_FILTER",
-    "TOGGLE_SELECTION_CROP_FILTER",
-    "DEPTH_ADJUST_NEAR",
-    "DEPTH_ADJUST_FAR",
-    "DEPTH_ADJUST_SIDE",
-    "CYCLE_BRUSH_MODE",
-    "BRUSH_RESIZE",
     "APPLY_CROP_BOX",
-    "UNDO",
-    "REDO",
-    "COPY_SELECTION",
-    "PASTE_SELECTION",
-    "INVERT_SELECTION",
-    "DESELECT_ALL",
-    "TOGGLE_SPLIT_VIEW",
-    "TOGGLE_INDEPENDENT_SPLIT_VIEW",
-    "TOGGLE_GT_COMPARISON",
-    "CYCLE_PLY",
-    "CYCLE_SELECTION_VIS",
-    "DELETE_NODE",
-    "DELETE_SELECTED",
+    "NODE_PICK",
+    "NODE_RECT_SELECT",
+    "TOGGLE_UI",
+    "TOGGLE_FULLSCREEN",
+    "SEQUENCER_ADD_KEYFRAME",
+    "SEQUENCER_UPDATE_KEYFRAME",
+    "SEQUENCER_PLAY_PAUSE",
+    "TOOL_SELECT",
+    "TOOL_TRANSLATE",
+    "TOOL_ROTATE",
+    "TOOL_SCALE",
+    "TOOL_MIRROR",
+    "TOOL_BRUSH",
+    "TOOL_ALIGN",
+    "PIE_MENU",
+    "DEPTH_ADJUST_NEAR",
 )
 
 
@@ -112,6 +133,19 @@ def _install_lf_stub(monkeypatch):
         state.triggers[(mode, action_value)] = trigger
         return True
 
+    def get_allowed_trigger_kinds(action_value):
+        if action_value in (action.CAMERA_ORBIT, action.CAMERA_PAN):
+            return ["mouse_button", "mouse_drag"]
+        if action_value in (action.CAMERA_ZOOM, action.CAMERA_ROLL, action.BRUSH_RESIZE):
+            return ["mouse_scroll"]
+        if action_value in (action.SELECTION_REPLACE, action.SELECTION_ADD, action.SELECTION_REMOVE):
+            return ["mouse_button", "mouse_drag"]
+        if action_value == action.NODE_PICK:
+            return ["mouse_button"]
+        if action_value == action.NODE_RECT_SELECT:
+            return ["mouse_drag"]
+        return ["key"]
+
     keymap = SimpleNamespace(
         ToolMode=tool_mode,
         Action=action,
@@ -123,6 +157,7 @@ def _install_lf_stub(monkeypatch):
         get_trigger=lambda action_value, mode: state.triggers.get((mode, action_value)),
         set_trigger_binding=set_trigger_binding,
         find_conflict_for_action=lambda _mode, _action: state.conflict[0],
+        get_allowed_trigger_kinds=get_allowed_trigger_kinds,
         is_capturing=lambda: state.capturing[0],
         is_waiting_for_double_click=lambda: state.waiting_double[0],
         load_profile=lambda name: state.current_profile.__setitem__(0, name),
@@ -214,12 +249,15 @@ def test_input_settings_builds_profile_and_mode_records(input_settings_module):
         {"index": "0", "label": "Default"},
         {"index": "1", "label": "Studio"},
     ]
-    assert panel._handle.records["tool_modes"][:5] == [
+    assert panel._handle.records["tool_modes"] == [
         {"index": "0", "label": "Mode GLOBAL"},
         {"index": "1", "label": "Mode SELECTION"},
         {"index": "2", "label": "Mode BRUSH"},
-        {"index": "3", "label": "Mode ALIGN"},
-        {"index": "4", "label": "Mode CROP_BOX"},
+        {"index": "3", "label": "Mode TRANSLATE"},
+        {"index": "4", "label": "Mode ROTATE"},
+        {"index": "5", "label": "Mode SCALE"},
+        {"index": "6", "label": "Mode ALIGN"},
+        {"index": "7", "label": "Mode CROP_BOX"},
     ]
 
 
@@ -244,7 +282,7 @@ def test_input_settings_builds_binding_rows_with_capture_state(input_settings_mo
         if not row["is_section"]
         and row["action_id"] == str(module.lf.keymap.Action.CAMERA_ORBIT.value)
     )
-    assert orbit_row["desc_text"] == "input_settings.press_key_or_click"
+    assert orbit_row["desc_text"] == "input_settings.click_or_drag_mouse"
     assert orbit_row["desc_class"] == "is-binding-desc is-capturing"
     assert orbit_row["button_action"] == "cancel"
     assert orbit_row["button_label"] == "input_settings.cancel"
@@ -386,6 +424,50 @@ def test_input_settings_selection_mode_shows_only_streamlined_depth_actions(inpu
 
     assert str(module.lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER.value) in action_ids
     assert str(module.lf.keymap.Action.DEPTH_ADJUST_FAR.value) in action_ids
+    assert str(module.lf.keymap.Action.CONFIRM_POLYGON.value) in action_ids
+    assert str(module.lf.keymap.Action.CANCEL_POLYGON.value) in action_ids
+    assert str(module.lf.keymap.Action.UNDO_POLYGON_VERTEX.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_DEPTH_MODE.value) not in action_ids
     assert str(module.lf.keymap.Action.DEPTH_ADJUST_NEAR.value) not in action_ids
     assert str(module.lf.keymap.Action.DEPTH_ADJUST_SIDE.value) not in action_ids
+
+
+def test_input_settings_transform_mode_exposes_node_picking(input_settings_module):
+    module, _state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+
+    panel._rebuild_binding_rows(module.lf.keymap.ToolMode.TRANSLATE)
+
+    action_ids = {
+        row["action_id"]
+        for row in panel._handle.records["binding_rows"]
+        if not row["is_section"]
+    }
+    section_titles = {
+        row["section_title"]
+        for row in panel._handle.records["binding_rows"]
+        if row["is_section"]
+    }
+
+    assert "input_settings.section.node_picking" in section_titles
+    assert str(module.lf.keymap.Action.NODE_PICK.value) in action_ids
+    assert str(module.lf.keymap.Action.NODE_RECT_SELECT.value) in action_ids
+
+
+def test_input_settings_global_mode_exposes_system_sections(input_settings_module):
+    module, _state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+
+    panel._rebuild_binding_rows(module.lf.keymap.ToolMode.GLOBAL)
+
+    action_ids = {
+        row["action_id"]
+        for row in panel._handle.records["binding_rows"]
+        if not row["is_section"]
+    }
+
+    assert str(module.lf.keymap.Action.TOOL_TRANSLATE.value) in action_ids
+    assert str(module.lf.keymap.Action.TOGGLE_UI.value) in action_ids
+    assert str(module.lf.keymap.Action.SEQUENCER_PLAY_PAUSE.value) in action_ids

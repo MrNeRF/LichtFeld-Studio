@@ -330,6 +330,24 @@ namespace lfs::python {
             "Get display string for modifier bitmask");
 
         keymap.def(
+            "get_allowed_trigger_kinds",
+            [](Action action) {
+                nb::list result;
+                const auto allowed = describe(action).allowed_kinds;
+                if (allowed & TRIGGER_KIND_KEY)
+                    result.append("key");
+                if (allowed & TRIGGER_KIND_MOUSE_BUTTON)
+                    result.append("mouse_button");
+                if (allowed & TRIGGER_KIND_MOUSE_SCROLL)
+                    result.append("mouse_scroll");
+                if (allowed & TRIGGER_KIND_MOUSE_DRAG)
+                    result.append("mouse_drag");
+                return result;
+            },
+            nb::arg("action"),
+            "Get allowed trigger kinds for an action");
+
+        keymap.def(
             "get_available_profiles",
             []() {
                 if (!get_keymap_bindings())

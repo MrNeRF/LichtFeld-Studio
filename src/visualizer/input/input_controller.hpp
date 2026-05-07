@@ -220,6 +220,19 @@ namespace lfs::vis {
         Viewport* drag_viewport_ = nullptr;
         SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
+        int node_rect_button_ = -1;
+        bool node_point_pick_enabled_ = false;
+        bool node_rect_select_enabled_ = false;
+        struct PendingClickDragGesture {
+            bool active = false;
+            int button = -1;
+            int mods = input::MODIFIER_NONE;
+            input::Action click_action = input::Action::NONE;
+            input::Action drag_action = input::Action::NONE;
+            glm::dvec2 press_pos{0.0, 0.0};
+        };
+        PendingClickDragGesture pending_click_drag_;
+        input::Action forced_mouse_press_action_ = input::Action::NONE;
         struct PendingCameraContextMenuGesture {
             bool active = false;
             bool released = false;

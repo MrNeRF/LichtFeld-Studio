@@ -39,6 +39,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
 
@@ -128,6 +129,27 @@ namespace lfs::vis::gui {
 
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
+
+        void capturePressedKeysForRebinding(InputController& input_controller,
+                                            const FrameInputBuffer& input) {
+            auto& bindings = input_controller.getBindings();
+            if (!bindings.isCapturing())
+                return;
+
+            const int mods = input::sdlModsToAppMods(input.key_mods);
+            for (const SDL_Scancode scancode : input.keys_pressed) {
+                const int physical_key = input::sdlScancodeToAppKey(scancode);
+                int logical_key = input::sdlKeycodeToAppKey(
+                    SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false));
+                if (logical_key == input::KEY_UNKNOWN) {
+                    logical_key = physical_key;
+                }
+
+                bindings.captureKey(physical_key, logical_key, mods);
+                if (!bindings.isCapturing())
+                    return;
+            }
+        }
 
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
             return isBoundsGizmoHovered() ||
@@ -4521,6 +4543,9 @@ namespace lfs::vis::gui {
             rmlui_manager_.clearVulkanQueue();
         }
         const auto& sdl_input = viewer_->getWindowManager()->frameInput();
+        if (auto* input_controller = viewer_->getInputController()) {
+            capturePressedKeysForRebinding(*input_controller, sdl_input);
+        }
 
         // Check mouse state before ImGui::NewFrame() updates WantCaptureMouse
         const bool mouse_in_viewport = isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y);

@@ -154,6 +154,7 @@ namespace lfs::vis::op {
     OperatorResult AlignPickPointOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
         picked_points_.clear();
         services().clearAlignPickedPoints();
+        pick_button_ = props.get_or<int>("button", static_cast<int>(lfs::vis::input::AppMouseButton::LEFT));
 
         const auto x = props.get_or<double>("x", 0.0);
         const auto y = props.get_or<double>("y", 0.0);
@@ -185,11 +186,12 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT)) {
+            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT) &&
+                mb->button != pick_button_) {
                 return OperatorResult::CANCELLED;
             }
 
-            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::LEFT)) {
+            if (mb->button == pick_button_) {
                 const glm::vec3 world_pos = unprojectScreenPoint(ctx, mb->position.x, mb->position.y);
                 if (!Viewport::isValidWorldPosition(world_pos)) {
                     return OperatorResult::RUNNING_MODAL;
@@ -212,8 +214,8 @@ namespace lfs::vis::op {
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
-            if (ke && ke->key == lfs::vis::input::KEY_ESCAPE && ke->action == lfs::vis::input::ACTION_PRESS) {
-                return OperatorResult::CANCELLED;
+            if (ke && ke->action == lfs::vis::input::ACTION_PRESS) {
+                return OperatorResult::PASS_THROUGH;
             }
         }
 

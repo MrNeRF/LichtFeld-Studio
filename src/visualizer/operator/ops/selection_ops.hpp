@@ -24,6 +24,7 @@ namespace lfs::vis::op {
         lfs::vis::SelectionShape shape_ = lfs::vis::SelectionShape::Brush;
         lfs::vis::SelectionMode mode_ = lfs::vis::SelectionMode::Replace;
         float brush_radius_ = 20.0f;
+        int stroke_button_ = 0;
         SelectionFilterState filters_{};
     };
 

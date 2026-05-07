@@ -37,6 +37,7 @@ namespace lfs::vis::op {
         BrushAction action_ = BrushAction::Add;
         float brush_radius_ = 20.0f;
         float saturation_amount_ = 0.5f;
+        int stroke_button_ = 0;
         glm::vec2 last_stroke_pos_{0.0f};
 
         // Selection mode state

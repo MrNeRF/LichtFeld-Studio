@@ -260,7 +260,8 @@ namespace lfs::vis::input {
 
         static std::filesystem::path getConfigDir();
 
-        // Query bindings (mode-specific only, no fallback)
+        // Query effective bindings. Mode-local bindings are checked first; actions
+        // marked as inherited then fall back to GLOBAL.
         Action getActionForKey(ToolMode mode, int key, int modifiers) const;
         Action getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click = false) const;
         // held_keys: non-modifier keys currently held in press order; chord lookup
@@ -270,6 +271,7 @@ namespace lfs::vis::input {
         Action getActionForDrag(ToolMode mode, MouseButton button, int modifiers, const std::vector<int>& held_keys = {}) const;
 
         std::optional<InputTrigger> getTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
+        std::optional<InputTrigger> getEffectiveTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
         std::string getTriggerDescription(Action action, ToolMode mode = ToolMode::GLOBAL) const;
 
         // Get the key code for a continuous action (returns -1 if not a key binding)
@@ -278,10 +280,9 @@ namespace lfs::vis::input {
         void setBinding(ToolMode mode, Action action, const InputTrigger& trigger);
         void clearBinding(ToolMode mode, Action action);
 
-        // Returns the first binding that shares this trigger in the given mode
-        // (or in GLOBAL when the action inherits from global). The action being
-        // re-bound is ignored so callers can detect conflicts after a capture
-        // has already replaced its own previous binding.
+        // Returns the first same-mode binding that shares this trigger. The action
+        // being re-bound is ignored so callers can detect conflicts after a
+        // capture has already replaced its own previous binding.
         [[nodiscard]] std::optional<BindingConflict> findConflict(
             ToolMode mode, const InputTrigger& trigger, Action ignore_action) const;
 
@@ -337,6 +338,7 @@ namespace lfs::vis::input {
         void notifyBindingsChanged();
 
         size_t migrateLoadedProfile(int version);
+        size_t collapseRedundantModeBindings(int version);
     };
 
     LFS_VIS_API std::string getActionName(Action action);
