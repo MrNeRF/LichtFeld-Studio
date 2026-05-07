@@ -2424,12 +2424,8 @@ class AssetManagerPanel(Panel):
             "selected_total_size",
             "selection_type",
             "selected_project_name",
-            "selected_project_scene_count",
-            "selected_project_total_assets",
-            "selected_project_path",
             "selected_project_created",
             "selected_project_modified",
-            "selected_project_scenes",
             *self._selection_visibility_fields(),
         )
         return True
@@ -3819,7 +3815,7 @@ class AssetManagerPanel(Panel):
         self._handle.update_record_list("projects", self.get_project_list())
         self._handle.update_record_list("scenes", self.get_scene_list())
         self._handle.update_record_list("filters", self.get_filter_list())
-        self._handle.update_record_list("tags", self.get_tag_list())
+        # Note: "tags" record list removed - not bound in on_bind_model
         self._handle.update_record_list("assets", self.get_filtered_assets())
 
         # Update selection-specific record lists
@@ -3873,11 +3869,8 @@ class AssetManagerPanel(Panel):
                                 "asset_count": scene_asset_count,
                             }
                         )
-                self._handle.update_record_list(
-                    "selected_project_scenes", project_scenes
-                )
-            else:
-                self._handle.update_record_list("selected_project_scenes", [])
+                # Note: selected_project_scenes record list removed - not used in UI
+            # Note: selected_project_scenes record list removed - not used in UI
 
             selected_asset = self._get_selected_asset()
             if selected_asset:
@@ -3970,7 +3963,6 @@ class AssetManagerPanel(Panel):
                     "projects": self.get_project_list,
                     "scenes": self.get_scene_list,
                     "filters": self.get_filter_list,
-                    "tags": self.get_tag_list,
                     "assets": self.get_filtered_assets,
                     "selected_asset_tags": lambda: [
                         {"value": tag}
