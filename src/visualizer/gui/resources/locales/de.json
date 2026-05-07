@@ -1016,6 +1016,8 @@
     "cancel": "Abbrechen",
     "replace": "Ersetzen",
     "conflict_title": "Belegung ersetzen?",
+    "conflict_message": "{trigger} ist bereits {action} in {mode} zugewiesen. Diese Belegung ersetzen?",
+    "conflict_inline": "{binding}  ⚠ auch: {action}",
     "press_key_or_click": "Taste drücken oder Maus klicken...",
     "press_key": "Taste drücken...",
     "click_mouse": "Maustaste klicken...",

@@ -300,6 +300,47 @@ namespace lfs::vis {
                   input::Action::CAMERA_PAN);
     }
 
+    TEST_F(InputControllerFocusTest, BindingConflictChecksInheritedGlobalBindings) {
+        input::InputBindings bindings;
+        const input::MouseDragTrigger right_drag{
+            input::MouseButton::RIGHT,
+            input::MODIFIER_NONE,
+        };
+
+        bindings.setBinding(input::ToolMode::TRANSLATE,
+                            input::Action::NODE_RECT_SELECT,
+                            right_drag);
+
+        const auto conflict = bindings.findConflict(input::ToolMode::TRANSLATE,
+                                                    right_drag,
+                                                    input::Action::NODE_RECT_SELECT);
+        ASSERT_TRUE(conflict.has_value());
+        EXPECT_EQ(conflict->other_action, input::Action::CAMERA_PAN);
+        EXPECT_EQ(conflict->other_mode, input::ToolMode::GLOBAL);
+    }
+
+    TEST_F(InputControllerFocusTest, BindingConflictPrefersSameModeOverInheritedGlobal) {
+        input::InputBindings bindings;
+        const input::MouseDragTrigger right_drag{
+            input::MouseButton::RIGHT,
+            input::MODIFIER_NONE,
+        };
+
+        bindings.setBinding(input::ToolMode::TRANSLATE,
+                            input::Action::NODE_RECT_SELECT,
+                            right_drag);
+        bindings.setBinding(input::ToolMode::TRANSLATE,
+                            input::Action::CAMERA_ORBIT,
+                            right_drag);
+
+        const auto conflict = bindings.findConflict(input::ToolMode::TRANSLATE,
+                                                    right_drag,
+                                                    input::Action::NODE_RECT_SELECT);
+        ASSERT_TRUE(conflict.has_value());
+        EXPECT_EQ(conflict->other_action, input::Action::CAMERA_ORBIT);
+        EXPECT_EQ(conflict->other_mode, input::ToolMode::TRANSLATE);
+    }
+
     TEST_F(InputControllerFocusTest, TransformModeLeftDragUsesNodeSelectionNotSelectionStroke) {
         input::InputBindings bindings;
 

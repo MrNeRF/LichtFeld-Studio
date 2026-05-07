@@ -1019,6 +1019,8 @@
     "cancel": "취소",
     "replace": "교체",
     "conflict_title": "바인딩을 교체할까요?",
+    "conflict_message": "{trigger}은(는) 이미 {mode}에서 {action}에 할당되어 있습니다. 이 바인딩을 교체할까요?",
+    "conflict_inline": "{binding}  ⚠ 또한: {action}",
     "press_key_or_click": "키를 누르거나 마우스를 클릭하세요...",
     "press_key": "키를 누르세요...",
     "click_mouse": "마우스 버튼을 클릭하세요...",

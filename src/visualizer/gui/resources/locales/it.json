@@ -1018,6 +1018,8 @@
     "cancel": "Annulla",
     "replace": "Sostituisci",
     "conflict_title": "Sostituire associazione?",
+    "conflict_message": "{trigger} è già assegnato a {action} in {mode}. Sostituire questa associazione?",
+    "conflict_inline": "{binding}  ⚠ anche: {action}",
     "press_key_or_click": "Premi un tasto o clicca il mouse...",
     "press_key": "Premi un tasto...",
     "click_mouse": "Clicca un pulsante del mouse...",

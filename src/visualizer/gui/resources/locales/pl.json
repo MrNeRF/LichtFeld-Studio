@@ -1019,6 +1019,8 @@
     "cancel": "Anuluj",
     "replace": "Zastąp",
     "conflict_title": "Zastąpić przypisanie?",
+    "conflict_message": "{trigger} jest już przypisane do {action} w {mode}. Zastąpić to przypisanie?",
+    "conflict_inline": "{binding}  ⚠ także: {action}",
     "press_key_or_click": "Naciśnij klawisz lub kliknij myszą...",
     "press_key": "Naciśnij klawisz...",
     "click_mouse": "Kliknij przycisk myszy...",

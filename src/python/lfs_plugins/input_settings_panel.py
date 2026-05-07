@@ -387,10 +387,10 @@ class InputSettingsPanel(Panel):
         other_mode = self._pending_conflict["other_mode"]
 
         trigger_desc = lf.keymap.get_trigger_description(action, mode)
-        message = (
-            f"{trigger_desc} is already assigned to "
-            f"{lf.keymap.get_action_name(other_action)} "
-            f"in {lf.keymap.get_tool_mode_name(other_mode)}. Replace that binding?"
+        message = lf.ui.tr("input_settings.conflict_message").format(
+            trigger=trigger_desc,
+            action=lf.keymap.get_action_name(other_action),
+            mode=lf.keymap.get_tool_mode_name(other_mode),
         )
 
         msg_el = doc.get_element_by_id("binding-conflict-message")
@@ -546,7 +546,10 @@ class InputSettingsPanel(Panel):
             conflict = lf.keymap.find_conflict_for_action(mode, action)
             if conflict is not None:
                 other_name = lf.keymap.get_action_name(conflict["other_action"])
-                desc_text = f"{desc_text}  ⚠ also: {other_name}"
+                desc_text = tr("input_settings.conflict_inline").format(
+                    binding=desc_text,
+                    action=other_name,
+                )
                 desc_class = "is-binding-desc is-conflict"
             button_action = "rebind"
             button_label = tr("input_settings.rebind")

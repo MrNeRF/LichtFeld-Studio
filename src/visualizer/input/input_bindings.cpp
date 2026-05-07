@@ -784,6 +784,22 @@ namespace lfs::vis::input {
                 return BindingConflict{b.action, b.mode};
             }
         }
+
+        if (mode == ToolMode::GLOBAL) {
+            return std::nullopt;
+        }
+
+        for (const auto& b : bindings_) {
+            if (b.action == ignore_action) {
+                continue;
+            }
+            if (b.mode != ToolMode::GLOBAL || !describe(b.action).inherits_from_global) {
+                continue;
+            }
+            if (triggersOverlap(b.trigger, trigger)) {
+                return BindingConflict{b.action, b.mode};
+            }
+        }
         return std::nullopt;
     }
 

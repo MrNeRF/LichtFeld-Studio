@@ -58,6 +58,10 @@
     "video_lichtfeld": "Tutorial LichtFeld",
     "video_masks": "Tutorial de Máscaras"
   },
+  "input_settings": {
+    "conflict_message": "{trigger} ya está asignado a {action} en {mode}. ¿Reemplazar esta asignación?",
+    "conflict_inline": "{binding}  ⚠ también: {action}"
+  },
   "about": {
     "title": "LICHTFELD STUDIO",
     "description": "Una implementación de alto rendimiento en C++ y CUDA del 3D Gaussian Splatting para renderizado neuronal en tiempo real, entrenamiento y visualización.",

@@ -1019,6 +1019,8 @@
     "cancel": "Annuler",
     "replace": "Remplacer",
     "conflict_title": "Remplacer la liaison ?",
+    "conflict_message": "{trigger} est déjà assigné à {action} dans {mode}. Remplacer cette liaison ?",
+    "conflict_inline": "{binding}  ⚠ aussi : {action}",
     "press_key_or_click": "Appuyez sur une touche ou cliquez...",
     "press_key": "Appuyez sur une touche...",
     "click_mouse": "Cliquez sur un bouton de souris...",

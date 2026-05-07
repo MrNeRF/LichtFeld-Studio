@@ -1036,6 +1036,8 @@
     "cancel": "Cancel",
     "replace": "Replace",
     "conflict_title": "Replace binding?",
+    "conflict_message": "{trigger} is already assigned to {action} in {mode}. Replace that binding?",
+    "conflict_inline": "{binding}  ⚠ also: {action}",
     "save_hint": "Save to persist custom bindings",
     "double_click_hint": "Tip: Double-click to bind double-click action",
     "export_dialog_title": "Export Input Bindings",

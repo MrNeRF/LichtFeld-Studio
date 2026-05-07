@@ -863,6 +863,8 @@
     "cancel": "取消",
     "replace": "替换",
     "conflict_title": "替换绑定？",
+    "conflict_message": "{trigger} 已分配给 {mode} 中的 {action}。要替换该绑定吗？",
+    "conflict_inline": "{binding}  ⚠ 同时: {action}",
     "press_key_or_click": "按键或点击鼠标...",
     "press_key": "按一个键...",
     "click_mouse": "点击鼠标按钮...",

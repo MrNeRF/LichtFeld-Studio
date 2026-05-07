@@ -1019,6 +1019,8 @@
     "cancel": "キャンセル",
     "replace": "置き換え",
     "conflict_title": "割り当てを置き換えますか？",
+    "conflict_message": "{trigger} はすでに {mode} の {action} に割り当てられています。この割り当てを置き換えますか？",
+    "conflict_inline": "{binding}  ⚠ ほか: {action}",
     "press_key_or_click": "キーを押すかマウスをクリック...",
     "press_key": "キーを押してください...",
     "click_mouse": "マウスボタンをクリック...",

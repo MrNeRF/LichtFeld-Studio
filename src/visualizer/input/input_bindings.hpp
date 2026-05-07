@@ -280,9 +280,10 @@ namespace lfs::vis::input {
         void setBinding(ToolMode mode, Action action, const InputTrigger& trigger);
         void clearBinding(ToolMode mode, Action action);
 
-        // Returns the first same-mode binding that shares this trigger. The action
-        // being re-bound is ignored so callers can detect conflicts after a
-        // capture has already replaced its own previous binding.
+        // Returns the first binding that shares this trigger. Mode-local bindings
+        // are checked first; actions marked as inherited then fall back to GLOBAL.
+        // The action being re-bound is ignored so callers can detect conflicts
+        // after a capture has already replaced its own previous binding.
         [[nodiscard]] std::optional<BindingConflict> findConflict(
             ToolMode mode, const InputTrigger& trigger, Action ignore_action) const;
 

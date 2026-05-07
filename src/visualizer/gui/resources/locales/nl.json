@@ -1016,6 +1016,8 @@
     "cancel": "Annuleren",
     "replace": "Vervangen",
     "conflict_title": "Toewijzing vervangen?",
+    "conflict_message": "{trigger} is al toegewezen aan {action} in {mode}. Deze toewijzing vervangen?",
+    "conflict_inline": "{binding}  ⚠ ook: {action}",
     "press_key_or_click": "Druk een toets of klik met de muis...",
     "press_key": "Druk een toets...",
     "click_mouse": "Klik een muisknop...",

@@ -146,6 +146,16 @@ def _install_lf_stub(monkeypatch):
             return ["mouse_drag"]
         return ["key"]
 
+    translations = {
+        "input_settings.conflict_message":
+            "{trigger} conflicts with {action} in {mode}",
+        "input_settings.conflict_inline":
+            "{binding} :: also {action}",
+    }
+
+    def tr(key):
+        return translations.get(key, key)
+
     keymap = SimpleNamespace(
         ToolMode=tool_mode,
         Action=action,
@@ -177,7 +187,7 @@ def _install_lf_stub(monkeypatch):
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
-        tr=lambda key: key,
+        tr=tr,
         get_current_language=lambda: state.language[0],
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -316,7 +326,7 @@ def test_input_settings_marks_conflicting_binding_rows(input_settings_module):
         if not row["is_section"]
         and row["action_id"] == str(module.lf.keymap.Action.CAMERA_ORBIT.value)
     )
-    assert orbit_row["desc_text"] == "GLOBAL:CAMERA_ORBIT  ⚠ also: Action CAMERA_ZOOM"
+    assert orbit_row["desc_text"] == "GLOBAL:CAMERA_ORBIT :: also Action CAMERA_ZOOM"
     assert orbit_row["desc_class"] == "is-binding-desc is-conflict"
 
 
@@ -343,7 +353,9 @@ def test_input_settings_capture_conflict_prompts_to_replace(input_settings_modul
     assert panel._pending_conflict["action"] == module.lf.keymap.Action.CAMERA_ORBIT
     assert panel._pending_conflict["other_action"] == module.lf.keymap.Action.CAMERA_PAN
     assert doc.elements["binding-conflict-overlay"].classes["hidden"] is False
-    assert "Action CAMERA_PAN" in doc.elements["binding-conflict-message"].text
+    assert doc.elements["binding-conflict-message"].text == (
+        "GLOBAL:CAMERA_ORBIT conflicts with Action CAMERA_PAN in Mode GLOBAL"
+    )
 
     panel._on_replace_conflict(None, None, None)
 
