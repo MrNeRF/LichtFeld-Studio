@@ -1276,6 +1276,16 @@ namespace lfs::python {
         auto* line = ensure_line_container();
         auto& slot = ensure_slot(SlotType::Combo, build_slot_id("combo", &label));
 
+        // Build a cheap snapshot key: "item0\0item1\0item2\0..."
+        // Detects both renames and length changes.
+        std::string items_key;
+        for (const auto& s : items) {
+            items_key += s;
+            items_key += '\0';
+        }
+
+        const bool items_dirty = (items_key != slot.events.items_key);
+
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
             wrapper->SetClass("setting-row", true);
@@ -1296,6 +1306,7 @@ namespace lfs::python {
             }
 
             slot.events.int_value = current_idx;
+            slot.events.items_key = std::move(items_key);
             select->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(lbl));
@@ -1305,9 +1316,33 @@ namespace lfs::python {
         } else {
             if (slot.element->GetParentNode() != line)
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
+
             auto* select = slot.element->GetChild(1);
-            if (select && !slot.events.changed)
-                select->SetAttribute("value", Rml::String(std::to_string(current_idx)));
+            if (select) {
+                if (items_dirty) {
+                    // Replace the entire <select> element to avoid RmlUi
+                    // retaining stale internal form state from child removal.
+                    auto new_select = doc_->CreateElement("select");
+                    new_select->SetClass("im-control--fill", true);
+                    for (int i = 0; i < static_cast<int>(items.size()); ++i) {
+                        auto option = doc_->CreateElement("option");
+                        option->SetAttribute("value", Rml::String(std::to_string(i)));
+                        option->SetInnerRML(Rml::String(items[i]));
+                        if (i == current_idx)
+                            option->SetAttribute("selected", "");
+                        new_select->AppendChild(std::move(option));
+                    }
+                    new_select->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
+                    slot.element->RemoveChild(select);
+                    slot.element->AppendChild(std::move(new_select));
+
+                    slot.events.items_key = std::move(items_key);
+                    slot.events.int_value = current_idx;
+                    slot.events.changed = false;
+                } else if (!slot.events.changed) {
+                    select->SetAttribute("value", Rml::String(std::to_string(current_idx)));
+                }
+            }
         }
 
         last_element_ = slot.element;
