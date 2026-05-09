@@ -1405,6 +1405,11 @@ namespace lfs::app {
             }
             }
 
+            // Release merged CUDA tensors and trim the memory pool so that
+            // temporary VRAM allocated for the export is returned to the GPU.
+            merged.reset();
+            lfs::core::Tensor::trim_memory_pool();
+
             return {};
         }
 

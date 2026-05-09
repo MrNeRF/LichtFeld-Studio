@@ -665,7 +665,7 @@ namespace lfs::vis::gui {
         LOG_INFO("Export started: {} (format: {})", lfs::core::path_to_utf8(path), static_cast<int>(format));
 
         export_state_.thread.emplace(
-            [this, format, path, splat_data](std::stop_token stop_token) {
+            [this, format, path, splat_data](std::stop_token stop_token) mutable {
                 auto update_progress = [this, &stop_token](float progress, const std::string& stage) -> bool {
                     export_state_.progress.store(progress);
                     {
@@ -821,6 +821,11 @@ namespace lfs::vis::gui {
                         .error = error_msg}
                         .emit();
                 }
+
+                // Release merged CUDA tensors and trim the memory pool so that
+                // temporary VRAM allocated for the export is returned to the GPU.
+                splat_data.reset();
+                lfs::core::Tensor::trim_memory_pool();
 
                 export_state_.active.store(false);
             });
