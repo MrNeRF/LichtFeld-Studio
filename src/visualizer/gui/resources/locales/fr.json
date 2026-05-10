@@ -189,6 +189,9 @@
     "status.multi_items_selected": "{count} éléments sélectionnés",
 
     "title": "Gestionnaire d'actifs",
+    "panel_title": "Gestionnaire d'actifs",
+    "import_button": "Importer",
+    "import_from_url": "Importer depuis URL",
     "toolbar.import": "가져오기",
     "toolbar.clean_missing": "Nettoyer",
     "toolbar.search_icon": "Rechercher",

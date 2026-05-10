@@ -189,6 +189,9 @@
     "status.multi_items_selected": "{count} elementów wybranych",
 
     "title": "Menedżer zasobów",
+    "panel_title": "Menedżer Zasobów",
+    "import_button": "Importuj",
+    "import_from_url": "Importuj z URL",
     "toolbar.import": "가져오기",
     "toolbar.clean_missing": "Wyczyść",
     "toolbar.search_icon": "Szukaj",
@@ -209,7 +212,7 @@
     "type.checkpoint": "CKPT",
     "type.dataset": "Dataset",
     "type.gaussian_splat": "Splat Gaussowski",
-    "type.mesh": "MESH",
+    "type.mesh": "Mesh",
     "type.pcl": "PointCloud",
     "type.point_cloud": "Chmura Punktów",
     "type.project": "PROJEKT",

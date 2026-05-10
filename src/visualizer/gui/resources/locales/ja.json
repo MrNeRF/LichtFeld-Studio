@@ -189,6 +189,9 @@
     "status.multi_items_selected": "{count} 項目選択中",
 
     "title": "アセットマネージャー",
+    "panel_title": "アセットマネージャー",
+    "import_button": "インポート",
+    "import_from_url": "URLからインポート",
     "toolbar.import": "インポート",
     "toolbar.clean_missing": "クリーン",
     "toolbar.search_icon": "検索",

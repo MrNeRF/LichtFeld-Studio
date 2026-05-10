@@ -186,6 +186,9 @@
     "status.multi_items_selected": "{count} Elemente ausgewählt",
 
     "title": "Asset Manager",
+    "panel_title": "Asset Manager",
+    "import_button": "Importieren",
+    "import_from_url": "Von URL importieren",
     "toolbar.import": "Importieren",
     "toolbar.clean_missing": "Bereinigen",
     "toolbar.search_icon": "Suche",

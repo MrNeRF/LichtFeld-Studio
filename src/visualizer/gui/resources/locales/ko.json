@@ -189,6 +189,9 @@
     "status.multi_items_selected": "{count}개 항목 선택됨",
 
     "title": "에셋 매니저",
+    "panel_title": "에셋 관리자",
+    "import_button": "가져오기",
+    "import_from_url": "URL에서 가져오기",
     "toolbar.import": "가져오기",
     "toolbar.clean_missing": "정리",
     "toolbar.search_icon": "검색",

@@ -84,6 +84,9 @@
   },
   "asset_manager": {
     "title": "Gestor de Activos",
+    "panel_title": "Gestor de Activos",
+    "import_button": "Importar",
+    "import_from_url": "Importar desde URL",
     "action.add_tag": "Añadir etiqueta",
     "action.delete_project": "Eliminar proyecto",
     "action.export": "Exportar",
@@ -204,7 +207,7 @@
     "type.checkpoint": "CKPT",
     "type.dataset": "Dataset",
     "type.gaussian_splat": "Splat Gaussiano",
-    "type.mesh": "MESH",
+    "type.mesh": "Mesh",
     "type.pcl": "PointCloud",
     "type.point_cloud": "Nube de Puntos",
     "type.rad": "RAD",

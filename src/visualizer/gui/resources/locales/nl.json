@@ -186,6 +186,9 @@
     "status.multi_items_selected": "{count} items geselecteerd",
 
     "title": "Asset Manager",
+    "panel_title": "Asset Manager",
+    "import_button": "Importeren",
+    "import_from_url": "Importeren van URL",
     "toolbar.import": "Importeren",
     "toolbar.clean_missing": "Opruimen",
     "toolbar.search_icon": "Zoeken",
@@ -206,7 +209,7 @@
     "type.checkpoint": "CKPT",
     "type.dataset": "Dataset",
     "type.gaussian_splat": "Gaussiaanse Splat",
-    "type.mesh": "MESH",
+    "type.mesh": "Mesh",
     "type.pcl": "PointCloud",
     "type.point_cloud": "Puntwolk",
     "type.project": "PROJECT",

@@ -170,6 +170,13 @@
     background-color: #38342f;
 }
 
+.asset-import-menu-separator {
+    height: 1dp;
+    background-color: rgba(128, 128, 128, 0.3);
+    margin: 4dp 0;  /* Reduced from 8dp */
+    width: 100%;
+}
+
 #asset-popup-summary {
     display: flex;
     flex-direction: row;

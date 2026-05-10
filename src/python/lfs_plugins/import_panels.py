@@ -1,22 +1,53 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Retained RmlUI panels for dataset and checkpoint import flows."""
+"""Retained RmlUI panels for dataset, checkpoint, and URL import flows."""
 
+import shutil
+import threading
 from pathlib import Path
+from typing import Any, Optional
 
 import lichtfeld as lf
 
 from . import rml_widgets as w
-from .asset_manager_integration import register_catalog_asset_path
+from .asset_manager_integration import (
+    get_asset_manager_panel,
+    load_asset_index,
+    load_scanner,
+    load_thumbnails,
+    metadata_to_asset_kwargs,
+    refresh_active_panel,
+    register_catalog_asset_path,
+    select_asset_in_active_panel,
+)
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
+from .url_downloader import (
+    URLDownloadError,
+    UnsupportedURLError,
+    ExtractError,
+    detect_url_type,
+    download_url,
+    extract_archive,
+    get_url_info,
+    is_archive_url,
+)
 
 
 _dataset_import_panel = None
 _resume_checkpoint_panel = None
+_url_import_panel = None
 
-__lfs_panel_classes__ = ["DatasetImportPanel", "ResumeCheckpointPanel"]
-__lfs_panel_ids__ = ["lfs.dataset_import", "lfs.resume_checkpoint"]
+__lfs_panel_classes__ = [
+    "DatasetImportPanel",
+    "ResumeCheckpointPanel",
+    "URLImportPanel",
+]
+__lfs_panel_ids__ = [
+    "lfs.dataset_import",
+    "lfs.resume_checkpoint",
+    "lfs.url_import",
+]
 
 
 def open_dataset_import_panel(dataset_path: str) -> bool:
@@ -31,6 +62,34 @@ def open_resume_checkpoint_panel(checkpoint_path: str) -> bool:
     if _resume_checkpoint_panel is None:
         return False
     return _resume_checkpoint_panel.show(checkpoint_path)
+
+
+def open_url_import_panel() -> bool:
+    """Open the retained URL import panel."""
+    if _url_import_panel is None:
+        return False
+    return _url_import_panel.show()
+
+
+def _tr(key: str) -> str:
+    fallbacks = {
+        "asset_manager.import_from_url": "Import from URL",
+        "asset_manager.import_button": "Import",
+        "asset_manager.import_button_downloading": "Downloading...",
+        "asset_manager.status_connecting": "Connecting...",
+        "asset_manager.status_extracting": "Extracting...",
+        "asset_manager.status_complete": "Complete!",
+        "asset_manager.status_cancelling": "Cancelling...",
+        "asset_manager.error_empty_url": "Please enter a URL",
+        "asset_manager.error_unsupported_url": "Unsupported URL format",
+        "asset_manager.error_download_failed": "Download failed",
+        "asset_manager.error_extract_failed": "Extraction failed",
+        "asset_manager.error_unknown": "An error occurred",
+    }
+    result = lf.ui.tr(key)
+    if not result or result == key:
+        return fallbacks.get(key, key)
+    return result
 
 
 class _ImportDialogPanel(Panel):
@@ -555,3 +614,527 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
         lf.ui.set_panel_enabled(self.id, False)
+
+
+class URLImportPanel(_ImportDialogPanel):
+    """Floating panel for importing assets from URL-backed sources."""
+
+    id = "lfs.url_import"
+    label = "Import from URL"
+    space = lf.ui.PanelSpace.FLOATING
+    order = 13
+    template = "rmlui/url_import_panel.rml"
+    height_mode = lf.ui.PanelHeightMode.FILL
+    size = (560, 360)
+    form_id = "url-import-form"
+
+    STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
+
+    def __init__(self):
+        global _url_import_panel
+        _url_import_panel = self
+
+        self._handle = None
+        self._doc = None
+        self._last_lang = ""
+        self._url_import_url = ""
+        self._url_import_progress = -1.0
+        self._url_import_status = ""
+        self._url_import_warning = ""
+        self._url_import_in_progress = False
+        self._url_import_thread: Optional[threading.Thread] = None
+        self._url_import_cancelled = False
+        self._url_import_session_id = 0
+        self._url_import_close_timer: Optional[threading.Timer] = None
+        self._url_import_formats_open = False
+        self._formats_header = None
+        self._formats_arrow = None
+        self._formats_content = None
+
+    def on_mount(self, doc):
+        super().on_mount(doc)
+        self._doc = doc
+        self._formats_header = doc.get_element_by_id("url-import-formats-header")
+        self._formats_arrow = doc.get_element_by_id("url-import-formats-arrow")
+        self._formats_content = doc.get_element_by_id("url-import-formats-content")
+        self._sync_formats_ui()
+
+    def on_unmount(self, doc):
+        self._cancel_url_import_close_timer()
+        self._handle = None
+        self._doc = None
+        self._formats_header = None
+        self._formats_arrow = None
+        self._formats_content = None
+        doc.remove_data_model("url_import")
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("url_import")
+        if model is None:
+            return
+
+        model.bind_func("panel_label", lambda: _tr("asset_manager.import_from_url"))
+        model.bind(
+            "url_import_url",
+            lambda: self._url_import_url,
+            self._set_url_import_url,
+        )
+        model.bind_func(
+            "url_import_progress",
+            lambda: str(
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        self._url_import_progress
+                        if self._url_import_progress >= 0.0
+                        else 0.0,
+                    ),
+                )
+            ),
+        )
+        model.bind_func("url_import_status", lambda: self._url_import_status)
+        model.bind_func("url_import_warning_text", lambda: self._url_import_warning)
+        model.bind_func("url_import_has_warning", lambda: bool(self._url_import_warning))
+        model.bind_func(
+            "url_import_show_progress",
+            lambda: self._url_import_in_progress or bool(self._url_import_status),
+        )
+        model.bind_func(
+            "url_import_show_progress_bar",
+            lambda: self._url_import_in_progress
+            and self._url_import_progress >= 0.0
+            and not self._url_import_cancelled,
+        )
+        model.bind_func(
+            "url_import_button_enabled",
+            lambda: not self._url_import_in_progress and bool(self._url_import_url.strip()),
+        )
+        model.bind_func(
+            "url_import_button_text",
+            lambda: _tr("asset_manager.import_button_downloading")
+            if self._url_import_in_progress
+            else _tr("asset_manager.import_button"),
+        )
+
+        model.bind_event("toggle_formats", self._on_toggle_formats)
+        model.bind_event("do_load", self._on_do_load)
+        model.bind_event("do_cancel", self._on_do_cancel)
+
+        self._handle = model.get_handle()
+
+    def on_update(self, doc):
+        del doc
+        current_lang = lf.ui.get_current_language()
+        if current_lang != self._last_lang:
+            self._last_lang = current_lang
+            self._dirty_model()
+            return True
+        return False
+
+    def show(self) -> bool:
+        self._reset_state()
+        self._dirty_model()
+        self._sync_formats_ui()
+        lf.ui.set_panel_enabled(self.id, True)
+        return True
+
+    def _can_submit_from_keyboard(self) -> bool:
+        return not self._url_import_in_progress and bool(self._url_import_url.strip())
+
+    def _dirty_model(self, *fields):
+        if not self._handle:
+            return
+        if not fields:
+            self._handle.dirty_all()
+            return
+        for field in fields:
+            self._handle.dirty(field)
+
+    def _set_url_import_url(self, value):
+        next_value = str(value)
+        if next_value == self._url_import_url:
+            return
+        self._url_import_url = next_value
+        self._dirty_model("url_import_url", "url_import_button_enabled")
+
+    def _cancel_url_import_close_timer(self) -> None:
+        if self._url_import_close_timer is None:
+            return
+        self._url_import_close_timer.cancel()
+        self._url_import_close_timer = None
+
+    def _schedule_close(self, session_id: int) -> None:
+        self._cancel_url_import_close_timer()
+        self._url_import_close_timer = threading.Timer(
+            1.0,
+            lambda: self._close_panel_after_success(session_id),
+        )
+        self._url_import_close_timer.start()
+
+    def _close_panel_after_success(self, session_id: int) -> None:
+        if session_id != self._url_import_session_id:
+            return
+        self._reset_state()
+        self._dirty_model()
+        refresh_active_panel()
+        lf.ui.set_panel_enabled(self.id, False)
+
+    def _on_toggle_formats(self, _handle=None, _ev=None, _args=None):
+        self._url_import_formats_open = not self._url_import_formats_open
+        self._sync_formats_ui()
+
+    def _sync_formats_ui(self) -> None:
+        if self._formats_header is not None:
+            self._formats_header.set_class("is-expanded", self._url_import_formats_open)
+        if self._formats_arrow is not None:
+            self._formats_arrow.set_class("is-expanded", self._url_import_formats_open)
+        if self._formats_content is not None:
+            self._formats_content.set_class("collapsed", not self._url_import_formats_open)
+
+    def _reset_state(self) -> None:
+        self._cancel_url_import_close_timer()
+        self._url_import_url = ""
+        self._url_import_progress = -1.0
+        self._url_import_status = ""
+        self._url_import_warning = ""
+        self._url_import_in_progress = False
+        self._url_import_cancelled = False
+        self._url_import_thread = None
+        self._url_import_formats_open = False
+
+    def _should_cancel(self, session_id: int) -> bool:
+        return self._url_import_cancelled or session_id != self._url_import_session_id
+
+    def _cleanup_destination(self, dest_dir: Optional[Path], created_dest_dir: bool) -> None:
+        if not dest_dir or not created_dest_dir:
+            return
+        try:
+            shutil.rmtree(dest_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+    def _make_import_metadata(self, managed_root: Path) -> dict[str, Any]:
+        return {
+            "kind": "url_download",
+            "managed_root": str(managed_root.resolve()),
+        }
+
+    def _resolve_catalog_context(self, index) -> tuple[Optional[str], Optional[str]]:
+        project_id = None
+        scene_id = None
+
+        panel = get_asset_manager_panel()
+        if panel is not None:
+            candidate_project = getattr(panel, "_selected_project_id", None)
+            candidate_scene = getattr(panel, "_selected_scene_id", None)
+            if candidate_project and candidate_project in index.projects:
+                project_id = candidate_project
+            if candidate_scene and candidate_scene in index.scenes:
+                scene = index.scenes[candidate_scene]
+                if project_id is None or scene.project_id == project_id:
+                    scene_id = candidate_scene
+                    project_id = project_id or scene.project_id
+
+        if project_id is None:
+            project = index.find_or_create_project("Default")
+            project_id = project.id if project is not None else None
+
+        return project_id, scene_id
+
+    def _generate_thumbnail(self, index, asset, thumbnails) -> None:
+        if thumbnails is None or asset is None:
+            return
+        try:
+            thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
+            index.update_asset(asset.id, thumbnail_path=str(thumb_path))
+        except Exception:
+            pass
+
+    def _scan_and_register_asset(
+        self,
+        path: str,
+        *,
+        fallback_role: str,
+        override_type: Optional[str],
+        override_role: Optional[str],
+        import_metadata: dict[str, Any],
+    ):
+        index = load_asset_index()
+        if index is None:
+            raise RuntimeError("Asset Manager backend is unavailable")
+
+        scanner = load_scanner()
+        thumbnails = load_thumbnails()
+        project_id, scene_id = self._resolve_catalog_context(index)
+
+        metadata = scanner.scan_file(path) if scanner is not None else {}
+        asset_kwargs = metadata_to_asset_kwargs(metadata)
+        asset_type = (
+            override_type
+            or metadata.get("type")
+            or Path(path).suffix.lstrip(".").lower()
+            or "unknown"
+        )
+        role = override_role or metadata.get("role") or fallback_role
+
+        asset = index.create_asset(
+            project_id=project_id,
+            name=Path(path).name,
+            type=asset_type,
+            path=path,
+            absolute_path=path,
+            scene_id=scene_id,
+            role=role,
+            import_metadata=import_metadata,
+            **asset_kwargs,
+        )
+        if asset is not None:
+            self._generate_thumbnail(index, asset, thumbnails)
+            panel = get_asset_manager_panel()
+            if panel is not None:
+                select_asset_in_active_panel(
+                    asset.id,
+                    project_id=asset.project_id,
+                    scene_id=asset.scene_id,
+                )
+            else:
+                refresh_active_panel()
+        return asset
+
+    def _register_extracted_asset(self, extract_dir: Path):
+        import_metadata = self._make_import_metadata(extract_dir)
+
+        for ext in (".ply", ".sog", ".spz", ".rad"):
+            files = list(extract_dir.rglob(f"*{ext}"))
+            if files:
+                return self._scan_and_register_asset(
+                    str(files[0]),
+                    fallback_role="source_dataset",
+                    override_type="dataset",
+                    override_role=None,
+                    import_metadata=import_metadata,
+                )
+
+        cameras_bin = list(extract_dir.rglob("cameras.bin"))
+        if cameras_bin:
+            dataset_dir = cameras_bin[0].parent.parent
+            return self._scan_and_register_asset(
+                str(dataset_dir),
+                fallback_role="source_dataset",
+                override_type="dataset",
+                override_role=None,
+                import_metadata=import_metadata,
+            )
+
+        return self._scan_and_register_asset(
+            str(extract_dir),
+            fallback_role="source_dataset",
+            override_type="dataset",
+            override_role=None,
+            import_metadata=import_metadata,
+        )
+
+    def _register_downloaded_file(self, file_path: Path):
+        return self._scan_and_register_asset(
+            str(file_path),
+            fallback_role="source_dataset",
+            override_type="dataset",
+            override_role=None,
+            import_metadata=self._make_import_metadata(file_path.parent),
+        )
+
+    def _handle_download_error(self, title: str, message: str, session_id: int) -> None:
+        if session_id != self._url_import_session_id:
+            return
+        self._url_import_in_progress = False
+        self._url_import_progress = -1.0
+        self._url_import_status = ""
+        self._url_import_warning = f"{title}: {message}"
+        self._dirty_model(
+            "url_import_show_progress",
+            "url_import_show_progress_bar",
+            "url_import_progress",
+            "url_import_status",
+            "url_import_warning_text",
+            "url_import_has_warning",
+            "url_import_button_enabled",
+            "url_import_button_text",
+        )
+
+    def _download_url_worker(self, url: str, session_id: int) -> None:
+        dest_dir: Optional[Path] = None
+        created_dest_dir = False
+        try:
+            url_info = get_url_info(url)
+            asset_name = str(url_info.get("name") or "").strip() or "imported-asset"
+
+            dest_dir = self.STORAGE_PATH / "assets" / asset_name
+            created_dest_dir = not dest_dir.exists()
+            dest_dir.mkdir(parents=True, exist_ok=True)
+
+            def on_progress(percent: float, status: str):
+                if self._should_cancel(session_id):
+                    raise InterruptedError("Download cancelled")
+                if session_id != self._url_import_session_id:
+                    return
+                self._url_import_progress = percent
+                self._url_import_status = status
+                self._dirty_model(
+                    "url_import_show_progress",
+                    "url_import_show_progress_bar",
+                    "url_import_progress",
+                    "url_import_status",
+                )
+
+            def on_warning(message: str):
+                if session_id != self._url_import_session_id:
+                    return
+                self._url_import_warning = message
+                self._dirty_model("url_import_warning_text", "url_import_has_warning")
+
+            if is_archive_url(url):
+                temp_file = dest_dir / f"download_{asset_name}.tmp"
+                download_url(
+                    url,
+                    temp_file,
+                    on_progress=on_progress,
+                    on_warning=on_warning,
+                    should_cancel=lambda: self._should_cancel(session_id),
+                )
+
+                if self._should_cancel(session_id):
+                    raise InterruptedError("Download cancelled")
+
+                self._url_import_progress = 0.0
+                self._url_import_status = _tr("asset_manager.status_extracting")
+                self._dirty_model(
+                    "url_import_show_progress",
+                    "url_import_show_progress_bar",
+                    "url_import_progress",
+                    "url_import_status",
+                )
+
+                extract_archive(
+                    temp_file,
+                    dest_dir,
+                    on_progress=on_progress,
+                    should_cancel=lambda: self._should_cancel(session_id),
+                )
+                temp_file.unlink(missing_ok=True)
+                self._register_extracted_asset(dest_dir)
+            else:
+                dest_file = dest_dir / asset_name
+                download_url(
+                    url,
+                    dest_file,
+                    on_progress=on_progress,
+                    on_warning=on_warning,
+                    should_cancel=lambda: self._should_cancel(session_id),
+                )
+
+                if self._should_cancel(session_id):
+                    raise InterruptedError("Download cancelled")
+
+                self._register_downloaded_file(dest_file)
+
+            if session_id != self._url_import_session_id:
+                return
+            self._url_import_in_progress = False
+            self._url_import_status = _tr("asset_manager.status_complete")
+            self._url_import_progress = 1.0
+            self._dirty_model(
+                "url_import_show_progress",
+                "url_import_show_progress_bar",
+                "url_import_status",
+                "url_import_progress",
+                "url_import_button_enabled",
+                "url_import_button_text",
+            )
+            self._schedule_close(session_id)
+
+        except URLDownloadError as exc:
+            self._cleanup_destination(dest_dir, created_dest_dir)
+            self._handle_download_error(_tr("asset_manager.error_download_failed"), str(exc), session_id)
+        except UnsupportedURLError as exc:
+            self._cleanup_destination(dest_dir, created_dest_dir)
+            self._handle_download_error(_tr("asset_manager.error_unsupported_url"), str(exc), session_id)
+        except ExtractError as exc:
+            self._cleanup_destination(dest_dir, created_dest_dir)
+            self._handle_download_error(_tr("asset_manager.error_extract_failed"), str(exc), session_id)
+        except InterruptedError:
+            self._cleanup_destination(dest_dir, created_dest_dir)
+            if session_id != self._url_import_session_id:
+                return
+            self._reset_state()
+            self._dirty_model()
+            lf.ui.set_panel_enabled(self.id, False)
+        except Exception as exc:
+            self._cleanup_destination(dest_dir, created_dest_dir)
+            self._handle_download_error(_tr("asset_manager.error_unknown"), str(exc), session_id)
+        finally:
+            if session_id == self._url_import_session_id:
+                self._url_import_thread = None
+
+    def _on_do_load(self, _handle=None, _ev=None, _args=None):
+        if self._url_import_in_progress:
+            return
+
+        url = self._url_import_url.strip()
+        if not url:
+            self._url_import_warning = _tr("asset_manager.error_empty_url")
+            self._dirty_model("url_import_warning_text", "url_import_has_warning")
+            return
+
+        try:
+            if detect_url_type(url) == "unknown":
+                self._url_import_warning = _tr("asset_manager.error_unsupported_url")
+                self._dirty_model("url_import_warning_text", "url_import_has_warning")
+                return
+        except Exception as exc:
+            self._url_import_warning = str(exc)
+            self._dirty_model("url_import_warning_text", "url_import_has_warning")
+            return
+
+        self._cancel_url_import_close_timer()
+        self._url_import_session_id += 1
+        self._url_import_warning = ""
+        self._url_import_in_progress = True
+        self._url_import_cancelled = False
+        self._url_import_progress = 0.0
+        self._url_import_status = _tr("asset_manager.status_connecting")
+        self._dirty_model(
+            "url_import_warning_text",
+            "url_import_has_warning",
+            "url_import_show_progress",
+            "url_import_show_progress_bar",
+            "url_import_progress",
+            "url_import_status",
+            "url_import_button_enabled",
+            "url_import_button_text",
+        )
+
+        self._url_import_thread = threading.Thread(
+            target=self._download_url_worker,
+            args=(url, self._url_import_session_id),
+            daemon=True,
+        )
+        self._url_import_thread.start()
+
+    def _on_do_cancel(self, _handle=None, _ev=None, _args=None):
+        if not self._url_import_in_progress:
+            self._reset_state()
+            self._dirty_model()
+            lf.ui.set_panel_enabled(self.id, False)
+            return
+
+        if self._url_import_cancelled:
+            return
+
+        self._url_import_cancelled = True
+        self._url_import_status = _tr("asset_manager.status_cancelling")
+        self._dirty_model(
+            "url_import_show_progress",
+            "url_import_show_progress_bar",
+            "url_import_status",
+        )

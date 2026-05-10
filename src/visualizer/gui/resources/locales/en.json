@@ -84,6 +84,9 @@
   },
   "asset_manager": {
     "title": "Asset Manager",
+    "panel_title": "Asset Manager",
+    "import_button": "Import",
+    "import_from_url": "Import from URL",
     "toolbar.search_placeholder": "Search assets...",
     "toolbar.search_icon": "Search",
     "toolbar.sort_by": "Sort by: Recent",
@@ -208,7 +211,7 @@
     "type.spz": "SPZ",
     "type.checkpoint": "CKPT",
     "type.dataset": "Dataset",
-    "type.mesh": "MESH",
+    "type.mesh": "Mesh",
     "type.usd": "USD",
     "type.video": "VIDEO",
     "type.gaussian_splat": "Gaussian Splat",

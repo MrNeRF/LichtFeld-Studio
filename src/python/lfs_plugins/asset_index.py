@@ -114,6 +114,7 @@ class Asset:
     dataset_metadata: Dict[str, Any] = field(default_factory=dict)
     video_metadata: Dict[str, Any] = field(default_factory=dict)
     transform_metadata: Dict[str, Any] = field(default_factory=dict)
+    import_metadata: Dict[str, Any] = field(default_factory=dict)
     exists: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -146,6 +147,7 @@ class Asset:
             dataset_metadata=data.get("dataset_metadata", {}),
             video_metadata=data.get("video_metadata", {}),
             transform_metadata=data.get("transform_metadata", {}),
+            import_metadata=data.get("import_metadata", {}),
             exists=data.get("exists", True),
         )
 
@@ -585,6 +587,7 @@ class AssetIndex:
         dataset_metadata: Optional[Dict[str, Any]] = None,
         video_metadata: Optional[Dict[str, Any]] = None,
         transform_metadata: Optional[Dict[str, Any]] = None,
+        import_metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[str] = None,
         modified_at: Optional[str] = None,
         exists: Optional[bool] = None,
@@ -648,6 +651,9 @@ class AssetIndex:
                 video_metadata=video_metadata
                 if video_metadata is not None
                 else existing_asset.video_metadata,
+                import_metadata=import_metadata
+                if import_metadata is not None
+                else existing_asset.import_metadata,
                 tags=merged_tags,
                 created_at=created_at or existing_asset.created_at,
                 exists=os.path.exists(normalized_abs_path)
@@ -676,6 +682,7 @@ class AssetIndex:
             dataset_metadata=dataset_metadata or {},
             video_metadata=video_metadata or {},
             transform_metadata=transform_metadata or {},
+            import_metadata=import_metadata or {},
             exists=os.path.exists(normalized_abs_path) if exists is None else exists,
         )
         self._assets[asset.id] = asset

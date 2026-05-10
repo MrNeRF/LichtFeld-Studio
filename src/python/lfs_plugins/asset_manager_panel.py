@@ -5,6 +5,7 @@
 import logging
 import math
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
@@ -17,6 +18,7 @@ from .asset_manager_integration import (
     ensure_dataset_catalog_context,
     set_active_asset_manager_panel,
 )
+from .import_panels import open_url_import_panel
 from .types import Panel
 
 _logger = logging.getLogger(__name__)
@@ -35,11 +37,30 @@ except ImportError:
     AssetThumbnails = None
 
 def tr(key):
+    """Translate a key using the UI translation system with fallback."""
+    # Fallback translations for URL import feature
+    fallbacks = {
+        "asset_manager.panel_title": "Asset Manager",
+        "asset_manager.import_from_url": "Import from URL",
+        "asset_manager.import_button": "Import",
+        "asset_manager.import_button_downloading": "Downloading...",
+        "asset_manager.status_connecting": "Connecting...",
+        "asset_manager.status_downloading": "Downloading...",
+        "asset_manager.status_extracting": "Extracting...",
+        "asset_manager.status_complete": "Complete!",
+        "asset_manager.status_cancelling": "Cancelling...",
+        "asset_manager.error_empty_url": "Please enter a URL",
+        "asset_manager.error_unsupported_url": "Unsupported URL format",
+        "asset_manager.error_download_failed": "Download failed",
+        "asset_manager.error_extract_failed": "Extraction failed",
+        "asset_manager.error_unknown": "An error occurred",
+        "asset_manager.help_title": "URL Import Help",
+    }
+
     result = lf.ui.tr(key)
-    if result == key:
-        # Strip prefix for fallback
-        if key.startswith("asset_manager."):
-            return key.split(".")[-1].replace("_", " ").title()
+    # If translation returns empty or the key itself, use fallback
+    if not result or result == key:
+        result = fallbacks.get(key, key)
     return result
 
 __lfs_panel_classes__ = ["AssetManagerPanel"]
@@ -94,6 +115,7 @@ class AssetManagerPanel(Panel):
 
         # Import menu state
         self._import_menu_open: bool = False
+
         self._library_mtime: float = 0.0
         self._updating_selection_details: bool = False
         self._pending_transform_applications: List[Dict[str, Any]] = []
@@ -165,8 +187,16 @@ class AssetManagerPanel(Panel):
             "show_selection_multiple", lambda: self._selection_type == "multiple"
         )
 
+        # Panel label for floating window template
+        model.bind_func("panel_label", lambda: tr("asset_manager.panel_title"))
+
         # Import menu state
         model.bind_func("import_menu_open", self.get_import_menu_open)
+
+        # Import from URL action
+        model.bind_func("import_from_url_label", lambda: tr("asset_manager.import_from_url"))
+        model.bind_event("on_import_from_url", self.on_import_from_url)
+
 
         # New project menu state
         model.bind_func("new_project_menu_open", self.get_new_project_menu_open)
@@ -339,7 +369,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("locate_file_button_label", lambda: tr("asset_manager.action.locate_file"))
         model.bind_func("scene_pill_label", lambda: tr("asset_manager.type.scene"))
         model.bind_func("scene_details_title", lambda: tr("asset_manager.info_panel.scene_details"))
-        model.bind_func("prop_assets_label", lambda: tr("asset_manager.property.assets"))
+        model.bind_func("prop_assets_label", lambda: tr("asset_manager.propertyu.assets"))
         model.bind_func("scene_assets_title", lambda: tr("asset_manager.info_panel.scenes"))
         model.bind_func("project_pill_label", lambda: tr("asset_manager.type.project"))
         model.bind_func("project_details_title", lambda: tr("asset_manager.info_panel.project_details"))
@@ -1884,6 +1914,7 @@ class AssetManagerPanel(Panel):
         fallback_role: str = "reference",
         override_type: Optional[str] = None,
         override_role: Optional[str] = None,
+        import_metadata: Optional[Dict[str, Any]] = None,
     ):
         metadata = self._asset_scanner.scan_file(path) if self._asset_scanner else {}
         asset_kwargs = self._metadata_to_asset_kwargs(metadata)
@@ -1905,6 +1936,7 @@ class AssetManagerPanel(Panel):
             absolute_path=path,
             scene_id=scene_id,
             role=role,
+            import_metadata=import_metadata,
             **asset_kwargs,
         )
         if asset:
@@ -2831,22 +2863,70 @@ class AssetManagerPanel(Panel):
             return
 
         try:
-            # Remove asset from catalog
-            if not self._delete_asset_from_catalog(asset_id):
+            removed_asset_ids = self._delete_asset_and_managed_storage(asset_id)
+            if not removed_asset_ids:
                 self._log_warn("Asset index does not support asset deletion")
                 return
 
             # Remove from selection if selected
-            if asset_id in self._selected_asset_ids:
-                self._selected_asset_ids.discard(asset_id)
-                self._update_selection_type()
+            for removed_asset_id in removed_asset_ids:
+                self._selected_asset_ids.discard(removed_asset_id)
+            self._update_selection_type()
 
             # Refresh UI
             self.refresh_catalog()
 
-            self._log_info("Removed asset from catalog: %s", asset_id)
+            self._log_info("Removed asset from catalog: %s", ", ".join(removed_asset_ids))
         except Exception as e:
             self._log_error("Failed to remove asset %s: %s", asset_id, e)
+
+    def _get_url_import_managed_root(self, asset: Dict[str, Any]) -> Optional[Path]:
+        import_metadata = asset.get("import_metadata") or {}
+        if import_metadata.get("kind") != "url_download":
+            return None
+
+        managed_root = import_metadata.get("managed_root")
+        if not managed_root:
+            return None
+
+        try:
+            root = Path(str(managed_root)).resolve()
+            base = (self.STORAGE_PATH / "assets").resolve()
+            if root == base:
+                return None
+            root.relative_to(base)
+            return root
+        except Exception:
+            return None
+
+    def _delete_asset_and_managed_storage(self, asset_id: str) -> List[str]:
+        """Delete an asset and any URL-managed storage owned by it."""
+        if not self._asset_index or not hasattr(self._asset_index, "assets"):
+            return []
+
+        asset = self._asset_index.assets.get(asset_id)
+        if not asset:
+            return []
+
+        managed_root = self._get_url_import_managed_root(asset)
+        related_asset_ids = [asset_id]
+
+        if managed_root is not None:
+            related_asset_ids = []
+            for candidate_id, candidate in self._asset_index.assets.items():
+                candidate_root = self._get_url_import_managed_root(candidate)
+                if candidate_root == managed_root:
+                    related_asset_ids.append(candidate_id)
+
+            if managed_root.exists():
+                shutil.rmtree(managed_root)
+
+        removed_asset_ids: List[str] = []
+        for related_asset_id in related_asset_ids:
+            if self._delete_asset_from_catalog(related_asset_id):
+                removed_asset_ids.append(related_asset_id)
+
+        return removed_asset_ids
 
     def _get_available_projects_for_asset(self, asset: Dict[str, Any]) -> List[Dict[str, str]]:
         """Get list of projects this asset can be moved to."""
@@ -4007,3 +4087,11 @@ class AssetManagerPanel(Panel):
                     element = None
 
         return ""
+
+    # ── Import from URL handlers ───────────────────────────────
+
+    def on_import_from_url(self, _handle, _ev, _args):
+        """Open the retained URL import panel."""
+        self._import_menu_open = False
+        self._dirty_model("import_menu_open")
+        open_url_import_panel()

@@ -31,6 +31,8 @@
           <div class="asset-import-menu-item" data-event-click="on_import_asset">{{import_asset_label}}</div>
           <div class="asset-import-menu-item" data-event-click="on_import_dataset">{{import_dataset_label}}</div>
           <div class="asset-import-menu-item" data-event-click="on_import_checkpoint">{{import_checkpoint_label}}</div>
+          <div class="asset-import-menu-separator"></div>
+          <div class="asset-import-menu-item" data-event-click="on_import_from_url">{{import_from_url_label}}</div>
         </div>
       </div>
     </div>

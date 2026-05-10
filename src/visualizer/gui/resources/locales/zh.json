@@ -1027,6 +1027,9 @@
   },
   "asset_manager": {
     "title": "资源管理器",
+    "panel_title": "资源管理器",
+    "import_button": "导入",
+    "import_from_url": "从URL导入",
     "action.add_tag": "添加标签",
     "action.delete_project": "删除项目",
     "action.export": "导出",

@@ -189,6 +189,9 @@
     "status.multi_items_selected": "{count} elementi selezionati",
 
     "title": "Gestore risorse",
+    "panel_title": "Gestore Risorse",
+    "import_button": "Importa",
+    "import_from_url": "Importa da URL",
     "toolbar.import": "가져오기",
     "toolbar.clean_missing": "Pulisci",
     "toolbar.search_icon": "Cerca",
