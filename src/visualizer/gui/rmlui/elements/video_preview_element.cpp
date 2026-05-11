@@ -5,7 +5,6 @@
 #include "gui/rmlui/elements/video_preview_element.hpp"
 
 #include <RmlUi/Core/RenderManager.h>
-#include <glad/glad.h>
 #include <algorithm>
 #include <cstring>
 
@@ -13,10 +12,7 @@ namespace lfs::vis::gui {
 
     VideoPreviewElement::VideoPreviewElement(const Rml::String& tag) : Rml::Element(tag) {}
 
-    VideoPreviewElement::~VideoPreviewElement() {
-        if (gl_texture_ != 0)
-            glDeleteTextures(1, &gl_texture_);
-    }
+    VideoPreviewElement::~VideoPreviewElement() = default;
 
     bool VideoPreviewElement::GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) {
         dimensions = {1.f, 200.f};
@@ -69,7 +65,7 @@ namespace lfs::vis::gui {
     }
 
     void VideoPreviewElement::uploadTexture() {
-        std::vector<uint8_t> data;
+        std::vector<uint8_t> rgb;
         int w = 0;
         int h = 0;
 
@@ -77,54 +73,37 @@ namespace lfs::vis::gui {
             std::lock_guard lock(mutex_);
             if (!has_pending_)
                 return;
-            data = std::move(pending_data_);
+            rgb = std::move(pending_data_);
             w = pending_width_;
             h = pending_height_;
             has_pending_ = false;
         }
 
-        if (data.empty())
+        if (rgb.empty() || w <= 0 || h <= 0)
             return;
 
-        if (gl_texture_ == 0) {
-            glGenTextures(1, &gl_texture_);
-            glBindTexture(GL_TEXTURE_2D, gl_texture_);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glBindTexture(GL_TEXTURE_2D, 0);
+        const size_t pixel_count = static_cast<size_t>(w) * static_cast<size_t>(h);
+        std::vector<Rml::byte> rgba(pixel_count * 4);
+        for (size_t i = 0; i < pixel_count; ++i) {
+            rgba[i * 4 + 0] = static_cast<Rml::byte>(rgb[i * 3 + 0]);
+            rgba[i * 4 + 1] = static_cast<Rml::byte>(rgb[i * 3 + 1]);
+            rgba[i * 4 + 2] = static_cast<Rml::byte>(rgb[i * 3 + 2]);
+            rgba[i * 4 + 3] = static_cast<Rml::byte>(255);
         }
 
-        glBindTexture(GL_TEXTURE_2D, gl_texture_);
-
-        const bool size_changed = (texture_width_ != w || texture_height_ != h);
-        if (size_changed) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, w, h, 0, GL_RGB,
-                         GL_UNSIGNED_BYTE, data.data());
+        if (texture_width_ != w || texture_height_ != h) {
             texture_width_ = w;
             texture_height_ = h;
             geom_dirty_ = true;
-
-            auto* rm = GetRenderManager();
-            if (rm) {
-                const uint32_t tex_id = gl_texture_;
-                const int tw = w;
-                const int th = h;
-                texture_source_ = Rml::CallbackTextureSource(
-                    [tex_id, tw, th](const Rml::CallbackTextureInterface& iface) -> bool {
-                        iface.SetTextureHandle(
-                            static_cast<Rml::TextureHandle>(tex_id),
-                            Rml::Vector2i(tw, th));
-                        return true;
-                    });
-            }
-        } else {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGB,
-                            GL_UNSIGNED_BYTE, data.data());
         }
 
-        glBindTexture(GL_TEXTURE_2D, 0);
+        const Rml::Vector2i dims(w, h);
+        texture_source_ = Rml::CallbackTextureSource(
+            [data = std::move(rgba), dims](const Rml::CallbackTextureInterface& iface) -> bool {
+                return iface.GenerateTexture(
+                    Rml::Span<const Rml::byte>(data.data(), data.size()), dims);
+            });
+        has_texture_ = true;
     }
 
     void VideoPreviewElement::rebuildGeometry() {
@@ -148,7 +127,7 @@ namespace lfs::vis::gui {
             bg_geom_ = rm->MakeGeometry(std::move(mesh));
         }
 
-        if (gl_texture_ != 0 && texture_width_ > 0 && texture_height_ > 0) {
+        if (has_texture_ && texture_width_ > 0 && texture_height_ > 0) {
             const float video_aspect =
                 static_cast<float>(texture_width_) / static_cast<float>(texture_height_);
             const float box_aspect = box_w / box_h;
@@ -192,7 +171,7 @@ namespace lfs::vis::gui {
         bg_geom_.Render(offset);
 
         auto* rm = GetRenderManager();
-        if (rm && gl_texture_ != 0 && texture_width_ > 0) {
+        if (rm && has_texture_ && texture_width_ > 0) {
             Rml::Texture tex = texture_source_.GetTexture(*rm);
             video_geom_.Render(offset, tex);
         }

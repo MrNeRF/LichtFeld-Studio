@@ -50,9 +50,9 @@ namespace lfs::vis::gui {
         int pending_height_ = 0;
         bool has_pending_ = false;
 
-        uint32_t gl_texture_ = 0;
         int texture_width_ = 0;
         int texture_height_ = 0;
+        bool has_texture_ = false;
 
         Rml::Geometry bg_geom_;
         Rml::Geometry video_geom_;
