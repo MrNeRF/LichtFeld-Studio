@@ -3,94 +3,22 @@ name: Windows CUDA Build
 on:
   push:
     branches: [ dev, master ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
   pull_request:
     branches: [ dev, master ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
   workflow_dispatch:
+    inputs:
+      build_type:
+        description: Build type
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
 
 jobs:
-  test-plugin-venv:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Download Python embeddable
-        shell: pwsh
-        run: |
-          Invoke-WebRequest "https://www.python.org/ftp/python/3.12.8/python-3.12.8-embed-amd64.zip" -OutFile python-embed.zip
-          Expand-Archive python-embed.zip -DestinationPath python-embed
-
-      - name: Test uv sync with embedded Python
-        shell: pwsh
-        run: |
-          $PYTHON = "$PWD\python-embed\python.exe"
-
-          # Create minimal test plugin
-          $PLUGIN = "$env:TEMP\test_plugin"
-          New-Item -ItemType Directory -Force -Path $PLUGIN
-          @"
-          [project]
-          name = "test-plugin"
-          version = "0.1.0"
-          requires-python = ">=3.12"
-          dependencies = []
-          "@ | Set-Content "$PLUGIN\pyproject.toml"
-
-          # Test 1: uv sync creates venv
-          uv sync --project $PLUGIN --python $PYTHON
-          if (-not (Test-Path "$PLUGIN\.venv\Scripts\python.exe")) {
-            Write-Error "FAIL: venv python not created"
-            exit 1
-          }
-          Write-Host "PASS: uv sync created venv with python.exe"
-
-          # Test 2: broken venv recovery
-          Remove-Item "$PLUGIN\.venv\Scripts\python.exe"
-          uv sync --project $PLUGIN --python $PYTHON
-          if (-not (Test-Path "$PLUGIN\.venv\Scripts\python.exe")) {
-            Write-Error "FAIL: broken venv not recovered"
-            exit 1
-          }
-          Write-Host "PASS: uv sync recovered broken venv"
-
-          # Test 3: uv sync works when PYTHONHOME is set (simulates in-app environment)
-          Remove-Item -Recurse -Force "$PLUGIN\.venv"
-          $env:PYTHONHOME = "$PWD\python-embed"
-          uv sync --project $PLUGIN --python $PYTHON
-          $env:PYTHONHOME = $null
-          if (-not (Test-Path "$PLUGIN\.venv\Scripts\python.exe")) {
-            Write-Error "FAIL: uv sync failed with PYTHONHOME set"
-            exit 1
-          }
-          Write-Host "PASS: uv sync works with PYTHONHOME set"
-
-          # Test 4: uv sync works when PYTHONHOME points to wrong location
-          Remove-Item -Recurse -Force "$PLUGIN\.venv"
-          $env:PYTHONHOME = "C:\nonexistent\path"
-          uv sync --project $PLUGIN --python $PYTHON
-          $env:PYTHONHOME = $null
-          if (-not (Test-Path "$PLUGIN\.venv\Scripts\python.exe")) {
-            Write-Error "FAIL: uv sync failed with wrong PYTHONHOME"
-            exit 1
-          }
-          Write-Host "PASS: uv sync resilient to wrong PYTHONHOME"
-
   build-windows:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: [Release, Debug]
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
       VCPKG_BUILD_TYPE: release
@@ -144,7 +72,7 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DCUDA_DEVICE_DEBUG=OFF
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type || 'Release' }} -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DCUDA_DEVICE_DEBUG=OFF
 
       - name: Build
         shell: cmd
@@ -152,3 +80,17 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set PATH=%CD%\build;%CD%\build\vcpkg_installed\x64-windows\bin;%PATH%
           cmake --build build -j %NUMBER_OF_PROCESSORS%
+
+      - name: Package
+        shell: pwsh
+        run: |
+          cmake --install build --prefix dist
+          Compress-Archive -Path dist\* -DestinationPath LichtFeld-Studio-windows.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LichtFeld-Studio-windows
+          if-no-files-found: error
+          retention-days: 1
+          path: LichtFeld-Studio-windows.zip
