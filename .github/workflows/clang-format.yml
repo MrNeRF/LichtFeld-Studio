@@ -2,25 +2,20 @@ name: Clang Format Check
 
 on:
   push:
-    branches: [ master ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
+    branches: [ dev, master ]
   workflow_dispatch:
 
 jobs:
   clang-format:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Install clang-format
         run: |
@@ -30,20 +25,10 @@ jobs:
       - name: Print clang-format version
         run: clang-format --version
 
-      - name: Run clang-format
+      - name: Check formatting
         run: |
-          find . -regex '.*\.\(cpp\|hpp\|cc\|c\|h\|cu\|cuh\)' \
-            -exec clang-format -i {} +
-
-      - name: Commit and push changes
-        run: |
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git remote set-url origin https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/${{ github.repository }}
-            git add .
-            git commit -m "style: apply clang-format"
-            git push
-          else
-            echo "No formatting changes needed."
+          if ! find . -regex '.*\.\(cpp\|hpp\|cc\|c\|h\|cu\|cuh\)' -exec clang-format --dry-run -Werror {} + 2>&1; then
+            echo "Formatting issues detected. Run clang-format -i to fix."
+            exit 1
           fi
+          echo "All files are formatted correctly."

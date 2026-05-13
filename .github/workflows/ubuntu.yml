@@ -3,26 +3,15 @@ name: Ubuntu CUDA Build
 on:
   push:
     branches: [ dev, master ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
   pull_request:
     branches: [ dev, master ]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
   workflow_dispatch:
 
 jobs:
   build-ubuntu:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04
     container:
       image: nvidia/cuda:12.8.0-devel-ubuntu24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: [Release, Debug]
     env:
       VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
       CC: gcc-14
@@ -47,13 +36,10 @@ jobs:
         run: |
           apt-get clean
           rm -rf /var/lib/apt/lists/*
-          # Host paths (may not exist in container)
           rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache /usr/local/lib/android /opt/az
-          # CUDA extras - samples, docs, tools we don't need
           rm -rf /usr/local/cuda/nsight* /usr/local/cuda/compute-sanitizer
           rm -rf /usr/local/cuda/extras /usr/local/cuda/tools
           rm -rf /usr/local/cuda/doc
-          # Remove large static libs but keep ones needed for build
           find /usr/local/cuda/targets/x86_64-linux/lib -name '*.a' \
             ! -name 'libcudart_static.a' \
             ! -name 'libcudadevrt.a' \
@@ -68,7 +54,6 @@ jobs:
           apt-get update
           apt-get install -y ca-certificates gpg wget
 
-          # CMake 3.30+ from Kitware
           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null
           apt-get update
@@ -109,8 +94,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-
+          key: ccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-
 
       - name: Cache vcpkg packages
         uses: actions/cache@v4
@@ -122,7 +107,7 @@ jobs:
       - name: Configure
         run: |
           cmake -B build -S . -G Ninja \
-            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
@@ -136,3 +121,16 @@ jobs:
 
       - name: Build
         run: cmake --build build -j $(nproc)
+
+      - name: Package
+        run: |
+          cmake --install build --prefix dist
+          tar -czf LichtFeld-Studio-ubuntu.tar.gz -C dist .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LichtFeld-Studio-ubuntu
+          if-no-files-found: error
+          retention-days: 1
+          path: LichtFeld-Studio-ubuntu.tar.gz
