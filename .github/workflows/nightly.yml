@@ -152,7 +152,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LichtFeld-Studio-windows
+          name: LichtFeld-Studio-windows-${{ steps.package.outputs.package_version }}
           if-no-files-found: error
           retention-days: 1
-          path: LichtFeld-Studio-windows.zip
+          path: ${{ steps.package.outputs.package_name }}
