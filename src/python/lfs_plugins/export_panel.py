@@ -3,6 +3,7 @@
 """Export panel for exporting scene nodes."""
 
 import html
+from pathlib import Path
 from typing import Set
 from enum import IntEnum
 
@@ -31,6 +32,7 @@ class ExportFormat(IntEnum):
     USD = 4
     NUREC_USDZ = 5
     RAD = 6
+    COLMAP = 7
 
 
 FORMAT_INFO = (
@@ -41,6 +43,7 @@ FORMAT_INFO = (
     (ExportFormat.USD, "export.format.usd_openusd"),
     (ExportFormat.NUREC_USDZ, "export.format.usdz_nurec"),
     (ExportFormat.HTML_VIEWER, "export.format.html_viewer"),
+    (ExportFormat.COLMAP, "export.format.colmap_sparse"),
 )
 
 EXPORT_PROGRESS_FORMAT_NAMES = {
@@ -51,6 +54,7 @@ EXPORT_PROGRESS_FORMAT_NAMES = {
     ExportFormat.USD: "USD",
     ExportFormat.NUREC_USDZ: "USDZ",
     ExportFormat.RAD: "RAD",
+    ExportFormat.COLMAP: "COLMAP",
 }
 
 SCRUB_FIELD_DEFS = {
@@ -85,6 +89,8 @@ class ExportPanel(Panel):
         self._selection_seeded = False
         self._handle = None
         self._last_node_key = None
+        self._last_colmap_key = None
+        self._last_colmap_source_path = ""
         self._last_lang = ""
         self._exporting = False
         self._last_progress = -1.0
@@ -116,7 +122,10 @@ class ExportPanel(Panel):
         model.bind_func("panel_label", lambda: lf.ui.tr("export.export"))
         model.bind_func("export_label", self._get_export_label)
         model.bind_func("show_no_models", lambda: not self._has_models)
-        model.bind_func("can_export", lambda: bool(self._selected_nodes))
+        model.bind_func("show_model_selection", lambda: self._format != ExportFormat.COLMAP)
+        model.bind_func("show_sh_degree", lambda: self._format != ExportFormat.COLMAP)
+        model.bind_func("export_error_text", self._get_export_error_text)
+        model.bind_func("can_export", self._can_export)
         model.bind_func("progress_value", lambda: self._progress_value)
 
         model.bind(
@@ -371,6 +380,7 @@ class ExportPanel(Panel):
         self._cached_export_state = {}
         self._selection_seeded = False
         self._last_node_key = None
+        self._last_colmap_source_path = ""
         self._last_lang = lf.ui.get_current_language()
 
         export_form = doc.get_element_by_id("export-form")
@@ -424,16 +434,28 @@ class ExportPanel(Panel):
 
         nodes = self._get_splat_nodes()
         node_key = tuple((n.name, n.gaussian_count) for n in nodes)
+        colmap_source_path = self._get_colmap_sparse_path_raw()
+
+        if colmap_source_path != self._last_colmap_source_path:
+            self._last_colmap_source_path = colmap_source_path
+            self._dirty_model("can_export", "export_error_text")
+            dirty = True
 
         if self._sync_selection(nodes):
             self._rebuild_model_records(nodes)
-            self._dirty_model("export_label", "can_export")
+            self._dirty_model("export_label", "can_export", "export_error_text")
             dirty = True
 
         if node_key != self._last_node_key:
             self._last_node_key = node_key
             self._rebuild_model_records(nodes)
-            self._dirty_model("show_no_models", "can_export")
+            self._dirty_model("show_no_models", "can_export", "export_error_text")
+            dirty = True
+
+        colmap_key = (self._format, self._can_export_colmap())
+        if colmap_key != self._last_colmap_key:
+            self._last_colmap_key = colmap_key
+            self._dirty_model("can_export", "export_error_text")
             dirty = True
 
         dirty |= self._scrub_fields.sync_all()
@@ -441,6 +463,8 @@ class ExportPanel(Panel):
 
     def on_scene_changed(self, doc):
         self._last_node_key = None
+        self._last_colmap_key = None
+        self._last_colmap_source_path = ""
 
     def on_unmount(self, doc):
         doc.remove_data_model("export")
@@ -461,9 +485,65 @@ class ExportPanel(Panel):
 
     def _get_export_label(self):
         tr = lf.ui.tr
+        if self._format == ExportFormat.COLMAP:
+            return tr("export.export")
         if len(self._selected_nodes) > 1:
             return tr("export_dialog.export_merged")
         return tr("export.export")
+
+    def _get_colmap_sparse_path_raw(self):
+        try:
+            return lf.get_colmap_sparse_source_path() or ""
+        except Exception:
+            return ""
+
+    def _get_colmap_suggested_export_path_raw(self):
+        source_path = self._get_colmap_sparse_path_raw()
+        if not source_path:
+            return ""
+
+        path = Path(source_path)
+        if path.parent.name == "sparse":
+            return str(path.parent)
+        return source_path
+
+    def _get_colmap_output_file_names(self):
+        source_path = Path(self._get_colmap_sparse_path_raw())
+        if (source_path / "cameras.bin").exists() and (source_path / "images.bin").exists():
+            return ("cameras.bin", "images.bin", "points3D.bin")
+        return ("cameras.txt", "images.txt", "points3D.txt")
+
+    def _colmap_sparse_data_exists(self, folder):
+        path = Path(folder)
+        for file_name in (
+            "cameras.bin",
+            "images.bin",
+            "points3D.bin",
+            "cameras.txt",
+            "images.txt",
+            "points3D.txt",
+        ):
+            if (path / file_name).exists():
+                return True
+        return False
+
+    def _get_export_error_text(self):
+        tr = lf.ui.tr
+        if self._format != ExportFormat.COLMAP:
+            return tr("export.select_at_least_one")
+
+        try:
+            if lf.ui.get_content_type() != "dataset":
+                return tr("export_dialog.colmap_requires_dataset")
+            if not self._get_colmap_sparse_path_raw():
+                return tr("export_dialog.colmap_no_sparse")
+            scene = lf.get_scene()
+            if scene is None or int(getattr(scene, "active_camera_count", 0)) <= 0:
+                return tr("export_dialog.colmap_no_cameras")
+        except Exception:
+            return tr("export_dialog.colmap_unavailable")
+
+        return ""
 
     def _sync_selection(self, nodes):
         node_names = {node.name for node in nodes}
@@ -479,7 +559,7 @@ class ExportPanel(Panel):
             self._selected_nodes = node_names
             self._pinned_sh_degree = True
             self._selection_seeded = True
-            self._dirty_model("sh_degree")
+            self._refresh_sh_degree_bounds(nodes)
             return True
 
         selected_nodes = self._selected_nodes & node_names
@@ -568,7 +648,15 @@ class ExportPanel(Panel):
         self._rebuild_format_records()
         # Dirty RAD settings visibility when format changes
         self._dirty_model(
-            "show_rad_settings", "rad_flip_y", "rad_customize_lod", "no_rad_lod"
+            "show_rad_settings",
+            "show_model_selection",
+            "show_sh_degree",
+            "export_error_text",
+            "rad_flip_y",
+            "rad_customize_lod",
+            "no_rad_lod",
+            "can_export",
+            "export_label",
         )
 
     def _on_model_toggle(self, ev):
@@ -582,26 +670,26 @@ class ExportPanel(Panel):
             self._selected_nodes.discard(node_name)
 
         self._rebuild_model_records(self._get_splat_nodes())
-        self._dirty_model("can_export", "export_label")
+        self._dirty_model("can_export", "export_label", "export_error_text")
 
     def _on_select_all(self, _ev):
         nodes = self._get_splat_nodes()
         self._selected_nodes = {node.name for node in nodes}
         self._rebuild_model_records(nodes)
-        self._dirty_model("can_export", "export_label")
+        self._dirty_model("can_export", "export_label", "export_error_text")
 
     def _on_select_none(self, _ev):
         self._selected_nodes.clear()
         self._rebuild_model_records(self._get_splat_nodes())
-        self._dirty_model("can_export", "export_label")
+        self._dirty_model("can_export", "export_label", "export_error_text")
 
     def _on_export(self, _handle, _ev, _args):
-        if not self._selected_nodes:
+        if not self._can_export():
             return
         self._do_export()
 
     def _on_export_submit(self, ev):
-        if self._selected_nodes:
+        if self._can_export():
             self._do_export()
         ev.stop_propagation()
 
@@ -629,6 +717,25 @@ class ExportPanel(Panel):
             pass
         return nodes
 
+    def _can_export_colmap(self):
+        try:
+            if lf.ui.get_content_type() != "dataset":
+                return False
+            scene = lf.get_scene()
+            source_path = self._get_colmap_sparse_path_raw()
+            return (
+                bool(source_path)
+                and scene is not None
+                and int(getattr(scene, "active_camera_count", 0)) > 0
+            )
+        except Exception:
+            return False
+
+    def _can_export(self):
+        if self._format == ExportFormat.COLMAP:
+            return self._can_export_colmap()
+        return bool(self._selected_nodes)
+
     def _get_selected_node_names(self):
         selected = []
         for node in self._get_splat_nodes():
@@ -651,18 +758,54 @@ class ExportPanel(Panel):
             return lf.ui.save_html_file_dialog(default_name)
         if self._format == ExportFormat.RAD:
             return lf.ui.save_rad_file_dialog(default_name)
+        if self._format == ExportFormat.COLMAP:
+            try:
+                default_path = self._get_colmap_suggested_export_path_raw()
+                return lf.ui.select_colmap_sparse_folder_dialog(default_path)
+            except Exception:
+                return ""
         return None
 
+    def _confirm_colmap_overwrite(self, path, selected_nodes):
+        file_names = self._get_colmap_output_file_names()
+        file_list = f"{file_names[0]}, {file_names[1]}, and {file_names[2]}"
+        message = (
+            "COLMAP export will overwrite existing sparse reconstruction data in:\n"
+            f"{path}\n\n"
+            f"This writes {file_list}."
+        )
+
+        def on_result(button_label):
+            if button_label == "Overwrite":
+                self._start_export(path, selected_nodes)
+
+        lf.ui.confirm_dialog(
+            "Export COLMAP sparse",
+            message,
+            ["Overwrite", "Cancel"],
+            on_result,
+        )
+
     def _do_export(self):
-        selected_nodes = self._get_selected_node_names()
-        if not selected_nodes:
-            self._dirty_model("can_export")
+        if not self._can_export():
+            self._dirty_model("can_export", "export_error_text")
             return
 
-        default_name = selected_nodes[0]
+        selected_nodes = [] if self._format == ExportFormat.COLMAP else self._get_selected_node_names()
+        default_name = "colmap_sparse" if self._format == ExportFormat.COLMAP else selected_nodes[0]
         path = self._get_save_path(default_name)
 
         if path:
+            if self._format == ExportFormat.COLMAP:
+                if self._colmap_sparse_data_exists(path):
+                    self._confirm_colmap_overwrite(path, selected_nodes)
+                    return
+
+            self._start_export(path, selected_nodes)
+
+    def _start_export(self, path, selected_nodes):
+        if path:
+
             # Store export info for Asset Manager registration
             self._last_export_path = path
             self._last_export_format = self._format
@@ -752,6 +895,7 @@ class ExportPanel(Panel):
             ExportFormat.USD: "usd",
             ExportFormat.NUREC_USDZ: "usdz",
             ExportFormat.HTML_VIEWER: "html",
+            ExportFormat.COLMAP: "dataset",
         }
         return mapping.get(fmt, "unknown")
 

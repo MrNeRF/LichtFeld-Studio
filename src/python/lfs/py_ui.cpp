@@ -58,6 +58,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <future>
 #include <implot.h>
 #include <memory>
@@ -3962,11 +3963,27 @@ namespace lfs::python {
 
         m.def(
             "open_dataset_folder_dialog",
-            []() -> std::string {
-                auto result = lfs::vis::gui::OpenDatasetFolderDialog();
+            [](const std::string& default_path) -> std::string {
+                const auto default_fs_path = default_path.empty()
+                                                 ? std::filesystem::path{}
+                                                 : lfs::core::utf8_to_path(default_path);
+                auto result = lfs::vis::gui::OpenDatasetFolderDialog(default_fs_path);
                 return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
+            nb::arg("default_path") = "",
             "Open a folder dialog to select a dataset. Returns empty string if cancelled.");
+
+        m.def(
+            "select_colmap_sparse_folder_dialog",
+            [](const std::string& default_path) -> std::string {
+                const auto default_fs_path = default_path.empty()
+                                                 ? std::filesystem::path{}
+                                                 : lfs::core::utf8_to_path(default_path);
+                auto result = lfs::vis::gui::PickColmapSparseFolderDialog(default_fs_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_path") = "",
+            "Open a folder dialog to select the COLMAP sparse export folder. Returns empty string if cancelled.");
 
         m.def(
             "open_video_file_dialog",

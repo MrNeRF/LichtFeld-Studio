@@ -181,6 +181,7 @@ namespace lfs::vis {
                                   std::shared_mutex* model_mutex,
                                   std::vector<float> rad_lod_ratios,
                                   bool rad_flip_y);
+            void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
             void checkAsyncImportCompletion();

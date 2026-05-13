@@ -26,7 +26,8 @@ namespace lfs::core {
                               HTML_VIEWER = 3,
                               USD = 4,
                               NUREC_USDZ = 5,
-                              RAD = 6 };
+                              RAD = 6,
+                              COLMAP = 7 };
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \

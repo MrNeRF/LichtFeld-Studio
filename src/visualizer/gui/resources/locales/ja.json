@@ -543,6 +543,7 @@
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTMLビューアー",
     "format.rad_random_access": "RAD (SparkJS)",
+    "format.colmap_sparse": "COLMAP Sparse",
     "select_models": "モデルを選択:",
     "all": "すべて",
     "none": "なし",
@@ -973,13 +974,20 @@
   "export_dialog": {
     "format": "フォーマット",
     "models": "モデル",
+    "folder": "フォルダー",
     "no_models": "シーンにモデルがありません",
     "sh_degree": "SH Degree",
     "export_merged": "結合してエクスポート...",
     "rad_customize_lod": "LODをカスタマイズ",
     "rad_lod_levels": "LODレベル",
     "no_lod_settings": "LOD設定なし（デフォルトを使用）",
-    "rad_flip_y": "Y軸を反転"
+    "rad_flip_y": "Y軸を反転",
+    "colmap_writes_sparse": "cameras.bin、images.bin、points3D.binを書き込みます",
+    "colmap_no_sparse": "COLMAP sparseフォルダーが見つかりません",
+    "colmap_select_folder": "COLMAP sparseフォルダーを選択",
+    "colmap_requires_dataset": "先にCOLMAPデータセットを読み込んでください",
+    "colmap_no_cameras": "エクスポートするCOLMAPカメラがありません",
+    "colmap_unavailable": "COLMAPエクスポートは利用できません"
   },
   "selection_group": {
     "lock": "ロック",

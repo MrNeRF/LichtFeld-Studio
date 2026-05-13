@@ -311,6 +311,7 @@ namespace lfs::vis {
                                : fmt == core::ExportFormat::USD         ? "USD"
                                : fmt == core::ExportFormat::NUREC_USDZ  ? "USDZ"
                                : fmt == core::ExportFormat::RAD         ? "RAD"
+                               : fmt == core::ExportFormat::COLMAP      ? "COLMAP"
                                                                         : "file";
                 return state;
             },
