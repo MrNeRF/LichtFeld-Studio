@@ -80,6 +80,10 @@ namespace lfs::vis {
             // Sub-manager access
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
+            void enqueueModal(lfs::core::ModalRequest request) {
+                if (rml_modal_overlay_)
+                    rml_modal_overlay_->enqueue(std::move(request));
+            }
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }

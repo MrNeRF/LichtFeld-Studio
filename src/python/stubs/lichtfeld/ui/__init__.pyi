@@ -1980,9 +1980,14 @@ def save_rad_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for RAD files. Returns empty string if cancelled.
     """
 
-def open_dataset_folder_dialog() -> str:
+def open_dataset_folder_dialog(default_path: str = '') -> str:
     """
     Open a folder dialog to select a dataset. Returns empty string if cancelled.
+    """
+
+def select_colmap_sparse_folder_dialog(default_path: str = '') -> str:
+    """
+    Open a folder dialog to select the COLMAP sparse export folder. Returns empty string if cancelled.
     """
 
 def open_video_file_dialog() -> str:

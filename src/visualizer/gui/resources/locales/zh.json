@@ -397,6 +397,7 @@
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML查看器",
     "format.rad_random_access": "RAD (SparkJS)",
+    "format.colmap_sparse": "COLMAP Sparse",
     "select_models": "选择模型：",
     "all": "全部",
     "none": "无",
@@ -827,13 +828,20 @@
   "export_dialog": {
     "format": "格式",
     "models": "模型",
+    "folder": "文件夹",
     "no_models": "场景中无模型",
     "sh_degree": "SH Degree",
     "export_merged": "导出合并的...",
     "rad_customize_lod": "自定义LOD",
     "rad_lod_levels": "LOD级别",
     "no_lod_settings": "无LOD设置（使用默认值）",
-    "rad_flip_y": "翻转Y轴"
+    "rad_flip_y": "翻转Y轴",
+    "colmap_writes_sparse": "写入 cameras.bin、images.bin 和 points3D.bin",
+    "colmap_no_sparse": "未找到 COLMAP sparse 文件夹",
+    "colmap_select_folder": "选择 COLMAP sparse 文件夹",
+    "colmap_requires_dataset": "请先加载 COLMAP 数据集",
+    "colmap_no_cameras": "没有可导出的 COLMAP 相机",
+    "colmap_unavailable": "COLMAP 导出不可用"
   },
   "selection_group": {
     "lock": "锁定",

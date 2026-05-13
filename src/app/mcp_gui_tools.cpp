@@ -21,6 +21,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/colmap.hpp"
 #include "mcp/llm_client.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "mcp/render_capture_utils.hpp"
@@ -1447,8 +1448,73 @@ namespace lfs::app {
                     return std::unexpected(result.error().message);
                 break;
             }
+            case core::ExportFormat::COLMAP:
+                return std::unexpected("COLMAP export uses scene.export_colmap");
             }
 
+            return {};
+        }
+
+        io::ColmapWriteFormat parse_colmap_write_format(const std::string& value) {
+            if (value == "binary")
+                return io::ColmapWriteFormat::Binary;
+            if (value == "text")
+                return io::ColmapWriteFormat::Text;
+            return io::ColmapWriteFormat::Auto;
+        }
+
+        std::expected<void, std::string> export_colmap_reconstruction_from_scene(
+            const vis::SceneManager& scene_manager,
+            const std::filesystem::path& source_path,
+            const std::filesystem::path& output_sparse_path,
+            const io::ColmapWriteFormat format) {
+            const auto& scene = scene_manager.getScene();
+            auto cameras = scene.getAllCameras();
+            if (cameras.empty()) {
+                return std::unexpected("Scene has no COLMAP cameras to export");
+            }
+
+            std::vector<io::ColmapCameraWriteData> camera_exports;
+            camera_exports.reserve(cameras.size());
+            for (const auto& camera : cameras) {
+                if (!camera)
+                    continue;
+                camera_exports.push_back(io::ColmapCameraWriteData{
+                    .camera = camera,
+                    .data_world_transform = scene.getCameraSceneTransformByUid(camera->uid()).value_or(glm::mat4(1.0f)),
+                });
+            }
+
+            const core::PointCloud* point_cloud = nullptr;
+            glm::mat4 point_cloud_transform{1.0f};
+            for (const auto* node : scene.getNodes()) {
+                if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
+                    !scene.isNodeEffectivelyVisible(node->id)) {
+                    continue;
+                }
+                point_cloud = node->point_cloud.get();
+                point_cloud_transform = scene.getWorldTransform(node->id);
+                break;
+            }
+            if (!point_cloud) {
+                for (const auto* node : scene.getNodes()) {
+                    if (node && node->type == core::NodeType::DATASET) {
+                        point_cloud_transform = scene.getWorldTransform(node->id);
+                        break;
+                    }
+                }
+            }
+
+            auto result = io::write_colmap_reconstruction(
+                source_path,
+                output_sparse_path,
+                camera_exports,
+                point_cloud,
+                point_cloud_transform,
+                io::ColmapWriteOptions{.format = format});
+            if (!result) {
+                return std::unexpected(result.error().message);
+            }
             return {};
         }
 
@@ -2705,6 +2771,54 @@ namespace lfs::app {
                         {"format", "rad"},
                         {"path", core::path_to_utf8(path)},
                         {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_colmap",
+                .description = "Write the current scene camera and sparse point cloud transforms to COLMAP sparse files",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination COLMAP sparse directory"}}},
+                        {"source_path", json{{"type", "string"}, {"description", "Optional source COLMAP dataset or sparse directory; defaults to the loaded dataset path"}}},
+                        {"format", json{{"type", "string"}, {"description", "Output format: auto, binary, or text"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const auto source_arg = optional_string_arg(args, "source_path");
+                const auto format = parse_colmap_write_format(args.value("format", "auto"));
+
+                return post_and_wait(viewer_impl, [viewer_impl, path, source_arg, format]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    std::filesystem::path source_path;
+                    if (source_arg && !source_arg->empty()) {
+                        source_path = *source_arg;
+                    } else {
+                        source_path = scene_manager->getDatasetPath();
+                    }
+                    if (source_path.empty()) {
+                        return json{{"error", "No source COLMAP path provided and no dataset path is loaded"}};
+                    }
+
+                    if (auto result = export_colmap_reconstruction_from_scene(
+                            *scene_manager, source_path, path, format);
+                        !result) {
+                        return json{{"error", result.error()}};
+                    }
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "colmap"},
+                        {"path", core::path_to_utf8(path)},
+                        {"source_path", core::path_to_utf8(source_path)},
                     };
                 });
             });

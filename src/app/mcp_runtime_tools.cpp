@@ -220,6 +220,10 @@ namespace lfs::app {
                 return "usd";
             case core::ExportFormat::NUREC_USDZ:
                 return "usdz_nurec";
+            case core::ExportFormat::RAD:
+                return "rad";
+            case core::ExportFormat::COLMAP:
+                return "colmap";
             }
             return "unknown";
         }

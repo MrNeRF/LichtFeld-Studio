@@ -263,7 +263,7 @@ def force_exit() -> None:
 
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_lod_ratios: Sequence[float] | None = None, rad_flip_y: bool = False) -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD.
+    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.
     """
 
 def save_config_file(path: str) -> None:
@@ -381,6 +381,9 @@ def get_node_transform(name: str) -> list[float] | None:
 
 def get_node_source_path(name: str) -> str | None:
     """Get original source path for a node if available"""
+
+def get_colmap_sparse_source_path() -> str | None:
+    """Get the loaded dataset's COLMAP sparse metadata folder if available"""
 
 def get_node_visualizer_world_transform(name: str) -> list[float] | None:
     """Get node visualizer-world transform matrix (16 floats, column-major)"""

@@ -543,6 +543,7 @@
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML 뷰어",
     "format.rad_random_access": "RAD (SparkJS)",
+    "format.colmap_sparse": "COLMAP Sparse",
     "select_models": "모델 선택:",
     "all": "전체",
     "none": "없음",
@@ -973,13 +974,20 @@
   "export_dialog": {
     "format": "형식",
     "models": "모델",
+    "folder": "폴더",
     "no_models": "씬에 모델 없음",
     "sh_degree": "SH Degree",
     "export_merged": "병합하여보내기...",
     "rad_customize_lod": "LOD 사용자 정의",
     "rad_lod_levels": "LOD 레벨",
     "no_lod_settings": "LOD 설정 없음 (기본값 사용)",
-    "rad_flip_y": "Y축 뒤집기"
+    "rad_flip_y": "Y축 뒤집기",
+    "colmap_writes_sparse": "cameras.bin, images.bin, points3D.bin을 씁니다",
+    "colmap_no_sparse": "COLMAP sparse 폴더를 찾을 수 없습니다",
+    "colmap_select_folder": "COLMAP sparse 폴더 선택",
+    "colmap_requires_dataset": "먼저 COLMAP 데이터셋을 로드하세요",
+    "colmap_no_cameras": "내보낼 COLMAP 카메라가 없습니다",
+    "colmap_unavailable": "COLMAP 내보내기를 사용할 수 없습니다"
   },
   "selection_group": {
     "lock": "잠금",

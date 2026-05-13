@@ -17,6 +17,7 @@
 #include "gui/video_export_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/colmap.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/rendering.hpp"
@@ -105,6 +106,72 @@ namespace lfs::vis::gui {
 
         plan.storage_mode = core::Scene::MergeStorageMode::BorrowSingleIdentity;
         return plan;
+    }
+
+    struct ColmapExportSnapshot {
+        std::filesystem::path source_path;
+        std::vector<io::ColmapCameraWriteData> cameras;
+        std::shared_ptr<const core::PointCloud> point_cloud;
+        glm::mat4 point_cloud_transform{1.0f};
+    };
+
+    [[nodiscard]] std::expected<ColmapExportSnapshot, std::string>
+    makeColmapExportSnapshot(const lfs::vis::SceneManager& scene_manager) {
+        if (!scene_manager.hasDataset()) {
+            return std::unexpected("COLMAP export requires a loaded dataset");
+        }
+
+        const auto source_path = scene_manager.getDatasetPath();
+        if (source_path.empty()) {
+            return std::unexpected("COLMAP export requires a source dataset path");
+        }
+
+        const auto& scene = scene_manager.getScene();
+        auto cameras = scene.getAllCameras();
+        if (cameras.empty()) {
+            return std::unexpected("COLMAP export requires scene cameras");
+        }
+
+        ColmapExportSnapshot snapshot;
+        snapshot.source_path = source_path;
+        snapshot.cameras.reserve(cameras.size());
+        for (const auto& camera : cameras) {
+            if (!camera)
+                continue;
+            snapshot.cameras.push_back(io::ColmapCameraWriteData{
+                .camera = camera,
+                .data_world_transform = scene.getCameraSceneTransformByUid(camera->uid()).value_or(glm::mat4(1.0f)),
+            });
+        }
+
+        for (const auto* node : scene.getNodes()) {
+            if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
+                !scene.isNodeEffectivelyVisible(node->id)) {
+                continue;
+            }
+            snapshot.point_cloud = node->point_cloud;
+            snapshot.point_cloud_transform = scene.getWorldTransform(node->id);
+            break;
+        }
+
+        // If no live POINTCLOUD node exists (e.g. the splat model replaced it
+        // once training started), the export will fall through to the source
+        // COLMAP points3D file. Those points are in the original COLMAP frame
+        // and the writer otherwise leaves them untransformed, which makes the
+        // exported cameras (which DO get a world transform) inconsistent with
+        // the points after the user reorients the scene. Anchor the point
+        // transform to the DATASET node so points and cameras share the same
+        // user-applied orientation.
+        if (!snapshot.point_cloud) {
+            for (const auto* node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::DATASET) {
+                    snapshot.point_cloud_transform = scene.getWorldTransform(node->id);
+                    break;
+                }
+            }
+        }
+
+        return snapshot;
     }
 
     template <typename F>
@@ -643,6 +710,11 @@ namespace lfs::vis::gui {
         if (isExporting())
             return;
 
+        if (format == ExportFormat::COLMAP) {
+            startColmapExport(path);
+            return;
+        }
+
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager || node_names.empty())
             return;
@@ -670,6 +742,117 @@ namespace lfs::vis::gui {
                          borrow_plan.model_mutex,
                          rad_lod_ratios,
                          rad_flip_y);
+    }
+
+    void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
+        if (isExporting())
+            return;
+
+        auto* const scene_manager = viewer_->getSceneManager();
+        if (!scene_manager) {
+            LOG_ERROR("COLMAP export failed: scene manager not initialized");
+            return;
+        }
+
+        auto snapshot_result = makeColmapExportSnapshot(*scene_manager);
+        if (!snapshot_result) {
+            LOG_ERROR("COLMAP export failed: {}", snapshot_result.error());
+            lfs::core::events::state::ExportFailed{.error = snapshot_result.error()}.emit();
+            return;
+        }
+
+        export_state_.active.store(true);
+        export_state_.cancel_requested.store(false);
+        export_state_.progress.store(0.0f);
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = ExportFormat::COLMAP;
+            export_state_.stage = "Starting";
+            export_state_.error.clear();
+            export_state_.path = path;
+        }
+
+        LOG_INFO("COLMAP export started: {}", lfs::core::path_to_utf8(path));
+
+        export_state_.thread.emplace(
+            [this, path, snapshot = std::move(*snapshot_result)](std::stop_token stop_token) mutable {
+                bool success = false;
+                bool cancelled = false;
+                std::string error_msg;
+
+                auto update_stage = [this](float progress, const std::string& stage) {
+                    export_state_.progress.store(progress);
+                    {
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.stage = stage;
+                    }
+                    if (auto* window_manager = services().windowOrNull()) {
+                        window_manager->wakeEventLoop();
+                    }
+                };
+
+                try {
+                    if (stop_token.stop_requested() || export_state_.cancel_requested.load()) {
+                        cancelled = true;
+                        error_msg = "Export cancelled by user";
+                    } else {
+                        update_stage(0.1f, "Writing COLMAP sparse files");
+                        auto result = io::write_colmap_reconstruction(
+                            snapshot.source_path,
+                            path,
+                            snapshot.cameras,
+                            snapshot.point_cloud.get(),
+                            snapshot.point_cloud_transform,
+                            io::ColmapWriteOptions{.format = io::ColmapWriteFormat::Auto});
+                        if (result) {
+                            success = true;
+                            update_stage(1.0f, "Complete");
+                        } else {
+                            error_msg = result.error().message;
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    error_msg = std::string("COLMAP export crashed with exception: ") + e.what();
+                } catch (...) {
+                    error_msg = "COLMAP export crashed with unknown exception";
+                }
+
+                if (success && (stop_token.stop_requested() || export_state_.cancel_requested.load())) {
+                    success = false;
+                    cancelled = true;
+                    error_msg = "Export cancelled by user";
+                }
+
+                if (success) {
+                    LOG_INFO("COLMAP export completed: {}", lfs::core::path_to_utf8(path));
+                    lfs::core::events::state::ExportCompleted{
+                        .path = path,
+                        .format = ExportFormat::COLMAP}
+                        .emit();
+                } else if (cancelled) {
+                    LOG_INFO("COLMAP export cancelled: {}", lfs::core::path_to_utf8(path));
+                    {
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.error = error_msg;
+                        export_state_.stage = "Cancelled";
+                    }
+                    lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
+                } else {
+                    LOG_ERROR("COLMAP export failed: {}", error_msg);
+                    {
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.error = error_msg;
+                        export_state_.stage = "Failed";
+                    }
+                    lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
+                }
+
+                lfs::core::Tensor::trim_memory_pool();
+                export_state_.active.store(false);
+                if (auto* window_manager = services().windowOrNull()) {
+                    window_manager->wakeEventLoop();
+                }
+            });
     }
 
     void AsyncTaskManager::startAsyncExport(ExportFormat format,
@@ -883,6 +1066,9 @@ namespace lfs::vis::gui {
                             }
                             break;
                         }
+                        case ExportFormat::COLMAP:
+                            error_msg = "COLMAP export uses the dataset write-back path";
+                            break;
                         }
                     }
 

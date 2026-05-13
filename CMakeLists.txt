@@ -32,6 +32,33 @@ endif()
 
 project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
 
+# On Linux, hide symbols pulled in from third-party image / compression static
+# archives so they don't escape into the dynamic symbol tables of the binaries
+# we ship. Without this, every .so/exe we build re-exports e.g.
+# png_destroy_read_struct from its statically-linked libpng16. When the GTK
+# file-chooser dialog asks gdk-pixbuf to decode a PNG icon, gdk-pixbuf
+# allocates a png_struct against the system libpng but the dynamic linker
+# resolves png_destroy_read_struct to one of our re-exported copies; the two
+# libpng versions have incompatible png_struct layouts and the icon-decode
+# path crashes inside free(). The list is targeted at libraries with known
+# clashes against system loaders (libpng + libz for gdk-pixbuf, libjpeg /
+# libtiff / libwebp for the same code path); our own static archives
+# (lfs_tensor_kernels, lfs_core_cuda, ...) stay exported so the rest of our
+# .so graph keeps resolving cross-module symbols.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # ld accepts comma- or colon-separated archive lists for --exclude-libs,
+    # but the comma form collides with the way `-Wl,` itself splits on commas
+    # (each comma becomes a separate ld argument). Use colons so the whole
+    # list reaches ld as a single argument.
+    set(_LFS_EXCLUDE_STATIC_ARCHIVES
+        "libpng16.a:libpng.a:libz.a:libjpeg.a:libturbojpeg.a:libtiff.a:libwebp.a:libwebpdecoder.a:libsharpyuv.a:liblzma.a:libdeflate.a:libzstd.a"
+    )
+    string(APPEND CMAKE_EXE_LINKER_FLAGS    " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
+    string(APPEND CMAKE_MODULE_LINKER_FLAGS " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
+    unset(_LFS_EXCLUDE_STATIC_ARCHIVES)
+endif()
+
 # The application ships CUDA DLLs and links CUDA::cudart throughout the target graph.
 # Keep CUDA language targets on the shared runtime as well; MSVC otherwise adds
 # cudart_static.lib implicitly, which collides with cudart.lib when linking DLLs.
@@ -304,7 +331,7 @@ lfs_validate_linux_sdl_video_backends()
 find_package(glm REQUIRED)
 find_package(imgui REQUIRED)
 find_package(implot REQUIRED)
-find_package(nfd CONFIG REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNativeFileDialog.cmake")
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
 find_package(spdlog REQUIRED)

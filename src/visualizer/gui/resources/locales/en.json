@@ -543,6 +543,7 @@
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML Viewer",
     "format.rad_random_access": "RAD (SparkJS)",
+    "format.colmap_sparse": "COLMAP Sparse",
     "select_models": "Select Models:",
     "all": "All",
     "none": "None",
@@ -987,13 +988,20 @@
   "export_dialog": {
     "format": "FORMAT",
     "models": "MODELS",
+    "folder": "FOLDER",
     "no_models": "No models in scene",
     "sh_degree": "SH DEGREE",
     "export_merged": "Export Merged...",
     "rad_customize_lod": "Customize LOD",
     "rad_lod_levels": "LOD Levels",
     "no_lod_settings": "No LOD settings (using defaults)",
-    "rad_flip_y": "Flip Y axis"
+    "rad_flip_y": "Flip Y axis",
+    "colmap_writes_sparse": "Writes cameras.bin, images.bin, and points3D.bin",
+    "colmap_no_sparse": "No COLMAP sparse folder found",
+    "colmap_select_folder": "Select a COLMAP sparse folder",
+    "colmap_requires_dataset": "Load a COLMAP dataset first",
+    "colmap_no_cameras": "No COLMAP cameras to export",
+    "colmap_unavailable": "COLMAP export is unavailable"
   },
   "selection_group": {
     "lock": "Lock",

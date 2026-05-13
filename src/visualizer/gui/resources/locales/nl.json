@@ -540,6 +540,7 @@
     "format.usdz_nurec": "USDZ (NuRec)",
     "format.html_viewer": "HTML Viewer",
     "format.rad_random_access": "RAD (SparkJS)",
+    "format.colmap_sparse": "COLMAP Sparse",
     "select_models": "Selecteer Modellen:",
     "all": "Alle",
     "none": "Geen",
@@ -970,13 +971,20 @@
   "export_dialog": {
     "format": "FORMAAT",
     "models": "MODELLEN",
+    "folder": "MAP",
     "no_models": "Geen modellen in scène",
     "sh_degree": "SH DEGREE",
     "export_merged": "Exporteer Samengevoegd...",
     "rad_customize_lod": "LOD aanpassen",
     "rad_lod_levels": "LOD-niveaus",
     "no_lod_settings": "Geen LOD-instellingen (standaardwaarden gebruiken)",
-    "rad_flip_y": "Y-as omkeren"
+    "rad_flip_y": "Y-as omkeren",
+    "colmap_writes_sparse": "Schrijft cameras.bin, images.bin en points3D.bin",
+    "colmap_no_sparse": "Geen COLMAP sparse-map gevonden",
+    "colmap_select_folder": "Selecteer een COLMAP sparse-map",
+    "colmap_requires_dataset": "Laad eerst een COLMAP-dataset",
+    "colmap_no_cameras": "Geen COLMAP-camera's om te exporteren",
+    "colmap_unavailable": "COLMAP-export is niet beschikbaar"
   },
   "selection_group": {
     "lock": "Vergrendelen",

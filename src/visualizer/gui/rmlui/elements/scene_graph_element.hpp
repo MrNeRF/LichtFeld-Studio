@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -68,6 +69,7 @@ namespace lfs::vis::gui {
             bool draggable = false;
             bool has_mask = false;
             bool deletable = false;
+            std::optional<std::string> visibility_icon_color;
         };
 
         struct FlatRow {
@@ -86,6 +88,7 @@ namespace lfs::vis::gui {
             std::string padding_left_dp;
             bool has_mask = false;
             bool deletable = false;
+            std::optional<std::string> visibility_icon_color;
         };
 
         struct RowSlot {
@@ -115,6 +118,7 @@ namespace lfs::vis::gui {
                                   std::unordered_map<core::NodeId, NodeSnapshot>& snapshots,
                                   std::vector<core::NodeId>& root_ids);
         bool syncTrainingTopologyLabel(const core::Scene& scene, bool update_cached_rows);
+        bool syncCameraLossIconColors(const core::Scene& scene, bool update_cached_rows);
         void appendSnapshotRows(core::NodeId node_id, int depth, std::vector<FlatRow>& rows,
                                 const std::string& filter_text_lower) const;
         void appendVisibleSubtreeRows(core::NodeId node_id, int depth,
