@@ -2,181 +2,15 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-name: Windows Package Publish
+name: Windows Nightly Build
 
 on:
-  schedule:
-    - cron: '0 1 * * *'  # 2 AM CET (1 AM UTC)
   push:
-    tags:
-      - 'v*'
+    branches: [ dev, master ]
   workflow_dispatch:
-    inputs:
-      force_build:
-        description: Build even if the previous successful nightly already used this commit
-        required: false
-        type: boolean
-        default: false
-      release_channel:
-        description: Publish channel
-        required: false
-        type: choice
-        default: nightly
-        options:
-          - nightly
-          - stable
-      release_version:
-        description: Stable version without leading v, for manual stable publishes
-        required: false
-        type: string
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  precheck:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      should_build: ${{ steps.decide.outputs.should_build }}
-      reason: ${{ steps.decide.outputs.reason }}
-      previous_sha: ${{ steps.decide.outputs.previous_sha }}
-      build_channel: ${{ steps.decide.outputs.build_channel }}
-      stable_version: ${{ steps.decide.outputs.stable_version }}
-
-    steps:
-      - name: Decide whether package build is needed
-        id: decide
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const inputs = context.payload.inputs || {};
-            const forceBuild = inputs.force_build === 'true';
-            const currentRef = context.ref;
-            const refName = currentRef.replace(/^refs\/(heads|tags)\//, '');
-            const currentSha = context.sha;
-            const requestedChannel = inputs.release_channel || 'nightly';
-            const isTagRelease = context.eventName === 'push' && currentRef.startsWith('refs/tags/v');
-            const stableVersion = isTagRelease
-              ? refName.replace(/^v/, '')
-              : (inputs.release_version || '').trim().replace(/^v/, '');
-            const stableVersionPattern = /^[0-9]+(\.[0-9]+){1,2}$/;
-
-            if (isTagRelease || requestedChannel === 'stable') {
-              core.setOutput('build_channel', 'stable');
-              core.setOutput('previous_sha', '');
-              if (!stableVersionPattern.test(stableVersion)) {
-                core.setFailed(
-                  `Stable publishes require a version like 0.5.2; got '${stableVersion || '<empty>'}'.`
-                );
-                return;
-              }
-              core.setOutput('stable_version', stableVersion);
-              core.setOutput('should_build', 'true');
-              core.setOutput(
-                'reason',
-                isTagRelease
-                  ? `Tag ${refName} will be published as stable release ${stableVersion}.`
-                  : `Manual stable publish requested for ${stableVersion}.`
-              );
-              return;
-            }
-
-            core.setOutput('build_channel', 'nightly');
-            core.setOutput('stable_version', '');
-
-            if (forceBuild) {
-              core.setOutput('should_build', 'true');
-              core.setOutput('reason', 'Manual force_build override requested.');
-              core.setOutput('previous_sha', '');
-              return;
-            }
-
-            const params = {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'nightly.yml',
-              status: 'success',
-              per_page: 20,
-            };
-
-            if (context.ref.startsWith('refs/heads/')) {
-              params.branch = context.ref.replace('refs/heads/', '');
-            }
-
-            let previousRun;
-            try {
-              const { data } = await github.rest.actions.listWorkflowRuns(params);
-              previousRun = data.workflow_runs.find((run) =>
-                run.id !== context.runId &&
-                ['schedule', 'workflow_dispatch'].includes(run.event)
-              );
-            } catch (error) {
-              core.warning(`Failed to inspect previous nightly runs: ${error.message}`);
-              core.setOutput('should_build', 'true');
-              core.setOutput(
-                'reason',
-                'Failed to inspect previous nightly runs; building to avoid skipping a needed nightly.'
-              );
-              core.setOutput('previous_sha', '');
-              return;
-            }
-
-            if (!previousRun) {
-              core.setOutput('should_build', 'true');
-              core.setOutput('reason', 'No previous successful nightly build was found.');
-              core.setOutput('previous_sha', '');
-              return;
-            }
-
-            core.setOutput('previous_sha', previousRun.head_sha);
-
-            if (previousRun.head_sha === currentSha) {
-              core.setOutput('should_build', 'false');
-              core.setOutput(
-                'reason',
-                `Previous successful nightly already built commit ${currentSha}.`
-              );
-              return;
-            }
-
-            core.setOutput('should_build', 'true');
-            core.setOutput(
-              'reason',
-              `Previous successful nightly used ${previousRun.head_sha}; current commit is ${currentSha}.`
-            );
-
-      - name: Publish precheck summary
-        env:
-          BUILD_CHANNEL: ${{ steps.decide.outputs.build_channel }}
-          PREVIOUS_SHA: ${{ steps.decide.outputs.previous_sha }}
-          REASON: ${{ steps.decide.outputs.reason }}
-          SHOULD_BUILD: ${{ steps.decide.outputs.should_build }}
-          STABLE_VERSION: ${{ steps.decide.outputs.stable_version }}
-        run: |
-          {
-            echo "### Package precheck"
-            echo
-            echo "- Build required: \`${SHOULD_BUILD}\`"
-            echo "- Channel: \`${BUILD_CHANNEL}\`"
-            if [ -n "${STABLE_VERSION}" ]; then
-              echo "- Stable version: \`v${STABLE_VERSION}\`"
-            fi
-            echo "- Current commit: \`${GITHUB_SHA}\`"
-            if [ -n "${PREVIOUS_SHA}" ]; then
-              echo "- Previous successful nightly commit: \`${PREVIOUS_SHA}\`"
-            else
-              echo "- Previous successful nightly commit: not found"
-            fi
-            echo "- Decision: ${REASON}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
   build-windows:
-    needs: precheck
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' && needs.precheck.outputs.should_build == 'true'
     runs-on: windows-2022
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
@@ -235,16 +69,6 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $cmakeArgs = '-B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF'
-          $retryablePatterns = @(
-            'status code 5\d\d',
-            'timed out',
-            'timeout',
-            'connection reset',
-            'failed to connect',
-            'temporarily unavailable',
-            'tls',
-            'ssl'
-          )
 
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Write-Host "Configure attempt $attempt/3"
@@ -256,7 +80,7 @@ jobs:
 
             $shouldRetry = $false
             if (Test-Path 'build\vcpkg-manifest-install.log') {
-              foreach ($pattern in $retryablePatterns) {
+              foreach ($pattern in @('status code 5\d\d', 'timed out', 'timeout', 'connection reset', 'failed to connect', 'temporarily unavailable', 'tls', 'ssl')) {
                 if (Select-String -Path 'build\vcpkg-manifest-install.log' -Pattern $pattern -Quiet) {
                   $shouldRetry = $true
                   break
@@ -286,16 +110,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          $paths = @(
-            'build\vcpkg-manifest-install.log',
-            'build\vcpkg_installed\vcpkg\issue_body.md',
-            'build\CMakeFiles\CMakeConfigureLog.yaml',
-            'build\CMakeFiles\CMakeError.log',
-            'build\CMakeFiles\CMakeOutput.log',
-            'build\CMakeCache.txt'
-          )
-
-          foreach ($path in $paths) {
+          foreach ($path in @('build\vcpkg-manifest-install.log', 'build\vcpkg_installed\vcpkg\issue_body.md', 'build\CMakeFiles\CMakeConfigureLog.yaml', 'build\CMakeFiles\CMakeError.log', 'build\CMakeFiles\CMakeOutput.log', 'build\CMakeCache.txt')) {
             if (Test-Path $path) {
               Write-Host "::group::$path"
               Get-Content $path -Tail 400
@@ -303,8 +118,6 @@ jobs:
             }
           }
 
-      # Failure-only; small log payload with short retention stays well under the
-      # GitHub Actions artifact quota.
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -324,166 +137,22 @@ jobs:
       - name: Package
         id: package
         shell: pwsh
-        env:
-          BUILD_CHANNEL: ${{ needs.precheck.outputs.build_channel }}
-          STABLE_VERSION: ${{ needs.precheck.outputs.stable_version }}
         run: |
-          $date = Get-Date -AsUTC -Format "yyyy-MM-dd"
           $dateStamp = Get-Date -AsUTC -Format "yyyyMMdd"
-          $builtAt = Get-Date -AsUTC -Format "yyyy-MM-ddTHH:mm:ssZ"
           $shortSha = (git rev-parse --short HEAD).Trim()
-          $fullSha = (git rev-parse HEAD).Trim()
-          $buildChannel = $env:BUILD_CHANNEL
-          if ([string]::IsNullOrWhiteSpace($buildChannel)) {
-            $buildChannel = "nightly"
-          }
-
-          if ($buildChannel -eq "stable") {
-            $packageVersion = $env:STABLE_VERSION
-            if ([string]::IsNullOrWhiteSpace($packageVersion) -or $packageVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
-              throw "Stable publishes require STABLE_VERSION like 0.5.2."
-            }
-          } elseif ($buildChannel -eq "nightly") {
-            $targetVersionFile = ".github/nightly-target-version.txt"
-            if (-not (Test-Path $targetVersionFile)) {
-              throw "Missing $targetVersionFile."
-            }
-            $nightlyTargetVersion = Get-Content $targetVersionFile |
-              ForEach-Object { $_.Trim() } |
-              Where-Object { $_ -and -not $_.StartsWith("#") } |
-              Select-Object -First 1
-            if ([string]::IsNullOrWhiteSpace($nightlyTargetVersion) -or $nightlyTargetVersion -eq "SET_ME") {
-              throw "Set the target version in $targetVersionFile, for example 0.6 or 0.5.2."
-            }
-            if ($nightlyTargetVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
-              throw "Invalid nightly target version '$nightlyTargetVersion' in $targetVersionFile."
-            }
-            $packageVersion = "$nightlyTargetVersion.dev$dateStamp+$shortSha"
-          } else {
-            throw "Unsupported build channel '$buildChannel'."
-          }
-
+          $packageVersion = "nightly.$dateStamp+$shortSha"
           $packageName = "LichtFeld-Studio-windows-v$packageVersion.zip"
+
           cmake --install build --prefix dist
           Compress-Archive -Path dist\* -DestinationPath $packageName
-          "build_channel=$buildChannel" >> $env:GITHUB_OUTPUT
+
           "package_name=$packageName" >> $env:GITHUB_OUTPUT
           "package_version=$packageVersion" >> $env:GITHUB_OUTPUT
-          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
-          "full_sha=$fullSha" >> $env:GITHUB_OUTPUT
-          "built_at=$builtAt" >> $env:GITHUB_OUTPUT
 
-      # Package binaries must not be uploaded as GitHub Actions artifacts.
-      # Keep the generated zip on the runner and publish it directly to R2.
-      # AWS CLI is preinstalled on windows-2022 hosted runners.
-      - name: Verify AWS CLI
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          aws --version
-
-      - name: Upload package to Cloudflare R2
-        shell: pwsh
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          BUILD_CHANNEL: ${{ steps.package.outputs.build_channel }}
-          FILE_NAME: ${{ steps.package.outputs.package_name }}
-          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
-          R2_BUCKET: ${{ vars.R2_BUCKET }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          foreach ($name in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'R2_ACCOUNT_ID', 'R2_BUCKET', 'BUILD_CHANNEL', 'FILE_NAME')) {
-            if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-              throw "Missing $name"
-            }
-          }
-
-          $endpointUrl = "https://$($env:R2_ACCOUNT_ID).r2.cloudflarestorage.com"
-          $versionedKey = "windows/$($env:BUILD_CHANNEL)/$($env:FILE_NAME)"
-          $checksumFile = "$($env:FILE_NAME).sha256"
-          $checksumKey = "$versionedKey.sha256"
-          $checksum = (Get-FileHash -Algorithm SHA256 -Path $env:FILE_NAME).Hash.ToLowerInvariant()
-          Set-Content -Path $checksumFile -Value "$checksum  $($env:FILE_NAME)" -Encoding ascii
-
-          aws s3 cp $checksumFile "s3://$($env:R2_BUCKET)/$checksumKey" `
-            --endpoint-url $endpointUrl `
-            --content-type text/plain `
-            --only-show-errors `
-            2>$null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to upload private R2 checksum object."
-          }
-          aws s3 cp $env:FILE_NAME "s3://$($env:R2_BUCKET)/$versionedKey" `
-            --endpoint-url $endpointUrl `
-            --content-type application/zip `
-            --only-show-errors `
-            2>$null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to upload private R2 package object."
-          }
-
-      # Confirms the zip landed intact before reporting success. Size mismatch
-      # is the most likely failure mode on flaky networks; a missing sidecar .sha256
-      # would silently break download verification.
-      - name: Verify R2 upload
-        shell: pwsh
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: auto
-          BUILD_CHANNEL: ${{ steps.package.outputs.build_channel }}
-          FILE_NAME: ${{ steps.package.outputs.package_name }}
-          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
-          R2_BUCKET: ${{ vars.R2_BUCKET }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $endpointUrl = "https://$($env:R2_ACCOUNT_ID).r2.cloudflarestorage.com"
-          $versionedKey = "windows/$($env:BUILD_CHANNEL)/$($env:FILE_NAME)"
-          $checksumKey = "$versionedKey.sha256"
-          $localSize = (Get-Item $env:FILE_NAME).Length
-
-          $headOutput = aws s3api head-object `
-            --bucket $env:R2_BUCKET `
-            --key $versionedKey `
-            --endpoint-url $endpointUrl `
-            2>$null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to verify private R2 package object."
-          }
-
-          $headJson = $headOutput | ConvertFrom-Json
-          if ($headJson.ContentLength -ne $localSize) {
-            throw "Private R2 package object size mismatch (local=$localSize, remote=$($headJson.ContentLength))"
-          }
-
-          $checksumOutput = aws s3api head-object `
-            --bucket $env:R2_BUCKET `
-            --key $checksumKey `
-            --endpoint-url $endpointUrl `
-            2>$null
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to verify private R2 checksum object."
-          }
-
-          Write-Host "Verified private R2 package upload and checksum sidecar."
-
-      - name: Publish summary
-        shell: pwsh
-        env:
-          BUILD_CHANNEL: ${{ steps.package.outputs.build_channel }}
-          FULL_SHA: ${{ steps.package.outputs.full_sha }}
-          BUILT_AT: ${{ steps.package.outputs.built_at }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $summary = @(
-            '### Private Package Upload'
-            ''
-            '- Private R2 upload completed.'
-            "- Channel: ``$env:BUILD_CHANNEL``"
-            "- Commit: ``$env:FULL_SHA``"
-            "- Built at: ``$env:BUILT_AT``"
-            '- Public download URL: not published.'
-          )
-          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LichtFeld-Studio-windows
+          if-no-files-found: error
+          retention-days: 1
+          path: LichtFeld-Studio-windows.zip
