@@ -110,14 +110,8 @@ namespace lfs::vis::gui {
             return std::clamp(static_cast<int>(std::round(value * 255.0f)), 0, 255);
         }
 
-        [[nodiscard]] std::string formatCameraLossIconColor(std::array<float, 3> color,
-                                                            const bool training_enabled) {
-            float alpha = 1.0f;
-            if (!training_enabled) {
-                for (float& channel : color)
-                    channel = channel + (0.5f - channel) * 0.5f;
-                alpha *= 0.5f;
-            }
+        [[nodiscard]] std::string formatCameraLossIconColor(const std::array<float, 3>& color) {
+            constexpr float alpha = 1.0f;
             return std::format("rgba({}, {}, {}, {})",
                                colorChannel(color[0]),
                                colorChannel(color[1]),
@@ -834,7 +828,7 @@ namespace lfs::vis::gui {
             .padding_left_dp = formatDp(4 + depth * 16),
             .has_mask = snapshot.has_mask,
             .deletable = snapshot.deletable,
-            .visibility_icon_color = snapshot.visibility_icon_color,
+            .camera_loss_icon_color = snapshot.camera_loss_icon_color,
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
@@ -865,7 +859,7 @@ namespace lfs::vis::gui {
             .padding_left_dp = formatDp(4 + depth * 16),
             .has_mask = snapshot.has_mask,
             .deletable = snapshot.deletable,
-            .visibility_icon_color = snapshot.visibility_icon_color,
+            .camera_loss_icon_color = snapshot.camera_loss_icon_color,
         });
 
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id)) {
@@ -981,7 +975,8 @@ namespace lfs::vis::gui {
             camera_node_ids.reserve(nodes.size());
 
             for (const core::SceneNode* node : nodes) {
-                if (!node || node->type != core::NodeType::CAMERA || !node->camera)
+                if (!node || node->type != core::NodeType::CAMERA || !node->camera ||
+                    !node->training_enabled)
                     continue;
                 cameras.push_back(node->camera);
                 camera_node_ids.push_back(node->id);
@@ -1000,11 +995,7 @@ namespace lfs::vis::gui {
                         continue;
                     }
 
-                    const core::NodeId node_id = camera_node_ids[i];
-                    const auto snapshot_it = node_snapshots_.find(node_id);
-                    const bool training_enabled =
-                        snapshot_it == node_snapshots_.end() || snapshot_it->second.training_enabled;
-                    camera_icon_colors.emplace(node_id, formatCameraLossIconColor(color, training_enabled));
+                    camera_icon_colors.emplace(camera_node_ids[i], formatCameraLossIconColor(color));
                 }
             }
         }
@@ -1018,14 +1009,14 @@ namespace lfs::vis::gui {
             if (const auto color_it = camera_icon_colors.find(id); color_it != camera_icon_colors.end())
                 next_color = color_it->second;
 
-            if (snapshot.visibility_icon_color == next_color)
+            if (snapshot.camera_loss_icon_color == next_color)
                 continue;
 
-            snapshot.visibility_icon_color = std::move(next_color);
+            snapshot.camera_loss_icon_color = std::move(next_color);
             if (update_cached_rows) {
                 if (const auto flat_it = flat_index_by_id_.find(id);
                     flat_it != flat_index_by_id_.end() && flat_it->second < flat_rows_.size()) {
-                    flat_rows_[flat_it->second].visibility_icon_color = snapshot.visibility_icon_color;
+                    flat_rows_[flat_it->second].camera_loss_icon_color = snapshot.camera_loss_icon_color;
                 }
             }
             changed = true;
@@ -1208,9 +1199,6 @@ namespace lfs::vis::gui {
         setCachedAttribute(slot.vis_icon, "sprite", row.visible ? "icon-visible" : "icon-hidden");
         setCachedClass(slot.vis_icon, "icon-vis-on", row.visible);
         setCachedClass(slot.vis_icon, "icon-vis-off", !row.visible);
-        setCachedOptionalProperty(slot.vis_icon,
-                                  "image-color",
-                                  row.visible ? row.visibility_icon_color : std::nullopt);
 
         setCachedAttribute(slot.delete_icon, "data-node-id", row.node_id_text);
         setCachedProperty(slot.delete_icon, "display", row.deletable ? "inline" : "none");
@@ -1222,13 +1210,16 @@ namespace lfs::vis::gui {
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
+            setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color);
             setCachedProperty(slot.type_icon, "display", "inline");
             setCachedProperty(slot.unicode_icon, "display", "none");
         } else if (!unicode.empty()) {
+            setCachedOptionalProperty(slot.type_icon, "image-color", std::nullopt);
             setCachedInnerRml(slot.unicode_icon, std::string(unicode));
             setCachedProperty(slot.unicode_icon, "display", "inline");
             setCachedProperty(slot.type_icon, "display", "none");
         } else {
+            setCachedOptionalProperty(slot.type_icon, "image-color", std::nullopt);
             setCachedProperty(slot.type_icon, "display", "none");
             setCachedProperty(slot.unicode_icon, "display", "none");
         }

@@ -69,7 +69,7 @@ namespace lfs::vis::gui {
             bool draggable = false;
             bool has_mask = false;
             bool deletable = false;
-            std::optional<std::string> visibility_icon_color;
+            std::optional<std::string> camera_loss_icon_color;
         };
 
         struct FlatRow {
@@ -88,7 +88,7 @@ namespace lfs::vis::gui {
             std::string padding_left_dp;
             bool has_mask = false;
             bool deletable = false;
-            std::optional<std::string> visibility_icon_color;
+            std::optional<std::string> camera_loss_icon_color;
         };
 
         struct RowSlot {

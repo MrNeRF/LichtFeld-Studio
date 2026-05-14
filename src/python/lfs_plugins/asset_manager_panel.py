@@ -34,12 +34,29 @@ except ImportError:
     AssetScanner = None
     AssetThumbnails = None
 
-def tr(key):
-    result = lf.ui.tr(key)
+_TR_FALLBACKS = {
+    "asset_manager.title": "Asset Manager",
+    "asset_manager.action.load_new": "New",
+    "asset_manager.action.add_to_scene": "Add to Scene",
+}
+
+
+def tr(key, **kwargs):
+    tr_func = getattr(getattr(lf, "ui", None), "tr", None)
+    try:
+        result = tr_func(key) if callable(tr_func) else key
+    except Exception:
+        result = key
     if result == key:
         # Strip prefix for fallback
-        if key.startswith("asset_manager."):
-            return key.split(".")[-1].replace("_", " ").title()
+        result = _TR_FALLBACKS.get(key, result)
+        if result == key and key.startswith("asset_manager."):
+            result = key.split(".")[-1].replace("_", " ").title()
+    if kwargs:
+        try:
+            return result.format(**kwargs)
+        except Exception:
+            return result
     return result
 
 __lfs_panel_classes__ = ["AssetManagerPanel"]
@@ -85,6 +102,7 @@ class AssetManagerPanel(Panel):
 
         # Track which asset has its dropdown menu open
         self._open_menu_asset_id: Optional[str] = None
+        self._load_menu_asset_id: Optional[str] = None
 
         # Track which project has its dropdown menu open
         self._open_menu_project_id: Optional[str] = None
@@ -141,6 +159,7 @@ class AssetManagerPanel(Panel):
             return
 
         # Basic properties
+        model.bind_func("panel_label", lambda: tr("asset_manager.title"))
         model.bind("search_query", self.get_search_query, self.set_search_query)
 
         # View state
@@ -292,6 +311,8 @@ class AssetManagerPanel(Panel):
         model.bind_func("rename_project_label", lambda: tr("asset_manager.action.rename_project"))
         model.bind_func("delete_project_label", lambda: tr("asset_manager.action.delete_project"))
         model.bind_func("load_button_label", lambda: tr("asset_manager.action.load"))
+        model.bind_func("load_new_label", lambda: tr("asset_manager.action.load_new"))
+        model.bind_func("add_to_scene_label", lambda: tr("asset_manager.action.add_to_scene"))
         model.bind_func("rename_label", lambda: tr("asset_manager.action.rename"))
         model.bind_func("move_to_project_label", lambda: tr("asset_manager.action.move_to_project"))
         model.bind_func("new_project_label", lambda: tr("asset_manager.action.new_project"))
@@ -462,7 +483,38 @@ class AssetManagerPanel(Panel):
         """Return True if multiple assets are selected."""
         return len(self._selected_asset_ids) > 1
 
-    def _format_size(self, file_size_bytes: int) -> str:
+    def _coerce_nonnegative_int(self, value: Any, default: int = 0) -> int:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return default
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return default
+        if not math.isfinite(number):
+            return default
+        return max(0, int(number))
+
+    def _coerce_optional_nonnegative_int(self, value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return max(0, int(number))
+
+    def _format_size(self, file_size_bytes: Any) -> str:
+        file_size_bytes = self._coerce_nonnegative_int(file_size_bytes)
         if file_size_bytes >= 1024**3:
             return f"{file_size_bytes / (1024**3):.2f} {tr('asset_manager.unit.gb')}"
         if file_size_bytes >= 1024**2:
@@ -555,11 +607,15 @@ class AssetManagerPanel(Panel):
         )
 
         if not has_default:
+            if not hasattr(self._asset_index, "create_project"):
+                return
             try:
                 self._asset_index.create_project(name=default_project_name)
                 self._log_info(tr("asset_manager.msg.created_default"))
             except Exception as e:
-                self._log_error(tr("asset_manager.msg.failed_create_default"), e)
+                self._log_error(
+                    tr("asset_manager.msg.failed_create_default", error=e)
+                )
 
     def _format_display_name(self, name: str, max_length: int = 15) -> str:
         """Format a name for display, truncating with ... if too long."""
@@ -711,10 +767,11 @@ class AssetManagerPanel(Panel):
 
             assets.append(self._format_asset_for_ui(asset))
 
-        if prune_ids:
+        if prune_ids and hasattr(self._asset_index, "delete_asset"):
             for pid in prune_ids:
                 self._asset_index.delete_asset(pid)
-            self._asset_index.save()
+            if hasattr(self._asset_index, "save"):
+                self._asset_index.save()
 
         return self._sort_assets(assets)
 
@@ -762,19 +819,25 @@ class AssetManagerPanel(Panel):
         """Format asset data for UI display."""
         asset_id = asset.get("id", "")
         asset_type = asset.get("type", "")
-        file_size_bytes = asset.get("file_size_bytes", 0)
+        file_size_bytes = self._coerce_nonnegative_int(
+            asset.get("file_size_bytes", 0)
+        )
 
         # Format size string
         size_str = self._format_size(file_size_bytes)
 
         # Get geometry metadata
         geom = asset.get("geometry_metadata", {}) or {}
-        gaussian_count = geom.get("gaussian_count", 0)
+        gaussian_count = self._coerce_nonnegative_int(
+            geom.get("gaussian_count", 0)
+        )
         dataset_meta = asset.get("dataset_metadata", {}) or {}
 
         # Format gaussian count
         if asset_type == "dataset":
-            image_count = dataset_meta.get("image_count", 0)
+            image_count = self._coerce_nonnegative_int(
+                dataset_meta.get("image_count", 0)
+            )
             if image_count >= 1_000_000:
                 points_str = f"{image_count / 1_000_000:.2f}M images"
             elif image_count >= 1_000:
@@ -857,6 +920,7 @@ class AssetManagerPanel(Panel):
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
             "thumbnail_path": asset.get("thumbnail_path"),
             "menu_open": asset_id == self._open_menu_asset_id,
+            "load_menu_open": asset_id == self._load_menu_asset_id,
         }
 
     def get_project_list(self) -> List[Dict[str, Any]]:
@@ -1045,7 +1109,9 @@ class AssetManagerPanel(Panel):
 
         # Get geometry metadata
         geom = asset.get("geometry_metadata", {}) or {}
-        gaussian_count = geom.get("gaussian_count", 0)
+        gaussian_count = self._coerce_nonnegative_int(
+            geom.get("gaussian_count", 0)
+        )
 
         # Format points
         if gaussian_count >= 1_000_000:
@@ -1056,7 +1122,9 @@ class AssetManagerPanel(Panel):
             points_str = str(gaussian_count)
 
         # Format size
-        file_size_bytes = asset.get("file_size_bytes", 0)
+        file_size_bytes = self._coerce_nonnegative_int(
+            asset.get("file_size_bytes", 0)
+        )
         if file_size_bytes >= 1024**3:
             size_str = f"{file_size_bytes / (1024**3):.2f} GB"
         elif file_size_bytes >= 1024**2:
@@ -1427,8 +1495,12 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         dataset_meta = asset.get("dataset_metadata", {}) or {}
-        image_count = dataset_meta.get("image_count", 0)
-        return str(image_count) if image_count or asset.get("type") == "dataset" else ""
+        image_count = self._coerce_nonnegative_int(
+            dataset_meta.get("image_count", 0)
+        )
+        if image_count or asset.get("type") == "dataset":
+            return str(image_count)
+        return ""
 
     def get_selected_asset_dataset_image_root(self) -> str:
         asset = self._get_selected_asset()
@@ -1443,7 +1515,9 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         dataset_meta = asset.get("dataset_metadata", {}) or {}
-        mask_count = dataset_meta.get("mask_count", 0)
+        mask_count = self._coerce_nonnegative_int(
+            dataset_meta.get("mask_count", 0)
+        )
         return str(mask_count)
 
     def get_selected_asset_dataset_camera_count(self) -> str:
@@ -1461,7 +1535,9 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         dataset_meta = asset.get("dataset_metadata", {}) or {}
-        initial_points = dataset_meta.get("initial_points")
+        initial_points = self._coerce_optional_nonnegative_int(
+            dataset_meta.get("initial_points")
+        )
         if initial_points is None:
             return ""
         if initial_points >= 1_000_000:
@@ -1478,7 +1554,9 @@ class AssetManagerPanel(Panel):
         # For datasets, show initial points from COLMAP
         if asset_type == "dataset":
             dataset_meta = asset.get("dataset_metadata", {}) or {}
-            points = dataset_meta.get("initial_points")
+            points = self._coerce_optional_nonnegative_int(
+                dataset_meta.get("initial_points")
+            )
             if points is None:
                 return ""
             if points >= 1_000_000:
@@ -1488,7 +1566,7 @@ class AssetManagerPanel(Panel):
             return str(points)
         # For geometry files (PLY, SOG, etc.), show gaussian count
         geom = asset.get("geometry_metadata", {}) or {}
-        gaussian_count = geom.get("gaussian_count") or 0
+        gaussian_count = self._coerce_nonnegative_int(geom.get("gaussian_count"))
         if gaussian_count >= 1_000_000:
             return f"{gaussian_count / 1_000_000:.2f}M"
         elif gaussian_count >= 1_000:
@@ -2545,6 +2623,19 @@ class AssetManagerPanel(Panel):
     def on_load_asset(self, _handle, _ev, args):
         """Load a specific asset by ID into the viewer."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        self._load_asset(asset_id, replace_scene=False)
+
+    def on_load_asset_new(self, _handle, _ev, args):
+        """Clear the scene and load a specific asset by ID into the viewer."""
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        self._load_asset(asset_id, replace_scene=True)
+
+    def on_add_asset_to_scene(self, _handle, _ev, args):
+        """Load a specific asset by ID into the current scene."""
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        self._load_asset(asset_id, replace_scene=False)
+
+    def _load_asset(self, asset_id: str, *, replace_scene: bool) -> None:
         if not asset_id:
             return
 
@@ -2562,10 +2653,13 @@ class AssetManagerPanel(Panel):
 
         file_path = asset.get("absolute_path") or asset.get("path")
         if not file_path or not os.path.exists(file_path):
-            self._asset_index.delete_asset(asset_id)
+            self._delete_asset_from_catalog(asset_id)
             return
 
         try:
+            if replace_scene:
+                lf.clear_scene()
+
             # Load based on asset type
             asset_type = asset.get("type", "")
             if asset_type == "dataset":
@@ -2588,6 +2682,7 @@ class AssetManagerPanel(Panel):
             # Select the loaded asset
             self._selected_asset_ids = {asset_id}
             self._selection_type = "asset"
+            self._load_menu_asset_id = None
             self.refresh_catalog()
         except Exception as e:
             self._log_error("Failed to load asset %s: %s", asset_id, e)
@@ -3433,7 +3528,11 @@ class AssetManagerPanel(Panel):
         """
         content = doc.get_element_by_id("asset-popup-content")
         if content:
+            content.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             content.add_event_listener("click", self._on_asset_manager_click)
+            content.add_event_listener(
+                "dblclick", self._on_asset_manager_double_click
+            )
 
         # Resize-start is bound declaratively in RML via data-event-mousedown.
         # Only keep document-level listeners here for active drag tracking.
@@ -3441,6 +3540,9 @@ class AssetManagerPanel(Panel):
         doc.add_event_listener("mouseup", self._on_resize_mouseup)
 
     def _on_asset_manager_click(self, event) -> None:
+        if self._input_capture_active():
+            return
+
         container = event.current_target()
         target = event.target()
         if target is None:
@@ -3455,9 +3557,22 @@ class AssetManagerPanel(Panel):
 
             if action == "load":
                 self.on_load_asset(None, event, [asset_id])
+            elif action == "load_new":
+                self._load_menu_asset_id = None
+                self._dirty_model("assets")
+                self.on_load_asset_new(None, event, [asset_id])
+                self._stop_event(event)
+                return
+            elif action == "add_to_scene":
+                self._load_menu_asset_id = None
+                self._dirty_model("assets")
+                self.on_add_asset_to_scene(None, event, [asset_id])
+                self._stop_event(event)
+                return
             elif action == "remove":
                 self.on_remove_asset(None, event, [asset_id])
             elif action == "menu":
+                self._load_menu_asset_id = None
                 self.on_toggle_asset_menu(None, event, [asset_id])
                 self._stop_event(event)
                 return
@@ -3507,6 +3622,9 @@ class AssetManagerPanel(Panel):
                     self._dirty_model("assets", "move_menu_projects")
                     if self._handle:
                         self._handle.update_record_list("move_menu_projects", [])
+                if self._load_menu_asset_id:
+                    self._load_menu_asset_id = None
+                    self._dirty_model("assets")
                 self._select_asset_id(
                     asset_id,
                     toggle=False,
@@ -3566,10 +3684,88 @@ class AssetManagerPanel(Panel):
             if self._handle:
                 self._handle.update_record_list("move_menu_projects", [])
 
+        if self._load_menu_asset_id:
+            self._load_menu_asset_id = None
+            self._dirty_model("assets")
+
         # Close open project menu when clicking elsewhere
         if self._open_menu_project_id:
             self._open_menu_project_id = None
             self._dirty_model("projects")
+
+    def _on_asset_manager_mousedown(self, event) -> None:
+        if self._input_capture_active():
+            return
+
+        try:
+            button = int(event.get_parameter("button", "0"))
+        except (AttributeError, TypeError, ValueError):
+            return
+        if button != 1:
+            return
+
+        container = event.current_target()
+        target = event.target()
+        if target is None:
+            return
+
+        action_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-asset-action", container
+        )
+        if action_el is None:
+            return
+
+        action = action_el.get_attribute("data-asset-action", "")
+        if action not in ("select", "scene_asset"):
+            return
+
+        asset_id = action_el.get_attribute("data-asset-id", "")
+        if not asset_id:
+            return
+
+        if self._select_asset_id(asset_id):
+            self._load_menu_asset_id = asset_id
+            self._open_menu_asset_id = None
+            self._open_menu_project_id = None
+            self._dirty_model("assets", "projects")
+        self._stop_event(event)
+
+    def _on_asset_manager_double_click(self, event) -> None:
+        if self._input_capture_active():
+            return
+
+        container = event.current_target()
+        target = event.target()
+        if target is None:
+            return
+
+        action_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-asset-action", container
+        )
+        if action_el is None:
+            return
+
+        action = action_el.get_attribute("data-asset-action", "")
+        if action not in ("select", "scene_asset"):
+            return
+
+        asset_id = action_el.get_attribute("data-asset-id", "")
+        if not asset_id:
+            return
+
+        self._load_menu_asset_id = None
+        self.on_load_asset(None, event, [asset_id])
+        self._stop_event(event)
+
+    def _input_capture_active(self) -> bool:
+        keymap = getattr(lf, "keymap", None)
+        is_capturing = getattr(keymap, "is_capturing", None)
+        if not callable(is_capturing):
+            return False
+        try:
+            return bool(is_capturing())
+        except Exception:
+            return False
 
     def _event_multi_select(self, event) -> bool:
         for key in ("ctrl_key", "meta_key", "command_key"):

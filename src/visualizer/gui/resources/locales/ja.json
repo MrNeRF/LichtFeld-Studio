@@ -88,6 +88,8 @@
     "action.export": "エクスポート",
     "action.favorite": "お気に入り",
     "action.load": "読み込み",
+    "action.load_new": "新規",
+    "action.add_to_scene": "シーンに追加",
     "action.locate_file": "ファイルを探す",
     "action.move_to_project": "プロジェクトに移動",
     "action.new_project": "+ 新規プロジェクト",

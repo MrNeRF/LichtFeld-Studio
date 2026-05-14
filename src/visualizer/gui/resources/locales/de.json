@@ -88,6 +88,8 @@
     "action.export": "Exportieren",
     "action.favorite": "Favorit",
     "action.load": "Laden",
+    "action.load_new": "Neu",
+    "action.add_to_scene": "Zur Szene hinzufügen",
     "action.locate_file": "Datei finden",
     "action.move_to_project": "Zu Projekt verschieben",
     "action.new_project": "+ Neues Projekt",

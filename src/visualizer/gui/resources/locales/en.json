@@ -178,6 +178,8 @@
     "geometry.scale": "Scale",
     "hint.multi_select": "Ctrl/Cmd-click cards to select multiple",
     "action.load": "Load",
+    "action.load_new": "New",
+    "action.add_to_scene": "Add to Scene",
     "action.preview": "Preview",
     "action.export": "Export",
     "action.remove_from_catalog": "Remove from Catalog",

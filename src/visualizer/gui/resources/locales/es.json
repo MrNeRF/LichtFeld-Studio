@@ -93,6 +93,8 @@
     "action.export": "Exportar",
     "action.favorite": "Favorito",
     "action.load": "Cargar",
+    "action.load_new": "Nuevo",
+    "action.add_to_scene": "Añadir a la escena",
     "action.locate_file": "Localizar archivo",
     "action.move_to_project": "Mover a proyecto",
     "action.new_project": "+ Nuevo proyecto",

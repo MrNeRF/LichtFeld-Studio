@@ -79,10 +79,17 @@ class _ElementStub:
 
 
 class _EventStub:
-    def __init__(self, current_target=None, target=None, bool_params=None):
+    def __init__(
+        self,
+        current_target=None,
+        target=None,
+        bool_params=None,
+        params=None,
+    ):
         self._current_target = current_target
         self._target = target or current_target
         self._bool_params = bool_params or {}
+        self._params = params or {}
         self.stopped = False
 
     def current_target(self):
@@ -93,6 +100,9 @@ class _EventStub:
 
     def get_bool_parameter(self, key, default=False):
         return self._bool_params.get(key, default)
+
+    def get_parameter(self, key, default=""):
+        return self._params.get(key, default)
 
     def stop_propagation(self):
         self.stopped = True
@@ -174,6 +184,18 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
     assert "{{asset.display_name}}" in rml
     assert "{{selected_asset_name}}" in rml
     assert "{{selected_asset_dataset_image_count}}" in rml
+
+
+def test_asset_manager_load_context_actions_are_localized():
+    project_root = Path(__file__).parent.parent.parent
+    locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
+    required_keys = ("action.load_new", "action.add_to_scene")
+
+    for locale_path in sorted(locale_dir.glob("*.json")):
+        data = json.loads(locale_path.read_text(encoding="utf-8"))
+        asset_manager = data["asset_manager"]
+        for key in required_keys:
+            assert asset_manager.get(key), f"{locale_path.name} missing asset_manager.{key}"
 
 
 def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
@@ -279,6 +301,283 @@ def test_dom_card_ctrl_click_adds_to_multi_selection(asset_manager_panel_module)
     assert panel.get_selection_type() == "multiple"
 
 
+def test_dom_card_double_click_loads_asset(asset_manager_panel_module, monkeypatch):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    panel._load_menu_asset_id = "a1"
+    calls = []
+    monkeypatch.setattr(
+        asset_manager_panel_module.os.path, "exists", lambda _path: True
+    )
+    monkeypatch.setattr(
+        asset_manager_panel_module.lf,
+        "load_file",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    card = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "select"},
+        parent=container,
+    )
+    child = _ElementStub(parent=card)
+    event = _EventStub(current_target=container, target=child)
+
+    panel._on_asset_manager_double_click(event)
+
+    assert calls == [
+        (
+            ("/tmp/bicycle",),
+            {"is_dataset": True, "output_path": "/tmp/bicycle/output"},
+        )
+    ]
+    assert panel.get_selected_asset_name() == "bicycle"
+    assert panel._load_menu_asset_id is None
+    assert event.stopped is True
+
+
+def test_dom_card_right_click_opens_load_menu(asset_manager_panel_module, monkeypatch):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    calls = []
+    monkeypatch.setattr(
+        asset_manager_panel_module.os.path, "exists", lambda _path: True
+    )
+    monkeypatch.setattr(
+        asset_manager_panel_module.lf,
+        "load_file",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    card = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "select"},
+        parent=container,
+    )
+    child = _ElementStub(parent=card)
+    event = _EventStub(current_target=container, target=child, params={"button": "1"})
+
+    panel._on_asset_manager_mousedown(event)
+
+    assert calls == []
+    assert panel.get_selected_asset_name() == "bicycle"
+    assert panel._handle.records["assets"][0]["load_menu_open"] is True
+    assert event.stopped is True
+
+
+def test_dom_card_left_mousedown_does_not_capture_input(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    card = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "select"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=card, params={"button": "0"})
+
+    panel._on_asset_manager_mousedown(event)
+
+    assert panel.get_selected_count() == 0
+    assert panel._load_menu_asset_id is None
+    assert event.stopped is False
+
+
+def test_dom_card_right_click_ignored_during_input_capture(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    asset_manager_panel_module.lf.keymap = SimpleNamespace(is_capturing=lambda: True)
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    card = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "select"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=card, params={"button": "1"})
+
+    panel._on_asset_manager_mousedown(event)
+
+    assert panel.get_selected_count() == 0
+    assert panel._load_menu_asset_id is None
+    assert event.stopped is False
+
+
+def test_dom_card_double_click_ignored_during_input_capture(
+    asset_manager_panel_module,
+    monkeypatch,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    asset_manager_panel_module.lf.keymap = SimpleNamespace(is_capturing=lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        asset_manager_panel_module.lf,
+        "load_file",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
+    )
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    card = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "select"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=card)
+
+    panel._on_asset_manager_double_click(event)
+
+    assert calls == []
+    assert panel.get_selected_count() == 0
+    assert event.stopped is False
+
+
+def test_load_menu_add_to_scene_loads_asset(asset_manager_panel_module, monkeypatch):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    panel._load_menu_asset_id = "a1"
+    calls = []
+    monkeypatch.setattr(
+        asset_manager_panel_module.os.path, "exists", lambda _path: True
+    )
+    monkeypatch.setattr(
+        asset_manager_panel_module.lf,
+        "load_file",
+        lambda *args, **kwargs: calls.append(("load", args, kwargs)),
+        raising=False,
+    )
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    item = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "add_to_scene"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=item)
+
+    panel._on_asset_manager_click(event)
+
+    assert calls == [
+        (
+            "load",
+            ("/tmp/bicycle",),
+            {"is_dataset": True, "output_path": "/tmp/bicycle/output"},
+        )
+    ]
+    assert panel.get_selected_asset_name() == "bicycle"
+    assert panel._load_menu_asset_id is None
+    assert event.stopped is True
+
+
+def test_load_menu_new_clears_scene_before_loading(asset_manager_panel_module, monkeypatch):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": _make_asset()},
+        projects={
+            "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
+        },
+        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    panel._load_menu_asset_id = "a1"
+    calls = []
+    monkeypatch.setattr(
+        asset_manager_panel_module.os.path, "exists", lambda _path: True
+    )
+    monkeypatch.setattr(
+        asset_manager_panel_module.lf,
+        "clear_scene",
+        lambda: calls.append(("clear",)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        asset_manager_panel_module.lf,
+        "load_file",
+        lambda *args, **kwargs: calls.append(("load", args, kwargs)),
+        raising=False,
+    )
+
+    container = _ElementStub({"id": "asset-popup-content"})
+    item = _ElementStub(
+        {"data-asset-id": "a1", "data-asset-action": "load_new"},
+        parent=container,
+    )
+    event = _EventStub(current_target=container, target=item)
+
+    panel._on_asset_manager_click(event)
+
+    assert calls == [
+        ("clear",),
+        (
+            "load",
+            ("/tmp/bicycle",),
+            {"is_dataset": True, "output_path": "/tmp/bicycle/output"},
+        ),
+    ]
+    assert panel._load_menu_asset_id is None
+    assert event.stopped is True
+
+
 def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, tmp_path):
     index = asset_manager_panel_module.AssetIndex(
         library_path=tmp_path / "library.json"
@@ -310,6 +609,3 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     assert scene.id not in data["scenes"]
     assert project.id not in data["projects"]
     assert panel.get_selected_count() == 0
-
-
-

@@ -88,6 +88,8 @@
     "action.export": "보내기",
     "action.favorite": "즐겨찾기",
     "action.load": "로드",
+    "action.load_new": "새로 만들기",
+    "action.add_to_scene": "장면에 추가",
     "action.locate_file": "파일 찾기",
     "action.move_to_project": "프로젝트로 이동",
     "action.new_project": "+ 새 프로젝트",

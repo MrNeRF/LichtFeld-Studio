@@ -88,6 +88,8 @@
     "action.export": "Exporteren",
     "action.favorite": "Favoriet",
     "action.load": "Laden",
+    "action.load_new": "Nieuw",
+    "action.add_to_scene": "Aan scène toevoegen",
     "action.locate_file": "Bestand zoeken",
     "action.move_to_project": "Verplaats naar Project",
     "action.new_project": "+ Nieuw project",
