@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <semaphore>
@@ -95,6 +96,75 @@ namespace {
         return source.rfind("preview://", 0) == 0;
     }
 
+    bool IsLfsVkTextureSource(std::string_view source) {
+        return source.rfind("lfs-vk://", 0) == 0;
+    }
+
+    struct LfsVkTextureRequest {
+        VkImageView image_view = VK_NULL_HANDLE;
+        VkSampler sampler = VK_NULL_HANDLE;
+        int width = 0;
+        int height = 0;
+    };
+
+    std::optional<std::uintptr_t> ParseHexHandle(std::string_view value) {
+        if (value.empty())
+            return std::nullopt;
+        std::uintptr_t parsed = 0;
+        const auto* first = value.data();
+        const auto* last = value.data() + value.size();
+        const auto [ptr, ec] = std::from_chars(first, last, parsed, 16);
+        if (ec != std::errc() || ptr != last)
+            return std::nullopt;
+        return parsed;
+    }
+
+    int ParseIntParam(std::string_view value) {
+        int parsed = 0;
+        const auto* first = value.data();
+        const auto* last = value.data() + value.size();
+        const auto [ptr, ec] = std::from_chars(first, last, parsed);
+        if (ec != std::errc() || ptr != last)
+            return 0;
+        return std::max(parsed, 0);
+    }
+
+    std::optional<LfsVkTextureRequest> ParseLfsVkTextureRequest(std::string_view source) {
+        if (!IsLfsVkTextureSource(source))
+            return std::nullopt;
+        source.remove_prefix(std::string_view("lfs-vk://").size());
+        if (!source.empty() && source.front() == '?')
+            source.remove_prefix(1);
+
+        LfsVkTextureRequest request;
+        while (!source.empty()) {
+            const size_t sep = source.find('&');
+            const std::string_view part = sep == std::string_view::npos ? source : source.substr(0, sep);
+            if (const size_t eq = part.find('='); eq != std::string_view::npos) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view value = part.substr(eq + 1);
+                if (key == "v") {
+                    if (const auto h = ParseHexHandle(value))
+                        request.image_view = reinterpret_cast<VkImageView>(*h);
+                } else if (key == "s") {
+                    if (const auto h = ParseHexHandle(value))
+                        request.sampler = reinterpret_cast<VkSampler>(*h);
+                } else if (key == "w") {
+                    request.width = ParseIntParam(value);
+                } else if (key == "h") {
+                    request.height = ParseIntParam(value);
+                }
+            }
+            if (sep == std::string_view::npos)
+                break;
+            source.remove_prefix(sep + 1);
+        }
+        if (request.image_view == VK_NULL_HANDLE || request.sampler == VK_NULL_HANDLE ||
+            request.width <= 0 || request.height <= 0)
+            return std::nullopt;
+        return request;
+    }
+
     int HexValue(char c) {
         if (c >= '0' && c <= '9')
             return c - '0';
@@ -121,16 +191,6 @@ namespace {
             decoded.push_back(value[i] == '+' ? ' ' : value[i]);
         }
         return decoded;
-    }
-
-    int ParseIntParam(std::string_view value) {
-        int parsed = 0;
-        const auto* first = value.data();
-        const auto* last = value.data() + value.size();
-        const auto [ptr, ec] = std::from_chars(first, last, parsed);
-        if (ec != std::errc() || ptr != last)
-            return 0;
-        return std::max(parsed, 0);
     }
 
     std::optional<PreviewTextureRequest> ParsePreviewTextureRequest(std::string_view source) {
@@ -206,6 +266,7 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures{},
                                            m_p_descriptor_set{},
                                            m_p_sampler_linear{},
+                                           m_p_sampler_nearest{},
                                            m_scissor{},
                                            m_scissor_original{},
                                            m_viewport{},
@@ -233,6 +294,19 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
 }
 
 RenderInterface_VK::~RenderInterface_VK() {}
+
+std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view, VkSampler sampler,
+                                                          int width, int height) {
+    if (image_view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE || width <= 0 || height <= 0)
+        return {};
+    char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d",
+                  static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
+                  static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
+                  width, height);
+    return std::string(buf);
+}
 
 Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) {
     RMLUI_ZoneScopedN("Vulkan - CompileGeometry");
@@ -453,12 +527,19 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
         } else {
             m_is_transformed_scissor_enabled = false;
             m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
-            m_scissor.extent.width = region.Width();
-            m_scissor.extent.height = region.Height();
-            const int offset_x = static_cast<int>(std::round(m_context_offset.x));
-            const int offset_y = static_cast<int>(std::round(m_context_offset.y));
-            m_scissor.offset.x = Rml::Math::Clamp(region.Left() + offset_x, 0, m_width);
-            m_scissor.offset.y = Rml::Math::Clamp(region.Top() + offset_y, 0, m_height);
+            // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
+            const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
+            const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
+            const float right_f = left_f + static_cast<float>(region.Width());
+            const float bottom_f = top_f + static_cast<float>(region.Height());
+            const int left = Rml::Math::Clamp(static_cast<int>(std::floor(left_f)), 0, m_width);
+            const int top = Rml::Math::Clamp(static_cast<int>(std::floor(top_f)), 0, m_height);
+            const int right = Rml::Math::Clamp(static_cast<int>(std::ceil(right_f)), 0, m_width);
+            const int bottom = Rml::Math::Clamp(static_cast<int>(std::ceil(bottom_f)), 0, m_height);
+            m_scissor.offset.x = left;
+            m_scissor.offset.y = top;
+            m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+            m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
             m_scissor = IntersectContextClip(m_scissor);
 
 #ifdef RMLUI_VK_DEBUG
@@ -720,6 +801,18 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
     if (IsPreviewTextureSource(source))
         return LoadAsyncPreviewTexture(texture_dimensions, source);
 
+    if (auto vk_request = ParseLfsVkTextureRequest(source)) {
+        auto* texture = new texture_data_t{};
+        texture->m_p_vk_image = VK_NULL_HANDLE;
+        texture->m_p_vk_image_view = vk_request->image_view;
+        texture->m_p_vk_sampler = vk_request->sampler;
+        texture->m_p_vk_descriptor_set = VK_NULL_HANDLE;
+        texture->m_p_vma_allocation = VK_NULL_HANDLE;
+        texture_dimensions.x = vk_request->width;
+        texture_dimensions.y = vk_request->height;
+        return reinterpret_cast<Rml::TextureHandle>(texture);
+    }
+
     auto load_with_stbi = [&](const std::string& path) -> Rml::TextureHandle {
         int width = 0;
         int height = 0;
@@ -740,7 +833,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         }
 
         const size_t image_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-        const Rml::TextureHandle handle = GenerateTexture({data, image_size}, texture_dimensions);
+        const Rml::TextureHandle handle = CreateTexture({data, image_size}, texture_dimensions, path);
         stbi_image_free(data);
         return handle;
     };
@@ -861,7 +954,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
     texture_dimensions.x = header.width;
     texture_dimensions.y = header.height;
 
-    return GenerateTexture({image_dest, image_size}, texture_dimensions);
+    return CreateTexture({image_dest, image_size}, texture_dimensions, source);
 }
 
 Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) {
@@ -1003,7 +1096,7 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
 Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) {
     RMLUI_ASSERT(source_data.data() && source_data.size() == size_t(source_dimensions.x * source_dimensions.y * 4));
     Rml::String source_name = "generated-texture";
-    return CreateTexture(source_data, source_dimensions, source_name);
+    return CreateTexture(source_data, source_dimensions, source_name, m_p_sampler_nearest);
 }
 
 /*
@@ -1022,7 +1115,8 @@ Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte
     efficient handling otherwise it is cpu_to_gpu visibility and it means you create only ONE buffer that is accessible for CPU and for GPU, but it
     will cause the worst performance...
 */
-Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name) {
+Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name,
+                                                     VkSampler sampler) {
     RMLUI_ZoneScopedN("Vulkan - GenerateTexture");
 
     RMLUI_VK_ASSERTMSG(!source.empty(), "you pushed not valid data for copying to buffer");
@@ -1173,7 +1267,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
 
     p_texture->m_p_vk_image_view = p_image_view;
-    p_texture->m_p_vk_sampler = m_p_sampler_linear;
+    p_texture->m_p_vk_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
 
     return reinterpret_cast<Rml::TextureHandle>(p_texture);
 }
@@ -1194,6 +1288,8 @@ void RenderInterface_VK::SetTransform(const Rml::Matrix4f* transform) {
 }
 
 void RenderInterface_VK::SetContextOffset(float offset_x, float offset_y) {
+    offset_x = std::round(offset_x);
+    offset_y = std::round(offset_y);
     m_context_offset = Rml::Vector2f(offset_x, offset_y);
     m_context_transform = Rml::Matrix4f::Translate(offset_x, offset_y, 0.0f);
     ApplyTransformState();
@@ -2518,17 +2614,21 @@ void RenderInterface_VK::CreateDescriptorSets() noexcept {
 }
 
 void RenderInterface_VK::CreateSamplers() noexcept {
-    VkSamplerCreateInfo info = {};
+    auto create_sampler = [this](VkFilter filter, VkSampler* sampler) {
+        VkSamplerCreateInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        info.pNext = nullptr;
+        info.magFilter = filter;
+        info.minFilter = filter;
+        info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 
-    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.pNext = nullptr;
-    info.magFilter = VK_FILTER_LINEAR;
-    info.minFilter = VK_FILTER_LINEAR;
-    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        vkCreateSampler(m_p_device, &info, nullptr, sampler);
+    };
 
-    vkCreateSampler(m_p_device, &info, nullptr, &m_p_sampler_linear);
+    create_sampler(VK_FILTER_LINEAR, &m_p_sampler_linear);
+    create_sampler(VK_FILTER_NEAREST, &m_p_sampler_nearest);
 }
 
 void RenderInterface_VK::Create_Pipelines() noexcept {
@@ -3024,12 +3124,10 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
         m_image_barriers.forgetImage(texture.m_p_vk_image);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
         vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
+    }
 
-        VkDescriptorSet p_set = texture.m_p_vk_descriptor_set;
-
-        if (p_set) {
-            m_manager_descriptors.Free_Descriptors(m_p_device, &p_set);
-        }
+    if (VkDescriptorSet p_set = texture.m_p_vk_descriptor_set; p_set) {
+        m_manager_descriptors.Free_Descriptors(m_p_device, &p_set);
     }
 }
 
@@ -3074,7 +3172,12 @@ void RenderInterface_VK::DestroyPipelineLayout() noexcept {}
 
 void RenderInterface_VK::DestroySamplers() noexcept {
     RMLUI_VK_ASSERTMSG(m_p_device, "must exist here");
-    vkDestroySampler(m_p_device, m_p_sampler_linear, nullptr);
+    if (m_p_sampler_linear != VK_NULL_HANDLE)
+        vkDestroySampler(m_p_device, m_p_sampler_linear, nullptr);
+    if (m_p_sampler_nearest != VK_NULL_HANDLE)
+        vkDestroySampler(m_p_device, m_p_sampler_nearest, nullptr);
+    m_p_sampler_linear = VK_NULL_HANDLE;
+    m_p_sampler_nearest = VK_NULL_HANDLE;
 }
 
 VkImageAspectFlags RenderInterface_VK::DepthStencilAspectMask() const noexcept {
@@ -3837,5 +3940,4 @@ void RenderInterface_VK::MemoryPool::Free_GeometryHandle_ShaderDataOnly(geometry
     p_valid_geometry_handle->m_p_shader_allocation = nullptr;
 }
 
-#define VMA_IMPLEMENTATION
 #include <vk_mem_alloc.h>

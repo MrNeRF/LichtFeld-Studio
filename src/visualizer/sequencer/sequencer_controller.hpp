@@ -82,6 +82,9 @@ namespace lfs::vis {
         [[nodiscard]] bool isPlaying() const { return state_ == PlaybackState::PLAYING; }
         [[nodiscard]] bool isStopped() const { return state_ == PlaybackState::STOPPED; }
 
+        [[nodiscard]] float clipDuration() const { return timeline_.clipDuration(); }
+        void setClipDuration(float duration);
+
         [[nodiscard]] LoopMode loopMode() const { return loop_mode_; }
         void setLoopMode(LoopMode mode);
         void toggleLoop();

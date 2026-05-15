@@ -6,6 +6,7 @@
 
 #include "gui/panel_height_mode.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
 #include <core/export.hpp>
 #include <cstddef>
 #include <mutex>
@@ -49,8 +50,6 @@ namespace lfs::vis::gui {
         bool hasInput() const { return input_ != nullptr; }
         bool wantsKeyboard() const { return wants_keyboard_; }
 
-        static std::string consumeFrameTooltip();
-        static void setFrameTooltip(const std::string& tip, const void* hover_target);
         static bool consumeFrameWantsKeyboard();
         static bool consumeFrameWantsTextInput();
 
@@ -83,6 +82,7 @@ namespace lfs::vis::gui {
 
         std::optional<ShadowRect> collectVisibleColorPickerPopupShadow(float panel_screen_x,
                                                                        float panel_screen_y) const;
+        void applyHoverTooltip(int pw, float panel_y, float display_h);
         bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h);
         bool forwardInput(float panel_x, float panel_y);
         bool syncThemeProperties();
@@ -136,6 +136,7 @@ namespace lfs::vis::gui {
         int last_forwarded_mx_ = -1;
         int last_forwarded_my_ = -1;
         bool last_hovered_ = false;
+        RmlTooltipController tooltip_;
     };
 
 } // namespace lfs::vis::gui

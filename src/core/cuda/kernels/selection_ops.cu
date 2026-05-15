@@ -204,6 +204,34 @@ namespace lfs::core::cuda {
             out_mask[idx] = (max_s <= max_scale) ? group_id : 0;
         }
 
+        // SH_C0 constant for decoding DC spherical harmonic component to RGB
+        constexpr float SH_C0 = 0.28209479177387814f;
+
+        __device__ inline float decode_sh_color(float sh_val) {
+            return fminf(1.0f, fmaxf(0.0f, 0.5f + sh_val * SH_C0));
+        }
+
+        __global__ void color_threshold_kernel(
+            const float* __restrict__ sh0,
+            uint8_t* __restrict__ out_mask,
+            float ref_r, float ref_g, float ref_b,
+            float threshold, uint8_t group_id,
+            int N) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= N)
+                return;
+
+            // SH0 is stored as [N, 1, 3] or [N, 3] — stride is always 3 floats per gaussian
+            const float r = decode_sh_color(sh0[idx * 3]);
+            const float g = decode_sh_color(sh0[idx * 3 + 1]);
+            const float b = decode_sh_color(sh0[idx * 3 + 2]);
+
+            const bool match = fabsf(r - ref_r) <= threshold &&
+                               fabsf(g - ref_g) <= threshold &&
+                               fabsf(b - ref_b) <= threshold;
+            out_mask[idx] = match ? group_id : 0;
+        }
+
         __device__ inline void atomicMinFloat(float* addr, float val) {
             int* addr_as_int = reinterpret_cast<int*>(addr);
             int old = *addr_as_int, assumed;
@@ -474,6 +502,35 @@ namespace lfs::core::cuda {
 
         cudaError_t err = cudaGetLastError();
         assert(err == cudaSuccess && "select_by_scale kernel launch failed");
+
+        nvtxRangePop();
+        return out_mask;
+    }
+
+    Tensor select_by_color(const Tensor& sh0,
+                           float ref_r, float ref_g, float ref_b,
+                           float threshold, uint8_t group_id) {
+        assert(sh0.device() == Device::CUDA);
+        assert(sh0.dtype() == DataType::Float32);
+
+        nvtxRangePush("select_by_color");
+
+        // Support both [N, 1, 3] and [N, 3] layouts
+        const int N = static_cast<int>(sh0.size(0));
+        if (N == 0) {
+            nvtxRangePop();
+            return Tensor::empty({0}, Device::CUDA, DataType::UInt8);
+        }
+
+        auto out_mask = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
+
+        int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        color_threshold_kernel<<<blocks, BLOCK_SIZE, 0, sh0.stream()>>>(
+            sh0.ptr<float>(), out_mask.ptr<uint8_t>(),
+            ref_r, ref_g, ref_b, threshold, group_id, N);
+
+        cudaError_t err = cudaGetLastError();
+        assert(err == cudaSuccess && "select_by_color kernel launch failed");
 
         nvtxRangePop();
         return out_mask;

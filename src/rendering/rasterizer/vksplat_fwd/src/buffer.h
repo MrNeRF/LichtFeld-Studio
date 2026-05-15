@@ -99,6 +99,7 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> depths;             // (N, 1)
     Buffer<float> inv_cov_vs_opacity; // (N, 4)
     Buffer<float> rgb;                // (N, 3)
+    Buffer<int32_t> overlay_flags;    // (N, 1), selection/filter classification
 
     // tiles
     Buffer<int32_t> index_buffer_offset; // N
@@ -115,6 +116,7 @@ struct VulkanGSPipelineBuffers {
 
     // pixels
     Buffer<float> pixel_state;      // (H, W, 4)
+    Buffer<float> pixel_depth;      // (H, W, 1), median view-space depth
     Buffer<int32_t> n_contributors; // (H, W, 1)
 
     // intermediate buffers

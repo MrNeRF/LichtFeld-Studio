@@ -22,3 +22,20 @@
 .is-binding-desc.is-capturing {
     color: @{warning};
 }
+
+.is-conflict-overlay {
+    background-color: @{alpha(background,0.72)};
+}
+
+.is-conflict-dialog {
+    background-color: @{surface};
+    border-color: @{warning};
+}
+
+.is-conflict-title {
+    color: @{warning};
+}
+
+.is-conflict-message {
+    color: @{text};
+}

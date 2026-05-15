@@ -54,7 +54,8 @@ namespace lfs::rendering::detail {
             std::uint32_t height,
             int channels,
             CudaVulkanTensorLayout layout,
-            CudaVulkanTensorElementType element_type) {
+            CudaVulkanTensorElementType element_type,
+            bool flip_y) {
             const std::uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
             const std::uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
             if (x >= width || y >= height) {
@@ -76,7 +77,8 @@ namespace lfs::rendering::detail {
                 rgba.w = loadFloatChannel(floats, width, height, channels, layout, x, y, 3);
             }
 
-            surf2Dwrite(rgba, surface, static_cast<int>(x * sizeof(uchar4)), static_cast<int>(y));
+            const std::uint32_t out_y = flip_y ? (height - 1u - y) : y;
+            surf2Dwrite(rgba, surface, static_cast<int>(x * sizeof(uchar4)), static_cast<int>(out_y));
         }
 
         __global__ void copyTensorToSurfaceR32fKernel(
@@ -85,7 +87,8 @@ namespace lfs::rendering::detail {
             std::uint32_t width,
             std::uint32_t height,
             int channels,
-            CudaVulkanTensorLayout layout) {
+            CudaVulkanTensorLayout layout,
+            bool flip_y) {
             const std::uint32_t x = blockIdx.x * blockDim.x + threadIdx.x;
             const std::uint32_t y = blockIdx.y * blockDim.y + threadIdx.y;
             if (x >= width || y >= height) {
@@ -95,7 +98,8 @@ namespace lfs::rendering::detail {
             const float value = layout == CudaVulkanTensorLayout::Hwc
                                     ? source[(static_cast<std::size_t>(y) * width + x) * channels]
                                     : source[(static_cast<std::size_t>(y) * width + x)];
-            surf2Dwrite(value, surface, static_cast<int>(x * sizeof(float)), static_cast<int>(y));
+            const std::uint32_t out_y = flip_y ? (height - 1u - y) : y;
+            surf2Dwrite(value, surface, static_cast<int>(x * sizeof(float)), static_cast<int>(out_y));
         }
 
     } // namespace
@@ -108,6 +112,7 @@ namespace lfs::rendering::detail {
         const int channels,
         const CudaVulkanTensorLayout layout,
         const CudaVulkanTensorElementType element_type,
+        const bool flip_y,
         const cudaStream_t stream) {
         if (surface == 0 || source == nullptr || width == 0 || height == 0) {
             return cudaErrorInvalidValue;
@@ -126,7 +131,8 @@ namespace lfs::rendering::detail {
             height,
             channels,
             layout,
-            element_type);
+            element_type,
+            flip_y);
         return cudaGetLastError();
     }
 
@@ -137,6 +143,7 @@ namespace lfs::rendering::detail {
         const std::uint32_t height,
         const int channels,
         const CudaVulkanTensorLayout layout,
+        const bool flip_y,
         const cudaStream_t stream) {
         if (surface == 0 || source == nullptr || width == 0 || height == 0) {
             return cudaErrorInvalidValue;
@@ -148,7 +155,7 @@ namespace lfs::rendering::detail {
             1,
         };
         copyTensorToSurfaceR32fKernel<<<grid, block, 0, stream>>>(
-            surface, source, width, height, channels, layout);
+            surface, source, width, height, channels, layout, flip_y);
         return cudaGetLastError();
     }
 

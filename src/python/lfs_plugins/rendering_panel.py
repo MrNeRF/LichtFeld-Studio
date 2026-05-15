@@ -104,6 +104,7 @@ SCRUB_FIELD_DEFS = {
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
+GUT_RASTER_BACKENDS = {"3dgut", "vksplat_3dgut"}
 
 ENVIRONMENT_PRESET_PATHS = (
     "environments/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
@@ -311,9 +312,14 @@ class RenderingPanel(Panel):
                        lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
 
         for prop_id in SELECT_PROPS:
-            model.bind(prop_id,
-                       lambda p=prop_id: str(getattr(s(), p, "")),
-                       lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+            if prop_id == "raster_backend":
+                model.bind(prop_id,
+                           lambda p=prop_id: str(getattr(s(), p, "")),
+                           lambda v: self._set_raster_backend(v))
+            else:
+                model.bind(prop_id,
+                           lambda p=prop_id: str(getattr(s(), p, "")),
+                           lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
 
         model.bind("environment_mode",
                    lambda: str(getattr(s(), "environment_mode", "")),
@@ -544,6 +550,14 @@ class RenderingPanel(Panel):
             return
         settings.environment_mode = value
         self._sync_environment_state()
+
+    def _set_raster_backend(self, value):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+        backend = str(value)
+        settings.raster_backend = backend
+        settings.gut = backend in GUT_RASTER_BACKENDS
 
     def _environment_map_is_custom(self):
         settings = lf.get_render_settings()

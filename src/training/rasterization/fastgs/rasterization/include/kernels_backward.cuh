@@ -161,14 +161,11 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float grad_compensated_opacity = grad_opacity_helper[primitive_idx];
         float opacity_compensation = 1.0f;
         if constexpr (MIP_FILTER) {
+            // Keep mip opacity compensation detached from covariance; feeding this
+            // determinant ratio into scale/rotation gradients creates long splats.
             const float det_raw = raw_a * raw_c - raw_b * raw_b;
             if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
-                const float det_raw_rcp = 1.0f / det_raw;
                 opacity_compensation = sqrtf(det_raw * determinant_rcp);
-                const float compensation_grad_scale = 0.5f * grad_compensated_opacity * original_opacity * opacity_compensation;
-                dL_dcov2d.x += compensation_grad_scale * (raw_c * det_raw_rcp - c * determinant_rcp);
-                dL_dcov2d.y += compensation_grad_scale * (-2.0f * raw_b * det_raw_rcp + 2.0f * b * determinant_rcp);
-                dL_dcov2d.z += compensation_grad_scale * (raw_a * det_raw_rcp - a * determinant_rcp);
             } else {
                 opacity_compensation = 0.0f;
             }

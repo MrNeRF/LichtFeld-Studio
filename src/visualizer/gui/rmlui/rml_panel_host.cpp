@@ -24,7 +24,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -37,52 +36,8 @@ namespace lfs::vis::gui {
 
     constexpr int kMaxFboSize = 8192;
 
-    static std::string s_frame_tooltip;
-    static const void* s_frame_tooltip_target = nullptr;
-    static std::chrono::steady_clock::time_point s_frame_tooltip_hover_started_at{};
-    static bool s_frame_tooltip_updated_this_frame = false;
     static bool s_frame_wants_keyboard = false;
     static bool s_frame_wants_text_input = false;
-
-    std::string RmlPanelHost::consumeFrameTooltip() {
-        const bool updated = s_frame_tooltip_updated_this_frame;
-        s_frame_tooltip_updated_this_frame = false;
-        if (!updated) {
-            s_frame_tooltip.clear();
-            s_frame_tooltip_target = nullptr;
-            s_frame_tooltip_hover_started_at = {};
-            return {};
-        }
-
-        if (s_frame_tooltip.empty() || !s_frame_tooltip_target)
-            return {};
-
-        const auto now = std::chrono::steady_clock::now();
-        if (s_frame_tooltip_hover_started_at == std::chrono::steady_clock::time_point{} ||
-            now - s_frame_tooltip_hover_started_at < kRmlTooltipShowDelay)
-            return {};
-
-        return s_frame_tooltip;
-    }
-
-    void RmlPanelHost::setFrameTooltip(const std::string& tip, const void* hover_target) {
-        s_frame_tooltip_updated_this_frame = true;
-        if (tip.empty() || !hover_target) {
-            s_frame_tooltip.clear();
-            s_frame_tooltip_target = nullptr;
-            s_frame_tooltip_hover_started_at = {};
-            return;
-        }
-
-        if (s_frame_tooltip_target != hover_target || s_frame_tooltip != tip) {
-            s_frame_tooltip = tip;
-            s_frame_tooltip_target = hover_target;
-            s_frame_tooltip_hover_started_at = std::chrono::steady_clock::now();
-            return;
-        }
-
-        s_frame_tooltip = tip;
-    }
 
     bool RmlPanelHost::consumeFrameWantsKeyboard() {
         bool result = s_frame_wants_keyboard;
@@ -563,6 +518,8 @@ namespace lfs::vis::gui {
         if (forwardInput(pos_x, pos_y))
             render_needed_ = true;
 
+        applyHoverTooltip(w, pos_y, display_h);
+
         renderIfDirty(w, h, display_h);
 
         const ImVec2 panel_screen_pos = ImGui::GetCursorScreenPos();
@@ -667,6 +624,8 @@ namespace lfs::vis::gui {
         if (forwardInput(x, y))
             render_needed_ = true;
 
+        applyHoverTooltip(pw, y, display_h);
+
         renderIfDirty(pw, ph, display_h);
         compositeDirectToScreen(x, y, w, display_h);
     }
@@ -732,6 +691,21 @@ namespace lfs::vis::gui {
             .h = popup_h,
             .rounding = maxCornerRadius(popup->GetComputedValues().border_radius()),
         };
+    }
+
+    void RmlPanelHost::applyHoverTooltip(const int pw, const float panel_y,
+                                         const float display_h) {
+        if (!document_)
+            return;
+        Rml::Element* body = document_->GetElementById("body");
+        if (!body)
+            body = document_;
+        float visible_h = display_h;
+        if (clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_)
+            visible_h = std::min(visible_h, clip_y_max_ - panel_y);
+        const int clamp_h = std::max(1, static_cast<int>(std::floor(visible_h)));
+        if (tooltip_.apply(body, last_forwarded_mx_, last_forwarded_my_, pw, clamp_h))
+            render_needed_ = true;
     }
 
     void RmlPanelHost::compositeDirectToScreen(const float x, const float y,
@@ -924,9 +898,8 @@ namespace lfs::vis::gui {
         }
 
         if (hovered) {
-            auto* hover = rml_context_->GetHoverElement();
-            if (hover)
-                setFrameTooltip(resolveRmlTooltip(hover), hover);
+            if (auto* const hover = rml_context_->GetHoverElement())
+                tooltip_.setHover(resolveRmlTooltip(hover), hover);
         }
 
         if (input.viewport_keyboard_focus) {

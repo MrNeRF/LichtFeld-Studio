@@ -8,6 +8,14 @@ from .layouts.menus import register_menu, menu_action, menu_separator
 __lfs_menu_classes__ = ["EditMenu"]
 
 
+def _shortcut(action, fallback):
+    try:
+        shortcut = lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.GLOBAL)
+        return "" if shortcut == "Unbound" else shortcut
+    except (AttributeError, RuntimeError, TypeError):
+        return fallback
+
+
 @register_menu
 class EditMenu:
     """Edit menu for the menu bar."""
@@ -21,13 +29,13 @@ class EditMenu:
             menu_action(
                 "Undo",
                 lf.undo.undo,
-                shortcut="Ctrl+Z",
+                shortcut=_shortcut(lf.keymap.Action.UNDO, "Ctrl+Z"),
                 enabled=lf.undo.can_undo(),
             ),
             menu_action(
                 "Redo",
                 lf.undo.redo,
-                shortcut="Ctrl+Shift+Z",
+                shortcut=_shortcut(lf.keymap.Action.REDO, "Ctrl+Shift+Z"),
                 enabled=lf.undo.can_redo(),
             ),
             menu_separator(),

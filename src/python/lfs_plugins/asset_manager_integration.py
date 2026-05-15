@@ -132,39 +132,6 @@ def derive_project_scene_names(dataset_path: str) -> tuple[str, str]:
     return project_name, scene_name
 
 
-def resolve_latest_run_id(index: AssetIndex, scene_id: Optional[str]) -> Optional[str]:
-    if not scene_id:
-        return None
-    runs = index.list_runs(scene_id=scene_id)
-    if not runs:
-        return None
-
-    def _sort_key(run) -> tuple[str, str]:
-        return (
-            getattr(run, "completed_at", "") or getattr(run, "modified_at", ""),
-            getattr(run, "created_at", ""),
-        )
-
-    runs.sort(key=_sort_key, reverse=True)
-    return runs[0].id
-
-
-def backfill_scene_provenance(index: AssetIndex, scene_id: Optional[str]) -> bool:
-    run_id = resolve_latest_run_id(index, scene_id)
-    if not run_id or not scene_id:
-        return False
-
-    updated = False
-    for asset in index.list_assets(scene_id=scene_id):
-        if asset.run_id:
-            continue
-        if asset.role not in {"trained_output", "training_checkpoint"}:
-            continue
-        if index.update_asset(asset.id, run_id=run_id) is not None:
-            updated = True
-    return updated
-
-
 def ensure_dataset_catalog_context(
     dataset_path: str,
     *,
@@ -284,9 +251,6 @@ def register_catalog_asset_path(
 
     project_id = dataset_context.get("project_id")
     scene_id = dataset_context.get("scene_id")
-    run_id = None
-    if role in {"trained_output", "training_checkpoint"}:
-        run_id = resolve_latest_run_id(index, scene_id)
 
     if project_id is None:
         # Always use "Default" project for imported assets
@@ -305,7 +269,6 @@ def register_catalog_asset_path(
         path=normalized_path,
         absolute_path=normalized_path,
         scene_id=scene_id,
-        run_id=run_id,
         role=detected_role,
         **asset_kwargs,
     )
@@ -317,7 +280,6 @@ def register_catalog_asset_path(
             asset.id,
             project_id=project_id,
             scene_id=scene_id,
-            run_id=run_id,
         )
     elif asset is not None:
         refresh_active_panel()
@@ -340,7 +302,6 @@ def select_asset_in_active_panel(
     *,
     project_id: Optional[str] = None,
     scene_id: Optional[str] = None,
-    run_id: Optional[str] = None,
 ) -> None:
     panel = get_asset_manager_panel()
     if panel is None:
@@ -352,7 +313,6 @@ def select_asset_in_active_panel(
             panel._selected_project_id = project_id
         if scene_id is not None:
             panel._selected_scene_id = scene_id
-        panel._selected_run_id = run_id
         panel._update_selection_type()
         panel.refresh_catalog()
     except Exception:

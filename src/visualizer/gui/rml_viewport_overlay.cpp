@@ -7,7 +7,6 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
-#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -306,7 +305,7 @@ namespace lfs::vis::gui {
                 rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), mods);
             }
 
-            RmlPanelHost::setFrameTooltip(resolveRmlTooltip(hover), hover);
+            tooltip_.setHover(resolveRmlTooltip(hover), hover);
         }
     }
 
@@ -375,6 +374,15 @@ namespace lfs::vis::gui {
         applyGTMetricsOverlay();
     }
 
+    bool RmlViewportOverlay::applyFrameTooltip() {
+        if (!document_)
+            return false;
+        return tooltip_.apply(document_->GetElementById("overlay-body"),
+                              last_mouse_x_, last_mouse_y_,
+                              static_cast<int>(vp_size_.x),
+                              static_cast<int>(vp_size_.y));
+    }
+
     void RmlViewportOverlay::render() {
         if (!rml_context_ || !document_)
             return;
@@ -404,9 +412,10 @@ namespace lfs::vis::gui {
         auto* body = document_->GetElementById("overlay-body");
         ensureBodyDataModelBound(body);
         updateToolbarRoots();
+        const bool tooltip_changed = applyFrameTooltip();
 
         const bool needs_render = render_needed_ || animation_active_ || run_document_hooks ||
-                                  theme_changed || size_changed;
+                                  theme_changed || size_changed || tooltip_changed;
         if (!needs_render) {
             rml_manager_->queueVulkanContext(rml_context_,
                                              vp_pos_.x - screen_origin_.x,

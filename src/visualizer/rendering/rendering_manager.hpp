@@ -6,6 +6,7 @@
 
 #include "camera_interaction_service.hpp"
 #include "core/export.hpp"
+#include "core/tensor.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
@@ -25,6 +26,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -53,6 +55,7 @@ namespace lfs::core::events::cmd {
 namespace lfs::vis {
     class VulkanContext;
     class VksplatViewportRenderer;
+    class PointCloudVulkanRenderer;
 
     class SceneManager;
     class TrainerManager;
@@ -99,6 +102,17 @@ namespace lfs::vis {
         // Main render function
         void renderFrame(const RenderContext& context);
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
+
+        enum class VksplatSelectionMaskShape : std::uint32_t {
+            Brush = 0,
+            Rectangle = 1,
+        };
+        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildVksplatSelectionMask(
+            SceneManager& scene_manager,
+            const lfs::rendering::FrameView& frame_view,
+            bool equirectangular,
+            VksplatSelectionMaskShape shape,
+            const std::vector<glm::vec4>& primitives);
 
         // Render preview image without touching the shared viewport presentation textures.
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(SceneManager* scene_manager,
@@ -254,6 +268,12 @@ namespace lfs::vis {
 
         // Depth buffer access for tools (returns camera-space depth at pixel, or -1 if invalid)
         float getDepthAtPixel(int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
+        float renderDepthAtPixelForNodeMask(const SceneManager* scene_manager,
+                                            const Viewport& viewport,
+                                            const glm::ivec2& render_size,
+                                            int x,
+                                            int y,
+                                            const std::vector<bool>& node_visibility_mask);
         glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
@@ -426,7 +446,7 @@ namespace lfs::vis {
         void handleTrainingStarted();
         void handleTrainingCompleted();
         void handleSceneLoaded();
-        void handleSceneChanged();
+        void handleSceneChanged(uint32_t mutation_flags);
         void handleSceneCleared();
         void handlePLYVisibilityChanged();
         void handlePLYAdded();
@@ -444,6 +464,14 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
+        std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
+        // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
+        // only when the source sh0_raw() pointer/size changes so the Vulkan
+        // renderer's per-tensor upload cache stays warm across frames.
+        lfs::core::Tensor point_cloud_colors_cache_;
+        const void* point_cloud_colors_cache_key_ = nullptr;
+        std::size_t point_cloud_colors_cache_size_ = 0;
+        VulkanContext* last_vulkan_context_ = nullptr;
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         VkImageView vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;

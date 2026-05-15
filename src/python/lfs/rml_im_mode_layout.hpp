@@ -59,6 +59,7 @@ namespace lfs::python {
         bool bool_value = false;
         int int_value = 0;
         float float_value = 0.0f;
+        std::string items_key;
         std::string string_value;
         bool open = true;
     };

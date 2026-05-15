@@ -29,6 +29,20 @@ enum CameraModel {
     FISHEYE = 2,
 };
 
+static const uint CAMERA_MODEL_MASK = 0xffu;
+static const uint PROJECTION_MODE_SHIFT = 8u;
+static const uint PROJECTION_MODE_GUT = 1u;
+
+[ForceInline]
+uint base_camera_model(uint packed_camera_model) {
+    return packed_camera_model & CAMERA_MODEL_MASK;
+}
+
+[ForceInline]
+bool is_gut_projection_mode(uint packed_camera_model) {
+    return ((packed_camera_model >> PROJECTION_MODE_SHIFT) & CAMERA_MODEL_MASK) == PROJECTION_MODE_GUT;
+}
+
 [ForceInline]
 [Differentiable]
 float read_t1_float(uint32_t idx, StructuredBuffer<float> t1) {
@@ -391,6 +405,63 @@ float3x3 compute_jacobian(float3 xyz_ws, Camera cam) {
 }
 
 [ForceInline]
+bool image_point_in_image_bounds_margin(float2 image_point, Camera cam, float margin_factor) {
+    float margin_x = float(cam.W) * margin_factor;
+    float margin_y = float(cam.H) * margin_factor;
+    return (-margin_x <= image_point.x && image_point.x < float(cam.W) + margin_x) &&
+           (-margin_y <= image_point.y && image_point.y < float(cam.H) + margin_y);
+}
+
+[ForceInline]
+float3 safe_normalize(float3 v) {
+    float l2 = dot(v, v);
+    return l2 > 0.0f ? v * rsqrt(l2) : v;
+}
+
+struct WorldRay
+{
+    float3 origin;
+    float3 direction;
+    bool valid;
+};
+
+[ForceInline]
+WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
+    float2 uv = (pixel - float2(cam.cx, cam.cy)) / float2(cam.fx, cam.fy);
+    if (cam.model == int(CameraModel::FISHEYE)) {
+        uv = undistort_fisheye(uv, cam.dist_coeffs);
+    } else if (cam.model == int(CameraModel::OPENCV)) {
+        uv = undistort_point_kkpp(uv, cam.dist_coeffs);
+    }
+
+    float3 ray_camera = safe_normalize(float3(uv, 1.0f));
+    float4x3 world_view_t = transpose(cam.world_view_transform);
+    float3x3 view_to_world_rotation = float3x3(world_view_t);
+    float3 origin = -mul(view_to_world_rotation, world_view_t[3]);
+    float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
+    return { origin, direction, isfinite(dot(origin, origin)) && isfinite(dot(direction, direction)) };
+}
+
+[ForceInline]
+[Differentiable]
+float4 add_blur_to_covariance2d(float3 cov_vs) {
+    float4 result = float4(cov_vs, 1.0);
+
+    #if ANTIALIASE_MODE == 0
+        result.x += AA_EPS2D;
+        result.z += AA_EPS2D;
+    #elif ANTIALIASE_MODE == 1
+        float old_det = compute_det(result.xyz);
+        result.x += AA_EPS2D;
+        result.z += AA_EPS2D;
+        float new_det = compute_det(result.xyz);
+        result.w = sqrt(max(0.f, old_det / new_det));
+    #endif
+
+    return result;
+}
+
+[ForceInline]
 float2 undistort_fisheye(float2 uv) {
     float theta = length(uv);
     float r = tan(theta);
@@ -414,20 +485,7 @@ float4 covariance_3d_to_2d(Camera cam, float3 xyz_ws, float3x3 cov_ws) {
     float3x3 J = compute_jacobian(xyz_ws, cam);
     float3x3 cov_vs = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
 
-    float4 result = float4(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1], 1.0);
-
-    #if ANTIALIASE_MODE == 0
-        result.x += AA_EPS2D;
-        result.z += AA_EPS2D;
-    #elif ANTIALIASE_MODE == 1
-        float old_det = compute_det(result.xyz);
-        result.x += AA_EPS2D;
-        result.z += AA_EPS2D;
-        float new_det = compute_det(result.xyz);
-        result.w = sqrt(max(0.f, old_det / new_det));
-    #endif
-
-    return result;
+    return add_blur_to_covariance2d(float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]));
 }
 
 
@@ -469,6 +527,14 @@ struct Splat_2D_AlphaBlend : IDifferentiable
     float3 rgb;
 };
 
+struct Splat_3D_GUT_AlphaBlend
+{
+    float3 xyz_ws;
+    float3x3 iscl_rot;
+    float opacity;
+    float3 rgb;
+};
+
 [ForceInline]
 [Differentiable]
 Splat_2D_AlphaBlend load_splat_alphablend(
@@ -482,6 +548,29 @@ Splat_2D_AlphaBlend load_splat_alphablend(
     float4 g_inv_cov_opac = inv_cov_vs_opacity[g_idx];
 
     return { g_inv_cov_opac, g_xy_vs, g_rgb };
+}
+
+[ForceInline]
+Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
+    int32_t g_idx,
+    StructuredBuffer<float> xyz_ws,
+    StructuredBuffer<float4> rotations,
+    StructuredBuffer<float4> scales_opacs,
+    StructuredBuffer<float> rgb
+) {
+    float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
+    float4 g_rotation = rotations[g_idx];
+    float4 g_scale_opac = scales_opacs[g_idx];
+    float3 g_rgb = read_t3_float3(g_idx, rgb);
+    float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
+    float3 safe_scale = max(g_scale_opac.xyz, float3(1e-8f));
+    float3x3 inv_scale = float3x3(
+        1.0f / safe_scale.x, 0.0f, 0.0f,
+        0.0f, 1.0f / safe_scale.y, 0.0f,
+        0.0f, 0.0f, 1.0f / safe_scale.z
+    );
+    float3x3 iscl_rot = mul(inv_scale, transpose(rotation));
+    return { g_xyz_ws, iscl_rot, g_scale_opac.w, g_rgb };
 }
 
 [ForceInline]
@@ -586,6 +675,19 @@ float4 evaluate_splat(Splat_2D_AlphaBlend g,
     float3 premult_rgb = g_rgb * alpha;
     
     return float4(premult_rgb, alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction)
+{
+    // Same world-space 3DGUT alpha test as the CUDA path: transform the pixel
+    // ray into the Gaussian's normalized local frame and measure ray distance.
+    float3 gro = mul(g.iscl_rot, ray_origin - g.xyz_ws);
+    float3 grd = safe_normalize(mul(g.iscl_rot, ray_direction));
+    float3 gcrod = cross(grd, gro);
+    float power = -0.5f * dot(gcrod, gcrod);
+    float alpha = float(clipOpacity(g.opacity * exp(power)));
+    return float4(g.rgb * alpha, alpha);
 }
 
 [ForceInline]
@@ -766,4 +868,110 @@ struct Uniforms {
     float cy;
     float4 dist_coeffs;
     float4x4 world_view_transform;
+}
+
+static const uint OVERLAY_FLAG_DIM = 1;
+static const uint OVERLAY_FLAG_NONSELECTABLE = 2;
+static const uint OVERLAY_FLAG_FLASH = 4;
+
+static const uint OVERLAY_PARAM_CROP_FLAGS = 0;
+static const uint OVERLAY_PARAM_CROP_MIN = 1;
+static const uint OVERLAY_PARAM_CROP_MAX = 2;
+static const uint OVERLAY_PARAM_CROP_TRANSFORM = 3;
+static const uint OVERLAY_PARAM_ELLIPSOID_FLAGS = 7;
+static const uint OVERLAY_PARAM_ELLIPSOID_RADII = 8;
+static const uint OVERLAY_PARAM_ELLIPSOID_TRANSFORM = 9;
+static const uint OVERLAY_PARAM_VIEW_FLAGS = 13;
+static const uint OVERLAY_PARAM_VIEW_MIN = 14;
+static const uint OVERLAY_PARAM_VIEW_MAX = 15;
+static const uint OVERLAY_PARAM_VIEW_TRANSFORM = 16;
+static const uint OVERLAY_PARAM_EMPHASIS_FLAGS = 20;
+static const uint OVERLAY_PARAM_CURSOR_FLAGS = 21;
+static const uint OVERLAY_PARAM_MARKER_FLAGS = 22;
+static const uint OVERLAY_PARAM_SELECTION_CURSOR = 23;
+static const uint OVERLAY_PARAM_SELECTION_FLAGS = 24;
+static const uint OVERLAY_PARAM_COUNT = 25;
+
+[ForceInline]
+bool overlay_enabled(float value)
+{
+    return value > 0.5f;
+}
+
+[ForceInline]
+int overlay_int(float value)
+{
+    return int(round(value));
+}
+
+[ForceInline]
+uint read_byte(ByteAddressBuffer buffer, uint idx)
+{
+    uint aligned_idx = idx & ~3u;
+    uint shift = (idx & 3u) * 8u;
+    return (buffer.Load(aligned_idx) >> shift) & 0xffu;
+}
+
+[ForceInline]
+int read_int32(ByteAddressBuffer buffer, uint idx)
+{
+    return int(buffer.Load(idx * 4u));
+}
+
+[ForceInline]
+float3 transform_point_rows(StructuredBuffer<float4> params, uint base_idx, float3 p)
+{
+    float4 r0 = params[base_idx + 0];
+    float4 r1 = params[base_idx + 1];
+    float4 r2 = params[base_idx + 2];
+    return float3(dot(r0.xyz, p) + r0.w,
+                  dot(r1.xyz, p) + r1.w,
+                  dot(r2.xyz, p) + r2.w);
+}
+
+[ForceInline]
+float3x3 linear_transform_rows(StructuredBuffer<float4> params, uint base_idx)
+{
+    float4 r0 = params[base_idx + 0];
+    float4 r1 = params[base_idx + 1];
+    float4 r2 = params[base_idx + 2];
+    return float3x3(r0.x, r0.y, r0.z,
+                    r1.x, r1.y, r1.z,
+                    r2.x, r2.y, r2.z);
+}
+
+[ForceInline]
+float3x3 transform_covariance_rows(StructuredBuffer<float4> params, uint base_idx, float3x3 cov)
+{
+    float3x3 m = linear_transform_rows(params, base_idx);
+    return mul(m, mul(cov, transpose(m)));
+}
+
+[ForceInline]
+bool extract_rotation_rows(StructuredBuffer<float4> params, uint base_idx, out float3 row0, out float3 row1, out float3 row2)
+{
+    row0 = float3(1.0f, 0.0f, 0.0f);
+    row1 = float3(0.0f, 1.0f, 0.0f);
+    row2 = float3(0.0f, 0.0f, 1.0f);
+    float4 m0 = params[base_idx + 0];
+    float4 m1 = params[base_idx + 1];
+    float4 m2 = params[base_idx + 2];
+    float scale_x = length(float3(m0.x, m1.x, m2.x));
+    float scale_y = length(float3(m0.y, m1.y, m2.y));
+    float scale_z = length(float3(m0.z, m1.z, m2.z));
+    if (scale_x <= 1.0e-8f || scale_y <= 1.0e-8f || scale_z <= 1.0e-8f)
+        return false;
+
+    row0 = float3(m0.x / scale_x, m0.y / scale_y, m0.z / scale_z);
+    row1 = float3(m1.x / scale_x, m1.y / scale_y, m1.z / scale_z);
+    row2 = float3(m2.x / scale_x, m2.y / scale_y, m2.z / scale_z);
+    return true;
+}
+
+[ForceInline]
+float3 transpose_mul_rows(float3 row0, float3 row1, float3 row2, float3 v)
+{
+    return float3(row0.x * v.x + row1.x * v.y + row2.x * v.z,
+                  row0.y * v.x + row1.y * v.y + row2.y * v.z,
+                  row0.z * v.x + row1.z * v.y + row2.z * v.z);
 }

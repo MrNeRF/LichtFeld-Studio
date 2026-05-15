@@ -37,6 +37,7 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
             SubmodeDef("polygon", "Polygon", "polygon"),
             SubmodeDef("lasso", "Lasso", "lasso"),
             SubmodeDef("rings", "Rings", "ring"),
+            SubmodeDef("color", "Color", "color-picker"),
         ),
         poll=_poll_has_gaussians,
     ),

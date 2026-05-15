@@ -15,7 +15,18 @@ namespace lfs::rendering {
         FastGs = 0,
         Gut = 1,
         VkSplat = 2,
+        VkSplatGut = 3,
     };
+
+    inline bool isGutBackend(const GaussianRasterBackend backend) {
+        return backend == GaussianRasterBackend::Gut ||
+               backend == GaussianRasterBackend::VkSplatGut;
+    }
+
+    inline bool isVkSplatBackend(const GaussianRasterBackend backend) {
+        return backend == GaussianRasterBackend::VkSplat ||
+               backend == GaussianRasterBackend::VkSplatGut;
+    }
 
     constexpr float DEFAULT_NEAR_PLANE = 0.1f;
     constexpr float DEFAULT_FAR_PLANE = 100000.0f;

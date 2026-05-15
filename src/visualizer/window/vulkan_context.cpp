@@ -406,16 +406,27 @@ namespace lfs::vis {
         }
         frame_timeline_waits_.clear();
         frame = {};
-        if (device_ == VK_NULL_HANDLE || swapchain_ == VK_NULL_HANDLE || framebuffer_width_ <= 0 || framebuffer_height_ <= 0) {
+        if (device_ == VK_NULL_HANDLE || framebuffer_width_ <= 0 || framebuffer_height_ <= 0) {
             last_error_.clear();
             return false;
         }
 
-        if (framebuffer_resized_) {
-            framebuffer_resized_ = false;
+        if (swapchain_ == VK_NULL_HANDLE || framebuffer_resized_) {
             if (!recreateSwapchain()) {
                 return false;
             }
+        }
+
+        const bool depth_stencil_ready =
+            depth_stencil_resources_.size() == swapchain_images_.size() &&
+            std::all_of(depth_stencil_resources_.begin(),
+                        depth_stencil_resources_.end(),
+                        [](const DepthStencilResource& resource) {
+                            return resource.image != VK_NULL_HANDLE &&
+                                   resource.view != VK_NULL_HANDLE;
+                        });
+        if (!depth_stencil_ready) {
+            return fail("Vulkan swapchain depth/stencil resources are incomplete");
         }
 
         const std::size_t current_frame = frame_index_;
@@ -625,7 +636,10 @@ namespace lfs::vis {
         frame_index_ = (frame_index_ + 1) % kFramesInFlight;
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || frame_suboptimal_) {
             frame_suboptimal_ = false;
-            return recreateSwapchain();
+            // A silent false (empty error) means the surface reported 0×0 extent (window minimized);
+            // treat as success so the caller doesn't log a spurious warning. framebuffer_resized_
+            // stays true, so recreation is retried each frame until the window is restored.
+            return recreateSwapchain() || last_error_.empty();
         }
         frame_suboptimal_ = false;
         if (result != VK_SUCCESS) {
@@ -2052,6 +2066,11 @@ namespace lfs::vis {
         const VkSurfaceFormatKHR surface_format = chooseSurfaceFormat(support.formats);
         const VkPresentModeKHR present_mode = choosePresentMode(support.present_modes);
         const VkExtent2D extent = chooseSwapchainExtent(support.capabilities, framebuffer_width, framebuffer_height);
+        if (extent.width == 0 || extent.height == 0) {
+            // Surface reports zero extent (window minimized); skip creation and retry next frame.
+            last_error_.clear();
+            return false;
+        }
 
         if ((support.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT) == 0) {
             return fail("Vulkan swapchain does not support color attachment usage");
@@ -2556,12 +2575,22 @@ namespace lfs::vis {
         // vkQueueWaitIdle(present_queue_) because it stalls the entire CPU thread on the
         // compositor, which can deadlock if the display server is itself blocked.
         if (!waitForFrameFences()) {
+            framebuffer_resized_ = true;
             return false;
         }
         destroySwapchain();
-        return createSwapchain(framebuffer_width_, framebuffer_height_) &&
-               createImageViews() &&
-               createDepthStencilResources();
+        const bool created = createSwapchain(framebuffer_width_, framebuffer_height_) &&
+                             createImageViews() &&
+                             createDepthStencilResources();
+        if (!created) {
+            const std::string error = last_error_;
+            destroySwapchain();
+            framebuffer_resized_ = true;
+            last_error_ = error;
+            return false;
+        }
+        framebuffer_resized_ = false;
+        return true;
     }
 #endif
 

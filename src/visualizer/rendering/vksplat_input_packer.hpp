@@ -14,6 +14,8 @@
 
 #include "rendering/rasterizer/vksplat_fwd/src/buffer.h"
 
+#include "visualizer/visualizer.hpp"
+
 namespace lfs::vis::vksplat {
 
     // CPU-side reference packer for VkSplat forward inputs.
@@ -31,7 +33,7 @@ namespace lfs::vis::vksplat {
     //
     // The buffers preserve their existing deviceBuffer fields so callers can
     // drop the result straight into VulkanGSPipelineBuffers without a reupload.
-    [[nodiscard]] std::expected<void, std::string> packHostInputs(
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> packHostInputs(
         const lfs::core::SplatData& splat_data,
         Buffer<float>& xyz_ws,
         Buffer<float>& rotations,
@@ -42,13 +44,13 @@ namespace lfs::vis::vksplat {
     // Returns sh_coeffs as a freshly allocated vector with size num_splats*16*3.
     // Slot 0 is the DC (sh0) component, slots 1..rest hold shN coefficients,
     // the remainder is zero.
-    [[nodiscard]] std::expected<std::vector<float>, std::string> buildPaddedShReference(
+    LFS_VIS_API [[nodiscard]] std::expected<std::vector<float>, std::string> buildPaddedShReference(
         const lfs::core::SplatData& splat_data);
 
     // GPU-resident packed inputs. Each tensor is contiguous Float32 on CUDA and
     // matches the host packer byte-for-byte; downstream code uploads them with
     // a single cudaMemcpyAsync(D2D) into a Vulkan-imported buffer.
-    struct DevicePackedInputs {
+    struct LFS_VIS_API DevicePackedInputs {
         lfs::core::Tensor xyz_ws;       // [N, 3]
         lfs::core::Tensor rotations;    // [N, 4]
         lfs::core::Tensor scales_opacs; // [N, 4]
@@ -60,7 +62,7 @@ namespace lfs::vis::vksplat {
     // GPU-only packer. Uses the tensor library to compose activations, padding,
     // and the SH reorder via permute+contiguous. Produces output tensors whose
     // raw byte layout matches packHostInputs's host buffers exactly.
-    [[nodiscard]] std::expected<DevicePackedInputs, std::string> packDeviceInputs(
+    LFS_VIS_API [[nodiscard]] std::expected<DevicePackedInputs, std::string> packDeviceInputs(
         const lfs::core::SplatData& splat_data);
 
 } // namespace lfs::vis::vksplat

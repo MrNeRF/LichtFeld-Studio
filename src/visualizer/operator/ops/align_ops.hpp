@@ -22,11 +22,10 @@ namespace lfs::vis::op {
 
     private:
         std::vector<glm::vec3> picked_points_;
-        std::vector<std::pair<std::string, glm::mat4>> transforms_before_;
+        int pick_button_ = 0;
 
-        glm::vec3 unprojectScreenPoint(double x, double y) const;
+        glm::vec3 unprojectScreenPoint(const OperatorContext& ctx, double x, double y) const;
         void applyAlignment(OperatorContext& ctx);
-        void captureTransformsBefore(const OperatorContext& ctx);
     };
 
     void registerAlignOperators();

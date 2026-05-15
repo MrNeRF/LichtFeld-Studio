@@ -180,6 +180,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/rml_document_utils.cpp
         gui/rmlui/rml_panel_host.cpp
         gui/rmlui/rml_theme.cpp
+        gui/rmlui/rml_tooltip.cpp
         gui/rmlui/elements/chromaticity_element.cpp
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
@@ -237,12 +238,20 @@ target_link_libraries(lfs_visualizer
         vterm
 )
 
+# Linux folder pickers bypass NFD and call GTK directly so they can return
+# the currently-open folder rather than the highlighted child. Set up by
+# cmake/SetupNativeFileDialog.cmake.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET PkgConfig::LFS_GTK3)
+    target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_GTK3)
+endif()
+
 if(ENABLE_VULKAN_VIEWER)
     target_sources(lfs_visualizer
             PRIVATE
             gui/rmlui/rmlui_vk_backend.cpp
             rendering/vksplat_input_packer.cpp
-            rendering/vksplat_viewport_renderer.cpp)
+            rendering/vksplat_viewport_renderer.cpp
+            rendering/point_cloud_vulkan_renderer.cpp)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
         CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
     find_package(glslang CONFIG REQUIRED)
@@ -282,6 +291,8 @@ if(ENABLE_VULKAN_VIEWER)
     compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/depth_blit.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/depth_blit.frag.spv.h" kDepthBlitFragSpv)
     compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/split_view.frag.spv.h" kSplitViewFragSpv)
     compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv)
+    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
 
     target_link_libraries(lfs_visualizer
             PRIVATE

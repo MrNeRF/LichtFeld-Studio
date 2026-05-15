@@ -162,6 +162,37 @@ def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):
     assert set_calls["intensity"] == [0.4]
 
 
+def test_rendering_panel_raster_backend_updates_gut_mirror(rendering_panel_module):
+    module = rendering_panel_module
+    settings = SimpleNamespace(raster_backend="3dgut", gut=True)
+    module.lf.get_render_settings = lambda: settings
+
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+
+    backend_getter, backend_setter = model.bindings["raster_backend"]
+
+    assert backend_getter() == "3dgut"
+
+    backend_setter("fast_gs")
+    assert settings.raster_backend == "fast_gs"
+    assert settings.gut is False
+
+    backend_setter("3dgut")
+    assert settings.raster_backend == "3dgut"
+    assert settings.gut is True
+
+    backend_setter("vksplat")
+    assert settings.raster_backend == "vksplat"
+    assert settings.gut is False
+
+    backend_setter("vksplat_3dgut")
+    assert settings.raster_backend == "vksplat_3dgut"
+    assert settings.gut is True
+
+
 def test_rendering_panel_custom_environment_map_appears_in_dropdown(rendering_panel_module):
     module = rendering_panel_module
     settings = SimpleNamespace(
@@ -206,7 +237,11 @@ def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     assert 'data-tooltip="tooltip.simplify_output"' in content
     assert 'data-tooltip="tooltip.simplify_apply"' in content
     assert 'data-tooltip="tooltip.simplify_cancel"' in content
-    assert 'option value="__custom__" data-if="environment_map_has_custom_option"' in content
+    custom_option_start = content.find('<option value="__custom__"')
+    assert custom_option_start >= 0
+    custom_option_end = content.find("</option>", custom_option_start)
+    custom_option = content[custom_option_start:custom_option_end]
+    assert 'data-if="environment_map_has_custom_option"' in custom_option
     assert "{{environment_map_last_custom_display_name}}" in content
     assert "{{label_simplify_source}}" in content
     assert "{{label_simplify_select_source}}" in content

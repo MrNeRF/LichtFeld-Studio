@@ -25,7 +25,7 @@
 
 .card-title {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     margin-top: 4dp;
     text-align: center;
 }

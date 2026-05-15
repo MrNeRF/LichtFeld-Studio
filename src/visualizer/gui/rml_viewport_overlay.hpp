@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "gui/rmlui/rml_tooltip.hpp"
+
 #include <chrono>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -55,6 +57,7 @@ namespace lfs::vis::gui {
         bool shouldRunDocumentHooks(bool force) const;
         void updateToolbarRoots();
         void applyGTMetricsOverlay();
+        bool applyFrameTooltip();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -82,6 +85,7 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         GTMetricsOverlayState gt_metrics_overlay_;
+        RmlTooltipController tooltip_;
         std::chrono::steady_clock::time_point last_document_hook_run_{};
         static constexpr auto kDocumentHookPollInterval = std::chrono::milliseconds(100);
     };

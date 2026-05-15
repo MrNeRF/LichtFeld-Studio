@@ -138,22 +138,32 @@ namespace lfs::vis::gui {
 
         cmd::SequencerAddKeyframe::when([this](const auto&) {
             const auto& cam = viewer_->getViewport().camera;
-
-            const float interval = ui_state_.snap_to_grid ? ui_state_.snap_interval : 1.0f;
-            const float time = controller_.timeline().realKeyframeCount() == 0
-                                   ? 0.0f
-                                   : controller_.timeline().realEndTime() + interval;
+            const float time = controller_.playhead();
+            const glm::vec3 position = cam.t;
+            const glm::quat rotation = glm::quat_cast(cam.R);
 
             auto* const rm = viewer_->getRenderingManager();
             const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
 
-            lfs::sequencer::Keyframe kf;
-            kf.time = time;
-            kf.position = cam.t;
-            kf.rotation = glm::quat_cast(cam.R);
-            kf.focal_length_mm = focal_mm;
-            controller_.addKeyframeAtTime(kf, time);
-            controller_.seek(time);
+            // Match Blender / After Effects / Maya: clicking + at a time that already has a
+            // keyframe overwrites that keyframe with the current pose instead of stacking.
+            constexpr float REPLACE_EPSILON_S = 0.01f;
+            const auto& keyframes = controller_.timeline().keyframes();
+            const auto existing = std::find_if(keyframes.begin(), keyframes.end(),
+                                               [time](const lfs::sequencer::Keyframe& kf) {
+                                                   return !kf.is_loop_point &&
+                                                          std::abs(kf.time - time) < REPLACE_EPSILON_S;
+                                               });
+            if (existing != keyframes.end()) {
+                controller_.updateKeyframeById(existing->id, position, rotation, focal_mm);
+            } else {
+                lfs::sequencer::Keyframe kf;
+                kf.time = time;
+                kf.position = position;
+                kf.rotation = rotation;
+                kf.focal_length_mm = focal_mm;
+                controller_.addKeyframeAtTime(kf, time);
+            }
             state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         });
 
@@ -191,6 +201,17 @@ namespace lfs::vis::gui {
 
         state::KeyframeListChanged::when([this](const auto&) {
             film_strip_.invalidateAll();
+        });
+
+        // File → New Project (and any dataset swap) emits SceneCleared. Drop the camera path
+        // and film-strip thumbs by wiping the timeline; the keyframes belong to the old scene.
+        state::SceneCleared::when([this](const auto&) {
+            if (controller_.timeline().realKeyframeCount() == 0 &&
+                !controller_.timeline().hasAnimationClip())
+                return;
+            controller_.clear();
+            film_strip_.invalidateAll();
+            state::KeyframeListChanged{.count = 0}.emit();
         });
 
         ui::NodeSelected::when([this](const auto& e) {
@@ -269,7 +290,7 @@ namespace lfs::vis::gui {
             guiFocusState().want_capture_mouse = true;
 
         const bool actively_following =
-            ui_state_.follow_playback && controller_.isPlaying() &&
+            ui_state_.follow_playback &&
             controller_.timeline().realKeyframeCount() > 0;
 
         if (ui_state_.show_camera_path && !actively_following) {
@@ -319,7 +340,10 @@ namespace lfs::vis::gui {
 
         if (auto* const rm = viewer_->getRenderingManager()) {
             rm->setOverlayAnimationActive(is_playing);
-            if (is_playing && ui_state_.follow_playback && !ui_state_.show_pip_preview) {
+            // Follow whenever the toggle is on — playing, scrubbing, or paused.
+            // The user wants the main viewport to track the playhead at all times,
+            // not only during automatic playback.
+            if (ui_state_.follow_playback && controller_.timeline().realKeyframeCount() > 0) {
                 rm->markDirty(DirtyFlag::CAMERA);
                 const auto state = controller_.currentCameraState();
                 auto& vp = viewer_->getViewport();
@@ -1264,7 +1288,8 @@ namespace lfs::vis::gui {
 
         const auto image = rm->renderPreviewImage(sm, cam_rot, cam_pos, cam_focal_length_mm,
                                                   PREVIEW_WIDTH, PREVIEW_HEIGHT);
-        if (image && pip_texture_.upload(*image, PREVIEW_WIDTH, PREVIEW_HEIGHT)) {
+        // Rasterizer output uses OpenGL (bottom-left) origin; RmlUi samples top-left, so flip on upload.
+        if (image && pip_texture_.upload(*image, PREVIEW_WIDTH, PREVIEW_HEIGHT, /*flip_y=*/true)) {
             pip_last_render_time_ = now;
             if (!is_playing) {
                 pip_last_keyframe_ = selected;
@@ -1324,7 +1349,8 @@ namespace lfs::vis::gui {
                                         }();
 
         overlay_->showPreviewWindow(left, top, scaled_width, scaled_height,
-                                    title, is_playing, pip_texture_.textureId());
+                                    title, is_playing,
+                                    pip_texture_.rmlSrcUrl(PREVIEW_WIDTH, PREVIEW_HEIGHT));
     }
 
     void SequencerUIManager::renderKeyframeEditOverlay(const ViewportLayout& viewport) {

@@ -15,6 +15,7 @@ namespace Rml {
     class Context;
     class ElementDocument;
     class Element;
+    class EventListener;
 } // namespace Rml
 
 namespace lfs::vis {
@@ -31,17 +32,21 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
                     int screen_w, int screen_h);
+        void processInput(const PanelInputState& input, float bar_x, float bar_y,
+                          float bar_w, float bar_h);
 
     private:
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
         bool updateTheme();
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
+        void attachGitCommitListener();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         Rml::DataModelHandle model_handle_;
+        Rml::EventListener* git_commit_listener_ = nullptr;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;

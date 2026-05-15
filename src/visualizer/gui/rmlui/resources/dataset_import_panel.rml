@@ -32,7 +32,13 @@
     <div class="impdlg-info-row">
       <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.sparse_dir</span>
       <div class="impdlg-info-main">
-        <span class="impdlg-value text-default">{{sparse_path}}</span>
+        <div class="impdlg-control-row">
+          <span class="impdlg-value text-default">{{sparse_path}}</span>
+          <label class="impdlg-checkbox-label">
+            <input type="checkbox" data-checked="apply_auto_crop" />
+            <span class="text-muted">@tr:load_dataset_popup.apply_auto_crop</span>
+          </label>
+        </div>
       </div>
     </div>
 

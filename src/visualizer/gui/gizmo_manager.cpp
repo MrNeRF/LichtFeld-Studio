@@ -50,6 +50,7 @@ namespace lfs::vis::gui {
             case SelectionSubMode::Polygon: return lfs::vis::SelectionPreviewMode::Polygon;
             case SelectionSubMode::Lasso: return lfs::vis::SelectionPreviewMode::Lasso;
             case SelectionSubMode::Rings: return lfs::vis::SelectionPreviewMode::Rings;
+            case SelectionSubMode::Color: return lfs::vis::SelectionPreviewMode::Color;
             case SelectionSubMode::Centers:
             default: return lfs::vis::SelectionPreviewMode::Centers;
             }
@@ -372,8 +373,8 @@ namespace lfs::vis::gui {
         lfs::core::events::tools::SetSelectionSubMode::when([this](const auto& e) {
             setSelectionSubMode(static_cast<SelectionSubMode>(e.selection_mode));
 
-            static constexpr std::array<const char*, 5> SUBMODE_IDS = {
-                "centers", "rectangle", "polygon", "lasso", "rings"};
+            static constexpr std::array<const char*, 6> SUBMODE_IDS = {
+                "centers", "rectangle", "polygon", "lasso", "rings", "color"};
             const auto idx = static_cast<size_t>(e.selection_mode);
             if (idx < SUBMODE_IDS.size()) {
                 UnifiedToolRegistry::instance().setActiveSubmode(SUBMODE_IDS[idx]);
@@ -1917,6 +1918,7 @@ namespace lfs::vis::gui {
                                 {"polygon", SelectionSubMode::Polygon},
                                 {"lasso", SelectionSubMode::Lasso},
                                 {"rings", SelectionSubMode::Rings},
+                                {"color", SelectionSubMode::Color},
                             };
                             for (const auto& [sm_id, sm_mode] : SUBMODE_MAP) {
                                 if (submode_id == sm_id) {

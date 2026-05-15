@@ -64,7 +64,9 @@ namespace lfs::vis::gui {
 
         const auto image = rm->renderPreviewImage(sm, cam_rot, state.position, state.focal_length_mm,
                                                   THUMB_WIDTH, THUMB_HEIGHT);
-        const bool ok = image && slots_[slot_idx].texture.upload(*image, THUMB_WIDTH, THUMB_HEIGHT);
+        // Rasterizer output uses OpenGL (bottom-left) origin; RmlUi samples top-left, so flip on upload.
+        const bool ok = image &&
+                        slots_[slot_idx].texture.upload(*image, THUMB_WIDTH, THUMB_HEIGHT, /*flip_y=*/true);
 
         if (ok) {
             slots_[slot_idx].time = time;
@@ -313,6 +315,13 @@ namespace lfs::vis::gui {
             return 0;
         const auto& slot = slots_[slot_idx];
         return slot.valid ? slot.texture.textureId() : 0;
+    }
+
+    std::string FilmStripRenderer::srcUrlForSlot(const int slot_idx) const {
+        if (slot_idx < 0 || slot_idx >= MAX_SLOTS)
+            return {};
+        const auto& slot = slots_[slot_idx];
+        return slot.valid ? slot.texture.rmlSrcUrl(THUMB_WIDTH, THUMB_HEIGHT) : std::string{};
     }
 
     bool FilmStripRenderer::slotIsCurrentGeneration(const int slot_idx) const {

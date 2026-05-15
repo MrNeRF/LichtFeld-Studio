@@ -13,9 +13,126 @@
 #include "scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
+#include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
+#include <unordered_set>
 
 namespace lfs::vis::op {
+
+    namespace {
+        [[nodiscard]] bool isAlignTransformTarget(const core::SceneNode& node) {
+            switch (node.type) {
+            case core::NodeType::SPLAT:
+            case core::NodeType::POINTCLOUD:
+            case core::NodeType::GROUP:
+            case core::NodeType::DATASET:
+            case core::NodeType::MESH:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        [[nodiscard]] core::NodeId resolveAlignTargetId(const core::Scene& scene,
+                                                        const core::SceneNode& node) {
+            if ((node.type == core::NodeType::CROPBOX ||
+                 node.type == core::NodeType::ELLIPSOID) &&
+                node.parent_id != core::NULL_NODE) {
+                const auto* const parent = scene.getNodeById(node.parent_id);
+                if (parent && isAlignTransformTarget(*parent)) {
+                    return parent->id;
+                }
+            }
+
+            return isAlignTransformTarget(node) ? node.id : core::NULL_NODE;
+        }
+
+        [[nodiscard]] bool hasTargetAncestor(const core::Scene& scene,
+                                             const core::NodeId node_id,
+                                             const std::unordered_set<core::NodeId>& target_ids) {
+            const auto* node = scene.getNodeById(node_id);
+            while (node && node->parent_id != core::NULL_NODE) {
+                if (target_ids.contains(node->parent_id)) {
+                    return true;
+                }
+                node = scene.getNodeById(node->parent_id);
+            }
+            return false;
+        }
+
+        [[nodiscard]] std::vector<core::NodeId> resolveAlignmentTargets(const OperatorContext& ctx) {
+            const auto& scene = ctx.scene().getScene();
+            const auto selected_names = ctx.selectedNodes();
+
+            std::vector<core::NodeId> target_ids;
+            std::unordered_set<core::NodeId> seen;
+
+            if (!selected_names.empty()) {
+                for (const auto& name : selected_names) {
+                    const auto* const node = scene.getNode(name);
+                    if (!node) {
+                        continue;
+                    }
+
+                    const core::NodeId target_id = resolveAlignTargetId(scene, *node);
+                    if (target_id != core::NULL_NODE && seen.insert(target_id).second) {
+                        target_ids.push_back(target_id);
+                    }
+                }
+            } else {
+                for (const auto node_id : scene.getRootNodes()) {
+                    const auto* const node = scene.getNodeById(node_id);
+                    if (node && isAlignTransformTarget(*node) && seen.insert(node_id).second) {
+                        target_ids.push_back(node_id);
+                    }
+                }
+            }
+
+            std::vector<core::NodeId> top_level_targets;
+            top_level_targets.reserve(target_ids.size());
+            for (const core::NodeId target_id : target_ids) {
+                if (!hasTargetAncestor(scene, target_id, seen)) {
+                    top_level_targets.push_back(target_id);
+                }
+            }
+            return top_level_targets;
+        }
+
+        [[nodiscard]] bool isTargetOrDescendant(const core::Scene& scene,
+                                                const core::NodeId node_id,
+                                                const std::unordered_set<core::NodeId>& target_ids) {
+            const auto* node = scene.getNodeById(node_id);
+            while (node) {
+                if (target_ids.contains(node->id)) {
+                    return true;
+                }
+                node = node->parent_id != core::NULL_NODE ? scene.getNodeById(node->parent_id) : nullptr;
+            }
+            return false;
+        }
+
+        [[nodiscard]] std::vector<bool> buildAlignmentTargetNodeMask(const core::Scene& scene,
+                                                                     const std::vector<core::NodeId>& target_ids) {
+            if (target_ids.empty()) {
+                return {};
+            }
+
+            const std::unordered_set<core::NodeId> target_set(target_ids.begin(), target_ids.end());
+            std::vector<bool> mask;
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->model && scene.isNodeEffectivelyVisible(node->id)) {
+                    mask.push_back(isTargetOrDescendant(scene, node->id, target_set));
+                }
+            }
+            return mask;
+        }
+
+        [[nodiscard]] bool hasVisibleAlignmentTarget(const std::vector<bool>& mask) {
+            return std::any_of(mask.begin(), mask.end(), [](const bool enabled) {
+                return enabled;
+            });
+        }
+    } // namespace
 
     const OperatorDescriptor AlignPickPointOperator::DESCRIPTOR = {
         .builtin_id = BuiltinOp::AlignPickPoint,
@@ -36,20 +153,19 @@ namespace lfs::vis::op {
 
     OperatorResult AlignPickPointOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
         picked_points_.clear();
-        transforms_before_.clear();
         services().clearAlignPickedPoints();
+        pick_button_ = props.get_or<int>("button", static_cast<int>(lfs::vis::input::AppMouseButton::LEFT));
 
         const auto x = props.get_or<double>("x", 0.0);
         const auto y = props.get_or<double>("y", 0.0);
 
-        const glm::vec3 world_pos = unprojectScreenPoint(x, y);
+        const glm::vec3 world_pos = unprojectScreenPoint(ctx, x, y);
         if (!Viewport::isValidWorldPosition(world_pos)) {
             return OperatorResult::CANCELLED;
         }
 
         picked_points_.push_back(world_pos);
         services().setAlignPickedPoints(picked_points_);
-        captureTransformsBefore(ctx);
 
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
@@ -70,12 +186,13 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT)) {
+            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT) &&
+                mb->button != pick_button_) {
                 return OperatorResult::CANCELLED;
             }
 
-            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::LEFT)) {
-                const glm::vec3 world_pos = unprojectScreenPoint(mb->position.x, mb->position.y);
+            if (mb->button == pick_button_) {
+                const glm::vec3 world_pos = unprojectScreenPoint(ctx, mb->position.x, mb->position.y);
                 if (!Viewport::isValidWorldPosition(world_pos)) {
                     return OperatorResult::RUNNING_MODAL;
                 }
@@ -97,8 +214,8 @@ namespace lfs::vis::op {
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
-            if (ke && ke->key == lfs::vis::input::KEY_ESCAPE && ke->action == lfs::vis::input::ACTION_PRESS) {
-                return OperatorResult::CANCELLED;
+            if (ke && ke->action == lfs::vis::input::ACTION_PRESS) {
+                return OperatorResult::PASS_THROUGH;
             }
         }
 
@@ -107,14 +224,15 @@ namespace lfs::vis::op {
 
     void AlignPickPointOperator::cancel(OperatorContext& /*ctx*/) {
         picked_points_.clear();
-        transforms_before_.clear();
         services().clearAlignPickedPoints();
         if (services().renderingOrNull()) {
             services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
         }
     }
 
-    glm::vec3 AlignPickPointOperator::unprojectScreenPoint(double x, double y) const {
+    glm::vec3 AlignPickPointOperator::unprojectScreenPoint(const OperatorContext& ctx,
+                                                           const double x,
+                                                           const double y) const {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
@@ -138,16 +256,33 @@ namespace lfs::vis::op {
         const float render_x = (static_cast<float>(x) - panel_info->x) * scale_x;
         const float render_y = (static_cast<float>(y) - panel_info->y) * scale_y;
 
-        const float depth = rm->getDepthAtPixel(
-            static_cast<int>(render_x),
-            static_cast<int>(render_y),
-            panel_info->panel);
+        Viewport projection_viewport = *panel_info->viewport;
+        projection_viewport.windowSize = {panel_info->render_width, panel_info->render_height};
+
+        float depth = -1.0f;
+        if (ctx.hasSelection()) {
+            const auto target_ids = resolveAlignmentTargets(ctx);
+            const auto target_mask = buildAlignmentTargetNodeMask(ctx.scene().getScene(), target_ids);
+            if (!hasVisibleAlignmentTarget(target_mask)) {
+                return glm::vec3(Viewport::INVALID_WORLD_POS);
+            }
+            depth = rm->renderDepthAtPixelForNodeMask(
+                &ctx.scene(),
+                projection_viewport,
+                {panel_info->render_width, panel_info->render_height},
+                static_cast<int>(render_x),
+                static_cast<int>(render_y),
+                target_mask);
+        } else {
+            depth = rm->getDepthAtPixel(
+                static_cast<int>(render_x),
+                static_cast<int>(render_y),
+                panel_info->panel);
+        }
         if (depth <= 0.0f) {
             return glm::vec3(Viewport::INVALID_WORLD_POS);
         }
 
-        Viewport projection_viewport = *panel_info->viewport;
-        projection_viewport.windowSize = {panel_info->render_width, panel_info->render_height};
         return projection_viewport.unprojectPixel(
             render_x,
             render_y,
@@ -155,23 +290,25 @@ namespace lfs::vis::op {
             rm->getFocalLengthMm());
     }
 
-    void AlignPickPointOperator::captureTransformsBefore(const OperatorContext& ctx) {
-        transforms_before_.clear();
-        auto& scene = ctx.scene().getScene();
-        for (const auto* node : scene.getNodes()) {
-            transforms_before_.emplace_back(node->name, node->local_transform);
-        }
-    }
-
     void AlignPickPointOperator::applyAlignment(OperatorContext& ctx) {
         if (picked_points_.size() != 3) {
             return;
         }
 
-        std::vector<std::string> node_names;
+        const auto target_ids = resolveAlignmentTargets(ctx);
+        if (target_ids.empty()) {
+            LOG_WARN("3-point alignment has no transformable selected target");
+            return;
+        }
+
         auto& scene = ctx.scene().getScene();
-        for (const auto* node : scene.getNodes()) {
-            node_names.push_back(node->name);
+        std::vector<std::string> node_names;
+        node_names.reserve(target_ids.size());
+        for (const auto node_id : target_ids) {
+            const auto* const node = scene.getNodeById(node_id);
+            if (node) {
+                node_names.push_back(node->name);
+            }
         }
 
         auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.align");
@@ -210,7 +347,7 @@ namespace lfs::vis::op {
             glm::translate(glm::mat4(1.0f), center - glm::dot(center, kTargetUp) * kTargetUp);
         const glm::mat4 visualizer_transform = from_origin * rotation * to_origin;
 
-        for (const auto node_id : scene.getRootNodes()) {
+        for (const auto node_id : target_ids) {
             const auto* const node = scene.getNodeById(node_id);
             if (!node) {
                 continue;

@@ -51,6 +51,7 @@ namespace lfs::vis::gui {
     private:
         enum class LifecycleState : uint8_t {
             AwaitingModelBind,
+            BindingModel,
             ModelBound,
             Mounted,
         };
@@ -63,6 +64,7 @@ namespace lfs::vis::gui {
         void callOnUnload(Rml::ElementDocument* doc);
         void callOnLoad(Rml::ElementDocument* doc);
         bool isModelBound() const;
+        bool isBindingModel() const;
         bool isMounted() const;
         void setLifecycleState(LifecycleState next_state);
         void resetLifecycle();

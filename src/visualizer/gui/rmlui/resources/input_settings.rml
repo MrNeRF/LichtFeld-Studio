@@ -67,5 +67,17 @@
   <span class="is-hint">@tr:input_settings.save_hint</span>
   <span class="is-hint">@tr:input_settings.double_click_hint</span>
 
+  <div id="binding-conflict-overlay" class="is-conflict-overlay hidden">
+    <div class="is-conflict-dialog">
+      <span class="is-conflict-title">@tr:input_settings.conflict_title</span>
+      <span id="binding-conflict-message" class="is-conflict-message"></span>
+      <div class="separator"></div>
+      <div class="is-conflict-buttons">
+        <button class="btn btn--secondary" data-event-click="cancel_conflict">@tr:input_settings.cancel</button>
+        <button class="btn btn--error" data-event-click="replace_conflict">@tr:input_settings.replace</button>
+      </div>
+    </div>
+  </div>
+
 </body>
 </rml>

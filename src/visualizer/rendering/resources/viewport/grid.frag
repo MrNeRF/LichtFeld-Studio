@@ -75,7 +75,7 @@ float pristineGrid(in vec2 uv, in vec2 ddx, in vec2 ddy, vec2 lineWidth) {
 float calcDepth(vec3 p) {
     GridUniform u = grid_buffer.grids[push.grid_index];
     vec4 v = u.view_projection * vec4(p, 1.0);
-    return (v.z / v.w) * 0.5 + 0.5;
+    return v.z / v.w;
 }
 
 void main() {

@@ -10,11 +10,19 @@
 
 .info-key {
     width: 120dp;
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .info-val {
-    font-size: 10dp;
+    font-size: 12dp;
+}
+
+.info-val--copy {
+    cursor: pointer;
+}
+
+.info-val--copy:hover {
+    text-decoration: underline;
 }
 
 .link-row {
@@ -25,12 +33,12 @@
 
 .link-label {
     margin-right: 6dp;
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .link-url {
     cursor: pointer;
-    font-size: 10dp;
+    font-size: 12dp;
     background-color: transparent;
     border-width: 0;
     padding: 0;
@@ -48,9 +56,9 @@
 }
 
 .footer-text {
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .footer-sep {
-    font-size: 11dp;
+    font-size: 12dp;
 }

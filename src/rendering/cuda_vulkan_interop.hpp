@@ -100,9 +100,13 @@ namespace lfs::rendering {
         [[nodiscard]] cudaArray_t cudaArray() const { return cuda_array_; }
 
         [[nodiscard]] lfs::core::Tensor view_as_tensor() const;
-        [[nodiscard]] bool copyViewToSurface(cudaStream_t stream = nullptr) const;
+        // flip_y: when true, vertically mirror the image during the surface copy. The rasterizer
+        // emits images with OpenGL's bottom-left origin (FrameMetadata::flip_y); pass true when
+        // the consuming Vulkan image samples top-left (e.g., RmlUi-bound textures).
+        [[nodiscard]] bool copyViewToSurface(cudaStream_t stream = nullptr, bool flip_y = false) const;
         [[nodiscard]] bool copyTensorToSurface(const lfs::core::Tensor& tensor,
-                                               cudaStream_t stream = nullptr) const;
+                                               cudaStream_t stream = nullptr,
+                                               bool flip_y = false) const;
         [[nodiscard]] bool wait(std::uint64_t value, cudaStream_t stream = nullptr) const;
         [[nodiscard]] bool signal(std::uint64_t value, cudaStream_t stream = nullptr) const;
 
@@ -183,6 +187,13 @@ namespace lfs::rendering {
                                           std::size_t byte_count,
                                           std::size_t dst_offset,
                                           cudaStream_t stream) const;
+        [[nodiscard]] bool copyToTensor(lfs::core::Tensor& tensor,
+                                        std::size_t byte_count,
+                                        cudaStream_t stream = nullptr) const;
+        [[nodiscard]] bool copyToTensor(lfs::core::Tensor& tensor,
+                                        std::size_t byte_count,
+                                        std::size_t src_offset,
+                                        cudaStream_t stream) const;
 
     private:
         [[nodiscard]] bool fail(std::string message) const;

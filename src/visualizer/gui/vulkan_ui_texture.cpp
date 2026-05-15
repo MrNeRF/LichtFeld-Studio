@@ -7,15 +7,18 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+#include "rendering/cuda_vulkan_interop.hpp"
 #include <vulkan/vulkan.h>
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -31,33 +34,34 @@ namespace lfs::vis::gui {
         [[nodiscard]] std::vector<std::uint8_t> toRgba(const std::uint8_t* pixels,
                                                        const int width,
                                                        const int height,
-                                                       const int channels) {
+                                                       const int channels,
+                                                       const bool flip_y = false) {
             if (!pixels || width <= 0 || height <= 0 || channels <= 0) {
                 return {};
             }
 
-            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) *
-                                           static_cast<std::size_t>(height) * 4u);
+            const std::size_t row_in = static_cast<std::size_t>(width) * static_cast<std::size_t>(channels);
+            const std::size_t row_out = static_cast<std::size_t>(width) * 4u;
+            std::vector<std::uint8_t> rgba(static_cast<std::size_t>(height) * row_out);
             for (int y = 0; y < height; ++y) {
-                for (int x = 0; x < width; ++x) {
-                    const std::size_t src = (static_cast<std::size_t>(y) *
-                                                 static_cast<std::size_t>(width) +
-                                             static_cast<std::size_t>(x)) *
-                                            static_cast<std::size_t>(channels);
-                    const std::size_t dst = (static_cast<std::size_t>(y) *
-                                                 static_cast<std::size_t>(width) +
-                                             static_cast<std::size_t>(x)) *
-                                            4u;
-                    if (channels == 1) {
-                        rgba[dst + 0] = pixels[src];
-                        rgba[dst + 1] = pixels[src];
-                        rgba[dst + 2] = pixels[src];
-                        rgba[dst + 3] = 255;
-                    } else {
-                        rgba[dst + 0] = pixels[src + 0];
-                        rgba[dst + 1] = pixels[src + 1];
-                        rgba[dst + 2] = pixels[src + 2];
-                        rgba[dst + 3] = channels >= 4 ? pixels[src + 3] : 255;
+                const int src_y = flip_y ? (height - 1 - y) : y;
+                const std::uint8_t* src = pixels + static_cast<std::size_t>(src_y) * row_in;
+                std::uint8_t* dst = rgba.data() + static_cast<std::size_t>(y) * row_out;
+                if (channels == 4) {
+                    std::memcpy(dst, src, row_out);
+                    continue;
+                }
+                if (channels == 1) {
+                    for (int x = 0; x < width; ++x, ++src, dst += 4) {
+                        dst[0] = dst[1] = dst[2] = src[0];
+                        dst[3] = 255;
+                    }
+                } else {
+                    for (int x = 0; x < width; ++x, src += channels, dst += 4) {
+                        dst[0] = src[0];
+                        dst[1] = src[1];
+                        dst[2] = src[2];
+                        dst[3] = 255;
                     }
                 }
             }
@@ -66,7 +70,8 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::vector<std::uint8_t> tensorToRgba(const lfs::core::Tensor& image,
                                                              const int expected_width,
-                                                             const int expected_height) {
+                                                             const int expected_height,
+                                                             const bool flip_y = false) {
             if (!image.is_valid() || image.ndim() != 3 || expected_width <= 0 || expected_height <= 0) {
                 return {};
             }
@@ -101,7 +106,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Vulkan UI texture upload received unsupported channel count {}", channels);
                 return {};
             }
-            return toRgba(formatted.ptr<std::uint8_t>(), width, height, channels);
+            return toRgba(formatted.ptr<std::uint8_t>(), width, height, channels, flip_y);
         }
 #endif
     } // namespace
@@ -116,6 +121,12 @@ namespace lfs::vis::gui {
 
     struct VulkanUiTexture::Impl {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
+        enum class Mode : std::uint8_t {
+            Uninitialized,
+            Cpu,
+            CudaInterop,
+        };
+
         VkDevice device = VK_NULL_HANDLE;
         VulkanContext* context = nullptr;
         VmaAllocator allocator = VK_NULL_HANDLE;
@@ -137,6 +148,15 @@ namespace lfs::vis::gui {
         VkCommandBuffer pending_command_buffer = VK_NULL_HANDLE;
         int width = 0;
         int height = 0;
+
+        // CUDA-Vulkan interop path: bypasses CPU readback by writing the rasterizer's
+        // CUDA tensor directly into the VkImage via a shared external memory handle.
+        Mode mode = Mode::Uninitialized;
+        VulkanContext::ExternalImage interop_image{};
+        VulkanContext::ExternalSemaphore interop_semaphore{};
+        lfs::rendering::CudaVulkanInterop interop;
+        std::uint64_t interop_timeline_value = 0;
+        bool interop_disabled = false;
 
         void releasePendingUpload() {
             if (pending_command_buffer != VK_NULL_HANDLE && command_pool != VK_NULL_HANDLE) {
@@ -352,6 +372,10 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] bool ensureImage(const int new_width, const int new_height) {
+            if (mode == Mode::CudaInterop) {
+                LOG_ERROR("Vulkan UI texture used CPU upload after CUDA-interop mode was engaged");
+                return false;
+            }
             if (image != VK_NULL_HANDLE && width == new_width && height == new_height) {
                 return true;
             }
@@ -359,6 +383,7 @@ namespace lfs::vis::gui {
             destroyImage();
             width = new_width;
             height = new_height;
+            mode = Mode::Cpu;
 
             VkImageCreateInfo image_info{};
             image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -429,6 +454,125 @@ namespace lfs::vis::gui {
             vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             return descriptor_set != VK_NULL_HANDLE;
+        }
+
+        [[nodiscard]] bool ensureInteropImage(const int new_width, const int new_height) {
+            if (interop_disabled || !context || !context->externalMemoryInteropEnabled() ||
+                !context->externalSemaphoreInteropEnabled()) {
+                return false;
+            }
+            if (mode == Mode::Cpu) {
+                LOG_ERROR("Vulkan UI texture used CUDA-interop after CPU mode was engaged");
+                return false;
+            }
+            if (interop.valid() && width == new_width && height == new_height) {
+                return true;
+            }
+
+            destroyImage();
+            width = new_width;
+            height = new_height;
+
+            const VkExtent2D extent{
+                static_cast<std::uint32_t>(new_width),
+                static_cast<std::uint32_t>(new_height),
+            };
+            if (!context->createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, interop_image) ||
+                !context->createExternalTimelineSemaphore(0, interop_semaphore)) {
+                LOG_WARN("Vulkan UI texture interop setup failed: {}", context->lastError());
+                destroyImage();
+                interop_disabled = true;
+                return false;
+            }
+            if (!context->transitionImageLayoutImmediate(interop_image.image,
+                                                         VK_IMAGE_LAYOUT_UNDEFINED,
+                                                         VK_IMAGE_LAYOUT_GENERAL)) {
+                LOG_WARN("Vulkan UI texture interop initial transition failed: {}", context->lastError());
+                destroyImage();
+                interop_disabled = true;
+                return false;
+            }
+
+            const auto memory_handle = context->releaseExternalImageNativeHandle(interop_image);
+            const auto semaphore_handle = context->releaseExternalSemaphoreNativeHandle(interop_semaphore);
+            const lfs::rendering::CudaVulkanExternalImageImport image_import{
+                .memory_handle = memory_handle,
+                .allocation_size = static_cast<std::size_t>(interop_image.allocation_size),
+                .extent = {.width = extent.width, .height = extent.height},
+                .format = lfs::rendering::CudaVulkanImageFormat::Rgba8Unorm,
+                .dedicated_allocation = context->externalMemoryDedicatedAllocationEnabled(),
+            };
+            const lfs::rendering::CudaVulkanExternalSemaphoreImport semaphore_import{
+                .semaphore_handle = semaphore_handle,
+                .initial_value = 0,
+            };
+            if (!interop.init(image_import, semaphore_import)) {
+                LOG_WARN("Vulkan UI texture CUDA import failed: {}", interop.lastError());
+                destroyImage();
+                interop_disabled = true;
+                return false;
+            }
+
+            image = interop_image.image;
+            image_view = interop_image.view;
+            image_layout = VK_IMAGE_LAYOUT_GENERAL;
+            image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+            interop_timeline_value = 0;
+            mode = Mode::CudaInterop;
+
+            // Skip allocating an internal descriptor set: the interop path is consumed via RmlUi
+            // (which allocates its own descriptor against its texture-set layout).
+            descriptor_set = VK_NULL_HANDLE;
+            return true;
+        }
+
+        [[nodiscard]] bool uploadCudaTensorImpl(const lfs::core::Tensor& tensor,
+                                                const int expected_width,
+                                                const int expected_height,
+                                                const bool flip_y) {
+            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::CUDA) {
+                return false;
+            }
+            VulkanContext* const ctx = getVulkanUiTextureContext();
+            if (!ctx || !init(*ctx)) {
+                return false;
+            }
+            if (!ensureInteropImage(expected_width, expected_height)) {
+                return false;
+            }
+
+            if (image_layout != VK_IMAGE_LAYOUT_GENERAL) {
+                if (!ctx->transitionImageLayoutImmediate(image,
+                                                         image_layout,
+                                                         VK_IMAGE_LAYOUT_GENERAL)) {
+                    LOG_ERROR("Vulkan UI texture interop transition to GENERAL failed: {}", ctx->lastError());
+                    return false;
+                }
+                image_layout = VK_IMAGE_LAYOUT_GENERAL;
+            }
+
+            if (!interop.copyTensorToSurface(tensor, /*stream=*/nullptr, flip_y)) {
+                LOG_ERROR("Vulkan UI texture CUDA copy failed: {}", interop.lastError());
+                return false;
+            }
+
+            const std::uint64_t signal_value = ++interop_timeline_value;
+            if (!interop.signal(signal_value)) {
+                LOG_ERROR("Vulkan UI texture CUDA signal failed: {}", interop.lastError());
+                return false;
+            }
+            if (!ctx->transitionImageLayoutImmediate(image,
+                                                     VK_IMAGE_LAYOUT_GENERAL,
+                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                                     interop_semaphore.semaphore,
+                                                     signal_value,
+                                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                LOG_ERROR("Vulkan UI texture interop transition to read-only failed: {}", ctx->lastError());
+                return false;
+            }
+            image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            return true;
         }
 
         [[nodiscard]] bool uploadRgbaRegion(const std::vector<std::uint8_t>& rgba,
@@ -581,17 +725,36 @@ namespace lfs::vis::gui {
 
         void destroyImage() {
             waitAndReleasePendingUpload();
-            if (image_view != VK_NULL_HANDLE) {
-                vkDestroyImageView(device, image_view, nullptr);
-                image_view = VK_NULL_HANDLE;
-            }
-            if (image != VK_NULL_HANDLE) {
-                image_barriers.forgetImage(image);
-                vmaDestroyImage(allocator, image, image_allocation);
+            if (mode == Mode::CudaInterop) {
+                if (image != VK_NULL_HANDLE) {
+                    image_barriers.forgetImage(image);
+                }
+                interop.reset();
+                if (context) {
+                    context->destroyExternalSemaphore(interop_semaphore);
+                    context->destroyExternalImage(interop_image);
+                } else {
+                    interop_image = {};
+                    interop_semaphore = {};
+                }
                 image = VK_NULL_HANDLE;
+                image_view = VK_NULL_HANDLE;
                 image_allocation = VK_NULL_HANDLE;
+                interop_timeline_value = 0;
+            } else {
+                if (image_view != VK_NULL_HANDLE) {
+                    vkDestroyImageView(device, image_view, nullptr);
+                    image_view = VK_NULL_HANDLE;
+                }
+                if (image != VK_NULL_HANDLE) {
+                    image_barriers.forgetImage(image);
+                    vmaDestroyImage(allocator, image, image_allocation);
+                    image = VK_NULL_HANDLE;
+                    image_allocation = VK_NULL_HANDLE;
+                }
             }
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            mode = Mode::Uninitialized;
             width = 0;
             height = 0;
         }
@@ -630,6 +793,7 @@ namespace lfs::vis::gui {
 #else
         [[nodiscard]] bool upload(const std::uint8_t*, int, int, int) { return false; }
         [[nodiscard]] bool uploadRegion(const std::uint8_t*, int, int, int, int, int, int, int) { return false; }
+        [[nodiscard]] bool uploadCudaTensorImpl(const lfs::core::Tensor&, int, int, bool) { return false; }
         void reset() {}
 #endif
     };
@@ -677,17 +841,45 @@ namespace lfs::vis::gui {
 
     bool VulkanUiTexture::upload(const lfs::core::Tensor& image,
                                  const int expected_width,
-                                 const int expected_height) {
+                                 const int expected_height,
+                                 const bool flip_y) {
         if (!impl_) {
             impl_ = new Impl();
         }
 #ifdef LFS_VULKAN_VIEWER_ENABLED
-        const std::vector<std::uint8_t> rgba = tensorToRgba(image, expected_width, expected_height);
+        // Try the GPU-direct path first when the rasterizer left the tensor on CUDA. We bind
+        // the rasterizer's CUDA tensor straight into a Vulkan image via shared external memory,
+        // skipping a CUDA→host→staging-buffer roundtrip per upload.
+        if (image.is_valid() && image.device() == lfs::core::Device::CUDA &&
+            impl_->mode != Impl::Mode::Cpu) {
+            if (impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y))
+                return true;
+        }
+        const std::vector<std::uint8_t> rgba = tensorToRgba(image, expected_width, expected_height, flip_y);
         return impl_->uploadRgba(rgba, expected_width, expected_height);
 #else
         (void)image;
         (void)expected_width;
         (void)expected_height;
+        (void)flip_y;
+        return false;
+#endif
+    }
+
+    bool VulkanUiTexture::uploadCudaTensor(const lfs::core::Tensor& image,
+                                           const int expected_width,
+                                           const int expected_height,
+                                           const bool flip_y) {
+        if (!impl_) {
+            impl_ = new Impl();
+        }
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        return impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y);
+#else
+        (void)image;
+        (void)expected_width;
+        (void)expected_height;
+        (void)flip_y;
         return false;
 #endif
     }
@@ -704,13 +896,30 @@ namespace lfs::vis::gui {
 #endif
     }
 
+    std::string VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        if (!impl_) {
+            return {};
+        }
+        impl_->tryReleasePendingUpload();
+        return RenderInterface_VK::MakeExternalTextureSource(impl_->image_view, impl_->sampler, width, height);
+#else
+        (void)width;
+        (void)height;
+        return {};
+#endif
+    }
+
     bool VulkanUiTexture::valid() const {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return false;
         }
         impl_->tryReleasePendingUpload();
-        return impl_->descriptor_set != VK_NULL_HANDLE && impl_->image_view != VK_NULL_HANDLE;
+        if (impl_->image_view == VK_NULL_HANDLE) {
+            return false;
+        }
+        return impl_->mode == Impl::Mode::CudaInterop || impl_->descriptor_set != VK_NULL_HANDLE;
 #else
         return false;
 #endif

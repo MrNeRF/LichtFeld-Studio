@@ -4,12 +4,48 @@
 
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "rendering_manager.hpp"
+#include <algorithm>
 
 namespace lfs::vis {
 
     using namespace lfs::core::events;
+
+    namespace {
+        [[nodiscard]] constexpr bool hasSceneMutation(const uint32_t flags, const lfs::core::Scene::MutationType type) {
+            return (flags & static_cast<uint32_t>(type)) != 0;
+        }
+
+        [[nodiscard]] constexpr DirtyMask dirtyMaskForSceneMutations(const uint32_t flags) {
+            using Mutation = lfs::core::Scene::MutationType;
+
+            if (flags == 0 || hasSceneMutation(flags, Mutation::CLEARED)) {
+                return DirtyFlag::ALL;
+            }
+
+            DirtyMask dirty = 0;
+            if (hasSceneMutation(flags, Mutation::NODE_ADDED) ||
+                hasSceneMutation(flags, Mutation::NODE_REMOVED) ||
+                hasSceneMutation(flags, Mutation::VISIBILITY_CHANGED) ||
+                hasSceneMutation(flags, Mutation::MODEL_CHANGED)) {
+                dirty |= DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW;
+            }
+            if (hasSceneMutation(flags, Mutation::TRANSFORM_CHANGED) ||
+                hasSceneMutation(flags, Mutation::NODE_REPARENTED)) {
+                dirty |= DirtyFlag::MESH | DirtyFlag::OVERLAY;
+            }
+            if (hasSceneMutation(flags, Mutation::SELECTION_CHANGED)) {
+                dirty |= DirtyFlag::SELECTION | DirtyFlag::OVERLAY;
+            }
+            if (hasSceneMutation(flags, Mutation::NODE_RENAMED)) {
+                dirty |= DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW;
+            }
+
+            return dirty == 0 ? DirtyFlag::ALL : dirty;
+        }
+    } // namespace
 
     void RenderingManager::setupEventHandlers() {
         cmd::ToggleSplitView::when([this](const auto&) { handleToggleSplitView(); });
@@ -24,7 +60,7 @@ namespace lfs::vis {
         state::TrainingStarted::when([this](const auto&) { handleTrainingStarted(); });
         state::TrainingCompleted::when([this](const auto&) { handleTrainingCompleted(); });
         state::SceneLoaded::when([this](const auto&) { handleSceneLoaded(); });
-        state::SceneChanged::when([this](const auto&) { handleSceneChanged(); });
+        state::SceneChanged::when([this](const auto& event) { handleSceneChanged(event.mutation_flags); });
         state::SceneCleared::when([this](const auto&) { handleSceneCleared(); });
         cmd::SetPLYVisibility::when([this](const auto&) { handlePLYVisibilityChanged(); });
         state::PLYAdded::when([this](const auto&) { handlePLYAdded(); });
@@ -89,9 +125,9 @@ namespace lfs::vis {
 
     void RenderingManager::handleSplitPositionChanged(const float position) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        settings_.split_position = position;
+        settings_.split_position = std::clamp(position, 0.0f, 1.0f);
         LOG_TRACE("Split position changed to: {}", position);
-        markDirty(DirtyFlag::SPLIT_VIEW);
+        markDirty(DirtyFlag::SPLIT_VIEW | frame_lifecycle_service_.deferViewportRefresh());
     }
 
     void RenderingManager::handleRenderSettingsChanged(const ui::RenderSettingsChanged& event) {
@@ -172,8 +208,8 @@ namespace lfs::vis {
         }
     }
 
-    void RenderingManager::handleSceneChanged() {
-        markDirty();
+    void RenderingManager::handleSceneChanged(const uint32_t mutation_flags) {
+        markDirty(dirtyMaskForSceneMutations(mutation_flags));
     }
 
     void RenderingManager::handleSceneCleared() {

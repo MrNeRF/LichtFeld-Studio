@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <sstream>
 
 #include "zep/buffer.h"
@@ -1329,6 +1330,108 @@ namespace Zep {
             DisableToolTipTillMove();
         }
         assert(!m_pBuffer || m_bufferCursor.Valid());
+    }
+
+    GlyphIterator ZepWindow::BufferLocationFromWindowPoint(const NVec2f& point,
+                                                           const bool clamp_to_text_region) {
+        UpdateLayout();
+
+        if (m_pBuffer == nullptr || m_windowLines.empty()) {
+            return GlyphIterator();
+        }
+
+        NVec2f clamped_point = point;
+        if (clamp_to_text_region) {
+            const float right = std::max(m_textRegion->rect.Left(), m_textRegion->rect.Right() - 1.0f);
+            const float bottom = std::max(m_textRegion->rect.Top(), m_textRegion->rect.Bottom() - 1.0f);
+            clamped_point.x = std::clamp(clamped_point.x, m_textRegion->rect.Left(), right);
+            clamped_point.y = std::clamp(clamped_point.y, m_textRegion->rect.Top(), bottom);
+        } else if (!m_textRegion->rect.Contains(clamped_point)) {
+            return GlyphIterator();
+        }
+
+        const float buffer_y = clamped_point.y + m_textOffsetPx - m_textRegion->rect.Top();
+        const SpanInfo* selected_line = nullptr;
+        for (const auto* line : m_windowLines) {
+            if (line == nullptr) {
+                continue;
+            }
+
+            selected_line = line;
+            const float line_bottom = line->yOffsetPx + line->FullLineHeightPx() + line->lineWidgetHeights.y;
+            if (buffer_y <= line_bottom) {
+                break;
+            }
+        }
+
+        if (selected_line == nullptr) {
+            return GlyphIterator();
+        }
+
+        if (selected_line->lineCodePoints.empty()) {
+            return GlyphIterator(m_pBuffer, static_cast<unsigned long>(selected_line->lineByteRange.first)).Clamped();
+        }
+
+        const float buffer_x = clamped_point.x + m_textOffsetXPx - m_textRegion->rect.Left();
+        float char_x = m_xPad;
+        GlyphIterator nearest = selected_line->lineCodePoints.front().iterator;
+        float nearest_distance = std::numeric_limits<float>::max();
+
+        for (const auto& code_point : selected_line->lineCodePoints) {
+            const float center_x = char_x + code_point.size.x * 0.5f;
+            const float distance = std::abs(buffer_x - center_x);
+            if (distance < nearest_distance) {
+                nearest_distance = distance;
+                nearest = code_point.iterator;
+            }
+            char_x += code_point.size.x + m_xPad;
+        }
+
+        return nearest.Clamped();
+    }
+
+    void ZepWindow::DrawSelectionPreview(const GlyphRange& range, const NVec4f& color) {
+        UpdateLayout();
+
+        if (m_pBuffer == nullptr || m_windowLines.empty() ||
+            !range.first.Valid() || !range.second.Valid() ||
+            range.first == range.second) {
+            return;
+        }
+
+        auto first = range.first;
+        auto second = range.second;
+        if (second < first) {
+            std::swap(first, second);
+        }
+
+        auto& display = GetEditor().GetDisplay();
+        display.SetClipRect(m_textRegion->rect);
+
+        for (long window_line = m_visibleLineIndices.x;
+             window_line < m_visibleLineIndices.y && window_line < static_cast<long>(m_windowLines.size());
+             ++window_line) {
+            const auto* line = m_windowLines[window_line];
+            if (line == nullptr || line->lineCodePoints.empty() ||
+                line->lineByteRange.second < first.Index() ||
+                line->lineByteRange.first > second.Index()) {
+                continue;
+            }
+
+            for (const auto& code_point : line->lineCodePoints) {
+                if (code_point.iterator < first || code_point.iterator > second) {
+                    continue;
+                }
+
+                display.DrawRectFilled(
+                    NRectf(NVec2f(code_point.pos.x, ToWindowY(line->yOffsetPx)),
+                           NVec2f(code_point.pos.x + code_point.size.x,
+                                  ToWindowY(line->yOffsetPx + line->FullLineHeightPx()))),
+                    color);
+            }
+        }
+
+        display.SetClipRect(NRectf{});
     }
 
     void ZepWindow::DisableToolTipTillMove() {

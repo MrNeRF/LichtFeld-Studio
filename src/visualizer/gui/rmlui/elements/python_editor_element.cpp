@@ -13,13 +13,22 @@
 namespace lfs::vis::gui {
 
     PythonEditorElement::PythonEditorElement(const Rml::String& tag)
-        : Rml::Element(tag) {
+        : Rml::Element(tag),
+          drag_end_listener_(*this) {
         SetProperty("display", "block");
         SetProperty("overflow", "hidden");
         SetProperty("width", "100%");
         SetProperty("height", "100%");
+        SetProperty("drag", "drag");
         SetAttribute("tabindex", "0");
         SetAttribute("data-text-input", "true");
+        AddEventListener(Rml::EventId::Dragend, &drag_end_listener_);
+    }
+
+    void PythonEditorElement::DragEndListener::ProcessEvent(Rml::Event& event) {
+        if (owner_.editor_) {
+            owner_.editor_->processRmlEvent(owner_, event);
+        }
     }
 
     void PythonEditorElement::setEditor(editor::PythonEditor* editor) {

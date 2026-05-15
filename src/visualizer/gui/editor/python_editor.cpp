@@ -5,8 +5,10 @@
 
 #include "python_lsp_client.hpp"
 
+#include "core/services.hpp"
 #include "gui/editor/zep_rml_display.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/gui_manager.hpp"
 #include "python/python_buffer_analysis.hpp"
 #include "theme/theme.hpp"
 
@@ -17,6 +19,7 @@
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_mouse.h>
 
 #include <algorithm>
 #include <cctype>
@@ -2276,6 +2279,174 @@ namespace lfs::vis::editor {
             }
         }
 
+        Zep::ZepWindow* activeWindow() const {
+            auto* tab = editor != nullptr ? editor->GetActiveTabWindow() : nullptr;
+            return tab != nullptr ? tab->GetActiveWindow() : nullptr;
+        }
+
+        [[nodiscard]] std::optional<Zep::GlyphIterator> bufferLocationFromMouse(
+            const Zep::NVec2f& mouse,
+            const bool clamp_to_text_region) const {
+            auto* window = activeWindow();
+            if (window == nullptr) {
+                return std::nullopt;
+            }
+
+            auto location = window->BufferLocationFromWindowPoint(mouse, clamp_to_text_region);
+            if (!location.Valid()) {
+                return std::nullopt;
+            }
+
+            return location;
+        }
+
+        bool beginMouseSelection(const Zep::NVec2f& mouse) {
+            auto* window = activeWindow();
+            if (window == nullptr || buffer == nullptr) {
+                return false;
+            }
+
+            auto location = window->BufferLocationFromWindowPoint(mouse, false);
+            if (!location.Valid()) {
+                return false;
+            }
+
+            clearCompletionState();
+            buffer->ClearSelection();
+            window->SetBufferCursor(location);
+            mouse_selection_anchor = location;
+            mouse_selection_head = location;
+            mouse_selecting = true;
+            editor->RequestRefresh();
+            return true;
+        }
+
+        bool updateMouseSelection(const Zep::NVec2f& mouse) {
+            auto* window = activeWindow();
+            if (!mouse_selecting || !mouse_selection_anchor.has_value() ||
+                window == nullptr || buffer == nullptr) {
+                return false;
+            }
+
+            auto location = window->BufferLocationFromWindowPoint(mouse, true);
+            if (!location.Valid()) {
+                return false;
+            }
+
+            if (location == *mouse_selection_anchor) {
+                buffer->ClearSelection();
+            } else if (location < *mouse_selection_anchor) {
+                buffer->SetSelection(Zep::GlyphRange(location, *mouse_selection_anchor));
+            } else {
+                buffer->SetSelection(Zep::GlyphRange(*mouse_selection_anchor, location));
+            }
+
+            window->SetBufferCursor(location);
+            mouse_selection_head = location;
+            editor->RequestRefresh();
+            return true;
+        }
+
+        void renderMouseSelectionPreview() const {
+            if (!mouse_selecting || !mouse_selection_anchor.has_value() ||
+                !mouse_selection_head.has_value() || *mouse_selection_anchor == *mouse_selection_head ||
+                buffer == nullptr) {
+                return;
+            }
+
+            auto* window = activeWindow();
+            if (window == nullptr) {
+                return;
+            }
+
+            auto color = buffer->GetTheme().GetColor(Zep::ThemeColor::VisualSelectBackground);
+            color.w = std::min(color.w, 0.42f);
+            window->DrawSelectionPreview(Zep::GlyphRange(*mouse_selection_anchor, *mouse_selection_head),
+                                         color);
+        }
+
+        bool pointInsideCurrentSelection(const Zep::GlyphIterator& location) const {
+            const auto range = currentSelectionRange();
+            return range.has_value() && range->ContainsInclusiveLocation(location);
+        }
+
+        void executeContextMenuAction(const std::string_view action) {
+            if (action == "cut") {
+                cutSelectionToClipboard();
+            } else if (action == "copy") {
+                copySelectionToClipboard();
+                focusEditor();
+            } else if (action == "paste") {
+                pasteFromClipboard();
+            } else if (action == "select-all") {
+                selectAll();
+            }
+        }
+
+        void showContextMenu(const float screen_x, const float screen_y) {
+            auto* gui = services().guiOrNull();
+            if (gui == nullptr) {
+                return;
+            }
+
+            const bool has_selection = hasEditableSelection();
+            std::vector<gui::ContextMenuItem> items;
+            if (has_selection && !read_only) {
+                items.push_back(gui::ContextMenuItem{.label = "Cut", .action = "cut"});
+            }
+            if (has_selection) {
+                items.push_back(gui::ContextMenuItem{.label = "Copy", .action = "copy"});
+            }
+            if (!read_only) {
+                items.push_back(gui::ContextMenuItem{
+                    .label = "Paste",
+                    .action = "paste",
+                    .separator_before = !items.empty(),
+                });
+            }
+            items.push_back(gui::ContextMenuItem{
+                .label = "Select All",
+                .action = "select-all",
+                .separator_before = !items.empty(),
+            });
+
+            gui->globalContextMenu().request(
+                std::move(items),
+                screen_x,
+                screen_y,
+                [this](const std::string_view action) {
+                    executeContextMenuAction(action);
+                });
+        }
+
+        bool handleContextMenuMouseDown(const Zep::NVec2f& mouse,
+                                        const float screen_x,
+                                        const float screen_y) {
+            auto* window = activeWindow();
+            if (window == nullptr || buffer == nullptr) {
+                return false;
+            }
+
+            endMouseSelection();
+            clearCompletionState();
+
+            const auto location = bufferLocationFromMouse(mouse, false);
+            if (location.has_value() && !pointInsideCurrentSelection(*location)) {
+                buffer->ClearSelection();
+                window->SetBufferCursor(*location);
+                editor->RequestRefresh();
+            }
+
+            showContextMenu(screen_x, screen_y);
+            return true;
+        }
+
+        void endMouseSelection() {
+            mouse_selecting = false;
+            mouse_selection_anchor.reset();
+            mouse_selection_head.reset();
+        }
+
         [[nodiscard]] std::optional<lfs::python::PythonByteRange> currentSelectionByteRange() const {
             const auto selection = currentSelectionRange();
             if (!selection.has_value()) {
@@ -2766,6 +2937,7 @@ namespace lfs::vis::editor {
         [[nodiscard]] bool needsRmlFrame() const {
             return request_focus ||
                    is_focused ||
+                   mouse_selecting ||
                    completion.visible ||
                    completion.hovered ||
                    manual_completion_requested ||
@@ -2807,6 +2979,9 @@ namespace lfs::vis::editor {
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
         bool mouse_pos_valid = false;
+        bool mouse_selecting = false;
+        std::optional<Zep::GlyphIterator> mouse_selection_anchor;
+        std::optional<Zep::GlyphIterator> mouse_selection_head;
         bool semantic_full_refresh_required = true;
         int document_version = 1;
         int last_requested_version = -1;
@@ -2867,6 +3042,7 @@ namespace lfs::vis::editor {
         impl_->rmlDisplay().beginFrame(element);
         impl_->editor->SetDisplayRegion({0.0f, 0.0f}, {editor_width, editor_height});
         impl_->editor->Display();
+        impl_->renderMouseSelectionPreview();
 
         const std::string updated_text = impl_->getText();
         const CursorLocation updated_cursor = impl_->getCursorLocation(updated_text);
@@ -2916,15 +3092,40 @@ namespace lfs::vis::editor {
         if (type == "blur") {
             impl_->is_focused = false;
             impl_->mouse_pos_valid = false;
+            impl_->endMouseSelection();
             impl_->completion.clear();
             return;
         }
 
-        if (type == "mousemove" || type == "drag") {
+        if (type == "drag") {
             const auto mouse = local_mouse();
             impl_->mouse_x = mouse.x;
             impl_->mouse_y = mouse.y;
             impl_->mouse_pos_valid = true;
+            if (impl_->updateMouseSelection(mouse)) {
+                event.StopPropagation();
+                return;
+            }
+            impl_->editor->OnMouseMove(mouse);
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "dragend") {
+            impl_->endMouseSelection();
+            event.StopPropagation();
+            return;
+        }
+
+        if (type == "mousemove") {
+            const auto mouse = local_mouse();
+            impl_->mouse_x = mouse.x;
+            impl_->mouse_y = mouse.y;
+            impl_->mouse_pos_valid = true;
+            if (impl_->mouse_selecting && impl_->updateMouseSelection(mouse)) {
+                event.StopPropagation();
+                return;
+            }
             impl_->editor->OnMouseMove(mouse);
             event.StopPropagation();
             return;
@@ -2942,8 +3143,24 @@ namespace lfs::vis::editor {
             const std::string text = impl_->getText();
             const CursorLocation cursor = impl_->getCursorLocation(text);
             const int button = event.GetParameter("button", 0);
+            if (button == 1) {
+                float screen_x = event.GetParameter("mouse_x", 0.0f);
+                float screen_y = event.GetParameter("mouse_y", 0.0f);
+                SDL_GetMouseState(&screen_x, &screen_y);
+                if (impl_->handleContextMenuMouseDown(mouse, screen_x, screen_y)) {
+                    event.StopPropagation();
+                    return;
+                }
+            }
+
             if (impl_->handleCompletionMouseDown(text, cursor, mouse.x, mouse.y, button)) {
                 event.StopPropagation();
+                return;
+            }
+
+            if (button == 0 && impl_->beginMouseSelection(mouse)) {
+                // Let the event propagate so RmlUi can enter its drag state and
+                // deliver continuous drag events for live selection feedback.
                 return;
             }
 
@@ -2957,7 +3174,12 @@ namespace lfs::vis::editor {
             impl_->mouse_x = mouse.x;
             impl_->mouse_y = mouse.y;
             impl_->mouse_pos_valid = true;
-            impl_->editor->OnMouseUp(mouse, zep_mouse_button_from_rml(event.GetParameter("button", 0)));
+            if (impl_->mouse_selecting) {
+                impl_->updateMouseSelection(mouse);
+                impl_->endMouseSelection();
+            } else {
+                impl_->editor->OnMouseUp(mouse, zep_mouse_button_from_rml(event.GetParameter("button", 0)));
+            }
             event.StopPropagation();
             return;
         }

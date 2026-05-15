@@ -80,6 +80,10 @@ namespace lfs::vis {
             // Sub-manager access
             [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
             [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
+            void enqueueModal(lfs::core::ModalRequest request) {
+                if (rml_modal_overlay_)
+                    rml_modal_overlay_->enqueue(std::move(request));
+            }
             [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
@@ -88,6 +92,7 @@ namespace lfs::vis {
 
             // State queries
             bool needsAnimationFrame() const;
+            [[nodiscard]] bool isViewportExportLocked() const;
 
             // Window visibility
             void showWindow(const std::string& name, bool show = true);
@@ -121,7 +126,9 @@ namespace lfs::vis {
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
             void captureKey(int physical_key, int logical_key, int mods);
-            void captureMouseButton(int button, int mods);
+            void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
+            void captureMouseButtonRelease(int button);
+            void captureMouseMove(double x, double y);
 
             // Thumbnail system (delegates to MenuBar)
             void requestThumbnail(const std::string& video_id);
@@ -175,6 +182,7 @@ namespace lfs::vis {
             void resetVulkanSplitRightInterop();
             void prepareVulkanDepthBlitInterop(VulkanContext& context);
             void resetVulkanDepthBlitInterop();
+            [[nodiscard]] bool shouldDeferVulkanInteropResize() const;
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();

@@ -11,6 +11,7 @@
 #include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -219,23 +220,46 @@ namespace lfs::vis {
         Viewport* drag_viewport_ = nullptr;
         SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
+        int node_rect_button_ = -1;
+        bool node_point_pick_enabled_ = false;
+        bool node_rect_select_enabled_ = false;
+        struct PendingClickDragGesture {
+            bool active = false;
+            int button = -1;
+            int mods = input::MODIFIER_NONE;
+            input::Action click_action = input::Action::NONE;
+            input::Action drag_action = input::Action::NONE;
+            glm::dvec2 press_pos{0.0, 0.0};
+        };
+        PendingClickDragGesture pending_click_drag_;
+        input::Action forced_mouse_press_action_ = input::Action::NONE;
         struct PendingCameraContextMenuGesture {
             bool active = false;
+            bool released = false;
             int camera_uid = -1;
             glm::dvec2 press_pos{0.0, 0.0};
+            glm::dvec2 release_pos{0.0, 0.0};
+            std::chrono::steady_clock::time_point release_time{};
             PanelInteractionState interaction{};
         } pending_camera_context_menu_;
 
         // Key states
-        bool key_r_pressed_ = false;
         bool key_ctrl_pressed_ = false;
         bool key_alt_pressed_ = false;
+        // Non-modifier keys currently held in press order (logical keycodes).
+        // Used to resolve chord-bound scroll/drag triggers, e.g. R+Scroll for
+        // Camera Roll. Newest held key wins when multiple chords are possible.
+        std::vector<int> held_keys_;
         bool keys_movement_[6] = {false, false, false, false, false, false}; // fwd, left, back, right, up, down
 
-        // Cached movement key bindings (refreshed when bindings change)
+        // Cached movement key bindings, indexed by ToolMode. Refreshed on
+        // binding change; read site picks the cache for the current tool mode
+        // so a key rebound only in GLOBAL doesn't leak into Selection/Brush/etc.
         struct MovementKeys {
             int forward = -1, backward = -1, left = -1, right = -1, up = -1, down = -1;
-        } movement_keys_;
+        };
+        std::array<MovementKeys, input::kToolModeCount> movement_keys_per_mode_{};
+        [[nodiscard]] const MovementKeys& currentMovementKeys() const;
         void refreshMovementKeyCache();
 
         // Special modes
@@ -272,9 +296,11 @@ namespace lfs::vis {
         int last_camview_ = -1;
         int hovered_camera_id_ = -1;
         int last_clicked_camera_id_ = -1;
+        int pressed_camera_frustum_id_ = -1;
         bool press_selected_camera_frustum_ = false;
         std::chrono::steady_clock::time_point last_click_time_;
         glm::dvec2 last_click_pos_{0, 0};
+        glm::dvec2 pressed_camera_frustum_pos_{0, 0};
 
         // General double-click tracking
         std::chrono::steady_clock::time_point last_general_click_time_;

@@ -121,7 +121,7 @@ namespace lfs::vis {
             .sh_degree = ctx.settings.sh_degree,
             .raster_backend = ctx.settings.raster_backend,
             .gut = ctx.settings.gut ||
-                   ctx.settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
+                   lfs::rendering::isGutBackend(ctx.settings.raster_backend),
             .equirectangular = ctx.settings.equirectangular,
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,
@@ -157,6 +157,20 @@ namespace lfs::vis {
                                                  : -1}},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings)};
 
+        request.overlay.selection_colors[0] = glm::vec4(ctx.settings.selection_color_center_marker, 1.0f);
+        request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex] =
+            glm::vec4(ctx.settings.selection_color_preview, 1.0f);
+        if (ctx.scene_manager) {
+            for (const auto& group : ctx.scene_manager->getScene().getSelectionGroups()) {
+                const auto index = static_cast<std::size_t>(group.id);
+                if (index < lfs::rendering::kSelectionGroupColorCount) {
+                    request.overlay.selection_colors[index] = glm::vec4(group.color, 1.0f);
+                }
+            }
+        } else {
+            request.overlay.selection_colors[1] = glm::vec4(ctx.settings.selection_color_committed, 1.0f);
+        }
+
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
         applyGaussianViewVolume(request.filters, ctx);
@@ -175,7 +189,7 @@ namespace lfs::vis {
             .sh_degree = ctx.settings.sh_degree,
             .raster_backend = ctx.settings.raster_backend,
             .gut = ctx.settings.gut ||
-                   ctx.settings.raster_backend == lfs::rendering::GaussianRasterBackend::Gut,
+                   lfs::rendering::isGutBackend(ctx.settings.raster_backend),
             .equirectangular = ctx.settings.equirectangular,
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,

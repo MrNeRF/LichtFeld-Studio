@@ -3,7 +3,6 @@
 
 #include "core/events.hpp"
 #include "gui/film_strip_renderer.hpp"
-#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "sequencer/interpolation.hpp"
@@ -336,17 +335,21 @@ namespace lfs::vis {
             if (!thumb_el || !image_el)
                 continue;
 
-            if (i >= film_strip.thumbs().size()) {
+            const auto clear_thumb = [&] {
                 thumb_el->SetProperty("display", "none");
-                image_el->SetAttribute("src", "");
+                if (!image_el->GetAttribute<Rml::String>("src", "").empty())
+                    image_el->SetAttribute("src", "");
+            };
+
+            if (i >= film_strip.thumbs().size()) {
+                clear_thumb();
                 continue;
             }
 
             const auto& thumb = film_strip.thumbs()[i];
-            const std::uintptr_t texture_id = film_strip.textureIdForSlot(thumb.slot_idx);
-            if (texture_id == 0) {
-                thumb_el->SetProperty("display", "none");
-                image_el->SetAttribute("src", "");
+            std::string src = film_strip.srcUrlForSlot(thumb.slot_idx);
+            if (src.empty()) {
+                clear_thumb();
                 continue;
             }
 
@@ -358,7 +361,11 @@ namespace lfs::vis {
             thumb_el->SetClass("contains-selected", thumb.contains_selected);
             thumb_el->SetClass("contains-hovered-keyframe", thumb.contains_hovered_keyframe);
             thumb_el->SetClass("stale", thumb.stale);
-            image_el->SetAttribute("src", "");
+            // The src URL embeds the underlying VkImageView pointer; setting only when it changes
+            // avoids RmlUi re-resolving the texture each frame.
+            if (image_el->GetAttribute<Rml::String>("src", "") != src)
+                image_el->SetAttribute("src", src);
+            active_sources.insert(std::move(src));
         }
 
         for (auto it = registered_film_strip_sources_.begin(); it != registered_film_strip_sources_.end();) {

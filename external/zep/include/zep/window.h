@@ -125,6 +125,8 @@ namespace Zep {
         // Cursor
         virtual GlyphIterator GetBufferCursor();
         virtual void SetBufferCursor(GlyphIterator location);
+        virtual GlyphIterator BufferLocationFromWindowPoint(const NVec2f& point, bool clamp_to_text_region = false);
+        virtual void DrawSelectionPreview(const GlyphRange& range, const NVec4f& color);
         virtual void MoveCursorY(int yDistance, LineLocation clampLocation = LineLocation::LineLastNonCR);
         virtual NVec2i BufferToDisplay();
         virtual NRectf GetCursorRect();

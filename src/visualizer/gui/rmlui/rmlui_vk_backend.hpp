@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #ifdef RMLUI_DEBUG
@@ -91,6 +92,11 @@ public:
     void SetViewport(int width, int height);
     bool IsSwapchainValid();
     void RecreateSwapchain();
+
+    // Build a Rml::Image src URL referencing an externally-owned VkImageView/VkSampler.
+    // The view+sampler must remain alive while any element references this URL. The
+    // returned URL form is "lfs-vk://?v=<view_hex>&s=<sampler_hex>&w=W&h=H".
+    static std::string MakeExternalTextureSource(VkImageView image_view, VkSampler sampler, int width, int height);
 
     // -- Inherited from Rml::RenderInterface --
 
@@ -476,7 +482,8 @@ private:
     using ExtensionPropertiesList = Rml::Vector<VkExtensionProperties>;
 
 private:
-    Rml::TextureHandle CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name);
+    Rml::TextureHandle CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions,
+                                     const Rml::String& name, VkSampler sampler = VK_NULL_HANDLE);
     Rml::TextureHandle LoadAsyncPreviewTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source);
     void ProcessAsyncPreviewUploads();
     void DropAsyncPreviewTexture(texture_data_t* texture);
@@ -644,6 +651,7 @@ private:
     VkPipeline m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures;
     VkDescriptorSet m_p_descriptor_set;
     VkSampler m_p_sampler_linear;
+    VkSampler m_p_sampler_nearest;
     VkRect2D m_scissor;
 
     // @ means it captures the window size full width and full height, offset equals both x and y to 0

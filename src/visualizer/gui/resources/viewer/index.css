@@ -360,7 +360,7 @@ button {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   color: rgba(255, 255, 255, 0.4);
   font-family: sans-serif;
   text-decoration: none;

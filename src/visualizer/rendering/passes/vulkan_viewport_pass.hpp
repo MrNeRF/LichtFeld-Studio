@@ -104,6 +104,8 @@ namespace lfs::vis {
         std::vector<VulkanViewportOverlayVertex> overlay_triangles;
         std::vector<VulkanViewportShapeOverlayVertex> shape_overlay_triangles;
         std::vector<VulkanViewportShapeOverlayVertex> ui_shape_overlay_triangles;
+        // Number of trailing overlay_triangles to draw after viewport UI overlays.
+        std::uint32_t post_ui_overlay_vertex_count = 0;
         std::vector<VulkanViewportPivotOverlay> pivot_overlays;
         std::vector<VulkanViewportTexturedOverlay> textured_overlays;
 

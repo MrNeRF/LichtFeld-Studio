@@ -88,6 +88,13 @@ input[type="text"]:focus {
     border-color: @{primary};
 }
 
+input[type="text"]:focus-visible {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{primary};
+    box-shadow: none;
+}
+
 select {
     color: @{text};
     background-color: @{surface};
@@ -436,4 +443,10 @@ scrollbarhorizontal sliderbar {
 
 scrollbarhorizontal sliderbar:hover {
     background-color: @{components.scroll_hover};
+}
+
+.frame-tooltip {
+    color: @{text};
+    background-color: @{alpha(surface,0.94)};
+    border-color: @{alpha(border,0.50)};
 }

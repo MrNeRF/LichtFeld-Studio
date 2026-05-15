@@ -15,9 +15,11 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -167,12 +169,24 @@ namespace lfs::vis {
             void cancelSplatSimplify();
 
         private:
+            struct ExportSplatSource {
+                const lfs::core::SplatData* data = nullptr;
+                glm::mat4 transform{1.0f};
+            };
+
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
-                                  std::unique_ptr<lfs::core::SplatData> data);
+                                  std::vector<ExportSplatSource> splats,
+                                  int sh_degree,
+                                  bool borrow_single_identity,
+                                  std::shared_mutex* model_mutex,
+                                  std::vector<float> rad_lod_ratios,
+                                  bool rad_flip_y);
+            void startColmapExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
             void checkAsyncImportCompletion();
             void applyLoadedDataToScene();
+            void applyAutoCropToLoadedScene();
             void startVideoExport(const std::filesystem::path& path,
                                   const io::video::VideoExportOptions& options);
             void resetVideoExportEnvironmentState();
@@ -223,6 +237,7 @@ namespace lfs::vis {
                 size_t num_points{0};
                 bool success{false};
                 bool is_mesh{false};
+                std::atomic<bool> apply_auto_crop{false};
                 std::chrono::steady_clock::time_point completion_time;
                 std::optional<lfs::io::LoadResult> load_result;
                 lfs::core::param::TrainingParameters params;

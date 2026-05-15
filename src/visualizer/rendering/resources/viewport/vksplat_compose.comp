@@ -14,7 +14,12 @@ layout(set = 0, binding = 0) readonly buffer PixelStateBuffer {
     vec4 pixel_state[];
 };
 
-layout(set = 0, binding = 1, rgba8) uniform writeonly image2D out_image;
+layout(set = 0, binding = 1) readonly buffer PixelDepthBuffer {
+    float pixel_depth[];
+};
+
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D out_image;
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D out_depth;
 
 void main() {
     const uvec2 gid = gl_GlobalInvocationID.xy;
@@ -24,6 +29,8 @@ void main() {
 
     const uint idx = gid.y * pc.width + gid.x;
     const vec4 state = pixel_state[idx];
+    imageStore(out_depth, ivec2(gid), vec4(pixel_depth[idx], 0.0, 0.0, 0.0));
+
     const float transmittance = clamp(state.a, 0.0, 1.0);
     const float alpha = 1.0 - transmittance;
     if (pc.transparent_background != 0u) {

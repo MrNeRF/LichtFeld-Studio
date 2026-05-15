@@ -63,7 +63,6 @@ class Scene:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
     dataset_asset_id: Optional[str] = None
-    run_ids: List[str] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     notes: str = ""
     thumbnail_asset_id: Optional[str] = None
@@ -83,60 +82,9 @@ class Scene:
             created_at=data.get("created_at", datetime.now().isoformat()),
             modified_at=data.get("modified_at", datetime.now().isoformat()),
             dataset_asset_id=data.get("dataset_asset_id"),
-            run_ids=data.get("run_ids", []),
             tags=data.get("tags", []),
             notes=data.get("notes", ""),
             thumbnail_asset_id=data.get("thumbnail_asset_id"),
-        )
-
-
-@dataclass
-class TrainingRun:
-    """A training run associated with a scene."""
-
-    id: str
-    project_id: str
-    scene_id: str
-    name: str
-    status: str = "pending"  # pending, running, completed, failed, cancelled
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    completed_at: Optional[str] = None
-    source_dataset_id: Optional[str] = None
-    parent_run_id: Optional[str] = None
-    parent_checkpoint_id: Optional[str] = None
-    parameters: Dict[str, Any] = field(default_factory=dict)
-    metrics: Dict[str, Any] = field(default_factory=dict)
-    artifact_asset_ids: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    notes: str = ""
-    is_favorite: bool = False
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "TrainingRun":
-        """Create from dictionary."""
-        return cls(
-            id=data["id"],
-            project_id=data["project_id"],
-            scene_id=data["scene_id"],
-            name=data["name"],
-            status=data.get("status", "pending"),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            modified_at=data.get("modified_at", datetime.now().isoformat()),
-            completed_at=data.get("completed_at"),
-            source_dataset_id=data.get("source_dataset_id"),
-            parent_run_id=data.get("parent_run_id"),
-            parent_checkpoint_id=data.get("parent_checkpoint_id"),
-            parameters=data.get("parameters", {}),
-            metrics=data.get("metrics", {}),
-            artifact_asset_ids=data.get("artifact_asset_ids", []),
-            tags=data.get("tags", []),
-            notes=data.get("notes", ""),
-            is_favorite=data.get("is_favorite", False),
         )
 
 
@@ -147,7 +95,6 @@ class Asset:
     id: str
     project_id: Optional[str] = None
     scene_id: Optional[str] = None
-    run_id: Optional[str] = None
     name: str = ""
     type: str = ""  # dataset, checkpoint, video, image, mesh, etc.
     role: str = ""  # source, output, intermediate, thumbnail, etc.
@@ -180,7 +127,6 @@ class Asset:
             id=data["id"],
             project_id=data.get("project_id"),
             scene_id=data.get("scene_id"),
-            run_id=data.get("run_id"),
             name=data.get("name", ""),
             type=data.get("type", ""),
             role=data.get("role", ""),
@@ -222,7 +168,6 @@ class AssetIndex:
         self._modified_at: str = datetime.now().isoformat()
         self._projects: Dict[str, Project] = {}
         self._scenes: Dict[str, Scene] = {}
-        self._runs: Dict[str, TrainingRun] = {}
         self._assets: Dict[str, Asset] = {}
         self._collections: Dict[str, Dict[str, Any]] = {}
         self._tags: Dict[str, Dict[str, Any]] = {}
@@ -241,11 +186,6 @@ class AssetIndex:
     def scenes(self) -> Dict[str, Dict[str, Any]]:
         """Return scenes as dictionaries for backward compatibility."""
         return {sid: s.to_dict() for sid, s in self._scenes.items()}
-
-    @property
-    def runs(self) -> Dict[str, Dict[str, Any]]:
-        """Return training runs as dictionaries for backward compatibility."""
-        return {rid: r.to_dict() for rid, r in self._runs.items()}
 
     @property
     def assets(self) -> Dict[str, Dict[str, Any]]:
@@ -293,11 +233,6 @@ class AssetIndex:
                 sid: Scene.from_dict(s) for sid, s in data.get("scenes", {}).items()
             }
 
-            # Load runs
-            self._runs = {
-                rid: TrainingRun.from_dict(r) for rid, r in data.get("runs", {}).items()
-            }
-
             # Load assets
             self._assets = {
                 aid: Asset.from_dict(a) for aid, a in data.get("assets", {}).items()
@@ -309,10 +244,9 @@ class AssetIndex:
             self.rebuild_tag_index(save=False)
 
             _log.info(
-                "Loaded library with %d projects, %d scenes, %d runs, %d assets",
+                "Loaded library with %d projects, %d scenes, %d assets",
                 len(self._projects),
                 len(self._scenes),
-                len(self._runs),
                 len(self._assets),
             )
             return True
@@ -339,7 +273,6 @@ class AssetIndex:
                 "modified_at": self._modified_at,
                 "projects": {pid: p.to_dict() for pid, p in self._projects.items()},
                 "scenes": {sid: s.to_dict() for sid, s in self._scenes.items()},
-                "runs": {rid: r.to_dict() for rid, r in self._runs.items()},
                 "assets": {aid: a.to_dict() for aid, a in self._assets.items()},
                 "collections": self._collections,
                 "tags": self._tags,
@@ -372,7 +305,6 @@ class AssetIndex:
         self._modified_at = datetime.now().isoformat()
         self._projects = {}
         self._scenes = {}
-        self._runs = {}
         self._assets = {}
         self._collections = {}
         self._tags = {}
@@ -427,7 +359,7 @@ class AssetIndex:
         return project
 
     def delete_project(self, project_id: str) -> bool:
-        """Delete a project and all associated scenes, runs, and assets.
+        """Delete a project and all associated scenes and assets.
 
         Args:
             project_id: Project ID to delete
@@ -558,7 +490,7 @@ class AssetIndex:
         return scene
 
     def delete_scene(self, scene_id: str) -> bool:
-        """Delete a scene and all associated runs and assets.
+        """Delete a scene and all associated assets.
 
         Args:
             scene_id: Scene ID to delete
@@ -570,13 +502,6 @@ class AssetIndex:
             return False
 
         scene = self._scenes[scene_id]
-
-        # Delete associated runs
-        runs_to_delete = [
-            rid for rid, r in self._runs.items() if r.scene_id == scene_id
-        ]
-        for rid in runs_to_delete:
-            self.delete_run(rid)
 
         # Delete associated assets
         assets_to_delete = [
@@ -639,160 +564,6 @@ class AssetIndex:
         return self.create_scene(project_id=project_id, name=name)
 
     # -------------------------------------------------------------------------
-    # Run CRUD
-    # -------------------------------------------------------------------------
-
-    def create_run(
-        self,
-        project_id: str,
-        scene_id: str,
-        name: str,
-        source_dataset_id: Optional[str] = None,
-        parent_run_id: Optional[str] = None,
-        parent_checkpoint_id: Optional[str] = None,
-        parameters: Optional[Dict[str, Any]] = None,
-        tags: Optional[List[str]] = None,
-        status: str = "pending",
-    ) -> Optional[TrainingRun]:
-        """Create a new training run.
-
-        Args:
-            project_id: Parent project ID
-            scene_id: Parent scene ID
-            name: Run name
-            source_dataset_id: Optional source dataset asset ID
-            parent_run_id: Optional parent run ID for branching
-            parent_checkpoint_id: Optional parent checkpoint asset ID
-            parameters: Optional training parameters
-            tags: Optional list of tags
-            status: Initial run status (default: "pending")
-
-        Returns:
-            The created TrainingRun instance or None if project/scene not found
-        """
-        if project_id not in self._projects or scene_id not in self._scenes:
-            return None
-
-        run = TrainingRun(
-            id=str(uuid.uuid4()),
-            project_id=project_id,
-            scene_id=scene_id,
-            name=name,
-            status=status,
-            source_dataset_id=source_dataset_id,
-            parent_run_id=parent_run_id,
-            parent_checkpoint_id=parent_checkpoint_id,
-            parameters=parameters or {},
-            tags=tags or [],
-        )
-        self._runs[run.id] = run
-        self._scenes[scene_id].run_ids.append(run.id)
-        self._scenes[scene_id].modified_at = datetime.now().isoformat()
-        self.save()
-        return run
-
-    def update_run(self, run_id: str, **kwargs) -> Optional[TrainingRun]:
-        """Update a training run.
-
-        Args:
-            run_id: Run ID to update
-            **kwargs: Fields to update
-
-        Returns:
-            Updated TrainingRun or None if not found
-        """
-        if run_id not in self._runs:
-            return None
-
-        run = self._runs[run_id]
-        for key, value in kwargs.items():
-            if hasattr(run, key):
-                setattr(run, key, value)
-        run.modified_at = datetime.now().isoformat()
-        self.save()
-        return run
-
-    def set_run_status(self, run_id: str, status: str) -> Optional[TrainingRun]:
-        """Set the status of a training run.
-
-        Args:
-            run_id: Run ID
-            status: New status (pending, running, completed, failed, cancelled)
-
-        Returns:
-            Updated TrainingRun or None if not found
-        """
-        return self.update_run(run_id, status=status)
-
-    def delete_run(self, run_id: str) -> bool:
-        """Delete a training run and its associated assets.
-
-        Args:
-            run_id: Run ID to delete
-
-        Returns:
-            True if deleted, False if not found
-        """
-        if run_id not in self._runs:
-            return False
-
-        run = self._runs[run_id]
-
-        # Delete associated assets
-        assets_to_delete = [
-            aid for aid, a in self._assets.items() if a.run_id == run_id
-        ]
-        for aid in assets_to_delete:
-            del self._assets[aid]
-
-        # Remove from scene
-        if run.scene_id in self._scenes:
-            scene = self._scenes[run.scene_id]
-            if run_id in scene.run_ids:
-                scene.run_ids.remove(run_id)
-                scene.modified_at = datetime.now().isoformat()
-
-        del self._runs[run_id]
-        self.save()
-        return True
-
-    def get_run(self, run_id: str) -> Optional[TrainingRun]:
-        """Get a training run by ID.
-
-        Args:
-            run_id: Run ID
-
-        Returns:
-            TrainingRun or None if not found
-        """
-        return self._runs.get(run_id)
-
-    def list_runs(
-        self,
-        project_id: Optional[str] = None,
-        scene_id: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> List[TrainingRun]:
-        """List training runs with optional filters.
-
-        Args:
-            project_id: Optional project ID to filter by
-            scene_id: Optional scene ID to filter by
-            status: Optional status to filter by
-
-        Returns:
-            List of training runs
-        """
-        runs = list(self._runs.values())
-        if project_id:
-            runs = [r for r in runs if r.project_id == project_id]
-        if scene_id:
-            runs = [r for r in runs if r.scene_id == scene_id]
-        if status:
-            runs = [r for r in runs if r.status == status]
-        return runs
-
-    # -------------------------------------------------------------------------
     # Asset CRUD
     # -------------------------------------------------------------------------
 
@@ -804,7 +575,6 @@ class AssetIndex:
         path: str,
         absolute_path: str,
         scene_id: Optional[str] = None,
-        run_id: Optional[str] = None,
         role: str = "",
         tags: Optional[List[str]] = None,
         file_size_bytes: int = 0,
@@ -828,7 +598,6 @@ class AssetIndex:
             path: Relative path within project
             absolute_path: Absolute path on filesystem
             scene_id: Optional parent scene ID
-            run_id: Optional parent run ID
             role: Asset role (source, output, etc.)
             tags: Optional list of tags
             file_size_bytes: File size in bytes
@@ -841,9 +610,6 @@ class AssetIndex:
             return None
         if scene_id is not None and scene_id not in self._scenes:
             _log.error("Cannot create asset: scene_id %s not found", scene_id)
-            return None
-        if run_id is not None and run_id not in self._runs:
-            _log.error("Cannot create asset: run_id %s not found", run_id)
             return None
 
         normalized_abs_path = os.path.abspath(absolute_path or path)
@@ -858,7 +624,6 @@ class AssetIndex:
                 if project_id is not None
                 else existing_asset.project_id,
                 scene_id=scene_id if scene_id is not None else existing_asset.scene_id,
-                run_id=run_id if run_id is not None else existing_asset.run_id,
                 name=name or existing_asset.name,
                 type=type or existing_asset.type,
                 role=role or existing_asset.role,
@@ -889,17 +654,12 @@ class AssetIndex:
                 if exists is None
                 else exists,
             )
-            if updated and run_id and run_id in self._runs:
-                run = self._runs[run_id]
-                if updated.id not in run.artifact_asset_ids:
-                    run.artifact_asset_ids.append(updated.id)
             return updated
 
         asset = Asset(
             id=str(uuid.uuid4()),
             project_id=project_id,
             scene_id=scene_id,
-            run_id=run_id,
             name=name,
             type=type,
             role=role,
@@ -923,20 +683,12 @@ class AssetIndex:
         # Update parent modified times
         if scene_id and scene_id in self._scenes:
             self._scenes[scene_id].modified_at = datetime.now().isoformat()
-        if run_id and run_id in self._runs:
-            self._runs[run_id].modified_at = datetime.now().isoformat()
-            if asset.id not in self._runs[run_id].artifact_asset_ids:
-                self._runs[run_id].artifact_asset_ids.append(asset.id)
 
         self.rebuild_tag_index(save=False)
         if not self.save():
             _log.error("Failed to save library during asset creation for %s", asset.id)
             # Clean up in-memory state to maintain consistency with disk
             del self._assets[asset.id]
-            if asset.run_id and asset.run_id in self._runs:
-                run = self._runs[asset.run_id]
-                if asset.id in run.artifact_asset_ids:
-                    run.artifact_asset_ids.remove(asset.id)
             return None
         return asset
 
@@ -982,24 +734,6 @@ class AssetIndex:
         asset_project_id = asset.project_id
         is_dataset = asset.type == "dataset" or asset.role == "source_dataset"
 
-        # Remove from run's artifact list
-        if asset.run_id and asset.run_id in self._runs:
-            run = self._runs[asset.run_id]
-            if asset_id in run.artifact_asset_ids:
-                run.artifact_asset_ids.remove(asset_id)
-                run.modified_at = datetime.now().isoformat()
-
-        for run in self._runs.values():
-            touched = False
-            if run.source_dataset_id == asset_id:
-                run.source_dataset_id = None
-                touched = True
-            if run.parent_checkpoint_id == asset_id:
-                run.parent_checkpoint_id = None
-                touched = True
-            if touched:
-                run.modified_at = datetime.now().isoformat()
-
         for scene in self._scenes.values():
             if scene.dataset_asset_id == asset_id:
                 scene.dataset_asset_id = None
@@ -1011,11 +745,9 @@ class AssetIndex:
             scene_has_assets = any(
                 a.scene_id == asset_scene_id for a in self._assets.values()
             )
-            scene_has_runs = any(r.scene_id == asset_scene_id for r in self._runs.values())
             scene = self._scenes[asset_scene_id]
             if (
                 not scene_has_assets
-                and not scene_has_runs
                 and scene.dataset_asset_id is None
             ):
                 project = self._projects.get(scene.project_id)
@@ -1090,8 +822,6 @@ class AssetIndex:
             _accumulate(project.tags)
         for scene in self._scenes.values():
             _accumulate(scene.tags)
-        for run in self._runs.values():
-            _accumulate(run.tags)
         for asset in self._assets.values():
             _accumulate(asset.tags)
 
@@ -1136,7 +866,6 @@ class AssetIndex:
         self,
         project_id: Optional[str] = None,
         scene_id: Optional[str] = None,
-        run_id: Optional[str] = None,
         type: Optional[str] = None,
         role: Optional[str] = None,
         tags: Optional[List[str]] = None,
@@ -1146,7 +875,6 @@ class AssetIndex:
         Args:
             project_id: Optional project ID to filter by
             scene_id: Optional scene ID to filter by
-            run_id: Optional run ID to filter by
             type: Optional asset type to filter by
             role: Optional asset role to filter by
             tags: Optional tags to filter by (all must match)
@@ -1159,8 +887,6 @@ class AssetIndex:
             assets = [a for a in assets if a.project_id == project_id]
         if scene_id:
             assets = [a for a in assets if a.scene_id == scene_id]
-        if run_id:
-            assets = [a for a in assets if a.run_id == run_id]
         if type:
             assets = [a for a in assets if a.type == type]
         if role:
@@ -1273,14 +999,6 @@ class AssetIndex:
         """
         return [a for a in self._assets.values() if a.is_favorite]
 
-    def get_favorite_runs(self) -> List[TrainingRun]:
-        """Get all favorite training runs.
-
-        Returns:
-            List of favorite runs
-        """
-        return [r for r in self._runs.values() if r.is_favorite]
-
     def get_recent_assets(self, limit: int = 10) -> List[Asset]:
         """Get most recently modified assets.
 
@@ -1323,7 +1041,6 @@ class AssetIndex:
             "modified_at": self._modified_at,
             "project_count": len(self._projects),
             "scene_count": len(self._scenes),
-            "run_count": len(self._runs),
             "asset_count": len(self._assets),
             "total_size_bytes": total_size,
             "missing_files_count": missing_count,

@@ -29,6 +29,8 @@ namespace lfs::vis::input {
         CROP_BOX,
     };
 
+    inline constexpr size_t kToolModeCount = 8;
+
     enum class Action {
         NONE = 0,
         // Camera
@@ -88,6 +90,7 @@ namespace lfs::vis::input {
         SELECT_MODE_POLYGON,
         SELECT_MODE_LASSO,
         SELECT_MODE_RINGS,
+        SELECT_MODE_COLOR,
         // Misc
         APPLY_CROP_BOX,
         // Node picking
@@ -147,14 +150,67 @@ namespace lfs::vis::input {
 
     struct MouseScrollTrigger {
         int modifiers = MODIFIER_NONE;
+        // If set, the trigger fires only while this non-modifier key is held —
+        // e.g. CAMERA_ROLL defaults to Scroll while R is held.
+        std::optional<int> chord_key;
+
+        constexpr MouseScrollTrigger() = default;
+        constexpr explicit MouseScrollTrigger(int modifiers_,
+                                              std::optional<int> chord_key_ = std::nullopt)
+            : modifiers(modifiers_),
+              chord_key(chord_key_) {}
     };
 
     struct MouseDragTrigger {
-        MouseButton button;
+        MouseButton button = MouseButton::LEFT;
         int modifiers = MODIFIER_NONE;
+        std::optional<int> chord_key;
+
+        constexpr MouseDragTrigger() = default;
+        constexpr explicit MouseDragTrigger(MouseButton button_,
+                                            int modifiers_ = MODIFIER_NONE,
+                                            std::optional<int> chord_key_ = std::nullopt)
+            : button(button_),
+              modifiers(modifiers_),
+              chord_key(chord_key_) {}
     };
 
     using InputTrigger = std::variant<KeyTrigger, MouseButtonTrigger, MouseScrollTrigger, MouseDragTrigger>;
+
+    enum TriggerKindFlag : uint8_t {
+        TRIGGER_KIND_KEY = 1 << 0,
+        TRIGGER_KIND_MOUSE_BUTTON = 1 << 1,
+        TRIGGER_KIND_MOUSE_SCROLL = 1 << 2,
+        TRIGGER_KIND_MOUSE_DRAG = 1 << 3,
+    };
+
+    enum class ActionSection : uint8_t {
+        None,
+        Navigation,
+        NavigationGlobal,
+        Selection,
+        SelectionGlobal,
+        Depth,
+        Brush,
+        CropBox,
+        Editing,
+        ViewGlobal,
+        Tools,
+        Sequencer,
+        UI,
+        NodePicking,
+    };
+
+    struct ActionDescriptor {
+        uint8_t allowed_kinds = 0;
+        bool prefers_physical_key = false;
+        bool allows_extra_modifiers = false;
+        bool prefers_single_click = false;
+        bool inherits_from_global = false;
+        ActionSection ui_section = ActionSection::None;
+    };
+
+    LFS_VIS_API const ActionDescriptor& describe(Action action);
 
     struct Binding {
         ToolMode mode = ToolMode::GLOBAL;
@@ -169,6 +225,11 @@ namespace lfs::vis::input {
         std::vector<Binding> bindings;
     };
 
+    struct BindingConflict {
+        Action other_action;
+        ToolMode other_mode;
+    };
+
     struct CaptureState {
         bool active = false;
         ToolMode mode = ToolMode::GLOBAL;
@@ -177,8 +238,14 @@ namespace lfs::vis::input {
         bool waiting_for_double_click = false;
         int pending_button = -1;
         int pending_mods = 0;
+        std::optional<int> pending_chord_key;
+        bool pending_button_down = false;
+        bool has_pending_mouse_position = false;
+        double pending_mouse_x = 0.0;
+        double pending_mouse_y = 0.0;
         std::chrono::steady_clock::time_point first_click_time;
         static constexpr double DOUBLE_CLICK_WAIT_TIME = 0.4;
+        static constexpr double DRAG_CAPTURE_THRESHOLD_PX = 4.0;
     };
 
     class LFS_VIS_API InputBindings {
@@ -194,13 +261,18 @@ namespace lfs::vis::input {
 
         static std::filesystem::path getConfigDir();
 
-        // Query bindings (mode-specific only, no fallback)
+        // Query effective bindings. Mode-local bindings are checked first; actions
+        // marked as inherited then fall back to GLOBAL.
         Action getActionForKey(ToolMode mode, int key, int modifiers) const;
         Action getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click = false) const;
-        Action getActionForScroll(ToolMode mode, int modifiers) const;
-        Action getActionForDrag(ToolMode mode, MouseButton button, int modifiers) const;
+        // held_keys: non-modifier keys currently held in press order; chord lookup
+        // checks newest first (e.g. R+Scroll for Camera Roll). Pass an empty list
+        // to query non-chord bindings only.
+        Action getActionForScroll(ToolMode mode, int modifiers, const std::vector<int>& held_keys = {}) const;
+        Action getActionForDrag(ToolMode mode, MouseButton button, int modifiers, const std::vector<int>& held_keys = {}) const;
 
         std::optional<InputTrigger> getTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
+        std::optional<InputTrigger> getEffectiveTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
         std::string getTriggerDescription(Action action, ToolMode mode = ToolMode::GLOBAL) const;
 
         // Get the key code for a continuous action (returns -1 if not a key binding)
@@ -208,6 +280,13 @@ namespace lfs::vis::input {
 
         void setBinding(ToolMode mode, Action action, const InputTrigger& trigger);
         void clearBinding(ToolMode mode, Action action);
+
+        // Returns the first binding that shares this trigger. Mode-local bindings
+        // are checked first; actions marked as inherited then fall back to GLOBAL.
+        // The action being re-bound is ignored so callers can detect conflicts
+        // after a capture has already replaced its own previous binding.
+        [[nodiscard]] std::optional<BindingConflict> findConflict(
+            ToolMode mode, const InputTrigger& trigger, Action ignore_action) const;
 
         // Callback for binding changes (e.g., to refresh cached keys)
         using BindingsChangedCallback = std::function<void()>;
@@ -218,7 +297,11 @@ namespace lfs::vis::input {
         void cancelCapture();
         void captureKey(int key, int mods);
         void captureKey(int physical_key, int logical_key, int mods);
-        void captureMouseButton(int button, int mods);
+        void captureMouseButton(int button, int mods, std::optional<int> chord_key = std::nullopt);
+        void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
+        void captureMouseButtonRelease(int button);
+        void captureMouseMove(double x, double y);
+        void captureScroll(int mods, std::optional<int> chord_key = std::nullopt);
         void updateCapture();
         bool isCapturing() const { return capture_state_.active; }
         const CaptureState& getCaptureState() const { return capture_state_; }
@@ -239,17 +322,25 @@ namespace lfs::vis::input {
         using MouseMapKey = std::tuple<ToolMode, MouseButton, int, bool>;
         using ScrollMapKey = std::pair<ToolMode, int>;
         using DragMapKey = std::tuple<ToolMode, MouseButton, int>;
+        // chord-aware variants are keyed by (..., chord_key).
+        using ScrollChordKey = std::tuple<ToolMode, int, int>;
+        using DragChordKey = std::tuple<ToolMode, MouseButton, int, int>;
 
         std::map<KeyMapKey, Action> key_map_;
         std::map<MouseMapKey, Action> mouse_button_map_;
         std::map<ScrollMapKey, Action> scroll_map_;
         std::map<DragMapKey, Action> drag_map_;
+        std::map<ScrollChordKey, Action> scroll_chord_map_;
+        std::map<DragChordKey, Action> drag_chord_map_;
 
         BindingsChangedCallback on_bindings_changed_;
         CaptureState capture_state_;
 
         void rebuildLookupMaps();
         void notifyBindingsChanged();
+
+        size_t migrateLoadedProfile(int version);
+        size_t collapseRedundantModeBindings(int version);
     };
 
     LFS_VIS_API std::string getActionName(Action action);

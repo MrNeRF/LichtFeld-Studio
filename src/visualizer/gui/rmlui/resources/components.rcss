@@ -203,7 +203,13 @@ input[type="text"]:focus {
     border-color: #89b4fa;
 }
 
-input[type="text"]:focus-visible,
+input[type="text"]:focus-visible {
+    color: #cdd6f4;
+    background-color: #313244;
+    border-color: #89b4fa;
+    box-shadow: none;
+}
+
 select:focus-visible,
 button:focus-visible,
 .btn:focus-visible,
@@ -240,8 +246,9 @@ selectbox {
 }
 
 selectbox option {
+    display: block;
     padding: 2dp 6dp;
-    font-size: 11dp;
+    font-size: 12dp;
     transition: background-color 0.1s quadratic-out;
 }
 
@@ -472,7 +479,7 @@ progress fill {
     border-color: #45475a;
     border-radius: 6dp;
     font-family: "JetBrains Mono";
-    font-size: 11dp;
+    font-size: 12dp;
     cursor: ew-resize;
     transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
 }
@@ -505,7 +512,7 @@ progress fill {
     width: 100%;
     text-align: right;
     font-family: "JetBrains Mono";
-    font-size: 11dp;
+    font-size: 12dp;
     color: #cdd6f4;
 }
 
@@ -549,7 +556,7 @@ progress fill {
     font-weight: bold;
     color: #cdd6f4;
     cursor: pointer;
-    font-size: 11dp;
+    font-size: 12dp;
     border-width: 0;
     border-top-width: 4dp;
     border-radius: 0;
@@ -566,7 +573,7 @@ progress fill {
 .section-arrow {
     display: inline-block;
     width: 10dp;
-    font-size: 11dp;
+    font-size: 12dp;
     color: #cdd6f4;
     text-align: center;
     transform: rotate(0deg);
@@ -693,7 +700,7 @@ progress fill {
     padding: 4dp 12dp;
     cursor: pointer;
     color: #cdd6f4;
-    font-size: 11dp;
+    font-size: 12dp;
     width: 100%;
     text-align: left;
     background-color: transparent;
@@ -758,7 +765,7 @@ progress fill {
 .btn {
     display: inline-block;
     padding: 2dp 8dp;
-    font-size: 11dp;
+    font-size: 12dp;
     color: #cdd6f4;
     background-color: #45475a;
     border-width: 1dp;
@@ -953,7 +960,7 @@ progress fill {
     display: block;
     padding: 8dp 6dp;
     color: #a6adc8;
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 /* ── Custom Diagram Elements ──────────────────────────── */
@@ -990,7 +997,7 @@ crf-curve {
     padding: 0 0 1dp 0;
     text-align: center;
     line-height: 16dp;
-    font-size: 11dp;
+    font-size: 12dp;
     border-width: 1dp;
     margin-left: 2dp;
     flex-shrink: 0;
@@ -1018,7 +1025,7 @@ crf-curve {
 
 .status-text {
     display: block;
-    font-size: 11dp;
+    font-size: 12dp;
     padding: 2dp 0;
 }
 
@@ -1071,4 +1078,20 @@ crf-curve {
 .select-chip.selected {
     color: #1e1e2e;
     background-color: #89b4fa;
+}
+
+.frame-tooltip {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    border-width: 1dp;
+    border-radius: 3dp;
+    padding: 4dp 8dp;
+    font-size: 12dp;
+    max-width: 320dp;
+    pointer-events: none;
+}
+
+.frame-tooltip.visible {
+    display: block;
 }

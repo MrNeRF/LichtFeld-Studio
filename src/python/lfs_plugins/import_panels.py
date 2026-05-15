@@ -131,6 +131,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._centralize_dataset = "off"
         self._max_width = self.DEFAULT_MAX_WIDTH
         self._max_width_str = str(self.DEFAULT_MAX_WIDTH)
+        self._apply_auto_crop = False
         self._last_lang = ""
 
     def on_bind_model(self, ctx):
@@ -155,6 +156,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         model.bind("centralize_dataset", lambda: self._centralize_dataset, self._set_centralize_dataset)
         model.bind("max_width_str", lambda: self._max_width_str, self._set_max_width_str)
         model.bind("max_width_disabled", lambda: self._max_width == 0, self._set_max_width_disabled)
+        model.bind("apply_auto_crop", lambda: self._apply_auto_crop, self._set_apply_auto_crop)
 
         model.bind_event("browse_dataset", self._on_browse_dataset)
         model.bind_event("browse_output", self._on_browse_output)
@@ -182,6 +184,7 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._centralize_dataset = "off"
         self._max_width = self.DEFAULT_MAX_WIDTH
         self._max_width_str = str(self.DEFAULT_MAX_WIDTH)
+        self._apply_auto_crop = False
         params = lf.optimization_params()
         self._ppisp_sidecar_path = (
             str(params.ppisp_sidecar_path) if params and params.has_params() else ""
@@ -323,6 +326,13 @@ class DatasetImportPanel(_ImportDialogPanel):
             self._max_width_str = str(self.DEFAULT_MAX_WIDTH)
         self._dirty_model("max_width_str", "max_width_disabled")
 
+    def _set_apply_auto_crop(self, value):
+        enabled = bool(value)
+        if enabled == self._apply_auto_crop:
+            return
+        self._apply_auto_crop = enabled
+        self._dirty_model("apply_auto_crop")
+
     def _on_browse_dataset(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_dataset_folder_dialog()
         if path:
@@ -373,6 +383,7 @@ class DatasetImportPanel(_ImportDialogPanel):
             init_path=init_path,
             centralize_dataset=centralize_dataset,
             max_width=self._max_width,
+            apply_auto_crop=self._apply_auto_crop,
         )
 
     def _on_do_cancel(self, _handle=None, _ev=None, _args=None):

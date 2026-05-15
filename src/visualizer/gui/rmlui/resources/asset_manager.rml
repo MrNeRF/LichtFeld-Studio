@@ -9,7 +9,7 @@
     <div id="asset-popup-toolbar">
       <div class="asset-search-box">
         <span class="asset-search-icon">{{search_icon_label}}</span>
-        <input type="text" placeholder="{{search_placeholder}}" data-value="search_query" data-event-change="on_search" />
+        <input type="text" placeholder="{{search_placeholder}}" data-value="search_query" />
       </div>
 
       <button class="asset-sort-button" data-event-click="cycle_sort_mode">
@@ -35,17 +35,19 @@
       </div>
     </div>
 
-    <div id="asset-popup-summary">
-      <span><span>{{asset_count}}</span> {{summary_assets_label}}</span>
-      <span><span>{{project_count}}</span> {{summary_projects_label}}</span>
-      <span><span>{{scene_count}}</span> {{summary_scenes_label}}</span>
-      <span><span>{{selected_count}}</span> {{summary_selected_label}}</span>
-    </div>
-
     <div id="asset-popup-content">
-      <div id="asset-sidebar">
+      <div id="asset-sidebar" data-style-width="sidebar_width">
+        <div class="asset-sidebar-inner">
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title">{{projects_title}}</div>
+          <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>{{projects_title}}</span>
+            <div style="position: relative;">
+              <button class="asset-project-menu" data-event-click="toggle_new_project_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <div class="asset-project-dropdown" data-class-is-visible="new_project_menu_open" style="position: absolute; top: 100%; right: 0; z-index: 100; margin-top: 4px; min-width: 140px; white-space: nowrap;">
+                <div class="asset-dropdown-item" data-event-click="on_create_project_dialog">{{create_new_project_label}}</div>
+              </div>
+            </div>
+          </div>
           <div data-for="project : projects">
             <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
               <span class="asset-row-label">{{project.name}}</span>
@@ -72,8 +74,7 @@
         </div>
 
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title">{{filters_title}}</div>
-          <div class="asset-filter-hint">{{filter_hint}}</div>
+          <div class="asset-sidebar-title" data-tooltip="asset_manager.sidebar.filter_hint">{{filters_title}}</div>
           <div data-for="filter : filters">
             <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
               <input type="checkbox" data-checked="filter.is_selected" />
@@ -81,9 +82,10 @@
             </div>
           </div>
         </div>
-
-
+        </div>
       </div>
+
+      <div id="sidebar-resize-handle" data-event-mousedown="on_sidebar_resize_start"></div>
 
       <div id="asset-gallery">
         <div class="asset-gallery-header">
@@ -119,6 +121,10 @@
                   </div>
                 </div>
                 <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
+                <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                </div>
                 <div class="asset-card-dropdown" data-class-is-visible="asset.menu_open">
                   <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">{{rename_label}}</div>
                   <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
@@ -143,13 +149,9 @@
           <div class="asset-list-header">
             <span class="asset-col asset-col-name">{{col_name_label}}</span>
             <span class="asset-col asset-col-type">{{col_type_label}}</span>
-            <span class="asset-col asset-col-role">{{col_role_label}}</span>
             <span class="asset-col asset-col-project">{{col_project_label}}</span>
-            <span class="asset-col asset-col-scene">{{col_scene_label}}</span>
-            <span class="asset-col asset-col-run">{{col_run_label}}</span>
             <span class="asset-col asset-col-size">{{col_size_label}}</span>
             <span class="asset-col asset-col-modified">{{col_modified_label}}</span>
-            <span class="asset-col asset-col-status">{{col_status_label}}</span>
           </div>
             <div data-for="asset : assets">
               <div class="asset-list-row" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
@@ -158,23 +160,24 @@
                   <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                 </span>
                 <span class="asset-col asset-col-type">{{asset.type_label}}</span>
-                <span class="asset-col asset-col-role">{{asset.role_label}}</span>
                 <span class="asset-col asset-col-project">{{asset.project_name}}</span>
-                <span class="asset-col asset-col-scene">{{asset.scene_name}}</span>
-                <span class="asset-col asset-col-run">{{asset.run_name}}</span>
                 <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                 <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
-                <span class="asset-col asset-col-status">{{asset.status_label}}</span>
+                <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div id="asset-info-panel">
+      <div id="right-panel-resize-handle" data-event-mousedown="on_right_panel_resize_start"></div>
+
+      <div id="asset-info-panel" data-style-width="right_panel_width">
         <div class="asset-info-tabs">
-          <div class="asset-info-tab" data-class-is-active="show_info_tab" data-asset-tab="info">{{info_tab_label}}</div>
-          <div class="asset-info-tab" data-class-is-active="show_parameters_tab" data-asset-tab="parameters">{{parameters_tab_label}}</div>
+          <div class="asset-info-tab" data-class-is-active="true">{{info_tab_label}}</div>
         </div>
 
         <div class="asset-info-content">
@@ -197,234 +200,108 @@
               <span data-attr-class="'asset-pill ' + selected_asset_pill_class">{{selected_asset_type_label}}</span>
             </div>
 
-            <div data-if="show_info_tab">
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{asset_details_title}}</div>
-                <div class="parameter-row" data-if="selected_asset_project_name">
-                  <span class="parameter-label">{{prop_project_label}}</span>
-                  <span class="parameter-value">{{selected_asset_project_name}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_scene_name">
-                  <span class="parameter-label">{{prop_scene_label}}</span>
-                  <span class="parameter-value">{{selected_asset_scene_name}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_run_name">
-                  <span class="parameter-label">{{prop_run_label}}</span>
-                  <span class="parameter-value">{{selected_asset_run_name}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_points_label}}</span>
-                  <span class="parameter-value">{{selected_asset_points}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_sh_degree_label}}</span>
-                  <span class="parameter-value">{{selected_asset_sh_degree}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_size_label}}</span>
-                  <span class="parameter-value">{{selected_asset_size}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_path_label}}</span>
-                  <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_created_label}}</span>
-                  <span class="parameter-value">{{selected_asset_created}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_modified_label}}</span>
-                  <span class="parameter-value">{{selected_asset_modified}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_resolution">
-                  <span class="parameter-label">{{prop_resolution_label}}</span>
-                  <span class="parameter-value">{{selected_asset_resolution}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_duration">
-                  <span class="parameter-label">{{prop_duration_label}}</span>
-                  <span class="parameter-value">{{selected_asset_duration}}</span>
-                </div>
+            <div class="asset-info-section">
+              <div class="asset-info-section-title">{{asset_details_title}}</div>
+              <div class="parameter-row" data-if="selected_asset_project_name">
+                <span class="parameter-label">{{prop_project_label}}</span>
+                <span class="parameter-value">{{selected_asset_project_name}}</span>
               </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_dataset_metadata">
-                <div class="asset-info-section-title">{{dataset_details_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_images_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_image_count}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_image_root_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_image_root}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_masks_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_masks}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_sparse_model_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_sparse_model}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_cameras_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_camera_count}}</span>
-                </div>
-                <div class="parameter-row" data-if="selected_asset_dataset_initial_points">
-                  <span class="parameter-label">{{prop_initial_points_label}}</span>
-                  <span class="parameter-value">{{selected_asset_dataset_initial_points}}</span>
-                </div>
+              <div class="parameter-row" data-if="selected_asset_scene_name">
+                <span class="parameter-label">{{prop_scene_label}}</span>
+                <span class="parameter-value">{{selected_asset_scene_name}}</span>
               </div>
-
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{tags_title}}</div>
-                <div class="asset-info-tags">
-                  <div data-for="tag : selected_asset_tags">
-                    <div class="asset-info-tag-row">
-                      <span class="asset-card-tag">{{tag.value}}</span>
-                      <button class="asset-tag-remove" data-event-click="on_remove_tag(tag.value)">{{remove_tag_label}}</button>
-                    </div>
-                  </div>
-                </div>
-                <div class="asset-tag-editor">
-                  <input type="text" placeholder="{{add_tag_placeholder}}" data-value="pending_tag_name" data-event-change="on_pending_tag_change" />
-                  <button class="asset-info-button" data-event-click="on_add_tag">{{add_tag_button_label}}</button>
-                </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_points_label}}</span>
+                <span class="parameter-value">{{selected_asset_points}}</span>
               </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_geometry_metadata">
-                <div class="asset-info-section-title">{{geometry_metadata_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_bounding_box_label}}</span>
-                  <span class="parameter-value">{{selected_asset_bounding_box}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_center_label}}</span>
-                  <span class="parameter-value">{{selected_asset_center}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_scale_label}}</span>
-                  <span class="parameter-value">{{selected_asset_scale}}</span>
-                </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_size_label}}</span>
+                <span class="parameter-value">{{selected_asset_size}}</span>
               </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_transform_metadata">
-                <div class="asset-info-section-title">{{transform_info_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_translation_label}}</span>
-                  <span class="parameter-value">{{selected_asset_transform_translation}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_rotation_label}}</span>
-                  <span class="parameter-value">{{selected_asset_transform_rotation}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_scaling_label}}</span>
-                  <span class="parameter-value">{{selected_asset_transform_scaling}}</span>
-                </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_path_label}}</span>
+                <span class="parameter-value asset-path-value">{{selected_asset_path}}</span>
               </div>
-
-              <div class="asset-info-section asset-info-warning" data-if="selected_asset_file_missing">
-                <div class="asset-info-section-title">{{file_not_found_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_expected_path_label}}</span>
-                  <span class="parameter-value">{{selected_asset_expected_path}}</span>
-                </div>
-                <button class="asset-info-button" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_created_label}}</span>
+                <span class="parameter-value">{{selected_asset_created}}</span>
               </div>
-
-            </div>
-
-            <div data-if="show_parameters_tab">
-              <div class="asset-info-section" data-if="selected_asset_has_runs">
-                <div class="asset-info-section-title">{{training_runs_title}}</div>
-                <div data-for="run : selected_asset_runs">
-                  <div class="asset-run-row" data-attr-data-run-id="run.id">
-                    <span class="asset-run-name">{{run.name}}</span>
-                    <span class="asset-run-status">{{run.status}}</span>
-                    <span class="asset-run-summary">{{run.summary}}</span>
-                  </div>
-                </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_modified_label}}</span>
+                <span class="parameter-value">{{selected_asset_modified}}</span>
               </div>
-
-              <div class="asset-info-section" data-if="selected_asset_has_training_provenance">
-                <div class="asset-info-section-title">{{training_summary_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_gaussians_label}}</span>
-                  <span class="parameter-value">{{selected_asset_gaussian_count}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_images_label}}</span>
-                  <span class="parameter-value">{{selected_asset_image_count}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_sh_degree_label}}</span>
-                  <span class="parameter-value">{{selected_asset_sh_degree}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_strategy_label}}</span>
-                  <span class="parameter-value">{{selected_asset_strategy}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_steps_scaler_label}}</span>
-                  <span class="parameter-value">{{selected_asset_steps_scaler}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_iterations_label}}</span>
-                  <span class="parameter-value">{{selected_asset_iterations}}</span>
-                </div>
+              <div class="parameter-row" data-if="selected_asset_resolution">
+                <span class="parameter-label">{{prop_resolution_label}}</span>
+                <span class="parameter-value">{{selected_asset_resolution}}</span>
               </div>
-              <div class="asset-info-empty" data-if="selected_asset_show_no_training">
-                <span class="asset-info-empty-text">{{no_training_provenance_msg}}</span>
-              </div>
-            </div>
-          </div>
-
-          <div data-if="show_selection_run">
-            <div class="asset-info-header">
-              <span class="asset-info-name">{{selected_run_name}}</span>
-              <span class="asset-pill asset-pill-run">{{run_pill_label}}</span>
-            </div>
-
-            <div data-if="show_info_tab">
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{run_details_title}}</div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_status_label}}</span>
-                  <span class="parameter-value">{{selected_run_status}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_started_label}}</span>
-                  <span class="parameter-value">{{selected_run_started}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_completed_label}}</span>
-                  <span class="parameter-value">{{selected_run_completed}}</span>
-                </div>
-                <div class="parameter-row">
-                  <span class="parameter-label">{{prop_duration_label}}</span>
-                  <span class="parameter-value">{{selected_run_duration}}</span>
-                </div>
+              <div class="parameter-row" data-if="selected_asset_duration">
+                <span class="parameter-label">{{prop_duration_label}}</span>
+                <span class="parameter-value">{{selected_asset_duration}}</span>
               </div>
             </div>
 
-            <div data-if="show_parameters_tab">
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{training_summary_title}}</div>
-                <div data-for="param : selected_run_parameters">
-                  <div class="parameter-row">
-                    <span class="parameter-label">{{param.name}}</span>
-                    <span class="parameter-value">{{param.value}}</span>
+            <div class="asset-info-section" data-if="selected_asset_has_dataset_metadata">
+              <div class="asset-info-section-title">{{dataset_details_title}}</div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_images_label}}</span>
+                <span class="parameter-value">{{selected_asset_dataset_image_count}}</span>
+              </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_image_root_label}}</span>
+                <span class="parameter-value">{{selected_asset_dataset_image_root}}</span>
+              </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_masks_label}}</span>
+                <span class="parameter-value">{{selected_asset_dataset_masks}}</span>
+              </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_cameras_label}}</span>
+                <span class="parameter-value">{{selected_asset_dataset_camera_count}}</span>
+              </div>
+              <div class="parameter-row" data-if="selected_asset_dataset_initial_points">
+                <span class="parameter-label">{{prop_initial_points_label}}</span>
+                <span class="parameter-value">{{selected_asset_dataset_initial_points}}</span>
+              </div>
+            </div>
+
+            <div class="asset-info-section" data-if="selected_asset_has_transform_metadata">
+              <div class="asset-info-section-title">{{transform_info_title}}</div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_translation_label}}</span>
+                <span class="parameter-value">{{selected_asset_transform_translation}}</span>
+              </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_rotation_label}}</span>
+                <span class="parameter-value">{{selected_asset_transform_rotation}}</span>
+              </div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_scaling_label}}</span>
+                <span class="parameter-value">{{selected_asset_transform_scaling}}</span>
+              </div>
+            </div>
+
+            <div class="asset-info-section asset-info-warning" data-if="selected_asset_file_missing">
+              <div class="asset-info-section-title">{{file_not_found_title}}</div>
+              <div class="parameter-row">
+                <span class="parameter-label">{{prop_expected_path_label}}</span>
+                <span class="parameter-value">{{selected_asset_expected_path}}</span>
+              </div>
+              <button class="asset-info-button" data-event-click="on_locate_file">{{locate_file_button_label}}</button>
+            </div>
+
+            <div class="asset-info-section">
+              <div class="asset-info-section-title">{{tags_title}}</div>
+              <div class="asset-info-tags">
+                <div data-for="tag : selected_asset_tags">
+                  <div class="asset-info-tag-row">
+                    <span class="asset-card-tag">{{tag.value}}</span>
+                    <button class="asset-tag-remove" data-event-click="on_remove_tag(tag.value)">{{remove_tag_label}}</button>
                   </div>
                 </div>
               </div>
-
-              <div class="asset-info-section">
-                <div class="asset-info-section-title">{{artifacts_title}}</div>
-                <div data-for="artifact : selected_run_artifacts">
-                  <div class="asset-artifact-row" data-attr-data-asset-id="artifact.id" data-asset-action="artifact">
-                    <span class="asset-artifact-name">{{artifact.name}}</span>
-                    <span class="asset-artifact-type">{{artifact.type}}</span>
-                  </div>
-                </div>
+              <div class="asset-tag-editor">
+                <input type="text" placeholder="{{add_tag_placeholder}}" data-event-change="on_pending_tag_change" />
+                <button class="asset-info-button" data-event-click="on_add_tag">{{add_tag_button_label}}</button>
               </div>
             </div>
           </div>
@@ -458,8 +335,8 @@
             <div class="asset-info-section">
               <div class="asset-info-section-title">{{scene_assets_title}}</div>
               <div data-for="scene_asset : selected_scene_assets">
-                <div class="asset-artifact-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
-                  <span class="asset-artifact-name">{{scene_asset.name}}</span>
+                <div class="scene-asset-row" data-attr-data-asset-id="scene_asset.id" data-asset-action="scene_asset">
+                  <span class="scene-asset-name">{{scene_asset.name}}</span>
                   <span class="asset-artifact-type">{{scene_asset.type}}</span>
                 </div>
               </div>
@@ -475,18 +352,6 @@
             <div class="asset-info-section">
               <div class="asset-info-section-title">{{project_details_title}}</div>
               <div class="parameter-row">
-                <span class="parameter-label">{{prop_scenes_label}}</span>
-                <span class="parameter-value">{{selected_project_scene_count}}</span>
-              </div>
-              <div class="parameter-row">
-                <span class="parameter-label">{{prop_total_assets_label}}</span>
-                <span class="parameter-value">{{selected_project_total_assets}}</span>
-              </div>
-              <div class="parameter-row">
-                <span class="parameter-label">{{prop_path_label}}</span>
-                <span class="parameter-value">{{selected_project_path}}</span>
-              </div>
-              <div class="parameter-row">
                 <span class="parameter-label">{{prop_created_label}}</span>
                 <span class="parameter-value">{{selected_project_created}}</span>
               </div>
@@ -496,27 +361,11 @@
               </div>
             </div>
 
-            <div class="asset-info-section">
-              <div class="asset-info-section-title">{{scenes_list_title}}</div>
-              <div data-for="proj_scene : selected_project_scenes">
-                <div class="asset-artifact-row" data-attr-data-scene-id="proj_scene.id">
-                  <span class="asset-artifact-name">{{proj_scene.name}}</span>
-                  <span class="asset-artifact-type">{{proj_scene.asset_count}}</span>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
       </div>
     </div>
 
-    <div id="asset-popup-footer">
-      <div class="asset-batch-summary">
-        <span class="asset-batch-title">{{selected_count_text}}</span>
-        <span class="asset-batch-subtitle" data-if="has_selection">{{selected_total_text}}</span>
-        <span class="asset-batch-subtitle" data-if="!has_selection">{{multi_select_hint}}</span>
-      </div>
-    </div>
   </div>
 </body>
 </rml>

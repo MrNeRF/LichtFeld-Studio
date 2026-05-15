@@ -47,7 +47,10 @@
                 </div>
                 <div id="time-display">
                     <span id="current-time">0:00.00</span>
-                    <span id="duration"></span>
+                    <div id="duration-field" data-tooltip="tooltip.seq_clip_duration">
+                        <span id="duration"></span>
+                        <input id="duration-input" type="text" />
+                    </div>
                 </div>
                 <div class="transport-sep"></div>
                 <div id="btn-speed" class="transport-btn text speed-group" data-tooltip="tooltip.seq_speed">

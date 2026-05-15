@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -26,6 +27,10 @@ namespace lfs::vis {
             VkImageView image_view = VK_NULL_HANDLE;
             VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t generation = 0;
+            VkImage depth_image = VK_NULL_HANDLE;
+            VkImageView depth_image_view = VK_NULL_HANDLE;
+            VkImageLayout depth_image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
         };
@@ -52,6 +57,26 @@ namespace lfs::vis {
                                                  const ModelInputSnapshot& b) = default;
         };
 
+        enum class SelectionMaskShape : std::uint32_t {
+            Brush = 0,
+            Rectangle = 1,
+        };
+
+        enum class OutputSlot : std::size_t {
+            Main = 0,
+            SplitLeft = 1,
+            SplitRight = 2,
+        };
+
+        struct SelectionMaskRequest {
+            lfs::rendering::FrameView frame_view;
+            lfs::rendering::GaussianSceneState scene;
+            SelectionMaskShape shape = SelectionMaskShape::Brush;
+            std::vector<glm::vec4> primitives;
+            bool gut = false;
+            bool equirectangular = false;
+        };
+
         VksplatViewportRenderer();
         ~VksplatViewportRenderer();
 
@@ -62,6 +87,15 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
+            bool force_input_upload,
+            OutputSlot output_slot = OutputSlot::Main);
+        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+            VulkanContext& context,
+            OutputSlot output_slot = OutputSlot::Main) const;
+        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
+            VulkanContext& context,
+            const lfs::core::SplatData& splat_data,
+            const SelectionMaskRequest& request,
             bool force_input_upload);
 
         void reset();
@@ -73,17 +107,35 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> uploadInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
-            int active_sh_degree,
+            std::size_t ring_slot,
+            bool synchronize_upload = false);
+        struct OverlayBindingViews {
+            _VulkanBuffer selection_mask{};
+            _VulkanBuffer preview_mask{};
+            _VulkanBuffer selection_colors{};
+            _VulkanBuffer transform_indices{};
+            _VulkanBuffer node_mask{};
+            _VulkanBuffer overlay_params{};
+            _VulkanBuffer model_transforms{};
+        };
+        [[nodiscard]] std::expected<OverlayBindingViews, std::string> uploadSelectionOverlay(
+            VulkanContext& context,
+            const lfs::rendering::ViewportRenderRequest& request,
+            std::size_t num_splats,
             std::size_t ring_slot);
         [[nodiscard]] bool inputsResident(const lfs::core::SplatData& splat_data,
                                           std::size_t ring_slot) const;
-        [[nodiscard]] std::expected<void, std::string> ensureOutputImage(VulkanContext& context, glm::ivec2 size);
+        [[nodiscard]] std::expected<void, std::string> ensureOutputImages(
+            VulkanContext& context,
+            glm::ivec2 size,
+            OutputSlot output_slot);
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
         [[nodiscard]] std::expected<void, std::string> composePixelState(
             VulkanContext& context,
             VkCommandBuffer cmd,
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background,
+            OutputSlot output_slot,
             bool transparent_background);
 
         // One coalesced CUDA-imported VkBuffer per ring slot, holding all four
@@ -93,32 +145,58 @@ namespace lfs::vis {
         // setup costs into 1×, and surfacing the regions to the rasterizer through
         // _VulkanBuffer offset views (no descriptor-side cost).
         static constexpr std::size_t kInputRegionCount = 4;
+        static constexpr std::size_t kOverlayRegionCount = 7;
+        static constexpr std::size_t kSelectionQueryRegionCount = 5;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaInputSlot {
             VulkanContext::ExternalBuffer buffer{};
             lfs::rendering::CudaVulkanBufferInterop interop{};
             std::array<std::size_t, kInputRegionCount> region_offset{};
             std::array<std::size_t, kInputRegionCount> region_bytes{};
-            std::size_t total_live_bytes = 0;
+        };
+        struct CudaOverlaySlot {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::array<std::size_t, kOverlayRegionCount> region_offset{};
+            std::array<std::size_t, kOverlayRegionCount> region_bytes{};
+            lfs::core::Tensor selection_source;
+            lfs::core::Tensor preview_source;
+            lfs::core::Tensor color_table_source;
+            lfs::core::Tensor transform_indices_source;
+            lfs::core::Tensor node_mask_source;
+            lfs::core::Tensor overlay_params_source;
+            lfs::core::Tensor model_transforms_source;
+        };
+        struct CudaSelectionQuerySlot {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
+            std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
+            lfs::core::Tensor transform_indices_source;
+            lfs::core::Tensor node_mask_source;
+            lfs::core::Tensor primitive_source;
+            lfs::core::Tensor model_transforms_source;
+            lfs::core::Tensor output_tensor;
         };
 
         void detachManagedBuffers();
         void plugRingInputs(std::size_t ring_slot, std::size_t num_splats);
-        [[nodiscard]] std::expected<void, std::string> ensureCudaInputSlot(
-            VulkanContext& context,
-            CudaInputSlot& slot,
-            std::size_t required_bytes,
-            const char* debug_name);
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
         VulkanGSRenderer renderer_;
         VulkanGSPipelineBuffers buffers_;
         std::unique_ptr<ComposePipeline> compose_;
-        VulkanContext::ExternalImage output_image_{};
-        glm::ivec2 output_size_{0, 0};
-        VkImageLayout output_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-        std::uint64_t output_generation_ = 0;
+        struct OutputImageSlot {
+            VulkanContext::ExternalImage image{};
+            VulkanContext::ExternalImage depth_image{};
+            glm::ivec2 size{0, 0};
+            VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            std::uint64_t generation = 0;
+        };
+        static constexpr std::size_t kOutputSlotCount = 3;
+        std::array<OutputImageSlot, kOutputSlotCount> output_slots_{};
 
         // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs),
         // ring-buffered per frame-in-flight. Each ring slot owns its own set of
@@ -128,6 +206,8 @@ namespace lfs::vis {
         // at runtime).
         static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
+        std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
+        CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
@@ -141,6 +221,7 @@ namespace lfs::vis {
             std::uint64_t value = 0;
         };
         std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
+        std::array<UploadTimeline, kInputRingSize> overlay_upload_timelines_{};
     };
 
 } // namespace lfs::vis

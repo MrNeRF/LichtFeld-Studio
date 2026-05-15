@@ -11,6 +11,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/gs_rasterizer_tensor.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/render_constants.hpp"
 #include "training/dataset.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/visualizer.hpp"
@@ -280,7 +281,11 @@ namespace lfs::python {
         add_bool(&Proxy::equirectangular, "equirectangular", "Equirectangular", "Equirectangular projection mode",
                  false);
         add_int_enum(&Proxy::raster_backend, "raster_backend", "Raster Backend", "Gaussian rasterization backend",
-                     {{"FastGS", "fast_gs", 0}, {"3DGUT", "3dgut", 1}, {"VkSplat", "vksplat", 2}}, 0);
+                     {{"FastGS", "fast_gs", 0},
+                      {"3DGUT", "3dgut", 1},
+                      {"VkSplat", "vksplat", 2},
+                      {"VkSplat 3DGUT", "vksplat_3dgut", 3}},
+                     0);
         add_bool(&Proxy::gut, "gut", "GUT Mode", "Enable GUT rendering mode", false);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
@@ -377,6 +382,25 @@ namespace lfs::python {
 
     void PyRenderSettings::set(const std::string& name, nb::object value) {
         prop_.setattr(name, value);
+        if (name == "raster_backend") {
+            settings_.gut = rendering::isGutBackend(
+                static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
+        } else if (name == "gut") {
+            const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
+            if (settings_.gut) {
+                if (backend == rendering::GaussianRasterBackend::FastGs) {
+                    settings_.raster_backend = static_cast<int>(rendering::GaussianRasterBackend::Gut);
+                } else if (backend == rendering::GaussianRasterBackend::VkSplat) {
+                    settings_.raster_backend = static_cast<int>(rendering::GaussianRasterBackend::VkSplatGut);
+                }
+            } else {
+                if (backend == rendering::GaussianRasterBackend::Gut) {
+                    settings_.raster_backend = static_cast<int>(rendering::GaussianRasterBackend::FastGs);
+                } else if (backend == rendering::GaussianRasterBackend::VkSplatGut) {
+                    settings_.raster_backend = static_cast<int>(rendering::GaussianRasterBackend::VkSplat);
+                }
+            }
+        }
         vis::update_render_settings(settings_);
         request_redraw();
     }

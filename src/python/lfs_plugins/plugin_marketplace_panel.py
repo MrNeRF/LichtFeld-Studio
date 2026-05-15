@@ -929,6 +929,12 @@ class PluginMarketplacePanel(Panel):
         if overlay:
             overlay.set_class("hidden", True)
         if name:
+            if mgr.get_state(name) == PluginState.ACTIVE:
+                # Unload on the UI thread before handing off to the background worker.
+                # Unloading in a background thread can crash when plugin callbacks
+                # (e.g. remove_draw_handler) touch UI state from the wrong thread.
+                lf.log.info(f"Plugin '{name}' was loaded. Unloading before uninstall.")
+                mgr.unload(name)
             self._uninstall_plugin(mgr, name, card_id)
 
     def _on_confirm_no(self, handle, event, args):

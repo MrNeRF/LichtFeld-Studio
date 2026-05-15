@@ -619,20 +619,20 @@ namespace lfs::vis {
             }
         }
 
-        void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanDepthBlitParams& params) {
+        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanDepthBlitParams& params) {
             if (pipeline == VK_NULL_HANDLE || bound_view == VK_NULL_HANDLE ||
-                screen_quad_buffer == VK_NULL_HANDLE) {
+                screen_quad_buffer == VK_NULL_HANDLE ||
+                rect.extent.width == 0 || rect.extent.height == 0) {
                 return;
             }
             VkViewport vp{};
-            vp.x = 0.0f;
-            vp.y = 0.0f;
-            vp.width = static_cast<float>(extent.width);
-            vp.height = static_cast<float>(extent.height);
+            vp.x = static_cast<float>(rect.offset.x);
+            vp.y = static_cast<float>(rect.offset.y);
+            vp.width = static_cast<float>(rect.extent.width);
+            vp.height = static_cast<float>(rect.extent.height);
             vp.minDepth = 0.0f;
             vp.maxDepth = 1.0f;
-            VkRect2D sc{};
-            sc.extent = extent;
+            VkRect2D sc = rect;
             vkCmdSetViewport(cb, 0, 1, &vp);
             vkCmdSetScissor(cb, 0, 1, &sc);
 
@@ -670,10 +670,10 @@ namespace lfs::vis {
             impl_->prepare(params);
     }
 
-    void VulkanDepthBlitPass::record(VkCommandBuffer cb, VkExtent2D extent,
+    void VulkanDepthBlitPass::record(VkCommandBuffer cb, VkRect2D rect,
                                      const VulkanDepthBlitParams& params) {
         if (impl_)
-            impl_->record(cb, extent, params);
+            impl_->record(cb, rect, params);
     }
 
     void VulkanDepthBlitPass::shutdown() {

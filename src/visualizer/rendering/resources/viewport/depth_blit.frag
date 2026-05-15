@@ -14,10 +14,7 @@ layout(push_constant) uniform Push {
 float view_depth_to_ndc(float z) {
     float n = pc.params.x;
     float f = pc.params.y;
-    float A = (f + n) / (f - n);
-    float B = (2.0 * f * n) / (f - n);
-    float ndc = A - B / max(z, n);
-    return ndc * 0.5 + 0.5;
+    return f / (f - n) * (1.0 - n / max(z, n));
 }
 
 void main() {

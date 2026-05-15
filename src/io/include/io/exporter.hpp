@@ -79,12 +79,10 @@ namespace lfs::io {
     // HTML Viewer Export
     // ============================================================================
 
-    using HtmlProgressCallback = std::function<void(float progress, const std::string& stage)>;
-
     struct HtmlExportOptions {
         std::filesystem::path output_path;
         int kmeans_iterations = 10;
-        HtmlProgressCallback progress_callback = nullptr;
+        ExportProgressCallback progress_callback = nullptr;
     };
 
     /**
@@ -99,6 +97,7 @@ namespace lfs::io {
 
     struct SpzSaveOptions {
         std::filesystem::path output_path;
+        ExportProgressCallback progress_callback = nullptr;
     };
 
     /**
@@ -113,6 +112,7 @@ namespace lfs::io {
 
     struct UsdSaveOptions {
         std::filesystem::path output_path;
+        ExportProgressCallback progress_callback = nullptr;
     };
 
     /**
@@ -127,6 +127,7 @@ namespace lfs::io {
 
     struct NurecUsdzSaveOptions {
         std::filesystem::path output_path;
+        ExportProgressCallback progress_callback = nullptr;
     };
 
     /**

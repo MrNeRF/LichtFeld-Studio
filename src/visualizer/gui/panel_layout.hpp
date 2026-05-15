@@ -140,8 +140,6 @@ namespace lfs::vis::gui {
 
         float tab_scroll_offset_ = 0.0f;
         float tab_content_total_h_ = 0.0f;
-        bool tab_scrollbar_dragging_ = false;
-        float tab_scrollbar_drag_offset_ = 0.0f;
         size_t background_preload_index_ = 0;
 
         CursorRequest cursor_request_ = CursorRequest::None;
@@ -153,7 +151,7 @@ namespace lfs::vis::gui {
         static constexpr float PYTHON_CONSOLE_MIN_WIDTH = 200.0f;
         static constexpr float PYTHON_CONSOLE_MAX_RATIO = 0.5f;
         static constexpr float BOTTOM_DOCK_MIN_HEIGHT = 180.0f;
-        static constexpr float BOTTOM_DOCK_DEFAULT_HEIGHT = 320.0f;
+        static constexpr float BOTTOM_DOCK_DEFAULT_HEIGHT = 440.0f;
         static constexpr float BOTTOM_DOCK_MAX_RATIO = 0.65f;
         static constexpr float MIN_VIEWPORT_HEIGHT = 140.0f;
     };

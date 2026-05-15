@@ -156,6 +156,7 @@ namespace lfs::vis {
         PanelImage left{};
         PanelImage right{};
         bool descriptors_dirty = true;
+        bool frame_ready = false;
 
         ~Impl() { destroy(); }
 
@@ -678,12 +679,13 @@ namespace lfs::vis {
             return true;
         }
 
-        void rebindDescriptorsIfDirty(const VulkanSplitViewPanel& left_spec,
+        bool rebindDescriptorsIfDirty(const VulkanSplitViewPanel& left_spec,
                                       VkImageView left_view,
                                       const VulkanSplitViewPanel& right_spec,
                                       VkImageView right_view) {
             if (left_view == VK_NULL_HANDLE || right_view == VK_NULL_HANDLE) {
-                return;
+                descriptors_dirty = true;
+                return false;
             }
             const std::uint64_t left_generation =
                 left_spec.external_image_view != VK_NULL_HANDLE ? left_spec.external_image_generation : 0;
@@ -695,7 +697,7 @@ namespace lfs::vis {
                 left_generation != left.bound_generation ||
                 right_generation != right.bound_generation;
             if (!descriptors_dirty && !changed) {
-                return;
+                return true;
             }
             std::array<VkDescriptorImageInfo, 2> infos{};
             infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -720,6 +722,7 @@ namespace lfs::vis {
             left.bound_generation = left_generation;
             right.bound_view = right_view;
             right.bound_generation = right_generation;
+            return true;
         }
 
         // Returns the view to bind for one panel: the externally-supplied interop view
@@ -738,12 +741,13 @@ namespace lfs::vis {
         }
 
         void prepare(const VulkanSplitViewParams& params) {
+            frame_ready = false;
             if (!params.enabled) {
                 return;
             }
             const VkImageView left_view = resolvePanelView(left, params.left);
             const VkImageView right_view = resolvePanelView(right, params.right);
-            rebindDescriptorsIfDirty(params.left, left_view, params.right, right_view);
+            frame_ready = rebindDescriptorsIfDirty(params.left, left_view, params.right, right_view);
         }
 
         void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params) {
@@ -812,7 +816,7 @@ namespace lfs::vis {
         }
 
         bool ready() const {
-            return pipeline != VK_NULL_HANDLE && left.bound_view != VK_NULL_HANDLE &&
+            return frame_ready && pipeline != VK_NULL_HANDLE && left.bound_view != VK_NULL_HANDLE &&
                    right.bound_view != VK_NULL_HANDLE;
         }
     };

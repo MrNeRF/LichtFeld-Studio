@@ -76,7 +76,7 @@ namespace lfs::vis::gui {
         void hideEditOverlay();
         void showPreviewWindow(float left, float top, float width, float height,
                                const std::string& title, bool playing,
-                               std::uintptr_t texture_id);
+                               const std::string& texture_src);
         void hidePreviewWindow();
 
         void processInput(const lfs::vis::PanelInputState& input);

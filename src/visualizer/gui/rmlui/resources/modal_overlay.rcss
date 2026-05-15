@@ -46,7 +46,7 @@ body {
 
 .modal-content {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     text-align: center;
     max-height: 400dp;
     overflow: auto;
@@ -87,7 +87,7 @@ body {
 
 /* Content helper classes */
 .dim-text {
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .error-text {

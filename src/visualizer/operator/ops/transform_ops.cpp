@@ -98,7 +98,7 @@ namespace lfs::vis::op {
         .label = "Translate",
         .description = "Move selected nodes",
         .icon = "translate",
-        .shortcut = "G",
+        .shortcut = "",
         .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
     };
@@ -121,7 +121,7 @@ namespace lfs::vis::op {
         .label = "Rotate",
         .description = "Rotate selected nodes",
         .icon = "rotate",
-        .shortcut = "R",
+        .shortcut = "",
         .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
     };
@@ -144,7 +144,7 @@ namespace lfs::vis::op {
         .label = "Scale",
         .description = "Scale selected nodes",
         .icon = "scale",
-        .shortcut = "S",
+        .shortcut = "",
         .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
     };

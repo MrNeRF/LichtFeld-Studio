@@ -31,7 +31,7 @@ body {
     margin-top: 2dp;
     padding: 6dp 0 0;
     border-top-width: 1dp;
-    font-size: 11dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -55,19 +55,19 @@ body {
 }
 
 .rendering-transform-meta__primary {
-    font-size: 10dp;
+    font-size: 12dp;
     min-width: 0;
     flex-grow: 1;
 }
 
 .rendering-transform-meta__secondary {
-    font-size: 10dp;
+    font-size: 12dp;
     white-space: nowrap;
     flex-shrink: 0;
 }
 
 .rendering-transform-group-label {
-    font-size: 11dp;
+    font-size: 12dp;
     padding: 2dp 0 0;
 }
 
@@ -98,7 +98,7 @@ body {
     padding-top: 6dp;
     border-top-width: 1dp;
     margin: 2dp 0 4dp;
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -131,9 +131,9 @@ body {
 .rendering-simplify-stat__label {
     display: block;
     margin-bottom: 4dp;
-    font-size: 9dp;
+    font-size: 12dp;
     text-transform: uppercase;
-    letter-spacing: 0.6dp;
+    letter-spacing: 0.2dp;
 }
 
 .rendering-simplify-stat__value {

@@ -11,8 +11,8 @@
 #include <random>
 #include <thrust/device_ptr.h>
 #include <thrust/sequence.h>
-#include <thrust/shuffle.h>
 #include <thrust/sort.h>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::io {
@@ -24,6 +24,14 @@ namespace lfs::io {
 
         constexpr int CHUNK_SIZE = 128;
         constexpr int BLOCK_SIZE = 256;
+
+        // Tensor::cuda() deep-copies CUDA tensors in this codebase; borrow when possible.
+        Tensor as_cuda_contiguous(const Tensor& data) {
+            if (data.device() == Device::CUDA) {
+                return data.is_contiguous() ? data : data.contiguous();
+            }
+            return data.cuda().contiguous();
+        }
 
         template <int N_DIMS>
         __global__ void gather_centroids_kernel(
@@ -42,11 +50,30 @@ namespace lfs::io {
             }
         }
 
-        void init_random_indices_gpu(int* d_indices, const int n, const unsigned int seed) {
-            thrust::device_ptr<int> indices_ptr(d_indices);
-            thrust::sequence(indices_ptr, indices_ptr + n);
-            thrust::default_random_engine rng(seed);
-            thrust::shuffle(indices_ptr, indices_ptr + n, rng);
+        std::vector<int> sample_unique_indices(const int n, const int count, const unsigned int seed) {
+            std::vector<int> indices(static_cast<size_t>(count));
+            std::unordered_map<int, int> swaps;
+            swaps.reserve(static_cast<size_t>(count) * 2);
+
+            auto value_for = [&swaps](const int index) {
+                auto it = swaps.find(index);
+                return it == swaps.end() ? index : it->second;
+            };
+
+            std::mt19937 rng(seed);
+            for (int i = 0; i < count; ++i) {
+                std::uniform_int_distribution<int> dist(i, n - 1);
+                const int pick = dist(rng);
+                indices[static_cast<size_t>(i)] = value_for(pick);
+                swaps[pick] = value_for(i);
+            }
+
+            return indices;
+        }
+
+        Tensor sample_unique_indices_gpu(const int n, const int count, const unsigned int seed) {
+            auto indices = sample_unique_indices(n, count, seed);
+            return Tensor::from_vector(indices, {static_cast<size_t>(count)}, Device::CUDA);
         }
 
         void build_csr_offsets_gpu(
@@ -263,7 +290,7 @@ namespace lfs::io {
                 return {centroids, labels};
             }
 
-            auto data_gpu = data.cuda().contiguous();
+            auto data_gpu = as_cuda_contiguous(data);
             const float* d_data = data_gpu.ptr<float>();
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
@@ -271,9 +298,8 @@ namespace lfs::io {
             float* d_centroids = centroids.ptr<float>();
 
             {
-                auto perm = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
                 std::random_device rd;
-                init_random_indices_gpu(perm.ptr<int>(), n, rd());
+                auto perm = sample_unique_indices_gpu(n, k, rd());
 
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
@@ -379,10 +405,13 @@ namespace lfs::io {
         constexpr int SUPER_CHUNK_SIZE = 64;
 
         template <int N_DIMS>
-        __global__ void find_nearest_super_clusters_kernel(
+        __global__ void hierarchical_search_fused_kernel(
             const float* __restrict__ data,
+            const float* __restrict__ centroids,
             const float* __restrict__ super_centroids,
-            int* __restrict__ nearest_supers,
+            const int* __restrict__ super_offsets,
+            const int* __restrict__ super_indices,
+            int* __restrict__ labels,
             const int n_points) {
             __shared__ float shared_supers[SUPER_CHUNK_SIZE * N_DIMS];
 
@@ -449,41 +478,11 @@ namespace lfs::io {
             }
 
             if (tid < n_points) {
-                for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
-                    nearest_supers[tid * NUM_NEAREST_SUPERS + i] = best_idxs[i];
-                }
-            }
-        }
+                float min_dist = 1e30f;
+                int min_idx = 0;
 
-        template <int N_DIMS>
-        __global__ void hierarchical_search_kernel(
-            const float* __restrict__ data,
-            const float* __restrict__ centroids,
-            const int* __restrict__ nearest_supers,
-            const int* __restrict__ super_offsets,
-            const int* __restrict__ super_indices,
-            int* __restrict__ labels,
-            const int n_points) {
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-            float point[N_DIMS];
-            if (tid < n_points) {
-#pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = data[tid * N_DIMS + d];
-                }
-            }
-
-            float min_dist = 1e30f;
-            int min_idx = 0;
-
-            for (int si = 0; si < NUM_NEAREST_SUPERS; ++si) {
-                int super_idx = 0;
-                if (tid < n_points) {
-                    super_idx = nearest_supers[tid * NUM_NEAREST_SUPERS + si];
-                }
-
-                if (tid < n_points) {
+                for (int si = 0; si < NUM_NEAREST_SUPERS; ++si) {
+                    const int super_idx = best_idxs[si];
                     const int start = super_offsets[super_idx];
                     const int end = super_offsets[super_idx + 1];
 
@@ -502,9 +501,7 @@ namespace lfs::io {
                         }
                     }
                 }
-            }
 
-            if (tid < n_points) {
                 labels[tid] = min_idx;
             }
         }
@@ -522,7 +519,7 @@ namespace lfs::io {
                 return {centroids, labels};
             }
 
-            auto data_gpu = data.cuda().contiguous();
+            auto data_gpu = as_cuda_contiguous(data);
             const float* d_data = data_gpu.ptr<float>();
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
@@ -530,9 +527,8 @@ namespace lfs::io {
             float* d_centroids = centroids.ptr<float>();
 
             {
-                auto perm = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
                 std::random_device rd;
-                init_random_indices_gpu(perm.ptr<int>(), n, rd());
+                auto perm = sample_unique_indices_gpu(n, k, rd());
 
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
@@ -544,9 +540,8 @@ namespace lfs::io {
             auto super_membership = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
 
             {
-                auto perm = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
                 std::random_device rd;
-                init_random_indices_gpu(perm.ptr<int>(), k, rd());
+                auto perm = sample_unique_indices_gpu(k, NUM_SUPER_CLUSTERS, rd());
 
                 const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
@@ -585,8 +580,6 @@ namespace lfs::io {
                                   super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
-            auto nearest_supers = Tensor::zeros({static_cast<size_t>(n), static_cast<size_t>(NUM_NEAREST_SUPERS)},
-                                                Device::CUDA, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
                                                Device::CUDA, DataType::Float32);
             auto centroid_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
@@ -616,11 +609,8 @@ namespace lfs::io {
                     assign_nearest_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                         d_data, d_centroids, labels.ptr<int>(), n, k);
                 } else {
-                    find_nearest_super_clusters_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                        d_data, super_centroids.ptr<float>(), nearest_supers.ptr<int>(), n);
-
-                    hierarchical_search_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                        d_data, d_centroids, nearest_supers.ptr<int>(),
+                    hierarchical_search_fused_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
+                        d_data, d_centroids, super_centroids.ptr<float>(),
                         super_offsets.ptr<int>(), super_indices.ptr<int>(),
                         labels.ptr<int>(), n);
                 }
@@ -710,7 +700,7 @@ namespace lfs::io {
             return {Tensor(), Tensor()};
         }
 
-        auto data_gpu = data_2d.cuda().contiguous();
+        auto data_gpu = as_cuda_contiguous(data_2d);
         const int n = data_gpu.shape()[0];
 
         if (n <= k) {

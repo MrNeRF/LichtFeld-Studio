@@ -2447,9 +2447,17 @@ namespace lfs::vis {
         // Get node visibility mask (for consolidated models)
         state.node_visibility_mask = scene_.getNodeVisibilityMask();
 
-        // Get selection mask
-        state.selection_mask = scene_.getSelectionMask();
-        state.has_selection = scene_.hasSelection();
+        // Renderers consume masks in visible-model order. Scene selection state remains full-scene
+        // so hidden-node selections survive visibility toggles.
+        state.selection_mask = scene_.getVisibleSelectionMask();
+        const size_t render_splat_count = state.combined_model
+                                              ? static_cast<size_t>(state.combined_model->size())
+                                              : scene_.getTotalGaussianCount();
+        if (state.selection_mask && state.selection_mask->is_valid() &&
+            state.selection_mask->numel() != render_splat_count) {
+            state.selection_mask.reset();
+        }
+        state.has_selection = state.selection_mask && state.selection_mask->is_valid();
 
         // Get cropboxes (before lock — no selection dependency)
         state.cropboxes = scene_.getVisibleCropBoxes();
@@ -3543,7 +3551,7 @@ namespace lfs::vis {
         if (!combined || combined->size() == 0)
             return false;
 
-        const auto mask = scene_.getSelectionMask();
+        const auto mask = scene_.getVisibleSelectionMask();
         if (!mask || !mask->is_valid())
             return false;
 
@@ -3888,7 +3896,7 @@ namespace lfs::vis {
             return;
         }
 
-        const size_t total = scene_.getTotalGaussianCount();
+        const size_t total = scene_.getSelectionGaussianCount();
         if (total == 0)
             return;
 
@@ -3899,7 +3907,7 @@ namespace lfs::vis {
         const auto old_mask = scene_.getSelectionMask();
 
         lfs::core::Tensor new_mask;
-        if (old_mask && old_mask->is_valid()) {
+        if (old_mask && old_mask->is_valid() && old_mask->numel() == total) {
             // Scene selection masks store selection group ids (uint8). Invert only the active group while
             // preserving membership in other groups.
             //
@@ -3959,8 +3967,10 @@ namespace lfs::vis {
         }
 
         if (is_selection_tool) {
-            const size_t total = scene_.getTotalGaussianCount();
-            if (total == 0)
+            const auto* const model = getModelForRendering();
+            const size_t visible_total = model ? static_cast<size_t>(model->size()) : scene_.getTotalGaussianCount();
+            const size_t full_total = scene_.getSelectionGaussianCount();
+            if (visible_total == 0 || full_total == 0)
                 return;
 
             const auto& selected_name = getSelectedNodeName();
@@ -3972,13 +3982,31 @@ namespace lfs::vis {
                 return;
 
             const auto transform_indices = scene_.getTransformIndices();
-            if (!transform_indices || transform_indices->numel() != total)
+            if (!transform_indices || transform_indices->numel() != visible_total)
                 return;
 
             auto entry = std::make_unique<op::SceneSnapshot>(*this, "select.all");
             entry->captureSelection();
 
-            auto new_mask = std::make_shared<lfs::core::Tensor>(transform_indices->eq(node_index));
+            const auto group_id = scene_.getActiveSelectionGroup() != 0 ? scene_.getActiveSelectionGroup() : 1;
+            const auto visible_bool = transform_indices->eq(node_index);
+            const auto visible_values = visible_bool.to(lfs::core::DataType::UInt8) *
+                                        lfs::core::Tensor::full(
+                                            {visible_total}, static_cast<float>(group_id),
+                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            lfs::core::Tensor full_mask;
+            const auto visible_indices = scene_.getVisibleSelectionIndices();
+            if (visible_values.numel() == full_total && !visible_indices) {
+                full_mask = visible_values;
+            } else if (visible_indices && visible_indices->is_valid() &&
+                       visible_indices->numel() == visible_values.numel()) {
+                full_mask = lfs::core::Tensor::zeros(
+                    {full_total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                full_mask.index_copy_(0, *visible_indices, visible_values);
+            } else {
+                return;
+            }
+            auto new_mask = std::make_shared<lfs::core::Tensor>(std::move(full_mask));
             scene_.setSelectionMask(new_mask);
 
             entry->captureAfter();

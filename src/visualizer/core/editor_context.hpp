@@ -51,7 +51,8 @@ namespace lfs::vis {
         Rectangle,
         Polygon,
         Lasso,
-        Rings
+        Rings,
+        Color
     };
 
     // Transform coordinate space

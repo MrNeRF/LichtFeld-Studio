@@ -75,7 +75,7 @@
     height: 20dp;
     padding: 0;
     line-height: 18dp;
-    font-size: 11dp;
+    font-size: 12dp;
     text-align: center;
 }
 
@@ -199,9 +199,9 @@
 }
 
 .status-item {
-    font-size: 10dp;
+    font-size: 12dp;
     margin-right: 16dp;
-    letter-spacing: 0.5dp;
+    letter-spacing: 0.2dp;
 }
 
 /* ── Card info area ───────────────────────────────────── */
@@ -232,18 +232,18 @@
 }
 
 .card-metrics {
-    font-size: 11dp;
+    font-size: 12dp;
     display: block;
     margin-top: 2dp;
 }
 
 .card-tags {
-    font-size: 11dp;
+    font-size: 12dp;
     display: block;
 }
 
 .card-local {
-    font-size: 11dp;
+    font-size: 12dp;
     display: block;
 }
 
@@ -289,7 +289,7 @@
 }
 
 .card-startup-label {
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 /* ── Card feedback ────────────────────────────────────── */
@@ -305,7 +305,7 @@
 }
 
 .card-progress-text {
-    font-size: 11dp;
+    font-size: 12dp;
     display: block;
 }
 
@@ -363,7 +363,7 @@
 }
 
 .plugin-list-version {
-    font-size: 11dp;
+    font-size: 12dp;
     flex-shrink: 0;
 }
 
@@ -377,14 +377,14 @@
 
 .plugin-list-summary-status {
     min-width: 112dp;
-    font-size: 11dp;
+    font-size: 12dp;
     text-align: right;
 }
 
 .plugin-list-marker {
     width: 10dp;
     min-width: 10dp;
-    font-size: 11dp;
+    font-size: 12dp;
     text-align: center;
 }
 
@@ -407,20 +407,20 @@
 }
 
 .plugin-list-meta-item {
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .plugin-list-link {
     padding: 0 4dp;
     border-width: 0;
     background-color: transparent;
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .plugin-list-description,
 .plugin-list-error {
     display: block;
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .plugin-list-feedback {
@@ -449,7 +449,7 @@
 }
 
 .plugin-list-option-label {
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .plugin-list-buttons {
@@ -491,7 +491,7 @@
 
 .confirm-message {
     display: block;
-    font-size: 11dp;
+    font-size: 12dp;
     text-align: center;
     margin-bottom: 8dp;
 }

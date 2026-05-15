@@ -14,7 +14,7 @@
 }
 
 .ep-section-title {
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
     margin-bottom: 4dp;
 }
@@ -43,7 +43,7 @@
 }
 
 .ep-format-name {
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 /* ── Model list ──────────────────────────────────────── */
@@ -55,7 +55,7 @@
 }
 
 .ep-small-btn {
-    font-size: 10dp;
+    font-size: 12dp;
     padding: 1dp 8dp;
 }
 
@@ -76,17 +76,17 @@
 }
 
 .ep-model-name {
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .ep-model-count {
-    font-size: 10dp;
+    font-size: 12dp;
     margin-left: 6dp;
     flex-shrink: 0;
 }
 
 .ep-no-models {
-    font-size: 10dp;
+    font-size: 12dp;
     padding: 4dp 0;
 }
 
@@ -94,7 +94,7 @@
 
 .ep-error {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     margin-bottom: 4dp;
 }
 
@@ -127,6 +127,6 @@
 
 .ep-stage-text {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     margin-bottom: 6dp;
 }

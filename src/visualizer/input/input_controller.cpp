@@ -47,6 +47,7 @@ namespace lfs::vis {
     namespace {
         constexpr float kWasdShiftSpeedBonus = 20.0f;
         constexpr double kCameraContextMenuDragThreshold = 4.0;
+        constexpr double kCameraFrustumClickThreshold = 5.0;
         namespace string_keys = lichtfeld::Strings;
 
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
@@ -69,6 +70,27 @@ namespace lfs::vis {
 
         [[nodiscard]] bool isEnvironmentMapExtension(const std::string_view ext) {
             return ext == ".hdr" || ext == ".exr";
+        }
+
+        [[nodiscard]] bool isSelectionModalAction(const input::Action action) {
+            return action == input::Action::CONFIRM_POLYGON ||
+                   action == input::Action::CANCEL_POLYGON ||
+                   action == input::Action::UNDO_POLYGON_VERTEX;
+        }
+
+        bool dispatchSelectionActionToModal(const input::Action action, const int mods,
+                                            const double x, const double y) {
+            if (!isSelectionModalAction(action)) {
+                return false;
+            }
+            if (op::operators().activeModalId() != op::to_string(op::BuiltinOp::SelectionStroke)) {
+                return false;
+            }
+
+            op::ModalEvent evt{};
+            evt.type = op::ModalEvent::Type::ACTION;
+            evt.data = op::ActionEvent{action, mods, {x, y}};
+            return op::operators().dispatchModalEvent(evt) != op::OperatorResult::PASS_THROUGH;
         }
 
         void applyDroppedEnvironmentMap(const std::filesystem::path& environment_map_path) {
@@ -212,6 +234,10 @@ namespace lfs::vis {
                 submode = SelectionSubMode::Rings;
                 submode_id = "rings";
                 break;
+            case input::Action::SELECT_MODE_COLOR:
+                submode = SelectionSubMode::Color;
+                submode_id = "color";
+                break;
             default:
                 return false;
             }
@@ -251,6 +277,15 @@ namespace lfs::vis {
 
             lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
             return true;
+        }
+
+        [[nodiscard]] bool shouldDeferClickActionForDrag(const input::Action action) {
+            switch (action) {
+            case input::Action::CAMERA_SET_PIVOT:
+                return true;
+            default:
+                return false;
+            }
         }
     } // namespace
 
@@ -299,6 +334,7 @@ namespace lfs::vis {
             drag_mode_ = DragMode::None;
             clearSelectedCameraContextMenuGesture();
             press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
             hovered_camera_id_ = -1;
 
@@ -366,12 +402,20 @@ namespace lfs::vis {
     }
 
     void InputController::refreshMovementKeyCache() {
-        movement_keys_.forward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_FORWARD);
-        movement_keys_.backward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_BACKWARD);
-        movement_keys_.left = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_LEFT);
-        movement_keys_.right = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_RIGHT);
-        movement_keys_.up = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_UP);
-        movement_keys_.down = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_DOWN);
+        for (size_t i = 0; i < input::kToolModeCount; ++i) {
+            const auto mode = static_cast<input::ToolMode>(i);
+            auto& mk = movement_keys_per_mode_[i];
+            mk.forward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_FORWARD, mode);
+            mk.backward = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_BACKWARD, mode);
+            mk.left = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_LEFT, mode);
+            mk.right = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_RIGHT, mode);
+            mk.up = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_UP, mode);
+            mk.down = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_DOWN, mode);
+        }
+    }
+
+    const InputController::MovementKeys& InputController::currentMovementKeys() const {
+        return movement_keys_per_mode_[static_cast<size_t>(getCurrentToolMode())];
     }
 
     void InputController::setCameraNavigationMode(const CameraNavigationMode mode) {
@@ -393,6 +437,13 @@ namespace lfs::vis {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
+        held_keys_.clear();
+        pending_click_drag_ = {};
+        forced_mouse_press_action_ = input::Action::NONE;
+        is_node_rect_dragging_ = false;
+        node_rect_button_ = -1;
+        node_point_pick_enabled_ = false;
+        node_rect_select_enabled_ = false;
     }
 
     bool InputController::hasViewportKeyboardFocus() const {
@@ -457,13 +508,21 @@ namespace lfs::vis {
             action == input::ACTION_RELEASE &&
             is_left_button &&
             press_selected_camera_frustum_;
+        const int pressed_camera_frustum_id = pressed_camera_frustum_id_;
+        const glm::dvec2 pressed_camera_frustum_pos = pressed_camera_frustum_pos_;
         if (action == input::ACTION_PRESS && is_left_button)
             press_selected_camera_frustum_ = false;
-        if (action == input::ACTION_RELEASE && is_left_button)
+        if (action == input::ACTION_PRESS && is_left_button)
+            pressed_camera_frustum_id_ = -1;
+        if (action == input::ACTION_RELEASE && is_left_button) {
             press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
+        }
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
         const bool over_gui = isPointerOverBlockingUi(x, y);
         const bool over_gui_hover = isPointerOverUiHover(x, y);
+        const bool over_transform_gizmo = isTransformGizmoOverOrUsing();
+        const int mods = getModifierKeys();
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
@@ -474,13 +533,33 @@ namespace lfs::vis {
         }
 
         // Forward to GUI for mouse capture (rebinding)
-        if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
-            gui->captureMouseButton(button, getModifierKeys());
+        if (gui && gui->isCapturingInput()) {
+            if (action == input::ACTION_PRESS) {
+                std::optional<int> chord_key;
+                if (!held_keys_.empty()) {
+                    chord_key = held_keys_.back();
+                }
+                gui->captureMouseButton(button, mods, x, y, chord_key);
+            } else if (action == input::ACTION_RELEASE) {
+                gui->captureMouseButtonRelease(button);
+            }
             return;
         }
 
+        if (action == input::ACTION_PRESS) {
+            const auto mouse_btn = static_cast<input::MouseButton>(button);
+            const auto tool_mode = getCurrentToolMode();
+            auto modal_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
+            if (!isSelectionModalAction(modal_action)) {
+                modal_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
+            }
+            if (dispatchSelectionActionToModal(modal_action, mods, x, y)) {
+                return;
+            }
+        }
+
         // Dispatch to modal operators first - if consumed, don't continue
-        if (dispatchMouseButtonToModals(button, action, getModifierKeys(), x, y, over_gui_hover)) {
+        if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
             return;
         }
 
@@ -503,8 +582,10 @@ namespace lfs::vis {
             bool is_double_click = (time_since_last < MOUSE_DOUBLE_CLICK_TIME &&
                                     dist < MOUSE_DOUBLE_CLICK_DISTANCE);
 
-            // If we have a hovered camera, check for double-click
-            if (hovered_camera_id_ >= 0) {
+            // If we have a hovered camera, check for double-click. Defer
+            // single-click selection until release so orbit drags that start
+            // over dataset image frustums do not change the node selection.
+            if (hovered_camera_id_ >= 0 && !over_gizmo && !over_transform_gizmo) {
                 if (is_double_click && hovered_camera_id_ == last_clicked_camera_id_) {
                     cmd::GoToCamView{.cam_id = hovered_camera_id_}.emit();
 
@@ -517,7 +598,8 @@ namespace lfs::vis {
                 last_click_time_ = now;
                 last_click_pos_ = {x, y};
                 last_clicked_camera_id_ = hovered_camera_id_;
-                selectCameraByUid(hovered_camera_id_);
+                pressed_camera_frustum_id_ = hovered_camera_id_;
+                pressed_camera_frustum_pos_ = {x, y};
                 press_selected_camera_frustum_ = true;
             } else {
                 last_click_time_ = std::chrono::steady_clock::time_point();
@@ -544,7 +626,6 @@ namespace lfs::vis {
         }
 
         // Single binding lookup with current tool mode
-        const int mods = getModifierKeys();
         const auto mouse_btn = static_cast<input::MouseButton>(button);
         const auto tool_mode = getCurrentToolMode();
 
@@ -561,16 +642,35 @@ namespace lfs::vis {
         last_general_click_pos_ = {x, y};
         last_general_click_button_ = button;
 
-        // Check double-click bindings first, then drag bindings
-        auto bound_action = input::Action::NONE;
-        if (is_general_double_click) {
-            bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, true);
+        // Check double-click bindings first, then drag bindings.
+        const auto double_click_action = is_general_double_click
+                                             ? bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, true)
+                                             : input::Action::NONE;
+        const auto drag_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods, held_keys_);
+        const auto single_click_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
+        auto bound_action = double_click_action;
+        if (bound_action == input::Action::NONE) {
+            if (single_click_action == input::Action::NODE_PICK &&
+                drag_action == input::Action::NODE_RECT_SELECT) {
+                bound_action = input::Action::NODE_PICK;
+            } else {
+                bound_action = drag_action;
+            }
         }
         if (bound_action == input::Action::NONE) {
-            bound_action = bindings_.getActionForDrag(tool_mode, mouse_btn, mods);
+            bound_action = single_click_action;
         }
-        if (bound_action == input::Action::NONE) {
-            bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
+        if (action == input::ACTION_PRESS &&
+            forced_mouse_press_action_ != input::Action::NONE) {
+            bound_action = forced_mouse_press_action_;
+        }
+
+        const bool is_right_button = button == static_cast<int>(input::AppMouseButton::RIGHT);
+        if (action == input::ACTION_PRESS &&
+            is_right_button &&
+            pending_camera_context_menu_.active &&
+            pending_camera_context_menu_.released) {
+            clearSelectedCameraContextMenuGesture();
         }
 
         if (action == input::ACTION_PRESS) {
@@ -579,7 +679,7 @@ namespace lfs::vis {
             }
 
             // Block if a transform gizmo is being used or hovered
-            if (isTransformGizmoOverOrUsing()) {
+            if (over_transform_gizmo) {
                 return;
             }
 
@@ -588,18 +688,52 @@ namespace lfs::vis {
                 return;
             }
 
+            if (forced_mouse_press_action_ == input::Action::NONE &&
+                double_click_action == input::Action::NONE &&
+                shouldDeferClickActionForDrag(single_click_action) &&
+                drag_action != input::Action::NONE &&
+                drag_action != single_click_action) {
+                pending_click_drag_ = {
+                    .active = true,
+                    .button = button,
+                    .mods = mods,
+                    .click_action = single_click_action,
+                    .drag_action = drag_action,
+                    .press_pos = {x, y},
+                };
+                return;
+            }
+
+            const auto begin_node_selection_tracking = [&](const bool point_pick_enabled,
+                                                           const bool rect_select_enabled) {
+                if (!over_gui && !over_gizmo && tool_context_ && !over_transform_gizmo) {
+                    is_node_rect_dragging_ = true;
+                    node_rect_button_ = button;
+                    node_point_pick_enabled_ = point_pick_enabled;
+                    node_rect_select_enabled_ = rect_select_enabled;
+                    node_rect_panel_ = splitPanelForScreenX(x);
+                    node_rect_start_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
+                    node_rect_end_ = node_rect_start_;
+                }
+            };
+
             switch (bound_action) {
             case input::Action::CAMERA_PAN:
                 if (const auto interaction = resolvePanelInteraction(x, y); interaction && interaction->valid()) {
-                    if (button == static_cast<int>(input::AppMouseButton::RIGHT) &&
-                        hovered_camera_id_ >= 0 &&
-                        canOpenSelectedCameraContextMenu(hovered_camera_id_)) {
+                    const int context_camera_id =
+                        is_right_button && services().renderingOrNull()
+                            ? services().renderingOrNull()->pickCameraFrustum(glm::vec2(x, y))
+                            : -1;
+                    if (is_right_button &&
+                        context_camera_id >= 0 &&
+                        canOpenSelectedCameraContextMenu(context_camera_id)) {
                         pending_camera_context_menu_ = {
                             .active = true,
-                            .camera_uid = hovered_camera_id_,
+                            .camera_uid = context_camera_id,
                             .press_pos = {x, y},
                             .interaction = *interaction,
                         };
+                        hovered_camera_id_ = context_camera_id;
                         break;
                     }
 
@@ -696,7 +830,7 @@ namespace lfs::vis {
             case input::Action::SELECTION_ADD:
             case input::Action::SELECTION_REMOVE:
                 if (!over_gui && !over_gizmo && tool_context_ &&
-                    !isTransformGizmoOverOrUsing()) {
+                    !over_transform_gizmo) {
                     if (selection_tool_ && selection_tool_->isEnabled()) {
                         // Invoke selection stroke operator
                         auto* gm = services().guiOrNull();
@@ -708,6 +842,8 @@ namespace lfs::vis {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
+                        props.set("button", button);
+                        props.set("modifiers", mods);
                         props.set("mode", sub_mode);
                         props.set("op", selection_op);
                         props.set("brush_radius", selection_tool_->getBrushRadius());
@@ -728,6 +864,8 @@ namespace lfs::vis {
                             op::OperatorProperties props;
                             props.set("x", x);
                             props.set("y", y);
+                            props.set("button", button);
+                            props.set("modifiers", mods);
                             props.set("mode", brush_mode);
                             props.set("action", brush_action);
                             props.set("brush_radius", brush_tool_->getBrushRadius());
@@ -739,6 +877,8 @@ namespace lfs::vis {
                         op::OperatorProperties props;
                         props.set("x", x);
                         props.set("y", y);
+                        props.set("button", button);
+                        props.set("modifiers", mods);
                         const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
                         if (result.status != op::OperatorResult::CANCELLED) {
                             return;
@@ -747,42 +887,45 @@ namespace lfs::vis {
                 }
                 break;
 
+            case input::Action::NODE_PICK:
+                begin_node_selection_tracking(true, drag_action == input::Action::NODE_RECT_SELECT);
+                break;
+
+            case input::Action::NODE_RECT_SELECT:
+                begin_node_selection_tracking(false, true);
+                break;
+
             case input::Action::NONE:
             default:
                 if (align_tool_ && align_tool_->isEnabled() && tool_context_ && !over_gui) {
                     op::OperatorProperties props;
                     props.set("x", x);
                     props.set("y", y);
+                    props.set("button", button);
+                    props.set("modifiers", mods);
                     const auto result = op::operators().invoke(op::BuiltinOp::AlignPickPoint, &props);
                     if (result.status != op::OperatorResult::CANCELLED) {
                         return;
                     }
                 }
-
-                // Node picking (controlled by bindings, skips if a transform gizmo is active)
-                const input::ToolMode input_mode = getCurrentToolMode();
-                const input::Action pick_action = bindings_.getActionForMouseButton(
-                    input_mode, input::MouseButton::LEFT, mods);
-                const input::Action drag_action = bindings_.getActionForDrag(
-                    input_mode, input::MouseButton::LEFT, mods);
-                const bool has_node_binding = (pick_action == input::Action::NODE_PICK ||
-                                               drag_action == input::Action::NODE_RECT_SELECT);
-
-                if (!over_gui && !over_gizmo && is_left_button && tool_context_ &&
-                    !isTransformGizmoOverOrUsing() && has_node_binding) {
-                    is_node_rect_dragging_ = true;
-                    node_rect_panel_ = splitPanelForScreenX(x);
-                    node_rect_start_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
-                    node_rect_end_ = node_rect_start_;
-                }
                 break;
             }
         } else if (action == input::ACTION_RELEASE) {
-            if (button == static_cast<int>(input::AppMouseButton::RIGHT) &&
-                pending_camera_context_menu_.active) {
-                const int camera_uid = pending_camera_context_menu_.camera_uid;
-                clearSelectedCameraContextMenuGesture();
-                openSelectedCameraContextMenu(camera_uid, static_cast<float>(x), static_cast<float>(y));
+            if (pending_click_drag_.active &&
+                pending_click_drag_.button == button) {
+                const auto pending = pending_click_drag_;
+                pending_click_drag_ = {};
+                forced_mouse_press_action_ = pending.click_action;
+                handleMouseButton(button, input::ACTION_PRESS,
+                                  pending.press_pos.x, pending.press_pos.y);
+                forced_mouse_press_action_ = input::Action::NONE;
+                return;
+            }
+
+            if (is_right_button && pending_camera_context_menu_.active) {
+                pending_camera_context_menu_.released = true;
+                pending_camera_context_menu_.release_pos = {x, y};
+                pending_camera_context_menu_.release_time = std::chrono::steady_clock::now();
                 return;
             }
 
@@ -828,16 +971,38 @@ namespace lfs::vis {
                 onCameraMovementEnd();
             }
 
+            if (press_consumed_camera_frustum) {
+                const double drag_dist = glm::length(glm::dvec2(x, y) - pressed_camera_frustum_pos);
+                if (pressed_camera_frustum_id >= 0 &&
+                    drag_dist < kCameraFrustumClickThreshold &&
+                    !over_gui &&
+                    !over_transform_gizmo) {
+                    selectCameraByUid(pressed_camera_frustum_id);
+                }
+                if (button == node_rect_button_) {
+                    is_node_rect_dragging_ = false;
+                    node_rect_button_ = -1;
+                    node_point_pick_enabled_ = false;
+                    node_rect_select_enabled_ = false;
+                }
+                return;
+            }
+
             // Node picking on release
-            if (is_node_rect_dragging_ && is_left_button) {
+            if (is_node_rect_dragging_ && button == node_rect_button_) {
+                const bool point_pick_enabled = node_point_pick_enabled_;
+                const bool rect_select_enabled = node_rect_select_enabled_;
                 is_node_rect_dragging_ = false;
+                node_rect_button_ = -1;
+                node_point_pick_enabled_ = false;
+                node_rect_select_enabled_ = false;
                 if (!press_consumed_camera_frustum && tool_context_ && !isPointerOverBlockingUi(x, y)) {
                     auto* scene_manager = tool_context_->getSceneManager();
                     if (scene_manager) {
                         constexpr float CLICK_THRESHOLD_PX = 5.0f;
                         const float drag_dist = glm::length(node_rect_end_ - node_rect_start_);
 
-                        if (drag_dist < CLICK_THRESHOLD_PX) {
+                        if (drag_dist < CLICK_THRESHOLD_PX && point_pick_enabled) {
                             // Point pick via ray-AABB intersection
                             const auto [ray_origin, ray_dir] = computePickRay(x, y);
                             const std::string picked = scene_manager->pickNodeByRay(ray_origin, ray_dir);
@@ -848,7 +1013,7 @@ namespace lfs::vis {
                             } else {
                                 (void)cap::clearNodeSelection(*scene_manager);
                             }
-                        } else {
+                        } else if (drag_dist >= CLICK_THRESHOLD_PX && rect_select_enabled) {
                             // Rectangle selection — convert window coords to viewport-local
                             glm::vec2 vp_offset(0.0f);
                             if (auto* gm = services().guiOrNull())
@@ -911,6 +1076,12 @@ namespace lfs::vis {
                  x, y, static_cast<int>(drag_mode_));
         auto* gui = services().guiOrNull();
 
+        if (gui && gui->isCapturingInput()) {
+            gui->captureMouseMove(x, y);
+            last_mouse_pos_ = {x, y};
+            return;
+        }
+
         // Forward to pie menu if open — consume event to prevent viewport interaction
         if (gui && gui->gizmo().isPieMenuOpen()) {
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
@@ -939,6 +1110,23 @@ namespace lfs::vis {
             return;
         }
 
+        const bool over_viewport_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
+        const bool over_transform_gizmo = isTransformGizmoOverOrUsing();
+
+        if (pending_click_drag_.active) {
+            if (!isMouseButtonPressed(pending_click_drag_.button)) {
+                pending_click_drag_ = {};
+            } else if (glm::length(current_pos - pending_click_drag_.press_pos) >=
+                       DOUBLE_CLICK_DISTANCE) {
+                const auto pending = pending_click_drag_;
+                pending_click_drag_ = {};
+                forced_mouse_press_action_ = pending.drag_action;
+                handleMouseButton(pending.button, input::ACTION_PRESS,
+                                  pending.press_pos.x, pending.press_pos.y);
+                forced_mouse_press_action_ = input::Action::NONE;
+            }
+        }
+
         if (drag_mode_ == DragMode::Splitter && services().renderingOrNull()) {
             const auto viewport_size = glm::ivec2(static_cast<int>(viewport_bounds_.width),
                                                   static_cast<int>(viewport_bounds_.height));
@@ -952,6 +1140,8 @@ namespace lfs::vis {
         }
 
         if (pending_camera_context_menu_.active &&
+            !pending_camera_context_menu_.released &&
+            isMouseButtonPressed(static_cast<int>(input::AppMouseButton::RIGHT)) &&
             glm::length(current_pos - pending_camera_context_menu_.press_pos) >= kCameraContextMenuDragThreshold) {
             const auto interaction = pending_camera_context_menu_.interaction;
             clearSelectedCameraContextMenuGesture();
@@ -967,7 +1157,9 @@ namespace lfs::vis {
         if (services().renderingOrNull() &&
             isInViewport(x, y) &&
             drag_mode_ == DragMode::None &&
-            !over_gui) {
+            !over_gui &&
+            !over_viewport_gizmo &&
+            !over_transform_gizmo) {
 
             // Additional throttling based on movement distance
             static glm::dvec2 last_pick_pos{-1, -1};
@@ -1050,6 +1242,9 @@ namespace lfs::vis {
         if (is_node_rect_dragging_) {
             if (isTransformGizmoUsing()) {
                 is_node_rect_dragging_ = false;
+                node_rect_button_ = -1;
+                node_point_pick_enabled_ = false;
+                node_rect_select_enabled_ = false;
             } else {
                 node_rect_end_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
                 if (tool_context_)
@@ -1094,6 +1289,17 @@ namespace lfs::vis {
     }
 
     void InputController::handleScroll([[maybe_unused]] double xoff, double yoff) {
+        // Capture mode (input settings panel) consumes scroll first so the user
+        // can rebind scroll-only actions like Camera Zoom or chord-style Roll.
+        if (bindings_.isCapturing()) {
+            std::optional<int> chord_key;
+            if (!held_keys_.empty()) {
+                chord_key = held_keys_.back();
+            }
+            bindings_.captureScroll(getModifierKeys(), chord_key);
+            return;
+        }
+
         float fx, fy;
         SDL_GetMouseState(&fx, &fy);
         double mouse_x = fx, mouse_y = fy;
@@ -1114,7 +1320,7 @@ namespace lfs::vis {
         }
 
         const int mods = getModifierKeys();
-        const input::Action scroll_action = bindings_.getActionForScroll(getCurrentToolMode(), mods);
+        const input::Action scroll_action = bindings_.getActionForScroll(getCurrentToolMode(), mods, held_keys_);
         if (selection_tool_ && selection_tool_->isEnabled()) {
             if (scroll_action == input::Action::DEPTH_ADJUST_FAR &&
                 selection_tool_->isDepthFilterEnabled()) {
@@ -1124,9 +1330,7 @@ namespace lfs::vis {
         }
 
         // Brush radius adjustment for selection/brush tools
-        const bool ctrl = (mods & input::KEYMOD_CTRL) != 0;
-        const bool shift = (mods & input::KEYMOD_SHIFT) != 0;
-        if ((ctrl || shift) && !op::operators().hasModalOperator()) {
+        if (scroll_action == input::Action::BRUSH_RESIZE && !op::operators().hasModalOperator()) {
             if (selection_tool_ && selection_tool_->isEnabled()) {
                 const float scale = (yoff > 0) ? 1.1f : 0.9f;
                 selection_tool_->setBrushRadius(selection_tool_->getBrushRadius() * scale);
@@ -1156,9 +1360,9 @@ namespace lfs::vis {
         if (std::abs(delta) < 0.01f)
             return;
 
-        if (key_r_pressed_) {
+        if (scroll_action == input::Action::CAMERA_ROLL) {
             target_viewport.camera.rotate_roll(delta);
-        } else {
+        } else if (scroll_action == input::Action::CAMERA_ZOOM) {
             // In orthographic mode, adjust ortho_scale instead of camera position
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
@@ -1175,6 +1379,8 @@ namespace lfs::vis {
             } else {
                 target_viewport.camera.zoom(delta);
             }
+        } else {
+            return;
         }
 
         onCameraMovementStart();
@@ -1195,8 +1401,25 @@ namespace lfs::vis {
         if (physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT) {
             key_alt_pressed_ = (action != input::ACTION_RELEASE);
         }
-        if (logical_key == input::KEY_R) {
-            key_r_pressed_ = (action != input::ACTION_RELEASE);
+        const bool is_modifier_key =
+            physical_key == input::KEY_LEFT_SHIFT || physical_key == input::KEY_RIGHT_SHIFT ||
+            physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL ||
+            physical_key == input::KEY_LEFT_ALT || physical_key == input::KEY_RIGHT_ALT ||
+            physical_key == input::KEY_LEFT_SUPER || physical_key == input::KEY_RIGHT_SUPER;
+        if (!is_modifier_key && logical_key != input::KEY_UNKNOWN) {
+            if (action == input::ACTION_RELEASE) {
+                std::erase(held_keys_, logical_key);
+            } else if (!std::ranges::contains(held_keys_, logical_key)) {
+                held_keys_.push_back(logical_key);
+            }
+        }
+
+        auto* gui = services().guiOrNull();
+
+        // Forward to binding capture before Python panels or modal operators consume keys.
+        if (action == input::ACTION_PRESS && bindings_.isCapturing()) {
+            bindings_.captureKey(physical_key, logical_key, mods);
+            return;
         }
 
         if (lfs::python::has_keyboard_capture_request()) {
@@ -1208,15 +1431,13 @@ namespace lfs::vis {
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
-        if (dispatchKeyToModals(logical_key, scancode, action, mods, mx, my, over_gui_hover)) {
+        const auto tool_mode = getCurrentToolMode();
+        const auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        if (action == input::ACTION_PRESS &&
+            dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;
         }
-
-        auto* gui = services().guiOrNull();
-
-        // Forward to GUI for key capture (rebinding)
-        if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
-            gui->captureKey(physical_key, logical_key, mods);
+        if (dispatchKeyToModals(logical_key, scancode, action, mods, mx, my, over_gui_hover)) {
             return;
         }
 
@@ -1247,9 +1468,6 @@ namespace lfs::vis {
 
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
-
-        const auto tool_mode = getCurrentToolMode();
-        const auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
 
         if (modal_open)
             return;
@@ -1351,11 +1569,61 @@ namespace lfs::vis {
                 return;
 
             case input::Action::CANCEL_POLYGON:
+                if (dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+                    return;
+                }
+                if (op::operators().hasModalOperator()) {
+                    op::operators().cancelModalOperator();
+                    return;
+                }
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
                         if (auto* selection_service = sm->getSelectionService();
                             selection_service && selection_service->isInteractiveSelectionActive()) {
                             selection_service->cancelInteractiveSelection();
+                            return;
+                        }
+                    }
+                }
+                return;
+
+            case input::Action::CONFIRM_POLYGON:
+                if (dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+                    return;
+                }
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager()) {
+                        if (auto* selection_service = sm->getSelectionService();
+                            selection_service &&
+                            selection_service->isInteractiveSelectionActive() &&
+                            selection_service->getInteractiveSelectionShape() == SelectionShape::Polygon) {
+                            if (mods & input::KEYMOD_SHIFT) {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Add);
+                            } else if (mods & input::KEYMOD_CTRL) {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Remove);
+                            } else {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Replace);
+                            }
+                            (void)selection_service->finishInteractiveSelection();
+                            return;
+                        }
+                    }
+                }
+                return;
+
+            case input::Action::UNDO_POLYGON_VERTEX:
+                if (dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
+                    return;
+                }
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager()) {
+                        if (auto* selection_service = sm->getSelectionService();
+                            selection_service &&
+                            selection_service->isInteractiveSelectionActive() &&
+                            selection_service->getInteractiveSelectionShape() == SelectionShape::Polygon) {
+                            if (!selection_service->undoInteractivePolygonVertex()) {
+                                selection_service->cancelInteractiveSelection();
+                            }
                             return;
                         }
                     }
@@ -1487,19 +1755,19 @@ namespace lfs::vis {
         if ((mods & (input::KEYMOD_CTRL | input::KEYMOD_ALT | input::KEYMOD_SUPER)) != 0)
             return;
 
-        // Use cached movement key bindings
+        const auto& mk = currentMovementKeys();
         const bool pressed = (action != input::ACTION_RELEASE);
-        if (physical_key == movement_keys_.forward) {
+        if (physical_key == mk.forward) {
             keys_movement_[0] = pressed;
-        } else if (physical_key == movement_keys_.left) {
+        } else if (physical_key == mk.left) {
             keys_movement_[1] = pressed;
-        } else if (physical_key == movement_keys_.backward) {
+        } else if (physical_key == mk.backward) {
             keys_movement_[2] = pressed;
-        } else if (physical_key == movement_keys_.right) {
+        } else if (physical_key == mk.right) {
             keys_movement_[3] = pressed;
-        } else if (physical_key == movement_keys_.down) {
+        } else if (physical_key == mk.down) {
             keys_movement_[5] = pressed;
-        } else if (physical_key == movement_keys_.up) {
+        } else if (physical_key == mk.up) {
             keys_movement_[4] = pressed;
         }
     }
@@ -1510,9 +1778,30 @@ namespace lfs::vis {
             input_router_->syncPressedMouseButtons(any_mouse_buttons_pressed);
         }
 
-        if (pending_camera_context_menu_.active &&
-            !isMouseButtonPressed(static_cast<int>(input::AppMouseButton::RIGHT))) {
-            clearSelectedCameraContextMenuGesture();
+        if (pending_camera_context_menu_.active) {
+            const bool right_button_down =
+                isMouseButtonPressed(static_cast<int>(input::AppMouseButton::RIGHT));
+            if (pending_camera_context_menu_.released) {
+                if (right_button_down) {
+                    clearSelectedCameraContextMenuGesture();
+                } else {
+                    const auto now = std::chrono::steady_clock::now();
+                    const double elapsed =
+                        std::chrono::duration<double>(
+                            now - pending_camera_context_menu_.release_time)
+                            .count();
+                    if (elapsed >= DOUBLE_CLICK_TIME) {
+                        const int camera_uid = pending_camera_context_menu_.camera_uid;
+                        const glm::dvec2 release_pos = pending_camera_context_menu_.release_pos;
+                        clearSelectedCameraContextMenuGesture();
+                        openSelectedCameraContextMenu(camera_uid,
+                                                      static_cast<float>(release_pos.x),
+                                                      static_cast<float>(release_pos.y));
+                    }
+                }
+            } else if (!right_button_down) {
+                clearSelectedCameraContextMenuGesture();
+            }
         }
 
         const bool drag_button_released = drag_button_ >= 0 &&
@@ -1532,6 +1821,8 @@ namespace lfs::vis {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
             drag_viewport_ = nullptr;
+            press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
 
             ui::CameraMove{
                 .rotation = released_viewport->getRotationMatrix(),
@@ -1544,12 +1835,16 @@ namespace lfs::vis {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
             drag_viewport_ = nullptr;
+            press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
         }
 
         if (drag_mode_ == DragMode::Rotate && drag_button_released) {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
             drag_viewport_ = nullptr;
+            press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
         }
 
         if (drag_mode_ == DragMode::Splitter &&
@@ -1557,16 +1852,19 @@ namespace lfs::vis {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
             press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
             SDL_SetCursor(SDL_GetDefaultCursor());
         }
 
         if (drag_mode_ == DragMode::Brush && drag_button_released) {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
+            press_selected_camera_frustum_ = false;
+            pressed_camera_frustum_id_ = -1;
         }
 
         // Sync movement key states with actual keyboard (using cached keys)
-        const auto& mk = movement_keys_;
+        const auto& mk = currentMovementKeys();
         if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
             keys_movement_[0] = false;
         }
@@ -1778,11 +2076,14 @@ namespace lfs::vis {
             glm::vec3(T_data[0], T_data[1], T_data[2]),
             scene_transform);
 
+        float pivot_distance = glm::length(target_viewport.camera.getPivot() - target_viewport.camera.t);
+        if (!std::isfinite(pivot_distance) || pivot_distance < 0.1f)
+            pivot_distance = 5.0f;
+
         target_viewport.camera.R = pose.rotation;
         target_viewport.camera.t = pose.translation;
 
-        // Update pivot point to be in front of camera
-        target_viewport.camera.updatePivotFromCamera();
+        target_viewport.camera.updatePivotFromCamera(pivot_distance);
 
         // Save as home position if this is the first camera view
         if (!target_viewport.camera.home_saved) {
@@ -2103,8 +2404,15 @@ namespace lfs::vis {
         drag_button_ = -1;
         drag_viewport_ = nullptr;
         drag_split_panel_ = SplitViewPanelId::Left;
+        pending_click_drag_ = {};
+        forced_mouse_press_action_ = input::Action::NONE;
+        is_node_rect_dragging_ = false;
+        node_rect_button_ = -1;
+        node_point_pick_enabled_ = false;
+        node_rect_select_enabled_ = false;
         clearSelectedCameraContextMenuGesture();
         press_selected_camera_frustum_ = false;
+        pressed_camera_frustum_id_ = -1;
 
         if (was_camera_drag) {
             onCameraMovementEnd();

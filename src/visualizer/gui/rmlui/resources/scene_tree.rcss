@@ -75,7 +75,7 @@ body {
 .scene-chip {
     display: inline-block;
     padding: 2dp 7dp;
-    font-size: 10dp;
+    font-size: 12dp;
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
@@ -116,7 +116,7 @@ body {
 
 #filter-input {
     flex: 1;
-    font-size: 11dp;
+    font-size: 12dp;
     color: #cdd6f4;
     background-color: transparent;
     border-width: 0;
@@ -209,7 +209,7 @@ scene-graph,
 
 .logging-field-label {
     display: block;
-    font-size: 9dp;
+    font-size: 12dp;
     letter-spacing: 0.3dp;
     text-transform: uppercase;
 }
@@ -226,7 +226,7 @@ scene-graph,
 
 .logging-feedback {
     display: none;
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .logging-scroll {
@@ -269,10 +269,10 @@ scene-graph,
     display: inline-block;
     padding: 1dp 6dp 2dp;
     border-radius: 999dp;
-    font-size: 8.5dp;
+    font-size: 12dp;
     font-weight: bold;
     text-transform: uppercase;
-    letter-spacing: 0.35dp;
+    letter-spacing: 0.2dp;
     color: #0f111a;
     background-color: #cdd6f4;
 }
@@ -280,7 +280,7 @@ scene-graph,
 .log-entry__meta {
     flex: 1;
     min-width: 0;
-    font-size: 8.5dp;
+    font-size: 12dp;
     text-align: right;
     white-space: nowrap;
     overflow: hidden;
@@ -289,7 +289,7 @@ scene-graph,
 
 .log-entry__message {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     line-height: 1.35;
     white-space: pre-wrap;
     word-break: break-word;
@@ -428,7 +428,7 @@ scene-graph,
 .expand-toggle {
     display: inline;
     width: 12dp;
-    font-size: 11dp;
+    font-size: 12dp;
     color: #a6adc8;
     cursor: pointer;
     text-align: center;
@@ -550,7 +550,7 @@ scene-graph,
     display: inline;
     width: 150dp;
     padding: 2dp 4dp;
-    font-size: 11dp;
+    font-size: 12dp;
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;

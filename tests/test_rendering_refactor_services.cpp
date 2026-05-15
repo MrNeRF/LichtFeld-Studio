@@ -774,6 +774,43 @@ namespace lfs::vis {
         EXPECT_FALSE(service.isResizeDeferring());
     }
 
+    TEST(ViewportFrameLifecycleServiceTest, PassiveWindowResizeDefersFullRefreshUntilDebounceCompletes) {
+        ViewportFrameLifecycleService service;
+
+        EXPECT_EQ(service.handleViewportResize({640, 480}).dirty,
+                  DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+
+        const auto passive_resize = service.handleViewportResize({800, 600});
+        EXPECT_EQ(passive_resize.dirty, DirtyFlag::OVERLAY);
+        EXPECT_FALSE(passive_resize.completed);
+        EXPECT_TRUE(service.isResizeDeferring());
+
+        EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
+        EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
+
+        const auto completed = service.handleViewportResize({800, 600});
+        EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
+        EXPECT_TRUE(completed.completed);
+        EXPECT_FALSE(service.isResizeDeferring());
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, ExplicitRefreshDeferralCompletesAfterStableFrames) {
+        ViewportFrameLifecycleService service;
+
+        EXPECT_EQ(service.handleViewportResize({640, 480}).dirty,
+                  DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+        EXPECT_EQ(service.deferViewportRefresh(), DirtyFlag::OVERLAY);
+        EXPECT_TRUE(service.isResizeDeferring());
+
+        EXPECT_EQ(service.handleViewportResize({640, 480}).dirty, DirtyFlag::OVERLAY);
+        EXPECT_EQ(service.handleViewportResize({640, 480}).dirty, DirtyFlag::OVERLAY);
+
+        const auto completed = service.handleViewportResize({640, 480});
+        EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
+        EXPECT_TRUE(completed.completed);
+        EXPECT_FALSE(service.isResizeDeferring());
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ModelChangeClearsCachedViewportArtifactsOncePerModelPointer) {
         ViewportFrameLifecycleService service;
         ViewportArtifactService artifacts;
@@ -840,6 +877,9 @@ namespace lfs::vis {
         EXPECT_EQ(
             service.requiredDirtyMask(false, false, SplitViewMode::PLYComparison),
             DirtyFlag::ALL | DirtyFlag::SPLIT_VIEW);
+        EXPECT_EQ(
+            service.requiredDirtyMask(true, true, SplitViewMode::PLYComparison),
+            0u);
     }
 
     TEST(ViewportRequestBuilderTest, CursorPreviewTargetsOnlyItsSplitPanel) {

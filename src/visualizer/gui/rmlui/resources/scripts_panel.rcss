@@ -33,7 +33,7 @@
 }
 
 .sp-filename {
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .sp-reload-btn {
@@ -42,7 +42,7 @@
 
 .sp-path {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .sp-meta-label {
@@ -51,5 +51,5 @@
 
 .sp-error {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
 }
