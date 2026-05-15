@@ -268,7 +268,8 @@ endif()
 
 if(TARGET nvimgcodec_imgproc_static)
     target_compile_options(nvimgcodec_imgproc_static PRIVATE
-        $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=860,3004 -Xcompiler "/wd4834">
+        $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=860,3004>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler "/wd4834">
     )
 endif()
 
