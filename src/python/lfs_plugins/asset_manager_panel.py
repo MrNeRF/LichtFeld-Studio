@@ -102,7 +102,6 @@ class AssetManagerPanel(Panel):
 
         # Track which asset has its dropdown menu open
         self._open_menu_asset_id: Optional[str] = None
-        self._load_menu_asset_id: Optional[str] = None
 
         # Track which project has its dropdown menu open
         self._open_menu_project_id: Optional[str] = None
@@ -920,7 +919,6 @@ class AssetManagerPanel(Panel):
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
             "thumbnail_path": asset.get("thumbnail_path"),
             "menu_open": asset_id == self._open_menu_asset_id,
-            "load_menu_open": asset_id == self._load_menu_asset_id,
         }
 
     def get_project_list(self) -> List[Dict[str, Any]]:
@@ -3528,7 +3526,6 @@ class AssetManagerPanel(Panel):
         """
         content = doc.get_element_by_id("asset-popup-content")
         if content:
-            content.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             content.add_event_listener("click", self._on_asset_manager_click)
             content.add_event_listener(
                 "dblclick", self._on_asset_manager_double_click
@@ -3558,21 +3555,16 @@ class AssetManagerPanel(Panel):
             if action == "load":
                 self.on_load_asset(None, event, [asset_id])
             elif action == "load_new":
-                self._load_menu_asset_id = None
-                self._dirty_model("assets")
                 self.on_load_asset_new(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "add_to_scene":
-                self._load_menu_asset_id = None
-                self._dirty_model("assets")
                 self.on_add_asset_to_scene(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "remove":
                 self.on_remove_asset(None, event, [asset_id])
             elif action == "menu":
-                self._load_menu_asset_id = None
                 self.on_toggle_asset_menu(None, event, [asset_id])
                 self._stop_event(event)
                 return
@@ -3622,9 +3614,6 @@ class AssetManagerPanel(Panel):
                     self._dirty_model("assets", "move_menu_projects")
                     if self._handle:
                         self._handle.update_record_list("move_menu_projects", [])
-                if self._load_menu_asset_id:
-                    self._load_menu_asset_id = None
-                    self._dirty_model("assets")
                 self._select_asset_id(
                     asset_id,
                     toggle=False,
@@ -3684,51 +3673,10 @@ class AssetManagerPanel(Panel):
             if self._handle:
                 self._handle.update_record_list("move_menu_projects", [])
 
-        if self._load_menu_asset_id:
-            self._load_menu_asset_id = None
-            self._dirty_model("assets")
-
         # Close open project menu when clicking elsewhere
         if self._open_menu_project_id:
             self._open_menu_project_id = None
             self._dirty_model("projects")
-
-    def _on_asset_manager_mousedown(self, event) -> None:
-        if self._input_capture_active():
-            return
-
-        try:
-            button = int(event.get_parameter("button", "0"))
-        except (AttributeError, TypeError, ValueError):
-            return
-        if button != 1:
-            return
-
-        container = event.current_target()
-        target = event.target()
-        if target is None:
-            return
-
-        action_el = rml_widgets.find_ancestor_with_attribute(
-            target, "data-asset-action", container
-        )
-        if action_el is None:
-            return
-
-        action = action_el.get_attribute("data-asset-action", "")
-        if action not in ("select", "scene_asset"):
-            return
-
-        asset_id = action_el.get_attribute("data-asset-id", "")
-        if not asset_id:
-            return
-
-        if self._select_asset_id(asset_id):
-            self._load_menu_asset_id = asset_id
-            self._open_menu_asset_id = None
-            self._open_menu_project_id = None
-            self._dirty_model("assets", "projects")
-        self._stop_event(event)
 
     def _on_asset_manager_double_click(self, event) -> None:
         if self._input_capture_active():
@@ -3753,7 +3701,6 @@ class AssetManagerPanel(Panel):
         if not asset_id:
             return
 
-        self._load_menu_asset_id = None
         self.on_load_asset(None, event, [asset_id])
         self._stop_event(event)
 
