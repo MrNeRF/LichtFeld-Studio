@@ -628,7 +628,10 @@ class PluginMarketplacePanel(Panel):
             f'{detail_meta}'
             f'{detail_text}'
             f'{self._build_feedback_markup(record, extra_class="plugin-list-feedback")}'
+            f'<div class="plugin-list-options">'
             f'<div class="plugin-list-buttons" id="btns-{esc("card_id")}">{self._build_action_buttons_markup(record)}</div>'
+            f'{self._build_startup_row(record, row_class="plugin-list-option-row", label_class="plugin-list-option-label text-disabled")}'
+            f'</div>'
             '</div>'
         )
 

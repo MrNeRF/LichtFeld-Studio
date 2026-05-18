@@ -81,7 +81,8 @@ namespace fast_lfs::rasterization {
         // Calculate grid dimensions
         const dim3 grid(div_round_up(width, config::tile_width),
                         div_round_up(height, config::tile_height), 1);
-        const int n_tiles = grid.x * grid.y;
+        const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
+        const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
 
         // Get global arena and begin frame
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
@@ -107,8 +108,8 @@ namespace fast_lfs::rasterization {
         }
 
         // Allocate helper buffers for backward pass upfront to avoid allocation failures later
-        const size_t grad_mean2d_size = n_primitives * 2 * sizeof(float);
-        const size_t grad_conic_size = n_primitives * 3 * sizeof(float);
+        const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * 2 * sizeof(float);
+        const size_t grad_conic_size = static_cast<size_t>(n_primitives) * 3 * sizeof(float);
         char* grad_mean2d_helper = arena_allocator(grad_mean2d_size);
         char* grad_conic_helper = arena_allocator(grad_conic_size);
 
@@ -299,20 +300,20 @@ namespace fast_lfs::rasterization {
             if (!grad_opacity_helper || !grad_color_helper) {
                 auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
                 auto arena_allocator = arena.get_allocator(forward_ctx.frame_id);
-                grad_opacity_helper = reinterpret_cast<float*>(arena_allocator(n_primitives * sizeof(float)));
-                grad_color_helper = reinterpret_cast<float*>(arena_allocator(n_primitives * 3 * sizeof(float)));
+                grad_opacity_helper = reinterpret_cast<float*>(arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float)));
+                grad_color_helper = reinterpret_cast<float*>(arena_allocator(static_cast<size_t>(n_primitives) * 3 * sizeof(float)));
                 if (!grad_opacity_helper || !grad_color_helper) {
                     throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate fused Adam helper buffers from arena");
                 }
             }
 
             // Zero out helper buffers
-            const size_t grad_mean2d_size = n_primitives * 2 * sizeof(float);
-            const size_t grad_conic_size = n_primitives * 3 * sizeof(float);
+            const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * 2 * sizeof(float);
+            const size_t grad_conic_size = static_cast<size_t>(n_primitives) * 3 * sizeof(float);
             cudaMemset(grad_mean2d_helper, 0, grad_mean2d_size);
             cudaMemset(grad_conic_helper, 0, grad_conic_size);
-            cudaMemset(grad_opacity_helper, 0, n_primitives * sizeof(float));
-            cudaMemset(grad_color_helper, 0, n_primitives * 3 * sizeof(float));
+            cudaMemset(grad_opacity_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float));
+            cudaMemset(grad_color_helper, 0, static_cast<size_t>(n_primitives) * 3 * sizeof(float));
 
             if (grad_w2c_ptr) {
                 cudaMemset(grad_w2c_ptr, 0, 4 * 4 * sizeof(float));

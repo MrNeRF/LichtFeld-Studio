@@ -1744,15 +1744,15 @@ namespace lfs::vis::gui {
                     }
                     rendering_manager->markDirty(DirtyFlag::CAMERA);
                 } else {
-                    if (auto* const active_panel = find_panel(viewport_gizmo_active_panel_)) {
-                        active_panel->viewport->camera.endRotateAroundCenter();
+                    if (auto* const released_panel = find_panel(viewport_gizmo_active_panel_)) {
+                        released_panel->viewport->camera.endRotateAroundCenter();
                         if (const auto* const input_controller = viewer_->getInputController();
                             input_controller && input_controller->cameraViewSnapEnabled()) {
                             constexpr float kAxisSnapAngleDegrees = 10.0f;
                             int snapped_axis = -1;
-                            if (active_panel->viewport->camera.snapToNearestAxisView(
+                            if (released_panel->viewport->camera.snapToNearestAxisView(
                                     kAxisSnapAngleDegrees, &snapped_axis, nullptr)) {
-                                rendering_manager->setGridPlaneForPanel(active_panel->panel, snapped_axis);
+                                rendering_manager->setGridPlaneForPanel(released_panel->panel, snapped_axis);
                             }
                         }
                         rendering_manager->markDirty(DirtyFlag::CAMERA);

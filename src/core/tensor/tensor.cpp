@@ -579,8 +579,13 @@ namespace lfs::core {
 // For HWC→CHW permute ([H, W, C] → [C, H, W]), this means:
 //   dim0 = C (typically 3), dim1 = H (typically 720+), dim2 = W (typically 820+)
 // Using collapse(2) distributes work across C×H iterations (e.g., 3×720=2160 iterations)
-// This ensures good work distribution even when dim0 is small
+// This ensures good work distribution even when dim0 is small.
+// collapse() requires OpenMP 3.0 (2008)
+#if _OPENMP >= 200805
 #pragma omp parallel for collapse(2) if (use_parallel) schedule(static)
+#else
+#pragma omp parallel for if (use_parallel) schedule(static)
+#endif
                 for (size_t i0 = 0; i0 < dim0; ++i0) {
                     for (size_t i1 = 0; i1 < dim1; ++i1) {
                         size_t i2 = 0;
@@ -619,7 +624,11 @@ namespace lfs::core {
                 }
 #else
 // Fallback: scalar version (no SIMD), but still multi-threaded with collapse(2)
+#if _OPENMP >= 200805
 #pragma omp parallel for collapse(2) if (use_parallel) schedule(static)
+#else
+#pragma omp parallel for if (use_parallel) schedule(static)
+#endif
                 for (int64_t i0 = 0; i0 < static_cast<int64_t>(dim0); ++i0) {
                     for (int64_t i1 = 0; i1 < static_cast<int64_t>(dim1); ++i1) {
                         for (size_t i2 = 0; i2 < dim2; ++i2) {

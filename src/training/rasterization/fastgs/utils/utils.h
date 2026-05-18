@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 #define CHECK_CUDA(debug, name)                                                                                                       \
@@ -21,4 +22,11 @@
 template <typename T>
 inline __host__ __device__ T div_round_up(T value, T divisor) {
     return (value + divisor - 1) / divisor;
+}
+
+inline int checked_to_int(uint64_t value, const char* message) {
+    if (value > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        throw std::overflow_error(message);
+    }
+    return static_cast<int>(value);
 }

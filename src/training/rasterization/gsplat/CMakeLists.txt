@@ -85,12 +85,9 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_definitions(gsplat_backend_lfs PRIVATE RELEASE_BUILD)
 endif()
 
-# GLM workarounds for CUDA 12.x compatibility
-# GLM_COMPILER=0 disables compiler detection (needed for CUDA 12.x)
-# GLM_FORCE_CUDA enables CUDA support
+# GLM_COMPILER must not be set externally — platform.h redefines it unconditionally (C4005)
 target_compile_definitions(gsplat_backend_lfs PRIVATE
     GLM_FORCE_CUDA
-    GLM_COMPILER=0
 )
 
 # Print debug info

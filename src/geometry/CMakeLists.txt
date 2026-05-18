@@ -29,8 +29,8 @@ set_target_properties(lfs_geometry PROPERTIES
     DEBUG_POSTFIX d
 )
 
-message(STATUS "╔════════════════════════════════════════════════════════════════╗")
-message(STATUS "║  geometry - LibTorch-free Geometry Module                 ║")
-message(STATUS "╚════════════════════════════════════════════════════════════════╝")
-message(STATUS "  • Namespace: lfs::geometry")
-message(STATUS "  • Contains: EuclideanTransform, BoundingBox")
+message(STATUS "+------------------------------------------------------------------+")
+message(STATUS "|  geometry - LibTorch-free Geometry Module                        |")
+message(STATUS "+------------------------------------------------------------------+")
+message(STATUS "  - Namespace: lfs::geometry")
+message(STATUS "  - Contains: EuclideanTransform, BoundingBox")

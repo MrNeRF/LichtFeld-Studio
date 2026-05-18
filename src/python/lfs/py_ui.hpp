@@ -129,9 +129,9 @@ namespace lfs::python {
         PySubLayout grid_flow(int columns = 0, bool even_columns = true, bool even_rows = true);
 
         void label(const std::string& text);
-        bool button(const std::string& label, std::tuple<float, float> size = {0, 0});
+        bool button(const std::string& label, std::tuple<float, float> size = {0.0f, 0.0f});
         bool button_styled(const std::string& label, const std::string& style,
-                           std::tuple<float, float> size = {0, 0});
+                           std::tuple<float, float> size = {0.0f, 0.0f});
         std::tuple<bool, nb::object> prop(nb::object data, const std::string& prop_id,
                                           std::optional<std::string> text = std::nullopt);
         std::tuple<bool, bool> checkbox(const std::string& label, bool value);
@@ -338,9 +338,9 @@ namespace lfs::python {
         void bullet_text(const std::string& text);
 
         // Buttons
-        bool button(const std::string& label, std::tuple<float, float> size = {0, 0});
+        bool button(const std::string& label, std::tuple<float, float> size = {0.0f, 0.0f});
         bool button_callback(const std::string& label, nb::object callback,
-                             std::tuple<float, float> size = {0, 0});
+                             std::tuple<float, float> size = {0.0f, 0.0f});
         bool small_button(const std::string& label);
         std::tuple<bool, bool> checkbox(const std::string& label, bool value);
         std::tuple<bool, int> radio_button(const std::string& label, int current, int value);
@@ -383,7 +383,7 @@ namespace lfs::python {
         std::tuple<bool, std::tuple<float, float, float>> color_picker3(const std::string& label,
                                                                         std::tuple<float, float, float> color);
         bool color_button(const std::string& label, nb::object color,
-                          std::tuple<float, float> size = {0, 0});
+                          std::tuple<float, float> size = {0.0f, 0.0f});
 
         // Selection
         std::tuple<bool, int> combo(const std::string& label, int current_idx,
@@ -421,7 +421,7 @@ namespace lfs::python {
 
         // Styled buttons
         bool button_styled(const std::string& label, const std::string& style,
-                           std::tuple<float, float> size = {0, 0});
+                           std::tuple<float, float> size = {0.0f, 0.0f});
 
         // Item width stack
         void push_item_width(float width);
@@ -430,7 +430,7 @@ namespace lfs::python {
         // Plots
         void plot_lines(const std::string& label, const std::vector<float>& values,
                         float scale_min = FLT_MAX, float scale_max = FLT_MAX,
-                        std::tuple<float, float> size = {0, 0});
+                        std::tuple<float, float> size = {0.0f, 0.0f});
 
         // Selectable
         bool selectable(const std::string& label, bool selected = false, float height = 0.0f);

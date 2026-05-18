@@ -46,7 +46,8 @@ void fast_lfs::rasterization::backward(
     DensificationType densification_type,
     FusedAdamSettings fused_adam) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
-    const int n_tiles = grid.x * grid.y;
+    const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
+    const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
 
     // These blobs are from the arena and are guaranteed to be valid
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
