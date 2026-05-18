@@ -226,8 +226,9 @@ def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
     assert panel.get_selected_asset_name() == "bicycle"
     assert panel.get_selected_asset_path() == "/tmp/bicycle"
     assert panel.get_selected_asset_dataset_image_count() == "194"
-    assert "selected_asset_path" in panel._handle.dirty_fields
-    assert "show_selection_asset" in panel._handle.dirty_fields
+    dirty = panel._handle.dirty_fields
+    assert "selected_asset_path" in dirty or "__all__" in dirty
+    assert "show_selection_asset" in dirty or "__all__" in dirty
 
 
 def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_panel_module):

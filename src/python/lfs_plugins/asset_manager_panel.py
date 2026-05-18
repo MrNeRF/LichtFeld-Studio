@@ -85,7 +85,6 @@ class AssetManagerPanel(Panel):
 
     def __init__(self):
         self._handle = None
-        self._doc = None
 
         # Backend components
         self._asset_index: Optional[Any] = None
@@ -411,7 +410,6 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_import_checkpoint", self.on_import_checkpoint)
         model.bind_event("on_locate_file", self.on_locate_file)
         model.bind_event("select_asset", self.select_asset_by_id)
-        model.bind_event("on_export_selected", self.on_export_selected)
         model.bind_event("on_load_asset", self.on_load_asset)
         model.bind_event("on_remove_asset", self.on_remove_asset)
         model.bind_event("on_pending_tag_change", self.on_pending_tag_change)
@@ -577,9 +575,6 @@ class AssetManagerPanel(Panel):
             if asset.get("scene_id") == scene_id
         )
 
-    def _scene_has_content(self, scene_id: str) -> bool:
-        return self._scene_asset_count(scene_id) > 0
-
     def _project_asset_count(self, project_id: str) -> int:
         """Count total assets in a project."""
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
@@ -588,21 +583,6 @@ class AssetManagerPanel(Panel):
             1
             for asset in self._asset_index.assets.values()
             if asset.get("project_id") == project_id
-        )
-
-    def _project_has_content(self, project_id: str) -> bool:
-        if not self._asset_index:
-            return False
-        if hasattr(self._asset_index, "assets") and any(
-            asset.get("project_id") == project_id
-            for asset in self._asset_index.assets.values()
-        ):
-            return True
-        if not hasattr(self._asset_index, "scenes"):
-            return False
-        return any(
-            scene.get("project_id") == project_id and self._scene_has_content(scene_id)
-            for scene_id, scene in self._asset_index.scenes.items()
         )
 
     def _ensure_default_project(self) -> None:
@@ -1045,348 +1025,6 @@ class AssetManagerPanel(Panel):
             {"id": "checkpoint", "label": tr("asset_manager.filter.checkpoint"), "count": 0, "is_selected": False},
         ]
 
-    def get_tag_list(self) -> List[Dict[str, Any]]:
-        """Return list of tags with counts."""
-        if not self._asset_index or not hasattr(self._asset_index, "tags"):
-            return []
-
-        tags = []
-        for tag_id, tag_data in self._asset_index.tags.items():
-            tags.append(
-                {
-                    "id": f"tag:{tag_id}",
-                    "label": tag_data.get("label", tag_id),
-                    "count": tag_data.get("count", 0),
-                    "is_selected": f"tag:{tag_id}" in self._active_filters,
-                }
-            )
-
-        return sorted(tags, key=lambda t: t["label"].lower())
-
-    def get_selected_asset_struct(self) -> Dict[str, Any]:
-        """Return selected asset as a struct for RML data binding."""
-        if not self._selected_asset_ids or len(self._selected_asset_ids) != 1:
-            return self._get_empty_asset_struct()
-
-        asset_id = list(self._selected_asset_ids)[0]
-        if not self._asset_index or not hasattr(self._asset_index, "assets"):
-            return self._get_empty_asset_struct()
-
-        asset = self._asset_index.assets.get(asset_id)
-        if not asset:
-            return self._get_empty_asset_struct()
-
-        return self._build_asset_struct(asset)
-
-    def _get_empty_asset_struct(self) -> Dict[str, Any]:
-        """Return empty asset struct with default values."""
-        return {
-            "id": "",
-            "name": "",
-            "type": "",
-            "role": "",
-            "path": "",
-            "size": "",
-            "points": "",
-            "resolution": "",
-            "duration": "",
-            "created": "",
-            "modified": "",
-            "is_favorite": False,
-            "has_geometry_metadata": False,
-            "bounding_box": "",
-            "center": "",
-            "scale": "",
-            "file_missing": False,
-            "expected_path": "",
-            "preview_class": "asset-thumb-default",
-            "preview_label": tr("asset_manager.preview"),
-            "pill_class": "",
-            "type_label": "",
-        }
-
-    def _build_asset_struct(self, asset: Dict[str, Any]) -> Dict[str, Any]:
-        """Build complete asset struct from asset data."""
-        asset_id = asset.get("id", "")
-        asset_type = asset.get("type", "")
-        file_path = asset.get("absolute_path") or asset.get("path", "")
-
-        # Format timestamps
-        created_at = asset.get("created_at", "")
-        modified_at = asset.get("modified_at", "")
-        created_str = self._format_timestamp(created_at) if created_at else ""
-        modified_str = self._format_timestamp(modified_at) if modified_at else ""
-
-        # Get geometry metadata
-        geom = asset.get("geometry_metadata", {}) or {}
-        gaussian_count = self._coerce_nonnegative_int(
-            geom.get("gaussian_count", 0)
-        )
-
-        # Format points
-        if gaussian_count >= 1_000_000:
-            points_str = f"{gaussian_count / 1_000_000:.2f}M"
-        elif gaussian_count >= 1_000:
-            points_str = f"{gaussian_count / 1_000:.1f}K"
-        else:
-            points_str = str(gaussian_count)
-
-        # Format size
-        file_size_bytes = self._coerce_nonnegative_int(
-            asset.get("file_size_bytes", 0)
-        )
-        if file_size_bytes >= 1024**3:
-            size_str = f"{file_size_bytes / (1024**3):.2f} GB"
-        elif file_size_bytes >= 1024**2:
-            size_str = f"{file_size_bytes / (1024**2):.1f} MB"
-        elif file_size_bytes >= 1024:
-            size_str = f"{file_size_bytes / 1024:.1f} KB"
-        else:
-            size_str = f"{file_size_bytes} B"
-
-        # Check geometry metadata
-        has_geometry_metadata = bool(geom)
-        bbox = geom.get("bounding_box", {})
-        if bbox:
-            min_val = bbox.get("min", [0, 0, 0])
-            max_val = bbox.get("max", [0, 0, 0])
-            bbox_str = f"[{min_val}, {max_val}]"
-        else:
-            bbox_str = ""
-
-        center = geom.get("center", [0, 0, 0])
-        center_str = (
-            f"{center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f}" if center else ""
-        )
-
-        scale = geom.get("scale", 1.0)
-        scale_str = f"{scale:.2f}" if scale else "1.0"
-
-        # Check if file exists
-        file_exists = asset.get("exists", True)
-        file_missing = not file_exists
-
-        # Preview class
-        thumb_classes = {
-            "ply_3dgs": "asset-thumb-splat",
-            "ply_pcl": "asset-thumb-splat",
-            "ply": "asset-thumb-splat",
-            "rad": "asset-thumb-splat",
-            "sog": "asset-thumb-splat",
-            "spz": "asset-thumb-splat",
-            "checkpoint": "asset-thumb-checkpoint",
-            "mp4": "asset-thumb-video",
-            "mov": "asset-thumb-video",
-            "video": "asset-thumb-video",
-            "dataset": "asset-thumb-dataset",
-        }
-        preview_class = thumb_classes.get(asset_type, "asset-thumb-default")
-
-        # Video resolution and duration
-        resolution = ""
-        duration = ""
-        if asset_type in ("mp4", "mov", "video"):
-            video_meta = asset.get("video_metadata", {}) or {}
-            width = video_meta.get("width", 0)
-            height = video_meta.get("height", 0)
-            if width and height:
-                resolution = f"{width}x{height}"
-            duration_secs = video_meta.get("duration_seconds", 0)
-            if duration_secs:
-                mins = int(duration_secs // 60)
-                secs = int(duration_secs % 60)
-                duration = f"{mins:02d}:{secs:02d}"
-
-        # Format type for display in info panel
-        type_display_names = {
-            "ply_3dgs": tr("asset_manager.type.gaussian_splat"),
-            "ply_pcl": tr("asset_manager.type.point_cloud"),
-            "ply": tr("asset_manager.type.gaussian_splat"),  # Legacy PLY type
-            "rad": tr("asset_manager.type.rad"),
-            "sog": tr("asset_manager.type.sog"),
-            "spz": tr("asset_manager.type.spz"),
-            "checkpoint": tr("asset_manager.type.checkpoint"),
-            "dataset": tr("asset_manager.type.dataset"),
-            "mesh": tr("asset_manager.type.mesh"),
-            "usd": tr("asset_manager.type.usd"),
-            "mp4": tr("asset_manager.type.video"),
-            "mov": tr("asset_manager.type.video"),
-        }
-        type_display = type_display_names.get(asset_type, asset_type.upper() if asset_type else "")
-
-        return {
-            "id": asset_id,
-            "name": asset.get("name", "Unnamed"),
-            "type": type_display,
-            "role": asset.get("role", "").replace("_", " ").title(),
-            "path": file_path,
-            "size": size_str,
-            "points": points_str if gaussian_count > 0 else "",
-            "resolution": resolution,
-            "duration": duration,
-            "created": created_str,
-            "modified": modified_str,
-            "is_favorite": asset.get("is_favorite", False),
-            "has_geometry_metadata": has_geometry_metadata,
-            "bounding_box": bbox_str,
-            "center": center_str,
-            "scale": scale_str,
-            "file_missing": file_missing,
-            "expected_path": file_path if file_missing else "",
-            "preview_class": preview_class,
-            "preview_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else tr("asset_manager.type.asset")),
-            "pill_class": f"asset-pill-{asset_type.replace('_', '-')}" if asset_type else "",
-            "type_label": type_display_names.get(asset_type, asset_type.upper() if asset_type else ""),
-        }
-
-    def get_selected_scene_struct(self) -> Dict[str, Any]:
-        """Return selected scene as a struct for RML data binding."""
-        if not self._selected_scene_id:
-            return self._get_empty_scene_struct()
-
-        if not self._asset_index or not hasattr(self._asset_index, "scenes"):
-            return self._get_empty_scene_struct()
-
-        scene = self._asset_index.scenes.get(self._selected_scene_id)
-        if not scene:
-            return self._get_empty_scene_struct()
-
-        return self._build_scene_struct(scene)
-
-    def _get_empty_scene_struct(self) -> Dict[str, Any]:
-        """Return empty scene struct with default values."""
-        return {
-            "id": "",
-            "name": "",
-            "project_name": "",
-            "asset_count": 0,
-            "created": "",
-            "modified": "",
-            "assets": [],
-        }
-
-    def _build_scene_struct(self, scene: Dict[str, Any]) -> Dict[str, Any]:
-        """Build complete scene struct from scene data."""
-        scene_id = scene.get("id", "")
-
-        # Get project name
-        project_id = scene.get("project_id", "")
-        project_name = ""
-        if project_id and self._asset_index and hasattr(self._asset_index, "projects"):
-            project = self._asset_index.projects.get(project_id)
-            if project:
-                project_name = project.get("name", "")
-
-        # Count assets in scene
-        asset_count = 0
-        scene_assets = []
-        if self._asset_index and hasattr(self._asset_index, "assets"):
-            for asset_id, asset in self._asset_index.assets.items():
-                if asset.get("scene_id") == scene_id:
-                    asset_count += 1
-                    scene_assets.append(
-                        {
-                            "id": asset_id,
-                            "name": asset.get("name", "Unnamed"),
-                            "type": asset.get("type", "").upper(),
-                        }
-                    )
-
-        # Format timestamps
-        created_at = scene.get("created_at", "")
-        modified_at = scene.get("modified_at", "")
-        created_str = self._format_timestamp(created_at) if created_at else ""
-        modified_str = self._format_timestamp(modified_at) if modified_at else ""
-
-        return {
-            "id": scene_id,
-            "name": scene.get("name", tr("asset_manager.unnamed_scene")),
-            "project_name": project_name,
-            "asset_count": asset_count,
-            "created": created_str,
-            "modified": modified_str,
-            "assets": scene_assets,
-        }
-
-    def get_selected_project_struct(self) -> Dict[str, Any]:
-        """Return selected project as a struct for RML data binding."""
-        if not self._selected_project_id:
-            return self._get_empty_project_struct()
-
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
-            return self._get_empty_project_struct()
-
-        project = self._asset_index.projects.get(self._selected_project_id)
-        if not project:
-            return self._get_empty_project_struct()
-
-        return self._build_project_struct(project)
-
-    def _get_empty_project_struct(self) -> Dict[str, Any]:
-        """Return empty project struct with default values."""
-        return {
-            "id": "",
-            "name": "",
-            "scene_count": 0,
-            "total_assets": 0,
-            "path": "",
-            "created": "",
-            "modified": "",
-            "scenes": [],
-        }
-
-    def _build_project_struct(self, project: Dict[str, Any]) -> Dict[str, Any]:
-        """Build complete project struct from project data."""
-        project_id = project.get("id", "")
-
-        # Count scenes and assets
-        scene_ids = project.get("scene_ids", [])
-        scene_count = len(scene_ids)
-
-        total_assets = 0
-        project_scenes = []
-
-        if self._asset_index:
-            for scene_id in scene_ids:
-                if hasattr(self._asset_index, "scenes"):
-                    scene = self._asset_index.scenes.get(scene_id)
-                    if scene:
-                        # Count assets for this scene
-                        scene_asset_count = 0
-                        if hasattr(self._asset_index, "assets"):
-                            for asset in self._asset_index.assets.values():
-                                if asset.get("scene_id") == scene_id:
-                                    scene_asset_count += 1
-                                    total_assets += 1
-
-                        project_scenes.append(
-                            {
-                                "id": scene_id,
-                                "name": scene.get("name", tr("asset_manager.unnamed_scene")),
-                                "asset_count": scene_asset_count,
-                            }
-                        )
-
-        # Format timestamps
-        created_at = project.get("created_at", "")
-        modified_at = project.get("modified_at", "")
-        created_str = self._format_timestamp(created_at) if created_at else ""
-        modified_str = self._format_timestamp(modified_at) if modified_at else ""
-
-        # Get project path
-        project_path = project.get("path", "")
-
-        return {
-            "id": project_id,
-            "name": project.get("name", tr("asset_manager.unnamed_project")),
-            "scene_count": scene_count,
-            "total_assets": total_assets,
-            "path": project_path,
-            "created": created_str,
-            "modified": modified_str,
-            "scenes": project_scenes,
-        }
-
     # ── Flattened Selected Asset Getters ─────────────────────
 
     def _get_selected_asset(self) -> Optional[Dict[str, Any]]:
@@ -1478,13 +1116,6 @@ class AssetManagerPanel(Panel):
     def get_selected_asset_is_favorite(self) -> bool:
         asset = self._get_selected_asset()
         return asset.get("is_favorite", False) if asset else False
-
-    def get_selected_asset_can_load(self) -> bool:
-        asset = self._get_selected_asset()
-        if not asset:
-            return False
-        asset_type = asset.get("type", "")
-        return asset_type in self.LOADABLE_TYPES
 
     def get_selected_asset_has_geometry_metadata(self) -> bool:
         asset = self._get_selected_asset()
@@ -1790,51 +1421,6 @@ class AssetManagerPanel(Panel):
             return dt.strftime("%b %d, %Y, %H:%M")
         except Exception:
             return timestamp
-
-    def _format_duration(self, start: str, end: str) -> str:
-        """Format duration between two ISO timestamps."""
-        try:
-            import datetime
-
-            start_dt = datetime.datetime.fromisoformat(start.replace("Z", "+00:00"))
-            end_dt = datetime.datetime.fromisoformat(end.replace("Z", "+00:00"))
-            duration = end_dt - start_dt
-            total_seconds = int(duration.total_seconds())
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            seconds = total_seconds % 60
-            return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-        except Exception:
-            return ""
-
-    def get_selected_assets_info(self) -> Dict[str, Any]:
-        """Return metadata about current selection for info panel."""
-        if not self._selected_asset_ids:
-            return {"type": "none", "assets": []}
-
-        if len(self._selected_asset_ids) == 1:
-            asset_id = list(self._selected_asset_ids)[0]
-            if self._asset_index and hasattr(self._asset_index, "assets"):
-                asset = self._asset_index.assets.get(asset_id)
-                if asset:
-                    return {
-                        "type": "asset",
-                        "asset": self._format_asset_for_ui(asset),
-                    }
-
-        # Multiple assets selected - compute total size
-        total_size = 0
-        if self._asset_index and hasattr(self._asset_index, "assets"):
-            for asset_id in self._selected_asset_ids:
-                asset = self._asset_index.assets.get(asset_id)
-                if asset:
-                    total_size += asset.get("file_size_bytes", 0)
-
-        return {
-            "type": "multiple",
-            "count": len(self._selected_asset_ids),
-            "total_size": self._format_size(total_size),
-        }
 
     def _ensure_import_project(
         self, default_name: str = "Default"
@@ -2174,7 +1760,7 @@ class AssetManagerPanel(Panel):
         self._asset_index.add_tag_to_asset(asset["id"], tag)
         self._pending_tag_name = ""
         self.refresh_catalog()
-        self._dirty_model("tags", "assets", "selected_asset_tags")
+        self._dirty_model("assets", "selected_asset_tags")
 
     def on_remove_tag(self, _handle, _ev, args):
         """Remove a tag from the currently selected asset."""
@@ -2186,7 +1772,7 @@ class AssetManagerPanel(Panel):
             return
         self._asset_index.remove_tag_from_asset(asset["id"], tag)
         self.refresh_catalog()
-        self._dirty_model("tags", "assets", "selected_asset_tags")
+        self._dirty_model("assets", "selected_asset_tags")
 
     # ── New Project Handlers ──────────────────────────────────
 
@@ -2369,30 +1955,6 @@ class AssetManagerPanel(Panel):
 
         except Exception as e:
             _logger.error(f"Failed to import mesh: {e}")
-
-    def on_import_splat(self, _handle, _ev, args):
-        """Import a splat/point-cloud file (PLY, SOG, SPZ, USD formats)."""
-        if not self._asset_index:
-            _logger.warning("Asset index not initialized")
-            return
-
-        file_path = lf.ui.open_ply_file_dialog("")
-        if not file_path:
-            return
-
-        self._import_single_asset(file_path)
-
-    def on_import_mesh(self, _handle, _ev, args):
-        """Import a mesh file (OBJ, FBX, GLTF, etc.)."""
-        if not self._asset_index:
-            _logger.warning("Asset index not initialized")
-            return
-
-        file_path = lf.ui.open_mesh_file_dialog("")
-        if not file_path:
-            return
-
-        self._import_single_asset(file_path)
 
     def on_import_dataset(self, _handle, _ev, args):
         """Import a dataset folder."""
@@ -2672,14 +2234,6 @@ class AssetManagerPanel(Panel):
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
         self._select_asset_id(asset_id)
 
-    def on_export_selected(self, _handle, _ev, args):
-        """Export selected assets."""
-        if not self._selected_asset_ids:
-            return
-
-        # TODO: Implement export dialog and logic
-        _logger.info(f"Export requested for {len(self._selected_asset_ids)} assets")
-
     def on_load_asset(self, _handle, _ev, args):
         """Load a specific asset by ID into the viewer."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
@@ -2742,7 +2296,6 @@ class AssetManagerPanel(Panel):
             # Select the loaded asset
             self._selected_asset_ids = {asset_id}
             self._selection_type = "asset"
-            self._load_menu_asset_id = None
             self.refresh_catalog()
         except Exception as e:
             self._log_error("Failed to load asset %s: %s", asset_id, e)
@@ -3845,20 +3398,6 @@ class AssetManagerPanel(Panel):
         except Exception:
             pass
 
-    def _on_sidebar_handle_mousedown(self, event) -> None:
-        """Handle mousedown on sidebar resize handle."""
-        button = int(event.get_parameter("button", "0"))
-        if button != 0:
-            return
-        self.on_sidebar_resize_start(None, event, None)
-
-    def _on_right_panel_handle_mousedown(self, event) -> None:
-        """Handle mousedown on right panel resize handle."""
-        button = int(event.get_parameter("button", "0"))
-        if button != 0:
-            return
-        self.on_right_panel_resize_start(None, event, None)
-
     def _on_resize_mousemove(self, event) -> None:
         """Handle mousemove for panel resizing."""
         try:
@@ -4025,20 +3564,6 @@ class AssetManagerPanel(Panel):
         self._reconcile_selection()
         self._update_all_record_lists()
         if self._handle:
-            for field in (
-                "selected_count",
-                "selected_count_text",
-                "has_selection",
-                "has_multi_selection",
-                "selection_type",
-                "show_selection_none",
-                "show_selection_asset",
-                "show_selection_scene",
-                "show_selection_project",
-                "show_selection_multiple",
-                "sort_label",
-            ):
-                self._handle.dirty(field)
             self._handle.dirty_all()
 
     def _sync_runtime_scene_catalog(self, select_current: bool = False) -> None:
@@ -4140,36 +3665,6 @@ class AssetManagerPanel(Panel):
             else:
                 self._handle.update_record_list("selected_asset_tags", [])
 
-            if self._selection_type == "asset":
-                for field in (
-                    "selected_asset_name",
-                    "selected_asset_type",
-                    "selected_asset_project_name",
-                    "selected_asset_scene_name",
-                    "selected_asset_path",
-                    "selected_asset_size",
-                    "selected_asset_points",
-                    "selected_asset_resolution",
-                    "selected_asset_duration",
-                    "selected_asset_created",
-                    "selected_asset_modified",
-                    "selected_asset_is_favorite",
-                    "selected_asset_has_geometry_metadata",
-                    "selected_asset_has_dataset_metadata",
-                    "selected_asset_dataset_image_count",
-                    "selected_asset_dataset_image_root",
-                    "selected_asset_dataset_masks",
-                    "selected_asset_dataset_camera_count",
-                    "selected_asset_dataset_initial_points",
-                    "selected_asset_bounding_box",
-                    "selected_asset_center",
-                    "selected_asset_scale",
-                    "selected_asset_file_missing",
-                    "selected_asset_expected_path",
-                    "selected_asset_pill_class",
-                    "selected_asset_type_label",
-                ):
-                    self._handle.dirty(field)
             self._handle.dirty_all()
         finally:
             self._updating_selection_details = False
@@ -4214,7 +3709,6 @@ class AssetManagerPanel(Panel):
                 "projects",
                 "scenes",
                 "filters",
-                "tags",
                 "assets",
                 "selected_asset_tags",
             ):
