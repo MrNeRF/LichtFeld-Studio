@@ -660,6 +660,9 @@ class URLImportPanel(_ImportDialogPanel):
         self._sync_formats_ui()
 
     def on_unmount(self, doc):
+        # Cancel any in-progress download before unmounting
+        if self._url_import_in_progress and not self._url_import_cancelled:
+            self._url_import_cancelled = True
         self._cancel_url_import_close_timer()
         self._handle = None
         self._doc = None
@@ -851,6 +854,12 @@ class URLImportPanel(_ImportDialogPanel):
         except Exception:
             pass
 
+    def _strip_archive_suffix(self, name: str) -> str:
+        for suffix in (".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".tar"):
+            if name.lower().endswith(suffix):
+                return name[:-len(suffix)]
+        return name
+
     def _scan_and_register_asset(
         self,
         path: str,
@@ -859,6 +868,7 @@ class URLImportPanel(_ImportDialogPanel):
         override_type: Optional[str],
         override_role: Optional[str],
         import_metadata: dict[str, Any],
+        name: Optional[str] = None,
     ):
         index = load_asset_index()
         if index is None:
@@ -878,9 +888,11 @@ class URLImportPanel(_ImportDialogPanel):
         )
         role = override_role or metadata.get("role") or fallback_role
 
+        asset_name = self._strip_archive_suffix(name) if name else Path(path).name
+
         asset = index.create_asset(
             project_id=project_id,
-            name=Path(path).name,
+            name=asset_name,
             type=asset_type,
             path=path,
             absolute_path=path,
@@ -902,7 +914,7 @@ class URLImportPanel(_ImportDialogPanel):
                 refresh_active_panel()
         return asset
 
-    def _register_extracted_asset(self, extract_dir: Path):
+    def _register_extracted_asset(self, extract_dir: Path, name: Optional[str] = None):
         import_metadata = self._make_import_metadata(extract_dir)
 
         for ext in (".ply", ".sog", ".spz", ".rad"):
@@ -914,6 +926,7 @@ class URLImportPanel(_ImportDialogPanel):
                     override_type="dataset",
                     override_role=None,
                     import_metadata=import_metadata,
+                    name=name,
                 )
 
         cameras_bin = list(extract_dir.rglob("cameras.bin"))
@@ -925,6 +938,7 @@ class URLImportPanel(_ImportDialogPanel):
                 override_type="dataset",
                 override_role=None,
                 import_metadata=import_metadata,
+                name=name,
             )
 
         return self._scan_and_register_asset(
@@ -933,15 +947,17 @@ class URLImportPanel(_ImportDialogPanel):
             override_type="dataset",
             override_role=None,
             import_metadata=import_metadata,
+            name=name,
         )
 
-    def _register_downloaded_file(self, file_path: Path):
+    def _register_downloaded_file(self, file_path: Path, name: Optional[str] = None):
         return self._scan_and_register_asset(
             str(file_path),
             fallback_role="source_dataset",
             override_type="dataset",
             override_role=None,
             import_metadata=self._make_import_metadata(file_path.parent),
+            name=name,
         )
 
     def _handle_download_error(self, title: str, message: str, session_id: int) -> None:
@@ -1022,7 +1038,7 @@ class URLImportPanel(_ImportDialogPanel):
                     should_cancel=lambda: self._should_cancel(session_id),
                 )
                 temp_file.unlink(missing_ok=True)
-                self._register_extracted_asset(dest_dir)
+                self._register_extracted_asset(dest_dir, name=asset_name)
             else:
                 dest_file = dest_dir / asset_name
                 download_url(
@@ -1036,7 +1052,7 @@ class URLImportPanel(_ImportDialogPanel):
                 if self._should_cancel(session_id):
                     raise InterruptedError("Download cancelled")
 
-                self._register_downloaded_file(dest_file)
+                self._register_downloaded_file(dest_file, name=asset_name)
 
             if session_id != self._url_import_session_id:
                 return
