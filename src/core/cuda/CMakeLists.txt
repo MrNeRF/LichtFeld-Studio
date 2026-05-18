@@ -66,4 +66,4 @@ if(MSVC)
     )
 endif()
 
-message(STATUS "✓ lfs_core_cuda library configured (memory arena, lanczos resize, core kernels)")
+message(STATUS "[ok] lfs_core_cuda library configured (memory arena, lanczos resize, core kernels)")

@@ -3018,8 +3018,8 @@ namespace lfs::vis::gui {
         });
 
         {
-            auto* vulkan_context = viewer_->getWindowManager()->getVulkanContext();
-            if (!vulkan_context || !rmlui_manager_.initVulkan(viewer_->getWindow(), *vulkan_context, current_ui_scale_)) {
+            auto* rml_vulkan_context = viewer_->getWindowManager()->getVulkanContext();
+            if (!rml_vulkan_context || !rmlui_manager_.initVulkan(viewer_->getWindow(), *rml_vulkan_context, current_ui_scale_)) {
                 throw std::runtime_error("Failed to initialize RmlUI Vulkan backend");
             }
         }

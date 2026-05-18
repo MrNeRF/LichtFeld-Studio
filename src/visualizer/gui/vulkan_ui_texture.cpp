@@ -193,15 +193,15 @@ namespace lfs::vis::gui {
             releasePendingUpload();
         }
 
-        [[nodiscard]] bool init(VulkanContext& context) {
+        [[nodiscard]] bool init(VulkanContext& ctx) {
             if (device != VK_NULL_HANDLE) {
                 return true;
             }
-            this->context = &context;
-            device = context.device();
-            allocator = context.allocator();
-            graphics_queue = context.graphicsQueue();
-            graphics_queue_family = context.graphicsQueueFamily();
+            this->context = &ctx;
+            device = ctx.device();
+            allocator = ctx.allocator();
+            graphics_queue = ctx.graphicsQueue();
+            graphics_queue_family = ctx.graphicsQueueFamily();
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
                 LOG_ERROR("Vulkan UI texture requires an initialized Vulkan context");
@@ -590,8 +590,8 @@ namespace lfs::vis::gui {
                                    static_cast<std::size_t>(region_height) * 4u) {
                 return false;
             }
-            VulkanContext* const context = getVulkanUiTextureContext();
-            if (!context || !init(*context)) {
+            VulkanContext* const ctx = getVulkanUiTextureContext();
+            if (!ctx || !init(*ctx)) {
                 return false;
             }
 

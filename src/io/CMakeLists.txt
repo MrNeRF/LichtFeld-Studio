@@ -92,7 +92,9 @@ target_include_directories(lfs_video
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/core/include
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/external
+)
+target_include_directories(lfs_video SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external
 )
 
 target_link_libraries(lfs_video
@@ -189,9 +191,11 @@ target_include_directories(lfs_io
         $<INSTALL_INTERFACE:include>
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/external
-        ${CMAKE_SOURCE_DIR}/external/nvImageCodec/include
         ${CMAKE_SOURCE_DIR}/external/spz
+)
+target_include_directories(lfs_io SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external
+    ${CMAKE_SOURCE_DIR}/external/nvImageCodec/include
 )
 
 # Find the actual WebP library targets
@@ -260,6 +264,19 @@ if(TARGET nvimgcodec)
     message(STATUS "Linking nvImageCodec to lfs_io")
 else()
     message(WARNING "nvImageCodec target not found - JPEG hardware decode will not work")
+endif()
+
+if(TARGET nvimgcodec_imgproc_static)
+    target_compile_options(nvimgcodec_imgproc_static PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=860,3004>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler "/wd4834">
+    )
+endif()
+
+if(TARGET nvimgcodec)
+    target_compile_options(nvimgcodec PRIVATE
+        $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:/wd4267>
+    )
 endif()
 
 # Set C++ standard

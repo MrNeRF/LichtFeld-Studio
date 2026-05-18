@@ -102,33 +102,6 @@ namespace fast_lfs::rasterization {
         }
     };
 
-    struct PerInstanceBuffers {
-        size_t cub_workspace_size;
-        char* cub_workspace;
-        cub::DoubleBuffer<InstanceKey> keys;
-        cub::DoubleBuffer<uint> primitive_indices;
-
-        static PerInstanceBuffers from_blob(char*& blob, int n_instances, int end_bit = 16) {
-            PerInstanceBuffers buffers;
-            InstanceKey* keys_current;
-            obtain(blob, keys_current, n_instances, 128);
-            InstanceKey* keys_alternate;
-            obtain(blob, keys_alternate, n_instances, 128);
-            buffers.keys = cub::DoubleBuffer<InstanceKey>(keys_current, keys_alternate);
-            uint* primitive_indices_current;
-            obtain(blob, primitive_indices_current, n_instances, 128);
-            uint* primitive_indices_alternate;
-            obtain(blob, primitive_indices_alternate, n_instances, 128);
-            buffers.primitive_indices = cub::DoubleBuffer<uint>(primitive_indices_current, primitive_indices_alternate);
-            cub::DeviceRadixSort::SortPairs(
-                nullptr, buffers.cub_workspace_size,
-                buffers.keys, buffers.primitive_indices,
-                n_instances, 0, end_bit);
-            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
-            return buffers;
-        }
-    };
-
     struct PerTileBuffers {
         uint2* instance_ranges;
         uint* n_contributions;

@@ -302,7 +302,11 @@ def test_plugin_marketplace_renders_list_markup(plugin_marketplace_module):
     assert 'class="plugin-list-row"' in markup
     assert 'data-action="toggle-expand"' in markup
     assert 'plugin-list-toggle' not in markup
-    assert 'type="checkbox"' not in markup
+    assert 'type="checkbox"' in markup
+    assert 'data-action="startup"' in markup
+    assert 'checked="checked"' in markup
+    assert 'class="plugin-list-option-row"' in markup
+    assert 'class="plugin-list-option-label' in markup
     assert 'data-action="unload"' in markup
     assert 'class="plugin-list-detail-meta"' in markup
     assert 'data-action="unload"' in markup

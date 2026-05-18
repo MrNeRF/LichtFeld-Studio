@@ -6,6 +6,7 @@
 #include "forward.h"
 #include "rasterization_api_tensor.h"
 #include "rasterization_config.h"
+#include "utils.h"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -234,7 +235,7 @@ namespace lfs::rendering {
         int count = 0;
 
         GpuBoolMask() = default;
-        explicit GpuBoolMask(const std::vector<bool>& mask) : count(static_cast<int>(mask.size())) {
+        explicit GpuBoolMask(const std::vector<bool>& mask) : count(checked_to_int(mask.size(), "mask size exceeds int range")) {
             if (count > 0) {
                 std::vector<uint8_t> data(count);
                 std::transform(mask.begin(), mask.end(), data.begin(), [](const bool b) -> uint8_t { return b ? 1 : 0; });
@@ -326,7 +327,7 @@ namespace lfs::rendering {
                 throw std::runtime_error("model_transforms tensor must contain a multiple of 16 float values (N x 4 x 4).");
             }
             result.ptr = result.contig.ptr<float>();
-            result.count = static_cast<int>(result.contig.numel() / 16);
+            result.count = checked_to_int(result.contig.numel() / 16, "model transform count exceeds int range");
             return result;
         }
     };
@@ -450,7 +451,7 @@ namespace lfs::rendering {
             prepared.deleted_mask_ptr = prepared.deleted_mask_contig.ptr<bool>();
         }
 
-        prepared.num_selected_nodes = static_cast<int>(emphasized_node_mask.size());
+        prepared.num_selected_nodes = checked_to_int(emphasized_node_mask.size(), "selected node count exceeds int range");
         if (prepared.num_selected_nodes > 0) {
             std::vector<uint8_t> mask_data(static_cast<size_t>(prepared.num_selected_nodes));
             std::transform(emphasized_node_mask.begin(), emphasized_node_mask.end(),
@@ -475,7 +476,7 @@ namespace lfs::rendering {
         prepared.visible_indices_ptr = prepared.computed_visible.count > 0
                                            ? prepared.computed_visible.tensor.ptr<int>()
                                            : nullptr;
-        prepared.actual_visible_count = static_cast<int>(prepared.computed_visible.count);
+        prepared.actual_visible_count = checked_to_int(prepared.computed_visible.count, "visible count exceeds int range");
 
         return prepared;
     }
@@ -547,8 +548,8 @@ namespace lfs::rendering {
         check_tensor_input(config::debug, sh_coefficients_0, "sh_coefficients_0");
         check_tensor_input(config::debug, sh_coefficients_rest, "sh_coefficients_rest");
 
-        const int n_primitives = static_cast<int>(means.size(0));
-        const int total_bases_sh_rest = static_cast<int>(sh_coefficients_rest.size(1));
+        const int n_primitives = checked_to_int(means.size(0), "n_primitives exceeds int range");
+        const int total_bases_sh_rest = checked_to_int(sh_coefficients_rest.size(1), "SH rest basis count exceeds int range");
 
         Tensor image = Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)},
                                      lfs::core::Device::CUDA, lfs::core::DataType::Float32);
@@ -704,8 +705,8 @@ namespace lfs::rendering {
         check_tensor_input(config::debug, sh_coefficients_0, "sh_coefficients_0");
         check_tensor_input(config::debug, sh_coefficients_rest, "sh_coefficients_rest");
 
-        const int n_primitives = static_cast<int>(means.size(0));
-        const int total_bases_sh_rest = static_cast<int>(sh_coefficients_rest.size(1));
+        const int n_primitives = checked_to_int(means.size(0), "n_primitives exceeds int range");
+        const int total_bases_sh_rest = checked_to_int(sh_coefficients_rest.size(1), "SH rest basis count exceeds int range");
         const std::vector<bool> empty_mask;
         const std::vector<bool>& emphasized_node_mask =
             shared.emphasized_node_mask ? *shared.emphasized_node_mask : empty_mask;
@@ -877,7 +878,7 @@ namespace lfs::rendering {
         if (!screen_positions.is_valid() || screen_positions.size(0) == 0)
             return;
 
-        int n_primitives = static_cast<int>(screen_positions.size(0));
+        const int n_primitives = checked_to_int(screen_positions.size(0), "n_primitives exceeds int range");
 
         brush_select(
             reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
@@ -897,12 +898,15 @@ namespace lfs::rendering {
         if (!polygon.is_valid() || polygon.size(0) < 3)
             return;
 
+        const int num_vertices = checked_to_int(polygon.size(0), "polygon vertex count exceeds int range");
+        const int n_primitives = checked_to_int(positions.size(0), "n_primitives exceeds int range");
+
         polygon_select(
             reinterpret_cast<const float2*>(positions.ptr<float>()),
             reinterpret_cast<const float2*>(polygon.ptr<float>()),
-            static_cast<int>(polygon.size(0)),
+            num_vertices,
             selection.ptr<bool>(),
-            static_cast<int>(positions.size(0)));
+            n_primitives);
     }
 
     void rect_select_tensor(
@@ -912,11 +916,13 @@ namespace lfs::rendering {
         if (!positions.is_valid() || positions.size(0) == 0)
             return;
 
+        const int n_primitives = checked_to_int(positions.size(0), "n_primitives exceeds int range");
+
         rect_select(
             reinterpret_cast<const float2*>(positions.ptr<float>()),
             x0, y0, x1, y1,
             selection.ptr<bool>(),
-            static_cast<int>(positions.size(0)));
+            n_primitives);
     }
 
     void rect_select_mode_tensor(
@@ -927,11 +933,13 @@ namespace lfs::rendering {
         if (!positions.is_valid() || positions.size(0) == 0)
             return;
 
+        const int n_primitives = checked_to_int(positions.size(0), "n_primitives exceeds int range");
+
         rect_select_mode(
             reinterpret_cast<const float2*>(positions.ptr<float>()),
             x0, y0, x1, y1,
             selection.ptr<bool>(),
-            static_cast<int>(positions.size(0)),
+            n_primitives,
             add_mode);
     }
 
@@ -945,12 +953,15 @@ namespace lfs::rendering {
         if (!polygon.is_valid() || polygon.size(0) < 3)
             return;
 
+        const int num_vertices = checked_to_int(polygon.size(0), "polygon vertex count exceeds int range");
+        const int n_primitives = checked_to_int(positions.size(0), "n_primitives exceeds int range");
+
         polygon_select_mode(
             reinterpret_cast<const float2*>(positions.ptr<float>()),
             reinterpret_cast<const float2*>(polygon.ptr<float>()),
-            static_cast<int>(polygon.size(0)),
+            num_vertices,
             selection.ptr<bool>(),
-            static_cast<int>(positions.size(0)),
+            n_primitives,
             add_mode);
     }
 
@@ -1007,7 +1018,7 @@ namespace lfs::rendering {
         if (!cumulative_selection.is_valid() || cumulative_selection.size(0) == 0)
             return;
 
-        const int n = static_cast<int>(cumulative_selection.size(0));
+        const int n = checked_to_int(cumulative_selection.size(0), "selection size exceeds int range");
         constexpr int BLOCK_SIZE = 256;
         const int grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
@@ -1115,14 +1126,16 @@ namespace lfs::rendering {
         if (!cumulative_selection.is_valid() || cumulative_selection.size(0) == 0)
             return;
 
-        const int n = static_cast<int>(cumulative_selection.size(0));
+        const int n = checked_to_int(cumulative_selection.size(0), "selection size exceeds int range");
 
         // If valid_nodes is empty, treat all nodes as valid
-        std::vector<bool> effective_valid_nodes = valid_nodes;
-        if (effective_valid_nodes.empty()) {
-            effective_valid_nodes.resize(1, true);
+        std::vector<bool> default_valid_nodes;
+        const std::vector<bool>* effective_valid_nodes = &valid_nodes;
+        if (effective_valid_nodes->empty()) {
+            default_valid_nodes.push_back(true);
+            effective_valid_nodes = &default_valid_nodes;
         }
-        const int num_nodes = static_cast<int>(effective_valid_nodes.size());
+        const int num_nodes = checked_to_int(effective_valid_nodes->size(), "node count exceeds int range");
 
         const uint8_t* const existing_ptr = (existing_mask.is_valid() &&
                                              existing_mask.numel() == static_cast<size_t>(n))
@@ -1134,7 +1147,7 @@ namespace lfs::rendering {
                                                 ? transform_indices->ptr<int>()
                                                 : nullptr;
 
-        const Tensor valid_nodes_gpu = upload_bool_mask(effective_valid_nodes);
+        const Tensor valid_nodes_gpu = upload_bool_mask(*effective_valid_nodes);
         const int grid_size = (n + KERNEL_BLOCK_SIZE - 1) / KERNEL_BLOCK_SIZE;
 
         apply_selection_group_mask_kernel<<<grid_size, KERNEL_BLOCK_SIZE>>>(
@@ -1176,7 +1189,7 @@ namespace lfs::rendering {
         if (target_node_index < 0)
             return;
 
-        const int n = static_cast<int>(selection.size(0));
+        const int n = checked_to_int(selection.size(0), "selection size exceeds int range");
         if (transform_indices.numel() != static_cast<size_t>(n))
             return;
 
@@ -1217,11 +1230,11 @@ namespace lfs::rendering {
         if (valid_nodes.empty())
             return;
 
-        const int n = static_cast<int>(selection.size(0));
+        const int n = checked_to_int(selection.size(0), "selection size exceeds int range");
         if (transform_indices.numel() != static_cast<size_t>(n))
             return;
 
-        const int num_nodes = static_cast<int>(valid_nodes.size());
+        const int num_nodes = checked_to_int(valid_nodes.size(), "node count exceeds int range");
         const Tensor valid_nodes_gpu = upload_bool_mask(valid_nodes);
         const int grid_size = (n + KERNEL_BLOCK_SIZE - 1) / KERNEL_BLOCK_SIZE;
 
@@ -1314,7 +1327,7 @@ namespace lfs::rendering {
         if (!selection.is_valid() || !means.is_valid())
             return;
 
-        const int n = static_cast<int>(selection.size(0));
+        const int n = checked_to_int(selection.size(0), "selection size exceeds int range");
         if (means.size(0) != static_cast<size_t>(n))
             return;
 
@@ -1392,7 +1405,7 @@ namespace lfs::rendering {
         check_tensor_input(config::debug, sh0, "sh0");
         check_tensor_input(config::debug, sh_rest, "sh_rest");
 
-        const int N_total = static_cast<int>(means.size(0));
+        const int N_total = checked_to_int(means.size(0), "N_total exceeds int range");
 
         // Compute visible_indices from transform_indices + node_visibility_mask on GPU
         const GpuBoolMask visibility_mask(node_visibility_mask);
@@ -1402,7 +1415,7 @@ namespace lfs::rendering {
 
         const size_t H = static_cast<size_t>(height);
         const size_t W = static_cast<size_t>(width);
-        const int num_sh_coeffs = 1 + static_cast<int>(sh_rest.size(1));
+        const int num_sh_coeffs = checked_to_int(sh_rest.size(1) + uint64_t{1}, "SH coefficient count exceeds int range");
 
         // Output tensors
         Tensor image = Tensor::empty({3, H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
@@ -1442,7 +1455,9 @@ namespace lfs::rendering {
 
         // visible_indices for kernel-level indirect indexing
         const int* visible_indices_ptr = use_visibility_filter ? computed_visible.tensor.ptr<int>() : nullptr;
-        const uint32_t visible_count = use_visibility_filter ? static_cast<uint32_t>(computed_visible.count) : 0;
+        const uint32_t visible_count = use_visibility_filter
+                                           ? static_cast<uint32_t>(checked_to_int(computed_visible.count, "visible count exceeds int range"))
+                                           : 0;
 
         // Render buffers in HWC format (gsplat output format)
         Tensor render_hwc = Tensor::empty({H, W, 3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);

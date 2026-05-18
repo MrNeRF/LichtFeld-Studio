@@ -79,9 +79,9 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
 endif()
 
 # GLM workarounds for CUDA 12.x compatibility
+# GLM_COMPILER must not be set externally, platform.h redefines it unconditionally
 target_compile_definitions(gsplat_fwd PRIVATE
     GLM_FORCE_CUDA
-    GLM_COMPILER=0
 )
 
 message(STATUS "gsplat_fwd configuration:")

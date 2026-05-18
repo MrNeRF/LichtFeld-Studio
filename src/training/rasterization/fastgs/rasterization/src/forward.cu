@@ -18,13 +18,6 @@
 #include <string>
 
 namespace {
-    int checked_to_int(uint64_t value, const char* message) {
-        if (value > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
-            throw std::overflow_error(message);
-        }
-        return static_cast<int>(value);
-    }
-
     class StreamOrderedDeviceBuffer {
     public:
         StreamOrderedDeviceBuffer() = default;
@@ -36,7 +29,8 @@ namespace {
         StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
 
         StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&& other) noexcept
-            : ptr_(other.ptr_), size_(other.size_) {
+            : ptr_(other.ptr_),
+              size_(other.size_) {
             other.ptr_ = nullptr;
             other.size_ = 0;
         }

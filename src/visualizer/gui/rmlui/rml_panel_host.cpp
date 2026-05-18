@@ -547,12 +547,12 @@ namespace lfs::vis::gui {
                                      clip_y1 - screen_y,
                                      clip_x2 - screen_x,
                                      clip_y2 - screen_y);
-        if (auto* vp = ImGui::GetMainViewport()) {
+        if (auto* popup_vp = ImGui::GetMainViewport()) {
             const auto popup_shadow =
                 collectVisibleColorPickerPopupShadow(panel_screen_pos.x, panel_screen_pos.y);
             if (popup_shadow) {
                 const auto& shadow = *popup_shadow;
-                auto* fg = ImGui::GetForegroundDrawList(vp);
+                auto* fg = ImGui::GetForegroundDrawList(popup_vp);
                 widgets::DrawPopoverShadowOverlay(fg,
                                                   {shadow.x, shadow.y},
                                                   {shadow.w, shadow.h},
