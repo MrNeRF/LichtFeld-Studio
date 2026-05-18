@@ -195,7 +195,6 @@
     "status.one_item_selected": "1 elemento seleccionado",
     "status.multi_items_selected": "{count} elementos seleccionados",
     "toolbar.import": "Importar",
-    "toolbar.clean_missing": "Limpiar",
     "toolbar.search_icon": "Buscar",
     "toolbar.search_placeholder": "Buscar activos...",
     "toolbar.sort_by": "Ordenar por: Reciente",

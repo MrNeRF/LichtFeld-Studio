@@ -306,7 +306,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("gallery_label", lambda: tr("asset_manager.toolbar.view_gallery"))
         model.bind_func("list_label", lambda: tr("asset_manager.toolbar.view_list"))
         model.bind_func("import_label", lambda: tr("asset_manager.toolbar.import"))
-        model.bind_func("clean_missing_label", lambda: tr("asset_manager.toolbar.clean_missing"))
         model.bind_func("import_splat_label", lambda: tr("asset_manager.import_menu.import_splat"))
         model.bind_func("import_mesh_label", lambda: tr("asset_manager.import_menu.import_mesh"))
         model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
@@ -395,7 +394,6 @@ class AssetManagerPanel(Panel):
         model.bind_event("toggle_filter", self.toggle_filter)
         model.bind_event("set_view_mode", self.set_view_mode)
         model.bind_event("cycle_sort_mode", self.cycle_sort_mode)
-        model.bind_event("clean_missing", self.clean_missing)
         model.bind_event("toggle_asset_selection", self.toggle_asset_selection)
         model.bind_event("on_search", self.on_search)
         model.bind_event("on_import_splat", self.on_import_splat)
@@ -1645,24 +1643,6 @@ class AssetManagerPanel(Panel):
             current_index = 0
         self._sort_mode = self.SORT_MODES[(current_index + 1) % len(self.SORT_MODES)]
         self._dirty_model("sort_mode", "sort_label", "assets")
-
-    def clean_missing(self, _handle, _ev, _args):
-        """Prune every catalog entry whose backing file is no longer on disk."""
-        if not self._asset_index or not hasattr(self._asset_index, "assets"):
-            return
-        prune_ids = [
-            asset_id
-            for asset_id, asset in self._asset_index.assets.items()
-            if not (asset.get("absolute_path") or asset.get("path"))
-            or not os.path.exists(asset.get("absolute_path") or asset.get("path"))
-        ]
-        if not prune_ids:
-            return
-        for pid in prune_ids:
-            self._asset_index.delete_asset(pid)
-        self._asset_index.save()
-        self._log_info("Pruned %d missing asset(s) from catalog", len(prune_ids))
-        self._dirty_model("assets")
 
     def toggle_asset_selection(self, _handle, _ev, args):
         """Toggle selection state of an asset."""

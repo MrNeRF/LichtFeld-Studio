@@ -192,7 +192,6 @@
     "status.multi_items_selected": "{count} elementów wybranych",
     "title": "Menedżer zasobów",
     "toolbar.import": "가져오기",
-    "toolbar.clean_missing": "Wyczyść",
     "toolbar.search_icon": "Szukaj",
     "toolbar.search_placeholder": "에셋 검색...",
     "toolbar.sort_by": "정렬: 최근",

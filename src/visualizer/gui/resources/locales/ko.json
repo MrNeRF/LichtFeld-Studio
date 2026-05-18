@@ -195,7 +195,6 @@
     "import_button": "가져오기",
     "import_from_url": "URL에서 가져오기",
     "toolbar.import": "가져오기",
-    "toolbar.clean_missing": "정리",
     "toolbar.search_icon": "검색",
     "toolbar.search_placeholder": "에셋 검색...",
     "toolbar.sort_by": "정렬: 최근",

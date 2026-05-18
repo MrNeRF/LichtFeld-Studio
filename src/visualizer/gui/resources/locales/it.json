@@ -192,7 +192,6 @@
     "status.multi_items_selected": "{count} elementi selezionati",
     "title": "Gestore risorse",
     "toolbar.import": "가져오기",
-    "toolbar.clean_missing": "Pulisci",
     "toolbar.search_icon": "Cerca",
     "toolbar.search_placeholder": "에셋 검색...",
     "toolbar.sort_by": "정렬: 최근",

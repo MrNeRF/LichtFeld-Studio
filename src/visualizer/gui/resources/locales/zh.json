@@ -1161,7 +1161,6 @@
     "status.one_item_selected": "已选择 1 个项目",
     "status.multi_items_selected": "已选择 {count} 个项目",
     "toolbar.import": "导入",
-    "toolbar.clean_missing": "清理",
     "toolbar.search_icon": "搜索",
     "toolbar.search_placeholder": "搜索资源...",
     "toolbar.sort_by_name": "排序: 名称",

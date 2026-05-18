@@ -195,7 +195,6 @@
     "import_button": "インポート",
     "import_from_url": "URLからインポート",
     "toolbar.import": "インポート",
-    "toolbar.clean_missing": "クリーン",
     "toolbar.search_icon": "検索",
     "toolbar.search_placeholder": "アセットを検索...",
     "toolbar.sort_by": "並べ替え: 最新",
