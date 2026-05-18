@@ -60,6 +60,7 @@
                 </div>
               </div>
               <div class="asset-project-dropdown" data-class-is-visible="project.menu_open">
+                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="watch_dirs">{{edit_watch_dirs_label}}</div>
                 <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="rename">{{rename_project_label}}</div>
                 <div class="asset-dropdown-item is-danger" data-attr-data-project-id="project.id" data-project-action="delete">{{delete_project_label}}</div>
               </div>
@@ -119,7 +120,6 @@
                 <div class="asset-card-body">
                   <div class="asset-card-title-row">
                     <span class="asset-card-title">{{asset.display_name}}</span>
-                    <span class="asset-favorite" data-if="asset.is_favorite">*</span>
                   </div>
                   <div class="asset-card-subtitle">{{asset.display_subtitle}}</div>
                   <div class="asset-card-meta">
@@ -202,7 +202,6 @@
           <div data-if="show_selection_asset">
             <div class="asset-info-header">
               <span class="asset-info-name">{{selected_asset_name}}</span>
-              <span class="asset-info-favorite" data-if="selected_asset_is_favorite">*</span>
               <span data-attr-class="'asset-pill ' + selected_asset_pill_class">{{selected_asset_type_label}}</span>
             </div>
 

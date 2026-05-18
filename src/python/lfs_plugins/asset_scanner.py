@@ -188,9 +188,9 @@ class AssetScanner:
                 if header.startswith(b"ply"):
                     return "ply"
 
-                # Check for RAD format (typically starts with comment or vertex data)
+                # Check for RAD format — must contain the RAD marker in the first 16 bytes
                 header_str = header.decode("ascii", errors="ignore")
-                if "# RAD" in header_str or header_str.startswith("#"):
+                if "# RAD" in header_str:
                     return "rad"
 
         except (IOError, OSError, PermissionError):
@@ -201,6 +201,16 @@ class AssetScanner:
     def _looks_like_dataset(self, path: Path) -> bool:
         """Check if a directory looks like a valid dataset.
 
+        A valid dataset must have:
+        - An images/ directory with actual image files, OR
+        - A sparse/ directory with actual COLMAP data (not just empty), OR
+        - A database.db (COLMAP database), OR
+        - cameras.txt + images.txt (text-format COLMAP)
+
+        Only checks the immediate directory — does NOT recurse into subdirectories.
+        This prevents parent directories (e.g. "360_v2/" containing "bicycle/")
+        from being misidentified as datasets.
+
         Args:
             path: Path object to the directory.
 
@@ -208,11 +218,42 @@ class AssetScanner:
             True if directory contains dataset-like structure.
         """
         try:
-            has_images = bool(self._collect_dataset_images(path))
-            has_sparse = (path / "sparse").is_dir()
+            # Only check for images/ in the immediate directory
+            images_dir = path / "images"
+            has_images = False
+            if images_dir.is_dir():
+                has_images = any(
+                    item.is_file() and item.suffix.lower() in _IMAGE_EXTENSIONS
+                    for item in images_dir.iterdir()
+                )
+
+            # sparse/ must contain actual COLMAP files, not just be an empty dir
+            sparse_dir = path / "sparse"
+            has_sparse = False
+            if sparse_dir.is_dir():
+                for colmap_file in (
+                    "cameras.bin",
+                    "images.bin",
+                    "points3D.bin",
+                    "cameras.txt",
+                    "images.txt",
+                    "points3D.txt",
+                ):
+                    if (sparse_dir / colmap_file).exists():
+                        has_sparse = True
+                        break
+                    if (sparse_dir / "0" / colmap_file).exists():
+                        has_sparse = True
+                        break
+
             has_colmap_db = (path / "database.db").exists()
 
-            return has_images or has_sparse or has_colmap_db
+            # Text-format COLMAP (cameras.txt + images.txt in root)
+            has_text_colmap = (
+                (path / "cameras.txt").exists() and (path / "images.txt").exists()
+            )
+
+            return has_images or has_sparse or has_colmap_db or has_text_colmap
 
         except (OSError, PermissionError):
             return False
@@ -395,8 +436,6 @@ class AssetScanner:
             result["format_specific"] = self.extract_checkpoint_metadata(path) or {}
         elif result["type"] == "dataset":
             result["format_specific"] = self.extract_dataset_metadata(path) or {}
-        elif result["type"] == "video":
-            result["format_specific"] = self.extract_video_metadata(path) or {}
         elif result["type"] == "json":
             result["format_specific"] = self._extract_json_metadata(path) or {}
 
@@ -792,93 +831,6 @@ class AssetScanner:
 
         return None
 
-    def extract_video_metadata(self, path: str) -> Optional[dict]:
-        """Extract metadata from video files.
-
-        Args:
-            path: Path to the video file.
-
-        Returns:
-            Dictionary with metadata including:
-            - duration: Video duration in seconds (if available)
-            - resolution: Resolution as "WIDTHxHEIGHT" (if available)
-            - fps: Frames per second (if available)
-            Returns empty dict if file cannot be read.
-
-        Example:
-            >>> meta = scanner.extract_video_metadata("flythrough.mp4")
-            >>> print(meta.get("duration"))
-        """
-        result = {
-            "duration": None,
-            "resolution": None,
-            "fps": None,
-        }
-
-        # Try to use ffprobe if available
-        try:
-            import subprocess
-
-            cmd = [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-show_entries",
-                "stream=width,height,r_frame_rate",
-                "-of",
-                "json",
-                path,
-            ]
-
-            output = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if output.returncode == 0:
-                data = json.loads(output.stdout)
-
-                # Extract duration
-                if "format" in data and "duration" in data["format"]:
-                    try:
-                        result["duration"] = float(data["format"]["duration"])
-                    except ValueError:
-                        pass
-
-                # Extract resolution and fps from first video stream
-                if "streams" in data and data["streams"]:
-                    stream = data["streams"][0]
-                    width = stream.get("width")
-                    height = stream.get("height")
-                    if width and height:
-                        result["resolution"] = f"{width}x{height}"
-
-                    fps_str = stream.get("r_frame_rate", "")
-                    if fps_str and "/" in fps_str:
-                        num, den = fps_str.split("/")
-                        try:
-                            result["fps"] = float(num) / float(den)
-                        except ValueError:
-                            pass
-
-        except (
-            subprocess.SubprocessError,
-            FileNotFoundError,
-            json.JSONDecodeError,
-        ) as e:
-            _logger.debug(f"Could not extract video metadata with ffprobe: {e}")
-
-        # Fallback: try to get basic info from file size (very rough estimate)
-        if result["duration"] is None:
-            try:
-                size = os.path.getsize(path)
-                # Rough estimate: 5MB per minute for typical compressed video
-                estimated_duration = (size / (5 * 1024 * 1024)) * 60
-                if estimated_duration > 0:
-                    result["estimated_duration"] = estimated_duration
-            except OSError:
-                pass
-
-        return result
-
     def _extract_json_metadata(self, path: str) -> Optional[dict]:
         """Extract metadata from JSON files.
 
@@ -1127,17 +1079,17 @@ class AssetScanner:
     def scan_directory(self, path: str, recursive: bool = False) -> list[dict]:
         """Scan a directory for assets and return metadata for all files.
 
+        Only scans files with recognized asset extensions and directories that
+        look like valid datasets. Skips unrelated files (text, scripts, etc.).
+        Does NOT recurse into directories that are themselves datasets — the
+        dataset directory is the asset, not its children.
+
         Args:
             path: Path to the directory to scan.
             recursive: Whether to scan subdirectories recursively.
 
         Returns:
             List of metadata dictionaries for all detected assets.
-
-        Example:
-            >>> assets = scanner.scan_directory("/path/to/assets")
-            >>> for asset in assets:
-            ...     print(asset["name"], asset["type"])
         """
         path_obj = Path(path)
         results = []
@@ -1146,19 +1098,25 @@ class AssetScanner:
             return results
 
         try:
-            if recursive:
-                files = path_obj.rglob("*")
-            else:
-                files = path_obj.iterdir()
-
-            for item in files:
+            for item in path_obj.iterdir():
                 if item.is_file():
+                    # Only scan files with recognized asset extensions
+                    ext = item.suffix.lower()
+                    if ext not in _EXTENSION_TYPE_MAP and ext not in _IMAGE_EXTENSIONS:
+                        continue
                     metadata = self.scan_file(str(item))
                     if metadata["type"] is not None:
                         results.append(metadata)
-                elif item.is_dir() and self._looks_like_dataset(item):
-                    metadata = self.scan_file(str(item))
-                    results.append(metadata)
+                elif item.is_dir():
+                    if self._looks_like_dataset(item):
+                        # This directory is a dataset — add it as an asset
+                        # but do NOT recurse into it
+                        metadata = self.scan_file(str(item))
+                        if metadata["type"] is not None:
+                            results.append(metadata)
+                    elif recursive:
+                        # Not a dataset — recurse into it
+                        results.extend(self.scan_directory(str(item), recursive=True))
 
         except (OSError, PermissionError) as e:
             _logger.warning(f"Error scanning directory {path}: {e}")

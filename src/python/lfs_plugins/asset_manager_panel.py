@@ -18,7 +18,7 @@ from .asset_manager_integration import (
     ensure_dataset_catalog_context,
     set_active_asset_manager_panel,
 )
-from .import_panels import open_url_import_panel
+from .import_panels import open_url_import_panel, open_watch_dirs_dialog
 from .types import Panel
 
 _logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ _TR_FALLBACKS = {
     "asset_manager.title": "Asset Manager",
     "asset_manager.action.load_new": "New",
     "asset_manager.action.add_to_scene": "Add to Scene",
+    "asset_manager.action.edit_watch_dirs": "Edit Watched Directories",
 }
 
 
@@ -231,9 +232,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_asset_created", self.get_selected_asset_created)
         model.bind_func("selected_asset_modified", self.get_selected_asset_modified)
         model.bind_func(
-            "selected_asset_is_favorite", self.get_selected_asset_is_favorite
-        )
-        model.bind_func(
             "selected_asset_has_geometry_metadata",
             self.get_selected_asset_has_geometry_metadata,
         )
@@ -320,6 +318,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("filters_title", lambda: tr("asset_manager.sidebar.filters"))
         model.bind_func("gallery_title", lambda: tr("asset_manager.toolbar.view_gallery"))
         model.bind_func("list_title", lambda: tr("asset_manager.toolbar.view_list"))
+        model.bind_func("edit_watch_dirs_label", lambda: tr("asset_manager.action.edit_watch_dirs"))
         model.bind_func("rename_project_label", lambda: tr("asset_manager.action.rename_project"))
         model.bind_func("delete_project_label", lambda: tr("asset_manager.action.delete_project"))
         model.bind_func("load_button_label", lambda: tr("asset_manager.action.load"))
@@ -409,7 +408,6 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_import_dataset", self.on_import_dataset)
         model.bind_event("on_load_selected", self.on_load_selected)
         model.bind_event("on_remove_from_catalog", self.on_remove_from_catalog)
-        model.bind_event("on_toggle_favorite", self.on_toggle_favorite)
         model.bind_event("select_project", self.select_project)
         model.bind_event("select_scene", self.select_scene)
         model.bind_event("toggle_import_menu", self.toggle_import_menu)
@@ -936,7 +934,6 @@ class AssetManagerPanel(Panel):
             "thumb_class": thumb_class,
             "thumb_label": asset_type.upper() if asset_type else tr("asset_manager.type.asset"),
             "pill_class": f"asset-pill-{asset_type}" if asset_type else "",
-            "is_favorite": asset.get("is_favorite", False),
             "is_selected": asset_id in self._selected_asset_ids,
             "exists": asset.get("exists", True),
             "status_label": tr("asset_manager.status.missing") if not asset.get("exists", True) else tr("asset_manager.status.available"),
@@ -1028,25 +1025,25 @@ class AssetManagerPanel(Panel):
         filters = [
             {
                 "id": "splat",
-                "label": "Splat",
+                "label": tr("asset_manager.filter.splat"),
                 "count": splat_count,
                 "is_selected": "splat" in self._active_filters,
             },
             {
                 "id": "pcl",
-                "label": "PointCloud",
+                "label": tr("asset_manager.filter.pcl"),
                 "count": pcl_count,
                 "is_selected": "pcl" in self._active_filters,
             },
             {
                 "id": "dataset",
-                "label": "Dataset",
+                "label": tr("asset_manager.filter.dataset"),
                 "count": dataset_count,
                 "is_selected": "dataset" in self._active_filters,
             },
             {
                 "id": "checkpoint",
-                "label": "Checkpoint",
+                "label": tr("asset_manager.filter.checkpoint"),
                 "count": checkpoint_count,
                 "is_selected": "checkpoint" in self._active_filters,
             },
@@ -1111,30 +1108,9 @@ class AssetManagerPanel(Panel):
         return self._format_size(asset.get("file_size_bytes", 0))
 
     def get_selected_asset_resolution(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return ""
-        asset_type = asset.get("type", "")
-        if asset_type in ("mp4", "mov", "video"):
-            video_meta = asset.get("video_metadata", {}) or {}
-            width = video_meta.get("width", 0)
-            height = video_meta.get("height", 0)
-            if width and height:
-                return f"{width}x{height}"
         return ""
 
     def get_selected_asset_duration(self) -> str:
-        asset = self._get_selected_asset()
-        if not asset:
-            return ""
-        asset_type = asset.get("type", "")
-        if asset_type in ("mp4", "mov", "video"):
-            video_meta = asset.get("video_metadata", {}) or {}
-            duration_secs = video_meta.get("duration_seconds", 0)
-            if duration_secs:
-                mins = int(duration_secs // 60)
-                secs = int(duration_secs % 60)
-                return f"{mins:02d}:{secs:02d}"
         return ""
 
     def get_selected_asset_created(self) -> str:
@@ -1150,10 +1126,6 @@ class AssetManagerPanel(Panel):
             return ""
         modified_at = asset.get("modified_at", "")
         return self._format_timestamp(modified_at) if modified_at else ""
-
-    def get_selected_asset_is_favorite(self) -> bool:
-        asset = self._get_selected_asset()
-        return asset.get("is_favorite", False) if asset else False
 
     def get_selected_asset_has_geometry_metadata(self) -> bool:
         asset = self._get_selected_asset()
@@ -1352,18 +1324,18 @@ class AssetManagerPanel(Panel):
             return ""
         asset_type = asset.get("type", "")
         type_labels = {
-            "ply_3dgs": "Splat",
-            "ply_pcl": "PointCloud",
-            "ply": "Splat",  # Legacy PLY type
-            "rad": "RAD",
-            "sog": "SOG",
-            "spz": "SPZ",
-            "checkpoint": "CKPT",
-            "dataset": "Dataset",
-            "mesh": "MESH",
-            "usd": "USD",
-            "mp4": "VIDEO",
-            "mov": "VIDEO",
+            "ply_3dgs": tr("asset_manager.type.splat"),
+            "ply_pcl": tr("asset_manager.type.pcl"),
+            "ply": tr("asset_manager.type.splat"),  # Legacy PLY type
+            "rad": tr("asset_manager.type.rad"),
+            "sog": tr("asset_manager.type.sog"),
+            "spz": tr("asset_manager.type.spz"),
+            "checkpoint": tr("asset_manager.type.checkpoint"),
+            "dataset": tr("asset_manager.type.dataset"),
+            "mesh": tr("asset_manager.type.mesh"),
+            "usd": tr("asset_manager.type.usd"),
+            "mp4": tr("asset_manager.type.video"),
+            "mov": tr("asset_manager.type.video"),
         }
         return type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 
@@ -1493,24 +1465,8 @@ class AssetManagerPanel(Panel):
 
         if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
             kwargs["geometry_metadata"] = format_specific
-        elif asset_type == "checkpoint":
-            kwargs["training_metadata"] = format_specific
         elif asset_type == "dataset":
             kwargs["dataset_metadata"] = format_specific
-        elif asset_type in ("video", "mp4", "mov"):
-            normalized_video = dict(format_specific)
-            resolution = normalized_video.pop("resolution", None)
-            if resolution and "x" in resolution:
-                width, height = resolution.split("x", 1)
-                try:
-                    normalized_video["width"] = int(width)
-                    normalized_video["height"] = int(height)
-                except ValueError:
-                    pass
-            duration = normalized_video.pop("duration", None)
-            if duration is not None:
-                normalized_video["duration_seconds"] = duration
-            kwargs["video_metadata"] = normalized_video
 
         return kwargs
 
@@ -1545,11 +1501,6 @@ class AssetManagerPanel(Panel):
             geom_meta = asset.get("geometry_metadata", {}) or {}
             # Need sync if empty or if gaussian_count is not present
             return not geom_meta or geom_meta.get("gaussian_count") is None
-        if asset_type == "checkpoint":
-            return not (asset.get("training_metadata", {}) or {})
-        if asset_type in ("video", "mp4", "mov"):
-            return not (asset.get("video_metadata", {}) or {})
-
         return asset.get("file_size_bytes", 0) <= 0
 
     def _sync_existing_asset_metadata(self) -> bool:
@@ -1596,7 +1547,6 @@ class AssetManagerPanel(Panel):
         fallback_role: str = "reference",
         override_type: Optional[str] = None,
         override_role: Optional[str] = None,
-        import_metadata: Optional[Dict[str, Any]] = None,
     ):
         metadata = self._asset_scanner.scan_file(path) if self._asset_scanner else {}
         asset_kwargs = self._metadata_to_asset_kwargs(metadata)
@@ -1618,7 +1568,6 @@ class AssetManagerPanel(Panel):
             absolute_path=path,
             scene_id=scene_id,
             role=role,
-            import_metadata=import_metadata,
             **asset_kwargs,
         )
         if asset:
@@ -1828,8 +1777,8 @@ class AssetManagerPanel(Panel):
                 self._log_error("Failed to create new project: %s", e)
 
         lf.ui.input_dialog(
-            "Create New Project",
-            "Enter project name",
+            tr("asset_manager.dialog.create_new_project"),
+            tr("asset_manager.dialog.enter_project_name"),
             "",
             _on_project_name_entered
         )
@@ -2099,29 +2048,6 @@ class AssetManagerPanel(Panel):
         self.refresh_catalog()
 
         _logger.info(f"Removed {removed_count} assets from catalog")
-
-    def on_toggle_favorite(self, _handle, _ev, args):
-        """Toggle favorite status of selected asset(s)."""
-        if not args:
-            return
-
-        asset_id = str(args[0])
-
-        if not self._asset_index or not hasattr(self._asset_index, "assets"):
-            return
-
-        asset = self._asset_index.assets.get(asset_id)
-        if not asset:
-            return
-
-        new_state = not asset.get("is_favorite", False)
-
-        try:
-            self._asset_index.update_asset(asset_id, is_favorite=new_state)
-            self._asset_index.save()
-            self.refresh_catalog()
-        except Exception as e:
-            _logger.error(f"Failed to toggle favorite: {e}")
 
     def select_project(self, _handle, _ev, args):
         """Select a project to filter scenes and assets."""
@@ -2577,23 +2503,7 @@ class AssetManagerPanel(Panel):
             self._log_error("Failed to remove asset %s: %s", asset_id, e)
 
     def _get_url_import_managed_root(self, asset: Dict[str, Any]) -> Optional[Path]:
-        import_metadata = asset.get("import_metadata") or {}
-        if import_metadata.get("kind") != "url_download":
-            return None
-
-        managed_root = import_metadata.get("managed_root")
-        if not managed_root:
-            return None
-
-        try:
-            root = Path(str(managed_root)).resolve()
-            base = (self.STORAGE_PATH / "assets").resolve()
-            if root == base:
-                return None
-            root.relative_to(base)
-            return root
-        except Exception:
-            return None
+        return None
 
     def _delete_asset_and_managed_storage(self, asset_id: str) -> List[str]:
         """Delete an asset and any URL-managed storage owned by it."""
@@ -2710,8 +2620,8 @@ class AssetManagerPanel(Panel):
                     self._log_error("Failed to rename asset: %s", e)
 
         lf.ui.input_dialog(
-            "Rename Asset",
-            f"Enter new name for: {current_name}",
+            tr("asset_manager.dialog.rename_asset"),
+            tr("asset_manager.dialog.enter_new_name", name=current_name),
             current_name,
             _on_rename_result
         )
@@ -2844,9 +2754,13 @@ class AssetManagerPanel(Panel):
             except Exception as e:
                 self._log_error("Failed to move asset: %s", e)
 
+        prompt = tr("asset_manager.dialog.current_project", name=current_project) + "\n\n"
+        prompt += tr("asset_manager.dialog.available_projects") + "\n"
+        prompt += project_list + "\n\n"
+        prompt += tr("asset_manager.dialog.enter_number_or_name")
         lf.ui.input_dialog(
-            "Move to Project",
-            f"Current: {current_project}\n\nAvailable projects:\n{project_list}\n\nEnter number or name:",
+            tr("asset_manager.dialog.move_to_project"),
+            prompt,
             "",
             _on_project_selected
         )
@@ -2934,8 +2848,8 @@ class AssetManagerPanel(Panel):
                 self._log_error("Failed to create project and move asset: %s", e)
 
         lf.ui.input_dialog(
-            "New Project",
-            "Enter name for the new project:",
+            tr("asset_manager.dialog.new_project"),
+            tr("asset_manager.dialog.enter_project_name"),
             "",
             _on_project_name_entered
         )
@@ -2960,6 +2874,26 @@ class AssetManagerPanel(Panel):
             self._open_menu_project_id = project_id
 
         self._dirty_model("projects")
+
+    def on_edit_watch_dirs(self, _handle, _ev, args):
+        """Open the watched directories dialog for a project."""
+        project_id = self._resolve_event_value(args, _ev, "data-project-id")
+        if not project_id:
+            return
+
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        # Close the menu
+        self._open_menu_project_id = None
+        self._dirty_model("projects")
+
+        ok = open_watch_dirs_dialog(project_id)
+        if not ok:
+            self._log_warn("Failed to open watch dirs dialog for project %s", project_id)
 
     def on_rename_project(self, _handle, _ev, args):
         """Open rename dialog for a project."""
@@ -3000,8 +2934,8 @@ class AssetManagerPanel(Panel):
                     self._log_error("Failed to rename project: %s", e)
 
         lf.ui.input_dialog(
-            "Rename Project",
-            f"Enter new name for: {current_name}",
+            tr("asset_manager.dialog.rename_project"),
+            tr("asset_manager.dialog.enter_new_name", name=current_name),
             current_name,
             _on_rename_result
         )
@@ -3327,6 +3261,10 @@ class AssetManagerPanel(Panel):
                     self.on_toggle_project_menu(None, event, [project_id])
                     self._stop_event(event)
                     return
+                elif action == "watch_dirs":
+                    self.on_edit_watch_dirs(None, event, [project_id])
+                    self._stop_event(event)
+                    return
                 elif action == "rename":
                     self.on_rename_project(None, event, [project_id])
                     self._stop_event(event)
@@ -3501,12 +3439,6 @@ class AssetManagerPanel(Panel):
             )
 
             if asset:
-                training_metadata = dict(asset.training_metadata or {})
-                training_metadata["iteration"] = iteration
-                self._asset_index.update_asset(
-                    asset.id,
-                    training_metadata=training_metadata,
-                )
                 self._asset_index.save()
 
                 # Refresh UI

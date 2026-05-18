@@ -31,6 +31,7 @@ class Project:
     tags: List[str] = field(default_factory=list)
     notes: str = ""
     thumbnail_asset_id: Optional[str] = None
+    watch_directories: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -49,6 +50,7 @@ class Project:
             tags=data.get("tags", []),
             notes=data.get("notes", ""),
             thumbnail_asset_id=data.get("thumbnail_asset_id"),
+            watch_directories=data.get("watch_directories", []),
         )
 
 
@@ -104,17 +106,10 @@ class Asset:
     modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
     file_size_bytes: int = 0
     tags: List[str] = field(default_factory=list)
-    collection_ids: List[str] = field(default_factory=list)
-    notes: str = ""
-    is_favorite: bool = False
     thumbnail_path: Optional[str] = None
-    preview_path: Optional[str] = None
     geometry_metadata: Dict[str, Any] = field(default_factory=dict)
-    training_metadata: Dict[str, Any] = field(default_factory=dict)
     dataset_metadata: Dict[str, Any] = field(default_factory=dict)
-    video_metadata: Dict[str, Any] = field(default_factory=dict)
     transform_metadata: Dict[str, Any] = field(default_factory=dict)
-    import_metadata: Dict[str, Any] = field(default_factory=dict)
     exists: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
@@ -137,17 +132,10 @@ class Asset:
             modified_at=data.get("modified_at", datetime.now().isoformat()),
             file_size_bytes=data.get("file_size_bytes", 0),
             tags=data.get("tags", []),
-            collection_ids=data.get("collection_ids", []),
-            notes=data.get("notes", ""),
-            is_favorite=data.get("is_favorite", False),
             thumbnail_path=data.get("thumbnail_path"),
-            preview_path=data.get("preview_path"),
             geometry_metadata=data.get("geometry_metadata", {}),
-            training_metadata=data.get("training_metadata", {}),
             dataset_metadata=data.get("dataset_metadata", {}),
-            video_metadata=data.get("video_metadata", {}),
             transform_metadata=data.get("transform_metadata", {}),
-            import_metadata=data.get("import_metadata", {}),
             exists=data.get("exists", True),
         )
 
@@ -403,6 +391,38 @@ class AssetIndex:
         """
         return self._projects.get(project_id)
 
+    def get_watch_dirs(self, project_id: str) -> List[str]:
+        """Get watched directories for a project.
+
+        Args:
+            project_id: Project ID
+
+        Returns:
+            List of watched directory paths
+        """
+        project = self._projects.get(project_id)
+        if project is None:
+            return []
+        return list(project.watch_directories)
+
+    def set_watch_dirs(self, project_id: str, paths: List[str]) -> bool:
+        """Set watched directories for a project.
+
+        Args:
+            project_id: Project ID
+            paths: List of directory paths to watch
+
+        Returns:
+            True if updated, False if project not found
+        """
+        if project_id not in self._projects:
+            return False
+        project = self._projects[project_id]
+        project.watch_directories = list(paths)
+        project.modified_at = datetime.now().isoformat()
+        self.save()
+        return True
+
     def list_projects(self) -> List[Project]:
         """List all projects.
 
@@ -581,13 +601,9 @@ class AssetIndex:
         tags: Optional[List[str]] = None,
         file_size_bytes: int = 0,
         thumbnail_path: Optional[str] = None,
-        preview_path: Optional[str] = None,
         geometry_metadata: Optional[Dict[str, Any]] = None,
-        training_metadata: Optional[Dict[str, Any]] = None,
         dataset_metadata: Optional[Dict[str, Any]] = None,
-        video_metadata: Optional[Dict[str, Any]] = None,
         transform_metadata: Optional[Dict[str, Any]] = None,
-        import_metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[str] = None,
         modified_at: Optional[str] = None,
         exists: Optional[bool] = None,
@@ -636,24 +652,12 @@ class AssetIndex:
                 thumbnail_path=thumbnail_path
                 if thumbnail_path is not None
                 else existing_asset.thumbnail_path,
-                preview_path=preview_path
-                if preview_path is not None
-                else existing_asset.preview_path,
                 geometry_metadata=geometry_metadata
                 if geometry_metadata is not None
                 else existing_asset.geometry_metadata,
-                training_metadata=training_metadata
-                if training_metadata is not None
-                else existing_asset.training_metadata,
                 dataset_metadata=dataset_metadata
                 if dataset_metadata is not None
                 else existing_asset.dataset_metadata,
-                video_metadata=video_metadata
-                if video_metadata is not None
-                else existing_asset.video_metadata,
-                import_metadata=import_metadata
-                if import_metadata is not None
-                else existing_asset.import_metadata,
                 tags=merged_tags,
                 created_at=created_at or existing_asset.created_at,
                 exists=os.path.exists(normalized_abs_path)
@@ -676,13 +680,9 @@ class AssetIndex:
             tags=tags or [],
             file_size_bytes=file_size_bytes,
             thumbnail_path=thumbnail_path,
-            preview_path=preview_path,
             geometry_metadata=geometry_metadata or {},
-            training_metadata=training_metadata or {},
             dataset_metadata=dataset_metadata or {},
-            video_metadata=video_metadata or {},
             transform_metadata=transform_metadata or {},
-            import_metadata=import_metadata or {},
             exists=os.path.exists(normalized_abs_path) if exists is None else exists,
         )
         self._assets[asset.id] = asset
@@ -998,14 +998,6 @@ class AssetIndex:
                 results.append(asset)
         return results
 
-    def get_favorite_assets(self) -> List[Asset]:
-        """Get all favorite assets.
-
-        Returns:
-            List of favorite assets
-        """
-        return [a for a in self._assets.values() if a.is_favorite]
-
     def get_recent_assets(self, limit: int = 10) -> List[Asset]:
         """Get most recently modified assets.
 
@@ -1021,17 +1013,6 @@ class AssetIndex:
             reverse=True,
         )
         return sorted_assets[:limit]
-
-    def get_assets_by_collection(self, collection_id: str) -> List[Asset]:
-        """Get all assets in a collection.
-
-        Args:
-            collection_id: Collection ID
-
-        Returns:
-            List of assets in the collection
-        """
-        return [a for a in self._assets.values() if collection_id in a.collection_ids]
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get catalog statistics.

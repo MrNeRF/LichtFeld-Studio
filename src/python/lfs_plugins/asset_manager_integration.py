@@ -88,24 +88,8 @@ def metadata_to_asset_kwargs(metadata: dict[str, Any]) -> dict[str, Any]:
 
     if asset_type in ("ply", "rad", "sog", "spz", "mesh"):
         kwargs["geometry_metadata"] = format_specific
-    elif asset_type == "checkpoint":
-        kwargs["training_metadata"] = format_specific
     elif asset_type == "dataset":
         kwargs["dataset_metadata"] = format_specific
-    elif asset_type in ("video", "mp4", "mov"):
-        normalized_video = dict(format_specific)
-        resolution = normalized_video.pop("resolution", None)
-        if resolution and "x" in resolution:
-            width, height = resolution.split("x", 1)
-            try:
-                normalized_video["width"] = int(width)
-                normalized_video["height"] = int(height)
-            except ValueError:
-                pass
-        duration = normalized_video.pop("duration", None)
-        if duration is not None:
-            normalized_video["duration_seconds"] = duration
-        kwargs["video_metadata"] = normalized_video
 
     return kwargs
 
@@ -291,6 +275,12 @@ def refresh_active_panel() -> None:
     panel = get_asset_manager_panel()
     if panel is None:
         return
+    # Reload from disk so we pick up changes written by background threads
+    if hasattr(panel, "_asset_index") and panel._asset_index is not None:
+        try:
+            panel._asset_index.load()
+        except Exception:
+            pass
     try:
         panel.refresh_catalog()
     except Exception:

@@ -85,6 +85,7 @@
   "asset_manager": {
     "action.add_tag": "Tag toevoegen",
     "action.delete_project": "Project Verwijderen",
+    "action.edit_watch_dirs": "Bewaakte Mappen Bewerken",
     "action.export": "Exporteren",
     "action.favorite": "Favoriet",
     "action.load": "Laden",
@@ -107,6 +108,7 @@
     "batch.remove_from_catalog": "Verwijderen uit Catalogus",
     "default_project_name": "Standaard",
     "dialog.available_projects": "Beschikbare projecten:",
+    "dialog.create_new_project": "Nieuw Project Aanmaken",
     "dialog.current_project": "Huidig: {name}",
     "dialog.enter_new_name": "Voer nieuwe naam in voor: {name}",
     "dialog.enter_number_or_name": "Voer nummer of naam in:",

@@ -2,12 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Retained RmlUI panels for dataset, checkpoint, and URL import flows."""
 
+import logging
+import os
 import shutil
 import threading
 from pathlib import Path
 from typing import Any, Optional
 
 import lichtfeld as lf
+
+_logger = logging.getLogger(__name__)
 
 from . import rml_widgets as w
 from .asset_manager_integration import (
@@ -37,16 +41,19 @@ from .url_downloader import (
 _dataset_import_panel = None
 _resume_checkpoint_panel = None
 _url_import_panel = None
+_watch_dirs_dialog_panel = None
 
 __lfs_panel_classes__ = [
     "DatasetImportPanel",
     "ResumeCheckpointPanel",
     "URLImportPanel",
+    "WatchDirsDialogPanel",
 ]
 __lfs_panel_ids__ = [
     "lfs.dataset_import",
     "lfs.resume_checkpoint",
     "lfs.url_import",
+    "lfs.watch_dirs_dialog",
 ]
 
 
@@ -69,6 +76,22 @@ def open_url_import_panel() -> bool:
     if _url_import_panel is None:
         return False
     return _url_import_panel.show()
+
+
+def open_watch_dirs_dialog(project_id: str) -> bool:
+    """Open the watched directories dialog for the given project."""
+    global _watch_dirs_dialog_panel
+    if _watch_dirs_dialog_panel is None:
+        try:
+            lf.register_class(WatchDirsDialogPanel)
+        except Exception:
+            pass
+        _watch_dirs_dialog_panel = WatchDirsDialogPanel()
+    try:
+        return _watch_dirs_dialog_panel.show(project_id)
+    except Exception as e:
+        _logger.error("Failed to open watch dirs dialog: %s", e, exc_info=True)
+        return False
 
 
 def _tr(key: str) -> str:
@@ -817,12 +840,6 @@ class URLImportPanel(_ImportDialogPanel):
         except Exception:
             pass
 
-    def _make_import_metadata(self, managed_root: Path) -> dict[str, Any]:
-        return {
-            "kind": "url_download",
-            "managed_root": str(managed_root.resolve()),
-        }
-
     def _resolve_catalog_context(self, index) -> tuple[Optional[str], Optional[str]]:
         project_id = None
         scene_id = None
@@ -867,7 +884,6 @@ class URLImportPanel(_ImportDialogPanel):
         fallback_role: str,
         override_type: Optional[str],
         override_role: Optional[str],
-        import_metadata: dict[str, Any],
         name: Optional[str] = None,
     ):
         index = load_asset_index()
@@ -898,7 +914,6 @@ class URLImportPanel(_ImportDialogPanel):
             absolute_path=path,
             scene_id=scene_id,
             role=role,
-            import_metadata=import_metadata,
             **asset_kwargs,
         )
         if asset is not None:
@@ -915,8 +930,6 @@ class URLImportPanel(_ImportDialogPanel):
         return asset
 
     def _register_extracted_asset(self, extract_dir: Path, name: Optional[str] = None):
-        import_metadata = self._make_import_metadata(extract_dir)
-
         for ext in (".ply", ".sog", ".spz", ".rad"):
             files = list(extract_dir.rglob(f"*{ext}"))
             if files:
@@ -925,7 +938,6 @@ class URLImportPanel(_ImportDialogPanel):
                     fallback_role="source_dataset",
                     override_type="dataset",
                     override_role=None,
-                    import_metadata=import_metadata,
                     name=name,
                 )
 
@@ -937,7 +949,6 @@ class URLImportPanel(_ImportDialogPanel):
                 fallback_role="source_dataset",
                 override_type="dataset",
                 override_role=None,
-                import_metadata=import_metadata,
                 name=name,
             )
 
@@ -946,7 +957,6 @@ class URLImportPanel(_ImportDialogPanel):
             fallback_role="source_dataset",
             override_type="dataset",
             override_role=None,
-            import_metadata=import_metadata,
             name=name,
         )
 
@@ -956,7 +966,6 @@ class URLImportPanel(_ImportDialogPanel):
             fallback_role="source_dataset",
             override_type="dataset",
             override_role=None,
-            import_metadata=self._make_import_metadata(file_path.parent),
             name=name,
         )
 
@@ -1155,3 +1164,204 @@ class URLImportPanel(_ImportDialogPanel):
             "url_import_show_progress_bar",
             "url_import_status",
         )
+
+
+class WatchDirsDialogPanel(Panel):
+    """Floating panel for editing watched directories per project."""
+
+    id = "lfs.watch_dirs_dialog"
+    label = "Watched Directories"
+    space = lf.ui.PanelSpace.FLOATING
+    order = 14
+    template = "rmlui/watch_dirs_dialog.rml"
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+    size = (520, 0)
+    update_interval_ms = 200
+
+    def __init__(self):
+        global _watch_dirs_dialog_panel
+        _watch_dirs_dialog_panel = self
+
+        self._handle = None
+        self._project_id: Optional[str] = None
+        self._project_name: str = ""
+        self._watch_dirs: list[str] = []
+        self._last_lang: str = ""
+
+    def on_mount(self, doc):
+        super().on_mount(doc)
+        self._last_lang = lf.ui.get_current_language()
+
+    def on_unmount(self, doc):
+        self._handle = None
+        doc.remove_data_model("watch_dirs_dialog")
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("watch_dirs_dialog")
+        if model is None:
+            return
+
+        model.bind_func("panel_label", self._panel_label)
+        model.bind_record_list("watch_dirs_list")
+        model.bind_func("no_watch_dirs", lambda: len(self._watch_dirs) == 0)
+        model.bind_event("on_browse_add", self._on_browse_add)
+        model.bind_event("on_remove_dir", self._on_remove_dir)
+        model.bind_event("on_cancel", self._on_cancel)
+        model.bind_event("on_save", self._on_save)
+        self._handle = model.get_handle()
+
+    def on_update(self, doc):
+        del doc
+        current_lang = lf.ui.get_current_language()
+        if current_lang != self._last_lang:
+            self._last_lang = current_lang
+            self._dirty_model()
+            return True
+        return False
+
+    def _catalog_index(self):
+        panel = get_asset_manager_panel()
+        shared_index = getattr(panel, "_asset_index", None) if panel is not None else None
+        return shared_index if shared_index is not None else load_asset_index()
+
+    def show(self, project_id: str) -> bool:
+        try:
+            index = self._catalog_index()
+            if index is None:
+                return False
+
+            project = index.get_project(project_id)
+            if project is None:
+                return False
+
+            self._project_id = project_id
+            self._project_name = getattr(project, "name", "Unnamed Project")
+            self._watch_dirs = index.get_watch_dirs(project_id)
+            self._dirty_model()
+            lf.ui.set_panel_enabled(self.id, True)
+            return True
+        except Exception as e:
+            _logger.error("Failed to show watch dirs dialog: %s", e, exc_info=True)
+            return False
+
+    def _panel_label(self) -> str:
+        return f"Watched Directories — {self._project_name}"
+
+    def _dirty_model(self, *fields):
+        if not self._handle:
+            return
+        if not fields:
+            self._handle.dirty_all()
+            return
+        for field in fields:
+            self._handle.dirty(field)
+        if "watch_dirs_list" in fields or not fields:
+            self._handle.update_record_list(
+                "watch_dirs_list", [{"path": p} for p in self._watch_dirs]
+            )
+
+    def _on_browse_add(self, _handle=None, _ev=None, _args=None):
+        path = lf.ui.open_dataset_folder_dialog()
+        if not path:
+            return
+        if path in self._watch_dirs:
+            return
+        self._watch_dirs.append(path)
+        self._dirty_model("watch_dirs_list", "no_watch_dirs")
+
+    def _on_remove_dir(self, _handle=None, _ev=None, args=None):
+        if not args:
+            return
+        try:
+            idx = int(args[0])
+        except (ValueError, TypeError):
+            return
+        if 0 <= idx < len(self._watch_dirs):
+            self._watch_dirs.pop(idx)
+            self._dirty_model("watch_dirs_list", "no_watch_dirs")
+
+    def _on_cancel(self, _handle=None, _ev=None, _args=None):
+        lf.ui.set_panel_enabled(self.id, False)
+
+    def _on_save(self, _handle=None, _ev=None, _args=None):
+        index = self._catalog_index()
+        if index is None or self._project_id is None:
+            lf.ui.set_panel_enabled(self.id, False)
+            return
+
+        # Persist watch directories
+        index.set_watch_dirs(self._project_id, self._watch_dirs)
+
+        # Close dialog immediately and run scan in background thread
+        lf.ui.set_panel_enabled(self.id, False)
+
+        thread = threading.Thread(
+            target=self._scan_worker,
+            args=(None, self._project_id, list(self._watch_dirs)),
+            daemon=True,
+        )
+        thread.start()
+
+    def _scan_worker(self, index, project_id: str, watch_dirs: list[str]):
+        """Background thread: scan watched directories and import new assets."""
+        if index is None:
+            index = load_asset_index()
+        scanner = load_scanner()
+        thumbnails = load_thumbnails()
+        if index is None or scanner is None:
+            return
+
+        added = 0
+        for path in watch_dirs:
+            try:
+                metadata_list = scanner.scan_directory(path, recursive=True)
+                for metadata in metadata_list:
+                    file_path = metadata.get("path")
+                    if not file_path or not os.path.exists(file_path):
+                        continue
+                    existing = index.find_asset_by_path(file_path)
+                    if existing is not None:
+                        continue
+
+                    # scan_file returns format_specific; route it to the right field
+                    fmt = metadata.get("format_specific", {})
+                    asset_type = metadata.get("type", "unknown")
+                    kwargs = {}
+                    if asset_type in ("ply", "ply_3dgs", "ply_pcl", "rad", "sog", "spz"):
+                        kwargs["geometry_metadata"] = fmt
+                    elif asset_type == "dataset":
+                        kwargs["dataset_metadata"] = fmt
+                    elif asset_type == "checkpoint":
+                        # checkpoint metadata is also in format_specific
+                        pass
+
+                    asset = index.create_asset(
+                        project_id=project_id,
+                        name=metadata.get("name", Path(file_path).name),
+                        type=asset_type,
+                        path=file_path,
+                        absolute_path=file_path,
+                        role=metadata.get("role", "source"),
+                        file_size_bytes=metadata.get("size_bytes", 0),
+                        **kwargs,
+                    )
+                    if asset is not None and thumbnails is not None:
+                        try:
+                            thumb_path = thumbnails.generate_placeholder(
+                                asset.type, asset.id
+                            )
+                            index.update_asset(asset.id, thumbnail_path=str(thumb_path))
+                        except Exception:
+                            pass
+                    if asset is not None:
+                        added += 1
+            except Exception as e:
+                _logger.warning("Failed to scan watched directory %s: %s", path, e, exc_info=True)
+
+        if added > 0:
+            try:
+                index.save()
+                refresh_active_panel()
+                _logger.info("Auto-imported %d new asset(s) from watched directories", added)
+            except Exception as e:
+                _logger.error("Failed to save after watch-dir scan: %s", e, exc_info=True)

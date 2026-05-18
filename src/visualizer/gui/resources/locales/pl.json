@@ -85,6 +85,7 @@
   "asset_manager": {
     "action.add_tag": "태그 추가",
     "action.delete_project": "Usuń Projekt",
+    "action.edit_watch_dirs": "Edytuj Obserwowane Katalogi",
     "action.export": "보내기",
     "action.favorite": "즐겨찾기",
     "action.load": "로드",
@@ -107,6 +108,7 @@
     "batch.remove_from_catalog": "카탈로그에서 제거",
     "default_project_name": "Domyślny",
     "dialog.available_projects": "Dostępne projekty:",
+    "dialog.create_new_project": "Utwórz Nowy Projekt",
     "dialog.current_project": "Aktualny: {name}",
     "dialog.enter_new_name": "Wprowadź nową nazwę dla: {name}",
     "dialog.enter_number_or_name": "Wprowadź numer lub nazwę:",
