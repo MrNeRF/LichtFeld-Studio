@@ -298,7 +298,8 @@ class AssetManagerPanel(Panel):
         model.bind_func("list_label", lambda: tr("asset_manager.toolbar.view_list"))
         model.bind_func("import_label", lambda: tr("asset_manager.toolbar.import"))
         model.bind_func("clean_missing_label", lambda: tr("asset_manager.toolbar.clean_missing"))
-        model.bind_func("import_asset_label", lambda: tr("asset_manager.import_menu.import_asset"))
+        model.bind_func("import_splat_label", lambda: tr("asset_manager.import_menu.import_splat"))
+        model.bind_func("import_mesh_label", lambda: tr("asset_manager.import_menu.import_mesh"))
         model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
         model.bind_func("import_checkpoint_label", lambda: tr("asset_manager.import_menu.import_checkpoint"))
 
@@ -388,7 +389,8 @@ class AssetManagerPanel(Panel):
         model.bind_event("clean_missing", self.clean_missing)
         model.bind_event("toggle_asset_selection", self.toggle_asset_selection)
         model.bind_event("on_search", self.on_search)
-        model.bind_event("on_import_asset", self.on_import_asset)
+        model.bind_event("on_import_splat", self.on_import_splat)
+        model.bind_event("on_import_mesh", self.on_import_mesh)
         model.bind_event("on_import_dataset", self.on_import_dataset)
         model.bind_event("on_load_selected", self.on_load_selected)
         model.bind_event("on_remove_from_catalog", self.on_remove_from_catalog)
@@ -2264,22 +2266,8 @@ class AssetManagerPanel(Panel):
         """End right panel resize drag."""
         self._right_panel_dragging = False
 
-    def on_import_asset(self, _handle, _ev, args):
-        """Import a single asset file (point clouds, splats, meshes, etc.)."""
-        if not self._asset_index:
-            _logger.warning("Asset index not initialized")
-            return
-
-        # Try point cloud/splat dialog first (PLY, SOG, SPZ, USD formats)
-        file_path = lf.ui.open_ply_file_dialog("")
-
-        # If user cancelled, try mesh dialog (OBJ, FBX, GLTF, etc.)
-        if not file_path:
-            file_path = lf.ui.open_mesh_file_dialog("")
-
-        if not file_path:
-            return
-
+    def _import_single_asset(self, file_path: str) -> None:
+        """Common logic to import a single asset file after dialog selection."""
         try:
             project_id = self._ensure_import_project()
 
@@ -2331,6 +2319,30 @@ class AssetManagerPanel(Panel):
 
         except Exception as e:
             _logger.error(f"Failed to import asset: {e}")
+
+    def on_import_splat(self, _handle, _ev, args):
+        """Import a splat/point-cloud file (PLY, SOG, SPZ, USD formats)."""
+        if not self._asset_index:
+            _logger.warning("Asset index not initialized")
+            return
+
+        file_path = lf.ui.open_ply_file_dialog("")
+        if not file_path:
+            return
+
+        self._import_single_asset(file_path)
+
+    def on_import_mesh(self, _handle, _ev, args):
+        """Import a mesh file (OBJ, FBX, GLTF, etc.)."""
+        if not self._asset_index:
+            _logger.warning("Asset index not initialized")
+            return
+
+        file_path = lf.ui.open_mesh_file_dialog("")
+        if not file_path:
+            return
+
+        self._import_single_asset(file_path)
 
     def on_import_dataset(self, _handle, _ev, args):
         """Import a dataset folder."""

@@ -1098,6 +1098,8 @@
     "geometry.title": "几何",
     "hint.multi_select": "Ctrl/Cmd+点击卡片进行多选",
     "import_menu.import_asset": "导入资源...",
+    "import_menu.import_splat": "导入Splat...",
+    "import_menu.import_mesh": "导入网格...",
     "import_menu.import_checkpoint": "导入检查点...",
     "import_menu.import_dataset": "导入数据集...",
     "info_panel.asset_details": "资源详情",

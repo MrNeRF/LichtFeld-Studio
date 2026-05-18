@@ -129,6 +129,8 @@
     "geometry.title": "Geometrie",
     "hint.multi_select": "Strg/Cmd-Klick auf Karten für Mehrfachauswahl",
     "import_menu.import_asset": "Asset importieren...",
+    "import_menu.import_splat": "Splat importieren...",
+    "import_menu.import_mesh": "Mesh importieren...",
     "import_menu.import_checkpoint": "Checkpoint importieren...",
     "import_menu.import_dataset": "Dataset importieren...",
     "info_panel.asset_details": "Asset-Details",
