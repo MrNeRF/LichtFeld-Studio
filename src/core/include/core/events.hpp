@@ -26,7 +26,8 @@ namespace lfs::core {
                               HTML_VIEWER = 3,
                               USD = 4,
                               NUREC_USDZ = 5,
-                              RAD = 6 };
+                              RAD = 6,
+                              COLMAP = 7 };
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \
@@ -182,6 +183,7 @@ namespace lfs::core {
                   size_t num_points;);
             EVENT(ConfigLoadFailed, std::filesystem::path path; std::string error;);
             EVENT(FileDropFailed, std::vector<std::string> files; std::string error;);
+            EVENT(SplatFileLoadFailed, std::filesystem::path path; std::string error;);
 
             // Evaluation
             EVENT(EvaluationStarted, int iteration; size_t num_images;);

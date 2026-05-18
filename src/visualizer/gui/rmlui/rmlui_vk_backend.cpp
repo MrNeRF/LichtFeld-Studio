@@ -266,6 +266,7 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures{},
                                            m_p_descriptor_set{},
                                            m_p_sampler_linear{},
+                                           m_p_sampler_nearest{},
                                            m_scissor{},
                                            m_scissor_original{},
                                            m_viewport{},
@@ -526,12 +527,19 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
         } else {
             m_is_transformed_scissor_enabled = false;
             m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
-            m_scissor.extent.width = region.Width();
-            m_scissor.extent.height = region.Height();
-            const int offset_x = static_cast<int>(std::round(m_context_offset.x));
-            const int offset_y = static_cast<int>(std::round(m_context_offset.y));
-            m_scissor.offset.x = Rml::Math::Clamp(region.Left() + offset_x, 0, m_width);
-            m_scissor.offset.y = Rml::Math::Clamp(region.Top() + offset_y, 0, m_height);
+            // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
+            const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
+            const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
+            const float right_f = left_f + static_cast<float>(region.Width());
+            const float bottom_f = top_f + static_cast<float>(region.Height());
+            const int left = Rml::Math::Clamp(static_cast<int>(std::floor(left_f)), 0, m_width);
+            const int top = Rml::Math::Clamp(static_cast<int>(std::floor(top_f)), 0, m_height);
+            const int right = Rml::Math::Clamp(static_cast<int>(std::ceil(right_f)), 0, m_width);
+            const int bottom = Rml::Math::Clamp(static_cast<int>(std::ceil(bottom_f)), 0, m_height);
+            m_scissor.offset.x = left;
+            m_scissor.offset.y = top;
+            m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+            m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
             m_scissor = IntersectContextClip(m_scissor);
 
 #ifdef RMLUI_VK_DEBUG
@@ -825,7 +833,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         }
 
         const size_t image_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-        const Rml::TextureHandle handle = GenerateTexture({data, image_size}, texture_dimensions);
+        const Rml::TextureHandle handle = CreateTexture({data, image_size}, texture_dimensions, path);
         stbi_image_free(data);
         return handle;
     };
@@ -946,7 +954,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
     texture_dimensions.x = header.width;
     texture_dimensions.y = header.height;
 
-    return GenerateTexture({image_dest, image_size}, texture_dimensions);
+    return CreateTexture({image_dest, image_size}, texture_dimensions, source);
 }
 
 Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) {
@@ -1088,7 +1096,7 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
 Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) {
     RMLUI_ASSERT(source_data.data() && source_data.size() == size_t(source_dimensions.x * source_dimensions.y * 4));
     Rml::String source_name = "generated-texture";
-    return CreateTexture(source_data, source_dimensions, source_name);
+    return CreateTexture(source_data, source_dimensions, source_name, m_p_sampler_nearest);
 }
 
 /*
@@ -1107,7 +1115,8 @@ Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte
     efficient handling otherwise it is cpu_to_gpu visibility and it means you create only ONE buffer that is accessible for CPU and for GPU, but it
     will cause the worst performance...
 */
-Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name) {
+Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name,
+                                                     VkSampler sampler) {
     RMLUI_ZoneScopedN("Vulkan - GenerateTexture");
 
     RMLUI_VK_ASSERTMSG(!source.empty(), "you pushed not valid data for copying to buffer");
@@ -1258,7 +1267,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
 
     p_texture->m_p_vk_image_view = p_image_view;
-    p_texture->m_p_vk_sampler = m_p_sampler_linear;
+    p_texture->m_p_vk_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
 
     return reinterpret_cast<Rml::TextureHandle>(p_texture);
 }
@@ -1279,6 +1288,8 @@ void RenderInterface_VK::SetTransform(const Rml::Matrix4f* transform) {
 }
 
 void RenderInterface_VK::SetContextOffset(float offset_x, float offset_y) {
+    offset_x = std::round(offset_x);
+    offset_y = std::round(offset_y);
     m_context_offset = Rml::Vector2f(offset_x, offset_y);
     m_context_transform = Rml::Matrix4f::Translate(offset_x, offset_y, 0.0f);
     ApplyTransformState();
@@ -2603,17 +2614,21 @@ void RenderInterface_VK::CreateDescriptorSets() noexcept {
 }
 
 void RenderInterface_VK::CreateSamplers() noexcept {
-    VkSamplerCreateInfo info = {};
+    auto create_sampler = [this](VkFilter filter, VkSampler* sampler) {
+        VkSamplerCreateInfo info = {};
+        info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        info.pNext = nullptr;
+        info.magFilter = filter;
+        info.minFilter = filter;
+        info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 
-    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.pNext = nullptr;
-    info.magFilter = VK_FILTER_LINEAR;
-    info.minFilter = VK_FILTER_LINEAR;
-    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        vkCreateSampler(m_p_device, &info, nullptr, sampler);
+    };
 
-    vkCreateSampler(m_p_device, &info, nullptr, &m_p_sampler_linear);
+    create_sampler(VK_FILTER_LINEAR, &m_p_sampler_linear);
+    create_sampler(VK_FILTER_NEAREST, &m_p_sampler_nearest);
 }
 
 void RenderInterface_VK::Create_Pipelines() noexcept {
@@ -3157,7 +3172,12 @@ void RenderInterface_VK::DestroyPipelineLayout() noexcept {}
 
 void RenderInterface_VK::DestroySamplers() noexcept {
     RMLUI_VK_ASSERTMSG(m_p_device, "must exist here");
-    vkDestroySampler(m_p_device, m_p_sampler_linear, nullptr);
+    if (m_p_sampler_linear != VK_NULL_HANDLE)
+        vkDestroySampler(m_p_device, m_p_sampler_linear, nullptr);
+    if (m_p_sampler_nearest != VK_NULL_HANDLE)
+        vkDestroySampler(m_p_device, m_p_sampler_nearest, nullptr);
+    m_p_sampler_linear = VK_NULL_HANDLE;
+    m_p_sampler_nearest = VK_NULL_HANDLE;
 }
 
 VkImageAspectFlags RenderInterface_VK::DepthStencilAspectMask() const noexcept {

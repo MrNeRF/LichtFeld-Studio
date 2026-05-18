@@ -23,7 +23,7 @@
 }
 
 .impdlg-badge {
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -32,7 +32,7 @@
 .impdlg-subtitle,
 .impdlg-note,
 .impdlg-meta {
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .impdlg-subtitle {
@@ -52,7 +52,7 @@
 .impdlg-field-label {
     width: 148dp;
     flex-shrink: 0;
-    font-size: 10dp;
+    font-size: 12dp;
     line-height: 14dp;
 }
 
@@ -75,7 +75,7 @@
 
 .impdlg-value {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     min-width: 0;
     word-break: break-word;
 }
@@ -98,7 +98,7 @@
 
 .impdlg-status {
     min-width: 0;
-    font-size: 10dp;
+    font-size: 12dp;
     text-align: left;
     flex-shrink: 0;
 }
@@ -126,5 +126,5 @@
     align-items: center;
     gap: 4dp;
     flex-shrink: 0;
-    font-size: 10dp;
+    font-size: 12dp;
 }

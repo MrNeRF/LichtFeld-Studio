@@ -310,6 +310,8 @@ namespace lfs::vis {
                                : fmt == core::ExportFormat::HTML_VIEWER ? "HTML"
                                : fmt == core::ExportFormat::USD         ? "USD"
                                : fmt == core::ExportFormat::NUREC_USDZ  ? "USDZ"
+                               : fmt == core::ExportFormat::RAD         ? "RAD"
+                               : fmt == core::ExportFormat::COLMAP      ? "COLMAP"
                                                                         : "file";
                 return state;
             },
@@ -803,19 +805,43 @@ namespace lfs::vis {
             }
         });
 
+        const auto sync_viewer_mip_filter_with_training = [this] {
+            if (!rendering_manager_ || !trainer_manager_)
+                return;
+            const auto* trainer = trainer_manager_->getTrainer();
+            if (!trainer)
+                return;
+
+            auto settings = rendering_manager_->getSettings();
+            const bool training_mip_filter = trainer->getParams().optimization.mip_filter;
+            if (settings.mip_filter == training_mip_filter)
+                return;
+
+            settings.mip_filter = training_mip_filter;
+            rendering_manager_->updateSettings(settings);
+            LOG_INFO("Synced viewer mip filter with training: {}", training_mip_filter ? "enabled" : "disabled");
+        };
+
         // Trainer ready signal
-        internal::TrainerReady::when([this](const auto&) {
+        internal::TrainerReady::when([this, sync_viewer_mip_filter_with_training](const auto&) {
+            sync_viewer_mip_filter_with_training();
             internal::TrainingReadyToStart{}.emit();
         });
 
         // Training started - switch to splat rendering without hijacking scene selection
-        state::TrainingStarted::when([this](const auto&) {
+        state::TrainingStarted::when([this, sync_viewer_mip_filter_with_training](const auto&) {
+            sync_viewer_mip_filter_with_training();
+
             ui::PointCloudModeChanged{
                 .enabled = false,
                 .voxel_size = 0.01f}
                 .emit();
 
             LOG_INFO("Switched to splat rendering mode (training started)");
+        });
+
+        state::TrainingResumed::when([sync_viewer_mip_filter_with_training](const auto&) {
+            sync_viewer_mip_filter_with_training();
         });
 
         // Training completed - update content type
@@ -1024,12 +1050,14 @@ namespace lfs::vis {
             LOG_INFO("Loading {} splat file(s)", paths.size());
             if (const auto result = data_loader_->loadPLY(paths[0]); !result) {
                 LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(paths[0]), result.error());
+                state::SplatFileLoadFailed{.path = paths[0], .error = result.error()}.emit();
             } else {
                 for (size_t i = 1; i < paths.size(); ++i) {
                     try {
                         data_loader_->addSplatFileToScene(paths[i]);
                     } catch (const std::exception& e) {
                         LOG_ERROR("Failed to add {}: {}", lfs::core::path_to_utf8(paths[i]), e.what());
+                        state::SplatFileLoadFailed{.path = paths[i], .error = e.what()}.emit();
                     }
                 }
                 if (paths.size() > 1) {
@@ -1093,6 +1121,11 @@ namespace lfs::vis {
         // Clamp delta time to prevent huge jumps (min 30 FPS)
         delta_time = std::min(delta_time, 1.0f / 30.0f);
 
+        const bool viewport_export_locked = gui_manager_ && gui_manager_->isViewportExportLocked();
+        if (viewport_export_locked && window_manager_) {
+            window_manager_->pollEvents();
+        }
+
         // Tick Python frame callback for animations
         if (python::has_frame_callback()) {
             python::tick_frame_callback(delta_time);
@@ -1119,7 +1152,9 @@ namespace lfs::vis {
         }
 
         if (input_controller_) {
-            input_controller_->update(delta_time);
+            if (!viewport_export_locked) {
+                input_controller_->update(delta_time);
+            }
         }
 
         // Get viewport region from GUI. This accounts for menu/tool/status panels and must be
@@ -1151,44 +1186,46 @@ namespace lfs::vis {
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
-        const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
-        if (gui_manager_) {
-            if (vulkan_frame.external_image != VK_NULL_HANDLE) {
-                gui_manager_->setVulkanExternalSceneImage(vulkan_frame.external_image,
-                                                          vulkan_frame.external_image_view,
-                                                          vulkan_frame.external_image_layout,
-                                                          vulkan_frame.size,
-                                                          vulkan_frame.flip_y,
-                                                          vulkan_frame.external_image_generation);
-            } else {
-                gui_manager_->setVulkanSceneImage(
-                    vulkan_frame.image,
-                    vulkan_frame.size,
-                    vulkan_frame.flip_y,
-                    vulkan_frame.image_generation);
-            }
-            if (vulkan_frame.split_right_image) {
-                gui_manager_->setVulkanSplitRightImage(
-                    vulkan_frame.split_right_image,
-                    vulkan_frame.split_right_size,
-                    vulkan_frame.split_right_flip_y,
-                    vulkan_frame.image_generation);
-            } else {
-                gui_manager_->clearVulkanSplitRightImage();
-            }
+        if (!viewport_export_locked) {
+            const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
+            if (gui_manager_) {
+                if (vulkan_frame.external_image != VK_NULL_HANDLE) {
+                    gui_manager_->setVulkanExternalSceneImage(vulkan_frame.external_image,
+                                                              vulkan_frame.external_image_view,
+                                                              vulkan_frame.external_image_layout,
+                                                              vulkan_frame.size,
+                                                              vulkan_frame.flip_y,
+                                                              vulkan_frame.external_image_generation);
+                } else {
+                    gui_manager_->setVulkanSceneImage(
+                        vulkan_frame.image,
+                        vulkan_frame.size,
+                        vulkan_frame.flip_y,
+                        vulkan_frame.image_generation);
+                }
+                if (vulkan_frame.split_right_image) {
+                    gui_manager_->setVulkanSplitRightImage(
+                        vulkan_frame.split_right_image,
+                        vulkan_frame.split_right_size,
+                        vulkan_frame.split_right_flip_y,
+                        vulkan_frame.image_generation);
+                } else {
+                    gui_manager_->clearVulkanSplitRightImage();
+                }
 
-            // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
-            const auto mesh_frame = rendering_manager_->getVulkanMeshFrame();
-            if (mesh_frame.depth_blit.depth && mesh_frame.depth_blit.depth->is_valid() &&
-                mesh_frame.depth_blit.depth->ndim() == 3 &&
-                mesh_frame.depth_blit.depth->size(0) == 1) {
-                const auto& d = *mesh_frame.depth_blit.depth;
-                gui_manager_->setVulkanDepthBlitImage(
-                    mesh_frame.depth_blit.depth,
-                    glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
-                    vulkan_frame.image_generation);
-            } else {
-                gui_manager_->clearVulkanDepthBlitImage();
+                // Splat depth -> R32_SFLOAT interop slot for the depth-blit pass.
+                const auto mesh_frame = rendering_manager_->getVulkanMeshFrame();
+                if (mesh_frame.depth_blit.depth && mesh_frame.depth_blit.depth->is_valid() &&
+                    mesh_frame.depth_blit.depth->ndim() == 3 &&
+                    mesh_frame.depth_blit.depth->size(0) == 1) {
+                    const auto& d = *mesh_frame.depth_blit.depth;
+                    gui_manager_->setVulkanDepthBlitImage(
+                        mesh_frame.depth_blit.depth,
+                        glm::ivec2(static_cast<int>(d.size(2)), static_cast<int>(d.size(1))),
+                        vulkan_frame.image_generation);
+                } else {
+                    gui_manager_->clearVulkanDepthBlitImage();
+                }
             }
         }
         if (gui_manager_) {

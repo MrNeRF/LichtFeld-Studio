@@ -12,6 +12,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -39,6 +40,21 @@ namespace lfs::vis::gui {
             case lfs::sequencer::EasingType::EASE_IN_OUT: return LOC(Scene::KEYFRAME_EASING_EASE_IN_OUT);
             default: return LOC(Scene::KEYFRAME_EASING_LINEAR);
             }
+        }
+
+        std::string shortcutSpan(const input::Action action) {
+            auto* const controller = InputController::instance();
+            if (!controller) {
+                return {};
+            }
+            const std::string shortcut =
+                controller->getBindings().getTriggerDescription(action, input::ToolMode::GLOBAL);
+            if (shortcut.empty() || shortcut == "Unbound") {
+                return {};
+            }
+            return fmt::format(
+                R"(<span class="context-menu-label context-menu-shortcut">{}</span>)",
+                shortcut);
         }
     } // namespace
 
@@ -268,8 +284,9 @@ namespace lfs::vis::gui {
 
         using namespace lichtfeld::Strings;
         html += fmt::format(
-            R"(<div class="context-menu-item" id="ctx-add">{}<span class="context-menu-label context-menu-shortcut">K</span></div>)",
-            LOC(Sequencer::ADD_KEYFRAME_HERE));
+            R"(<div class="context-menu-item" id="ctx-add">{}{}</div>)",
+            LOC(Sequencer::ADD_KEYFRAME_HERE),
+            shortcutSpan(input::Action::SEQUENCER_ADD_KEYFRAME));
 
         if (keyframe.has_value() && *keyframe < timeline.size()) {
             const size_t idx = *keyframe;
@@ -281,8 +298,9 @@ namespace lfs::vis::gui {
 
             html += R"(<div class="context-menu-separator"></div>)";
             html += fmt::format(
-                R"(<div class="context-menu-item" id="ctx-update">{}<span class="context-menu-label context-menu-shortcut">U</span></div>)",
-                LOC(Sequencer::UPDATE_TO_CURRENT_VIEW));
+                R"(<div class="context-menu-item" id="ctx-update">{}{}</div>)",
+                LOC(Sequencer::UPDATE_TO_CURRENT_VIEW),
+                shortcutSpan(input::Action::SEQUENCER_UPDATE_KEYFRAME));
             html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-goto">{}</div>)",
                 LOC(Sequencer::GO_TO_KEYFRAME));
@@ -326,7 +344,7 @@ namespace lfs::vis::gui {
                     LOC(Sequencer::DELETE_KEYFRAME));
             else
                 html += fmt::format(
-                    R"(<div class="context-menu-item" id="ctx-delete">{}<span class="context-menu-label context-menu-shortcut">Del</span></div>)",
+                    R"(<div class="context-menu-item" id="ctx-delete">{}</div>)",
                     LOC(Sequencer::DELETE_KEYFRAME));
         }
 

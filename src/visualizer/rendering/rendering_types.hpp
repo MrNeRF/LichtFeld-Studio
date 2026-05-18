@@ -106,7 +106,8 @@ namespace lfs::vis {
         Rectangle,
         Polygon,
         Lasso,
-        Rings
+        Rings,
+        Color
     };
 
     struct PPISPOverrides {

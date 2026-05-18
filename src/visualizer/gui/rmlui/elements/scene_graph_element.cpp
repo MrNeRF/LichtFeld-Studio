@@ -8,14 +8,17 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/colmap.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -31,6 +34,7 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <functional>
 #include <glm/mat4x4.hpp>
@@ -102,6 +106,77 @@ namespace lfs::vis::gui {
             return std::to_string(value) + "dp";
         }
 
+        [[nodiscard]] int colorChannel(const float value) {
+            return std::clamp(static_cast<int>(std::round(value * 255.0f)), 0, 255);
+        }
+
+        [[nodiscard]] std::string formatCameraLossIconColor(const std::array<float, 3>& color) {
+            constexpr float alpha = 1.0f;
+            return std::format("rgba({}, {}, {}, {})",
+                               colorChannel(color[0]),
+                               colorChannel(color[1]),
+                               colorChannel(color[2]),
+                               colorChannel(alpha));
+        }
+
+        [[nodiscard]] lfs::io::Result<std::filesystem::path> colmapSparseSourcePath(
+            const lfs::vis::SceneManager& scene_manager) {
+            const auto dataset_path = scene_manager.getDatasetPath();
+            if (dataset_path.empty()) {
+                return lfs::io::make_error(lfs::io::ErrorCode::PATH_NOT_FOUND,
+                                           "COLMAP export requires a source dataset path",
+                                           dataset_path);
+            }
+
+            return lfs::io::find_colmap_sparse_model_path(dataset_path);
+        }
+
+        enum class ColmapSparseOutputFormat : uint8_t {
+            Binary,
+            Text,
+        };
+
+        [[nodiscard]] ColmapSparseOutputFormat colmapSparseOutputFormat(
+            const std::filesystem::path& source_sparse_path) {
+            std::error_code ec;
+            const bool has_binary_pair =
+                std::filesystem::exists(source_sparse_path / "cameras.bin", ec) &&
+                std::filesystem::exists(source_sparse_path / "images.bin", ec);
+            return has_binary_pair ? ColmapSparseOutputFormat::Binary
+                                   : ColmapSparseOutputFormat::Text;
+        }
+
+        [[nodiscard]] std::array<std::string_view, 3> colmapSparseOutputFileNames(
+            const ColmapSparseOutputFormat format) {
+            if (format == ColmapSparseOutputFormat::Binary) {
+                return {"cameras.bin", "images.bin", "points3D.bin"};
+            }
+            return {"cameras.txt", "images.txt", "points3D.txt"};
+        }
+
+        [[nodiscard]] bool colmapSparseDataExists(const std::filesystem::path& output_path) {
+            constexpr std::array<std::string_view, 6> file_names{
+                "cameras.bin",
+                "images.bin",
+                "points3D.bin",
+                "cameras.txt",
+                "images.txt",
+                "points3D.txt",
+            };
+            for (const std::string_view file_name : file_names) {
+                std::error_code ec;
+                if (std::filesystem::exists(output_path / std::string(file_name), ec)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] std::string colmapSparseOutputFileList(
+            const std::array<std::string_view, 3>& file_names) {
+            return std::format("{}, {}, and {}", file_names[0], file_names[1], file_names[2]);
+        }
+
         [[nodiscard]] float currentDpRatio(const Rml::Element* element) {
             const Rml::Context* context = element ? element->GetContext() : nullptr;
             return context ? std::max(context->GetDensityIndependentPixelRatio(), 0.01f) : 1.0f;
@@ -134,6 +209,25 @@ namespace lfs::vis::gui {
 
             el->SetProperty(std::string(name), value);
             el->SetAttribute(attr_name, value);
+            return true;
+        }
+
+        bool setCachedOptionalProperty(Rml::Element* el,
+                                       std::string_view name,
+                                       const std::optional<std::string>& value) {
+            if (!el)
+                return false;
+
+            const std::string attr_name = cacheAttrName("prop", name);
+            const std::string encoded_value = value.value_or(std::string{});
+            if (el->GetAttribute<Rml::String>(attr_name.c_str(), "") == encoded_value)
+                return false;
+
+            if (value)
+                el->SetProperty(std::string(name), *value);
+            else
+                el->RemoveProperty(std::string(name));
+            el->SetAttribute(attr_name, encoded_value);
             return true;
         }
 
@@ -330,6 +424,8 @@ namespace lfs::vis::gui {
                 return;
             }
 
+            lfs::core::Tensor::trim_memory_pool();
+
             if (!result) {
                 LOG_ERROR("Failed to save '{}' to {}: {}",
                           node->name,
@@ -409,6 +505,7 @@ namespace lfs::vis::gui {
                 if (scene.hasNodes()) {
                     captureRenameBuffer();
                     rebuildFlatRows(scene);
+                    syncCameraLossIconColors(scene, true);
                     markStateDirty();
                 } else if (scene_has_nodes_ || !node_snapshots_.empty()) {
                     clear();
@@ -731,6 +828,7 @@ namespace lfs::vis::gui {
             .padding_left_dp = formatDp(4 + depth * 16),
             .has_mask = snapshot.has_mask,
             .deletable = snapshot.deletable,
+            .camera_loss_icon_color = snapshot.camera_loss_icon_color,
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
@@ -761,6 +859,7 @@ namespace lfs::vis::gui {
             .padding_left_dp = formatDp(4 + depth * 16),
             .has_mask = snapshot.has_mask,
             .deletable = snapshot.deletable,
+            .camera_loss_icon_color = snapshot.camera_loss_icon_color,
         });
 
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id)) {
@@ -862,6 +961,72 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    bool SceneGraphElement::syncCameraLossIconColors(const core::Scene& scene,
+                                                     const bool update_cached_rows) {
+        std::unordered_map<core::NodeId, std::string> camera_icon_colors;
+
+        const auto* trainer_manager = services().trainerOrNull();
+        const auto* trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+        if (trainer) {
+            std::vector<std::shared_ptr<const core::Camera>> cameras;
+            std::vector<core::NodeId> camera_node_ids;
+            const auto nodes = scene.getNodes();
+            cameras.reserve(nodes.size());
+            camera_node_ids.reserve(nodes.size());
+
+            for (const core::SceneNode* node : nodes) {
+                if (!node || node->type != core::NodeType::CAMERA || !node->camera ||
+                    !node->training_enabled)
+                    continue;
+                cameras.push_back(node->camera);
+                camera_node_ids.push_back(node->id);
+            }
+
+            std::vector<std::array<float, 3>> loss_colors;
+            if (!cameras.empty() &&
+                trainer->fillCameraLossColors(cameras, loss_colors) &&
+                loss_colors.size() == cameras.size()) {
+                camera_icon_colors.reserve(loss_colors.size());
+                for (size_t i = 0; i < loss_colors.size(); ++i) {
+                    const auto& color = loss_colors[i];
+                    if (!std::isfinite(color[0]) ||
+                        !std::isfinite(color[1]) ||
+                        !std::isfinite(color[2])) {
+                        continue;
+                    }
+
+                    camera_icon_colors.emplace(camera_node_ids[i], formatCameraLossIconColor(color));
+                }
+            }
+        }
+
+        bool changed = false;
+        for (auto& [id, snapshot] : node_snapshots_) {
+            if (snapshot.type != core::NodeType::CAMERA)
+                continue;
+
+            std::optional<std::string> next_color;
+            if (const auto color_it = camera_icon_colors.find(id); color_it != camera_icon_colors.end())
+                next_color = color_it->second;
+
+            if (snapshot.camera_loss_icon_color == next_color)
+                continue;
+
+            snapshot.camera_loss_icon_color = std::move(next_color);
+            if (update_cached_rows) {
+                if (const auto flat_it = flat_index_by_id_.find(id);
+                    flat_it != flat_index_by_id_.end() && flat_it->second < flat_rows_.size()) {
+                    flat_rows_[flat_it->second].camera_loss_icon_color = snapshot.camera_loss_icon_color;
+                }
+            }
+            changed = true;
+        }
+
+        if (changed)
+            markStateDirty();
+        return changed;
+    }
+
     bool SceneGraphElement::syncFromScene(const PanelDrawContext& ctx) {
         const auto* scene = ctx.scene;
         auto* scene_manager = services().sceneOrNull();
@@ -900,10 +1065,12 @@ namespace lfs::vis::gui {
             rebuildFlatRows(*scene);
             last_scene_generation_ = ctx.scene_generation;
             syncTrainingTopologyLabel(*scene, false);
+            syncCameraLossIconColors(*scene, true);
             markStateDirty();
             changed = true;
         } else {
             changed |= syncTrainingTopologyLabel(*scene, true);
+            changed |= syncCameraLossIconColors(*scene, true);
         }
 
         if (pending_reveal_node_id_ != core::NULL_NODE) {
@@ -1043,13 +1210,16 @@ namespace lfs::vis::gui {
 
         if (!icon_sprite.empty()) {
             setCachedAttribute(slot.type_icon, "sprite", std::string(icon_sprite));
+            setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color);
             setCachedProperty(slot.type_icon, "display", "inline");
             setCachedProperty(slot.unicode_icon, "display", "none");
         } else if (!unicode.empty()) {
+            setCachedOptionalProperty(slot.type_icon, "image-color", std::nullopt);
             setCachedInnerRml(slot.unicode_icon, std::string(unicode));
             setCachedProperty(slot.unicode_icon, "display", "inline");
             setCachedProperty(slot.type_icon, "display", "none");
         } else {
+            setCachedOptionalProperty(slot.type_icon, "image-color", std::nullopt);
             setCachedProperty(slot.type_icon, "display", "none");
             setCachedProperty(slot.unicode_icon, "display", "none");
         }
@@ -1691,9 +1861,15 @@ namespace lfs::vis::gui {
                     prefixedAction(std::format("disable_all_train:{}", node_id))));
                 break;
             case core::NodeType::DATASET:
+                if (colmapSparseSourcePath(*scene_manager)) {
+                    items.push_back(makeAction(
+                        "Export COLMAP sparse...",
+                        prefixedAction("export_colmap")));
+                }
                 items.push_back(makeAction(
                     tr(string_keys::Scene::DELETE_ITEM),
-                    prefixedAction(std::format("delete:{}", node_id))));
+                    prefixedAction(std::format("delete:{}", node_id)),
+                    !items.empty()));
                 break;
             case core::NodeType::CROPBOX:
                 items.push_back(makeAction(tr("common.apply"), prefixedAction("apply_cropbox")));
@@ -1920,6 +2096,64 @@ namespace lfs::vis::gui {
             }
         } else if (kind == "add_group_root") {
             cmd::AddGroup{.name = tr("scene.new_group_name"), .parent_name = ""}.emit();
+        } else if (kind == "export_colmap") {
+            auto* gui = services().guiOrNull();
+            if (!gui)
+                return;
+
+            auto path_result = colmapSparseSourcePath(*scene_manager);
+            if (!path_result) {
+                const std::string error = path_result.error().format();
+                LOG_ERROR("COLMAP export failed: {}", error);
+                state::ExportFailed{.error = error}.emit();
+                return;
+            }
+
+            const auto selected_path = PickColmapSparseFolderDialog(*path_result);
+            if (selected_path.empty()) {
+                return;
+            }
+
+            // The folder picker result is the export destination. Do not rewrite a selected
+            // sparse root to sparse/0; overwrite checks and writes must hit the same folder.
+            const auto output_path = selected_path;
+            const std::string output_path_text = lfs::core::path_to_utf8(output_path);
+            const auto output_format = colmapSparseOutputFormat(*path_result);
+            const auto output_file_names = colmapSparseOutputFileNames(output_format);
+            const std::string output_file_list = colmapSparseOutputFileList(output_file_names);
+
+            if (!colmapSparseDataExists(output_path)) {
+                gui->asyncTasks().performExport(core::ExportFormat::COLMAP, output_path, {}, 0);
+                return;
+            }
+
+            LOG_INFO("Confirming COLMAP sparse overwrite folder: {}", output_path_text);
+
+            const std::string export_button = "Overwrite";
+            lfs::core::ModalRequest request;
+            request.title = "Export COLMAP sparse";
+            request.style = lfs::core::ModalStyle::Warning;
+            request.width_dp = 560;
+            request.body_rml =
+                std::string("<div>COLMAP export will overwrite existing sparse reconstruction data in:</div>") +
+                "<div class=\"content-row\" style=\"margin-top: 8dp;\">"
+                "<span class=\"dim-text\">Folder </span>" +
+                encode(output_path_text) +
+                "</div>"
+                "<div class=\"warning-text\" style=\"margin-top: 8dp;\">"
+                "This writes " +
+                encode(output_file_list) +
+                "</div>";
+            request.buttons = {
+                {"Cancel", "secondary"},
+                {export_button, "warning"},
+            };
+            request.on_result = [gui, output_path, export_button](const lfs::core::ModalResult& result) {
+                if (result.button_label == export_button) {
+                    gui->asyncTasks().performExport(core::ExportFormat::COLMAP, output_path, {}, 0);
+                }
+            };
+            gui->enqueueModal(std::move(request));
         } else if ((kind == "add_cropbox" || kind == "add_ellipsoid" || kind == "save_node") && parts.size() >= 2) {
             core::NodeId node_id = core::NULL_NODE;
             if (!parseNodeId(parts[1], node_id))

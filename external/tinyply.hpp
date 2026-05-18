@@ -632,6 +632,8 @@ namespace tinyply {
                     } else {
                         write_property_binary(os, (helper->data->buffer.get_const() + helper->cursor->byteOffset), helper->cursor->byteOffset, f.prop_stride);
                     }
+                    if (!os.good())
+                        return;
                     property_index++;
                 }
             }
@@ -662,9 +664,13 @@ namespace tinyply {
                     } else {
                         write_property_ascii(p.propertyType, os, (helper->data->buffer.get() + helper->cursor->byteOffset), helper->cursor->byteOffset);
                     }
+                    if (!os.good())
+                        return;
                     property_index++;
                 }
                 os << "\n";
+                if (!os.good())
+                    return;
             }
             element_idx++;
         }

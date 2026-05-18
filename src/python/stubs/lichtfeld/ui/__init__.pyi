@@ -1920,6 +1920,26 @@ def open_csv_file_dialog() -> str:
     Open a file dialog to select a CSV file. Returns empty string if cancelled.
     """
 
+def open_xml_file_dialog() -> str:
+    """
+    Open a file dialog to select a Metashape XML file. Returns empty string if cancelled.
+    """
+
+def open_las_file_dialog() -> str:
+    """
+    Open a file dialog to select a LAS or LAZ point cloud file. Returns empty string if cancelled.
+    """
+
+def save_las_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for LAS files. Returns empty string if cancelled.
+    """
+
+def save_laz_file_dialog(default_name: str = 'export') -> str:
+    """
+    Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.
+    """
+
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
     Open a save file dialog for JSON files. Returns empty string if cancelled.
@@ -1960,9 +1980,14 @@ def save_rad_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for RAD files. Returns empty string if cancelled.
     """
 
-def open_dataset_folder_dialog() -> str:
+def open_dataset_folder_dialog(default_path: str = '') -> str:
     """
     Open a folder dialog to select a dataset. Returns empty string if cancelled.
+    """
+
+def select_colmap_sparse_folder_dialog(default_path: str = '') -> str:
+    """
+    Open a folder dialog to select the COLMAP sparse export folder. Returns empty string if cancelled.
     """
 
 def open_video_file_dialog() -> str:

@@ -140,6 +140,11 @@ body {
 
 #git-commit {
     margin-left: 16dp;
+    cursor: pointer;
+}
+
+#git-commit:hover {
+    text-decoration: underline;
 }
 
 #step-label {

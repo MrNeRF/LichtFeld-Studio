@@ -17,14 +17,14 @@
 
 .m2s-section-title {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
     margin-bottom: 4dp;
 }
 
 .m2s-label {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     margin-bottom: 3dp;
 }
 
@@ -34,7 +34,7 @@
 
 .m2s-help {
     display: block;
-    font-size: 9dp;
+    font-size: 12dp;
     margin-top: 2dp;
     line-height: 1.35;
 }
@@ -57,16 +57,16 @@
 }
 
 .m2s-list-name {
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .m2s-list-meta {
-    font-size: 9dp;
+    font-size: 12dp;
 }
 
 .m2s-empty {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     padding: 4dp 0;
 }
 
@@ -82,7 +82,7 @@
     min-width: 34dp;
     padding: 2dp 8dp;
     text-align: center;
-    font-size: 10dp;
+    font-size: 12dp;
     border-radius: 999dp;
     background-color: transparent;
     border-width: 1dp;
@@ -90,7 +90,7 @@
 }
 
 .m2s-summary-value {
-    font-size: 11dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -101,13 +101,13 @@
 
 .m2s-stage-text {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     margin-top: 4dp;
 }
 
 .m2s-error {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     margin-top: 8dp;
     line-height: 1.35;
 }

@@ -4,11 +4,16 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
+#include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/scene.hpp"
+#include "core/tensor.hpp"
+#include "io/loader.hpp"
 #include "training/checkpoint.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
@@ -18,6 +23,77 @@ namespace {
     constexpr const char* TEST_IMAGES = "images_4";
     constexpr int CHECKPOINT_ITER = 1200;
     constexpr int TOTAL_ITER = 2100;
+
+    TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
+        constexpr size_t initial_points = 12;
+        constexpr int target_splats = 5;
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_training_setup_full_init_regression";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto init_path = temp_dir / "init_points.ply";
+        {
+            std::ofstream ply(init_path);
+            ASSERT_TRUE(ply.is_open());
+            ply << "ply\n"
+                   "format ascii 1.0\n"
+                   "element vertex "
+                << initial_points
+                << "\n"
+                   "property float x\n"
+                   "property float y\n"
+                   "property float z\n"
+                   "property uchar red\n"
+                   "property uchar green\n"
+                   "property uchar blue\n"
+                   "end_header\n";
+            for (size_t i = 0; i < initial_points; ++i) {
+                ply << static_cast<float>(i) << ' '
+                    << static_cast<float>(i % 3) << ' '
+                    << static_cast<float>(i % 5) << ' '
+                    << static_cast<int>(10 + i) << ' '
+                    << static_cast<int>(20 + i) << ' '
+                    << static_cast<int>(30 + i) << '\n';
+            }
+        }
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir / "dataset";
+        params.init_path = lfs::core::path_to_utf8(init_path);
+        params.optimization.max_cap = target_splats;
+
+        lfs::io::LoadedScene loaded_scene;
+        loaded_scene.cameras.push_back(std::make_shared<lfs::core::Camera>());
+
+        lfs::io::LoadResult load_result;
+        load_result.data = std::move(loaded_scene);
+        load_result.scene_center = lfs::core::Tensor::from_vector(
+            std::vector<float>{0.0f, 0.0f, 0.0f},
+            {size_t{3}},
+            lfs::core::Device::CPU);
+        load_result.loader_used = "test";
+
+        lfs::core::Scene scene;
+        auto apply_result = lfs::training::applyLoadResultToScene(params, scene, std::move(load_result));
+        ASSERT_TRUE(apply_result.has_value()) << apply_result.error();
+
+        const auto* model = scene.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(static_cast<size_t>(model->size()), initial_points);
+        EXPECT_EQ(scene.getTrainingModelGaussianCount(), initial_points);
+
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        auto init_result = trainer->initialize(params);
+        ASSERT_TRUE(init_result.has_value()) << init_result.error();
+
+        EXPECT_EQ(static_cast<size_t>(trainer->get_strategy().get_model().size()), static_cast<size_t>(target_splats));
+        EXPECT_EQ(scene.getTrainingModelGaussianCount(), static_cast<size_t>(target_splats));
+
+        trainer->shutdown();
+        std::filesystem::remove_all(temp_dir, ec);
+    }
 
     class CheckpointResumeTest : public ::testing::TestWithParam<std::tuple<std::string, int>> {
     protected:

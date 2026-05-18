@@ -643,6 +643,13 @@ namespace lfs::vis {
         return result;
     }
 
+    std::optional<int> SelectionService::pickGaussianAt(const float x, const float y) {
+        if (!scene_manager_ || !rendering_manager_) {
+            return std::nullopt;
+        }
+        return resolveCommandHoveredGaussianId(x, y, -1, defaultFilterState());
+    }
+
     SelectionResult SelectionService::selectRing(const float x, const float y, const SelectionMode mode,
                                                  const int camera_index) {
         if (!scene_manager_ || !rendering_manager_) {

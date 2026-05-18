@@ -38,7 +38,7 @@
 .im-line > .btn {
     min-height: 20dp;
     padding: 3dp 12dp;
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .im-progress {
@@ -48,7 +48,7 @@
 }
 
 .im-label {
-    font-size: 10dp;
+    font-size: 12dp;
     padding: 0 0 0 2dp;
 }
 
@@ -58,13 +58,13 @@
 }
 
 .im-text-wrapped {
-    font-size: 10dp;
+    font-size: 12dp;
     padding: 0 2dp;
     word-break: break-word;
 }
 
 .im-bullet {
-    font-size: 10dp;
+    font-size: 12dp;
     padding: 0 0 0 8dp;
 }
 
@@ -89,13 +89,13 @@
 }
 
 .im-radio-dot {
-    font-size: 11dp;
+    font-size: 12dp;
     width: 16dp;
     text-align: center;
 }
 
 .im-radio-label {
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 /* Table layout */
@@ -150,7 +150,7 @@
     border-width: 1dp;
     border-radius: 3dp;
     padding: 4dp 8dp;
-    font-size: 11dp;
+    font-size: 12dp;
     max-width: 300dp;
     pointer-events: none;
 }

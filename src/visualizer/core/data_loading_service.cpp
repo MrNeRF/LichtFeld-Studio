@@ -68,15 +68,20 @@ namespace lfs::vis {
             }
         }
 
-        if (scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
-            const std::string name = lfs::core::path_to_utf8(path.stem());
-            scene_manager_->addSplatFile(path, name);
-            return;
-        }
+        try {
+            if (scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
+                const std::string name = lfs::core::path_to_utf8(path.stem());
+                scene_manager_->addSplatFile(path, name);
+                return;
+            }
 
-        // First import into an empty scene must take the full load path so SceneLoaded,
-        // application-scene binding, and UI state all refresh together.
-        scene_manager_->loadSplatFile(path);
+            // First import into an empty scene must take the full load path so SceneLoaded,
+            // application-scene binding, and UI state all refresh together.
+            scene_manager_->loadSplatFile(path);
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(path), e.what());
+            lfs::core::events::state::SplatFileLoadFailed{.path = path, .error = e.what()}.emit();
+        }
     }
 
     void DataLoadingService::handleLoadCheckpointForTrainingCommand(
@@ -155,7 +160,7 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             std::string error_msg = std::format("Failed to load PLY: {}", e.what());
             LOG_ERROR("{} (Path: {})", error_msg, lfs::core::path_to_utf8(path));
-            throw std::runtime_error(error_msg);
+            return std::unexpected(error_msg);
         }
     }
 
@@ -176,7 +181,7 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             std::string error_msg = std::format("Failed to load SOG: {}", e.what());
             LOG_ERROR("{} (Path: {})", error_msg, lfs::core::path_to_utf8(path));
-            throw std::runtime_error(error_msg);
+            return std::unexpected(error_msg);
         }
     }
 
@@ -200,7 +205,7 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             std::string error_msg = std::format("Failed to load splat file: {}", e.what());
             LOG_ERROR("{} (Path: {})", error_msg, lfs::core::path_to_utf8(path));
-            throw std::runtime_error(error_msg);
+            return std::unexpected(error_msg);
         }
     }
 

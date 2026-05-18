@@ -10,6 +10,7 @@
 #include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cctype>
 #include <charconv>
@@ -586,6 +587,27 @@ namespace lfs::io {
             auto [data_offset, layout] = parse_result.value();
             const char* vertex_data = data + data_offset;
 
+            if (layout.vertex_stride == 0) {
+                std::string error_msg = "PLY header declares no float vertex properties";
+                LOG_ERROR("{}", error_msg);
+                throw std::runtime_error(error_msg);
+            }
+
+            const size_t body_bytes_available = file_size - data_offset;
+            const size_t body_bytes_required = layout.vertex_count * layout.vertex_stride;
+            if (body_bytes_required > body_bytes_available) {
+                const size_t missing = body_bytes_required - body_bytes_available;
+                const size_t complete_vertices = body_bytes_available / layout.vertex_stride;
+                std::string error_msg = std::format(
+                    "PLY file is truncated: header declares {} vertices ({} bytes/vertex = {} bytes), "
+                    "but file body has only {} bytes ({} complete vertices). Missing {} bytes (~{} MB). "
+                    "Re-export or re-download the source file.",
+                    layout.vertex_count, layout.vertex_stride, body_bytes_required,
+                    body_bytes_available, complete_vertices, missing, missing / (1024 * 1024));
+                LOG_ERROR("{}", error_msg);
+                throw std::runtime_error(error_msg);
+            }
+
             LOG_INFO("Extracting {} Gaussians from PLY", layout.vertex_count);
 
             const size_t N = layout.vertex_count;
@@ -886,9 +908,145 @@ namespace lfs::io {
             return filtered;
         }
 
+        class ProgressReportingStreamBuf final : public std::streambuf {
+        public:
+            ProgressReportingStreamBuf(std::streambuf& target,
+                                       ExportProgressCallback progress_callback,
+                                       const size_t total_bytes)
+                : target_(&target),
+                  progress_callback_(std::move(progress_callback)),
+                  total_bytes_(std::max<size_t>(total_bytes, 1)),
+                  next_report_bytes_(kReportIntervalBytes) {}
+
+            [[nodiscard]] bool cancelled() const { return cancelled_; }
+
+            bool report_final() {
+                bytes_written_ = std::max(bytes_written_, total_bytes_);
+                return report(true);
+            }
+
+        protected:
+            std::streamsize xsputn(const char* s, std::streamsize count) override {
+                if (cancelled_ || !target_)
+                    return 0;
+
+                const auto written = target_->sputn(s, count);
+                if (written > 0) {
+                    bytes_written_ += static_cast<size_t>(written);
+                    if (!report(false))
+                        return 0;
+                }
+                return written;
+            }
+
+            int_type overflow(int_type ch) override {
+                if (traits_type::eq_int_type(ch, traits_type::eof()))
+                    return traits_type::not_eof(ch);
+                if (cancelled_ || !target_)
+                    return traits_type::eof();
+
+                const auto result = target_->sputc(traits_type::to_char_type(ch));
+                if (!traits_type::eq_int_type(result, traits_type::eof())) {
+                    ++bytes_written_;
+                    if (!report(false))
+                        return traits_type::eof();
+                }
+                return result;
+            }
+
+            int sync() override {
+                return target_ ? target_->pubsync() : -1;
+            }
+
+        private:
+            static constexpr size_t kReportIntervalBytes = 16 * 1024 * 1024;
+
+            bool report(const bool force) {
+                if (!progress_callback_)
+                    return true;
+                if (!force && bytes_written_ < next_report_bytes_)
+                    return true;
+
+                next_report_bytes_ = bytes_written_ + kReportIntervalBytes;
+                const auto ratio = static_cast<float>(
+                    std::min<double>(1.0, static_cast<double>(bytes_written_) / static_cast<double>(total_bytes_)));
+                if (!progress_callback_(ratio, "Writing PLY")) {
+                    cancelled_ = true;
+                    return false;
+                }
+                return true;
+            }
+
+            std::streambuf* target_ = nullptr;
+            ExportProgressCallback progress_callback_;
+            size_t total_bytes_ = 1;
+            size_t bytes_written_ = 0;
+            size_t next_report_bytes_ = 0;
+            bool cancelled_ = false;
+        };
+
+        std::filesystem::path make_temp_output_path(const std::filesystem::path& output_path) {
+            static std::atomic<uint64_t> counter{0};
+            const auto now = std::chrono::steady_clock::now().time_since_epoch();
+            const auto ticks = std::chrono::duration_cast<std::chrono::microseconds>(now).count();
+
+            for (int attempt = 0; attempt < 128; ++attempt) {
+                auto candidate = output_path;
+                candidate += std::format(".{}.{}.tmp", ticks, counter.fetch_add(1, std::memory_order_relaxed));
+
+                std::error_code ec;
+                if (!std::filesystem::exists(candidate, ec))
+                    return candidate;
+            }
+
+            auto candidate = output_path;
+            candidate += std::format(".{}.tmp", counter.fetch_add(1, std::memory_order_relaxed));
+            return candidate;
+        }
+
+        struct ScopedTempOutputFile {
+            std::filesystem::path path;
+            bool remove_on_destroy = true;
+
+            ~ScopedTempOutputFile() {
+                if (!remove_on_destroy || path.empty())
+                    return;
+
+                std::error_code ec;
+                std::filesystem::remove(path, ec);
+            }
+
+            void dismiss() {
+                remove_on_destroy = false;
+            }
+        };
+
+        Result<void> replace_output_file(const std::filesystem::path& temp_path,
+                                         const std::filesystem::path& output_path) {
+#ifdef _WIN32
+            if (!MoveFileExW(temp_path.wstring().c_str(),
+                             output_path.wstring().c_str(),
+                             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  std::format("Cannot replace output file: Windows error {}", GetLastError()),
+                                  output_path);
+            }
+#else
+            std::error_code ec;
+            std::filesystem::rename(temp_path, output_path, ec);
+            if (ec) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  std::format("Cannot replace output file: {}", ec.message()),
+                                  output_path);
+            }
+#endif
+            return {};
+        }
+
         Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
                                       bool binary = true,
-                                      std::span<const PlyAttributeBlock> extra_attributes = {}) {
+                                      std::span<const PlyAttributeBlock> extra_attributes = {},
+                                      ExportProgressCallback progress_callback = nullptr) {
             if (!pc.means.is_valid() || pc.means.ndim() != 2 || pc.means.size(1) != 3) {
                 return make_error(ErrorCode::INTERNAL_ERROR, "PointCloud.means must be [N,3]", output_path);
             }
@@ -978,7 +1136,10 @@ namespace lfs::io {
                 return std::unexpected(result.error());
             }
 
+            size_t estimated_write_bytes = 4096;
+
             if (colors_u8.is_valid()) {
+                estimated_write_bytes += static_cast<size_t>(colors_u8.numel()) * sizeof(uint8_t);
                 ply.add_properties_to_element(
                     "vertex", {"red", "green", "blue"}, tinyply::Type::UINT8, N,
                     const_cast<uint8_t*>(colors_u8.ptr<uint8_t>()),
@@ -988,94 +1149,198 @@ namespace lfs::io {
             for (auto& [t, attrs] : float_blocks) {
                 assert(attrs.size() == static_cast<size_t>(t.size(1)));
 
+                estimated_write_bytes += static_cast<size_t>(t.size(0)) *
+                                         static_cast<size_t>(t.size(1)) *
+                                         sizeof(float);
+
                 ply.add_properties_to_element(
                     "vertex", attrs, tinyply::Type::FLOAT32, t.size(0),
                     reinterpret_cast<uint8_t*>(const_cast<float*>(t.ptr<float>())),
                     tinyply::Type::INVALID, 0);
             }
 
+            const auto temp_path = make_temp_output_path(output_path);
+            ScopedTempOutputFile temp_file{temp_path};
+
             std::filebuf fb;
 #ifdef _WIN32
-            fb.open(output_path.wstring(), std::ios::out | std::ios::binary);
+            fb.open(temp_path.wstring(), std::ios::out | std::ios::binary);
 #else
-            fb.open(output_path, std::ios::out | std::ios::binary);
+            fb.open(temp_path, std::ios::out | std::ios::binary);
 #endif
             if (!fb.is_open()) {
-                return make_error(ErrorCode::WRITE_FAILURE, "Cannot open file", output_path);
+                return make_error(ErrorCode::WRITE_FAILURE, "Cannot open temporary file", temp_path);
             }
 
-            std::ostream out_stream(&fb);
-            ply.write(out_stream, binary);
+            if (progress_callback) {
+                ProgressReportingStreamBuf progress_buf(fb, std::move(progress_callback), estimated_write_bytes);
+                std::ostream out_stream(&progress_buf);
+                ply.write(out_stream, binary);
+                out_stream.flush();
+                const bool close_ok = fb.close() != nullptr;
 
-            if (!out_stream.good()) {
-                return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                if (progress_buf.cancelled()) {
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                }
+                if (!out_stream.good() || !close_ok) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
+                if (!progress_buf.report_final()) {
+                    return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+                }
+            } else {
+                std::ostream out_stream(&fb);
+                ply.write(out_stream, binary);
+                out_stream.flush();
+                const bool close_ok = fb.close() != nullptr;
+
+                if (!out_stream.good() || !close_ok) {
+                    return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+                }
             }
+
+            if (auto result = replace_output_file(temp_path, output_path); !result) {
+                return std::unexpected(result.error());
+            }
+
+            temp_file.dismiss();
             return {};
+        }
+
+        Tensor normalize_rotation_cpu(Tensor rotation_cpu) {
+            if (!rotation_cpu.is_valid() || rotation_cpu.dtype() != DataType::Float32 ||
+                rotation_cpu.ndim() != 2 || rotation_cpu.size(1) != 4) {
+                return rotation_cpu;
+            }
+
+            auto* const rotations = rotation_cpu.ptr<float>();
+            const size_t rows = rotation_cpu.size(0);
+            for (size_t row = 0; row < rows; ++row) {
+                float* const quat = rotations + row * 4;
+                const float norm = std::sqrt(
+                    quat[0] * quat[0] +
+                    quat[1] * quat[1] +
+                    quat[2] * quat[2] +
+                    quat[3] * quat[3]);
+                const float inv_norm = 1.0f / std::max(norm, 1e-12f);
+                quat[0] *= inv_norm;
+                quat[1] *= inv_norm;
+                quat[2] *= inv_norm;
+                quat[3] *= inv_norm;
+            }
+            return rotation_cpu;
+        }
+
+        bool report_export_progress(const ExportProgressCallback& progress_callback,
+                                    const float progress,
+                                    const std::string& stage) {
+            if (!progress_callback)
+                return true;
+            return progress_callback(std::clamp(progress, 0.0f, 1.0f), stage);
+        }
+
+        ExportProgressCallback scale_export_progress(const ExportProgressCallback& progress_callback,
+                                                     const float start,
+                                                     const float end) {
+            if (!progress_callback)
+                return nullptr;
+            return [progress_callback, start, end](const float progress, const std::string& stage) {
+                const float clamped = std::clamp(progress, 0.0f, 1.0f);
+                return progress_callback(start + (end - start) * clamped, stage);
+            };
+        }
+
+        Result<PointCloud> to_point_cloud_with_progress(const SplatData& splat_data,
+                                                        const ExportProgressCallback& progress_callback,
+                                                        const std::filesystem::path& output_path) {
+            PointCloud pc;
+
+            if (!report_export_progress(progress_callback, 0.0f, "Preparing splats"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+
+            // Filter out deleted splats if deletion mask exists
+            Tensor means, sh0, shN, opacity, scaling, rotation;
+
+            if (splat_data.has_deleted_mask()) {
+                // Create keep mask (inverse of deleted mask)
+                const auto keep_mask = splat_data.deleted().logical_not();
+
+                // Filter all tensors by keep mask
+                means = splat_data.means().index_select(0, keep_mask);
+                if (splat_data.sh0().is_valid())
+                    sh0 = splat_data.sh0().index_select(0, keep_mask);
+                if (splat_data.shN().is_valid())
+                    shN = splat_data.shN().index_select(0, keep_mask);
+                if (splat_data.opacity_raw().is_valid())
+                    opacity = splat_data.opacity_raw().index_select(0, keep_mask);
+                if (splat_data.scaling_raw().is_valid())
+                    scaling = splat_data.scaling_raw().index_select(0, keep_mask);
+                if (splat_data.rotation_raw().is_valid())
+                    rotation = splat_data.rotation_raw().index_select(0, keep_mask);
+            } else {
+                // No deletion mask, use original tensors
+                means = splat_data.means();
+                sh0 = splat_data.sh0();
+                shN = splat_data.shN();
+                opacity = splat_data.opacity_raw();
+                scaling = splat_data.scaling_raw();
+                rotation = splat_data.rotation_raw();
+            }
+
+            if (!report_export_progress(progress_callback, 0.10f, "Copying positions"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            pc.means = means.cpu().contiguous();
+            pc.normals = Tensor::zeros_like(pc.means);
+
+            auto process_sh = [](const Tensor& sh) -> Tensor {
+                const auto sh_cpu = sh.cpu().contiguous();
+                if (sh_cpu.ndim() == 3) {
+                    const auto transposed = sh_cpu.transpose(1, 2);
+                    const size_t N = transposed.shape()[0];
+                    const size_t flat_dim = transposed.shape()[1] * transposed.shape()[2];
+                    return transposed.reshape({static_cast<int>(N), static_cast<int>(flat_dim)});
+                }
+                return sh_cpu;
+            };
+
+            if (!report_export_progress(progress_callback, 0.25f, "Copying SH DC"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            if (sh0.is_valid())
+                pc.sh0 = process_sh(sh0);
+
+            if (!report_export_progress(progress_callback, 0.40f, "Copying SH coefficients"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            if (shN.is_valid())
+                pc.shN = process_sh(shN);
+
+            if (!report_export_progress(progress_callback, 0.65f, "Copying opacity"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            if (opacity.is_valid())
+                pc.opacity = opacity.cpu().contiguous();
+
+            if (!report_export_progress(progress_callback, 0.72f, "Copying scales"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            if (scaling.is_valid())
+                pc.scaling = scaling.cpu().contiguous();
+
+            if (!report_export_progress(progress_callback, 0.82f, "Copying rotations"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            if (rotation.is_valid()) {
+                pc.rotation = normalize_rotation_cpu(rotation.cpu().contiguous());
+            }
+
+            pc.attribute_names = get_ply_attribute_names(splat_data);
+
+            if (!report_export_progress(progress_callback, 1.0f, "PLY data prepared"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", output_path);
+            return pc;
         }
 
     } // anonymous namespace
 
     PointCloud to_point_cloud(const SplatData& splat_data) {
-        PointCloud pc;
-
-        // Filter out deleted splats if deletion mask exists
-        Tensor means, sh0, shN, opacity, scaling, rotation;
-
-        if (splat_data.has_deleted_mask()) {
-            // Create keep mask (inverse of deleted mask)
-            const auto keep_mask = splat_data.deleted().logical_not();
-
-            // Filter all tensors by keep mask
-            means = splat_data.means().index_select(0, keep_mask);
-            if (splat_data.sh0().is_valid())
-                sh0 = splat_data.sh0().index_select(0, keep_mask);
-            if (splat_data.shN().is_valid())
-                shN = splat_data.shN().index_select(0, keep_mask);
-            if (splat_data.opacity_raw().is_valid())
-                opacity = splat_data.opacity_raw().index_select(0, keep_mask);
-            if (splat_data.scaling_raw().is_valid())
-                scaling = splat_data.scaling_raw().index_select(0, keep_mask);
-            if (splat_data.rotation_raw().is_valid())
-                rotation = splat_data.get_rotation().index_select(0, keep_mask);
-        } else {
-            // No deletion mask, use original tensors
-            means = splat_data.means();
-            sh0 = splat_data.sh0();
-            shN = splat_data.shN();
-            opacity = splat_data.opacity_raw();
-            scaling = splat_data.scaling_raw();
-            rotation = splat_data.get_rotation();
-        }
-
-        pc.means = means.cpu().contiguous();
-        pc.normals = Tensor::zeros_like(pc.means);
-
-        auto process_sh = [](const Tensor& sh) -> Tensor {
-            const auto sh_cpu = sh.cpu().contiguous();
-            if (sh_cpu.ndim() == 3) {
-                const auto transposed = sh_cpu.transpose(1, 2);
-                const size_t N = transposed.shape()[0];
-                const size_t flat_dim = transposed.shape()[1] * transposed.shape()[2];
-                return transposed.reshape({static_cast<int>(N), static_cast<int>(flat_dim)});
-            }
-            return sh_cpu;
-        };
-
-        if (sh0.is_valid())
-            pc.sh0 = process_sh(sh0);
-        if (shN.is_valid())
-            pc.shN = process_sh(shN);
-        if (opacity.is_valid())
-            pc.opacity = opacity.cpu().contiguous();
-        if (scaling.is_valid())
-            pc.scaling = scaling.cpu().contiguous();
-
-        if (rotation.is_valid()) {
-            pc.rotation = rotation.cpu().contiguous();
-        }
-
-        pc.attribute_names = get_ply_attribute_names(splat_data);
-        return pc;
+        auto pc = to_point_cloud_with_progress(splat_data, nullptr, {});
+        return pc ? std::move(*pc) : PointCloud{};
     }
 
     std::vector<std::string> get_ply_attribute_names(const SplatData& splat_data) {
@@ -1111,16 +1376,26 @@ namespace lfs::io {
     }
 
     Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options) {
+        if (!report_export_progress(options.progress_callback, 0.0f, "Preparing PLY"))
+            return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
+
         auto filtered_extra_attributes = filter_extra_attributes_for_splat_export(
             splat_data, options.extra_attributes, options.output_path);
         if (!filtered_extra_attributes) {
             return std::unexpected(filtered_extra_attributes.error());
         }
 
-        auto pc = lfs::io::to_point_cloud(splat_data);
+        auto pc = to_point_cloud_with_progress(
+            splat_data,
+            scale_export_progress(options.progress_callback, 0.05f, 0.80f),
+            options.output_path);
+        if (!pc)
+            return std::unexpected(pc.error());
+
         auto filtered_options = options;
         filtered_options.extra_attributes = std::move(*filtered_extra_attributes);
-        return save_ply(pc, filtered_options);
+        filtered_options.progress_callback = scale_export_progress(options.progress_callback, 0.80f, 1.0f);
+        return save_ply(*pc, filtered_options);
     }
 
     Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options) {
@@ -1181,34 +1456,34 @@ namespace lfs::io {
                               options.output_path.parent_path());
         }
 
-        if (options.progress_callback) {
-            if (!options.progress_callback(0.1f, "Preparing data"))
-                return make_error(ErrorCode::INTERNAL_ERROR, "Export cancelled", options.output_path);
-        }
+        if (!report_export_progress(options.progress_callback, 0.1f, "Preparing PLY data"))
+            return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
 
         if (options.async) {
             cleanup_finished_saves();
             const std::lock_guard lock(g_save_mutex);
             g_save_futures.emplace_back(
                 std::async(std::launch::async, [pc = point_cloud, opts = options]() {
-                    if (const auto result = write_ply_binary(pc, opts.output_path, opts.binary, opts.extra_attributes); !result) {
+                    auto write_progress_callback = scale_export_progress(opts.progress_callback, 0.5f, 1.0f);
+                    if (const auto result = write_ply_binary(
+                            pc, opts.output_path, opts.binary, opts.extra_attributes, write_progress_callback);
+                        !result) {
                         LOG_ERROR("PLY save failed: {}", result.error().format());
                     }
                 }));
         } else {
-            if (options.progress_callback) {
-                if (!options.progress_callback(0.5f, "Writing PLY"))
-                    return make_error(ErrorCode::INTERNAL_ERROR, "Export cancelled", options.output_path);
-            }
+            if (!report_export_progress(options.progress_callback, 0.5f, "Writing PLY"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
 
-            if (const auto result = write_ply_binary(point_cloud, options.output_path, options.binary, options.extra_attributes);
+            auto write_progress_callback = scale_export_progress(options.progress_callback, 0.5f, 1.0f);
+            if (const auto result = write_ply_binary(
+                    point_cloud, options.output_path, options.binary, options.extra_attributes, write_progress_callback);
                 !result) {
                 return std::unexpected(result.error());
             }
 
-            if (options.progress_callback) {
-                options.progress_callback(1.0f, "Done");
-            }
+            if (!report_export_progress(options.progress_callback, 1.0f, "Done"))
+                return make_error(ErrorCode::CANCELLED, "Export cancelled by user", options.output_path);
         }
         return {};
     }

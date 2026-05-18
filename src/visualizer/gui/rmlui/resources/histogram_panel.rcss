@@ -116,9 +116,9 @@
 }
 
 .hero-eyebrow {
-    font-size: 8dp;
-    letter-spacing: 0.8dp;
-    color: #a6adc8;
+    font-size: 12dp;
+    letter-spacing: 0.25dp;
+    color: #bac2de;
     text-transform: uppercase;
 }
 
@@ -129,8 +129,8 @@
 }
 
 .hero-description {
-    font-size: 10dp;
-    color: #a6adc8;
+    font-size: 12dp;
+    color: #bac2de;
 }
 
 #histogram-docked-controls {
@@ -196,7 +196,7 @@
 }
 
 #histogram-docked-controls .histogram-toolbar-item {
-    min-height: 32dp;
+    min-height: 34dp;
     padding: 6dp 10dp;
     background-color: rgba(49, 50, 68, 214);
     border-width: 1dp;
@@ -228,15 +228,15 @@
 }
 
 #histogram-docked-controls .control-label {
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: 600;
     color: #bac2de;
 }
 
 #histogram-docked-controls .histogram-select {
     min-width: 124dp;
-    height: 22dp;
-    min-height: 22dp;
+    height: 26dp;
+    min-height: 26dp;
     background-color: rgba(24, 24, 37, 226);
     border-color: rgba(88, 91, 112, 200);
 }
@@ -262,7 +262,7 @@
 }
 
 .control-label {
-    font-size: 9dp;
+    font-size: 12dp;
     font-weight: 600;
     letter-spacing: 0.3dp;
     color: #bac2de;
@@ -285,7 +285,7 @@
 .histogram-slider-value {
     min-width: 28dp;
     text-align: right;
-    font-size: 10dp;
+    font-size: 12dp;
     color: #cdd6f4;
 }
 
@@ -326,7 +326,7 @@
 }
 
 #histogram-shell.is-floating .control-label {
-    font-size: 9dp;
+    font-size: 12dp;
     font-weight: 600;
     letter-spacing: 0.3dp;
     text-transform: none;
@@ -338,7 +338,7 @@
 }
 
 #histogram-shell.is-floating .hero-description {
-    font-size: 9dp;
+    font-size: 12dp;
 }
 
 #histogram-shell.is-floating .hero-copy {
@@ -346,7 +346,7 @@
 }
 
 .floating-control-label {
-    min-width: 86dp;
+    min-width: 96dp;
     flex-shrink: 0;
 }
 
@@ -377,8 +377,8 @@
 
 .empty-message {
     max-width: 420dp;
-    font-size: 10dp;
-    color: #a6adc8;
+    font-size: 12dp;
+    color: #bac2de;
     line-height: 1.45;
 }
 
@@ -404,7 +404,7 @@
 
 .stat-card {
     flex: 0 0 auto;
-    min-width: 112dp;
+    min-width: 124dp;
     padding: 8dp 10dp;
     display: flex;
     flex-direction: column;
@@ -414,10 +414,10 @@
 }
 
 .stat-label {
-    font-size: 8dp;
-    letter-spacing: 0.6dp;
+    font-size: 12dp;
+    letter-spacing: 0.2dp;
     text-transform: uppercase;
-    color: #a6adc8;
+    color: #bac2de;
 }
 
 .stat-value {
@@ -454,16 +454,16 @@
 #histogram-summary,
 #compare-summary {
     flex: 1;
-    font-size: 11dp;
+    font-size: 12dp;
     color: #bac2de;
 }
 
 #histogram-bin-count,
 #compare-bin-count {
-    font-size: 8dp;
-    letter-spacing: 0.8dp;
+    font-size: 12dp;
+    letter-spacing: 0.25dp;
     text-transform: uppercase;
-    color: #a6adc8;
+    color: #bac2de;
 }
 
 #histogram-range-of-interest {
@@ -474,20 +474,20 @@
 }
 
 .range-of-interest-label {
-    font-size: 9dp;
+    font-size: 12dp;
     font-weight: 600;
     letter-spacing: 0.3dp;
     color: #bac2de;
 }
 
 .range-input {
-    width: 84dp;
-    min-width: 60dp;
+    width: 96dp;
+    min-width: 72dp;
 }
 
 .range-separator {
     color: rgba(186, 194, 222, 180);
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .range-reset {
@@ -508,7 +508,7 @@
 }
 
 .compare-axis-marker {
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: 700;
     letter-spacing: 0.4dp;
     color: #a6adc8;
@@ -634,7 +634,7 @@
 }
 
 #compare-y-axis {
-    width: 78dp;
+    width: 88dp;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -728,21 +728,21 @@
 
 .axis-metric {
     flex-shrink: 0;
-    font-size: 8dp;
-    letter-spacing: 0.8dp;
+    font-size: 12dp;
+    letter-spacing: 0.25dp;
     text-transform: uppercase;
-    color: #a6adc8;
+    color: #bac2de;
 }
 
 .axis-label {
     font-family: "JetBrains Mono";
-    font-size: 10dp;
+    font-size: 12dp;
     color: #bac2de;
 }
 
 #histogram-footer {
-    min-height: 44dp;
-    padding: 8dp 10dp;
+    min-height: 54dp;
+    padding: 10dp 12dp;
     display: flex;
     align-items: center;
     flex-wrap: wrap;
@@ -757,28 +757,29 @@
 .footer-stat {
     display: flex;
     flex-direction: column;
-    gap: 1dp;
+    gap: 2dp;
     min-width: 120dp;
 }
 
 .footer-label {
-    font-size: 8dp;
-    letter-spacing: 0.6dp;
+    font-size: 12dp;
+    letter-spacing: 0.2dp;
     text-transform: uppercase;
-    color: #a6adc8;
+    color: #bac2de;
 }
 
 .footer-value {
     font-family: "JetBrains Mono";
-    font-size: 10dp;
+    font-size: 12dp;
     color: #cdd6f4;
 }
 
 .footer-hint {
     flex: 1;
     min-width: 160dp;
-    color: #a6adc8;
-    font-size: 9dp;
+    color: #bac2de;
+    font-size: 12dp;
+    line-height: 1.35;
 }
 
 .footer-history-actions,

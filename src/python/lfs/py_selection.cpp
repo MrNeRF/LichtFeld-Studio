@@ -648,6 +648,47 @@ namespace lfs::python {
             },
             nb::arg("max_scale"), "Select gaussians with max activated scale <= threshold.");
 
+        sel.def(
+            "by_color", [](int gaussian_index, float threshold) {
+                auto* sm = get_sm();
+                if (!sm)
+                    return;
+                auto& scene = sm->getScene();
+                auto* model = scene.getCombinedModel();
+                if (!model)
+                    return;
+                const auto& sh0 = model->sh0();
+                if (!sh0.is_valid() || gaussian_index < 0 ||
+                    static_cast<size_t>(gaussian_index) >= sh0.size(0))
+                    return;
+
+                // Read the reference gaussian's SH0 coefficients from GPU
+                auto sh0_cpu = sh0.cpu();
+                const float* sh0_data = sh0_cpu.ptr<float>();
+                if (!sh0_data)
+                    return;
+
+                // Decode SH DC to RGB: color = clamp(0.5 + sh_val * SH_C0, 0, 1)
+                constexpr float SH_C0 = 0.28209479177387814f;
+                const float ref_r = std::clamp(0.5f + sh0_data[gaussian_index * 3] * SH_C0, 0.0f, 1.0f);
+                const float ref_g = std::clamp(0.5f + sh0_data[gaussian_index * 3 + 1] * SH_C0, 0.0f, 1.0f);
+                const float ref_b = std::clamp(0.5f + sh0_data[gaussian_index * 3 + 2] * SH_C0, 0.0f, 1.0f);
+
+                const auto group_id = scene.getActiveSelectionGroup();
+                auto mask = core::cuda::select_by_color(sh0, ref_r, ref_g, ref_b,
+                                                        std::clamp(threshold, 0.0f, 1.0f), group_id);
+                apply_selection_state_with_undo(
+                    *sm, "selection.by_color",
+                    [updated = std::move(mask)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
+                if (auto* rm = get_rm())
+                    rm->markDirty(vis::DirtyFlag::SELECTION);
+            },
+            nb::arg("gaussian_index"), nb::arg("threshold") = 0.2f, "Select gaussians by color similarity to a reference gaussian.\n"
+                                                                    "Picks the SH DC color of the gaussian at the given index and selects all\n"
+                                                                    "gaussians whose per-channel color difference is within the threshold (0-1).");
+
         // ─────────────────────────────────────────────────────────────────────
         // FLASH & FEEDBACK
         // ─────────────────────────────────────────────────────────────────────

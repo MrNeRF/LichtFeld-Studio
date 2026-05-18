@@ -238,6 +238,13 @@ target_link_libraries(lfs_visualizer
         vterm
 )
 
+# Linux folder pickers bypass NFD and call GTK directly so they can return
+# the currently-open folder rather than the highlighted child. Set up by
+# cmake/SetupNativeFileDialog.cmake.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET PkgConfig::LFS_GTK3)
+    target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_GTK3)
+endif()
+
 if(ENABLE_VULKAN_VIEWER)
     target_sources(lfs_visualizer
             PRIVATE

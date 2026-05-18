@@ -24,6 +24,9 @@ class InputSettingsPanel(Panel):
         lf.keymap.ToolMode.GLOBAL,
         lf.keymap.ToolMode.SELECTION,
         lf.keymap.ToolMode.BRUSH,
+        lf.keymap.ToolMode.TRANSLATE,
+        lf.keymap.ToolMode.ROTATE,
+        lf.keymap.ToolMode.SCALE,
         lf.keymap.ToolMode.ALIGN,
         lf.keymap.ToolMode.CROP_BOX,
     ]
@@ -33,6 +36,7 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.CAMERA_ORBIT,
             lf.keymap.Action.CAMERA_PAN,
             lf.keymap.Action.CAMERA_ZOOM,
+            lf.keymap.Action.CAMERA_ROLL,
             lf.keymap.Action.CAMERA_SET_PIVOT,
             lf.keymap.Action.CAMERA_MOVE_FORWARD,
             lf.keymap.Action.CAMERA_MOVE_BACKWARD,
@@ -62,6 +66,11 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.SELECT_MODE_LASSO,
             lf.keymap.Action.SELECT_MODE_RINGS,
         ],
+        "selection_modal": [
+            lf.keymap.Action.CONFIRM_POLYGON,
+            lf.keymap.Action.CANCEL_POLYGON,
+            lf.keymap.Action.UNDO_POLYGON_VERTEX,
+        ],
         "depth": [
             lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER,
             lf.keymap.Action.TOGGLE_SELECTION_CROP_FILTER,
@@ -74,9 +83,14 @@ class InputSettingsPanel(Panel):
         "crop_box": [
             lf.keymap.Action.APPLY_CROP_BOX,
         ],
+        "node_picking": [
+            lf.keymap.Action.NODE_PICK,
+            lf.keymap.Action.NODE_RECT_SELECT,
+        ],
         "editing": [
             lf.keymap.Action.UNDO,
             lf.keymap.Action.REDO,
+            lf.keymap.Action.SELECT_ALL,
             lf.keymap.Action.COPY_SELECTION,
             lf.keymap.Action.PASTE_SELECTION,
             lf.keymap.Action.INVERT_SELECTION,
@@ -89,13 +103,47 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.CYCLE_PLY,
             lf.keymap.Action.CYCLE_SELECTION_VIS,
         ],
+        "tools_global": [
+            lf.keymap.Action.TOOL_SELECT,
+            lf.keymap.Action.TOOL_TRANSLATE,
+            lf.keymap.Action.TOOL_ROTATE,
+            lf.keymap.Action.TOOL_SCALE,
+            lf.keymap.Action.TOOL_MIRROR,
+            lf.keymap.Action.TOOL_BRUSH,
+            lf.keymap.Action.TOOL_ALIGN,
+            lf.keymap.Action.PIE_MENU,
+        ],
+        "ui_global": [
+            lf.keymap.Action.TOGGLE_UI,
+            lf.keymap.Action.TOGGLE_FULLSCREEN,
+        ],
+        "sequencer_global": [
+            lf.keymap.Action.SEQUENCER_ADD_KEYFRAME,
+            lf.keymap.Action.SEQUENCER_UPDATE_KEYFRAME,
+            lf.keymap.Action.SEQUENCER_PLAY_PAUSE,
+        ],
     }
+    SCENE_NODE_MODES = (
+        lf.keymap.ToolMode.GLOBAL,
+        lf.keymap.ToolMode.TRANSLATE,
+        lf.keymap.ToolMode.ROTATE,
+        lf.keymap.ToolMode.SCALE,
+    )
+    GAUSSIAN_SELECTION_MODES = (
+        lf.keymap.ToolMode.SELECTION,
+        lf.keymap.ToolMode.BRUSH,
+        lf.keymap.ToolMode.ALIGN,
+        lf.keymap.ToolMode.CROP_BOX,
+    )
 
     def __init__(self):
         self._selected_mode_idx = 0
         self._rebinding_action = None
         self._rebinding_mode = None
+        self._previous_trigger = None
+        self._pending_conflict = None
         self._handle = None
+        self._doc = None
         self._last_profiles = []
         self._last_state_key = None
         self._last_lang = ""
@@ -129,6 +177,8 @@ class InputSettingsPanel(Panel):
         model.bind_event("reset_default", self._on_reset_default)
         model.bind_event("export_profile", self._on_export_profile)
         model.bind_event("import_profile", self._on_import_profile)
+        model.bind_event("replace_conflict", self._on_replace_conflict)
+        model.bind_event("cancel_conflict", self._on_cancel_conflict)
         model.bind_record_list("profiles")
         model.bind_record_list("tool_modes")
         model.bind_record_list("binding_rows")
@@ -147,6 +197,7 @@ class InputSettingsPanel(Panel):
             return
         profiles = lf.keymap.get_available_profiles()
         if 0 <= idx < len(profiles):
+            self._clear_pending_conflict()
             lf.keymap.load_profile(profiles[idx])
             self._last_state_key = None
 
@@ -165,6 +216,7 @@ class InputSettingsPanel(Panel):
         lf.keymap.save_profile(lf.keymap.get_current_profile())
 
     def _on_reset_default(self, _handle, _ev, _args):
+        self._clear_pending_conflict()
         lf.keymap.reset_to_default()
         self._last_state_key = None
 
@@ -178,13 +230,38 @@ class InputSettingsPanel(Panel):
         tr = lf.ui.tr
         path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
         if path:
+            self._clear_pending_conflict()
             lf.keymap.import_profile(path)
             self._last_state_key = None
+
+    def _on_replace_conflict(self, _handle, _ev, _args):
+        if not self._pending_conflict:
+            return
+        other_mode = self._pending_conflict["other_mode"]
+        other_action = self._pending_conflict["other_action"]
+        lf.keymap.clear_binding(other_mode, other_action)
+        self._clear_pending_conflict()
+        self._last_state_key = None
+        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
+
+    def _on_cancel_conflict(self, _handle, _ev, _args):
+        if not self._pending_conflict:
+            return
+        mode = self._pending_conflict["mode"]
+        action = self._pending_conflict["action"]
+        previous_trigger = self._pending_conflict.get("previous_trigger")
+        lf.keymap.clear_binding(mode, action)
+        if previous_trigger is not None:
+            lf.keymap.set_trigger_binding(mode, action, previous_trigger)
+        self._clear_pending_conflict()
+        self._last_state_key = None
+        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
 
     # ── Lifecycle ─────────────────────────────────────────────
 
     def on_mount(self, doc):
         super().on_mount(doc)
+        self._doc = doc
         self._last_lang = lf.ui.get_current_language()
         self._last_current_profile = lf.keymap.get_current_profile()
 
@@ -195,8 +272,10 @@ class InputSettingsPanel(Panel):
         table_el = doc.get_element_by_id("bindings-table")
         if table_el:
             table_el.add_event_listener("click", self._on_table_click)
+        self._hide_conflict_overlay()
 
     def on_update(self, doc):
+        self._doc = doc
         self._update_max_height(doc)
 
         current_lang = lf.ui.get_current_language()
@@ -209,11 +288,32 @@ class InputSettingsPanel(Panel):
         is_capturing = lf.keymap.is_capturing()
         mode = self.TOOL_MODES[self._selected_mode_idx]
 
-        if is_capturing and self._rebinding_action is not None:
+        if self._rebinding_action is not None:
             trigger = lf.keymap.get_captured_trigger()
             if trigger is not None:
+                action = self._rebinding_action
+                mode = self._rebinding_mode
+                previous_trigger = self._previous_trigger
                 self._rebinding_action = None
                 self._rebinding_mode = None
+                self._previous_trigger = None
+                conflict = lf.keymap.find_conflict_for_action(mode, action)
+                if conflict is not None:
+                    self._pending_conflict = {
+                        "mode": mode,
+                        "action": action,
+                        "other_mode": lf.keymap.ToolMode(conflict["other_mode"]),
+                        "other_action": lf.keymap.Action(conflict["other_action"]),
+                        "previous_trigger": previous_trigger,
+                    }
+                    self._show_conflict_overlay(doc)
+                else:
+                    self._hide_conflict_overlay()
+                is_capturing = lf.keymap.is_capturing()
+            elif not is_capturing:
+                self._rebinding_action = None
+                self._rebinding_mode = None
+                self._previous_trigger = None
 
         current_profile = lf.keymap.get_current_profile()
         state_key = (
@@ -266,6 +366,40 @@ class InputSettingsPanel(Panel):
         for field in fields:
             self._handle.dirty(field)
 
+    def _clear_pending_conflict(self):
+        self._pending_conflict = None
+        self._previous_trigger = None
+        self._hide_conflict_overlay()
+
+    def _hide_conflict_overlay(self):
+        if not self._doc:
+            return
+        overlay = self._doc.get_element_by_id("binding-conflict-overlay")
+        if overlay:
+            overlay.set_class("hidden", True)
+
+    def _show_conflict_overlay(self, doc):
+        if not doc or not self._pending_conflict:
+            return
+        action = self._pending_conflict["action"]
+        mode = self._pending_conflict["mode"]
+        other_action = self._pending_conflict["other_action"]
+        other_mode = self._pending_conflict["other_mode"]
+
+        trigger_desc = lf.keymap.get_trigger_description(action, mode)
+        message = lf.ui.tr("input_settings.conflict_message").format(
+            trigger=trigger_desc,
+            action=lf.keymap.get_action_name(other_action),
+            mode=lf.keymap.get_tool_mode_name(other_mode),
+        )
+
+        msg_el = doc.get_element_by_id("binding-conflict-message")
+        if msg_el:
+            msg_el.set_text(message)
+        overlay = doc.get_element_by_id("binding-conflict-overlay")
+        if overlay:
+            overlay.set_class("hidden", False)
+
     def _get_bindings_hint(self):
         tr = lf.ui.tr
         mode = self.TOOL_MODES[self._selected_mode_idx]
@@ -309,26 +443,32 @@ class InputSettingsPanel(Panel):
         tr = lf.ui.tr
         rows = []
 
-        self._append_binding_section(
-            rows, tr("input_settings.section.navigation"),
-            self.BINDING_SECTIONS["navigation"], mode)
-
         if mode == lf.keymap.ToolMode.GLOBAL:
+            self._append_binding_section(
+                rows, tr("input_settings.section.navigation"),
+                self.BINDING_SECTIONS["navigation"], mode)
+
             for action in self.BINDING_SECTIONS["navigation_global"]:
                 rows.append(self._binding_row_record(action, mode))
 
-        if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
+        if mode in (lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
+            selection_actions = list(self.BINDING_SECTIONS["selection"])
+            if mode == lf.keymap.ToolMode.SELECTION:
+                selection_actions.extend(self.BINDING_SECTIONS["selection_modal"])
+            selection_actions.append(lf.keymap.Action.DELETE_SELECTED)
             self._append_binding_section(
                 rows, tr("input_settings.section.selection"),
-                self.BINDING_SECTIONS["selection"], mode)
-
-            if mode == lf.keymap.ToolMode.GLOBAL:
-                for action in self.BINDING_SECTIONS["selection_global"]:
-                    rows.append(self._binding_row_record(action, mode))
+                selection_actions, mode)
 
             if mode == lf.keymap.ToolMode.SELECTION:
-                for action in self.BINDING_SECTIONS["depth"]:
-                    rows.append(self._binding_row_record(action, mode))
+                self._append_binding_section(
+                    rows, tr("input_settings.section.depth"),
+                    self.BINDING_SECTIONS["depth"], mode)
+
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            self._append_binding_section(
+                rows, tr("input_settings.section.selection"),
+                self.BINDING_SECTIONS["selection_global"], mode)
 
         if mode == lf.keymap.ToolMode.BRUSH:
             self._append_binding_section(
@@ -340,23 +480,44 @@ class InputSettingsPanel(Panel):
                 rows, tr("input_settings.section.crop_box"),
                 self.BINDING_SECTIONS["crop_box"], mode)
 
-        rows.append({
-            "is_section": True,
-            "section_title": tr("input_settings.section.editing"),
-        })
-        if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
-                    lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
-            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_NODE, mode))
-        else:
-            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_SELECTED, mode))
+        if mode in self.SCENE_NODE_MODES:
+            scene_node_actions = list(self.BINDING_SECTIONS["node_picking"])
+            scene_node_actions.append(lf.keymap.Action.DELETE_NODE)
+            self._append_binding_section(
+                rows, tr("input_settings.section.node_picking"),
+                scene_node_actions, mode)
 
-        for action in self.BINDING_SECTIONS["editing"]:
-            rows.append(self._binding_row_record(action, mode))
+        editing_rows = []
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            for action in self.BINDING_SECTIONS["editing"]:
+                editing_rows.append(self._binding_row_record(action, mode))
+        elif mode in self.GAUSSIAN_SELECTION_MODES and mode not in (
+                lf.keymap.ToolMode.SELECTION,
+                lf.keymap.ToolMode.BRUSH):
+            self._append_binding_section(
+                rows, tr("input_settings.section.selection"),
+                [lf.keymap.Action.DELETE_SELECTED], mode)
+
+        if editing_rows:
+            rows.append({
+                "is_section": True,
+                "section_title": tr("input_settings.section.editing"),
+            })
+            rows.extend(editing_rows)
 
         if mode == lf.keymap.ToolMode.GLOBAL:
             self._append_binding_section(
                 rows, tr("input_settings.section.view"),
                 self.BINDING_SECTIONS["view_global"], mode)
+            self._append_binding_section(
+                rows, tr("input_settings.section.tools"),
+                self.BINDING_SECTIONS["tools_global"], mode)
+            self._append_binding_section(
+                rows, tr("input_settings.section.ui"),
+                self.BINDING_SECTIONS["ui_global"], mode)
+            self._append_binding_section(
+                rows, tr("input_settings.section.sequencer"),
+                self.BINDING_SECTIONS["sequencer_global"], mode)
 
         self._handle.update_record_list("binding_rows", rows)
 
@@ -374,7 +535,7 @@ class InputSettingsPanel(Panel):
             if lf.keymap.is_waiting_for_double_click():
                 desc_text = tr("input_settings.click_again_double")
             else:
-                desc_text = tr("input_settings.press_key_or_click")
+                desc_text = self._capture_prompt(action)
             desc_class = "is-binding-desc is-capturing"
             button_action = "cancel"
             button_label = tr("input_settings.cancel")
@@ -382,6 +543,14 @@ class InputSettingsPanel(Panel):
         else:
             desc_text = lf.keymap.get_trigger_description(action, mode)
             desc_class = "is-binding-desc"
+            conflict = lf.keymap.find_conflict_for_action(mode, action)
+            if conflict is not None:
+                other_name = lf.keymap.get_action_name(conflict["other_action"])
+                desc_text = tr("input_settings.conflict_inline").format(
+                    binding=desc_text,
+                    action=other_name,
+                )
+                desc_class = "is-binding-desc is-conflict"
             button_action = "rebind"
             button_label = tr("input_settings.rebind")
             button_class = "btn--primary"
@@ -398,6 +567,35 @@ class InputSettingsPanel(Panel):
             "action_id": action_val,
             "mode_id": mode_val,
         }
+
+    def _capture_prompt(self, action):
+        tr = lf.ui.tr
+        kinds = self._allowed_trigger_kinds(action)
+        has_key = "key" in kinds
+        has_button = "mouse_button" in kinds
+        has_drag = "mouse_drag" in kinds
+        has_scroll = "mouse_scroll" in kinds
+        has_mouse = has_button or has_drag or has_scroll
+
+        if has_key and not has_mouse:
+            return tr("input_settings.press_key")
+        if has_scroll and not has_key and not has_button and not has_drag:
+            return tr("input_settings.scroll_wheel")
+        if has_drag and has_button and not has_key and not has_scroll:
+            return tr("input_settings.click_or_drag_mouse")
+        if has_drag and not has_key and not has_button and not has_scroll:
+            return tr("input_settings.drag_mouse")
+        if has_button and not has_key and not has_drag and not has_scroll:
+            return tr("input_settings.click_mouse")
+        if has_key and has_mouse:
+            return tr("input_settings.press_key_or_use_mouse")
+        return tr("input_settings.press_key_or_click")
+
+    def _allowed_trigger_kinds(self, action):
+        try:
+            return set(lf.keymap.get_allowed_trigger_kinds(action))
+        except (AttributeError, TypeError, RuntimeError):
+            return {"key", "mouse_button", "mouse_scroll", "mouse_drag"}
 
     # ── Event delegation ──────────────────────────────────────
 
@@ -419,12 +617,14 @@ class InputSettingsPanel(Panel):
         if btn_action == "rebind":
             self._rebinding_action = action
             self._rebinding_mode = mode
+            self._previous_trigger = lf.keymap.get_trigger(action, mode)
             lf.keymap.start_capture(mode, action)
             self._last_state_key = None
         elif btn_action == "cancel":
             lf.keymap.cancel_capture()
             self._rebinding_action = None
             self._rebinding_mode = None
+            self._previous_trigger = None
             self._last_state_key = None
 
     def _find_btn_action(self, element):

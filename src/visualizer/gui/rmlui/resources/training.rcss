@@ -28,7 +28,7 @@ body {
     margin-top: 2dp;
     padding: 6dp 0 0;
     border-top-width: 1dp;
-    font-size: 11dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -54,7 +54,7 @@ body {
     padding-top: 6dp;
     border-top-width: 1dp;
     margin-bottom: 4dp;
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -94,7 +94,7 @@ body {
 
 .loss-tick {
     font-family: "JetBrains Mono";
-    font-size: 10dp;
+    font-size: 12dp;
     text-align: right;
     white-space: nowrap;
 }

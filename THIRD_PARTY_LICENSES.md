@@ -7,6 +7,8 @@ This project builds upon and is inspired by the following:
 |---------|-------------|---------|
 | [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) | Original work by Kerbl et al. | Custom |
 | [gsplat](https://github.com/nerfstudio-project/gsplat) | Optimized CUDA rasterization backend | Apache-2.0 |
+| [VkSplat](https://github.com/vksplat/vksplat) | High-performance 3DGS training in Vulkan compute | Apache-2.0 |
+| [PPISP](https://github.com/nv-tlabs/ppisp) | Physically-Plausible Image Signal Processing for radiance field reconstruction | Apache-2.0 |
 
 ## Gaussian Splatting Tools & Inspiration
 | Project | Description | License |

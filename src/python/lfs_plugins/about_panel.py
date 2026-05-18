@@ -48,3 +48,7 @@ class AboutPanel(Panel):
         website_el = doc.get_element_by_id("link-website")
         if website_el:
             website_el.add_event_listener("click", lambda _ev: lf.ui.open_url(lf.build_info.website_url))
+
+        commit_el = doc.get_element_by_id("commit-value")
+        if commit_el:
+            commit_el.add_event_listener("click", lambda _ev: lf.ui.set_clipboard_text(lf.build_info.commit))

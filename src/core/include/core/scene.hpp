@@ -252,8 +252,15 @@ namespace lfs::core {
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
 
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> createMergedModelWithTransforms() const;
+
+        enum class MergeStorageMode {
+            Clone,
+            BorrowSingleIdentity,
+        };
+
         [[nodiscard]] static std::unique_ptr<lfs::core::SplatData> mergeSplatsWithTransforms(
-            const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats);
+            const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats,
+            MergeStorageMode storage_mode = MergeStorageMode::Clone);
 
         [[nodiscard]] const lfs::core::PointCloud* getVisiblePointCloud() const;
         [[nodiscard]] std::optional<glm::mat4> getVisiblePointCloudTransform() const;

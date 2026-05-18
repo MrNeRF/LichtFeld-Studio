@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "io/atomic_output.hpp"
 #include "load-spz.h"
 #include <chrono>
 #include <format>
@@ -183,7 +184,15 @@ namespace lfs::io {
 
         LOG_INFO("Saving SPZ file: {}", lfs::core::path_to_utf8(options.output_path));
 
+        if (!report_export_progress(options.progress_callback, 0.0f, "Preparing SPZ")) {
+            return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
+        }
+
         auto cloud = convert_to_spz(splat_data);
+
+        if (!report_export_progress(options.progress_callback, 0.4f, "Packing SPZ")) {
+            return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
+        }
 
         // Save using Niantic's library (input is RDF coordinate system like PLY)
         spz::PackOptions pack_options;
@@ -196,17 +205,36 @@ namespace lfs::io {
                               "Failed to pack SPZ data", options.output_path);
         }
 
-        // Write file using std::ofstream with Unicode path handling
-        std::ofstream out;
-        if (!lfs::core::open_file_for_write(options.output_path, std::ios::binary | std::ios::out, out)) {
-            return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to open SPZ file for writing", options.output_path);
+        if (!report_export_progress(options.progress_callback, 0.9f, "Writing SPZ")) {
+            return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
         }
-        out.write(reinterpret_cast<const char*>(data.data()), data.size());
-        out.close();
-        if (!out.good()) {
+
+        if (auto dir_result = ensure_output_parent_directory(options.output_path); !dir_result) {
+            return std::unexpected(dir_result.error());
+        }
+
+        ScopedAtomicOutputFile atomic_output(options.output_path);
+        std::ofstream file;
+        if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, file)) {
             return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to write SPZ file", options.output_path);
+                              "Failed to open temporary SPZ file for writing",
+                              atomic_output.temp_path());
+        }
+
+        file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        file.close();
+
+        if (!file.good()) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to write SPZ file", atomic_output.temp_path());
+        }
+
+        if (!report_export_progress(options.progress_callback, 1.0f, "SPZ export complete")) {
+            return make_error(ErrorCode::CANCELLED, "SPZ export cancelled", options.output_path);
+        }
+
+        if (auto commit_result = atomic_output.commit(); !commit_result) {
+            return std::unexpected(commit_result.error());
         }
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

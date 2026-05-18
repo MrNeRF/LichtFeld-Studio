@@ -4,7 +4,11 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <iterator>
+#include <string>
+#include <vector>
 
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
@@ -35,6 +39,45 @@ namespace {
 
         void TearDown() override {
             fs::remove_all(temp_dir);
+        }
+
+        void write_text_file(const fs::path& path, const std::string& contents) const {
+            fs::create_directories(path.parent_path());
+            std::ofstream out(path, std::ios::binary);
+            ASSERT_TRUE(out.is_open()) << "Failed to open " << path;
+            out << contents;
+            out.close();
+            ASSERT_TRUE(out.good()) << "Failed to write " << path;
+        }
+
+        std::string read_text_file(const fs::path& path) const {
+            std::ifstream in(path, std::ios::binary);
+            EXPECT_TRUE(in.is_open()) << "Failed to open " << path;
+            return {
+                std::istreambuf_iterator<char>(in),
+                std::istreambuf_iterator<char>()};
+        }
+
+        void expect_existing_target_and_no_temp_files(const fs::path& output_path, const std::string& existing_contents) const {
+            EXPECT_EQ(read_text_file(output_path), existing_contents);
+
+            const auto temp_prefix = output_path.stem().string() + ".";
+            for (const auto& entry : fs::directory_iterator(output_path.parent_path())) {
+                if (entry.path() == output_path) {
+                    continue;
+                }
+                EXPECT_FALSE(entry.path().filename().string().starts_with(temp_prefix))
+                    << "Temporary export file was not removed: " << entry.path();
+            }
+        }
+
+        static void expect_progress_completed(const std::vector<float>& updates) {
+            ASSERT_FALSE(updates.empty());
+            EXPECT_FLOAT_EQ(updates.front(), 0.0f);
+            EXPECT_FLOAT_EQ(updates.back(), 1.0f);
+            for (size_t i = 1; i < updates.size(); ++i) {
+                EXPECT_GE(updates[i], updates[i - 1]) << "Progress regressed at update " << i;
+            }
         }
 
         static SplatData create_test_splat(const size_t num_points, const int sh_degree) {
@@ -110,9 +153,16 @@ namespace {
     TEST_F(UsdFormatTest, RoundtripPreservesValues) {
         auto original = create_test_splat(16, 2);
         const fs::path usd_path = temp_dir / "roundtrip.usda";
+        std::vector<float> updates;
 
-        ASSERT_TRUE(save_usd(original, {.output_path = usd_path}).has_value());
+        ASSERT_TRUE(save_usd(original, {.output_path = usd_path,
+                                        .progress_callback = [&](float progress, const std::string&) {
+                                            updates.push_back(progress);
+                                            return true;
+                                        }})
+                        .has_value());
         ASSERT_TRUE(fs::exists(usd_path));
+        expect_progress_completed(updates);
 
         auto loaded_result = load_usd(usd_path);
         ASSERT_TRUE(loaded_result.has_value()) << loaded_result.error();
@@ -174,6 +224,21 @@ namespace {
         auto result = save_usd(splat, {.output_path = temp_dir / "packed.usdz"});
         ASSERT_FALSE(result.has_value());
         EXPECT_EQ(result.error().code, ErrorCode::UNSUPPORTED_FORMAT);
+    }
+
+    TEST_F(UsdFormatTest, SaveCancellationKeepsExistingTarget) {
+        auto splat = create_test_splat(4, 0);
+        const fs::path usd_path = temp_dir / "keep_existing_on_cancel.usda";
+        const std::string existing_contents = "existing usd data";
+        write_text_file(usd_path, existing_contents);
+
+        auto result = save_usd(splat, {.output_path = usd_path,
+                                       .progress_callback = [](float progress, const std::string&) {
+                                           return progress < 1.0f;
+                                       }});
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
+        expect_existing_target_and_no_temp_files(usd_path, existing_contents);
     }
 
     TEST_F(UsdFormatTest, ExportAuthorsStageMetricsAndExtent) {

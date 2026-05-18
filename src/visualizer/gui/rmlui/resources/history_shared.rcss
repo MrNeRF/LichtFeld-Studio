@@ -5,15 +5,15 @@
 
 .history-summary__label {
     display: block;
-    font-size: 9dp;
-    letter-spacing: 0.4dp;
+    font-size: 12dp;
+    letter-spacing: 0.2dp;
     text-transform: uppercase;
     margin-bottom: 2dp;
 }
 
 .history-summary__value {
     display: block;
-    font-size: 11dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -22,7 +22,7 @@
     margin-bottom: 8dp;
     padding: 6dp 8dp;
     border-radius: 6dp;
-    font-size: 10dp;
+    font-size: 12dp;
 }
 
 .history-actions {
@@ -46,7 +46,7 @@
     display: block;
     margin-top: -2dp;
     margin-bottom: 2dp;
-    font-size: 9dp;
+    font-size: 12dp;
 }
 
 .history-section {
@@ -57,7 +57,7 @@
 
 .history-section__title {
     display: block;
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
@@ -122,22 +122,22 @@
 
 .history-row__line--primary {
     margin-bottom: 2dp;
-    font-size: 10.5dp;
+    font-size: 12dp;
     font-weight: bold;
 }
 
 .history-row__line--stack {
-    font-size: 8.75dp;
-    line-height: 1.2;
+    font-size: 12dp;
+    line-height: 1.25;
 }
 
 .history-row__line--secondary {
-    font-size: 9dp;
+    font-size: 12dp;
     line-height: 1.3;
 }
 
 .history-empty {
     display: block;
     padding: 4dp 0;
-    font-size: 10dp;
+    font-size: 12dp;
 }

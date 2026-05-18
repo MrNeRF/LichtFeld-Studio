@@ -30,9 +30,16 @@ def _install_lf_stub(monkeypatch):
     state = SimpleNamespace(
         language=["en"],
         nodes=[],
+        content_type="splat_files",
+        active_camera_count=0,
         export_state={"active": False},
         set_panel_enabled_calls=[],
         export_calls=[],
+        folder_dialog_calls=[],
+        folder_dialog_result="/tmp/colmap_sparse",
+        confirm_calls=[],
+        confirm_response="Overwrite",
+        colmap_source_path="/datasets/source/sparse/0",
         cancel_calls=0,
     )
 
@@ -53,10 +60,26 @@ def _install_lf_stub(monkeypatch):
         save_usd_file_dialog=lambda default_name: f"/tmp/{default_name}.usd",
         save_usdz_file_dialog=lambda default_name: f"/tmp/{default_name}.usdz",
         save_html_file_dialog=lambda default_name: f"/tmp/{default_name}.html",
+        save_rad_file_dialog=lambda default_name: f"/tmp/{default_name}.rad",
+        open_dataset_folder_dialog=lambda default_path="": (
+            state.folder_dialog_calls.append(default_path) or state.folder_dialog_result
+        ),
+        select_colmap_sparse_folder_dialog=lambda default_path="": (
+            state.folder_dialog_calls.append(default_path) or state.folder_dialog_result
+        ),
+        confirm_dialog=lambda title, message, buttons, callback=None: (
+            state.confirm_calls.append((title, message, tuple(buttons)))
+            or (callback(state.confirm_response) if callback else None)
+        ),
+        get_content_type=lambda: state.content_type,
     )
-    lf_stub.get_scene = lambda: SimpleNamespace(get_nodes=lambda: list(state.nodes))
+    lf_stub.get_colmap_sparse_source_path = lambda: state.colmap_source_path
+    lf_stub.get_scene = lambda: SimpleNamespace(
+        get_nodes=lambda: list(state.nodes),
+        active_camera_count=state.active_camera_count,
+    )
     lf_stub.export_scene = (
-        lambda fmt, path, nodes, sh_degree:
+        lambda fmt, path, nodes, sh_degree, **_kwargs:
         state.export_calls.append((fmt, path, tuple(nodes), sh_degree))
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -110,9 +133,11 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
         {"index": "0", "label": "export.format.ply_standard", "selected": False},
         {"index": "1", "label": "export.format.sog_supersplat", "selected": False},
         {"index": "2", "label": "export.format.spz_niantic", "selected": True},
+        {"index": "6", "label": "export.format.rad_random_access", "selected": False},
         {"index": "4", "label": "export.format.usd_openusd", "selected": False},
         {"index": "5", "label": "export.format.usdz_nurec", "selected": False},
         {"index": "3", "label": "export.format.html_viewer", "selected": False},
+        {"index": "7", "label": "export.format.colmap_sparse", "selected": False},
     ]
     assert panel._handle.records["models"] == [
         {"name": "Tree", "selected": True, "count_text": "(128)"},
@@ -154,6 +179,7 @@ def test_export_panel_progress_updates_bound_value(export_panel_module):
     assert panel._cached_export_state["stage"] == "writing"
     assert panel._handle.dirty_fields == [
         "progress_value",
+        "progress_title",
         "progress_pct",
         "progress_stage",
     ]
@@ -200,3 +226,123 @@ def test_export_panel_uses_nurec_usdz_dialog_and_format_id(export_panel_module):
     assert state.export_calls == [
         (int(module.ExportFormat.NUREC_USDZ), "/tmp/Tree.usdz", ("Tree",), 3),
     ]
+
+
+def test_export_panel_uses_colmap_folder_picker_without_selected_models(export_panel_module, tmp_path):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    panel._selected_nodes = set()
+    state.content_type = "dataset"
+    state.active_camera_count = 3
+    state.folder_dialog_result = str(tmp_path)
+
+    panel._do_export()
+
+    assert state.export_calls == [
+        (int(module.ExportFormat.COLMAP), str(tmp_path), (), 3),
+    ]
+    assert state.folder_dialog_calls == ["/datasets/source/sparse"]
+    assert state.confirm_calls == []
+
+
+def test_export_panel_exports_to_selected_sparse_root_not_child_model(export_panel_module, tmp_path):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    panel._selected_nodes = set()
+    state.content_type = "dataset"
+    state.active_camera_count = 3
+    sparse_root = tmp_path / "sparse"
+    child_model = sparse_root / "0"
+    child_model.mkdir(parents=True)
+    (child_model / "cameras.bin").write_text("existing child data\n")
+    state.folder_dialog_result = str(sparse_root)
+
+    panel._do_export()
+
+    assert state.export_calls == [
+        (int(module.ExportFormat.COLMAP), str(sparse_root), (), 3),
+    ]
+    assert state.confirm_calls == []
+
+
+def test_export_panel_uses_exact_folder_returned_by_picker(export_panel_module, tmp_path):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    panel._selected_nodes = set()
+    state.content_type = "dataset"
+    state.active_camera_count = 3
+    sparse_root = tmp_path / "sparse"
+    child_model = sparse_root / "0"
+    child_model.mkdir(parents=True)
+    (child_model / "cameras.bin").write_text("existing cameras\n")
+    (child_model / "images.bin").write_text("existing images\n")
+    state.colmap_source_path = str(child_model)
+    state.folder_dialog_result = str(child_model)
+
+    panel._do_export()
+
+    assert state.folder_dialog_calls == [str(sparse_root)]
+    assert len(state.confirm_calls) == 1
+    title, message, buttons = state.confirm_calls[0]
+    assert title == "Export COLMAP sparse"
+    assert str(child_model) in message
+    assert buttons == ("Overwrite", "Cancel")
+    assert state.export_calls == [
+        (int(module.ExportFormat.COLMAP), str(child_model), (), 3),
+    ]
+
+
+def test_export_panel_colmap_available_has_no_error(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._format = module.ExportFormat.COLMAP
+    state.content_type = "dataset"
+    state.active_camera_count = 3
+
+    assert panel._can_export() is True
+    assert panel._get_export_error_text() == ""
+
+
+def test_export_panel_confirms_colmap_overwrite(export_panel_module, tmp_path):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    state.content_type = "dataset"
+    state.active_camera_count = 3
+    state.folder_dialog_result = str(tmp_path)
+    (tmp_path / "cameras.txt").write_text("# existing\n")
+
+    panel._do_export()
+
+    assert len(state.confirm_calls) == 1
+    title, message, buttons = state.confirm_calls[0]
+    assert title == "Export COLMAP sparse"
+    assert str(tmp_path) in message
+    assert buttons == ("Overwrite", "Cancel")
+    assert state.export_calls == [
+        (int(module.ExportFormat.COLMAP), str(tmp_path), (), 3),
+    ]
+
+
+def test_export_panel_cancel_colmap_overwrite(export_panel_module, tmp_path):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._format = module.ExportFormat.COLMAP
+    state.content_type = "dataset"
+    state.active_camera_count = 3
+    state.folder_dialog_result = str(tmp_path)
+    state.confirm_response = "Cancel"
+    (tmp_path / "images.txt").write_text("# existing\n")
+
+    panel._do_export()
+
+    assert len(state.confirm_calls) == 1
+    assert state.export_calls == []

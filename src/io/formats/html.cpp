@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "html_viewer_resources.hpp"
+#include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "sogs.hpp"
 
@@ -97,8 +98,8 @@ namespace lfs::io {
     } // anonymous namespace
 
     Result<void> export_html(const SplatData& splat_data, const HtmlExportOptions& options) {
-        if (options.progress_callback) {
-            options.progress_callback(0.0f, "Exporting SOG...");
+        if (!report_export_progress(options.progress_callback, 0.0f, "Exporting SOG...")) {
+            return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
         // Estimate HTML file size: SOG data (compressed) + base64 overhead (4/3) + HTML template (~50KB)
@@ -121,16 +122,13 @@ namespace lfs::io {
             return std::unexpected(writable_check.error());
         }
 
-        const auto temp_sog = std::filesystem::temp_directory_path() / "lfs_html_export_temp.sog";
+        ScopedAtomicOutputFile temp_sog(options.output_path);
         const SogSaveOptions sog_options{
-            .output_path = temp_sog,
+            .output_path = temp_sog.temp_path(),
             .kmeans_iterations = options.kmeans_iterations,
             .use_gpu = true,
             .progress_callback = [&](float p, const std::string& stage) {
-                if (options.progress_callback) {
-                    options.progress_callback(p * 0.5f, stage);
-                }
-                return true;
+                return report_export_progress(options.progress_callback, p * 0.5f, stage);
             }};
 
         if (auto result = save_sog(splat_data, sog_options); !result) {
@@ -140,42 +138,50 @@ namespace lfs::io {
                               options.output_path);
         }
 
-        if (options.progress_callback) {
-            options.progress_callback(0.5f, "Encoding data...");
+        if (!report_export_progress(options.progress_callback, 0.5f, "Encoding data...")) {
+            return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
-        const auto sog_data = read_file_binary(temp_sog);
-        std::error_code ec;
-        std::filesystem::remove(temp_sog, ec); // Best effort cleanup
+        const auto sog_data = read_file_binary(temp_sog.temp_path());
 
         if (sog_data.empty()) {
             return make_error(ErrorCode::READ_FAILURE,
-                              "Failed to read temporary SOG file", temp_sog);
+                              "Failed to read temporary SOG file", temp_sog.temp_path());
         }
 
         const auto base64_data = core::base64_encode(sog_data);
 
-        if (options.progress_callback) {
-            options.progress_callback(0.8f, "Generating HTML...");
+        if (!report_export_progress(options.progress_callback, 0.8f, "Generating HTML...")) {
+            return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
 
         const auto html = generate_html(base64_data);
 
-        std::ofstream out;
-        if (!lfs::core::open_file_for_write(options.output_path, out)) {
-            return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to open output file for writing", options.output_path);
+        if (!report_export_progress(options.progress_callback, 0.9f, "Writing HTML...")) {
+            return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
         }
-        out << html;
+
+        ScopedAtomicOutputFile atomic_output(options.output_path);
+        std::ofstream out;
+        if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, out)) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to open temporary HTML file for writing",
+                              atomic_output.temp_path());
+        }
+        out.write(html.data(), static_cast<std::streamsize>(html.size()));
+        out.close();
 
         if (!out.good()) {
             return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to write HTML content (possibly disk full)", options.output_path);
+                              "Failed to write HTML content (possibly disk full)", atomic_output.temp_path());
         }
-        out.close();
 
-        if (options.progress_callback) {
-            options.progress_callback(1.0f, "Done");
+        if (!report_export_progress(options.progress_callback, 1.0f, "Done")) {
+            return make_error(ErrorCode::CANCELLED, "HTML export cancelled", options.output_path);
+        }
+
+        if (auto commit_result = atomic_output.commit(); !commit_result) {
+            return std::unexpected(commit_result.error());
         }
 
         LOG_INFO("Exported HTML viewer: {} ({:.1f} MB)",

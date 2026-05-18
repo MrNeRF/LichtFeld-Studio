@@ -21,6 +21,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/colmap.hpp"
 #include "mcp/llm_client.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "mcp/render_capture_utils.hpp"
@@ -30,6 +31,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/gs_rasterizer_tensor.hpp"
 #include "sequencer/keyframe.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -51,6 +53,7 @@
 #include <future>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1341,6 +1344,38 @@ namespace lfs::app {
             splat.set_sh_degree(target_degree);
         }
 
+        struct BorrowExportPlan {
+            core::Scene::MergeStorageMode storage_mode = core::Scene::MergeStorageMode::Clone;
+            std::optional<std::shared_lock<std::shared_mutex>> model_lock;
+        };
+
+        BorrowExportPlan make_borrow_single_identity_export_plan(const vis::SceneManager& scene_manager,
+                                                                 const std::vector<std::string>& node_names) {
+            BorrowExportPlan plan;
+            if (node_names.size() != 1)
+                return plan;
+
+            const auto& scene = scene_manager.getScene();
+            const auto* const node = scene.getNode(node_names.front());
+            if (!node || node->type != core::NodeType::SPLAT || !node->model)
+                return plan;
+
+            if (node->model->has_deleted_mask())
+                return plan;
+
+            if (node->name == scene.getTrainingModelNodeName()) {
+                const auto* const trainer_manager = scene_manager.getTrainerManager();
+                const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+                if (trainer && trainer->is_running() && !trainer->is_paused())
+                    return plan;
+                if (trainer)
+                    plan.model_lock.emplace(trainer->getRenderMutex());
+            }
+
+            plan.storage_mode = core::Scene::MergeStorageMode::BorrowSingleIdentity;
+            return plan;
+        }
+
         std::expected<void, std::string> export_scene_nodes(const vis::SceneManager& scene_manager,
                                                             const std::vector<std::string>& node_names,
                                                             const core::ExportFormat format,
@@ -1359,11 +1394,21 @@ namespace lfs::app {
             if (splats.empty())
                 return std::unexpected("The requested node set does not contain any splat nodes");
 
-            auto merged = core::Scene::mergeSplatsWithTransforms(splats);
+            auto borrow_plan = make_borrow_single_identity_export_plan(scene_manager, node_names);
+            auto merged = core::Scene::mergeSplatsWithTransforms(splats, borrow_plan.storage_mode);
             if (!merged)
                 return std::unexpected("Failed to merge scene nodes for export");
 
+            struct ExportMemoryCleanup {
+                std::unique_ptr<core::SplatData>& data;
+                ~ExportMemoryCleanup() {
+                    data.reset();
+                    core::Tensor::trim_memory_pool();
+                }
+            } cleanup{merged};
+
             truncate_sh_degree(*merged, sh_degree);
+            borrow_plan.model_lock.reset();
 
             switch (format) {
             case core::ExportFormat::PLY: {
@@ -1403,8 +1448,73 @@ namespace lfs::app {
                     return std::unexpected(result.error().message);
                 break;
             }
+            case core::ExportFormat::COLMAP:
+                return std::unexpected("COLMAP export uses scene.export_colmap");
             }
 
+            return {};
+        }
+
+        io::ColmapWriteFormat parse_colmap_write_format(const std::string& value) {
+            if (value == "binary")
+                return io::ColmapWriteFormat::Binary;
+            if (value == "text")
+                return io::ColmapWriteFormat::Text;
+            return io::ColmapWriteFormat::Auto;
+        }
+
+        std::expected<void, std::string> export_colmap_reconstruction_from_scene(
+            const vis::SceneManager& scene_manager,
+            const std::filesystem::path& source_path,
+            const std::filesystem::path& output_sparse_path,
+            const io::ColmapWriteFormat format) {
+            const auto& scene = scene_manager.getScene();
+            auto cameras = scene.getAllCameras();
+            if (cameras.empty()) {
+                return std::unexpected("Scene has no COLMAP cameras to export");
+            }
+
+            std::vector<io::ColmapCameraWriteData> camera_exports;
+            camera_exports.reserve(cameras.size());
+            for (const auto& camera : cameras) {
+                if (!camera)
+                    continue;
+                camera_exports.push_back(io::ColmapCameraWriteData{
+                    .camera = camera,
+                    .data_world_transform = scene.getCameraSceneTransformByUid(camera->uid()).value_or(glm::mat4(1.0f)),
+                });
+            }
+
+            const core::PointCloud* point_cloud = nullptr;
+            glm::mat4 point_cloud_transform{1.0f};
+            for (const auto* node : scene.getNodes()) {
+                if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
+                    !scene.isNodeEffectivelyVisible(node->id)) {
+                    continue;
+                }
+                point_cloud = node->point_cloud.get();
+                point_cloud_transform = scene.getWorldTransform(node->id);
+                break;
+            }
+            if (!point_cloud) {
+                for (const auto* node : scene.getNodes()) {
+                    if (node && node->type == core::NodeType::DATASET) {
+                        point_cloud_transform = scene.getWorldTransform(node->id);
+                        break;
+                    }
+                }
+            }
+
+            auto result = io::write_colmap_reconstruction(
+                source_path,
+                output_sparse_path,
+                camera_exports,
+                point_cloud,
+                point_cloud_transform,
+                io::ColmapWriteOptions{.format = format});
+            if (!result) {
+                return std::unexpected(result.error().message);
+            }
             return {};
         }
 
@@ -2661,6 +2771,54 @@ namespace lfs::app {
                         {"format", "rad"},
                         {"path", core::path_to_utf8(path)},
                         {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_colmap",
+                .description = "Write the current scene camera and sparse point cloud transforms to COLMAP sparse files",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination COLMAP sparse directory"}}},
+                        {"source_path", json{{"type", "string"}, {"description", "Optional source COLMAP dataset or sparse directory; defaults to the loaded dataset path"}}},
+                        {"format", json{{"type", "string"}, {"description", "Output format: auto, binary, or text"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const auto source_arg = optional_string_arg(args, "source_path");
+                const auto format = parse_colmap_write_format(args.value("format", "auto"));
+
+                return post_and_wait(viewer_impl, [viewer_impl, path, source_arg, format]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    std::filesystem::path source_path;
+                    if (source_arg && !source_arg->empty()) {
+                        source_path = *source_arg;
+                    } else {
+                        source_path = scene_manager->getDatasetPath();
+                    }
+                    if (source_path.empty()) {
+                        return json{{"error", "No source COLMAP path provided and no dataset path is loaded"}};
+                    }
+
+                    if (auto result = export_colmap_reconstruction_from_scene(
+                            *scene_manager, source_path, path, format);
+                        !result) {
+                        return json{{"error", result.error()}};
+                    }
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "colmap"},
+                        {"path", core::path_to_utf8(path)},
+                        {"source_path", core::path_to_utf8(source_path)},
                     };
                 });
             });

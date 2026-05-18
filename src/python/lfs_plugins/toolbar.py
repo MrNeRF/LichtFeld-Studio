@@ -87,6 +87,7 @@ class _GizmoToolbarController:
         "builtin.select:polygon": "toolbar.polygon_selection",
         "builtin.select:lasso": "toolbar.lasso_selection",
         "builtin.select:rings": "toolbar.ring_selection",
+        "builtin.select:color": "toolbar.color_selection",
         "builtin.translate:local": "toolbar.local_space",
         "builtin.translate:world": "toolbar.world_space",
         "builtin.rotate:local": "toolbar.local_space",

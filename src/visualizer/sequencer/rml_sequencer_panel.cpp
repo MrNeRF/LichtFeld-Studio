@@ -276,6 +276,7 @@ namespace lfs::vis {
         el_track_bar_ = nullptr;
         el_keyframes_ = nullptr;
         el_playhead_ = nullptr;
+        el_playhead_handle_ = nullptr;
         el_hint_ = nullptr;
         el_current_time_ = nullptr;
         el_duration_ = nullptr;
@@ -414,6 +415,7 @@ namespace lfs::vis {
         el_track_bar_ = document_->GetElementById("track-bar");
         el_keyframes_ = document_->GetElementById("keyframes");
         el_playhead_ = document_->GetElementById("playhead");
+        el_playhead_handle_ = document_->GetElementById("playhead-handle");
         el_hint_ = document_->GetElementById("hint");
         el_current_time_ = document_->GetElementById("current-time");
         el_duration_ = document_->GetElementById("duration");
@@ -465,7 +467,7 @@ namespace lfs::vis {
         el_btn_close_panel_ = document_->GetElementById("btn-close-panel");
         el_close_panel_label_ = document_->GetElementById("close-panel-label");
 
-        elements_cached_ = el_ruler_ && el_keyframes_ && el_playhead_ &&
+        elements_cached_ = el_ruler_ && el_keyframes_ && el_playhead_ && el_playhead_handle_ &&
                            el_current_time_ && el_duration_ && el_play_icon_ &&
                            el_btn_loop_ && el_timeline_ && el_header_ &&
                            el_easing_stripe_ && el_easing_segments_ &&

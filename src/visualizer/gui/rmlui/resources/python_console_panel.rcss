@@ -384,7 +384,7 @@ button.disabled {
 .menu-detail {
     margin-top: 2dp;
     color: rgb(146, 146, 146);
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .menu-empty {
@@ -560,7 +560,7 @@ button.disabled {
 
 .pkg-row {
     font-family: "JetBrains Mono";
-    font-size: 11dp;
+    font-size: 12dp;
 }
 
 .pkg-name {

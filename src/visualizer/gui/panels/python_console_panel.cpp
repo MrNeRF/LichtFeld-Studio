@@ -359,7 +359,7 @@ namespace {
     }
 
     float console_font_size(const lfs::vis::gui::panels::PythonConsoleState& state) {
-        return std::round(std::clamp(14.0f * state.getFontScale(), 10.0f, 34.0f));
+        return std::round(std::clamp(14.0f * state.getFontScale(), 12.0f, 34.0f));
     }
 
     bool has_key(const lfs::vis::gui::PanelInputState& input, const int scancode) {

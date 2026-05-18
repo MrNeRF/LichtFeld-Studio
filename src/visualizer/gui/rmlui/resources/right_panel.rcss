@@ -3,7 +3,7 @@ body {
     width: 100%;
     height: 100%;
     font-family: Inter;
-    font-size: 11dp;
+    font-size: 12dp;
     nav: auto;
 }
 
@@ -73,7 +73,7 @@ body {
     nav: auto;
     line-height: 20dp;
     text-align: center;
-    font-size: 10dp;
+    font-size: 12dp;
     font-weight: bold;
     z-index: 2;
 }

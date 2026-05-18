@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "io/exporter.hpp"
 #include <archive.h>
@@ -477,6 +478,23 @@ namespace lfs::io {
                 }
             }
 
+            std::expected<void, std::string> close() {
+                if (!archive_) {
+                    return {};
+                }
+
+                if (archive_write_close(archive_) != ARCHIVE_OK) {
+                    const std::string error = archive_error_string(archive_) ? archive_error_string(archive_) : "unknown error";
+                    archive_write_free(archive_);
+                    archive_ = nullptr;
+                    return std::unexpected(std::format("Failed to close USDZ archive: {}", error));
+                }
+
+                archive_write_free(archive_);
+                archive_ = nullptr;
+                return {};
+            }
+
             std::expected<void, std::string> add_file(const std::string& filename, const std::span<const uint8_t> data) {
                 auto* entry = archive_entry_new();
                 if (!entry) {
@@ -768,6 +786,10 @@ namespace lfs::io {
     }
 
     Result<void> save_nurec_usdz(const SplatData& splat_data, const NurecUsdzSaveOptions& options) {
+        if (!report_export_progress(options.progress_callback, 0.0f, "Preparing USDZ")) {
+            return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+        }
+
         if (splat_data.size() == 0) {
             return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", options.output_path);
         }
@@ -796,11 +818,24 @@ namespace lfs::io {
                               options.output_path);
         }
 
+        if (!report_export_progress(options.progress_callback, 0.15f, "Building NuRec payload")) {
+            return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+        }
+
         Json payload = build_nurec_payload(splat_data);
+
+        if (!report_export_progress(options.progress_callback, 0.45f, "Compressing NuRec payload")) {
+            return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+        }
+
         std::vector<uint8_t> payload_msgpack = Json::to_msgpack(payload);
         auto nurec_bytes = gzip_compress(payload_msgpack);
         if (!nurec_bytes) {
             return make_error(ErrorCode::ENCODING_FAILED, nurec_bytes.error(), options.output_path);
+        }
+
+        if (!report_export_progress(options.progress_callback, 0.65f, "Preparing USDZ bounds")) {
+            return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
         }
 
         Tensor means_for_bounds = splat_data.means();
@@ -829,31 +864,49 @@ namespace lfs::io {
             return std::unexpected(space_check.error());
         }
 
-        std::error_code ec;
-        std::filesystem::create_directories(options.output_path.parent_path(), ec);
-        if (ec) {
-            return make_error(ErrorCode::PERMISSION_DENIED,
-                              std::format("Cannot create directory: {}", ec.message()),
-                              options.output_path.parent_path());
+        if (auto dir_result = ensure_output_parent_directory(options.output_path); !dir_result) {
+            return std::unexpected(dir_result.error());
         }
 
+        if (!report_export_progress(options.progress_callback, 0.8f, "Writing USDZ")) {
+            return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+        }
+
+        ScopedAtomicOutputFile atomic_output(options.output_path, AtomicOutputTempName::PreserveExtension);
         try {
-            ZipArchiveWriter writer(options.output_path);
+            ZipArchiveWriter writer(atomic_output.temp_path());
             const std::vector<uint8_t> default_bytes(default_usda.begin(), default_usda.end());
             const std::vector<uint8_t> gauss_bytes(gauss_usda.begin(), gauss_usda.end());
             if (auto result = writer.add_file("default.usda", default_bytes); !result) {
                 return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, result.error(), options.output_path);
             }
+            if (!report_export_progress(options.progress_callback, 0.85f, "Writing NuRec payload")) {
+                return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+            }
             if (auto result = writer.add_file(nurec_filename, *nurec_bytes); !result) {
                 return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, result.error(), options.output_path);
             }
+            if (!report_export_progress(options.progress_callback, 0.95f, "Writing USD metadata")) {
+                return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+            }
             if (auto result = writer.add_file("gauss.usda", gauss_bytes); !result) {
+                return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, result.error(), options.output_path);
+            }
+            if (auto result = writer.close(); !result) {
                 return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, result.error(), options.output_path);
             }
         } catch (const std::exception& e) {
             return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
                               std::format("Failed to create USDZ archive: {}", e.what()),
                               options.output_path);
+        }
+
+        if (!report_export_progress(options.progress_callback, 1.0f, "USDZ export complete")) {
+            return make_error(ErrorCode::CANCELLED, "NuRec USDZ export cancelled", options.output_path);
+        }
+
+        if (auto commit_result = atomic_output.commit(); !commit_result) {
+            return std::unexpected(commit_result.error());
         }
 
         LOG_INFO("Saved NuRec USDZ file: {}", lfs::core::path_to_utf8(options.output_path));

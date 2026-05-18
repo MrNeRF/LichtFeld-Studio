@@ -24,7 +24,7 @@
       <div class="separator"></div>
 
       <!-- Model selection -->
-      <div class="ep-section">
+      <div class="ep-section" data-if="show_model_selection">
         <span class="ep-section-title">@tr:export_dialog.models</span>
         <div class="ep-toggle-row">
           <button id="btn-select-all" type="button" class="btn btn--secondary ep-small-btn">@tr:export.all</button>
@@ -49,7 +49,7 @@
       <div class="separator"></div>
 
       <!-- SH Degree -->
-      <div class="ep-section">
+      <div class="ep-section" data-if="show_sh_degree">
         <div class="setting-row setting-row--aligned">
           <span class="setting-row__label-col">@tr:export_dialog.sh_degree</span>
           <div class="setting-row__control-col setting-row__control-col--slider">
@@ -106,7 +106,7 @@
       <div class="separator"></div>
 
       <!-- Action buttons -->
-      <span id="export-error" class="ep-error hidden" data-class-hidden="can_export">@tr:export.select_at_least_one</span>
+      <span id="export-error" class="ep-error hidden" data-class-hidden="can_export">{{ export_error_text }}</span>
       <div class="ep-buttons">
         <input id="btn-export" class="btn btn--primary ep-action-btn"
                type="submit"

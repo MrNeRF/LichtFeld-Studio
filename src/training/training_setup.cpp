@@ -437,13 +437,6 @@ namespace lfs::training {
                             return std::unexpected(std::format("Init failed: {}", splat_result.error()));
                         }
 
-                        const int max_cap = params.optimization.max_cap;
-                        if (max_cap > 0 && max_cap < static_cast<int>(splat_result->size())) {
-                            LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
-                                     max_cap, splat_result->size(), max_cap);
-                            lfs::core::random_choose(*splat_result, max_cap);
-                        }
-
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Init {} gaussians from {} (sh={})",
                                  model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());

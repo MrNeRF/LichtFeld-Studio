@@ -58,6 +58,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstring>
+#include <filesystem>
 #include <future>
 #include <implot.h>
 #include <memory>
@@ -3855,6 +3856,40 @@ namespace lfs::python {
             "Open a file dialog to select a CSV file. Returns empty string if cancelled.");
 
         m.def(
+            "open_xml_file_dialog",
+            []() -> std::string {
+                auto result = lfs::vis::gui::OpenXmlFileDialog();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            "Open a file dialog to select a Metashape XML file. Returns empty string if cancelled.");
+
+        m.def(
+            "open_las_file_dialog",
+            []() -> std::string {
+                auto result = lfs::vis::gui::OpenLasFileDialog();
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            "Open a file dialog to select a LAS or LAZ point cloud file. Returns empty string if cancelled.");
+
+        m.def(
+            "save_las_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveLasFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for LAS files. Returns empty string if cancelled.");
+
+        m.def(
+            "save_laz_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveLazFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for LAZ compressed files. Returns empty string if cancelled.");
+
+        m.def(
             "save_json_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveJsonFileDialog(default_name);
@@ -3928,11 +3963,27 @@ namespace lfs::python {
 
         m.def(
             "open_dataset_folder_dialog",
-            []() -> std::string {
-                auto result = lfs::vis::gui::OpenDatasetFolderDialog();
+            [](const std::string& default_path) -> std::string {
+                const auto default_fs_path = default_path.empty()
+                                                 ? std::filesystem::path{}
+                                                 : lfs::core::utf8_to_path(default_path);
+                auto result = lfs::vis::gui::OpenDatasetFolderDialog(default_fs_path);
                 return result.empty() ? "" : lfs::core::path_to_utf8(result);
             },
+            nb::arg("default_path") = "",
             "Open a folder dialog to select a dataset. Returns empty string if cancelled.");
+
+        m.def(
+            "select_colmap_sparse_folder_dialog",
+            [](const std::string& default_path) -> std::string {
+                const auto default_fs_path = default_path.empty()
+                                                 ? std::filesystem::path{}
+                                                 : lfs::core::utf8_to_path(default_path);
+                auto result = lfs::vis::gui::PickColmapSparseFolderDialog(default_fs_path);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_path") = "",
+            "Open a folder dialog to select the COLMAP sparse export folder. Returns empty string if cancelled.");
 
         m.def(
             "open_video_file_dialog",
@@ -4278,7 +4329,8 @@ namespace lfs::python {
                     {"rectangle", 1},
                     {"polygon", 2},
                     {"lasso", 3},
-                    {"rings", 4}};
+                    {"rings", 4},
+                    {"color", 5}};
                 if (const auto it = MODE_MAP.find(mode); it != MODE_MAP.end()) {
                     lfs::core::events::tools::SetSelectionSubMode{.selection_mode = it->second}.emit();
                 }

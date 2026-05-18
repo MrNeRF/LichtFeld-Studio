@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "core/point_cloud.hpp"
@@ -45,6 +46,33 @@ protected:
         out << contents;
         out.close();
         ASSERT_TRUE(out.good()) << "Failed to write " << path;
+    }
+
+    std::string read_text_file(const fs::path& path) const {
+        std::ifstream in(path, std::ios::binary);
+        EXPECT_TRUE(in.is_open()) << "Failed to open " << path;
+        return {
+            std::istreambuf_iterator<char>(in),
+            std::istreambuf_iterator<char>()};
+    }
+
+    void expect_existing_target_and_no_temp_files(const fs::path& output_path, const std::string& existing_contents) const {
+        EXPECT_EQ(read_text_file(output_path), existing_contents);
+
+        const auto temp_prefix = output_path.filename().string() + ".";
+        for (const auto& entry : fs::directory_iterator(output_path.parent_path())) {
+            EXPECT_FALSE(entry.path().filename().string().starts_with(temp_prefix))
+                << "Temporary export file was not removed: " << entry.path();
+        }
+    }
+
+    static void expect_progress_completed(const std::vector<float>& updates) {
+        ASSERT_FALSE(updates.empty());
+        EXPECT_FLOAT_EQ(updates.front(), 0.0f);
+        EXPECT_FLOAT_EQ(updates.back(), 1.0f);
+        for (size_t i = 1; i < updates.size(); ++i) {
+            EXPECT_GE(updates[i], updates[i - 1]) << "Progress regressed at update " << i;
+        }
     }
 
     void write_png(const fs::path& path) const {
@@ -450,6 +478,80 @@ TEST_F(PythonIOTest, PlySaveLoadRoundtrip) {
     }
 }
 
+TEST_F(PythonIOTest, PlySaveReportsProgressDuringPreparation) {
+    auto splat = create_test_splat(1000, 1);
+    const fs::path output_path = temp_dir / "progress_output.ply";
+
+    std::vector<float> updates;
+    std::vector<std::string> stages;
+
+    PlySaveOptions save_options;
+    save_options.output_path = output_path;
+    save_options.binary = true;
+    save_options.progress_callback = [&](float progress, const std::string& stage) {
+        updates.push_back(progress);
+        stages.push_back(stage);
+        return true;
+    };
+
+    auto save_result = save_ply(splat, save_options);
+    ASSERT_TRUE(save_result.has_value()) << "Failed to save: " << save_result.error().format();
+
+    ASSERT_GE(updates.size(), 6UL);
+    EXPECT_FLOAT_EQ(updates.front(), 0.0f);
+    EXPECT_FLOAT_EQ(updates.back(), 1.0f);
+
+    for (size_t i = 1; i < updates.size(); ++i) {
+        EXPECT_GE(updates[i], updates[i - 1]) << "Progress regressed at update " << i;
+    }
+
+    bool saw_mid_export_progress = false;
+    bool saw_copy_stage = false;
+    for (size_t i = 0; i < updates.size(); ++i) {
+        saw_mid_export_progress |= updates[i] > 0.1f && updates[i] < 0.9f;
+        saw_copy_stage |= stages[i].starts_with("Copying ");
+    }
+
+    EXPECT_TRUE(saw_mid_export_progress);
+    EXPECT_TRUE(saw_copy_stage);
+}
+
+TEST_F(PythonIOTest, PlySaveCancellationAtFinalProgressDoesNotReportSuccess) {
+    auto splat = create_test_splat(1000, 1);
+    const fs::path output_path = temp_dir / "cancelled_progress_output.ply";
+
+    PlySaveOptions save_options;
+    save_options.output_path = output_path;
+    save_options.binary = true;
+    save_options.progress_callback = [](float progress, const std::string&) {
+        return progress < 1.0f;
+    };
+
+    auto save_result = save_ply(splat, save_options);
+    ASSERT_FALSE(save_result.has_value());
+    EXPECT_EQ(save_result.error().code, ErrorCode::CANCELLED);
+}
+
+TEST_F(PythonIOTest, PlySaveCancellationKeepsExistingTarget) {
+    auto splat = create_test_splat(1000, 1);
+    const fs::path output_path = temp_dir / "keep_existing_on_cancel.ply";
+    const std::string existing_contents = "existing ply data";
+    write_text_file(output_path, existing_contents);
+
+    PlySaveOptions save_options;
+    save_options.output_path = output_path;
+    save_options.binary = true;
+    save_options.progress_callback = [](float progress, const std::string&) {
+        return progress < 1.0f;
+    };
+
+    auto save_result = save_ply(splat, save_options);
+    ASSERT_FALSE(save_result.has_value());
+    EXPECT_EQ(save_result.error().code, ErrorCode::CANCELLED);
+
+    expect_existing_target_and_no_temp_files(output_path, existing_contents);
+}
+
 TEST_F(PythonIOTest, PlyLoadMapsExternalChannelMajorShOrderToInternalLayout) {
     const fs::path input_path = temp_dir / "external_channel_major_sh.ply";
     write_external_sh_layout_test_ply(input_path);
@@ -550,14 +652,38 @@ TEST_F(PythonIOTest, SpzSave) {
     auto splat = create_test_splat(num_points, 1);
 
     fs::path output_path = temp_dir / "test_output.spz";
+    std::vector<float> updates;
 
     SpzSaveOptions options;
     options.output_path = output_path;
+    options.progress_callback = [&](float progress, const std::string&) {
+        updates.push_back(progress);
+        return true;
+    };
 
     auto result = save_spz(splat, options);
     ASSERT_TRUE(result.has_value()) << "Failed to save SPZ: " << result.error().format();
     EXPECT_TRUE(fs::exists(output_path));
     EXPECT_GT(fs::file_size(output_path), 0);
+    expect_progress_completed(updates);
+}
+
+TEST_F(PythonIOTest, SpzSaveCancellationKeepsExistingTarget) {
+    auto splat = create_test_splat(200, 1);
+    const fs::path output_path = temp_dir / "keep_existing_on_cancel.spz";
+    const std::string existing_contents = "existing spz data";
+    write_text_file(output_path, existing_contents);
+
+    SpzSaveOptions options;
+    options.output_path = output_path;
+    options.progress_callback = [](float progress, const std::string&) {
+        return progress < 1.0f;
+    };
+
+    auto result = save_spz(splat, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
+    expect_existing_target_and_no_temp_files(output_path, existing_contents);
 }
 
 // Test SOG save (SuperSplat format)
@@ -566,16 +692,42 @@ TEST_F(PythonIOTest, SogSave) {
     auto splat = create_test_splat(num_points, 1);
 
     fs::path output_path = temp_dir / "test_output.sog";
+    std::vector<float> updates;
 
     SogSaveOptions options;
     options.output_path = output_path;
     options.kmeans_iterations = 5;
     options.use_gpu = true;
+    options.progress_callback = [&](float progress, const std::string&) {
+        updates.push_back(progress);
+        return true;
+    };
 
     auto result = save_sog(splat, options);
     ASSERT_TRUE(result.has_value()) << "Failed to save SOG: " << result.error().format();
     EXPECT_TRUE(fs::exists(output_path));
     EXPECT_GT(fs::file_size(output_path), 0);
+    expect_progress_completed(updates);
+}
+
+TEST_F(PythonIOTest, SogSaveCancellationKeepsExistingTarget) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "keep_existing_on_cancel.sog";
+    const std::string existing_contents = "existing sog data";
+    write_text_file(output_path, existing_contents);
+
+    SogSaveOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.use_gpu = true;
+    options.progress_callback = [](float progress, const std::string&) {
+        return progress < 1.0f;
+    };
+
+    auto result = save_sog(splat, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
+    expect_existing_target_and_no_temp_files(output_path, existing_contents);
 }
 
 // Test HTML export
@@ -584,14 +736,20 @@ TEST_F(PythonIOTest, HtmlExport) {
     auto splat = create_test_splat(num_points, 1);
 
     fs::path output_path = temp_dir / "test_viewer.html";
+    std::vector<float> updates;
 
     HtmlExportOptions options;
     options.output_path = output_path;
     options.kmeans_iterations = 5;
+    options.progress_callback = [&](float progress, const std::string&) {
+        updates.push_back(progress);
+        return true;
+    };
 
     auto result = export_html(splat, options);
     ASSERT_TRUE(result.has_value()) << "Failed to export HTML: " << result.error().format();
     EXPECT_TRUE(fs::exists(output_path));
+    expect_progress_completed(updates);
 
     // Verify HTML content
     std::ifstream file(output_path);
@@ -600,6 +758,64 @@ TEST_F(PythonIOTest, HtmlExport) {
     EXPECT_TRUE(content.find("<!DOCTYPE html>") != std::string::npos ||
                 content.find("<html") != std::string::npos)
         << "Should be valid HTML";
+}
+
+TEST_F(PythonIOTest, HtmlExportCancellationKeepsExistingTarget) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "keep_existing_on_cancel.html";
+    const std::string existing_contents = "existing html data";
+    write_text_file(output_path, existing_contents);
+
+    HtmlExportOptions options;
+    options.output_path = output_path;
+    options.kmeans_iterations = 1;
+    options.progress_callback = [](float progress, const std::string&) {
+        return progress < 1.0f;
+    };
+
+    auto result = export_html(splat, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
+    expect_existing_target_and_no_temp_files(output_path, existing_contents);
+}
+
+TEST_F(PythonIOTest, RadSaveCancellationKeepsExistingTarget) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "keep_existing_on_cancel.rad";
+    const std::string existing_contents = "existing rad data";
+    write_text_file(output_path, existing_contents);
+
+    RadSaveOptions options;
+    options.output_path = output_path;
+    options.compression_level = 1;
+    options.progress_callback = [](float progress, const std::string&) {
+        return progress < 1.0f;
+    };
+
+    auto result = save_rad(splat, options);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
+    expect_existing_target_and_no_temp_files(output_path, existing_contents);
+}
+
+TEST_F(PythonIOTest, RadSaveReportsProgressToCompletion) {
+    auto splat = create_test_splat(200, 0);
+    const fs::path output_path = temp_dir / "test_output.rad";
+    std::vector<float> updates;
+
+    RadSaveOptions options;
+    options.output_path = output_path;
+    options.compression_level = 1;
+    options.progress_callback = [&](float progress, const std::string&) {
+        updates.push_back(progress);
+        return true;
+    };
+
+    auto result = save_rad(splat, options);
+    ASSERT_TRUE(result.has_value()) << "Failed to save RAD: " << result.error().format();
+    EXPECT_TRUE(fs::exists(output_path));
+    EXPECT_GT(fs::file_size(output_path), 0);
+    expect_progress_completed(updates);
 }
 
 // Test progress callback

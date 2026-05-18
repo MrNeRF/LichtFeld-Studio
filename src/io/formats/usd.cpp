@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
+#include "io/atomic_output.hpp"
 #include "io/exporter.hpp"
 #include <algorithm>
 #include <cmath>
@@ -737,6 +738,10 @@ namespace lfs::io {
     }
 
     Result<void> save_usd(const SplatData& splat_data, const UsdSaveOptions& options) {
+        if (!report_export_progress(options.progress_callback, 0.0f, "Preparing USD")) {
+            return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
+        }
+
         if (splat_data.size() == 0) {
             return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", options.output_path);
         }
@@ -764,6 +769,10 @@ namespace lfs::io {
                               options.output_path);
         }
 
+        if (!report_export_progress(options.progress_callback, 0.15f, "Preparing USD attributes")) {
+            return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
+        }
+
         const auto means = splat_data.means().contiguous().to(Device::CPU);
         const auto scaling = splat_data.scaling_raw().contiguous().to(Device::CPU);
         const auto rotation = splat_data.rotation_raw().contiguous().to(Device::CPU);
@@ -788,12 +797,18 @@ namespace lfs::io {
 
         const auto sh_coefficients = flatten_sh_coefficients(splat_data);
 
+        if (!report_export_progress(options.progress_callback, 0.55f, "Authoring USD stage")) {
+            return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
+        }
+
+        ScopedAtomicOutputFile atomic_output(options.output_path, AtomicOutputTempName::PreserveExtension);
+
         // TfErrorMark captures OpenUSD diagnostic errors that don't throw.
         pxr::TfErrorMark error_mark;
 
         pxr::UsdStageRefPtr stage;
         try {
-            stage = pxr::UsdStage::CreateNew(lfs::core::path_to_utf8(options.output_path));
+            stage = pxr::UsdStage::CreateNew(lfs::core::path_to_utf8(atomic_output.temp_path()));
         } catch (const std::exception& e) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               std::format("UsdStage::CreateNew threw: {}", e.what()),
@@ -860,6 +875,10 @@ namespace lfs::io {
                               options.output_path);
         }
 
+        if (!report_export_progress(options.progress_callback, 0.9f, "Saving USD")) {
+            return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
+        }
+
         try {
             if (const auto root_layer = stage->GetRootLayer(); !root_layer || !root_layer->Save()) {
                 return make_error(ErrorCode::WRITE_FAILURE,
@@ -870,6 +889,18 @@ namespace lfs::io {
             return make_error(ErrorCode::WRITE_FAILURE,
                               std::format("Layer save threw: {}", e.what()),
                               options.output_path);
+        }
+
+        boundable = pxr::UsdGeomBoundable();
+        splat_prim = pxr::UsdVolParticleField3DGaussianSplat();
+        stage = pxr::UsdStageRefPtr();
+
+        if (!report_export_progress(options.progress_callback, 1.0f, "USD export complete")) {
+            return make_error(ErrorCode::CANCELLED, "USD export cancelled", options.output_path);
+        }
+
+        if (auto commit_result = atomic_output.commit(); !commit_result) {
+            return std::unexpected(commit_result.error());
         }
 
         return {};

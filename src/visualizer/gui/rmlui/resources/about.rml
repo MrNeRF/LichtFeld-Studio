@@ -19,7 +19,7 @@
     </div>
     <div class="info-row">
       <span class="info-key">@tr:about.build_info.commit</span>
-      <span class="info-val">{{commit}}</span>
+      <span class="info-val info-val--copy" id="commit-value">{{commit}}</span>
     </div>
     <div class="info-row">
       <span class="info-key">@tr:about.build_info.build_type</span>

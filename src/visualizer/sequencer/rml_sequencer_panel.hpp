@@ -258,6 +258,7 @@ namespace lfs::vis {
         Rml::Element* el_track_bar_ = nullptr;
         Rml::Element* el_keyframes_ = nullptr;
         Rml::Element* el_playhead_ = nullptr;
+        Rml::Element* el_playhead_handle_ = nullptr;
         Rml::Element* el_hint_ = nullptr;
         Rml::Element* el_current_time_ = nullptr;
         Rml::Element* el_duration_ = nullptr;

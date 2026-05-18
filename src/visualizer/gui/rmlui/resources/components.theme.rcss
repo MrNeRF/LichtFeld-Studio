@@ -88,6 +88,13 @@ input[type="text"]:focus {
     border-color: @{primary};
 }
 
+input[type="text"]:focus-visible {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{primary};
+    box-shadow: none;
+}
+
 select {
     color: @{text};
     background-color: @{surface};

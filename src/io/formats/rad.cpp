@@ -8,6 +8,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/splat_simplify.hpp"
 #include "core/tensor.hpp"
+#include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "nanoflann.hpp"
 
@@ -1696,8 +1697,8 @@ namespace lfs::io {
                 encode_u32(&header[0], RAD_MAGIC);
                 encode_u32(&header[4], static_cast<uint32_t>(meta_size));
 
-                // 0.9: Writing file
-                if (!report_progress(0.9f, "Writing file...")) {
+                // 0.9: Assembling file data
+                if (!report_progress(0.9f, "Assembling RAD data...")) {
                     throw std::runtime_error("CANCELLED");
                 }
 
@@ -1715,8 +1716,10 @@ namespace lfs::io {
                     result.insert(result.end(), payload.begin(), payload.end());
                 }
 
-                // 1.0: Done
-                report_progress(1.0f, "Done");
+                // 1.0: Encoding complete
+                if (!report_progress(1.0f, "RAD data prepared")) {
+                    throw std::runtime_error("CANCELLED");
+                }
 
                 return result;
             }
@@ -3012,7 +3015,10 @@ namespace lfs::io {
         }
 
         // Encode
-        RadEncoder encoder(compression_level, options.lod_ratios, options.flip_y, options.progress_callback);
+        RadEncoder encoder(compression_level,
+                           options.lod_ratios,
+                           options.flip_y,
+                           scale_export_progress(options.progress_callback, 0.0f, 0.95f));
         std::vector<uint8_t> data;
         try {
             data = encoder.encode(splat_data);
@@ -3023,19 +3029,36 @@ namespace lfs::io {
             throw;
         }
 
-        // Write file
-        std::ofstream out;
-        if (!lfs::core::open_file_for_write(options.output_path, std::ios::binary | std::ios::out, out)) {
-            return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to open RAD file for writing", options.output_path);
+        if (!report_export_progress(options.progress_callback, 0.95f, "Writing RAD")) {
+            return make_error(ErrorCode::CANCELLED, "RAD export cancelled", options.output_path);
         }
 
-        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        if (auto dir_result = ensure_output_parent_directory(options.output_path); !dir_result) {
+            return std::unexpected(dir_result.error());
+        }
+
+        ScopedAtomicOutputFile atomic_output(options.output_path);
+        std::ofstream out;
+        if (!lfs::core::open_file_for_write(atomic_output.temp_path(), std::ios::binary | std::ios::out, out)) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to open temporary RAD file for writing",
+                              atomic_output.temp_path());
+        }
+
+        out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
         out.close();
 
         if (!out.good()) {
             return make_error(ErrorCode::WRITE_FAILURE,
-                              "Failed to write RAD file", options.output_path);
+                              "Failed to write RAD file", atomic_output.temp_path());
+        }
+
+        if (!report_export_progress(options.progress_callback, 1.0f, "RAD export complete")) {
+            return make_error(ErrorCode::CANCELLED, "RAD export cancelled", options.output_path);
+        }
+
+        if (auto commit_result = atomic_output.commit(); !commit_result) {
+            return std::unexpected(commit_result.error());
         }
 
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

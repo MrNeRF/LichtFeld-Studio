@@ -350,9 +350,9 @@ namespace lfs::python {
                 options.kmeans_iterations = kmeans_iterations;
 
                 if (progress && !progress.is_none()) {
-                    PyProgressCallback py_progress{nb::cast<nb::object>(progress)};
-                    options.progress_callback = [py_progress](float p, const std::string& stage) {
-                        py_progress(p, stage);
+                    PyExportProgressCallback py_progress{nb::cast<nb::object>(progress)};
+                    options.progress_callback = [py_progress](float p, const std::string& stage) -> bool {
+                        return py_progress(p, stage);
                     };
                 }
 

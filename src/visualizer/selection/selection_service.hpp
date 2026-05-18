@@ -83,6 +83,7 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult selectLasso(const core::Tensor& vertices, SelectionMode mode,
                                                   int camera_index = 0);
         [[nodiscard]] SelectionResult selectRing(float x, float y, SelectionMode mode, int camera_index = 0);
+        [[nodiscard]] std::optional<int> pickGaussianAt(float x, float y);
         [[nodiscard]] SelectionResult selectAllFiltered();
         [[nodiscard]] SelectionResult invertFiltered();
 

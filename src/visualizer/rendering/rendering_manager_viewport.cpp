@@ -4,11 +4,14 @@
 
 #include "core/logger.hpp"
 #include "model_renderability.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include <algorithm>
 #include <shared_mutex>
+#include <utility>
 
 namespace lfs::vis {
 
@@ -290,6 +293,73 @@ namespace lfs::vis {
             frame_lifecycle_service_.lastViewportSize(),
             engine_.get(),
             panel);
+    }
+
+    float RenderingManager::renderDepthAtPixelForNodeMask(const SceneManager* const scene_manager,
+                                                          const Viewport& viewport,
+                                                          const glm::ivec2& render_size,
+                                                          const int x,
+                                                          const int y,
+                                                          const std::vector<bool>& node_visibility_mask) {
+        if (!initialized_ || !engine_ || !scene_manager ||
+            render_size.x <= 0 || render_size.y <= 0 ||
+            x < 0 || x >= render_size.x || y < 0 || y >= render_size.y ||
+            node_visibility_mask.empty() ||
+            !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) {
+                return enabled;
+            })) {
+            return -1.0f;
+        }
+
+        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        auto scene_state = scene_manager->buildRenderState();
+        const auto* const model = scene_state.combined_model;
+        if (!hasRenderableGaussians(model)) {
+            return -1.0f;
+        }
+
+        FrameContext frame_ctx{
+            .viewport = viewport,
+            .scene_manager = const_cast<SceneManager*>(scene_manager),
+            .model = model,
+            .scene_state = std::move(scene_state),
+            .settings = settings_,
+            .render_size = render_size,
+            .viewport_pos = {0, 0},
+            .cursor_preview = {},
+            .gizmo = {},
+            .view_panels = {},
+        };
+
+        lfs::rendering::FrameMetadata metadata{};
+        if (settings_.point_cloud_mode) {
+            auto request = buildPointCloudRenderRequest(
+                frame_ctx,
+                render_size,
+                frame_ctx.scene_state.model_transforms);
+            request.scene.node_visibility_mask = node_visibility_mask;
+            auto result = engine_->renderPointCloudImage(*model, request);
+            if (!result) {
+                LOG_DEBUG("Masked point-cloud depth render failed: {}", result.error());
+                return -1.0f;
+            }
+            metadata = std::move(result->metadata);
+        } else {
+            auto request = buildViewportRenderRequest(frame_ctx, render_size, &viewport, std::nullopt);
+            request.scene.node_visibility_mask = node_visibility_mask;
+            request.overlay = {};
+            auto result = engine_->renderGaussiansImage(*model, request);
+            if (!result) {
+                LOG_DEBUG("Masked Gaussian depth render failed: {}", result.error());
+                return -1.0f;
+            }
+            metadata = std::move(result->metadata);
+        }
+        render_lock.reset();
+
+        ViewportArtifactService artifacts;
+        artifacts.updateFromImageOutput({}, metadata, render_size, true);
+        return artifacts.sampleLinearDepthAt(x, y, render_size, engine_.get(), std::nullopt);
     }
 
 } // namespace lfs::vis

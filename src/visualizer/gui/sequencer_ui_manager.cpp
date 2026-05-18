@@ -290,7 +290,7 @@ namespace lfs::vis::gui {
             guiFocusState().want_capture_mouse = true;
 
         const bool actively_following =
-            ui_state_.follow_playback && controller_.isPlaying() &&
+            ui_state_.follow_playback &&
             controller_.timeline().realKeyframeCount() > 0;
 
         if (ui_state_.show_camera_path && !actively_following) {
@@ -340,7 +340,10 @@ namespace lfs::vis::gui {
 
         if (auto* const rm = viewer_->getRenderingManager()) {
             rm->setOverlayAnimationActive(is_playing);
-            if (is_playing && ui_state_.follow_playback && !ui_state_.show_pip_preview) {
+            // Follow whenever the toggle is on — playing, scrubbing, or paused.
+            // The user wants the main viewport to track the playhead at all times,
+            // not only during automatic playback.
+            if (ui_state_.follow_playback && controller_.timeline().realKeyframeCount() > 0) {
                 rm->markDirty(DirtyFlag::CAMERA);
                 const auto state = controller_.currentCameraState();
                 auto& vp = viewer_->getViewport();

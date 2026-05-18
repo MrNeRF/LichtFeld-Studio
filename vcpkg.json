@@ -30,7 +30,10 @@
     "libarchive",
     "libwebp",
     "nanobind",
-    "nativefiledialog-extended",
+    {
+      "name": "nativefiledialog-extended",
+      "platform": "windows | osx"
+    },
     "nlohmann-json",
     {
       "name": "openimageio",

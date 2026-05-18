@@ -96,6 +96,8 @@ namespace lfs::app {
             return "usdz_nurec";
         case core::ExportFormat::RAD:
             return "rad";
+        case core::ExportFormat::COLMAP:
+            return "colmap";
         }
         return "unknown";
     }

@@ -1890,7 +1890,8 @@ namespace lfs::core {
     }
 
     std::unique_ptr<lfs::core::SplatData> Scene::mergeSplatsWithTransforms(
-        const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats) {
+        const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats,
+        const MergeStorageMode storage_mode) {
         if (splats.empty()) {
             return nullptr;
         }
@@ -1914,6 +1915,18 @@ namespace lfs::core {
                     src->scaling_raw().index_select(0, keep_mask),
                     src->rotation_raw().index_select(0, keep_mask),
                     src->opacity_raw().index_select(0, keep_mask),
+                    src->get_scene_scale());
+                result->set_active_sh_degree(src->get_active_sh_degree());
+                return result;
+            } else if (storage_mode == MergeStorageMode::BorrowSingleIdentity) {
+                auto result = std::make_unique<lfs::core::SplatData>(
+                    src->get_max_sh_degree(),
+                    src->means_raw(),
+                    src->sh0_raw(),
+                    src->shN_raw().is_valid() ? src->shN_raw() : lfs::core::Tensor(),
+                    src->scaling_raw(),
+                    src->rotation_raw(),
+                    src->opacity_raw(),
                     src->get_scene_scale());
                 result->set_active_sh_degree(src->get_active_sh_degree());
                 return result;

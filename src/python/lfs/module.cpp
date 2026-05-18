@@ -51,6 +51,7 @@
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/formats/colmap.hpp"
 #include "py_rml.hpp"
 #include "python/python_runtime.hpp"
 
@@ -847,7 +848,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_lod_ratios") = nb::none(),
         nb::arg("rad_flip_y") = false,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD.");
+        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.");
 
     m.def(
         "save_config_file",
@@ -1232,6 +1233,24 @@ NB_MODULE(lichtfeld, m) {
             return std::nullopt;
         },
         nb::arg("name"), "Get original source path for a node if available");
+
+    m.def(
+        "get_colmap_sparse_source_path", []() -> std::optional<std::string> {
+            const auto* sm = lfs::python::get_scene_manager();
+            if (!sm || !sm->hasDataset())
+                return std::nullopt;
+
+            const auto dataset_path = sm->getDatasetPath();
+            if (dataset_path.empty())
+                return std::nullopt;
+
+            auto result = lfs::io::find_colmap_sparse_model_path(dataset_path);
+            if (!result)
+                return std::nullopt;
+
+            return lfs::core::path_to_utf8(*result);
+        },
+        "Get the loaded dataset's COLMAP sparse metadata folder if available");
 
     m.def(
         "get_node_visualizer_world_transform", [](const std::string& name) -> std::optional<std::vector<float>> {

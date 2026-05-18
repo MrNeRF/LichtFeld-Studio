@@ -27,8 +27,8 @@ namespace lfs::vis {
         constexpr float MIN_KEYFRAME_SPACING = 0.1f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
-        constexpr float PLAYHEAD_HIT_RADIUS = 10.0f;
-        constexpr float PLAYHEAD_HANDLE_WIDTH = 8.0f;
+        constexpr float PLAYHEAD_HIT_RADIUS = 8.0f;
+        constexpr float PLAYHEAD_HANDLE_WIDTH = 14.0f;
 
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
@@ -330,22 +330,33 @@ namespace lfs::vis {
                                                       const float height,
                                                       const PanelInputState& input) {
         const float s = cached_dp_ratio_;
-        const float timeline_y = pos.y + RULER_HEIGHT * s + 4.0f * s;
-        const float timeline_height = height - RULER_HEIGHT * s - 4.0f * s;
-        const float bar_half = std::min(timeline_height, TIMELINE_HEIGHT * s) / 2.0f;
-        const float y_center = timeline_y + timeline_height / 2.0f;
-
-        const Vec2 bar_min = {pos.x, y_center - bar_half};
-        const Vec2 bar_max = {pos.x + width, y_center + bar_half};
 
         const auto& timeline = controller_.timeline();
         if (timeline.empty())
             return;
 
+        // Resolve actual rendered Y of #track-area (where diamonds live) from
+        // #keyframes, which spans 100% of #track-area. The C++ pos/height math
+        // doesn't always match RML's flex layout, and a stale Y here pushes hits
+        // off the visible diamond. Fall back to the C++ approximation only until
+        // the element is laid out.
+        float track_area_top = pos.y + RULER_HEIGHT * s + 4.0f * s;
+        float track_area_bottom = pos.y + height;
+        if (el_keyframes_) {
+            const auto kf_offset = el_keyframes_->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto kf_size = el_keyframes_->GetBox().GetSize(Rml::BoxArea::Border);
+            if (kf_size.y > 0.0f) {
+                track_area_top = cached_panel_y_ + kf_offset.y;
+                track_area_bottom = track_area_top + kf_size.y;
+            }
+        }
+        const float diamond_y_center = (track_area_top + track_area_bottom) * 0.5f;
+
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
-        const bool mouse_in_timeline = mx >= bar_min.x && mx <= bar_max.x &&
-                                       my >= bar_min.y - RULER_HEIGHT * s && my <= bar_max.y;
+        // Wide band: wheel zoom/pan and click-anywhere-to-scrub.
+        const bool mouse_in_timeline = mx >= pos.x && mx <= pos.x + width &&
+                                       my >= track_area_top && my <= track_area_bottom;
 
         if (mouse_in_timeline && !input.want_capture_mouse) {
             const float wheel = input.mouse_wheel;
@@ -370,35 +381,50 @@ namespace lfs::vis {
             }
         }
 
+        // Diamond hit = Manhattan distance from the diamond center matches the
+        // rotated-square outline. 14dp visual diamond → vertices at ~10dp from
+        // center; we use 11dp for a 1dp ring of forgiveness without leaking onto
+        // the surrounding bar.
         hovered_keyframe_ = std::nullopt;
         const auto& keyframes = timeline.keyframes();
-        for (size_t i = 0; i < keyframes.size(); ++i) {
-            if (keyframes[i].is_loop_point)
-                continue;
-            const float x = timeToX(keyframes[i].time, pos.x, width);
-            const float dist = std::abs(mx - x);
-            const bool hovered = mouse_in_timeline && dist < KEYFRAME_RADIUS * s * 2;
-            if (hovered)
-                hovered_keyframe_ = i;
+        {
+            const float diamond_extent = 11.0f * s;
+            float best_score = diamond_extent;
+            for (size_t i = 0; i < keyframes.size(); ++i) {
+                if (keyframes[i].is_loop_point)
+                    continue;
+                const float kx = timeToX(keyframes[i].time, pos.x, width);
+                const float manhattan = std::abs(mx - kx) + std::abs(my - diamond_y_center);
+                if (manhattan < best_score) {
+                    best_score = manhattan;
+                    hovered_keyframe_ = i;
+                }
+            }
         }
 
         const float playhead_x = pos.x + clampCenteredSpan(
                                              timeToX(controller_.playhead(), 0.0f, width),
                                              width,
                                              PLAYHEAD_HANDLE_WIDTH * s);
-        const float playhead_dist = std::abs(mx - playhead_x);
-        // The visible #playhead-handle sits at top: -10dp relative to #track-area, i.e. inside
-        // the ruler. mouse_in_timeline's Y band can miss it; give the handle its own Y band
-        // covering the entire ruler+track-bar height so users can grab it where it's drawn.
-        const bool mouse_in_handle_band = mx >= pos.x && mx <= pos.x + width &&
-                                          my >= pos.y && my <= bar_max.y;
-        bool on_playhead_handle = playhead_dist < PLAYHEAD_HIT_RADIUS * s && mouse_in_handle_band;
-
-        if (on_playhead_handle && hovered_keyframe_.has_value()) {
-            const float kf_x = timeToX(keyframes[*hovered_keyframe_].time, pos.x, width);
-            if (std::abs(mx - kf_x) < playhead_dist)
-                on_playhead_handle = false;
+        // Playhead hit = circle at the actual #playhead-handle render position.
+        // Y comes from the rendered handle bounds (handle sits in the ruler at a
+        // fixed offset from #track-area top), X comes from playhead_x — using the
+        // element's X would be one frame stale because updatePlayhead runs after
+        // this function.
+        bool on_playhead_handle = false;
+        if (el_playhead_handle_) {
+            const auto h_offset = el_playhead_handle_->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto h_size = el_playhead_handle_->GetBox().GetSize(Rml::BoxArea::Border);
+            if (h_size.y > 0.0f) {
+                const float h_y_center = cached_panel_y_ + h_offset.y + h_size.y * 0.5f;
+                const float dx = mx - playhead_x;
+                const float dy = my - h_y_center;
+                on_playhead_handle = std::sqrt(dx * dx + dy * dy) < PLAYHEAD_HIT_RADIUS * s;
+            }
         }
+
+        if (on_playhead_handle && hovered_keyframe_.has_value())
+            on_playhead_handle = false;
 
         for (size_t i = 0; i < keyframes.size(); ++i) {
             const bool hovered = hovered_keyframe_.has_value() && *hovered_keyframe_ == i;
@@ -434,15 +460,10 @@ namespace lfs::vis {
                     } else {
                         selected_keyframes_.clear();
                         lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
-                        const bool is_first = (i == 0);
-                        if (!is_first) {
-                            dragging_keyframe_ = true;
-                            dragged_keyframe_changed_ = false;
-                            dragged_keyframe_id_ = keyframes[i].id;
-                            drag_start_mouse_x_ = mx;
-                        } else {
-                            lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = i}.emit();
-                        }
+                        dragging_keyframe_ = true;
+                        dragged_keyframe_changed_ = false;
+                        dragged_keyframe_id_ = keyframes[i].id;
+                        drag_start_mouse_x_ = mx;
                     }
                 }
             }

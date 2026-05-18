@@ -10,6 +10,7 @@
 #include "io/error.hpp"
 #include "io/loader.hpp"
 #include <filesystem>
+#include <glm/glm.hpp>
 #include <memory>
 #include <vector>
 
@@ -121,5 +122,49 @@ namespace lfs::io {
     Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     read_colmap_cameras_only(const std::filesystem::path& sparse_path,
                              float scale_factor = 1.0f);
+
+    enum class ColmapWriteFormat {
+        Auto,
+        Binary,
+        Text
+    };
+
+    struct ColmapCameraWriteData {
+        std::shared_ptr<const Camera> camera;
+        glm::mat4 data_world_transform{1.0f};
+    };
+
+    struct ColmapWriteOptions {
+        ColmapWriteFormat format = ColmapWriteFormat::Auto;
+    };
+
+    /**
+     * @brief Find the COLMAP sparse model directory for a dataset or sparse path.
+     * @param source_base Existing COLMAP dataset/sparse directory.
+     * @return Directory containing cameras/images sparse metadata.
+     *
+     * Binary sparse metadata is preferred when both binary and text files exist.
+     */
+    Result<std::filesystem::path> find_colmap_sparse_model_path(
+        const std::filesystem::path& source_base);
+
+    /**
+     * @brief Write transformed cameras and point cloud back to COLMAP sparse files
+     * @param source_base Existing COLMAP dataset/sparse directory to preserve camera models,
+     *        image ids, 2D observations, point ids, tracks, and reprojection errors.
+     * @param output_sparse_path Directory where cameras/images/points3D files are written.
+     * @param cameras Current camera objects with their scene data-world transforms.
+     * @param point_cloud Optional current sparse point cloud.
+     * @param point_cloud_transform Scene data-world transform for point_cloud.
+     * @param options Output format. Auto follows the source sparse model format.
+     * @return Success or structured error.
+     */
+    Result<void> write_colmap_reconstruction(
+        const std::filesystem::path& source_base,
+        const std::filesystem::path& output_sparse_path,
+        const std::vector<ColmapCameraWriteData>& cameras,
+        const PointCloud* point_cloud,
+        const glm::mat4& point_cloud_transform = glm::mat4(1.0f),
+        const ColmapWriteOptions& options = {});
 
 } // namespace lfs::io

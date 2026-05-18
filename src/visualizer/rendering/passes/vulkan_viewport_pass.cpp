@@ -1210,12 +1210,18 @@ namespace lfs::vis {
                 bindQuad(command_buffer);
             }
 
-            if (frame.overlay.count > 0 && overlay_pipeline != VK_NULL_HANDLE &&
+            const std::uint32_t post_ui_overlay_vertices =
+                std::min(params.post_ui_overlay_vertex_count, frame.overlay.count);
+            const std::uint32_t overlay_vertices = frame.overlay.count - post_ui_overlay_vertices;
+
+            // Most overlays sit below viewport UI shapes. A small tail segment is
+            // reserved for full-viewport state overlays, such as export dimming.
+            if (overlay_vertices > 0 && overlay_pipeline != VK_NULL_HANDLE &&
                 frame.overlay.buffer != VK_NULL_HANDLE) {
                 const VkDeviceSize offset = 0;
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline);
                 vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.overlay.buffer, &offset);
-                vkCmdDraw(command_buffer, frame.overlay.count, 1, 0, 0);
+                vkCmdDraw(command_buffer, overlay_vertices, 1, 0, 0);
                 bindQuad(command_buffer);
             }
 
@@ -1270,6 +1276,15 @@ namespace lfs::vis {
             }
 
             recordShapeOverlays(command_buffer, frame.ui_shape_overlay);
+
+            if (post_ui_overlay_vertices > 0 && overlay_pipeline != VK_NULL_HANDLE &&
+                frame.overlay.buffer != VK_NULL_HANDLE) {
+                const VkDeviceSize offset = 0;
+                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline);
+                vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.overlay.buffer, &offset);
+                vkCmdDraw(command_buffer, post_ui_overlay_vertices, 1, overlay_vertices, 0);
+                bindQuad(command_buffer);
+            }
         }
 
         void reset() {

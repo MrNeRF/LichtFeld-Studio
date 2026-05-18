@@ -268,6 +268,12 @@ namespace lfs::vis {
 
         // Depth buffer access for tools (returns camera-space depth at pixel, or -1 if invalid)
         float getDepthAtPixel(int x, int y, std::optional<SplitViewPanelId> panel = std::nullopt) const;
+        float renderDepthAtPixelForNodeMask(const SceneManager* scene_manager,
+                                            const Viewport& viewport,
+                                            const glm::ivec2& render_size,
+                                            int x,
+                                            int y,
+                                            const std::vector<bool>& node_visibility_mask);
         glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();

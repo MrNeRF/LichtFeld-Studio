@@ -387,7 +387,7 @@ class TrainingPanel(Panel):
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
         self._last_state = ""
-        self._last_save_steps = []
+        self._last_save_steps = None
         self._color_edit_prop = None
         self._picker_click_handled = False
         self._collapsed = set(INITIALLY_COLLAPSED)
@@ -1223,7 +1223,7 @@ class TrainingPanel(Panel):
             return False
 
         steps = list(params.save_steps)
-        if steps != self._last_save_steps:
+        if self._last_save_steps is None or steps != self._last_save_steps:
             self._last_save_steps = steps[:]
             self._handle.update_string_list(
                 "save_steps_list", [f"{s:,}" for s in steps]
@@ -1850,7 +1850,7 @@ class TrainingPanel(Panel):
                 params.add_save_step(self._new_save_step)
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
-                self._last_save_steps = []
+                self._last_save_steps = None
 
     def _action_start(self):
         params = lf.optimization_params()
@@ -1983,7 +1983,7 @@ class TrainingPanel(Panel):
             params.remove_save_step(step_to_remove)
             if params.enable_eval:
                 self._remove_from_eval_steps(params, step_to_remove)
-            self._last_save_steps = []
+            self._last_save_steps = None
 
     def _sync_eval_steps_with_save_steps(self, params):
         if not params or not params.has_params():
