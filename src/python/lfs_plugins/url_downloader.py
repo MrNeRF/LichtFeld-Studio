@@ -1,24 +1,21 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""URL downloader with cloud provider support."""
+"""Minimal HTTP(S) downloader with zip/tar archive extraction."""
 
 from __future__ import annotations
 
-import io
 import logging
 import os
-import re
 import shutil
 import tarfile
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional
 
 from .http import urlopen
 
@@ -33,39 +30,12 @@ def _raise_if_cancelled(should_cancel: Optional[Callable[[], bool]]) -> None:
         raise InterruptedError("Download cancelled")
 
 
-def _strip_all_extensions(filename: str) -> str:
-    """Strip all extensions from filename (e.g., data.tar.gz -> data)."""
-    name = filename
-    # Keep stripping extensions until no more
-    while "." in name:
-        new_name = os.path.splitext(name)[0]
-        if new_name == name or not new_name:
-            break
-        name = new_name
-    return name or filename
-
-# Optional imports (cloud providers)
-try:
-    import boto3
-    from botocore.config import Config
-    HAS_BOTO3 = True
-except ImportError:
-    HAS_BOTO3 = False
-    boto3 = None  # type: ignore
-
-try:
-    from google.cloud import storage
-    HAS_GCS = True
-except ImportError:
-    HAS_GCS = False
-    storage = None  # type: ignore
-
-try:
-    import py7zr
-    HAS_PY7ZR = True
-except ImportError:
-    HAS_PY7ZR = False
-    py7zr = None  # type: ignore
+def _strip_archive_suffix(name: str) -> str:
+    """Strip archive suffix from filename (e.g., data.tar.gz -> data)."""
+    for suffix in (".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".tar"):
+        if name.lower().endswith(suffix):
+            return name[: -len(suffix)]
+    return name
 
 
 class URLDownloadError(Exception):
@@ -83,59 +53,44 @@ class ExtractError(Exception):
     pass
 
 
-def detect_url_type(url: str) -> str:
-    """Detect the type of URL.
+def normalize_url(url: str) -> str:
+    """Normalize an HTTP(S) URL.
     
-    Returns one of: 's3', 'gcs', 'r2', 'dropbox', 'huggingface', 'github', 'http', 'manifest'
+    - Validates scheme is http or https.
+    - Rewrites Dropbox URLs to ensure dl=1.
+    - Rewrites HuggingFace /blob/ to /resolve/ and expands hf.co.
     
     Args:
-        url: The URL to analyze
+        url: The URL to normalize
         
     Returns:
-        String identifier for the URL type
+        Normalized URL string
+        
+    Raises:
+        UnsupportedURLError: If scheme is not http/https
     """
-    url_lower = url.lower().strip()
-    
-    # S3 URLs
-    if url_lower.startswith("s3://"):
-        return "s3"
-    if ".s3.amazonaws.com" in url_lower or ".s3." in url_lower:
-        return "s3"
-    
-    # R2 (Cloudflare) URLs - S3-compatible
-    if ".r2.cloudflarestorage.com" in url_lower:
-        return "r2"
-    
-    # GCS URLs
-    if url_lower.startswith("gs://"):
-        return "gcs"
-    if "storage.googleapis.com" in url_lower:
-        return "gcs"
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise UnsupportedURLError(
+            "Only http:// and https:// URLs are supported. "
+            "For S3/GCS/R2 assets, provide a public or signed HTTPS URL."
+        )
     
     # Dropbox
-    if "dropbox.com" in url_lower or "dropboxusercontent.com" in url_lower:
-        return "dropbox"
+    if "dropbox.com" in parsed.netloc.lower() or "dropboxusercontent.com" in parsed.netloc.lower():
+        url = _transform_dropbox_url(url)
     
     # HuggingFace
-    if "huggingface.co" in url_lower or "hf.co" in url_lower:
-        return "huggingface"
+    if "huggingface.co" in parsed.netloc.lower() or "hf.co" in parsed.netloc.lower():
+        url = _transform_huggingface_url(url)
     
-    # GitHub releases
-    if "github.com" in url_lower and "/releases/download/" in url_lower:
-        return "github"
-    
-    # Manifest files (JSON/YAML that describe downloads)
-    if url_lower.endswith((".json", ".yaml", ".yml")):
-        return "manifest"
-    
-    # Default to HTTP
-    return "http"
+    return url
 
 
 # Archive extensions
 _ARCHIVE_EXTENSIONS = {
-    '.zip', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tbz', 
-    '.tar.xz', '.txz', '.tar', '.7z'
+    '.zip', '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tbz',
+    '.tar.xz', '.txz', '.tar'
 }
 
 
@@ -157,7 +112,7 @@ def is_archive_url(url: str) -> bool:
 def get_url_info(url: str) -> Dict[str, Any]:
     """Get information about a URL.
     
-    Returns dict with: name, size (if available), type, supports_resume
+    Returns dict with: name, size (if available), type
     
     Args:
         url: The URL to analyze
@@ -165,130 +120,26 @@ def get_url_info(url: str) -> Dict[str, Any]:
     Returns:
         Dictionary with URL information
     """
-    url_type = detect_url_type(url)
-    info = {
-        "name": "",
-        "size": None,
-        "type": url_type,
-        "supports_resume": False,
-    }
-    
-    # Extract filename from URL
+    url = normalize_url(url)
     parsed = urllib.parse.urlparse(url)
-    path = parsed.path
-    if path:
-        info["name"] = _strip_all_extensions(os.path.basename(path)) or "download"
-    else:
-        info["name"] = "download"
-    
-    # Try to get size from HTTP headers for HTTP-based URLs
-    if url_type in ("http", "github", "dropbox", "huggingface"):
-        try:
-            req = urllib.request.Request(url, method="HEAD")
-            req.add_header("User-Agent", HTTP_USER_AGENT)
-            with urlopen(req, timeout=30) as resp:
-                if "Content-Length" in resp.headers:
-                    info["size"] = int(resp.headers["Content-Length"])
-                if "Accept-Ranges" in resp.headers:
-                    info["supports_resume"] = resp.headers["Accept-Ranges"] == "bytes"
-                # Update name from Content-Disposition if available
-                cd = resp.headers.get("Content-Disposition", "")
-                if "filename=" in cd:
-                    fname = cd.split("filename=")[-1].strip('"\'')
-                    if fname:
-                        info["name"] = fname
-        except Exception:
-            pass  # Size unknown is OK
-    
-    # S3-specific info
-    if url_type == "s3" and HAS_BOTO3:
-        try:
-            s3_info = _get_s3_object_info(url)
-            if s3_info:
-                info["size"] = s3_info.get("size")
-                info["name"] = s3_info.get("name", info["name"])
-                info["supports_resume"] = True
-        except Exception:
-            pass
-    
-    # GCS-specific info
-    if url_type == "gcs" and HAS_GCS:
-        try:
-            gcs_info = _get_gcs_object_info(url)
-            if gcs_info:
-                info["size"] = gcs_info.get("size")
-                info["name"] = gcs_info.get("name", info["name"])
-        except Exception:
-            pass
-    
-    return info
-
-
-def _get_s3_object_info(url: str) -> Optional[Dict[str, Any]]:
-    """Get S3 object info using boto3."""
-    if not HAS_BOTO3:
-        return None
+    name = os.path.basename(parsed.path) or "download"
+    size = None
     
     try:
-        if url.startswith("s3://"):
-            # s3://bucket/key format
-            parts = url[5:].split("/", 1)
-            bucket = parts[0]
-            key = parts[1] if len(parts) > 1 else ""
-        else:
-            # https://bucket.s3.amazonaws.com/key format
-            parsed = urllib.parse.urlparse(url)
-            host = parsed.netloc
-            if ".s3.amazonaws.com" in host:
-                bucket = host.replace(".s3.amazonaws.com", "")
-            elif ".s3." in host:
-                bucket = host.split(".s3.")[0]
-            else:
-                return None
-            key = parsed.path.lstrip("/")
-        
-        s3 = boto3.client("s3")
-        response = s3.head_object(Bucket=bucket, Key=key)
-        return {
-            "size": response.get("ContentLength"),
-            "name": _strip_all_extensions(os.path.basename(key)),
-        }
-    except Exception as exc:
-        logger.debug("Failed to get S3 object info: %s", exc)
-        return None
-
-
-def _get_gcs_object_info(url: str) -> Optional[Dict[str, Any]]:
-    """Get GCS object info using google-cloud-storage."""
-    if not HAS_GCS:
-        return None
+        req = urllib.request.Request(url, method="HEAD")
+        req.add_header("User-Agent", HTTP_USER_AGENT)
+        with urlopen(req, timeout=30) as resp:
+            if "Content-Length" in resp.headers:
+                size = int(resp.headers["Content-Length"])
+            cd = resp.headers.get("Content-Disposition", "")
+            if "filename=" in cd:
+                fname = cd.split("filename=")[-1].strip('"\'')
+                if fname:
+                    name = fname
+    except Exception:
+        pass  # Size unknown is OK
     
-    try:
-        if url.startswith("gs://"):
-            # gs://bucket/object format
-            parts = url[5:].split("/", 1)
-            bucket_name = parts[0]
-            blob_name = parts[1] if len(parts) > 1 else ""
-        else:
-            # https://storage.googleapis.com/bucket/object format
-            parsed = urllib.parse.urlparse(url)
-            path = parsed.path.lstrip("/")
-            parts = path.split("/", 1)
-            bucket_name = parts[0]
-            blob_name = parts[1] if len(parts) > 1 else ""
-        
-        client = storage.Client()
-        bucket = client.bucket(bucket_name)
-        blob = bucket.get_blob(blob_name)
-        if blob:
-            return {
-                "size": blob.size,
-                "name": _strip_all_extensions(os.path.basename(blob_name)),
-            }
-        return None
-    except Exception as exc:
-        logger.debug("Failed to get GCS object info: %s", exc)
-        return None
+    return {"name": name, "size": size, "type": "http"}
 
 
 def _transform_dropbox_url(url: str) -> str:
@@ -455,378 +306,6 @@ def _download_http(
         raise URLDownloadError(f"Download failed: {exc}") from exc
 
 
-def _download_s3(
-    url: str,
-    dest_path: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    on_warning: Optional[Callable[[str], None]],
-    timeout: int,
-    should_cancel: Optional[Callable[[], bool]] = None,
-) -> None:
-    """Download from S3 URL using boto3 or HTTP fallback."""
-    if HAS_BOTO3:
-        try:
-            _download_s3_boto3(url, dest_path, on_progress, timeout, should_cancel)
-            return
-        except InterruptedError:
-            raise
-        except Exception as exc:
-            if on_warning:
-                on_warning(f"S3 boto3 download failed, falling back to HTTP: {exc}")
-            logger.warning("S3 boto3 download failed, using HTTP fallback: %s", exc)
-    
-    # Fallback to HTTP
-    http_url = _s3_to_http_url(url)
-    _download_http(http_url, dest_path, on_progress, on_warning, timeout, should_cancel=should_cancel)
-
-
-def _s3_to_http_url(url: str) -> str:
-    """Convert S3 URL to HTTP URL."""
-    if url.startswith("s3://"):
-        parts = url[5:].split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return f"https://{bucket}.s3.amazonaws.com/{key}"
-    return url
-
-
-def _download_s3_boto3(
-    url: str,
-    dest_path: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    timeout: int,
-    should_cancel: Optional[Callable[[], bool]] = None,
-) -> None:
-    """Download from S3 using boto3 with progress."""
-    if not HAS_BOTO3 or boto3 is None:
-        raise URLDownloadError("boto3 not available")
-    
-    # Parse S3 URL
-    if url.startswith("s3://"):
-        parts = url[5:].split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-    else:
-        parsed = urllib.parse.urlparse(url)
-        host = parsed.netloc
-        if ".s3.amazonaws.com" in host:
-            bucket = host.replace(".s3.amazonaws.com", "")
-        elif ".s3." in host:
-            bucket = host.split(".s3.")[0]
-        else:
-            raise URLDownloadError(f"Cannot parse S3 URL: {url}")
-        key = parsed.path.lstrip("/")
-    
-    if on_progress:
-        on_progress(0.0, "Connecting to S3...")
-    
-    config = Config(connect_timeout=timeout, read_timeout=timeout)
-    s3 = boto3.client("s3", config=config)
-    
-    # Get object info
-    try:
-        _raise_if_cancelled(should_cancel)
-        head_response = s3.head_object(Bucket=bucket, Key=key)
-        total_size = head_response.get("ContentLength", 0)
-    except Exception:
-        total_size = 0
-    
-    if on_progress:
-        if total_size:
-            on_progress(0.0, f"Downloading from S3... 0% (0 / {_format_bytes(total_size)})")
-        else:
-            on_progress(0.0, "Downloading from S3...")
-    
-    # Download with progress callback
-    downloaded = 0
-    start_time = time.time()
-    last_report_time = start_time
-    
-    def progress_callback(bytes_transferred):
-        nonlocal downloaded, last_report_time
-        _raise_if_cancelled(should_cancel)
-        downloaded = bytes_transferred
-        
-        current_time = time.time()
-        if on_progress and (current_time - last_report_time >= 0.5):
-            last_report_time = current_time
-            
-            if total_size > 0:
-                percent = downloaded / total_size
-                elapsed = current_time - start_time
-                speed = downloaded / elapsed if elapsed > 0 else 0
-                
-                remaining = total_size - downloaded
-                eta_seconds = remaining / speed if speed > 0 else 0
-                
-                speed_str = _format_bytes(speed) + "/s"
-                eta_str = _format_time(eta_seconds) if eta_seconds > 0 else ""
-                
-                status = f"Downloading from S3... {int(percent * 100)}% ({_format_bytes(downloaded)} / {_format_bytes(total_size)}) {speed_str}"
-                if eta_str:
-                    status += f" ETA: {eta_str}"
-                
-                on_progress(min(percent, 0.99), status)
-    
-    _raise_if_cancelled(should_cancel)
-    s3.download_file(bucket, key, str(dest_path), Callback=progress_callback)
-    
-    if on_progress:
-        on_progress(1.0, f"S3 download complete: {_format_bytes(downloaded)}")
-
-
-def _download_r2(
-    url: str,
-    dest_path: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    on_warning: Optional[Callable[[str], None]],
-    timeout: int,
-    should_cancel: Optional[Callable[[], bool]] = None,
-) -> None:
-    """Download from Cloudflare R2 (S3-compatible)."""
-    if HAS_BOTO3:
-        try:
-            _download_r2_boto3(url, dest_path, on_progress, timeout, should_cancel)
-            return
-        except InterruptedError:
-            raise
-        except Exception as exc:
-            if on_warning:
-                on_warning(f"R2 boto3 download failed, falling back to HTTP: {exc}")
-            logger.warning("R2 boto3 download failed, using HTTP fallback: %s", exc)
-    
-    # Fallback to HTTP
-    _download_http(url, dest_path, on_progress, on_warning, timeout, should_cancel=should_cancel)
-
-
-def _download_r2_boto3(
-    url: str,
-    dest_path: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    timeout: int,
-    should_cancel: Optional[Callable[[], bool]] = None,
-) -> None:
-    """Download from R2 using boto3 with S3-compatible API."""
-    if not HAS_BOTO3 or boto3 is None:
-        raise URLDownloadError("boto3 not available")
-    
-    parsed = urllib.parse.urlparse(url)
-    host = parsed.netloc
-    
-    # Extract endpoint and bucket from R2 URL
-    # Format: https://<account>.r2.cloudflarestorage.com/<bucket>/<key>
-    # or: https://<bucket>.<account>.r2.cloudflarestorage.com/<key>
-    
-    if ".r2.cloudflarestorage.com" not in host:
-        raise URLDownloadError(f"Not a valid R2 URL: {url}")
-    
-    # Determine endpoint URL
-    endpoint = f"https://{host}"
-    
-    # Parse bucket and key from path
-    path_parts = parsed.path.lstrip("/").split("/", 1)
-    if len(path_parts) < 2:
-        raise URLDownloadError(f"Cannot parse R2 URL path: {url}")
-    
-    bucket = path_parts[0]
-    key = path_parts[1]
-    
-    if on_progress:
-        on_progress(0.0, "Connecting to R2...")
-    
-    # R2 uses S3-compatible API
-    config = Config(connect_timeout=timeout, read_timeout=timeout)
-    
-    # Try to get credentials from environment
-    access_key = os.environ.get("R2_ACCESS_KEY_ID") or os.environ.get("AWS_ACCESS_KEY_ID")
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY") or os.environ.get("AWS_SECRET_ACCESS_KEY")
-    
-    if access_key and secret_key:
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=endpoint,
-            aws_access_key_id=access_key,
-            aws_secret_access_key=secret_key,
-            config=config,
-        )
-    else:
-        # Try without explicit credentials (may use IAM role, etc.)
-        s3 = boto3.client("s3", endpoint_url=endpoint, config=config)
-    
-    # Get object info
-    try:
-        _raise_if_cancelled(should_cancel)
-        head_response = s3.head_object(Bucket=bucket, Key=key)
-        total_size = head_response.get("ContentLength", 0)
-    except Exception:
-        total_size = 0
-    
-    if on_progress:
-        if total_size:
-            on_progress(0.0, f"Downloading from R2... 0% (0 / {_format_bytes(total_size)})")
-        else:
-            on_progress(0.0, "Downloading from R2...")
-    
-    # Download with progress
-    downloaded = 0
-    start_time = time.time()
-    last_report_time = start_time
-    
-    def progress_callback(bytes_transferred):
-        nonlocal downloaded, last_report_time
-        _raise_if_cancelled(should_cancel)
-        downloaded = bytes_transferred
-        
-        current_time = time.time()
-        if on_progress and (current_time - last_report_time >= 0.5):
-            last_report_time = current_time
-            
-            if total_size > 0:
-                percent = downloaded / total_size
-                elapsed = current_time - start_time
-                speed = downloaded / elapsed if elapsed > 0 else 0
-                
-                remaining = total_size - downloaded
-                eta_seconds = remaining / speed if speed > 0 else 0
-                
-                speed_str = _format_bytes(speed) + "/s"
-                eta_str = _format_time(eta_seconds) if eta_seconds > 0 else ""
-                
-                status = f"Downloading from R2... {int(percent * 100)}% ({_format_bytes(downloaded)} / {_format_bytes(total_size)}) {speed_str}"
-                if eta_str:
-                    status += f" ETA: {eta_str}"
-                
-                on_progress(min(percent, 0.99), status)
-    
-    _raise_if_cancelled(should_cancel)
-    s3.download_file(bucket, key, str(dest_path), Callback=progress_callback)
-    
-    if on_progress:
-        on_progress(1.0, f"R2 download complete: {_format_bytes(downloaded)}")
-
-
-def _download_gcs(
-    url: str,
-    dest_path: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    on_warning: Optional[Callable[[str], None]],
-    timeout: int,
-    should_cancel: Optional[Callable[[], bool]] = None,
-) -> None:
-    """Download from GCS URL using google-cloud-storage or HTTP fallback."""
-    if HAS_GCS:
-        try:
-            _download_gcs_client(url, dest_path, on_progress, timeout, should_cancel)
-            return
-        except InterruptedError:
-            raise
-        except Exception as exc:
-            if on_warning:
-                on_warning(f"GCS client download failed, falling back to HTTP: {exc}")
-            logger.warning("GCS client download failed, using HTTP fallback: %s", exc)
-    
-    # Fallback to HTTP
-    http_url = _gcs_to_http_url(url)
-    _download_http(http_url, dest_path, on_progress, on_warning, timeout, should_cancel=should_cancel)
-
-
-def _gcs_to_http_url(url: str) -> str:
-    """Convert GCS URL to HTTP URL."""
-    if url.startswith("gs://"):
-        parts = url[5:].split("/", 1)
-        bucket = parts[0]
-        object_name = parts[1] if len(parts) > 1 else ""
-        return f"https://storage.googleapis.com/{bucket}/{object_name}"
-    return url
-
-
-def _download_gcs_client(
-    url: str,
-    dest_path: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    timeout: int,
-    should_cancel: Optional[Callable[[], bool]] = None,
-) -> None:
-    """Download from GCS using google-cloud-storage with progress."""
-    if not HAS_GCS or storage is None:
-        raise URLDownloadError("google-cloud-storage not available")
-    
-    # Parse GCS URL
-    if url.startswith("gs://"):
-        parts = url[5:].split("/", 1)
-        bucket_name = parts[0]
-        blob_name = parts[1] if len(parts) > 1 else ""
-    else:
-        parsed = urllib.parse.urlparse(url)
-        path = parsed.path.lstrip("/")
-        parts = path.split("/", 1)
-        bucket_name = parts[0]
-        blob_name = parts[1] if len(parts) > 1 else ""
-    
-    if on_progress:
-        on_progress(0.0, "Connecting to GCS...")
-    
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
-    _raise_if_cancelled(should_cancel)
-    blob = bucket.blob(blob_name)
-    
-    # Get size
-    _raise_if_cancelled(should_cancel)
-    blob.reload()
-    total_size = blob.size or 0
-    
-    if on_progress:
-        if total_size:
-            on_progress(0.0, f"Downloading from GCS... 0% (0 / {_format_bytes(total_size)})")
-        else:
-            on_progress(0.0, "Downloading from GCS...")
-    
-    # Download with progress
-    downloaded = 0
-    start_time = time.time()
-    last_report_time = start_time
-    
-    class ProgressCallback:
-        def __init__(self, total):
-            self.total = total
-            self.downloaded = 0
-            self.start_time = time.time()
-            self.last_report = self.start_time
-        
-        def __call__(self, chunk):
-            _raise_if_cancelled(should_cancel)
-            self.downloaded += len(chunk)
-            current_time = time.time()
-            
-            if on_progress and (current_time - self.last_report >= 0.5):
-                self.last_report = current_time
-                
-                if self.total > 0:
-                    percent = self.downloaded / self.total
-                    elapsed = current_time - self.start_time
-                    speed = self.downloaded / elapsed if elapsed > 0 else 0
-                    
-                    remaining = self.total - self.downloaded
-                    eta_seconds = remaining / speed if speed > 0 else 0
-                    
-                    speed_str = _format_bytes(speed) + "/s"
-                    eta_str = _format_time(eta_seconds) if eta_seconds > 0 else ""
-                    
-                    status = f"Downloading from GCS... {int(percent * 100)}% ({_format_bytes(self.downloaded)} / {_format_bytes(self.total)}) {speed_str}"
-                    if eta_str:
-                        status += f" ETA: {eta_str}"
-                    
-                    on_progress(min(percent, 0.99), status)
-    
-    callback = ProgressCallback(total_size)
-    _raise_if_cancelled(should_cancel)
-    blob.download_to_filename(str(dest_path), progress_callback=callback)
-    
-    if on_progress:
-        on_progress(1.0, f"GCS download complete: {_format_bytes(callback.downloaded)}")
-
-
 def download_url(
     url: str,
     dest_path: Path,
@@ -835,10 +314,10 @@ def download_url(
     timeout: int = 300,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> None:
-    """Download URL to destination with progress callbacks.
+    """Download an HTTP(S) URL to a local file with progress callbacks.
     
     Args:
-        url: Source URL (HTTP, S3, GCS, etc.)
+        url: Source URL (HTTP, HTTPS)
         dest_path: Where to save the file
         on_progress: Callback(percent: float, status: str) - percent 0.0-1.0
         on_warning: Callback(warning_msg: str) - for non-fatal issues
@@ -848,37 +327,16 @@ def download_url(
         URLDownloadError: If the download fails
         UnsupportedURLError: If the URL type is not supported
     """
+    url = normalize_url(url)
     dest_path = Path(dest_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     
-    url_type = detect_url_type(url)
-    
-    # Transform URLs as needed
-    if url_type == "dropbox":
-        url = _transform_dropbox_url(url)
-    elif url_type == "huggingface":
-        url = _transform_huggingface_url(url)
-    
-    # Track if we need cleanup on failure
     temp_path = dest_path.with_suffix(dest_path.suffix + ".tmp")
     
     try:
-        if url_type == "s3":
-            _download_s3(url, temp_path, on_progress, on_warning, timeout, should_cancel)
-        elif url_type == "r2":
-            _download_r2(url, temp_path, on_progress, on_warning, timeout, should_cancel)
-        elif url_type == "gcs":
-            _download_gcs(url, temp_path, on_progress, on_warning, timeout, should_cancel)
-        elif url_type in ("http", "github", "dropbox", "huggingface", "manifest"):
-            _download_http(url, temp_path, on_progress, on_warning, timeout, should_cancel=should_cancel)
-        else:
-            raise UnsupportedURLError(f"Unsupported URL type: {url_type}")
-        
-        # Move temp file to final destination
+        _download_http(url, temp_path, on_progress, on_warning, timeout, should_cancel=should_cancel)
         temp_path.replace(dest_path)
-        
     except Exception:
-        # Clean up temp file on failure
         if temp_path.exists():
             try:
                 temp_path.unlink()
@@ -895,7 +353,7 @@ def extract_archive(
 ) -> None:
     """Extract zip/tar archives with progress.
     
-    Supports: .zip, .tar.gz, .tgz, .tar.bz2, .tbz2, .tbz, .tar.xz, .txz, .tar, .7z
+    Supports: .zip, .tar.gz, .tgz, .tar.bz2, .tbz2, .tbz, .tar.xz, .txz, .tar
     
     Args:
         archive_path: Path to the archive file
@@ -918,7 +376,6 @@ def extract_archive(
     # Determine archive type by checking compound extensions first
     is_tar = False
     is_zip = False
-    is_7z = False
     if name_lower.endswith(('.tar.gz', '.tgz')):
         is_tar = True
     elif name_lower.endswith(('.tar.bz2', '.tbz2', '.tbz')):
@@ -929,21 +386,16 @@ def extract_archive(
         is_tar = True
     elif name_lower.endswith('.zip'):
         is_zip = True
-    elif name_lower.endswith('.7z'):
-        is_7z = True
     else:
         # Fall back to checking by content
         is_zip = zipfile.is_zipfile(archive_path)
         is_tar = tarfile.is_tarfile(archive_path)
-        is_7z = name_lower.endswith('.7z')
 
     try:
         if is_zip:
             _extract_zip(archive_path, dest_dir, on_progress, should_cancel)
         elif is_tar:
             _extract_tar(archive_path, dest_dir, on_progress, should_cancel)
-        elif is_7z:
-            _extract_7z(archive_path, dest_dir, on_progress, should_cancel)
         else:
             raise ExtractError(f"Unsupported archive format: {archive_path}")
     except InterruptedError:
@@ -987,9 +439,9 @@ def _extract_zip(
                 on_progress(percent, f"Extracting... {i}/{total} files")
             
             # Security: Check for path traversal
-            target_path = dest_dir / member.filename
+            target_path = (dest_dir / member.filename).resolve()
             try:
-                target_path.relative_to(dest_dir)
+                target_path.relative_to(dest_dir.resolve())
             except ValueError:
                 logger.warning("Skipping suspicious path in zip: %s", member.filename)
                 continue
@@ -1023,9 +475,9 @@ def _extract_tar(
                 on_progress(percent, f"Extracting... {i}/{total} files")
             
             # Security: Check for path traversal
-            target_path = dest_dir / member.name
+            target_path = (dest_dir / member.name).resolve()
             try:
-                target_path.relative_to(dest_dir)
+                target_path.relative_to(dest_dir.resolve())
             except ValueError:
                 logger.warning("Skipping suspicious path in tar: %s", member.name)
                 continue
@@ -1043,33 +495,6 @@ def _extract_tar(
             on_progress(1.0, f"Extraction complete: {total} files")
 
 
-def _extract_7z(
-    archive_path: Path,
-    dest_dir: Path,
-    on_progress: Optional[Callable[[float, str], None]],
-    should_cancel: Optional[Callable[[], bool]],
-) -> None:
-    """Extract 7z archive with progress."""
-    if not HAS_PY7ZR or py7zr is None:
-        raise ExtractError("py7zr not available for .7z extraction")
-    
-    with py7zr.SevenZipFile(archive_path, mode="r") as sz:
-        # Get list of files
-        file_list = sz.getnames()
-        total = len(file_list)
-        
-        _raise_if_cancelled(should_cancel)
-        if on_progress:
-            on_progress(0.0, f"Extracting 7z archive... 0/{total} files")
-        
-        # Extract all
-        _raise_if_cancelled(should_cancel)
-        sz.extractall(path=dest_dir)
-        
-        if on_progress:
-            on_progress(1.0, f"Extraction complete: {total} files")
-
-
 def download_and_extract(
     url: str,
     dest_dir: Path,
@@ -1079,7 +504,7 @@ def download_and_extract(
     extract: bool = True,
     should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
-    """Download URL and optionally extract archive.
+    """Download an HTTP(S) URL and optionally extract zip/tar archives.
     
     Args:
         url: Source URL
@@ -1099,29 +524,24 @@ def download_and_extract(
     dest_dir = Path(dest_dir)
     dest_dir.mkdir(parents=True, exist_ok=True)
     
-    # Get URL info to determine filename
-    info = get_url_info(url)
-    filename = info.get("name") or "download"
+    parsed = urllib.parse.urlparse(url)
+    filename = os.path.basename(parsed.path) or "download"
     
-    # Create temp directory for download
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir) / filename
         
-        # Download
         download_url(url, tmp_path, on_progress, on_warning, timeout, should_cancel)
         
-        # Check if it's an archive and should be extracted
         if extract and _is_archive(tmp_path):
             if on_progress:
                 on_progress(0.0, "Extracting archive...")
             
-            extract_dir = dest_dir / filename.rsplit(".", 1)[0]
+            extract_dir = dest_dir / _strip_archive_suffix(filename)
             extract_dir.mkdir(parents=True, exist_ok=True)
             
             extract_archive(tmp_path, extract_dir, on_progress, should_cancel)
             return extract_dir
         else:
-            # Move to destination
             final_path = dest_dir / filename
             shutil.move(str(tmp_path), str(final_path))
             return final_path
@@ -1133,8 +553,6 @@ def _is_archive(path: Path) -> bool:
         return True
     if tarfile.is_tarfile(path):
         return True
-    if path.suffix.lower() == ".7z":
-        return HAS_PY7ZR
     return False
 
 
@@ -1170,23 +588,24 @@ def download_with_retry(
             return
         except InterruptedError:
             raise
-        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        except urllib.error.HTTPError as exc:
             last_error = exc
-            
-            # Don't retry on 4xx errors (client errors)
-            if isinstance(exc, urllib.error.HTTPError) and exc.code < 500:
+            if exc.code < 500:
                 raise URLDownloadError(f"HTTP {exc.code}: {exc.reason}") from exc
-            
             if on_warning:
                 on_warning(f"Download attempt {attempt + 1} failed: {exc}. Retrying...")
-            
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (2 ** attempt))
+        except urllib.error.URLError as exc:
+            last_error = exc
+            if on_warning:
+                on_warning(f"Download attempt {attempt + 1} failed: {exc}. Retrying...")
             if attempt < max_retries - 1:
                 time.sleep(retry_delay * (2 ** attempt))
         except Exception as exc:
             last_error = exc
             if on_warning:
                 on_warning(f"Download attempt {attempt + 1} failed: {exc}. Retrying...")
-            
             if attempt < max_retries - 1:
                 time.sleep(retry_delay * (2 ** attempt))
     

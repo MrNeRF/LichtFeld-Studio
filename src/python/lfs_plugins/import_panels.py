@@ -26,7 +26,7 @@ from .url_downloader import (
     URLDownloadError,
     UnsupportedURLError,
     ExtractError,
-    detect_url_type,
+    normalize_url,
     download_url,
     extract_archive,
     get_url_info,
@@ -1087,10 +1087,11 @@ class URLImportPanel(_ImportDialogPanel):
             return
 
         try:
-            if detect_url_type(url) == "unknown":
-                self._url_import_warning = _tr("asset_manager.error_unsupported_url")
-                self._dirty_model("url_import_warning_text", "url_import_has_warning")
-                return
+            normalize_url(url)
+        except UnsupportedURLError as exc:
+            self._url_import_warning = _tr("asset_manager.error_unsupported_url")
+            self._dirty_model("url_import_warning_text", "url_import_has_warning")
+            return
         except Exception as exc:
             self._url_import_warning = str(exc)
             self._dirty_model("url_import_warning_text", "url_import_has_warning")
