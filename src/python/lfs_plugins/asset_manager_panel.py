@@ -188,8 +188,6 @@ class AssetManagerPanel(Panel):
 
         # Basic properties
         model.bind("search_query", self.get_search_query, self.set_search_query)
-        model.bind_func("panel_label", lambda: tr("asset_manager.title"))
-        model.bind("search_query", self.get_search_query, self.set_search_query)
 
         # View state
         model.bind_func("is_gallery_view", lambda: self._view_mode == "gallery")
@@ -223,10 +221,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("import_from_url_label", lambda: tr("asset_manager.import_from_url"))
         model.bind_event("on_import_from_url", self.on_import_from_url)
 
-
-        # New project menu state
-        model.bind_func("new_project_menu_open", self.get_new_project_menu_open)
-        model.bind_func("create_new_project_label", lambda: tr("asset_manager.action.create_new_project"))
 
         # New project menu state
         model.bind_func("new_project_menu_open", self.get_new_project_menu_open)
@@ -401,7 +395,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("locate_file_button_label", lambda: tr("asset_manager.action.locate_file"))
         model.bind_func("scene_pill_label", lambda: tr("asset_manager.type.scene"))
         model.bind_func("scene_details_title", lambda: tr("asset_manager.info_panel.scene_details"))
-        model.bind_func("prop_assets_label", lambda: tr("asset_manager.propertyu.assets"))
+        model.bind_func("prop_assets_label", lambda: tr("asset_manager.property.assets"))
         model.bind_func("scene_assets_title", lambda: tr("asset_manager.info_panel.scenes"))
         model.bind_func("project_pill_label", lambda: tr("asset_manager.type.project"))
         model.bind_func("project_details_title", lambda: tr("asset_manager.info_panel.project_details"))

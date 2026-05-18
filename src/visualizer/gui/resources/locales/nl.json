@@ -98,7 +98,6 @@
     "action.remove_from_catalog": "Verwijderen uit Catalogus",
     "action.rename": "Hernoemen",
     "action.rename_project": "Project Hernoemen",
-    "action.delete_project": "Project Verwijderen",
     "action.create_new_project": "Nieuw Project aanmaken",
     "action.show_in_folder": "Toon in Map",
     "batch.export_selected": "Exporteer Geselecteerde",
@@ -186,7 +185,6 @@
     "status.select_item": "Selecteer een item om details te bekijken",
     "status.one_item_selected": "1 item geselecteerd",
     "status.multi_items_selected": "{count} items geselecteerd",
-
     "title": "Asset Manager",
     "toolbar.import": "Importeren",
     "toolbar.clean_missing": "Opruimen",
@@ -225,7 +223,11 @@
     "unit.mb": "MB",
     "unnamed": "Naamloos",
     "unnamed_project": "Naamloos Project",
-    "unnamed_scene": "Naamloze Scène"
+    "unnamed_scene": "Naamloze Scène",
+    "panel_title": "Asset Manager",
+    "import_from_url": "Importeren van URL",
+    "import_button": "Importeren",
+    "import_button_downloading": "Downloaden..."
   },
   "training": {
     "section.dataset": "Dataset",

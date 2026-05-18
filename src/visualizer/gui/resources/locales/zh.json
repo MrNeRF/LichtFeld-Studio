@@ -1069,7 +1069,6 @@
     "action.remove_from_catalog": "从目录移除",
     "action.rename": "重命名",
     "action.rename_project": "重命名项目",
-    "action.delete_project": "删除项目",
     "action.create_new_project": "创建新项目",
     "action.show_in_folder": "在文件夹中显示",
     "batch.export_selected": "导出选中",
@@ -1099,7 +1098,7 @@
     "geometry.center": "中心",
     "geometry.scale": "缩放",
     "geometry.title": "几何",
-    "hint.multi_select": "Ctrl/Cmd+点击卡片进行多选",
+    "hint.multi_select": "Ctrl/Cmd+点击卡片可多选",
     "import_menu.import_asset": "导入资源...",
     "import_menu.import_checkpoint": "导入检查点...",
     "import_menu.import_dataset": "导入数据集...",
@@ -1147,9 +1146,6 @@
     "property.strategy": "策略",
     "property.translation": "平移",
     "property.type": "类型",
-
-    "preview": "预览",
-    "hint.multi_select": "Ctrl/Cmd+点击卡片可多选",
     "sidebar.collections": "集合",
     "sidebar.filters": "筛选器",
     "sidebar.projects": "项目",
@@ -1199,6 +1195,7 @@
     "training.train_time": "训练时间",
     "unnamed": "未命名",
     "unnamed_project": "未命名项目",
-    "unnamed_scene": "未命名场景"
+    "unnamed_scene": "未命名场景",
+    "import_button_downloading": "下载中..."
   }
 }

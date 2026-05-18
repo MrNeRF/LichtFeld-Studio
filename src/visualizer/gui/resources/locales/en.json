@@ -226,7 +226,11 @@
     "dialog.enter_project_name": "Enter name for the new project:",
     "dialog.current_project": "Current: {name}",
     "dialog.available_projects": "Available projects:",
-    "dialog.enter_number_or_name": "Enter number or name:"
+    "dialog.enter_number_or_name": "Enter number or name:",
+    "panel_title": "Asset Manager",
+    "import_from_url": "Import from URL",
+    "import_button": "Import",
+    "import_button_downloading": "Downloading..."
   },
   "training": {
     "section.dataset": "Dataset",

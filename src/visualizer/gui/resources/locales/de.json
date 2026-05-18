@@ -98,7 +98,6 @@
     "action.remove_from_catalog": "Aus Katalog entfernen",
     "action.rename": "Umbenennen",
     "action.rename_project": "Projekt umbenennen",
-    "action.delete_project": "Projekt löschen",
     "action.create_new_project": "Neues Projekt erstellen",
     "action.show_in_folder": "Im Ordner anzeigen",
     "batch.export_selected": "Ausgewählte exportieren",
@@ -186,7 +185,6 @@
     "status.select_item": "Wählen Sie ein Element aus, um Details anzuzeigen",
     "status.one_item_selected": "1 Element ausgewählt",
     "status.multi_items_selected": "{count} Elemente ausgewählt",
-
     "title": "Asset Manager",
     "panel_title": "Asset Manager",
     "import_button": "Importieren",
@@ -228,7 +226,8 @@
     "unit.mb": "MB",
     "unnamed": "Unbenannt",
     "unnamed_project": "Unbenanntes Projekt",
-    "unnamed_scene": "Unbenannte Szene"
+    "unnamed_scene": "Unbenannte Szene",
+    "import_button_downloading": "Herunterladen..."
   },
   "training": {
     "section.dataset": "Datensatz",

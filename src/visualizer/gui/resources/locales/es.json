@@ -103,7 +103,6 @@
     "action.remove_from_catalog": "Eliminar del Catálogo",
     "action.rename": "Renombrar",
     "action.rename_project": "Renombrar proyecto",
-    "action.delete_project": "Eliminar proyecto",
     "action.create_new_project": "Crear nuevo Proyecto",
     "action.show_in_folder": "Mostrar en carpeta",
     "batch.export_selected": "Exportar Seleccionados",
@@ -133,7 +132,7 @@
     "geometry.center": "Centro",
     "geometry.scale": "Escala",
     "geometry.title": "Geometría",
-    "hint.multi_select": "Ctrl/Cmd-clic en tarjetas para selección múltiple",
+    "hint.multi_select": "Ctrl/Cmd+clic en tarjetas para selección múltiple",
     "import_menu.import_asset": "Importar Activo...",
     "import_menu.import_checkpoint": "Importar Checkpoint...",
     "import_menu.import_dataset": "Importar Dataset...",
@@ -181,9 +180,6 @@
     "property.steps_scaler": "Escalador de Pasos",
     "property.strategy": "Estrategia",
     "property.translation": "Traslación",
-
-    "preview": "Vista previa",
-    "hint.multi_select": "Ctrl/Cmd+clic en tarjetas para selección múltiple",
     "sidebar.collections": "COLECCIONES",
     "sidebar.filter_hint": "Seleccione ninguno para mostrar todos",
     "sidebar.filters": "FILTROS",
@@ -234,7 +230,9 @@
     "unnamed": "Sin nombre",
     "unnamed_project": "Proyecto sin nombre",
     "unnamed_scene": "Escena sin nombre",
-    "msg.created_default": "Proyecto predeterminado creado",
-    "msg.failed_create_default": "Error al crear proyecto predeterminado: {error}"
+    "panel_title": "Gestor de Activos",
+    "import_from_url": "Importar desde URL",
+    "import_button": "Importar",
+    "import_button_downloading": "Descargando..."
   }
 }

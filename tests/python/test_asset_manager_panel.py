@@ -28,7 +28,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
-        PanelHeightMode=SimpleNamespace(FILL="FILL"),
+        PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
+        tr=lambda key: key,
     )
     lf_stub.log = _LogStub()
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -149,7 +150,7 @@ def test_asset_rows_expose_scalar_tag_label(asset_manager_panel_module):
 def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
     panel = asset_manager_panel_module.AssetManagerPanel()
     asset = _make_asset()
-    asset["name"] = "truck"
+    asset["name"] = ""
     asset["absolute_path"] = "/data/tandt/truck/train"
     fields = panel._get_asset_display_fields(
         asset,
@@ -189,7 +190,15 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
 def test_asset_manager_load_context_actions_are_localized():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
-    required_keys = ("action.load_new", "action.add_to_scene")
+    required_keys = (
+        "action.load_new",
+        "action.add_to_scene",
+        "import_from_url",
+        "import_button",
+        "import_button_downloading",
+        "panel_title",
+        "property.assets",
+    )
 
     for locale_path in sorted(locale_dir.glob("*.json")):
         data = json.loads(locale_path.read_text(encoding="utf-8"))

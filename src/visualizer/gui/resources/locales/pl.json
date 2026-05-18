@@ -98,7 +98,6 @@
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "Zmień Nazwę",
     "action.rename_project": "Zmień Nazwę Projektu",
-    "action.delete_project": "Usuń Projekt",
     "action.create_new_project": "Utwórz nowy Projekt",
     "action.show_in_folder": "Pokaż w Folderze",
     "batch.export_selected": "선택 항목보내기",
@@ -189,7 +188,6 @@
     "status.select_item": "Wybierz element, aby wyświetlić szczegóły",
     "status.one_item_selected": "1 element wybrany",
     "status.multi_items_selected": "{count} elementów wybranych",
-
     "title": "Menedżer zasobów",
     "toolbar.import": "가져오기",
     "toolbar.clean_missing": "Wyczyść",
@@ -228,7 +226,11 @@
     "unit.mb": "MB",
     "unnamed": "Bez nazwy",
     "unnamed_project": "Projekt bez nazwy",
-    "unnamed_scene": "Scena bez nazwy"
+    "unnamed_scene": "Scena bez nazwy",
+    "panel_title": "Menedżer Zasobów",
+    "import_from_url": "Importuj z URL",
+    "import_button": "Importuj",
+    "import_button_downloading": "Pobieranie..."
   },
   "training": {
     "section.dataset": "Zbiór Danych",

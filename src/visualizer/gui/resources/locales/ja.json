@@ -98,7 +98,6 @@
     "action.remove_from_catalog": "カタログから削除",
     "action.rename": "名前を変更",
     "action.rename_project": "プロジェクト名を変更",
-    "action.delete_project": "プロジェクトを削除",
     "action.create_new_project": "新規プロジェクトを作成",
     "action.show_in_folder": "フォルダに表示",
     "batch.export_selected": "選択項目をエクスポート",
@@ -189,7 +188,6 @@
     "status.select_item": "詳細を表示するには項目を選択してください",
     "status.one_item_selected": "1 項目選択中",
     "status.multi_items_selected": "{count} 項目選択中",
-
     "title": "アセットマネージャー",
     "panel_title": "アセットマネージャー",
     "import_button": "インポート",
@@ -231,7 +229,8 @@
     "unit.mb": "MB",
     "unnamed": "名前なし",
     "unnamed_project": "名前なしプロジェクト",
-    "unnamed_scene": "名前なしシーン"
+    "unnamed_scene": "名前なしシーン",
+    "import_button_downloading": "ダウンロード中..."
   },
   "training": {
     "section.dataset": "データセット",

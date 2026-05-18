@@ -98,7 +98,6 @@
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "이름 바꾸기",
     "action.rename_project": "프로젝트 이름 바꾸기",
-    "action.delete_project": "프로젝트 삭제",
     "action.create_new_project": "새 프로젝트 만들기",
     "action.show_in_folder": "폴더에 표시",
     "batch.export_selected": "선택 항목보내기",
@@ -189,7 +188,6 @@
     "status.select_item": "세부정보를 보려면 항목을 선택하세요",
     "status.one_item_selected": "1개 항목 선택됨",
     "status.multi_items_selected": "{count}개 항목 선택됨",
-
     "title": "에셋 매니저",
     "panel_title": "에셋 관리자",
     "import_button": "가져오기",
@@ -231,7 +229,8 @@
     "unit.mb": "MB",
     "unnamed": "이름 없음",
     "unnamed_project": "이름 없는 프로젝트",
-    "unnamed_scene": "이름 없는 장면"
+    "unnamed_scene": "이름 없는 장면",
+    "import_button_downloading": "다운로드 중..."
   },
   "training": {
     "section.dataset": "데이터셋",

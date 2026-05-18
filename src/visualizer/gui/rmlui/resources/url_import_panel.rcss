@@ -60,7 +60,7 @@
 }
 
 .urlimp-path {
-    font-family: monospace;
+    font-family: "JetBrains Mono";
     color: #d8d0c3;
 }
 

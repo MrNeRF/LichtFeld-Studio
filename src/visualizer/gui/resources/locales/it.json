@@ -98,7 +98,6 @@
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "Rinomina",
     "action.rename_project": "Rinomina Progetto",
-    "action.delete_project": "Elimina Progetto",
     "action.create_new_project": "Crea nuovo Progetto",
     "action.show_in_folder": "Mostra nella Cartella",
     "batch.export_selected": "선택 항목보내기",
@@ -189,7 +188,6 @@
     "status.select_item": "Seleziona un elemento per visualizzare i dettagli",
     "status.one_item_selected": "1 elemento selezionato",
     "status.multi_items_selected": "{count} elementi selezionati",
-
     "title": "Gestore risorse",
     "toolbar.import": "가져오기",
     "toolbar.clean_missing": "Pulisci",
@@ -227,7 +225,11 @@
     "unit.mb": "MB",
     "unnamed": "Senza nome",
     "unnamed_project": "Progetto senza nome",
-    "unnamed_scene": "Scena senza nome"
+    "unnamed_scene": "Scena senza nome",
+    "panel_title": "Gestione Risorse",
+    "import_from_url": "Importa da URL",
+    "import_button": "Importa",
+    "import_button_downloading": "Download in corso..."
   },
   "training": {
     "section.dataset": "Dataset",
