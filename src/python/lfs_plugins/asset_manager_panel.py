@@ -120,6 +120,10 @@ class AssetManagerPanel(Panel):
         # New project menu state
         self._new_project_menu_open: bool = False
 
+        # Collapse state for sidebar sections
+        self._projects_collapsed: bool = True
+        self._filters_collapsed: bool = True
+
         # Panel resize drag state
         self._sidebar_dragging: bool = False
         self._sidebar_drag_start_x: float = 0.0
@@ -326,6 +330,10 @@ class AssetManagerPanel(Panel):
         model.bind_func("new_project_label", lambda: tr("asset_manager.action.new_project"))
         model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
+        model.bind_func("refresh_label", lambda: tr("asset_manager.action.refresh"))
+        model.bind_func("clean_missing_label", lambda: tr("asset_manager.action.clean_missing"))
+        model.bind_func("refresh_tooltip", lambda: tr("asset_manager.tooltip.refresh"))
+        model.bind_func("clean_missing_tooltip", lambda: tr("asset_manager.tooltip.clean_missing"))
         model.bind_func("col_name_label", lambda: tr("asset_manager.property.name"))
         model.bind_func("col_type_label", lambda: tr("asset_manager.property.type"))
         model.bind_func("col_project_label", lambda: tr("asset_manager.property.project"))
@@ -421,6 +429,16 @@ class AssetManagerPanel(Panel):
         # New project event handlers
         model.bind_event("toggle_new_project_menu", self.toggle_new_project_menu)
         model.bind_event("on_create_project_dialog", self.on_create_project_dialog)
+        model.bind_event("refresh_catalog", self.refresh_catalog_scan)
+        model.bind_event("clean_missing", self.clean_missing)
+
+        # Collapse state bindings
+        model.bind_func("projects_collapsed", self.get_projects_collapsed)
+        model.bind_func("filters_collapsed", self.get_filters_collapsed)
+        model.bind_func("projects_expanded", self.get_projects_expanded)
+        model.bind_func("filters_expanded", self.get_filters_expanded)
+        model.bind_event("toggle_projects_collapsed", self.toggle_projects_collapsed)
+        model.bind_event("toggle_filters_collapsed", self.toggle_filters_collapsed)
 
     # ── Data Retrieval Methods ─────────────────────────────────
 
@@ -451,6 +469,28 @@ class AssetManagerPanel(Panel):
 
     def get_new_project_menu_open(self) -> bool:
         return self._new_project_menu_open
+
+    def get_projects_collapsed(self) -> bool:
+        return self._projects_collapsed
+
+    def get_filters_collapsed(self) -> bool:
+        return self._filters_collapsed
+
+    def get_projects_expanded(self) -> bool:
+        return not self._projects_collapsed
+
+    def get_filters_expanded(self) -> bool:
+        return not self._filters_collapsed
+
+    def toggle_projects_collapsed(self, _handle=None, _ev=None, _args=None):
+        self._projects_collapsed = not self._projects_collapsed
+        self._dirty_model("projects_collapsed")
+        self._dirty_model("projects_expanded")
+
+    def toggle_filters_collapsed(self, _handle=None, _ev=None, _args=None):
+        self._filters_collapsed = not self._filters_collapsed
+        self._dirty_model("filters_collapsed")
+        self._dirty_model("filters_expanded")
 
     def get_move_menu_projects(self) -> List[Dict[str, str]]:
         """Get projects for the currently open move menu."""
@@ -3545,6 +3585,46 @@ class AssetManagerPanel(Panel):
         self._update_all_record_lists()
         if self._handle:
             self._handle.dirty_all()
+
+    def refresh_catalog_scan(self, _handle=None, _ev=None, _args=None):
+        """Rescan all known asset directories and refresh the catalog."""
+        if not self._asset_index:
+            return
+        try:
+            # Rescan all asset paths in the index
+            for asset in list(self._asset_index.assets.values()):
+                path = asset.get("absolute_path") or asset.get("path")
+                if path and os.path.exists(path):
+                    try:
+                        if self._asset_scanner:
+                            metadata = self._asset_scanner.scan_file(path)
+                            if metadata:
+                                self._asset_index.update_asset(asset["id"], **metadata)
+                    except Exception as exc:
+                        _logger.debug(f"Failed to rescan {path}: {exc}")
+            self._asset_index.save()
+            self.refresh_catalog()
+            self._log_info("Refreshed asset catalog")
+        except Exception as exc:
+            self._log_error(f"Failed to refresh catalog: {exc}")
+
+    def clean_missing(self, _handle=None, _ev=None, _args=None):
+        """Prune every catalog entry whose backing file is no longer on disk."""
+        if not self._asset_index or not hasattr(self._asset_index, "assets"):
+            return
+        prune_ids = [
+            asset_id
+            for asset_id, asset in self._asset_index.assets.items()
+            if not (asset.get("absolute_path") or asset.get("path"))
+            or not os.path.exists(asset.get("absolute_path") or asset.get("path"))
+        ]
+        if not prune_ids:
+            return
+        for pid in prune_ids:
+            self._asset_index.delete_asset(pid)
+        self._asset_index.save()
+        self._log_info("Pruned %d missing asset(s) from catalog", len(prune_ids))
+        self.refresh_catalog()
 
     def _sync_runtime_scene_catalog(self, select_current: bool = False) -> None:
         if not self._asset_index:

@@ -100,6 +100,8 @@
     "action.new_project": "+ Nuevo proyecto",
     "action.preview": "Vista Previa",
     "action.remove": "Eliminar",
+    "action.refresh": "Actualizar",
+    "action.clean_missing": "Limpiar",
     "action.remove_from_catalog": "Eliminar del Catálogo",
     "action.rename": "Renombrar",
     "action.rename_project": "Renombrar proyecto",
@@ -237,6 +239,8 @@
     "import_button_downloading": "Descargando...",
     "status_connecting": "Conectando...",
     "status_extracting": "Extrayendo...",
-    "status_complete": "¡Completado!"
+    "status_complete": "¡Completado!",
+    "tooltip.refresh": "Volver a escanear todos los directorios de activos y actualizar los metadatos del catálogo",
+    "tooltip.clean_missing": "Eliminar entradas del catálogo cuyos archivos ya no existen en el disco"
   }
 }

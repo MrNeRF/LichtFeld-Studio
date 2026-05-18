@@ -193,6 +193,10 @@ def test_asset_manager_load_context_actions_are_localized():
     required_keys = (
         "action.load_new",
         "action.add_to_scene",
+        "action.refresh",
+        "action.clean_missing",
+        "tooltip.refresh",
+        "tooltip.clean_missing",
         "import_from_url",
         "import_button",
         "import_button_downloading",

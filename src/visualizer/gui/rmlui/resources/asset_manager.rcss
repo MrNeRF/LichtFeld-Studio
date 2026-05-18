@@ -82,7 +82,8 @@
 .asset-view-button,
 .asset-card-button,
 .asset-info-button,
-.asset-tag-remove {
+.asset-tag-remove,
+.asset-action-button {
     background-color: #302d29;
     border-width: 1dp;
     border-color: #514a42;
@@ -97,7 +98,8 @@
 .asset-view-button:hover,
 .asset-card-button:hover,
 .asset-info-button:hover,
-.asset-tag-remove:hover {
+.asset-tag-remove:hover,
+.asset-action-button:hover {
     background-color: #454038;
     border-color: #7fb9a5;
 }
@@ -219,6 +221,8 @@
     padding: 10dp;
     overflow-y: auto;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 #sidebar-resize-handle {
@@ -244,6 +248,31 @@
     color: #a9a093;
     margin-bottom: 8dp;
     letter-spacing: 0.2dp;
+}
+
+.asset-sidebar-title .section-arrow {
+    display: inline-block;
+    width: 10dp;
+    font-size: 10dp;
+    color: #7a7268;
+    text-align: center;
+    transform: rotate(0deg);
+    transition: transform 0.18s cubic-out, color 0.18s cubic-out;
+}
+
+.asset-sidebar-title:hover .section-arrow,
+.asset-sidebar-title .section-arrow.is-expanded {
+    color: #d8d0c3;
+}
+
+.asset-sidebar-title .section-arrow.is-expanded {
+    transform: rotate(90deg);
+}
+
+.section-content {
+    overflow: hidden;
+    opacity: 1;
+    transition: opacity 0.18s cubic-out;
 }
 
 .asset-filter-row {
@@ -1107,4 +1136,18 @@
 .asset-batch-summary {
     display: flex;
     flex-direction: column;
+}
+
+.asset-sidebar-actions {
+    display: flex;
+    gap: 8dp;
+    padding: 10dp 0 0 0;
+    margin-top: auto;
+    border-top-width: 1dp;
+    border-top-color: #3a3632;
+}
+
+.asset-action-button {
+    flex: 1;
+    text-align: center;
 }

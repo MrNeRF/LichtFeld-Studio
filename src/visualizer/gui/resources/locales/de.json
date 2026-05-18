@@ -95,6 +95,8 @@
     "action.new_project": "+ Neues Projekt",
     "action.preview": "Vorschau",
     "action.remove": "Entfernen",
+    "action.refresh": "Aktualisieren",
+    "action.clean_missing": "Bereinigen",
     "action.remove_from_catalog": "Aus Katalog entfernen",
     "action.rename": "Umbenennen",
     "action.rename_project": "Projekt umbenennen",
@@ -231,7 +233,9 @@
     "import_button_downloading": "Herunterladen...",
     "status_connecting": "Verbinden...",
     "status_extracting": "Extrahieren...",
-    "status_complete": "Abgeschlossen!"
+    "status_complete": "Abgeschlossen!",
+    "tooltip.refresh": "Alle Asset-Verzeichnisse neu scannen und Katalog-Metadaten aktualisieren",
+    "tooltip.clean_missing": "Katalogeinträge entfernen, deren Dateien nicht mehr auf der Festplatte existieren"
   },
   "training": {
     "section.dataset": "Datensatz",

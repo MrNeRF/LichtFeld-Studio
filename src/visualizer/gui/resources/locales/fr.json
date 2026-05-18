@@ -95,6 +95,8 @@
     "action.new_project": "+ Nouveau projet",
     "action.preview": "미리보기",
     "action.remove": "Supprimer",
+    "action.refresh": "Actualiser",
+    "action.clean_missing": "Nettoyer",
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "Renommer",
     "action.rename_project": "Renommer le Projet",
@@ -234,7 +236,9 @@
     "import_button_downloading": "Téléchargement...",
     "status_connecting": "Connexion...",
     "status_extracting": "Extraction...",
-    "status_complete": "Terminé !"
+    "status_complete": "Terminé !",
+    "tooltip.refresh": "Rescanner tous les répertoires d'actifs et mettre à jour les métadonnées du catalogue",
+    "tooltip.clean_missing": "Supprimer les entrées du catalogue dont les fichiers n'existent plus sur le disque"
   },
   "training": {
     "section.dataset": "Dataset",

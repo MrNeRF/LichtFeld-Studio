@@ -95,6 +95,8 @@
     "action.new_project": "+ Nuovo progetto",
     "action.preview": "미리보기",
     "action.remove": "Rimuovi",
+    "action.refresh": "Aggiorna",
+    "action.clean_missing": "Pulisci",
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "Rinomina",
     "action.rename_project": "Rinomina Progetto",
@@ -233,7 +235,9 @@
     "import_button_downloading": "Download in corso...",
     "status_connecting": "Connessione...",
     "status_extracting": "Estrazione...",
-    "status_complete": "Completato!"
+    "status_complete": "Completato!",
+    "tooltip.refresh": "Riscansiona tutte le directory degli asset e aggiorna i metadati del catalogo",
+    "tooltip.clean_missing": "Rimuovi le voci del catalogo i cui file non esistono più sul disco"
   },
   "training": {
     "section.dataset": "Dataset",

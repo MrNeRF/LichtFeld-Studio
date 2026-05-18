@@ -95,6 +95,8 @@
     "action.new_project": "+ 새 프로젝트",
     "action.preview": "미리보기",
     "action.remove": "제거",
+    "action.refresh": "새로고침",
+    "action.clean_missing": "정리",
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "이름 바꾸기",
     "action.rename_project": "프로젝트 이름 바꾸기",
@@ -234,7 +236,9 @@
     "import_button_downloading": "다운로드 중...",
     "status_connecting": "연결 중...",
     "status_extracting": "추출 중...",
-    "status_complete": "완료!"
+    "status_complete": "완료!",
+    "tooltip.refresh": "모든 에셋 디렉토리를 다시 스캔하고 카탈로그 메타데이터 업데이트",
+    "tooltip.clean_missing": "디스크에 더 이상 존재하지 않는 파일의 카탈로그 항목 제거"
   },
   "training": {
     "section.dataset": "데이터셋",

@@ -189,6 +189,8 @@
     "action.favorite": "Favorite",
     "action.rename": "Rename",
     "action.remove": "Remove",
+    "action.refresh": "Refresh",
+    "action.clean_missing": "Clean",
     "action.show_in_folder": "Show in Folder",
     "action.move_to_project": "Move to Project",
     "action.new_project": "+ New project",
@@ -234,7 +236,9 @@
     "import_button_downloading": "Downloading...",
     "status_connecting": "Connecting...",
     "status_extracting": "Extracting...",
-    "status_complete": "Complete!"
+    "status_complete": "Complete!",
+    "tooltip.refresh": "Rescan all asset directories and update catalog metadata",
+    "tooltip.clean_missing": "Remove catalog entries whose files no longer exist on disk"
   },
   "training": {
     "section.dataset": "Dataset",

@@ -95,6 +95,8 @@
     "action.new_project": "+ Nieuw project",
     "action.preview": "Voorbeeld",
     "action.remove": "Verwijderen",
+    "action.refresh": "Vernieuwen",
+    "action.clean_missing": "Opschonen",
     "action.remove_from_catalog": "Verwijderen uit Catalogus",
     "action.rename": "Hernoemen",
     "action.rename_project": "Project Hernoemen",
@@ -231,7 +233,9 @@
     "import_button_downloading": "Downloaden...",
     "status_connecting": "Verbinden...",
     "status_extracting": "Uitpakken...",
-    "status_complete": "Voltooid!"
+    "status_complete": "Voltooid!",
+    "tooltip.refresh": "Alle asset-mappen opnieuw scannen en catalogusmetadata bijwerken",
+    "tooltip.clean_missing": "Catalogusitems verwijderen waarvan de bestanden niet meer op de schijf bestaan"
   },
   "training": {
     "section.dataset": "Dataset",

@@ -1066,6 +1066,8 @@
     "action.new_project": "+ 新建项目",
     "action.preview": "预览",
     "action.remove": "移除",
+    "action.refresh": "刷新",
+    "action.clean_missing": "清理",
     "action.remove_from_catalog": "从目录移除",
     "action.rename": "重命名",
     "action.rename_project": "重命名项目",
@@ -1200,6 +1202,8 @@
     "import_button_downloading": "下载中...",
     "status_connecting": "连接中...",
     "status_extracting": "解压中...",
-    "status_complete": "完成！"
+    "status_complete": "完成！",
+    "tooltip.refresh": "重新扫描所有资源目录并更新目录元数据",
+    "tooltip.clean_missing": "删除磁盘上不再存在的文件的目录条目"
   }
 }

@@ -95,6 +95,8 @@
     "action.new_project": "+ Nowy projekt",
     "action.preview": "미리보기",
     "action.remove": "Usuń",
+    "action.refresh": "Odśwież",
+    "action.clean_missing": "Wyczyść",
     "action.remove_from_catalog": "카탈로그에서 제거",
     "action.rename": "Zmień Nazwę",
     "action.rename_project": "Zmień Nazwę Projektu",
@@ -234,7 +236,9 @@
     "import_button_downloading": "Pobieranie...",
     "status_connecting": "Łączenie...",
     "status_extracting": "Rozpakowywanie...",
-    "status_complete": "Ukończono!"
+    "status_complete": "Ukończono!",
+    "tooltip.refresh": "Ponownie przeskanuj wszystkie katalogi zasobów i zaktualizuj metadane katalogu",
+    "tooltip.clean_missing": "Usuń wpisy katalogu, których pliki nie istnieją już na dysku"
   },
   "training": {
     "section.dataset": "Zbiór Danych",

@@ -95,6 +95,8 @@
     "action.new_project": "+ 新規プロジェクト",
     "action.preview": "プレビュー",
     "action.remove": "削除",
+    "action.refresh": "更新",
+    "action.clean_missing": "クリーン",
     "action.remove_from_catalog": "カタログから削除",
     "action.rename": "名前を変更",
     "action.rename_project": "プロジェクト名を変更",
@@ -234,7 +236,9 @@
     "import_button_downloading": "ダウンロード中...",
     "status_connecting": "接続中...",
     "status_extracting": "展開中...",
-    "status_complete": "完了！"
+    "status_complete": "完了！",
+    "tooltip.refresh": "すべてのアセットディレクトリを再スキャンし、カタログメタデータを更新",
+    "tooltip.clean_missing": "ディスク上に存在しないファイルのカタログエントリを削除"
   },
   "training": {
     "section.dataset": "データセット",
