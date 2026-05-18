@@ -309,10 +309,6 @@ def select_asset_in_active_panel(
 
     try:
         panel._selected_asset_ids = {asset_id}
-        if project_id is not None:
-            panel._selected_project_id = project_id
-        if scene_id is not None:
-            panel._selected_scene_id = scene_id
         panel._update_selection_type()
         panel.refresh_catalog()
     except Exception:
