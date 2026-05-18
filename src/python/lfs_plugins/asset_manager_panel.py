@@ -2266,34 +2266,39 @@ class AssetManagerPanel(Panel):
         """End right panel resize drag."""
         self._right_panel_dragging = False
 
-    def _import_single_asset(self, file_path: str) -> None:
-        """Common logic to import a single asset file after dialog selection."""
+    def on_import_splat(self, _handle, _ev, args):
+        """Import a splat/point-cloud file (PLY, SOG, SPZ, USD formats)."""
+        if not self._asset_index:
+            _logger.warning("Asset index not initialized")
+            return
+
+        file_path = lf.ui.open_ply_file_dialog("")
+        if not file_path:
+            return
+
         try:
             project_id = self._ensure_import_project()
 
-            # Detect asset type and role
-            asset_type = None
-            fallback_role = "reference"
             path_lower = file_path.lower()
-
-            if path_lower.endswith(('.obj', '.fbx', '.gltf', '.glb', '.stl', '.dae', '.3ds')):
-                asset_type = "mesh"
-                fallback_role = "reference"
-            elif path_lower.endswith('.ply'):
-                # PLY files will be auto-detected as ply_3dgs or ply_pcl by the scanner
-                asset_type = None  # Let scanner detect
-                if 'point_cloud' in file_path.lower() or 'initial' in file_path.lower():
-                    fallback_role = "initial_point_cloud"
-                else:
-                    fallback_role = "trained_output"
+            if path_lower.endswith('.ply'):
+                asset_type = None  # Let scanner detect ply_3dgs vs ply_pcl
+                fallback_role = (
+                    "initial_point_cloud"
+                    if 'point_cloud' in path_lower or 'initial' in path_lower
+                    else "trained_output"
+                )
             elif path_lower.endswith(('.sog', '.spz')):
-                asset_type = path_lower.split('.')[-1].replace('sog', 'sog').replace('spz', 'spz')
-                if 'point_cloud' in file_path.lower() or 'initial' in file_path.lower():
-                    fallback_role = "initial_point_cloud"
-                else:
-                    fallback_role = "trained_output"
+                asset_type = path_lower.split('.')[-1]
+                fallback_role = (
+                    "initial_point_cloud"
+                    if 'point_cloud' in path_lower or 'initial' in path_lower
+                    else "trained_output"
+                )
             elif path_lower.endswith(('.usd', '.usda', '.usdc', '.usdz')):
                 asset_type = "usd"
+                fallback_role = "reference"
+            else:
+                asset_type = None
                 fallback_role = "reference"
 
             asset = self._scan_and_register_asset(
@@ -2305,12 +2310,10 @@ class AssetManagerPanel(Panel):
             )
             self._import_menu_open = False
 
-            # Auto-select the newly imported asset
             if asset:
                 self._selected_asset_ids.add(asset.id)
                 self._update_selection_type()
 
-            # Refresh UI
             self.refresh_catalog()
             self._dirty_model("import_menu_open")
 
@@ -2318,19 +2321,7 @@ class AssetManagerPanel(Panel):
                 _logger.info(f"Imported asset: {asset.name}")
 
         except Exception as e:
-            _logger.error(f"Failed to import asset: {e}")
-
-    def on_import_splat(self, _handle, _ev, args):
-        """Import a splat/point-cloud file (PLY, SOG, SPZ, USD formats)."""
-        if not self._asset_index:
-            _logger.warning("Asset index not initialized")
-            return
-
-        file_path = lf.ui.open_ply_file_dialog("")
-        if not file_path:
-            return
-
-        self._import_single_asset(file_path)
+            _logger.error(f"Failed to import splat: {e}")
 
     def on_import_mesh(self, _handle, _ev, args):
         """Import a mesh file (OBJ, FBX, GLTF, etc.)."""
@@ -2342,7 +2333,30 @@ class AssetManagerPanel(Panel):
         if not file_path:
             return
 
-        self._import_single_asset(file_path)
+        try:
+            project_id = self._ensure_import_project()
+
+            asset = self._scan_and_register_asset(
+                file_path,
+                project_id=project_id,
+                scene_id=self._selected_scene_id,
+                fallback_role="reference",
+                override_type="mesh",
+            )
+            self._import_menu_open = False
+
+            if asset:
+                self._selected_asset_ids.add(asset.id)
+                self._update_selection_type()
+
+            self.refresh_catalog()
+            self._dirty_model("import_menu_open")
+
+            if asset:
+                _logger.info(f"Imported asset: {asset.name}")
+
+        except Exception as e:
+            _logger.error(f"Failed to import mesh: {e}")
 
     def on_import_dataset(self, _handle, _ev, args):
         """Import a dataset folder."""
