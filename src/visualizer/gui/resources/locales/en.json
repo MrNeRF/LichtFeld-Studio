@@ -96,6 +96,8 @@
     "toolbar.import": "Import",
     "toolbar.clean_missing": "Clean",
     "import_menu.import_asset": "Import Asset...",
+    "import_menu.import_splat": "Import Splat...",
+    "import_menu.import_mesh": "Import Mesh...",
     "import_menu.import_dataset": "Import Dataset...",
     "import_menu.import_checkpoint": "Import Checkpoint...",
     "sidebar.projects": "PROJECTS",

@@ -28,8 +28,9 @@
       <div class="asset-import-dropdown">
         <button class="asset-import-button" data-event-click="toggle_import_menu">{{import_label}} ▼</button>
         <div class="asset-import-menu" data-class-is-visible="import_menu_open">
-          <div class="asset-import-menu-item" data-event-click="on_import_asset">{{import_asset_label}}</div>
           <div class="asset-import-menu-item" data-event-click="on_import_dataset">{{import_dataset_label}}</div>
+          <div class="asset-import-menu-item" data-event-click="on_import_splat">{{import_splat_label}}</div>
+          <div class="asset-import-menu-item" data-event-click="on_import_mesh">{{import_mesh_label}}</div>
           <div class="asset-import-menu-item" data-event-click="on_import_checkpoint">{{import_checkpoint_label}}</div>
           <div class="asset-import-menu-separator"></div>
           <div class="asset-import-menu-item" data-event-click="on_import_from_url">{{import_from_url_label}}</div>
