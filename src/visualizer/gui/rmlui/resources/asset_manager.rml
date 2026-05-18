@@ -215,6 +215,10 @@
                 <span class="parameter-label">{{prop_scene_label}}</span>
                 <span class="parameter-value">{{selected_asset_scene_name}}</span>
               </div>
+              <div class="parameter-row" data-if="selected_asset_role">
+                <span class="parameter-label">{{prop_role_label}}</span>
+                <span class="parameter-value">{{selected_asset_role}}</span>
+              </div>
               <div class="parameter-row">
                 <span class="parameter-label">{{prop_points_label}}</span>
                 <span class="parameter-value">{{selected_asset_points}}</span>

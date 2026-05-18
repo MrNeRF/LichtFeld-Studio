@@ -125,6 +125,7 @@
     "filter.all_assets": "Todos los Activos",
     "filter.checkpoint": "Checkpoint",
     "filter.checkpoints": "Checkpoints",
+    "filter.dataset": "Dataset",
     "filter.datasets": "Datasets",
     "filter.favorites": "Favoritos",
     "filter.missing_files": "Archivos Faltantes",

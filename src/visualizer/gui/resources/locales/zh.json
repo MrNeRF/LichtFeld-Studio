@@ -1091,6 +1091,7 @@
     "filter.all_assets": "所有资源",
     "filter.checkpoint": "检查点",
     "filter.checkpoints": "检查点",
+    "filter.dataset": "数据集",
     "filter.datasets": "数据集",
     "filter.favorites": "收藏",
     "filter.missing_files": "缺失文件",

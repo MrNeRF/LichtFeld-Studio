@@ -226,6 +226,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_asset_scene_name", self.get_selected_asset_scene_name)
         model.bind_func("selected_asset_path", self.get_selected_asset_path)
         model.bind_func("selected_asset_size", self.get_selected_asset_size)
+        model.bind_func("selected_asset_role", self.get_selected_asset_role)
         model.bind_func("selected_asset_points", self.get_selected_asset_points)
         model.bind_func("selected_asset_resolution", self.get_selected_asset_resolution)
         model.bind_func("selected_asset_duration", self.get_selected_asset_duration)
@@ -343,6 +344,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("asset_details_title", lambda: tr("asset_manager.info_panel.asset_details"))
         model.bind_func("prop_project_label", lambda: tr("asset_manager.property.project"))
         model.bind_func("prop_scene_label", lambda: tr("asset_manager.property.scene"))
+        model.bind_func("prop_role_label", lambda: tr("asset_manager.property.role"))
         model.bind_func("prop_points_label", lambda: tr("asset_manager.property.points"))
 
         model.bind_func("prop_size_label", lambda: tr("asset_manager.property.size"))
@@ -1043,7 +1045,7 @@ class AssetManagerPanel(Panel):
             },
             {
                 "id": "checkpoint",
-                "label": tr("asset_manager.filter.checkpoint"),
+                "label": tr("asset_manager.filter.checkpoints"),
                 "count": checkpoint_count,
                 "is_selected": "checkpoint" in self._active_filters,
             },
@@ -1057,7 +1059,7 @@ class AssetManagerPanel(Panel):
             {"id": "splat", "label": tr("asset_manager.filter.splat"), "count": 0, "is_selected": False},
             {"id": "pcl", "label": tr("asset_manager.filter.pcl"), "count": 0, "is_selected": False},
             {"id": "dataset", "label": tr("asset_manager.filter.dataset"), "count": 0, "is_selected": False},
-            {"id": "checkpoint", "label": tr("asset_manager.filter.checkpoint"), "count": 0, "is_selected": False},
+            {"id": "checkpoint", "label": tr("asset_manager.filter.checkpoints"), "count": 0, "is_selected": False},
         ]
 
     # ── Flattened Selected Asset Getters ─────────────────────
@@ -1106,6 +1108,13 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         return self._format_size(asset.get("file_size_bytes", 0))
+
+    def get_selected_asset_role(self) -> str:
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        role = asset.get("role", "")
+        return role.replace("_", " ").title() if role else ""
 
     def get_selected_asset_resolution(self) -> str:
         return ""
