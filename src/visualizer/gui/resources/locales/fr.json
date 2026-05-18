@@ -230,7 +230,10 @@
     "panel_title": "Gestionnaire de Ressources",
     "import_from_url": "Importer depuis URL",
     "import_button": "Importer",
-    "import_button_downloading": "Téléchargement..."
+    "import_button_downloading": "Téléchargement...",
+    "status_connecting": "Connexion...",
+    "status_extracting": "Extraction...",
+    "status_complete": "Terminé !"
   },
   "training": {
     "section.dataset": "Dataset",

@@ -230,7 +230,10 @@
     "panel_title": "Menedżer Zasobów",
     "import_from_url": "Importuj z URL",
     "import_button": "Importuj",
-    "import_button_downloading": "Pobieranie..."
+    "import_button_downloading": "Pobieranie...",
+    "status_connecting": "Łączenie...",
+    "status_extracting": "Rozpakowywanie...",
+    "status_complete": "Ukończono!"
   },
   "training": {
     "section.dataset": "Zbiór Danych",

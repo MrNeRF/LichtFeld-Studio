@@ -230,7 +230,10 @@
     "unnamed": "名前なし",
     "unnamed_project": "名前なしプロジェクト",
     "unnamed_scene": "名前なしシーン",
-    "import_button_downloading": "ダウンロード中..."
+    "import_button_downloading": "ダウンロード中...",
+    "status_connecting": "接続中...",
+    "status_extracting": "展開中...",
+    "status_complete": "完了！"
   },
   "training": {
     "section.dataset": "データセット",

@@ -1196,6 +1196,9 @@
     "unnamed": "未命名",
     "unnamed_project": "未命名项目",
     "unnamed_scene": "未命名场景",
-    "import_button_downloading": "下载中..."
+    "import_button_downloading": "下载中...",
+    "status_connecting": "连接中...",
+    "status_extracting": "解压中...",
+    "status_complete": "完成！"
   }
 }

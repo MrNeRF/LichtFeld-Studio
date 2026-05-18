@@ -233,6 +233,9 @@
     "panel_title": "Gestor de Activos",
     "import_from_url": "Importar desde URL",
     "import_button": "Importar",
-    "import_button_downloading": "Descargando..."
+    "import_button_downloading": "Descargando...",
+    "status_connecting": "Conectando...",
+    "status_extracting": "Extrayendo...",
+    "status_complete": "¡Completado!"
   }
 }

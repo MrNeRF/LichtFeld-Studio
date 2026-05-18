@@ -229,7 +229,10 @@
     "panel_title": "Gestione Risorse",
     "import_from_url": "Importa da URL",
     "import_button": "Importa",
-    "import_button_downloading": "Download in corso..."
+    "import_button_downloading": "Download in corso...",
+    "status_connecting": "Connessione...",
+    "status_extracting": "Estrazione...",
+    "status_complete": "Completato!"
   },
   "training": {
     "section.dataset": "Dataset",

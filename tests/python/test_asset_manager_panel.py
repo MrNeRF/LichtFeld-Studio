@@ -198,6 +198,9 @@ def test_asset_manager_load_context_actions_are_localized():
         "import_button_downloading",
         "panel_title",
         "property.assets",
+        "status_connecting",
+        "status_extracting",
+        "status_complete",
     )
 
     for locale_path in sorted(locale_dir.glob("*.json")):

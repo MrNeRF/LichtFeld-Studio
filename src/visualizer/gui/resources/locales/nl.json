@@ -227,7 +227,10 @@
     "panel_title": "Asset Manager",
     "import_from_url": "Importeren van URL",
     "import_button": "Importeren",
-    "import_button_downloading": "Downloaden..."
+    "import_button_downloading": "Downloaden...",
+    "status_connecting": "Verbinden...",
+    "status_extracting": "Uitpakken...",
+    "status_complete": "Voltooid!"
   },
   "training": {
     "section.dataset": "Dataset",

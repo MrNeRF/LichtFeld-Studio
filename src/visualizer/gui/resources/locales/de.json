@@ -227,7 +227,10 @@
     "unnamed": "Unbenannt",
     "unnamed_project": "Unbenanntes Projekt",
     "unnamed_scene": "Unbenannte Szene",
-    "import_button_downloading": "Herunterladen..."
+    "import_button_downloading": "Herunterladen...",
+    "status_connecting": "Verbinden...",
+    "status_extracting": "Extrahieren...",
+    "status_complete": "Abgeschlossen!"
   },
   "training": {
     "section.dataset": "Datensatz",

@@ -230,7 +230,10 @@
     "panel_title": "Asset Manager",
     "import_from_url": "Import from URL",
     "import_button": "Import",
-    "import_button_downloading": "Downloading..."
+    "import_button_downloading": "Downloading...",
+    "status_connecting": "Connecting...",
+    "status_extracting": "Extracting...",
+    "status_complete": "Complete!"
   },
   "training": {
     "section.dataset": "Dataset",
