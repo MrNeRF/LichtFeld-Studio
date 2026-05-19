@@ -84,6 +84,12 @@ _dataset_import_panel = None
 _resume_checkpoint_panel = None
 _url_import_panel = None
 _watch_dirs_dialog_panel = None
+_watch_dirs_dialog_state = {
+    "project_id": None,
+    "project_name": "",
+    "watch_dirs": [],
+    "version": 0,
+}
 
 __lfs_panel_classes__ = [
     "DatasetImportPanel",
@@ -123,24 +129,70 @@ def open_url_import_panel() -> bool:
 def open_watch_dirs_dialog(project_id: str) -> bool:
     """Open the watched directories dialog for the given project."""
     global _watch_dirs_dialog_panel
+    if not project_id:
+        return False
     if _watch_dirs_dialog_panel is None:
         try:
             lf.register_class(WatchDirsDialogPanel)
         except Exception:
             pass
-        _watch_dirs_dialog_panel = WatchDirsDialogPanel()
     try:
         _watch_log(
             "info",
             "open dialog requested project_id=%s panel_object_id=%s",
             project_id,
-            id(_watch_dirs_dialog_panel),
+            id(_watch_dirs_dialog_panel) if _watch_dirs_dialog_panel is not None else "None",
         )
-        _watch_dirs_dialog_panel._project_id = project_id
-        return _watch_dirs_dialog_panel.show(project_id)
+        if not _load_watch_dirs_dialog_state(project_id):
+            return False
+        lf.ui.set_panel_enabled(WatchDirsDialogPanel.id, True)
+        if _watch_dirs_dialog_panel is not None:
+            _watch_dirs_dialog_panel._sync_from_shared_state()
+            _watch_dirs_dialog_panel._dirty_model()
+        return True
     except Exception as e:
         _logger.error("Failed to open watch dirs dialog: %s", e, exc_info=True)
         return False
+
+
+def _set_watch_dirs_dialog_state(
+    project_id: Optional[str],
+    project_name: str = "",
+    watch_dirs: Optional[list[str]] = None,
+) -> None:
+    _watch_dirs_dialog_state["project_id"] = project_id
+    _watch_dirs_dialog_state["project_name"] = project_name
+    _watch_dirs_dialog_state["watch_dirs"] = list(watch_dirs or [])
+    _watch_dirs_dialog_state["version"] = int(_watch_dirs_dialog_state.get("version") or 0) + 1
+
+
+def _load_watch_dirs_dialog_state(project_id: str) -> bool:
+    index = load_asset_index()
+    if index is None:
+        _watch_log("error", "catalog load failed")
+        return False
+    project = index.get_project(project_id)
+    if project is None:
+        _watch_log(
+            "error",
+            "show aborted: project not found project_id=%s available=%s library=%s",
+            project_id,
+            list(getattr(index, "projects", {}).keys()),
+            _index_library_path(index),
+        )
+        return False
+    project_name = getattr(project, "name", "Unnamed Project")
+    watch_dirs = index.get_watch_dirs(project_id)
+    _set_watch_dirs_dialog_state(project_id, project_name, watch_dirs)
+    _watch_log(
+        "info",
+        "show loaded project_id=%s project_name=%s watch_dirs=%s library=%s",
+        project_id,
+        project_name,
+        watch_dirs,
+        _index_library_path(index),
+    )
+    return True
 
 
 def _tr(key: str) -> str:
@@ -243,12 +295,13 @@ def _register_discovered_assets(
                 metadata.get("type"),
             )
             continue
-        existing = index.find_asset_by_path(file_path)
+        existing = index.find_asset_by_path(file_path, project_id=project_id)
         if existing is not None:
             _watch_log(
                 "info",
-                "register skipped existing asset path=%s asset_id=%s",
+                "register skipped existing project asset path=%s project_id=%s asset_id=%s",
                 file_path,
+                project_id,
                 getattr(existing, "id", "<unknown>"),
             )
             continue
@@ -1302,9 +1355,20 @@ class WatchDirsDialogPanel(Panel):
         self._project_id: Optional[str] = None
         self._project_name: str = ""
         self._watch_dirs: list[str] = []
+        self._shared_state_version: int = -1
         self._last_lang: str = ""
         self._scan_thread: Optional[threading.Thread] = None
         self._scan_cancel_event = threading.Event()
+
+    def _sync_from_shared_state(self) -> None:
+        self._project_id = _watch_dirs_dialog_state.get("project_id")
+        self._project_name = str(_watch_dirs_dialog_state.get("project_name") or "")
+        self._watch_dirs = list(_watch_dirs_dialog_state.get("watch_dirs") or [])
+        self._shared_state_version = int(_watch_dirs_dialog_state.get("version") or 0)
+
+    def _publish_shared_state(self) -> None:
+        _set_watch_dirs_dialog_state(self._project_id, self._project_name, self._watch_dirs)
+        self._shared_state_version = int(_watch_dirs_dialog_state.get("version") or 0)
 
     def on_mount(self, doc):
         super().on_mount(doc)
@@ -1331,6 +1395,7 @@ class WatchDirsDialogPanel(Panel):
         model.bind_event("on_cancel", self._on_cancel)
         model.bind_event("on_save", self._on_save)
         self._handle = model.get_handle()
+        self._sync_from_shared_state()
         if self._handle:
             self._handle.update_record_list(
                 "watch_dirs_list", [{"path": p} for p in self._watch_dirs]
@@ -1339,6 +1404,10 @@ class WatchDirsDialogPanel(Panel):
 
     def on_update(self, doc):
         del doc
+        if self._shared_state_version != int(_watch_dirs_dialog_state.get("version") or 0):
+            self._sync_from_shared_state()
+            self._dirty_model()
+            return True
         current_lang = lf.ui.get_current_language()
         if current_lang != self._last_lang:
             self._last_lang = current_lang
@@ -1395,36 +1464,16 @@ class WatchDirsDialogPanel(Panel):
     def show(self, project_id: str) -> bool:
         try:
             _watch_log("info", "show requested project_id=%s", project_id)
-            self._project_id = None
-            self._project_name = ""
-            self._watch_dirs = []
-            self._dirty_model()
-
-            index = self._catalog_index()
-            if index is None:
-                _watch_log("error", "show aborted: no AssetIndex")
+            if not _load_watch_dirs_dialog_state(project_id):
                 return False
-
-            project = index.get_project(project_id)
-            if project is None:
-                _watch_log(
-                    "error",
-                    "show aborted: project not found project_id=%s available=%s",
-                    project_id,
-                    list(getattr(index, "projects", {}).keys()),
-                )
-                return False
-
-            self._project_id = project_id
-            self._project_name = getattr(project, "name", "Unnamed Project")
-            self._watch_dirs = index.get_watch_dirs(project_id)
+            self._sync_from_shared_state()
             _watch_log(
                 "info",
-                "show loaded project_id=%s project_name=%s watch_dirs=%s library=%s",
+                "show synced object_id=%s project_id=%s project_name=%s watch_dirs=%s",
+                id(self),
                 self._project_id,
                 self._project_name,
                 self._watch_dirs,
-                _index_library_path(index),
             )
             lf.ui.set_panel_enabled(self.id, True)
             self._dirty_model()
@@ -1453,6 +1502,7 @@ class WatchDirsDialogPanel(Panel):
             self._handle.dirty(field)
 
     def _on_browse_add(self, _handle=None, _ev=None, _args=None):
+        self._sync_from_shared_state()
         path = lf.ui.open_dataset_folder_dialog()
         if not path:
             _watch_log("info", "browse add cancelled")
@@ -1462,9 +1512,11 @@ class WatchDirsDialogPanel(Panel):
             return
         _watch_log("info", "browse add path=%s exists=%s", path, os.path.exists(path))
         self._watch_dirs.append(path)
+        self._publish_shared_state()
         self._dirty_model("watch_dirs_list", "no_watch_dirs")
 
     def _on_remove_dir(self, _handle=None, _ev=None, args=None):
+        self._sync_from_shared_state()
         if not args:
             return
         try:
@@ -1473,15 +1525,18 @@ class WatchDirsDialogPanel(Panel):
             return
         if 0 <= idx < len(self._watch_dirs):
             self._watch_dirs.pop(idx)
+            self._publish_shared_state()
             self._dirty_model("watch_dirs_list", "no_watch_dirs")
 
     def _on_cancel(self, _handle=None, _ev=None, _args=None):
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_save(self, _handle=None, _ev=None, _args=None):
+        self._sync_from_shared_state()
         _watch_log(
             "info",
-            "save clicked project_id=%s watch_dirs=%s",
+            "save clicked object_id=%s project_id=%s watch_dirs=%s",
+            id(self),
             self._project_id,
             self._watch_dirs,
         )

@@ -768,7 +768,10 @@ class AssetIndex:
             return None
 
         normalized_abs_path = os.path.abspath(absolute_path or path)
-        existing_asset = self.find_asset_by_path(normalized_abs_path)
+        existing_asset = self.find_asset_by_path(
+            normalized_abs_path,
+            project_id=project_id,
+        )
         if existing_asset is not None:
             merged_tags = list(
                 dict.fromkeys((existing_asset.tags or []) + (tags or []))
@@ -928,17 +931,24 @@ class AssetIndex:
         """
         return self._assets.get(asset_id)
 
-    def find_asset_by_path(self, absolute_path: str) -> Optional[Asset]:
+    def find_asset_by_path(
+        self,
+        absolute_path: str,
+        project_id: Optional[str] = None,
+    ) -> Optional[Asset]:
         """Find an asset by its absolute path.
 
         Args:
             absolute_path: Absolute file path
+            project_id: Optional project ID to scope the lookup
 
         Returns:
             Asset or None if not found
         """
         normalized = os.path.abspath(absolute_path)
         for asset in self._assets.values():
+            if project_id is not None and asset.project_id != project_id:
+                continue
             if os.path.abspath(asset.absolute_path) == normalized:
                 return asset
         return None

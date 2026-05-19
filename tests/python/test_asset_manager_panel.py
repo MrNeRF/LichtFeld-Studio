@@ -451,7 +451,10 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     assert panel.get_selected_count() == 0
 
 
-def test_edit_watch_dirs_selects_requested_project(asset_manager_panel_module, monkeypatch):
+def test_edit_watch_dirs_uses_clicked_project_without_selecting_it(
+    asset_manager_panel_module,
+    monkeypatch,
+):
     panel = asset_manager_panel_module.AssetManagerPanel()
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
@@ -475,7 +478,7 @@ def test_edit_watch_dirs_selects_requested_project(asset_manager_panel_module, m
 
     panel.on_edit_watch_dirs(None, None, ["target"])
 
-    assert panel._selected_project_id == "target"
+    assert panel._selected_project_id == "default"
     assert opened == ["target"]
 
 

@@ -138,7 +138,7 @@ def ensure_dataset_catalog_context(
     scene = index.find_or_create_scene(project.id, scene_name) if project else None
     project_id = project.id if project else None
     scene_id = scene.id if scene else None
-    existing = index.find_asset_by_path(normalized_path)
+    existing = index.find_asset_by_path(normalized_path, project_id=project_id)
 
     asset = existing
     if asset is None or asset.type != "dataset":

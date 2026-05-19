@@ -329,7 +329,49 @@ def test_watch_directory_discovery_imports_resume_checkpoints(import_dialog_modu
     assert list(reloaded.assets.values())[0]["type"] == "checkpoint"
 
 
-def test_watch_dialog_inherits_active_asset_manager_index(
+def test_watch_directory_import_allows_same_path_in_multiple_projects(
+    import_dialog_module,
+    tmp_path,
+):
+    module, _state = import_dialog_module
+    index_module = import_module("lfs_plugins.asset_index")
+
+    watched_dir = tmp_path / "watched"
+    watched_dir.mkdir()
+    checkpoint_path = watched_dir / "checkpoint.resume"
+    checkpoint_path.write_bytes(b"checkpoint data")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    default_project = index.create_project("Default")
+    target_project = index.create_project("Target")
+
+    metadata_list = [{"path": str(checkpoint_path), "type": "checkpoint"}]
+    default_assets = module._register_discovered_assets(
+        index,
+        None,
+        metadata_list,
+        project_id=default_project.id,
+    )
+    target_assets = module._register_discovered_assets(
+        index,
+        None,
+        metadata_list,
+        project_id=target_project.id,
+    )
+
+    assert len(default_assets) == 1
+    assert len(target_assets) == 1
+    assert default_assets[0].id != target_assets[0].id
+    assert default_assets[0].absolute_path == target_assets[0].absolute_path
+
+    reloaded = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    assert reloaded.load() is True
+    assert len(reloaded.list_assets(project_id=default_project.id)) == 1
+    assert len(reloaded.list_assets(project_id=target_project.id)) == 1
+
+
+def test_watch_dialog_uses_loaded_catalog_state(
     import_dialog_module,
     monkeypatch,
     tmp_path,
@@ -337,20 +379,19 @@ def test_watch_dialog_inherits_active_asset_manager_index(
     module, _state = import_dialog_module
     index_module = import_module("lfs_plugins.asset_index")
 
-    shared_index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
-    active_panel = SimpleNamespace(_asset_index=shared_index)
-    monkeypatch.setattr(module, "get_asset_manager_panel", lambda: active_panel)
-    monkeypatch.setattr(
-        module,
-        "load_asset_index",
-        lambda: pytest.fail("watch dialog should use active panel index"),
-    )
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    project = index.create_project("Default")
+    index.set_watch_dirs(project.id, [str(tmp_path / "watched")])
+    monkeypatch.setattr(module, "load_asset_index", lambda: index)
 
     panel = module.WatchDirsDialogPanel()
-    assert panel._catalog_index() is shared_index
+    assert panel.show(project.id) is True
+    assert panel._project_id == project.id
+    assert panel._watch_dirs == [str(tmp_path / "watched")]
 
 
-def test_watch_dialog_reconciles_active_panel_selection(import_dialog_module, monkeypatch, tmp_path):
+def test_watch_dialog_does_not_mutate_active_panel_selection(import_dialog_module, monkeypatch, tmp_path):
     module, _state = import_dialog_module
     index_module = import_module("lfs_plugins.asset_index")
 
@@ -373,11 +414,13 @@ def test_watch_dialog_reconciles_active_panel_selection(import_dialog_module, mo
 
     active_panel = _PanelStub()
     monkeypatch.setattr(module, "get_asset_manager_panel", lambda: active_panel)
+    monkeypatch.setattr(module, "load_asset_index", lambda: index)
 
     panel = module.WatchDirsDialogPanel()
     assert panel.show(target_project.id) is True
-    assert selection_calls == [target_project.id]
+    assert selection_calls == []
     assert panel._project_id == target_project.id
+    assert active_panel._selected_project_id == default_project.id
 
 
 def test_asset_scanner_rejects_html_assets(import_dialog_module):
