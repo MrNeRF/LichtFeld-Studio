@@ -15,7 +15,13 @@ from typing import Any, Dict, List, Optional, Tuple
 _log = logging.getLogger(__name__)
 
 LIBRARY_VERSION = "1.0.0"
-DEFAULT_LIBRARY_PATH = Path.home() / ".lichtfeld" / "asset_manager" / "library.json"
+LEGACY_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
+DEFAULT_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+LEGACY_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+
+
+def resolve_asset_manager_storage_path() -> Path:
+    return LEGACY_STORAGE_PATH
 
 
 @dataclass

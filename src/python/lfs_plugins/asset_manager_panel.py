@@ -25,7 +25,13 @@ _logger = logging.getLogger(__name__)
 
 # Import backend components (to be implemented)
 try:
-    from .asset_index import AssetIndex, Project, Scene, Asset
+    from .asset_index import (
+        AssetIndex,
+        Project,
+        Scene,
+        Asset,
+        resolve_asset_manager_storage_path,
+    )
     from .asset_scanner import AssetScanner
     from .asset_thumbnails import AssetThumbnails
 
@@ -69,7 +75,7 @@ class AssetManagerPanel(Panel):
     update_interval_ms = 500
 
     # Storage path for asset manager data
-    STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
+    STORAGE_PATH = resolve_asset_manager_storage_path()
 
     def __init__(self):
         self._handle = None

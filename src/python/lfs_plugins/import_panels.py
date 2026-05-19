@@ -24,6 +24,7 @@ from .asset_manager_integration import (
     register_catalog_asset_path,
     select_asset_in_active_panel,
 )
+from .asset_index import resolve_asset_manager_storage_path
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
 from .url_downloader import (
@@ -34,7 +35,6 @@ from .url_downloader import (
     download_url,
     extract_archive,
     get_url_info,
-    is_archive_url,
 )
 
 
@@ -711,7 +711,7 @@ class URLImportPanel(_ImportDialogPanel):
     size = (560, 360)
     form_id = "url-import-form"
 
-    STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
+    STORAGE_PATH = resolve_asset_manager_storage_path()
 
     def __init__(self):
         global _url_import_panel
@@ -1009,50 +1009,42 @@ class URLImportPanel(_ImportDialogPanel):
                 self._url_import_warning = message
                 self._dirty_model("url_import_warning_text", "url_import_has_warning")
 
-            if is_archive_url(url):
-                temp_file = dest_dir / f"download_{asset_name}.tmp"
-                download_url(
-                    url,
-                    temp_file,
-                    on_progress=on_progress,
-                    on_warning=on_warning,
-                    should_cancel=lambda: self._should_cancel(session_id),
-                )
+            downloaded_file = dest_dir / asset_name
+            download_url(
+                url,
+                downloaded_file,
+                on_progress=on_progress,
+                on_warning=on_warning,
+                should_cancel=lambda: self._should_cancel(session_id),
+            )
 
-                if self._should_cancel(session_id):
-                    raise InterruptedError("Download cancelled")
+            if self._should_cancel(session_id):
+                raise InterruptedError("Download cancelled")
 
-                self._url_import_progress = 0.0
-                self._url_import_status = _tr("asset_manager.status_extracting")
-                self._dirty_model(
-                    "url_import_show_progress",
-                    "url_import_show_progress_bar",
-                    "url_import_progress",
-                    "url_import_status",
-                )
+            self._url_import_progress = 0.0
+            self._url_import_status = _tr("asset_manager.status_extracting")
+            self._dirty_model(
+                "url_import_show_progress",
+                "url_import_show_progress_bar",
+                "url_import_progress",
+                "url_import_status",
+            )
 
+            extracted = False
+            try:
                 extract_archive(
-                    temp_file,
+                    downloaded_file,
                     dest_dir,
                     on_progress=on_progress,
                     should_cancel=lambda: self._should_cancel(session_id),
                 )
-                temp_file.unlink(missing_ok=True)
-                self._scan_and_register_asset(str(dest_dir), name=asset_name)
-            else:
-                dest_file = dest_dir / asset_name
-                download_url(
-                    url,
-                    dest_file,
-                    on_progress=on_progress,
-                    on_warning=on_warning,
-                    should_cancel=lambda: self._should_cancel(session_id),
-                )
+                downloaded_file.unlink(missing_ok=True)
+                extracted = True
+            except ExtractError:
+                extracted = False
 
-                if self._should_cancel(session_id):
-                    raise InterruptedError("Download cancelled")
-
-                self._scan_and_register_asset(str(dest_file), name=asset_name)
+            discovery_path = str(dest_dir) if extracted else str(downloaded_file)
+            self._scan_and_register_asset(discovery_path, name=asset_name)
 
             if session_id != self._url_import_session_id:
                 return
@@ -1200,6 +1192,11 @@ class WatchDirsDialogPanel(Panel):
         model.bind_event("on_cancel", self._on_cancel)
         model.bind_event("on_save", self._on_save)
         self._handle = model.get_handle()
+        if self._handle:
+            self._handle.update_record_list(
+                "watch_dirs_list", [{"path": p} for p in self._watch_dirs]
+            )
+            self._handle.dirty_all()
 
     def on_update(self, doc):
         del doc
@@ -1213,7 +1210,16 @@ class WatchDirsDialogPanel(Panel):
     def _catalog_index(self):
         panel = get_asset_manager_panel()
         shared_index = getattr(panel, "_asset_index", None) if panel is not None else None
-        return shared_index if shared_index is not None else load_asset_index()
+        index = shared_index if shared_index is not None else load_asset_index()
+        if index is not None:
+            try:
+                index.load()
+            except Exception:
+                _logger.debug(
+                    "Failed to reload asset index from library.json for watch dirs dialog",
+                    exc_info=True,
+                )
+        return index
 
     def show(self, project_id: str) -> bool:
         try:

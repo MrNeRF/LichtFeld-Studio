@@ -1939,9 +1939,9 @@ class TrainingPanel(Panel):
         if not ASSET_MANAGER_AVAILABLE:
             return
         try:
-            from pathlib import Path
+            from .asset_index import resolve_asset_manager_storage_path
 
-            storage_path = Path.home() / ".lichtfeld" / "asset_manager"
+            storage_path = resolve_asset_manager_storage_path()
             storage_path.mkdir(parents=True, exist_ok=True)
             self._asset_index = AssetIndex(library_path=storage_path / "library.json")
             self._asset_index.load()

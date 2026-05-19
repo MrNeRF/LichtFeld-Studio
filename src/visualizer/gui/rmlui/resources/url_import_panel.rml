@@ -6,12 +6,12 @@
 </head>
 <body template="floating-window" data-model="url_import">
 
-  <span class="impdlg-subtitle text-muted">Download a dataset archive or remote dataset layout into the asset library.</span>
+  <span class="impdlg-subtitle text-muted">@tr:asset_manager.url_import.subtitle</span>
   <div class="separator"></div>
 
   <form id="url-import-form" class="impdlg-form">
     <div class="impdlg-control-group">
-      <span class="impdlg-field-label text-muted">URL</span>
+      <span class="impdlg-field-label text-muted">@tr:asset_manager.url_import.url_label</span>
       <div class="impdlg-control-main">
         <div class="impdlg-control-row">
           <input type="text" class="impdlg-input urlimp-input" data-value="url_import_url" placeholder="https://..." />
@@ -22,26 +22,22 @@
     <div class="urlimp-help">
       <div id="url-import-formats-header" class="section-header urlimp-formats-header" data-event-click="toggle_formats">
         <span id="url-import-formats-arrow" class="section-arrow">&#x25B6;</span>
-        <span>Supported sources</span>
+        <span>@tr:asset_manager.url_import.supported_sources</span>
       </div>
       <div id="url-import-formats-content" class="section-content collapsed urlimp-formats-content">
         <div class="urlimp-hint-group">
-          <div class="urlimp-hint-title">Direct URL expects</div>
-          <div class="urlimp-hint-line"><span class="urlimp-path">&lt;baseUrl&gt;/sparse/0/cameras.bin</span></div>
-          <div class="urlimp-hint-line"><span class="urlimp-path">&lt;baseUrl&gt;/sparse/0/images.bin</span></div>
-          <div class="urlimp-hint-line"><span class="urlimp-path">&lt;baseUrl&gt;/sparse/0/points3D.bin</span></div>
-          <div class="urlimp-hint-line"><span class="urlimp-path">&lt;baseUrl&gt;/images/</span> <span class="urlimp-hint-optional">optional</span></div>
-          <div class="urlimp-hint-line"><span class="urlimp-path">&lt;baseUrl&gt;/masks/</span> <span class="urlimp-hint-optional">optional</span></div>
+          <div class="urlimp-hint-title">@tr:asset_manager.url_import.asset_files_title</div>
+          <div class="urlimp-hint-line">@tr:asset_manager.url_import.asset_files_line</div>
         </div>
 
         <div class="urlimp-hint-group">
-          <div class="urlimp-hint-title">Archives</div>
-          <div class="urlimp-hint-line">.zip, .tar.gz, .tar.bz2, .tar.xz, .tar, .7z</div>
+          <div class="urlimp-hint-title">@tr:asset_manager.url_import.archives_title</div>
+          <div class="urlimp-hint-line">@tr:asset_manager.url_import.archives_line</div>
         </div>
 
         <div class="urlimp-hint-group">
-          <div class="urlimp-hint-title">Cloud providers</div>
-          <div class="urlimp-hint-line">S3, GCS, R2, Dropbox, HuggingFace, GitHub</div>
+          <div class="urlimp-hint-title">@tr:asset_manager.url_import.providers_title</div>
+          <div class="urlimp-hint-line">@tr:asset_manager.url_import.providers_line</div>
         </div>
       </div>
     </div>

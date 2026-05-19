@@ -16,7 +16,7 @@ from typing import Any, Optional
 import lichtfeld as lf
 
 try:
-    from .asset_index import AssetIndex
+    from .asset_index import AssetIndex, resolve_asset_manager_storage_path
     from .asset_scanner import AssetScanner
     from .asset_thumbnails import AssetThumbnails
 
@@ -29,9 +29,6 @@ except ImportError:
 
 _logger = logging.getLogger(__name__)
 _active_panel = None
-_DEFAULT_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
-
-
 def set_active_asset_manager_panel(panel) -> None:
     global _active_panel
     _active_panel = panel
@@ -48,8 +45,9 @@ def get_asset_manager_panel():
 
 
 def _storage_path() -> Path:
-    _DEFAULT_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-    return _DEFAULT_STORAGE_PATH
+    path = resolve_asset_manager_storage_path()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def load_asset_index(asset_index: Optional[AssetIndex] = None) -> Optional[AssetIndex]:
@@ -86,7 +84,7 @@ def metadata_to_asset_kwargs(metadata: dict[str, Any]) -> dict[str, Any]:
         "modified_at": metadata.get("modified"),
     }
 
-    if asset_type in ("ply", "rad", "sog", "spz", "mesh"):
+    if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
         kwargs["geometry_metadata"] = format_specific
     elif asset_type == "dataset":
         kwargs["dataset_metadata"] = format_specific

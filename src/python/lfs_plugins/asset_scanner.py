@@ -26,13 +26,21 @@ _EXTENSION_TYPE_MAP = {
     ".rad": "rad",
     ".sog": "sog",
     ".spz": "spz",
+    ".obj": "mesh",
+    ".fbx": "mesh",
+    ".gltf": "mesh",
+    ".glb": "mesh",
+    ".stl": "mesh",
+    ".dae": "mesh",
+    ".3ds": "mesh",
     ".ckpt": "checkpoint",
     ".mp4": "video",
     ".mov": "video",
     ".usd": "usd",
+    ".usda": "usd",
+    ".usdc": "usd",
     ".usdz": "usd",
     ".html": "html",
-    ".json": "json",
 }
 
 # Header signatures for file type detection (first few bytes)
@@ -136,7 +144,7 @@ class AssetScanner:
 
         Returns:
             One of: "ply", "rad", "sog", "spz", "checkpoint", "dataset",
-            "video", "usd", "html", "json", or None if type cannot be determined.
+            "video", "usd", "html", or None if type cannot be determined.
 
         Example:
             >>> scanner.detect_type("model.ply")
@@ -436,8 +444,6 @@ class AssetScanner:
             result["format_specific"] = self.extract_checkpoint_metadata(path) or {}
         elif result["type"] == "dataset":
             result["format_specific"] = self.extract_dataset_metadata(path) or {}
-        elif result["type"] == "json":
-            result["format_specific"] = self._extract_json_metadata(path) or {}
 
         return result
 
@@ -831,43 +837,6 @@ class AssetScanner:
 
         return None
 
-    def _extract_json_metadata(self, path: str) -> Optional[dict]:
-        """Extract metadata from JSON files.
-
-        Args:
-            path: Path to the JSON file.
-
-        Returns:
-            Dictionary with metadata including:
-            - keys: Top-level keys in the JSON
-            - type_hint: Inferred type based on content
-        """
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            result = {
-                "keys": list(data.keys()) if isinstance(data, dict) else [],
-                "type_hint": None,
-                "is_array": isinstance(data, list),
-            }
-
-            # Try to infer type from content
-            if isinstance(data, dict):
-                if "gaussians" in data or "point_cloud" in data:
-                    result["type_hint"] = "gaussian_data"
-                elif "iteration" in data and "training_params" in data:
-                    result["type_hint"] = "checkpoint_metadata"
-                elif "cameras" in data or "images" in data:
-                    result["type_hint"] = "scene_data"
-
-            return result
-
-        except (json.JSONDecodeError, IOError, PermissionError) as e:
-            _logger.debug(f"Could not read JSON metadata from {path}: {e}")
-
-        return None
-
     # ═══════════════════════════════════════════════════════════════════════════════
     # Validation
     # ═══════════════════════════════════════════════════════════════════════════════
@@ -1159,12 +1128,25 @@ class AssetScanner:
 
             for current_root, dirnames, filenames in os.walk(path_obj):
                 current_root_path = Path(current_root)
-                _append_metadata(str(current_root_path))
+                current_is_dataset = self._looks_like_dataset(current_root_path)
+                if current_is_dataset:
+                    _append_metadata(str(current_root_path))
+                    # Dataset internals like images/ and sparse/ can be extremely
+                    # large and are not importable assets themselves.
+                    dirnames[:] = [
+                        dirname
+                        for dirname in dirnames
+                        if dirname.lower() not in _DATASET_EXCLUDED_DIRS
+                    ]
+                else:
+                    dirnames[:] = [
+                        dirname for dirname in dirnames if dirname.lower() != "__pycache__"
+                    ]
 
                 for filename in filenames:
                     file_path = current_root_path / filename
                     ext = file_path.suffix.lower()
-                    if ext not in _EXTENSION_TYPE_MAP and ext not in _IMAGE_EXTENSIONS:
+                    if ext not in _EXTENSION_TYPE_MAP:
                         continue
                     _append_metadata(str(file_path))
         except (OSError, PermissionError) as e:
