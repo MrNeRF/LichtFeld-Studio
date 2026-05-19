@@ -68,6 +68,10 @@ class _ElementStub:
         self._attrs = attrs or {}
         self._parent = parent
         self.tag_name = tag_name
+        self.listeners = {}
+        self.scroll_height = 0.0
+        self.client_height = 0.0
+        self.scroll_top = 0.0
 
     def get_attribute(self, name, default=""):
         return self._attrs.get(name, default)
@@ -77,6 +81,9 @@ class _ElementStub:
 
     def parent(self):
         return self._parent
+
+    def add_event_listener(self, event, callback):
+        self.listeners[event] = callback
 
 
 class _EventStub:
@@ -107,6 +114,18 @@ class _EventStub:
 
     def stop_propagation(self):
         self.stopped = True
+
+
+class _DocumentStub:
+    def __init__(self, elements=None):
+        self._elements = elements or {}
+        self.listeners = {}
+
+    def get_element_by_id(self, element_id):
+        return self._elements.get(element_id)
+
+    def add_event_listener(self, event, callback):
+        self.listeners[event] = callback
 
 
 def _make_asset():
@@ -458,3 +477,40 @@ def test_edit_watch_dirs_selects_requested_project(asset_manager_panel_module, m
 
     assert panel._selected_project_id == "target"
     assert opened == ["target"]
+
+
+def test_bind_dom_event_listeners_registers_gallery_wheel_handler(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    content = _ElementStub({"id": "asset-popup-content"})
+    gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
+    doc = _DocumentStub(
+        {
+            "asset-popup-content": content,
+            "asset-gallery-scroll": gallery_scroll,
+        }
+    )
+
+    panel._bind_dom_event_listeners(doc)
+
+    assert "mousescroll" in gallery_scroll.listeners
+    assert "click" in content.listeners
+    assert "mousemove" in doc.listeners
+
+
+def test_gallery_precise_scroll_moves_scroll_container(asset_manager_panel_module):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
+    gallery_scroll.scroll_height = 900.0
+    gallery_scroll.client_height = 300.0
+    gallery_scroll.scroll_top = 120.0
+    event = _EventStub(
+        current_target=gallery_scroll,
+        params={"wheel_delta_y": "1"},
+    )
+
+    panel._on_gallery_precise_scroll(event)
+
+    assert gallery_scroll.scroll_top == 152.0
+    assert event.stopped is True

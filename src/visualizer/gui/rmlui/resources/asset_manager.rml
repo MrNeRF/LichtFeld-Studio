@@ -108,7 +108,7 @@
           <span class="asset-gallery-title" data-if="is_list_view">{{list_title}}</span>
         </div>
 
-        <div class="asset-gallery-scroll">
+        <div id="asset-gallery-scroll" class="asset-gallery-scroll">
           <div class="asset-card-grid" data-if="is_gallery_view">
             <div data-for="asset : assets">
               <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">

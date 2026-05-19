@@ -24,6 +24,8 @@ from .types import Panel
 
 _logger = logging.getLogger(__name__)
 
+PRECISE_SCROLL_STEP = 32.0
+
 # Import backend components (to be implemented)
 try:
     from .asset_index import (
@@ -3322,11 +3324,40 @@ class AssetManagerPanel(Panel):
             content.add_event_listener(
                 "dblclick", self._on_asset_manager_double_click
             )
+        gallery_scroll = doc.get_element_by_id("asset-gallery-scroll")
+        if gallery_scroll:
+            gallery_scroll.add_event_listener(
+                "mousescroll", self._on_gallery_precise_scroll
+            )
 
         # Resize-start is bound declaratively in RML via data-event-mousedown.
         # Only keep document-level listeners here for active drag tracking.
         doc.add_event_listener("mousemove", self._on_resize_mousemove)
         doc.add_event_listener("mouseup", self._on_resize_mouseup)
+
+    def _on_gallery_precise_scroll(self, event) -> None:
+        scroll_el = event.current_target()
+        if not scroll_el:
+            return
+
+        try:
+            wheel_delta = float(event.get_parameter("wheel_delta_y", "0"))
+        except (TypeError, ValueError):
+            return
+
+        max_scroll = max(0.0, scroll_el.scroll_height - scroll_el.client_height)
+        if max_scroll <= 0.0:
+            event.stop_propagation()
+            return
+
+        new_scroll = min(
+            max(scroll_el.scroll_top + wheel_delta * PRECISE_SCROLL_STEP, 0.0),
+            max_scroll,
+        )
+        if abs(new_scroll - scroll_el.scroll_top) > 0.01:
+            scroll_el.scroll_top = new_scroll
+
+        event.stop_propagation()
 
     def _on_asset_manager_click(self, event) -> None:
         if self._input_capture_active():
