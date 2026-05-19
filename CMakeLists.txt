@@ -1084,7 +1084,7 @@ endif()
 if(BUILD_PORTABLE)
     # Exclusion patterns for system libraries
     # nvcuda.dll is provided by the NVIDIA GPU driver, not the CUDA Toolkit
-    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]] [[nvcuda[.]dll]])
+    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]] [[nvcuda[.]dll]] [[libcuda[.]so.*]])
     set(_POST_EXCLUDE
             [[.*[Ss]ystem32.*]] [[.*[Ww]indows.*]]
             [[/lib/x86_64-linux-gnu/.*]] [[/lib64/ld-linux.*]] [[/usr/lib.*]]
