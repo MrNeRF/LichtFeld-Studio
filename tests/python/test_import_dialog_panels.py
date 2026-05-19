@@ -159,6 +159,7 @@ class _DocumentStub:
     def __init__(self):
         self.listeners = {}
         self.close_btn = _ElementStub()
+        self.removed_models = []
 
     def add_event_listener(self, event, callback):
         self.listeners[event] = callback
@@ -170,6 +171,31 @@ class _DocumentStub:
 
     def query_selector_all(self, _selector):
         return []
+
+    def remove_data_model(self, name):
+        self.removed_models.append(name)
+
+
+class _ThreadStub:
+    def __init__(self, alive=True):
+        self.alive = alive
+        self.join_calls = []
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+        self.alive = False
+
+    def is_alive(self):
+        return self.alive
+
+
+class _TimerStub(_ThreadStub):
+    def __init__(self, alive=True):
+        super().__init__(alive=alive)
+        self.cancel_calls = 0
+
+    def cancel(self):
+        self.cancel_calls += 1
 
 
 def test_dataset_import_panel_show_and_load(import_dialog_module):
@@ -535,3 +561,42 @@ def test_resume_checkpoint_panel_binds_enter_and_escape(import_dialog_module):
 
     assert state.panel_enabled_calls[-1] == ("lfs.resume_checkpoint", False)
     assert escape_event.propagation_stopped is True
+
+
+def test_url_import_panel_unmount_cancels_and_joins_worker_threads(import_dialog_module):
+    module, _state = import_dialog_module
+    panel = module.URLImportPanel()
+    document = _DocumentStub()
+    worker = _ThreadStub()
+    close_timer = _TimerStub()
+
+    panel._url_import_in_progress = True
+    panel._url_import_cancelled = False
+    panel._url_import_thread = worker
+    panel._url_import_close_timer = close_timer
+
+    panel.on_unmount(document)
+
+    assert panel._url_import_cancelled is True
+    assert close_timer.cancel_calls == 1
+    assert close_timer.join_calls == [module.THREAD_JOIN_TIMEOUT_SEC]
+    assert worker.join_calls == [module.THREAD_JOIN_TIMEOUT_SEC]
+    assert panel._url_import_thread is None
+    assert panel._url_import_close_timer is None
+    assert document.removed_models == ["url_import"]
+
+
+def test_watch_dirs_dialog_unmount_cancels_and_joins_scan_thread(import_dialog_module):
+    module, _state = import_dialog_module
+    panel = module.WatchDirsDialogPanel()
+    document = _DocumentStub()
+    scan_thread = _ThreadStub()
+
+    panel._scan_thread = scan_thread
+
+    panel.on_unmount(document)
+
+    assert panel._scan_cancel_event.is_set() is True
+    assert scan_thread.join_calls == [module.THREAD_JOIN_TIMEOUT_SEC]
+    assert panel._scan_thread is None
+    assert document.removed_models == ["watch_dirs_dialog"]

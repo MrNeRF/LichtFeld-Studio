@@ -13,6 +13,8 @@ import lichtfeld as lf
 
 _logger = logging.getLogger(__name__)
 
+THREAD_JOIN_TIMEOUT_SEC = 5.0
+
 
 def _watch_log(level: str, message: str, *args, exc_info: bool = False) -> None:
     if args:
@@ -38,6 +40,19 @@ def _watch_log(level: str, message: str, *args, exc_info: bool = False) -> None:
             lf_fn(prefixed)
     except Exception:
         pass
+
+
+def _join_thread(thread: Optional[threading.Thread], name: str, timeout: float = THREAD_JOIN_TIMEOUT_SEC) -> None:
+    if thread is None:
+        return
+    if threading.current_thread() is thread:
+        return
+    try:
+        thread.join(timeout=timeout)
+        if thread.is_alive():
+            _logger.warning("%s thread did not stop within %.1fs", name, timeout)
+    except Exception:
+        _logger.warning("Failed to join %s thread", name, exc_info=True)
 
 
 from . import rml_widgets as w
@@ -861,6 +876,11 @@ class URLImportPanel(_ImportDialogPanel):
         if self._url_import_in_progress and not self._url_import_cancelled:
             self._url_import_cancelled = True
         self._cancel_url_import_close_timer()
+        _join_thread(self._url_import_close_timer, "URL import close timer")
+        self._url_import_close_timer = None
+        url_import_thread = self._url_import_thread
+        self._url_import_thread = None
+        _join_thread(url_import_thread, "URL import worker")
         self._handle = None
         self._doc = None
         self._formats_header = None
@@ -962,7 +982,6 @@ class URLImportPanel(_ImportDialogPanel):
         if self._url_import_close_timer is None:
             return
         self._url_import_close_timer.cancel()
-        self._url_import_close_timer = None
 
     def _schedule_close(self, session_id: int) -> None:
         self._cancel_url_import_close_timer()
@@ -1284,12 +1303,18 @@ class WatchDirsDialogPanel(Panel):
         self._project_name: str = ""
         self._watch_dirs: list[str] = []
         self._last_lang: str = ""
+        self._scan_thread: Optional[threading.Thread] = None
+        self._scan_cancel_event = threading.Event()
 
     def on_mount(self, doc):
         super().on_mount(doc)
         self._last_lang = lf.ui.get_current_language()
 
     def on_unmount(self, doc):
+        self._scan_cancel_event.set()
+        scan_thread = self._scan_thread
+        self._scan_thread = None
+        _join_thread(scan_thread, "AssetManagerWatch scan")
         self._handle = None
         doc.remove_data_model("watch_dirs_dialog")
 
@@ -1579,12 +1604,21 @@ class WatchDirsDialogPanel(Panel):
 
         scanner = self._scanner()
         thumbnails = self._thumbnails()
+        self._scan_cancel_event = threading.Event()
         thread = threading.Thread(
             target=self._scan_worker,
-            args=(index, scanner, thumbnails, self._project_id, list(self._watch_dirs)),
+            args=(
+                index,
+                scanner,
+                thumbnails,
+                self._project_id,
+                list(self._watch_dirs),
+                self._scan_cancel_event,
+            ),
             daemon=True,
             name="AssetManagerWatchScan",
         )
+        self._scan_thread = thread
         thread.start()
         _watch_log(
             "info",
@@ -1594,7 +1628,15 @@ class WatchDirsDialogPanel(Panel):
             id(index),
         )
 
-    def _scan_worker(self, index, scanner, thumbnails, project_id: str, watch_dirs: list[str]):
+    def _scan_worker(
+        self,
+        index,
+        scanner,
+        thumbnails,
+        project_id: str,
+        watch_dirs: list[str],
+        cancel_event: Optional[threading.Event] = None,
+    ):
         """Background thread: scan watched directories and import new assets."""
         _watch_log(
             "info",
@@ -1620,6 +1662,14 @@ class WatchDirsDialogPanel(Panel):
         added = 0
         discovered = 0
         for path in watch_dirs:
+            if cancel_event is not None and cancel_event.is_set():
+                _watch_log(
+                    "info",
+                    "scan worker cancelled before path=%s project_id=%s",
+                    path,
+                    project_id,
+                )
+                return
             try:
                 metadata_list = _discover_asset_metadata(scanner, path)
                 discovered += len(metadata_list)
@@ -1643,6 +1693,15 @@ class WatchDirsDialogPanel(Panel):
                 )
 
         try:
+            if cancel_event is not None and cancel_event.is_set():
+                _watch_log(
+                    "info",
+                    "scan worker cancelled before final save project_id=%s discovered=%d added=%d",
+                    project_id,
+                    discovered,
+                    added,
+                )
+                return
             if added > 0:
                 if index.save():
                     _watch_log(
@@ -1674,3 +1733,6 @@ class WatchDirsDialogPanel(Panel):
             _watch_log("info", "active panel refresh requested after scan")
         except Exception as e:
             _watch_log("error", "failed to finalize watch-dir scan: %s", e, exc_info=True)
+        finally:
+            if self._scan_thread is threading.current_thread():
+                self._scan_thread = None
