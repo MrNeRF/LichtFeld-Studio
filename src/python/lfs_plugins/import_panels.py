@@ -993,6 +993,7 @@ class URLImportPanel(_ImportDialogPanel):
         try:
             url_info = get_url_info(url)
             asset_name = str(url_info.get("name") or "").strip() or "imported-asset"
+            asset_name = Path(asset_name).name or "imported-asset"
 
             dest_dir = self.STORAGE_PATH / "assets" / asset_name
             created_dest_dir = not dest_dir.exists()

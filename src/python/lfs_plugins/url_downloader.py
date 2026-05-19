@@ -133,8 +133,8 @@ def get_url_info(url: str) -> Dict[str, Any]:
                 size = int(resp.headers["Content-Length"])
             cd = resp.headers.get("Content-Disposition", "")
             if "filename=" in cd:
-                fname = cd.split("filename=")[-1].strip('"\'')
-                if fname:
+                fname = Path(cd.split("filename=")[-1].strip('"\' \t')).name
+                if fname and fname not in (".", ".."):
                     name = fname
     except Exception:
         pass  # Size unknown is OK
