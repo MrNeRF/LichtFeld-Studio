@@ -1,0 +1,32 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="import_dialog.rcss"/>
+  <link type="text/rcss" href="watch_dirs_dialog.rcss"/>
+</head>
+<body template="floating-window" data-model="watch_dirs_dialog">
+
+  <span class="impdlg-subtitle text-muted">Auto-import assets from these folders. New files appear live.</span>
+  <div class="separator"></div>
+
+  <div class="setting-row">
+      <button class="btn btn--secondary" data-event-click="on_browse_add">+ Add Directory</button>
+  </div>
+  <div class="separator"></div>
+
+  <div data-for="dir : watch_dirs_list">
+      <div class="setting-row">
+          <span class="impdlg-value">{{dir.path}}</span>
+          <button class="btn btn--secondary" data-event-click="on_remove_dir(it_index)">Remove</button>
+      </div>
+  </div>
+
+  <span class="status-text status-muted" data-if="no_watch_dirs">No watched directories.</span>
+
+  <div class="impdlg-buttons">
+      <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="on_cancel">Cancel</button>
+      <button type="button" class="btn btn--primary impdlg-action-btn" data-event-click="on_save">Save & Scan</button>
+  </div>
+
+</body>
+</rml>
