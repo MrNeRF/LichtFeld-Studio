@@ -95,6 +95,8 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
             return lfs::app::run_converter(mode.params);
+        } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
+            return lfs::app::run_mesh2splat(mode.params);
         } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
             return lfs::python::run_plugin_command(mode);
         } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {

@@ -131,6 +131,8 @@
     "geometry.title": "ジオメトリ",
     "hint.multi_select": "Ctrl/Cmd+クリックで複数選択",
     "import_menu.import_asset": "アセットをインポート...",
+    "import_menu.import_splat": "スプラットをインポート...",
+    "import_menu.import_mesh": "メッシュをインポート...",
     "import_menu.import_checkpoint": "チェックポイントをインポート...",
     "import_menu.import_dataset": "データセットをインポート...",
     "info_panel.asset_details": "アセット詳細",

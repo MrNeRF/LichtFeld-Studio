@@ -102,7 +102,6 @@ class AssetManagerPanel(Panel):
 
         # Track which asset has its dropdown menu open
         self._open_menu_asset_id: Optional[str] = None
-        self._load_menu_asset_id: Optional[str] = None
 
         # Track which project has its dropdown menu open
         self._open_menu_project_id: Optional[str] = None
@@ -299,7 +298,8 @@ class AssetManagerPanel(Panel):
         model.bind_func("list_label", lambda: tr("asset_manager.toolbar.view_list"))
         model.bind_func("import_label", lambda: tr("asset_manager.toolbar.import"))
         model.bind_func("clean_missing_label", lambda: tr("asset_manager.toolbar.clean_missing"))
-        model.bind_func("import_asset_label", lambda: tr("asset_manager.import_menu.import_asset"))
+        model.bind_func("import_splat_label", lambda: tr("asset_manager.import_menu.import_splat"))
+        model.bind_func("import_mesh_label", lambda: tr("asset_manager.import_menu.import_mesh"))
         model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
         model.bind_func("import_checkpoint_label", lambda: tr("asset_manager.import_menu.import_checkpoint"))
 
@@ -389,7 +389,8 @@ class AssetManagerPanel(Panel):
         model.bind_event("clean_missing", self.clean_missing)
         model.bind_event("toggle_asset_selection", self.toggle_asset_selection)
         model.bind_event("on_search", self.on_search)
-        model.bind_event("on_import_asset", self.on_import_asset)
+        model.bind_event("on_import_splat", self.on_import_splat)
+        model.bind_event("on_import_mesh", self.on_import_mesh)
         model.bind_event("on_import_dataset", self.on_import_dataset)
         model.bind_event("on_load_selected", self.on_load_selected)
         model.bind_event("on_remove_from_catalog", self.on_remove_from_catalog)
@@ -920,7 +921,6 @@ class AssetManagerPanel(Panel):
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
             "thumbnail_path": asset.get("thumbnail_path"),
             "menu_open": asset_id == self._open_menu_asset_id,
-            "load_menu_open": asset_id == self._load_menu_asset_id,
         }
 
     def get_project_list(self) -> List[Dict[str, Any]]:
@@ -2266,48 +2266,39 @@ class AssetManagerPanel(Panel):
         """End right panel resize drag."""
         self._right_panel_dragging = False
 
-    def on_import_asset(self, _handle, _ev, args):
-        """Import a single asset file (point clouds, splats, meshes, etc.)."""
+    def on_import_splat(self, _handle, _ev, args):
+        """Import a splat/point-cloud file (PLY, SOG, SPZ, USD formats)."""
         if not self._asset_index:
             _logger.warning("Asset index not initialized")
             return
 
-        # Try point cloud/splat dialog first (PLY, SOG, SPZ, USD formats)
         file_path = lf.ui.open_ply_file_dialog("")
-
-        # If user cancelled, try mesh dialog (OBJ, FBX, GLTF, etc.)
-        if not file_path:
-            file_path = lf.ui.open_mesh_file_dialog("")
-
         if not file_path:
             return
 
         try:
             project_id = self._ensure_import_project()
 
-            # Detect asset type and role
-            asset_type = None
-            fallback_role = "reference"
             path_lower = file_path.lower()
-
-            if path_lower.endswith(('.obj', '.fbx', '.gltf', '.glb', '.stl', '.dae', '.3ds')):
-                asset_type = "mesh"
-                fallback_role = "reference"
-            elif path_lower.endswith('.ply'):
-                # PLY files will be auto-detected as ply_3dgs or ply_pcl by the scanner
-                asset_type = None  # Let scanner detect
-                if 'point_cloud' in file_path.lower() or 'initial' in file_path.lower():
-                    fallback_role = "initial_point_cloud"
-                else:
-                    fallback_role = "trained_output"
+            if path_lower.endswith('.ply'):
+                asset_type = None  # Let scanner detect ply_3dgs vs ply_pcl
+                fallback_role = (
+                    "initial_point_cloud"
+                    if 'point_cloud' in path_lower or 'initial' in path_lower
+                    else "trained_output"
+                )
             elif path_lower.endswith(('.sog', '.spz')):
-                asset_type = path_lower.split('.')[-1].replace('sog', 'sog').replace('spz', 'spz')
-                if 'point_cloud' in file_path.lower() or 'initial' in file_path.lower():
-                    fallback_role = "initial_point_cloud"
-                else:
-                    fallback_role = "trained_output"
+                asset_type = path_lower.split('.')[-1]
+                fallback_role = (
+                    "initial_point_cloud"
+                    if 'point_cloud' in path_lower or 'initial' in path_lower
+                    else "trained_output"
+                )
             elif path_lower.endswith(('.usd', '.usda', '.usdc', '.usdz')):
                 asset_type = "usd"
+                fallback_role = "reference"
+            else:
+                asset_type = None
                 fallback_role = "reference"
 
             asset = self._scan_and_register_asset(
@@ -2319,12 +2310,10 @@ class AssetManagerPanel(Panel):
             )
             self._import_menu_open = False
 
-            # Auto-select the newly imported asset
             if asset:
                 self._selected_asset_ids.add(asset.id)
                 self._update_selection_type()
 
-            # Refresh UI
             self.refresh_catalog()
             self._dirty_model("import_menu_open")
 
@@ -2332,7 +2321,42 @@ class AssetManagerPanel(Panel):
                 _logger.info(f"Imported asset: {asset.name}")
 
         except Exception as e:
-            _logger.error(f"Failed to import asset: {e}")
+            _logger.error(f"Failed to import splat: {e}")
+
+    def on_import_mesh(self, _handle, _ev, args):
+        """Import a mesh file (OBJ, FBX, GLTF, etc.)."""
+        if not self._asset_index:
+            _logger.warning("Asset index not initialized")
+            return
+
+        file_path = lf.ui.open_mesh_file_dialog("")
+        if not file_path:
+            return
+
+        try:
+            project_id = self._ensure_import_project()
+
+            asset = self._scan_and_register_asset(
+                file_path,
+                project_id=project_id,
+                scene_id=self._selected_scene_id,
+                fallback_role="reference",
+                override_type="mesh",
+            )
+            self._import_menu_open = False
+
+            if asset:
+                self._selected_asset_ids.add(asset.id)
+                self._update_selection_type()
+
+            self.refresh_catalog()
+            self._dirty_model("import_menu_open")
+
+            if asset:
+                _logger.info(f"Imported asset: {asset.name}")
+
+        except Exception as e:
+            _logger.error(f"Failed to import mesh: {e}")
 
     def on_import_dataset(self, _handle, _ev, args):
         """Import a dataset folder."""
@@ -3528,7 +3552,6 @@ class AssetManagerPanel(Panel):
         """
         content = doc.get_element_by_id("asset-popup-content")
         if content:
-            content.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             content.add_event_listener("click", self._on_asset_manager_click)
             content.add_event_listener(
                 "dblclick", self._on_asset_manager_double_click
@@ -3558,21 +3581,16 @@ class AssetManagerPanel(Panel):
             if action == "load":
                 self.on_load_asset(None, event, [asset_id])
             elif action == "load_new":
-                self._load_menu_asset_id = None
-                self._dirty_model("assets")
                 self.on_load_asset_new(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "add_to_scene":
-                self._load_menu_asset_id = None
-                self._dirty_model("assets")
                 self.on_add_asset_to_scene(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "remove":
                 self.on_remove_asset(None, event, [asset_id])
             elif action == "menu":
-                self._load_menu_asset_id = None
                 self.on_toggle_asset_menu(None, event, [asset_id])
                 self._stop_event(event)
                 return
@@ -3622,9 +3640,6 @@ class AssetManagerPanel(Panel):
                     self._dirty_model("assets", "move_menu_projects")
                     if self._handle:
                         self._handle.update_record_list("move_menu_projects", [])
-                if self._load_menu_asset_id:
-                    self._load_menu_asset_id = None
-                    self._dirty_model("assets")
                 self._select_asset_id(
                     asset_id,
                     toggle=False,
@@ -3684,51 +3699,10 @@ class AssetManagerPanel(Panel):
             if self._handle:
                 self._handle.update_record_list("move_menu_projects", [])
 
-        if self._load_menu_asset_id:
-            self._load_menu_asset_id = None
-            self._dirty_model("assets")
-
         # Close open project menu when clicking elsewhere
         if self._open_menu_project_id:
             self._open_menu_project_id = None
             self._dirty_model("projects")
-
-    def _on_asset_manager_mousedown(self, event) -> None:
-        if self._input_capture_active():
-            return
-
-        try:
-            button = int(event.get_parameter("button", "0"))
-        except (AttributeError, TypeError, ValueError):
-            return
-        if button != 1:
-            return
-
-        container = event.current_target()
-        target = event.target()
-        if target is None:
-            return
-
-        action_el = rml_widgets.find_ancestor_with_attribute(
-            target, "data-asset-action", container
-        )
-        if action_el is None:
-            return
-
-        action = action_el.get_attribute("data-asset-action", "")
-        if action not in ("select", "scene_asset"):
-            return
-
-        asset_id = action_el.get_attribute("data-asset-id", "")
-        if not asset_id:
-            return
-
-        if self._select_asset_id(asset_id):
-            self._load_menu_asset_id = asset_id
-            self._open_menu_asset_id = None
-            self._open_menu_project_id = None
-            self._dirty_model("assets", "projects")
-        self._stop_event(event)
 
     def _on_asset_manager_double_click(self, event) -> None:
         if self._input_capture_active():
@@ -3753,7 +3727,6 @@ class AssetManagerPanel(Panel):
         if not asset_id:
             return
 
-        self._load_menu_asset_id = None
         self.on_load_asset(None, event, [asset_id])
         self._stop_event(event)
 

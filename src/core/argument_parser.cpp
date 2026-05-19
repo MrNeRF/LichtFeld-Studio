@@ -62,6 +62,7 @@ namespace {
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .spz, .usd/.usda/.usdc, .html\n"
+                "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -71,6 +72,7 @@ namespace {
                 "lichtfeld-studio --resume checkpoint.resume\n"
                 "lichtfeld-studio -v model.ply\n"
                 "lichtfeld-studio convert in.ply out.spz\n"
+                "lichtfeld-studio mesh2splat model.obj -o model_splat.ply\n"
                 "lichtfeld-studio plugin create my_plugin\n"
                 "\n"
                 "ENVIRONMENT:\n"
@@ -97,6 +99,7 @@ namespace {
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
             ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
+            ::args::ValueFlagList<std::string> add_splats(paths_group, "path", "Append trained splat file(s) to the training model before optimizer initialization", {"add-splat"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -379,6 +382,16 @@ namespace {
 
                 if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
                     return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
+                }
+            }
+
+            if (add_splats) {
+                for (const auto& path_str : ::args::get(add_splats)) {
+                    const auto splat_path = lfs::core::utf8_to_path(path_str);
+                    if (!std::filesystem::exists(splat_path)) {
+                        return std::unexpected(std::format("Added splat does not exist: {}", path_str));
+                    }
+                    params.add_splat_paths.push_back(splat_path);
                 }
             }
 
@@ -769,6 +782,21 @@ namespace {
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "\n";
 
+    constexpr const char* MESH2SPLAT_HELP_HEADER = "LichtFeld Studio - Convert mesh files to Gaussian splats\n";
+    constexpr const char* MESH2SPLAT_HELP_FOOTER =
+        "\n"
+        "EXAMPLES:\n"
+        "  LichtFeld-Studio mesh2splat model.obj -o model_splat.ply\n"
+        "  LichtFeld-Studio mesh2splat model.glb output.spz --resolution 1024 --sigma 0.65\n"
+        "  LichtFeld-Studio mesh2splat model.glb -o ./splats/model -f ply,spz,html --overwrite\n"
+        "  LichtFeld-Studio mesh2splat ./meshes/ -o ./splats/ -f ply,spz --overwrite\n"
+        "\n"
+        "SUPPORTED FORMATS:\n"
+        "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
+        "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Multiple output formats: pass a comma-separated list to --format\n"
+        "\n";
+
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
         using lfs::core::param::OutputFormat;
         if (str == "ply" || str == ".ply")
@@ -789,6 +817,221 @@ namespace {
             return OutputFormat::RAD;
         return std::nullopt;
     }
+
+    std::expected<std::vector<lfs::core::param::OutputFormat>, std::string> parseFormatList(const std::string& formats_str) {
+        std::vector<lfs::core::param::OutputFormat> formats;
+        size_t start = 0;
+        while (start < formats_str.size()) {
+            size_t end = formats_str.find(',', start);
+            if (end == std::string::npos)
+                end = formats_str.size();
+            std::string token = formats_str.substr(start, end - start);
+            const size_t first = token.find_first_not_of(" \t");
+            const size_t last = token.find_last_not_of(" \t");
+            if (first != std::string::npos && last != std::string::npos) {
+                token = token.substr(first, last - first + 1);
+            }
+            if (!token.empty()) {
+                auto fmt = parseFormat(token);
+                if (!fmt) {
+                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", token));
+                }
+                if (std::ranges::find(formats, *fmt) == formats.end()) {
+                    formats.push_back(*fmt);
+                }
+            }
+            start = end + 1;
+        }
+        if (formats.empty()) {
+            return std::unexpected("No output formats specified");
+        }
+        return formats;
+    }
+
+    std::expected<std::vector<float>, std::string> parseLodLevels(const std::string& levels_str) {
+        std::vector<float> levels;
+        size_t start = 0;
+        while (start < levels_str.size()) {
+            size_t end = levels_str.find(',', start);
+            if (end == std::string::npos)
+                end = levels_str.size();
+            std::string token = levels_str.substr(start, end - start);
+            const size_t first = token.find_first_not_of(" \t");
+            const size_t last = token.find_last_not_of(" \t");
+            if (first != std::string::npos && last != std::string::npos) {
+                token = token.substr(first, last - first + 1);
+            }
+            if (!token.empty()) {
+                try {
+                    const float percentage = std::stof(token);
+                    levels.push_back(percentage / 100.0f);
+                } catch (...) {
+                    return std::unexpected(std::format("Invalid LOD level value: '{}'", token));
+                }
+            }
+            start = end + 1;
+        }
+        return levels;
+    }
+
+    std::expected<lfs::core::args::ParsedArgs, std::string> parseConvertArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+
+        ::args::ArgumentParser parser(CONVERT_HELP_HEADER, CONVERT_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> input(parser, "input", "Input file or directory");
+        ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
+        ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
+        ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
+        ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
+        ::args::ValueFlag<std::string> lod_levels(parser, "levels", "LOD levels for RAD format as comma-separated percentages (default: 100)", {"lod-levels"});
+        ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
+
+        std::vector<std::string> args_vec(argv + 1, argv + argc);
+        args_vec[0] = std::string(argv[0]) + " convert";
+        parser.Prog(args_vec[0]);
+
+        try {
+            parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+
+        if (!input) {
+            return std::unexpected(std::format("Missing input path\n\n{}", parser.Help()));
+        }
+
+        param::ConvertParameters params;
+        params.input_path = lfs::core::utf8_to_path(::args::get(input));
+        params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
+
+        if (!std::filesystem::exists(params.input_path)) {
+            return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
+        }
+
+        if (params.sh_degree < -1 || params.sh_degree > 3) {
+            return std::unexpected("SH degree must be -1 (keep) or 0-3");
+        }
+
+        if (output)
+            params.output_path = lfs::core::utf8_to_path(::args::get(output));
+        if (sog_iter)
+            params.sog_iterations = ::args::get(sog_iter);
+        if (lod_levels) {
+            auto levels = parseLodLevels(::args::get(lod_levels));
+            if (!levels)
+                return std::unexpected(levels.error());
+            params.rad_lod_levels = std::move(*levels);
+        }
+        params.overwrite = overwrite;
+
+        if (format) {
+            if (const auto fmt = parseFormat(::args::get(format))) {
+                params.format = *fmt;
+            } else {
+                return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", ::args::get(format)));
+            }
+        } else if (!params.output_path.empty()) {
+            if (const auto fmt = parseFormat(params.output_path.extension().string())) {
+                params.format = *fmt;
+            } else {
+                return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
+            }
+        }
+
+        return core_args::ConvertMode{params};
+    }
+
+    std::expected<lfs::core::args::ParsedArgs, std::string> parseMesh2SplatArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+
+        ::args::ArgumentParser parser(MESH2SPLAT_HELP_HEADER, MESH2SPLAT_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> input(parser, "input", "Input mesh file or directory");
+        ::args::Positional<std::string> output(parser, "output", "Output file or directory (optional)");
+        ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
+        ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
+        ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
+        ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
+        ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
+        ::args::ValueFlag<std::string> lod_levels(parser, "levels", "LOD levels for RAD format as comma-separated percentages (default: 100)", {"lod-levels"});
+        ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
+
+        std::vector<std::string> args_vec(argv + 1, argv + argc);
+        args_vec[0] = std::string(argv[0]) + " mesh2splat";
+        parser.Prog(args_vec[0]);
+
+        try {
+            parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+
+        if (!input) {
+            return std::unexpected(std::format("Missing input mesh path\n\n{}", parser.Help()));
+        }
+        if (output && output_flag) {
+            return std::unexpected("Use either positional output or --output, not both");
+        }
+
+        param::Mesh2SplatParameters params;
+        params.input_path = lfs::core::utf8_to_path(::args::get(input));
+
+        if (!std::filesystem::exists(params.input_path)) {
+            return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
+        }
+
+        if (output_flag) {
+            params.output_path = lfs::core::utf8_to_path(::args::get(output_flag));
+        } else if (output) {
+            params.output_path = lfs::core::utf8_to_path(::args::get(output));
+        }
+        if (resolution)
+            params.options.resolution_target = ::args::get(resolution);
+        if (sigma)
+            params.options.sigma = ::args::get(sigma);
+        if (sog_iter)
+            params.sog_iterations = ::args::get(sog_iter);
+        if (lod_levels) {
+            auto levels = parseLodLevels(::args::get(lod_levels));
+            if (!levels)
+                return std::unexpected(levels.error());
+            params.rad_lod_levels = std::move(*levels);
+        }
+        params.overwrite = overwrite;
+
+        if (params.options.resolution_target < lfs::core::Mesh2SplatOptions::kMinResolution) {
+            return std::unexpected(std::format("Mesh2Splat resolution must be at least {}", lfs::core::Mesh2SplatOptions::kMinResolution));
+        }
+        if (params.options.sigma <= 0.0f) {
+            return std::unexpected("Mesh2Splat sigma must be positive");
+        }
+
+        if (format) {
+            auto formats = parseFormatList(::args::get(format));
+            if (!formats)
+                return std::unexpected(formats.error());
+            params.formats = std::move(*formats);
+            params.format = params.formats.front();
+        } else if (!params.output_path.empty()) {
+            if (const auto fmt = parseFormat(params.output_path.extension().string())) {
+                params.format = *fmt;
+                params.formats = {*fmt};
+            } else if (!params.output_path.extension().empty() && !std::filesystem::is_directory(params.output_path)) {
+                return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
+            }
+        }
+
+        return core_args::Mesh2SplatMode{params};
+    }
 } // namespace
 
 std::expected<lfs::core::args::ParsedArgs, std::string>
@@ -805,7 +1048,9 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
         }
 
         if (arg1 == "convert") {
-            // Handle convert subcommand below
+            return parseConvertArgs(argc, argv);
+        } else if (arg1 == "mesh2splat" || arg1 == "mesh-to-splat") {
+            return parseMesh2SplatArgs(argc, argv);
         } else if (arg1 == "plugin") {
             if (argc < 3) {
                 return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|list> [name]");
@@ -854,92 +1099,4 @@ Commands:
             return std::unexpected(result.error());
         return TrainingMode{std::move(*result)};
     }
-
-    // Convert subcommand
-    ::args::ArgumentParser parser(CONVERT_HELP_HEADER, CONVERT_HELP_FOOTER);
-    ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
-    ::args::Positional<std::string> input(parser, "input", "Input file or directory");
-    ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
-    ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
-    ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
-    ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
-    ::args::ValueFlag<std::string> lod_levels(parser, "levels", "LOD levels for RAD format as comma-separated percentages (default: 100)", {"lod-levels"});
-    ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
-
-    std::vector<std::string> args_vec(argv + 1, argv + argc);
-    args_vec[0] = std::string(argv[0]) + " convert";
-    parser.Prog(args_vec[0]);
-
-    try {
-        parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
-    } catch (const ::args::Help&) {
-        std::print("{}", parser.Help());
-        return HelpMode{};
-    } catch (const ::args::ParseError& e) {
-        return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
-    }
-
-    if (!input) {
-        return std::unexpected(std::format("Missing input path\n\n{}", parser.Help()));
-    }
-
-    param::ConvertParameters params;
-    params.input_path = lfs::core::utf8_to_path(::args::get(input));
-    params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
-
-    if (!std::filesystem::exists(params.input_path)) {
-        return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
-    }
-
-    if (params.sh_degree < -1 || params.sh_degree > 3) {
-        return std::unexpected("SH degree must be -1 (keep) or 0-3");
-    }
-
-    if (output)
-        params.output_path = lfs::core::utf8_to_path(::args::get(output));
-    if (sog_iter)
-        params.sog_iterations = ::args::get(sog_iter);
-    if (lod_levels) {
-        const auto& levels_str = ::args::get(lod_levels);
-        params.rad_lod_levels.clear();
-        size_t start = 0;
-        while (start < levels_str.size()) {
-            size_t end = levels_str.find(',', start);
-            if (end == std::string::npos)
-                end = levels_str.size();
-            std::string token = levels_str.substr(start, end - start);
-            // Trim whitespace
-            size_t first = token.find_first_not_of(" \t");
-            size_t last = token.find_last_not_of(" \t");
-            if (first != std::string::npos && last != std::string::npos) {
-                token = token.substr(first, last - first + 1);
-            }
-            if (!token.empty()) {
-                try {
-                    float percentage = std::stof(token);
-                    params.rad_lod_levels.push_back(percentage / 100.0f);
-                } catch (...) {
-                    return std::unexpected(std::format("Invalid LOD level value: '{}'", token));
-                }
-            }
-            start = end + 1;
-        }
-    }
-    params.overwrite = overwrite;
-
-    if (format) {
-        if (const auto fmt = parseFormat(::args::get(format))) {
-            params.format = *fmt;
-        } else {
-            return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", ::args::get(format)));
-        }
-    } else if (!params.output_path.empty()) {
-        if (const auto fmt = parseFormat(params.output_path.extension().string())) {
-            params.format = *fmt;
-        } else {
-            return std::unexpected(std::format("Unknown extension '{}'. Use --format", params.output_path.extension().string()));
-        }
-    }
-
-    return ConvertMode{params};
 }

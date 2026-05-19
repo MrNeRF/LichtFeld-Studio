@@ -135,6 +135,8 @@
     "geometry.title": "Geometría",
     "hint.multi_select": "Ctrl/Cmd-clic en tarjetas para selección múltiple",
     "import_menu.import_asset": "Importar Activo...",
+    "import_menu.import_splat": "Importar Splat...",
+    "import_menu.import_mesh": "Importar Mesh...",
     "import_menu.import_checkpoint": "Importar Checkpoint...",
     "import_menu.import_dataset": "Importar Dataset...",
     "info_panel.asset_details": "Detalles del Activo",

@@ -131,6 +131,8 @@
     "geometry.title": "기하학",
     "hint.multi_select": "Ctrl/Cmd-click sulle schede per selezione multipla",
     "import_menu.import_asset": "에셋 가져오기...",
+    "import_menu.import_splat": "Importa Splat...",
+    "import_menu.import_mesh": "Importa Mesh...",
     "import_menu.import_checkpoint": "체크포인트 가져오기...",
     "import_menu.import_dataset": "데이터셋 가져오기...",
     "info_panel.asset_details": "에셋 세부정보",
