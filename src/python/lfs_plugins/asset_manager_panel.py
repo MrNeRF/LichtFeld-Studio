@@ -3056,9 +3056,9 @@ class AssetManagerPanel(Panel):
             except Exception:
                 pass
 
-        # Close the menu
+        # Close the menu. Editing watch directories must not depend on or mutate
+        # the current project selection; the clicked row is the source of truth.
         self._open_menu_project_id = None
-        self._select_project_id(project_id)
         self._dirty_model("projects")
 
         ok = open_watch_dirs_dialog(project_id)

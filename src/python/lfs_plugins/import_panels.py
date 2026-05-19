@@ -1347,27 +1347,14 @@ class WatchDirsDialogPanel(Panel):
         return False
 
     def _catalog_index(self):
-        panel = get_asset_manager_panel()
-        shared_index = getattr(panel, "_asset_index", None) if panel is not None else None
-        if shared_index is not None:
-            _watch_log(
-                "info",
-                "using active panel AssetIndex object_id=%s library=%s projects=%d assets=%d",
-                id(shared_index),
-                _index_library_path(shared_index),
-                _safe_count(getattr(shared_index, "projects", {})),
-                _safe_count(getattr(shared_index, "assets", {})),
-            )
-            return shared_index
-
         index = load_asset_index()
         if index is None:
-            _watch_log("error", "no active panel AssetIndex and fallback load failed")
+            _watch_log("error", "catalog load failed")
             return None
 
         _watch_log(
-            "warn",
-            "using fallback AssetIndex object_id=%s library=%s projects=%d assets=%d",
+            "info",
+            "using fresh AssetIndex object_id=%s library=%s projects=%d assets=%d",
             id(index),
             _index_library_path(index),
             _safe_count(getattr(index, "projects", {})),
@@ -1408,39 +1395,17 @@ class WatchDirsDialogPanel(Panel):
     def show(self, project_id: str) -> bool:
         try:
             _watch_log("info", "show requested project_id=%s", project_id)
+            self._project_id = None
+            self._project_name = ""
+            self._watch_dirs = []
+            self._dirty_model()
+
             index = self._catalog_index()
             if index is None:
                 _watch_log("error", "show aborted: no AssetIndex")
                 return False
 
-            panel = get_asset_manager_panel()
-            requested_name = None
-            if panel is not None:
-                try:
-                    requested = getattr(panel, "_asset_index", None)
-                    requested_project = (
-                        requested.projects.get(project_id)
-                        if requested is not None and hasattr(requested, "projects")
-                        else None
-                    )
-                    if requested_project is not None:
-                        requested_name = requested_project.get("name")
-                except Exception:
-                    requested_name = None
-
             project = index.get_project(project_id)
-            if project is None and requested_name:
-                _watch_log(
-                    "warn",
-                    "project id not found in watch index, trying name match project_id=%s name=%s",
-                    project_id,
-                    requested_name,
-                )
-                for candidate in index.list_projects():
-                    if getattr(candidate, "name", None) == requested_name:
-                        project = candidate
-                        project_id = candidate.id
-                        break
             if project is None:
                 _watch_log(
                     "error",
@@ -1461,21 +1426,8 @@ class WatchDirsDialogPanel(Panel):
                 self._watch_dirs,
                 _index_library_path(index),
             )
-            if panel is not None and getattr(panel, "_selected_project_id", None) != project_id:
-                try:
-                    if hasattr(panel, "_select_project_id"):
-                        panel._select_project_id(project_id)
-                    else:
-                        panel._selected_project_id = project_id
-                        panel._dirty_model("projects")
-                except Exception:
-                    _watch_log(
-                        "warn",
-                        "failed to reconcile selected project id for watch dirs dialog",
-                        exc_info=True,
-                    )
-            self._dirty_model()
             lf.ui.set_panel_enabled(self.id, True)
+            self._dirty_model()
             return True
         except Exception as e:
             _watch_log("error", "failed to show watch dirs dialog: %s", e, exc_info=True)
@@ -1488,17 +1440,17 @@ class WatchDirsDialogPanel(Panel):
         if not self._handle:
             return
         if not fields:
-            self._handle.dirty_all()
             self._handle.update_record_list(
                 "watch_dirs_list", [{"path": p} for p in self._watch_dirs]
             )
+            self._handle.dirty_all()
             return
-        for field in fields:
-            self._handle.dirty(field)
         if "watch_dirs_list" in fields or not fields:
             self._handle.update_record_list(
                 "watch_dirs_list", [{"path": p} for p in self._watch_dirs]
             )
+        for field in fields:
+            self._handle.dirty(field)
 
     def _on_browse_add(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_dataset_folder_dialog()
@@ -1534,18 +1486,6 @@ class WatchDirsDialogPanel(Panel):
             self._watch_dirs,
         )
         index = self._catalog_index()
-        if self._project_id is None:
-            panel = get_asset_manager_panel()
-            fallback_project_id = (
-                getattr(panel, "_selected_project_id", None) if panel is not None else None
-            )
-            _watch_log(
-                "warn",
-                "save missing dialog project_id; active panel selected_project_id=%s",
-                fallback_project_id,
-            )
-            self._project_id = fallback_project_id
-
         if index is None or self._project_id is None:
             _watch_log(
                 "error",

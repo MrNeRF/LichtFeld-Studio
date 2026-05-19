@@ -60,7 +60,7 @@
                 </div>
               </div>
               <div class="asset-project-dropdown" data-class-is-visible="project.menu_open">
-                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="watch_dirs">{{edit_watch_dirs_label}}</div>
+                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="watch_dirs" data-event-click="on_edit_watch_dirs(project.id)">{{edit_watch_dirs_label}}</div>
                 <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="rename">{{rename_project_label}}</div>
                 <div class="asset-dropdown-item is-danger" data-attr-data-project-id="project.id" data-project-action="delete">{{delete_project_label}}</div>
               </div>
