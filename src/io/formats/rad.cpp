@@ -1975,7 +1975,9 @@ namespace lfs::io {
                 packed.scales = copy_f32(splat_data.get_scaling(), packed.count * 3);
                 packed.rotation = copy_f32(splat_data.get_rotation(), packed.count * 4);
                 if (packed.sh_coeffs > 0) {
-                    packed.shN = copy_f32(splat_data.shN_raw(), packed.count * static_cast<size_t>(packed.sh_coeffs) * 3);
+                    // shN is stored swizzled — materialise canonical [N, K, 3] for RAD export.
+                    const auto shN_canon = splat_data.shN_canonical();
+                    packed.shN = copy_f32(shN_canon, packed.count * static_cast<size_t>(packed.sh_coeffs) * 3);
                 }
 
                 return packed;

@@ -1273,18 +1273,19 @@ namespace lfs::io {
             int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
             palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
 
-            const auto& shN_raw = splat_data.shN_raw();
-            if (!shN_raw.is_valid() || shN_raw.ndim() != 3 ||
-                static_cast<int64_t>(shN_raw.size(0)) != num_rows ||
-                static_cast<int>(shN_raw.size(1)) != sh_coeffs ||
-                static_cast<int>(shN_raw.size(2)) != 3) {
+            // shN is stored swizzled — materialise canonical [N, K, 3] for SOG export.
+            const auto shN_canon = splat_data.shN_canonical();
+            if (!shN_canon.is_valid() || shN_canon.ndim() != 3 ||
+                static_cast<int64_t>(shN_canon.size(0)) != num_rows ||
+                static_cast<int>(shN_canon.size(1)) != sh_coeffs ||
+                static_cast<int>(shN_canon.size(2)) != 3) {
                 return make_error(ErrorCode::INVALID_DATASET,
                                   std::format("Invalid SH tensor shape for SOG export: expected [{}, {}, 3]",
                                               num_rows, sh_coeffs),
                                   options.output_path);
             }
 
-            auto shN_tensor = shN_raw.reshape({static_cast<int>(num_rows), sh_dims});
+            auto shN_tensor = shN_canon.reshape({static_cast<int>(num_rows), sh_dims});
             auto [sh_centroids, sh_labels] = lfs::io::kmeans(shN_tensor, palette_size, options.kmeans_iterations);
 
             auto sh_centroids_cpu = sh_centroids.cpu();

@@ -133,7 +133,12 @@ namespace lfs::core {
 
             const auto means = select_or_clone(input.means_raw()).to(device).contiguous();
             const auto sh0 = select_or_clone(input.sh0_raw()).to(device).contiguous();
-            const auto shN = input.shN_raw().is_valid() ? select_or_clone(input.shN_raw()).to(device).contiguous() : Tensor{};
+            // shN is stored swizzled — materialise the canonical [N, K, 3] view, then apply
+            // the optional keep_mask in canonical space.
+            const Tensor shN_canon_full = input.shN_canonical();
+            const auto shN = (shN_canon_full.is_valid() && shN_canon_full.numel() > 0)
+                                 ? select_or_clone(shN_canon_full).to(device).contiguous()
+                                 : Tensor{};
             const auto scaling = select_or_clone(input.scaling_raw()).to(device).contiguous();
             const auto rotation = select_or_clone(input.rotation_raw()).to(device).contiguous();
             const auto opacity = select_or_clone(input.opacity_raw()).to(device).contiguous();

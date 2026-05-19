@@ -56,8 +56,53 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float cy,
         FusedAdamSettings fused_adam) {
         auto primitive_idx = cg::this_grid().thread_rank();
-        if (primitive_idx >= n_primitives || primitive_n_touched_tiles[primitive_idx] == 0)
+        if (primitive_idx >= n_primitives)
             return;
+
+        // vksplat-style invisible fold: when n_touched_tiles == 0, skip the projection /
+        // SH-backward work and only apply Adam momentum decay (with regulariser grads for
+        // scaling / opacity). Eliminates the separate adam_step_invisible kernel launches.
+        if (primitive_n_touched_tiles[primitive_idx] == 0) {
+            // means: grad = 0
+            adam_step_helper(0.0f, fused_adam.means, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.means, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.means, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+
+            // scaling: grad = scale_regularization_grad per channel
+            for (uint c = 0; c < 3u; ++c) {
+                const uint elt = static_cast<uint>(primitive_idx) * 3u + c;
+                const float g = scale_regularization_grad(fused_adam, fused_adam.scaling, elt);
+                adam_step_helper(g, fused_adam.scaling, primitive_idx, c, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            }
+
+            // rotation: grad = 0
+            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+
+            // opacity: grad = opacity_extra_grad
+            {
+                const float g = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
+                adam_step_helper(g, fused_adam.opacity, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            }
+
+            // sh0: grad = 0
+            adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+
+            // shN: grad = 0, all 15 coefficients via swizzle-aware indexing
+            if constexpr (ACTIVE_SH_BASES > 1) {
+                constexpr uint K = 15u;
+                for (uint k = 0; k < K; ++k) {
+                    adam_step_helper_shN(0.0f, fused_adam.shN, primitive_idx, k, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+                    adam_step_helper_shN(0.0f, fused_adam.shN, primitive_idx, k, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+                    adam_step_helper_shN(0.0f, fused_adam.shN, primitive_idx, k, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+                }
+            }
+            return;
+        }
 
         // load 3d mean
         const float3 mean3d = means[primitive_idx];
@@ -333,6 +378,43 @@ namespace fast_lfs::rasterization::kernels::backward {
         param.param[idx] -= param.step_size * moment1 / denom;
         param.exp_avg[idx] = moment1;
         param.exp_avg_sq[idx] = moment2;
+    }
+
+    // Swizzle-aware Adam decay for shN's invisible primitives. One thread per primitive;
+    // if invisible, iterate over all 15 coefficient slots * 3 channels via shAt indexing.
+    // This is dispatched once per backward pass for shN. Phase 4 will fold the invisible
+    // handling directly into the fused-backward kernel to eliminate this launch entirely.
+    __global__ void adam_step_invisible_shN(
+        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
+        FusedAdamParam param,
+        const uint n_primitives,
+        const float beta1,
+        const float beta2,
+        const float eps) {
+        const uint primitive_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (primitive_idx >= n_primitives || !param.enabled)
+            return;
+        if (primitive_n_touched_tiles[primitive_idx] != 0)
+            return;
+
+        constexpr uint K = 15u; // SH_MAX_COEFFS_REST
+        for (uint k = 0; k < K; ++k) {
+            const uint slot = shAt(primitive_idx, k);
+            for (uint c = 0; c < 3u; ++c) {
+                const uint element_idx = slot * 3u + c;
+                if (element_idx >= static_cast<uint>(param.n_elements))
+                    break;
+                const float m1_prev = param.exp_avg[element_idx];
+                const float m2_prev = param.exp_avg_sq[element_idx];
+                // grad = 0 for invisibles in the shN path
+                const float m1 = beta1 * m1_prev;
+                const float m2 = beta2 * m2_prev;
+                const float denom = sqrtf(m2) * param.bias_correction2_sqrt_rcp + eps;
+                param.param[element_idx] -= param.step_size * m1 / denom;
+                param.exp_avg[element_idx] = m1;
+                param.exp_avg_sq[element_idx] = m2;
+            }
+        }
     }
 
     struct BlendBackwardAccum {

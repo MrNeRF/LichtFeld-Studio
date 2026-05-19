@@ -131,11 +131,19 @@ namespace lfs::core {
             rot.index_copy_(0, indices, rot.index_select(0, indices) * g_cache.quat_mult[a]);
         }
 
-        // SH coefficients (degrees 1-3 only, shN excludes DC)
-        if (auto& shN = splat_data.shN(); shN.is_valid() && shN.size(0) > 0 && shN.size(1) > 0) {
-            const int degree = static_cast<int>(std::sqrt(shN.size(1) + 1)) - 1;
-            if (degree >= 1 && degree <= 3) {
-                shN.index_copy_(0, indices, shN.index_select(0, indices) * g_cache.sh_mult[a][degree - 1]);
+        // SH coefficients (degrees 1-3 only, shN excludes DC).
+        // shN is stored swizzled — deswizzle, apply the per-coefficient sign multiply on the
+        // canonical [N, K, 3] view, reswizzle. Mirror is a one-shot edit op so the extra
+        // copy doesn't matter.
+        if (splat_data.shN().is_valid() && splat_data.shN().numel() > 0) {
+            Tensor shN_canon = splat_data.shN_canonical();
+            if (shN_canon.is_valid() && shN_canon.size(0) > 0 && shN_canon.size(1) > 0) {
+                const int degree = static_cast<int>(std::sqrt(shN_canon.size(1) + 1)) - 1;
+                if (degree >= 1 && degree <= 3) {
+                    shN_canon.index_copy_(0, indices,
+                                          shN_canon.index_select(0, indices) * g_cache.sh_mult[a][degree - 1]);
+                    splat_data.shN_set_from_canonical(shN_canon, splat_data.means().capacity());
+                }
             }
         }
     }

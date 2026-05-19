@@ -92,6 +92,8 @@ namespace lfs::training {
         void remove(const lfs::core::Tensor& is_prune);
         void mark_as_free(const lfs::core::Tensor& indices);
 
+        // shN_canon_inout: canonical [N, K, 3] working view of splat_data.shN() (swizzled).
+        // Density operations write into this and the caller reswizzles at the end.
         std::pair<lfs::core::Tensor, int64_t> fill_free_slots_with_data(
             const lfs::core::Tensor& positions,
             const lfs::core::Tensor& rotations,
@@ -99,6 +101,7 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
+            lfs::core::Tensor& shN_canon_inout,
             int64_t count);
 
         struct PendingFailureSnapshot {

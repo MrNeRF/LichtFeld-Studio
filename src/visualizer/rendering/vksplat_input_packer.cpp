@@ -119,16 +119,20 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        const Tensor& shn_tensor = splat_data.shN();
-        if (shn_tensor.is_valid() && shn_tensor.numel() > 0) {
-            if (shn_tensor.ndim() != 3 || shn_tensor.size(0) != n || shn_tensor.size(2) != 3) {
+        // shN is stored swizzled — materialise canonical [N, K, 3] for the staging path.
+        const Tensor shn_canon = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 &&
+                                  splat_data.active_sh_coeffs_rest() > 0)
+                                     ? splat_data.shN_canonical()
+                                     : Tensor();
+        if (shn_canon.is_valid() && shn_canon.numel() > 0) {
+            if (shn_canon.ndim() != 3 || shn_canon.size(0) != n || shn_canon.size(2) != 3) {
                 return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
             }
-            auto shn = tensorToCpuVector(shn_tensor, "model.shN");
+            auto shn = tensorToCpuVector(shn_canon, "model.shN");
             if (!shn) {
                 return std::unexpected(shn.error());
             }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_tensor.size(1));
+            const std::size_t source_rest = static_cast<std::size_t>(shn_canon.size(1));
             const std::size_t rest = std::min<std::size_t>(15, source_rest);
             if (shn->size() < n * source_rest * 3) {
                 return std::unexpected("VkSplat staged SH rest tensor is smaller than [N, coeffs, 3]");
@@ -183,10 +187,12 @@ namespace lfs::vis::vksplat {
                 return std::unexpected("VkSplat expected SH DC tensor with a single coefficient slot");
             }
 
-            const Tensor& shN_raw = splat_data.shN();
-            const std::size_t source_rest = (shN_raw.is_valid() && shN_raw.numel() > 0)
-                                                ? static_cast<std::size_t>(shN_raw.size(1))
-                                                : 0;
+            // shN is stored swizzled — materialise canonical [N, K, 3] for the packer.
+            const Tensor shN_canon = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0)
+                                         ? splat_data.shN_canonical()
+                                         : Tensor();
+            const std::size_t source_rest =
+                (shN_canon.is_valid() && shN_canon.ndim() == 3) ? static_cast<std::size_t>(shN_canon.size(1)) : 0;
             const std::size_t rest = std::min<std::size_t>(15, source_rest);
 
             std::vector<Tensor> parts;
@@ -194,10 +200,10 @@ namespace lfs::vis::vksplat {
             parts.push_back(sh0.contiguous());
 
             if (rest > 0) {
-                if (shN_raw.ndim() != 3 || shN_raw.size(0) != n || shN_raw.size(2) != 3) {
+                if (shN_canon.ndim() != 3 || shN_canon.size(0) != n || shN_canon.size(2) != 3) {
                     return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
                 }
-                Tensor shn = shN_raw;
+                Tensor shn = shN_canon;
                 if (shn.dtype() != DataType::Float32) {
                     shn = shn.to(DataType::Float32);
                 }
@@ -340,16 +346,20 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        const Tensor& shn_tensor = splat_data.shN();
-        if (shn_tensor.is_valid() && shn_tensor.numel() > 0) {
-            if (shn_tensor.ndim() != 3 || shn_tensor.size(0) != n || shn_tensor.size(2) != 3) {
+        // shN is stored swizzled — materialise canonical [N, K, 3] before flattening to CPU.
+        const Tensor shn_canon = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 &&
+                                  splat_data.active_sh_coeffs_rest() > 0)
+                                     ? splat_data.shN_canonical()
+                                     : Tensor();
+        if (shn_canon.is_valid() && shn_canon.numel() > 0) {
+            if (shn_canon.ndim() != 3 || shn_canon.size(0) != n || shn_canon.size(2) != 3) {
                 return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
             }
-            auto shn = tensorToCpuVector(shn_tensor, "model.shN");
+            auto shn = tensorToCpuVector(shn_canon, "model.shN");
             if (!shn) {
                 return std::unexpected(shn.error());
             }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_tensor.size(1));
+            const std::size_t source_rest = static_cast<std::size_t>(shn_canon.size(1));
             const std::size_t rest = std::min<std::size_t>(15, source_rest);
             for (std::size_t i = 0; i < n; ++i) {
                 for (std::size_t k = 0; k < rest; ++k) {

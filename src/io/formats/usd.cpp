@@ -349,8 +349,9 @@ namespace lfs::io {
 
             Tensor shN;
             const float* shN_ptr = nullptr;
-            if (rest_coeffs > 0 && splat_data.shN().is_valid()) {
-                shN = splat_data.shN().contiguous().to(Device::CPU);
+            if (rest_coeffs > 0 && splat_data.shN().is_valid() && splat_data.shN().numel() > 0) {
+                // shN is stored swizzled — materialise canonical [N, K, 3] for export.
+                shN = splat_data.shN_canonical().contiguous().to(Device::CPU);
                 shN_ptr = static_cast<const float*>(shN.data_ptr());
             }
 

@@ -87,7 +87,10 @@ namespace lfs::rendering {
         const auto& rotations_raw = gaussian_model.rotation_raw();
         const auto& opacities_raw = gaussian_model.opacity_raw();
         const auto& sh0 = gaussian_model.sh0_raw();
-        const auto& shN = gaussian_model.shN_raw();
+        // shN is stored in vksplat swizzled layout; the gsplat backend wants canonical
+        // [N, K, 3]. Materialise the canonical view (allocates per frame — gsplat is the
+        // alternate viewer path, not the fastgs hot path).
+        const auto shN = gaussian_model.shN_canonical();
 
         if (lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug)) {
             constexpr int DEBUG_LOG_INTERVAL = 300;
@@ -212,7 +215,8 @@ namespace lfs::rendering {
         const auto& rotations_raw = gaussian_model.rotation_raw();
         const auto& opacities_raw = gaussian_model.opacity_raw();
         const auto& sh0 = gaussian_model.sh0_raw();
-        const auto& shN = gaussian_model.shN_raw();
+        // Materialise canonical [N, K, 3] shN for the gsplat backend (swizzled storage).
+        const auto shN = gaussian_model.shN_canonical();
 
         const Tensor* actual_deleted_mask = request.deleted_mask;
         if (!actual_deleted_mask && gaussian_model.has_deleted_mask()) {

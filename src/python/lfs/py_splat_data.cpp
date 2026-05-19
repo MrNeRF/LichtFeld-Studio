@@ -22,7 +22,9 @@ namespace lfs::python {
     }
 
     PyTensor PySplatData::shN_raw() const {
-        return PyTensor(data_->shN_raw(), false);
+        // shN is stored swizzled internally. Python callers expect canonical [N, K, 3];
+        // materialise that view (this allocates a fresh tensor — not a view).
+        return PyTensor(data_->shN_canonical(), true);
     }
 
     PyTensor PySplatData::scaling_raw() const {

@@ -87,10 +87,31 @@ namespace lfs::core {
         inline const Tensor& sh0() const { return _sh0; }
         inline Tensor& sh0_raw() { return _sh0; }
         inline const Tensor& sh0_raw() const { return _sh0; }
+
+        // shN is stored in vksplat-style swizzled layout: 1D float tensor of
+        // sh_swizzled_float_count(N) = ceil(N/32) * 15 * 32 * 3 floats.
+        // 15 = SH_MAX_COEFFS_REST, 32 = SH_REORDER_SIZE. All 15 coefficient slots are
+        // always allocated regardless of active SH degree; unused slots are zero.
+        // Indexing into the raw buffer: shAt(p, k) * 3 + c.
+        // shN() / shN_raw() return the swizzled tensor directly. Use shN_canonical() to
+        // materialise a deswizzled [N, K, 3] view for I/O / transforms / scene merge.
         inline Tensor& shN() { return _shN; }
         inline const Tensor& shN() const { return _shN; }
         inline Tensor& shN_raw() { return _shN; }
         inline const Tensor& shN_raw() const { return _shN; }
+
+        // Materialise a deswizzled [N, K, 3] copy of shN where K = sh_rest_coeffs of the
+        // currently active SH degree. Always allocates a new tensor — not a view.
+        Tensor shN_canonical() const;
+
+        // Replace _shN with the swizzled form of a canonical-layout source tensor.
+        // `canonical` may be [N, K, 3] or [N, K*3]; K may be 0 for SH degree 0. The
+        // swizzled buffer is allocated/resized to fit N with optional `capacity`.
+        void shN_set_from_canonical(const Tensor& canonical, size_t capacity = 0);
+
+        // Number of "rest" SH coefficients implied by the current active SH degree
+        // (0 / 3 / 8 / 15 for degree 0 / 1 / 2 / 3).
+        size_t active_sh_coeffs_rest() const;
 
         // ========== Soft deletion (for undo/redo crop support) ==========
         Tensor& deleted() { return _deleted; }

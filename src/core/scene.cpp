@@ -693,16 +693,19 @@ namespace lfs::core {
             cached_sizes.push_back(node_size);
             stats.total_gaussians += node_size;
 
+            // shN is swizzled — derive coefficient count from the active SH degree rather
+            // than .size(1).
             const auto& shN_tensor = model->shN_raw();
-            if (shN_tensor.is_valid() && shN_tensor.ndim() >= 2 && shN_tensor.size(1) > 0) {
-                const int shN_coeffs = static_cast<int>(shN_tensor.size(1));
-                const int sh_degree = std::clamp(
-                    static_cast<int>(std::round(std::sqrt(shN_coeffs + 1))) - 1, 0, 3);
-                stats.max_sh_degree = std::max(stats.max_sh_degree, sh_degree);
+            const int model_active_rest = static_cast<int>(
+                model->get_active_sh_degree() > 0
+                    ? (model->get_active_sh_degree() + 1) * (model->get_active_sh_degree() + 1) - 1
+                    : 0);
+            if (shN_tensor.is_valid() && shN_tensor.numel() > 0 && model_active_rest > 0) {
+                stats.max_sh_degree = std::max(stats.max_sh_degree, model->get_active_sh_degree());
             }
 
             stats.total_scene_scale += model->get_scene_scale();
-            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && shN_tensor.size(1) > 0);
+            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && model_active_rest > 0);
         }
 
         const lfs::core::Device device = visible_nodes[0]->model->means_raw().device();
@@ -743,15 +746,17 @@ namespace lfs::core {
             sh0.slice(0, offset, offset + size) = model->sh0_raw();
             opacity.slice(0, offset, offset + size) = model->opacity_raw();
 
-            if (shN_coeffs > 0) {
-                const auto& model_shN = model->shN_raw();
-                const int model_shN_coeffs = (model_shN.is_valid() && model_shN.ndim() >= 2)
-                                                 ? static_cast<int>(model_shN.size(1))
-                                                 : 0;
-                if (model_shN_coeffs > 0) {
-                    const int coeffs_to_copy = std::min(model_shN_coeffs, shN_coeffs);
+            if (shN_coeffs > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
+                const int model_active_rest_local =
+                    model->get_active_sh_degree() > 0
+                        ? (model->get_active_sh_degree() + 1) * (model->get_active_sh_degree() + 1) - 1
+                        : 0;
+                if (model_active_rest_local > 0) {
+                    // Deswizzle this model's shN to canonical [N, K, 3] for the merge copy.
+                    const Tensor model_shN_canon = model->shN_canonical();
+                    const int coeffs_to_copy = std::min(model_active_rest_local, shN_coeffs);
                     shN.slice(0, offset, offset + size).slice(1, 0, coeffs_to_copy) =
-                        model_shN.slice(1, 0, coeffs_to_copy);
+                        model_shN_canon.slice(1, 0, coeffs_to_copy);
                 }
             }
 
@@ -1905,13 +1910,18 @@ namespace lfs::core {
         if (splats.size() == 1 && splats[0].second == IDENTITY) {
             const auto* const src = splats[0].first;
 
+            // SplatData ctor expects CANONICAL [N, K, 3] shN — materialise it.
+            const lfs::core::Tensor src_shN_canon =
+                (src->shN_raw().is_valid() && src->shN_raw().numel() > 0)
+                    ? src->shN_canonical()
+                    : lfs::core::Tensor();
             if (src->has_deleted_mask()) {
                 const auto keep_mask = src->deleted().logical_not();
                 auto result = std::make_unique<lfs::core::SplatData>(
                     src->get_max_sh_degree(),
                     src->means_raw().index_select(0, keep_mask),
                     src->sh0_raw().index_select(0, keep_mask),
-                    src->shN_raw().is_valid() ? src->shN_raw().index_select(0, keep_mask) : lfs::core::Tensor(),
+                    src_shN_canon.is_valid() ? src_shN_canon.index_select(0, keep_mask) : lfs::core::Tensor(),
                     src->scaling_raw().index_select(0, keep_mask),
                     src->rotation_raw().index_select(0, keep_mask),
                     src->opacity_raw().index_select(0, keep_mask),
@@ -1923,7 +1933,7 @@ namespace lfs::core {
                     src->get_max_sh_degree(),
                     src->means_raw(),
                     src->sh0_raw(),
-                    src->shN_raw().is_valid() ? src->shN_raw() : lfs::core::Tensor(),
+                    src_shN_canon,
                     src->scaling_raw(),
                     src->rotation_raw(),
                     src->opacity_raw(),
@@ -1935,7 +1945,7 @@ namespace lfs::core {
                     src->get_max_sh_degree(),
                     src->means_raw().clone(),
                     src->sh0_raw().clone(),
-                    src->shN_raw().is_valid() ? src->shN_raw().clone() : lfs::core::Tensor(),
+                    src_shN_canon.is_valid() ? src_shN_canon.clone() : lfs::core::Tensor(),
                     src->scaling_raw().clone(),
                     src->rotation_raw().clone(),
                     src->opacity_raw().clone(),
@@ -1959,18 +1969,23 @@ namespace lfs::core {
 
         for (const auto& [model, world_transform] : splats) {
             lfs::core::Tensor means, sh0, shN, scaling, rotation, opacity;
+            // Materialise shN canonical for downstream constructor.
+            const lfs::core::Tensor model_shN_canon =
+                (model->shN_raw().is_valid() && model->shN_raw().numel() > 0)
+                    ? model->shN_canonical()
+                    : lfs::core::Tensor();
             if (model->has_deleted_mask()) {
                 const auto keep_mask = model->deleted().logical_not();
                 means = model->means_raw().index_select(0, keep_mask);
                 sh0 = model->sh0_raw().index_select(0, keep_mask);
-                shN = model->shN_raw().is_valid() ? model->shN_raw().index_select(0, keep_mask) : lfs::core::Tensor();
+                shN = model_shN_canon.is_valid() ? model_shN_canon.index_select(0, keep_mask) : lfs::core::Tensor();
                 scaling = model->scaling_raw().index_select(0, keep_mask);
                 rotation = model->rotation_raw().index_select(0, keep_mask);
                 opacity = model->opacity_raw().index_select(0, keep_mask);
             } else {
                 means = model->means_raw().clone();
                 sh0 = model->sh0_raw().clone();
-                shN = model->shN_raw().is_valid() ? model->shN_raw().clone() : lfs::core::Tensor();
+                shN = model_shN_canon.is_valid() ? model_shN_canon.clone() : lfs::core::Tensor();
                 scaling = model->scaling_raw().clone();
                 rotation = model->rotation_raw().clone();
                 opacity = model->opacity_raw().clone();
@@ -2000,19 +2015,24 @@ namespace lfs::core {
             opacity_list.push_back(transformed.opacity_raw().clone());
 
             if (shN_coeffs > 0) {
-                const auto& src_shN = transformed.shN_raw();
-                const int src_coeffs = (src_shN.is_valid() && src_shN.ndim() >= 2)
-                                           ? static_cast<int>(src_shN.size(1))
-                                           : 0;
+                // transformed.shN_raw() is swizzled — get canonical [N, K, 3] for the merge list.
+                const int src_coeffs =
+                    transformed.get_active_sh_degree() > 0
+                        ? (transformed.get_active_sh_degree() + 1) * (transformed.get_active_sh_degree() + 1) - 1
+                        : 0;
+                const lfs::core::Tensor src_shN_canon =
+                    (transformed.shN_raw().is_valid() && transformed.shN_raw().numel() > 0 && src_coeffs > 0)
+                        ? transformed.shN_canonical()
+                        : lfs::core::Tensor();
 
-                if (src_coeffs == shN_coeffs) {
-                    shN_list.push_back(src_shN.clone());
-                } else if (src_coeffs > 0) {
+                if (src_shN_canon.is_valid() && src_coeffs == shN_coeffs) {
+                    shN_list.push_back(src_shN_canon);
+                } else if (src_shN_canon.is_valid() && src_coeffs > 0) {
                     const int copy_coeffs = std::min(src_coeffs, shN_coeffs);
                     auto padded = lfs::core::Tensor::zeros(
                         {transformed.size(), static_cast<size_t>(shN_coeffs), 3},
                         lfs::core::Device::CUDA);
-                    padded.slice(1, 0, copy_coeffs).copy_from(src_shN.slice(1, 0, copy_coeffs));
+                    padded.slice(1, 0, copy_coeffs).copy_from(src_shN_canon.slice(1, 0, copy_coeffs));
                     shN_list.push_back(std::move(padded));
                 } else {
                     shN_list.push_back(lfs::core::Tensor::zeros(

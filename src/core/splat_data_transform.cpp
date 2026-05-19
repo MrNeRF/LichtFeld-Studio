@@ -200,7 +200,10 @@ namespace lfs::core {
                 return true;
             }
 
-            const int available_coeffs = splat_data.shN().ndim() >= 2 ? static_cast<int>(splat_data.shN().size(1)) : 0;
+            // shN is stored swizzled. Materialise the canonical [N, K, 3] view, rotate band
+            // coefficients on it, then reswizzle.
+            Tensor shN_canon = splat_data.shN_canonical();
+            const int available_coeffs = shN_canon.ndim() >= 2 ? static_cast<int>(shN_canon.size(1)) : 0;
             if (available_coeffs <= 0) {
                 return true;
             }
@@ -210,7 +213,7 @@ namespace lfs::core {
             }
 
             const int max_band = std::min(3, splat_data.get_max_sh_degree());
-            const auto device = splat_data.shN().device();
+            const auto device = shN_canon.device();
 
             for (int band = 1; band <= max_band; ++band) {
                 const int coeff_count = 2 * band + 1;
@@ -229,15 +232,16 @@ namespace lfs::core {
                     TensorShape({static_cast<size_t>(coeff_count), static_cast<size_t>(coeff_count)}),
                     device);
 
-                const Tensor band_coeffs = splat_data.shN().slice(1, offset, offset + coeff_count).contiguous();
+                const Tensor band_coeffs = shN_canon.slice(1, offset, offset + coeff_count).contiguous();
                 // band_coeffs: [N, coeff_count, 3] → permute to [3, N, coeff_count]
                 // matmul broadcasts coeff_matrix [cc, cc] across batch dim 3
                 const Tensor channels_first = band_coeffs.permute({2, 0, 1});
                 const Tensor rotated = channels_first.matmul(coeff_matrix_tensor);
                 const Tensor rotated_band = rotated.permute({1, 2, 0});
-                splat_data.shN().slice(1, offset, offset + coeff_count).copy_from(rotated_band);
+                shN_canon.slice(1, offset, offset + coeff_count).copy_from(rotated_band);
             }
 
+            splat_data.shN_set_from_canonical(shN_canon, splat_data.means().capacity());
             return true;
         }
 
@@ -416,9 +420,15 @@ namespace lfs::core {
 
         auto cropped_means = splat_data._means.index_select(0, indices).contiguous();
         auto cropped_sh0 = splat_data._sh0.index_select(0, indices).contiguous();
-        Tensor cropped_shN = splat_data._shN.is_valid()
-                                 ? splat_data._shN.index_select(0, indices).contiguous()
-                                 : Tensor{};
+        // shN is swizzled — deswizzle to [N, K, 3] then index_select, hand to SplatData
+        // constructor which reswizzles.
+        Tensor cropped_shN;
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0) {
+            const Tensor shN_canon = splat_data.shN_canonical();
+            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
+                cropped_shN = shN_canon.index_select(0, indices).contiguous();
+            }
+        }
         auto cropped_scaling = splat_data._scaling.index_select(0, indices).contiguous();
         auto cropped_rotation = splat_data._rotation.index_select(0, indices).contiguous();
         auto cropped_opacity = splat_data._opacity.index_select(0, indices).contiguous();
@@ -555,10 +565,23 @@ namespace lfs::core {
             TensorShape({static_cast<size_t>(num_required_splat)}),
             splat_data._means.device());
 
+        // shN is swizzled and shN_canonical() reads splat_data.size(). Deswizzle BEFORE
+        // mutating _means so size() still reflects the original N. Keep the selected
+        // canonical rows in a local; we reswizzle after _means has been reduced.
+        Tensor shN_selected_canon;
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
+            splat_data.active_sh_coeffs_rest() > 0) {
+            Tensor shN_canon = splat_data.shN_canonical();
+            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
+                shN_selected_canon = shN_canon.index_select(0, indices_tensor).contiguous();
+            }
+        }
+
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
         splat_data._sh0 = splat_data._sh0.index_select(0, indices_tensor).contiguous();
-        if (splat_data._shN.is_valid()) {
-            splat_data._shN = splat_data._shN.index_select(0, indices_tensor).contiguous();
+        // Now reswizzle the pre-selected canonical rows into _shN at the new (smaller) N.
+        if (shN_selected_canon.is_valid() && shN_selected_canon.numel() > 0) {
+            splat_data.shN_set_from_canonical(shN_selected_canon, splat_data._means.capacity());
         }
         splat_data._scaling = splat_data._scaling.index_select(0, indices_tensor).contiguous();
         splat_data._rotation = splat_data._rotation.index_select(0, indices_tensor).contiguous();
@@ -677,9 +700,14 @@ namespace lfs::core {
             indices = indices.squeeze(1);
         }
 
-        Tensor shN_selected = splat_data._shN.is_valid()
-                                  ? splat_data._shN.index_select(0, indices).contiguous()
-                                  : Tensor{};
+        // shN is swizzled — deswizzle then index_select. SplatData constructor reswizzles.
+        Tensor shN_selected;
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0) {
+            const Tensor shN_canon = splat_data.shN_canonical();
+            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
+                shN_selected = shN_canon.index_select(0, indices).contiguous();
+            }
+        }
 
         SplatData result(
             splat_data._max_sh_degree,

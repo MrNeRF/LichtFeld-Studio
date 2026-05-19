@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mrnf.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "edge_rasterizer.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -158,6 +159,24 @@ namespace lfs::training {
 
             auto* state = optimizer.get_state_mutable(param_type);
             if (!state) {
+                return;
+            }
+
+            // shN state is swizzled — zero by primitive index via the swizzle-aware kernel.
+            if (param_type == ParamType::ShN) {
+                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                    return;
+                auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                   ? indices
+                                   : indices.to(lfs::core::DataType::Int32);
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                    lfs::core::shN_swizzled_zero_at_indices(
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                }
                 return;
             }
 
@@ -370,10 +389,19 @@ namespace lfs::training {
                 param = new_param;
             };
 
+            // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
+            auto replace_shN_with_direct = [capacity](Tensor& param) {
+                const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity);
+                auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
+                cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
+                           param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                param = new_param;
+            };
+
             replace_with_direct(_splat_data->means());
             replace_with_direct(_splat_data->sh0());
-            if (_splat_data->shN().is_valid() && _splat_data->shN().ndim() > 0) {
-                replace_with_direct(_splat_data->shN());
+            if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+                replace_shN_with_direct(_splat_data->shN());
             }
             replace_with_direct(_splat_data->scaling_raw());
             replace_with_direct(_splat_data->rotation_raw());
@@ -778,10 +806,18 @@ namespace lfs::training {
                current_active + split_indices.numel() <= static_cast<size_t>(_params->max_cap));
 
         const size_t K = split_indices.numel();
-        const size_t sh_rest = (_splat_data->shN().is_valid() && _splat_data->shN().ndim() >= 2)
-                                   ? _splat_data->shN().shape()[1]
-                                   : 0;
+        // shN is stored swizzled — materialise canonical [N, K, 3] working view for the
+        // kernel + downstream operations; reswizzle at the end.
+        const size_t sh_rest = _splat_data->active_sh_coeffs_rest();
         const int shN_dim = static_cast<int>(sh_rest * 3);
+
+        Tensor shN_canon;
+        if (sh_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            const size_t cap_rows = std::max<size_t>(_splat_data->means().capacity(),
+                                                     static_cast<size_t>(_splat_data->size()) + K);
+            shN_canon = _splat_data->shN_canonical();
+            shN_canon.reserve(cap_rows);
+        }
 
         auto child_means = Tensor::empty({K, 3}, Device::CUDA);
         auto child_log_scales = Tensor::empty({K, 3}, Device::CUDA);
@@ -800,7 +836,7 @@ namespace lfs::training {
             _splat_data->rotation_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
             _splat_data->sh0().ptr<float>(),
-            shN_dim > 0 ? _splat_data->shN().ptr<float>() : nullptr,
+            shN_dim > 0 && shN_canon.is_valid() ? shN_canon.ptr<float>() : nullptr,
             _splat_data->opacity_raw().ptr<float>(),
             child_means.ptr<float>(),
             child_rotations.ptr<float>(),
@@ -828,6 +864,7 @@ namespace lfs::training {
                 child_sh0,
                 child_shN,
                 child_raw_opacities,
+                shN_canon,
                 static_cast<int64_t>(K));
             append_start = K - static_cast<size_t>(remaining_after_fill);
         }
@@ -852,10 +889,38 @@ namespace lfs::training {
 
             _optimizer->add_new_params(ParamType::Means, append_means, true);
             _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
-            _optimizer->add_new_params(ParamType::ShN, append_shN, false);
+            // shN is swizzled; do the canonical append on shN_canon then reswizzle below,
+            // and extend the optimizer state separately.
+            if (shN_canon.is_valid() && shN_canon.numel() > 0 && append_shN.is_valid() &&
+                append_shN.numel() > 0) {
+                const size_t n_app = static_cast<size_t>(append_shN.shape()[0]);
+                std::vector<int> new_indices_vec(n_app);
+                const int base = static_cast<int>(shN_canon.shape()[0]);
+                for (size_t i = 0; i < n_app; ++i) {
+                    new_indices_vec[i] = base + static_cast<int>(i);
+                }
+                const auto new_indices = lfs::core::Tensor::from_vector(
+                    new_indices_vec, {n_app}, shN_canon.device());
+                shN_canon.append_zeros(n_app);
+                shN_canon.index_put_(new_indices, append_shN);
+                _optimizer->extend_state_for_new_params(ParamType::ShN, n_app);
+            } else {
+                _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
+            }
             _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
             _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
             _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
+        }
+
+        // Reswizzle the canonical working buffer back into splat_data._shN. We pass
+        // max_cap as the capacity hint so the freshly-allocated _shN retains headroom
+        // for further densification; otherwise subsequent append_zeros calls would
+        // realloc mid-iteration and lose the pre-reserved buffer.
+        if (shN_canon.is_valid() && shN_canon.numel() > 0) {
+            const size_t cap_primitives = _params->max_cap > 0
+                                              ? std::max<size_t>(_params->max_cap, _splat_data->size())
+                                              : _splat_data->means().capacity();
+            _splat_data->shN_set_from_canonical(shN_canon, cap_primitives);
         }
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
@@ -880,10 +945,27 @@ namespace lfs::training {
             t = std::move(compacted);
         };
 
+        // shN is swizzled — compact via block-aware gather.
+        auto compact_shN_swizzled = [&](Tensor& t, size_t cap_rows) {
+            if (!t.is_valid() || t.numel() == 0)
+                return;
+            auto idx_i32 = valid_indices.dtype() == lfs::core::DataType::Int32
+                               ? valid_indices
+                               : valid_indices.to(lfs::core::DataType::Int32);
+            const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows)
+                                                   : lfs::core::sh_swizzled_float_count(new_size);
+            const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size);
+            auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, Device::CUDA);
+            lfs::core::shN_swizzled_gather_self(
+                t.ptr<float>(), fresh.ptr<float>(),
+                idx_i32.ptr<int>(), new_size, 0);
+            t = std::move(fresh);
+        };
+
         compact(_splat_data->means());
         compact(_splat_data->sh0());
-        if (_splat_data->shN().is_valid() && _splat_data->shN().ndim() > 0)
-            compact(_splat_data->shN());
+        if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0)
+            compact_shN_swizzled(_splat_data->shN(), cap);
         compact(_splat_data->scaling_raw());
         compact(_splat_data->rotation_raw());
         compact(_splat_data->opacity_raw());
@@ -896,15 +978,23 @@ namespace lfs::training {
             auto* state = _optimizer->get_state_mutable(pt);
             if (!state)
                 continue;
-            compact(state->exp_avg);
-            compact(state->exp_avg_sq);
+            if (pt == ParamType::ShN) {
+                compact_shN_swizzled(state->exp_avg, cap);
+                compact_shN_swizzled(state->exp_avg_sq, cap);
+                state->size = lfs::core::sh_swizzled_float_count(new_size);
+                state->capacity = cap > 0 ? lfs::core::sh_swizzled_float_count(cap)
+                                          : lfs::core::sh_swizzled_float_count(new_size);
+            } else {
+                compact(state->exp_avg);
+                compact(state->exp_avg_sq);
+                state->size = new_size;
+                state->capacity = cap;
+            }
             if (state->exp_avg.is_valid()) {
                 state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
-                if (cap > 0)
+                if (cap > 0 && pt != ParamType::ShN)
                     state->grad.reserve(cap);
             }
-            state->size = new_size;
-            state->capacity = cap;
         }
 
         const auto& info = _splat_data->_densification_info;
@@ -1062,6 +1152,7 @@ namespace lfs::training {
         const lfs::core::Tensor& sh0,
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
+        lfs::core::Tensor& shN_canon_inout,
         int64_t count) {
 
         using namespace lfs::core;
@@ -1093,8 +1184,8 @@ namespace lfs::training {
         }
         _splat_data->opacity_raw().index_put_(target_indices, opacity_slice);
 
-        if (shN.is_valid() && has_shN_coefficients(_splat_data->shN())) {
-            _splat_data->shN().index_put_(target_indices, shN.slice(0, 0, slots_to_fill));
+        if (shN.is_valid() && shN_canon_inout.is_valid() && shN_canon_inout.numel() > 0) {
+            shN_canon_inout.index_put_(target_indices, shN.slice(0, 0, slots_to_fill));
         }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, target_indices);

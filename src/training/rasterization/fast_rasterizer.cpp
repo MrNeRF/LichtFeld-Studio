@@ -241,7 +241,11 @@ namespace lfs::training {
                 params_file << "  \"shN_shape\": [" << shN.shape()[0];
                 for (size_t i = 1; i < shN.ndim(); ++i)
                     params_file << ", " << shN.shape()[i];
-                params_file << "]\n";
+                params_file << "],\n";
+                // shN is stored in vksplat swizzled layout (ceil(N/32) * 15 * 32 * 3 floats,
+                // 1D flat). Crash-dump consumers should deswizzle via shAt(p, k) before
+                // interpreting as canonical [N, K, 3].
+                params_file << "  \"shN_layout\": \"swizzled-sh-reorder-32\"\n";
                 params_file << "}\n";
             }
 
@@ -295,8 +299,10 @@ namespace lfs::training {
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
         const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
-        const int total_bases_sh_rest = (shN.is_valid() && shN.ndim() >= 2)
-                                            ? checked_dim_to_int(shN.shape()[1], "total_bases_sh_rest")
+        // shN is stored swizzled — the kernel indexes via shAt(p, k) and ignores stride.
+        // Pass the active SH-rest coefficient count for the kernel's loop bounds.
+        const int total_bases_sh_rest = sh_degree > 0
+                                            ? (sh_degree + 1) * (sh_degree + 1) - 1
                                             : 0;
 
         if (n_primitives == 0) {

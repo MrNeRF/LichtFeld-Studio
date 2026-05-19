@@ -209,7 +209,10 @@ namespace lfs::io {
 
             Tensor means = splat_data.means();
             Tensor sh0 = splat_data.sh0();
-            Tensor shN = splat_data.shN();
+            // shN is stored swizzled — materialise canonical [N, K, 3] for export.
+            Tensor shN = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0)
+                             ? splat_data.shN_canonical()
+                             : Tensor();
             Tensor scales = splat_data.scaling_raw();
             Tensor densities = splat_data.opacity_raw();
             Tensor rotations = splat_data.get_rotation();

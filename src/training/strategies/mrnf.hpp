@@ -87,6 +87,8 @@ namespace lfs::training {
         size_t free_count() const;
         [[nodiscard]] lfs::core::Tensor get_active_indices() const;
         void mark_as_free(const lfs::core::Tensor& indices);
+        // shN_canon_inout: canonical [N, K, 3] working view of splat_data.shN() (swizzled).
+        // The helper writes child shN rows into this; the caller reswizzles at the end.
         std::pair<lfs::core::Tensor, int64_t> fill_free_slots_with_data(
             const lfs::core::Tensor& positions,
             const lfs::core::Tensor& rotations,
@@ -94,6 +96,7 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
+            lfs::core::Tensor& shN_canon_inout,
             int64_t count);
         [[nodiscard]] lfs::core::Tensor compute_edge_scores(int iter);
         [[nodiscard]] lfs::core::Tensor edge_guidance_factor() const;
