@@ -57,6 +57,26 @@ def _install_lf_stub(monkeypatch, tmp_path):
         checkpoint_path=str(checkpoint_path),
     )
 
+    def _load_file(
+        path,
+        is_dataset=False,
+        output_path="",
+        init_path="",
+        centralize_dataset="off",
+        max_width=None,
+        **_kwargs,
+    ):
+        state.load_file_calls.append(
+            {
+                "path": path,
+                "is_dataset": is_dataset,
+                "output_path": output_path,
+                "init_path": init_path,
+                "centralize_dataset": centralize_dataset,
+                "max_width": max_width,
+            }
+        )
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
@@ -65,22 +85,14 @@ def _install_lf_stub(monkeypatch, tmp_path):
         tr=lambda key: key,
         get_current_language=lambda: state.language[0],
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append((panel_id, enabled)),
+        set_save_asset_callback=lambda _callback: None,
         open_dataset_folder_dialog=lambda: state.output_browse_path,
         open_ply_file_dialog=lambda _start_dir="": state.init_browse_path,
     )
     lf_stub.detect_dataset_info = lambda path: state.dataset_infos[str(path)]
     lf_stub.is_dataset_path = lambda path: str(path) in state.dataset_infos
     lf_stub.optimization_params = lambda: None
-    lf_stub.load_file = lambda path, is_dataset=False, output_path="", init_path="", centralize_dataset="off", max_width=None: state.load_file_calls.append(
-        {
-            "path": path,
-            "is_dataset": is_dataset,
-            "output_path": output_path,
-            "init_path": init_path,
-            "centralize_dataset": centralize_dataset,
-            "max_width": max_width,
-        }
-    )
+    lf_stub.load_file = _load_file
     lf_stub.read_checkpoint_header = lambda _path: state.checkpoint_header
     lf_stub.read_checkpoint_params = lambda _path: state.checkpoint_params
     lf_stub.load_checkpoint_for_training = lambda checkpoint_path, dataset_path, output_path: state.load_checkpoint_calls.append(
@@ -255,6 +267,98 @@ def test_dataset_import_panel_loads_updated_dataset_path(import_dialog_module, t
             "max_width": 3840,
         }
     ]
+
+
+def test_watch_directory_discovery_imports_resume_checkpoints(import_dialog_module, tmp_path):
+    module, _state = import_dialog_module
+    scanner_module = import_module("lfs_plugins.asset_scanner")
+    index_module = import_module("lfs_plugins.asset_index")
+
+    watched_dir = tmp_path / "watched"
+    watched_dir.mkdir()
+    checkpoint_path = watched_dir / "checkpoint.resume"
+    checkpoint_path.write_bytes(b"checkpoint data")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    project = index.create_project("Default")
+
+    metadata_list = module._discover_asset_metadata(
+        scanner_module.AssetScanner(),
+        str(watched_dir),
+    )
+    assert [metadata["path"] for metadata in metadata_list] == [str(checkpoint_path)]
+    assert metadata_list[0]["type"] == "checkpoint"
+
+    created_assets = module._register_discovered_assets(
+        index,
+        None,
+        metadata_list,
+        project_id=project.id,
+    )
+    assert [asset.name for asset in created_assets] == ["checkpoint.resume"]
+
+    reloaded = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    assert reloaded.load() is True
+    assert list(reloaded.assets.values())[0]["type"] == "checkpoint"
+
+
+def test_watch_dialog_inherits_active_asset_manager_index(
+    import_dialog_module,
+    monkeypatch,
+    tmp_path,
+):
+    module, _state = import_dialog_module
+    index_module = import_module("lfs_plugins.asset_index")
+
+    shared_index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    active_panel = SimpleNamespace(_asset_index=shared_index)
+    monkeypatch.setattr(module, "get_asset_manager_panel", lambda: active_panel)
+    monkeypatch.setattr(
+        module,
+        "load_asset_index",
+        lambda: pytest.fail("watch dialog should use active panel index"),
+    )
+
+    panel = module.WatchDirsDialogPanel()
+    assert panel._catalog_index() is shared_index
+
+
+def test_watch_dialog_reconciles_active_panel_selection(import_dialog_module, monkeypatch, tmp_path):
+    module, _state = import_dialog_module
+    index_module = import_module("lfs_plugins.asset_index")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    default_project = index.create_project("Default")
+    target_project = index.create_project("Target")
+
+    selection_calls = []
+
+    class _PanelStub:
+        def __init__(self):
+            self._asset_index = index
+            self._selected_project_id = default_project.id
+
+        def _select_project_id(self, project_id):
+            selection_calls.append(project_id)
+            self._selected_project_id = project_id
+            return True
+
+    active_panel = _PanelStub()
+    monkeypatch.setattr(module, "get_asset_manager_panel", lambda: active_panel)
+
+    panel = module.WatchDirsDialogPanel()
+    assert panel.show(target_project.id) is True
+    assert selection_calls == [target_project.id]
+    assert panel._project_id == target_project.id
+
+
+def test_asset_scanner_rejects_html_assets(import_dialog_module):
+    scanner_module = import_module("lfs_plugins.asset_scanner")
+    scanner = scanner_module.AssetScanner()
+
+    assert scanner.detect_type("viewer.html") is None
 
 
 def test_dataset_import_panel_clears_init_and_sidecar_on_dataset_change(import_dialog_module, tmp_path):

@@ -124,7 +124,7 @@
     "filter.datasets": "データセット",
     "filter.favorites": "お気に入り",
     "filter.missing_files": "欠落ファイル",
-    "filter.pcl": "PCL",
+    "filter.pcl": "PointCloud",
     "filter.splat": "スプラット",
     "filter.trained_outputs": "トレーニング済み出力",
     "filter.videos": "動画",

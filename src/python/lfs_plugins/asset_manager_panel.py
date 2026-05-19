@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import shutil
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
@@ -77,6 +78,166 @@ class AssetManagerPanel(Panel):
     # Storage path for asset manager data
     STORAGE_PATH = resolve_asset_manager_storage_path()
 
+    @staticmethod
+    def _dedupe_paths(paths: List[Path]) -> List[Path]:
+        seen: Set[str] = set()
+        result: List[Path] = []
+        for path in paths:
+            try:
+                key = str(path.expanduser().resolve())
+            except Exception:
+                key = str(path.expanduser())
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(path.expanduser())
+        return result
+
+    @classmethod
+    def _storage_candidates(cls) -> List[Path]:
+        candidates: List[Path] = []
+
+        for env_name in (
+            "LICHTFELD_ASSET_MANAGER_DIR",
+            "LFS_ASSET_MANAGER_DIR",
+        ):
+            env_value = os.environ.get(env_name, "").strip()
+            if env_value:
+                candidates.append(Path(env_value))
+
+        candidates.append(resolve_asset_manager_storage_path())
+
+        xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+        if xdg_data_home:
+            candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
+
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
+
+        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        if local_appdata:
+            candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
+
+        home = Path.home()
+        candidates.append(home / ".local" / "share" / "LichtFeldStudio" / "asset_manager")
+
+        # Last resort keeps the panel usable in packaged environments where HOME
+        # resolves inside a read-only mount. It is less durable, so only use it
+        # when every platform data directory rejects writes.
+        candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
+
+        return cls._dedupe_paths(candidates)
+
+    @staticmethod
+    def _path_accepts_writes(path: Path) -> bool:
+        probe_path: Optional[Path] = None
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                prefix=".lfs-write-test-",
+                dir=path,
+                delete=False,
+            ) as probe:
+                probe.write(b"ok")
+                probe_path = Path(probe.name)
+            probe_path.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            _logger.debug("Asset Manager storage path is not writable: %s (%s)", path, exc)
+            if probe_path is not None:
+                try:
+                    probe_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return False
+        except Exception as exc:
+            _logger.debug("Asset Manager storage path probe failed: %s (%s)", path, exc)
+            return False
+
+    @classmethod
+    def _resolve_writable_storage_path(cls) -> Path:
+        for candidate in cls._storage_candidates():
+            if cls._path_accepts_writes(candidate):
+                return candidate
+
+        # Let backend initialization report the concrete failure if even /tmp is
+        # unavailable.
+        return resolve_asset_manager_storage_path()
+
+    @staticmethod
+    def _copy_existing_catalog(source_dir: Path, target_dir: Path) -> None:
+        if source_dir == target_dir:
+            return
+
+        source_library = source_dir / "library.json"
+        target_library = target_dir / "library.json"
+        try:
+            if source_library.exists() and not target_library.exists():
+                target_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_library, target_library)
+                _logger.info(
+                    "Copied Asset Manager catalog from %s to writable storage %s",
+                    source_library,
+                    target_library,
+                )
+        except Exception as exc:
+            _logger.warning(
+                "Failed to copy Asset Manager catalog from %s to %s: %s",
+                source_library,
+                target_library,
+                exc,
+            )
+
+        source_thumbnails = source_dir / "thumbnails"
+        target_thumbnails = target_dir / "thumbnails"
+        try:
+            if source_thumbnails.exists() and not target_thumbnails.exists():
+                shutil.copytree(source_thumbnails, target_thumbnails)
+        except Exception as exc:
+            _logger.debug(
+                "Failed to copy Asset Manager thumbnails from %s to %s: %s",
+                source_thumbnails,
+                target_thumbnails,
+                exc,
+            )
+
+    def _publish_storage_path(self) -> None:
+        """Keep dialog/import helpers on the same writable catalog path."""
+        storage_path = self.STORAGE_PATH
+
+        try:
+            from . import asset_manager_integration as integration
+
+            integration.resolve_asset_manager_storage_path = lambda: storage_path
+        except Exception as exc:
+            _logger.debug("Failed to publish Asset Manager storage path: %s", exc)
+
+        try:
+            from . import import_panels
+
+            import_panels.resolve_asset_manager_storage_path = lambda: storage_path
+            if hasattr(import_panels, "URLImportPanel"):
+                import_panels.URLImportPanel.STORAGE_PATH = storage_path
+        except Exception as exc:
+            _logger.debug("Failed to publish Asset Manager dialog storage path: %s", exc)
+
+    def _configure_storage_path(self) -> None:
+        requested_path = resolve_asset_manager_storage_path()
+        writable_path = self._resolve_writable_storage_path()
+        self.STORAGE_PATH = writable_path
+        self.__class__.STORAGE_PATH = writable_path
+
+        if writable_path != requested_path:
+            self._copy_existing_catalog(requested_path, writable_path)
+            _logger.warning(
+                "Asset Manager catalog path %s is not writable; using %s",
+                requested_path,
+                writable_path,
+            )
+
+        self._publish_storage_path()
+
     def __init__(self):
         self._handle = None
 
@@ -97,6 +258,7 @@ class AssetManagerPanel(Panel):
 
         # Track which asset has its dropdown menu open
         self._open_menu_asset_id: Optional[str] = None
+        self._load_menu_asset_id: Optional[str] = None
 
         # Track which project has its dropdown menu open
         self._open_menu_project_id: Optional[str] = None
@@ -136,6 +298,8 @@ class AssetManagerPanel(Panel):
             return False
 
         try:
+            self._configure_storage_path()
+
             # Ensure storage directory exists
             self.STORAGE_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -941,6 +1105,7 @@ class AssetManagerPanel(Panel):
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
             "thumbnail_path": asset.get("thumbnail_path"),
             "menu_open": asset_id == self._open_menu_asset_id,
+            "load_menu_open": asset_id == self._load_menu_asset_id,
         }
 
     def get_project_list(self) -> List[Dict[str, Any]]:
@@ -2891,6 +3056,7 @@ class AssetManagerPanel(Panel):
 
         # Close the menu
         self._open_menu_project_id = None
+        self._select_project_id(project_id)
         self._dirty_model("projects")
 
         ok = open_watch_dirs_dialog(project_id)
@@ -3151,6 +3317,7 @@ class AssetManagerPanel(Panel):
         """
         content = doc.get_element_by_id("asset-popup-content")
         if content:
+            content.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             content.add_event_listener("click", self._on_asset_manager_click)
             content.add_event_listener(
                 "dblclick", self._on_asset_manager_double_click
@@ -3180,16 +3347,21 @@ class AssetManagerPanel(Panel):
             if action == "load":
                 self.on_load_asset(None, event, [asset_id])
             elif action == "load_new":
+                self._load_menu_asset_id = None
+                self._dirty_model("assets")
                 self.on_load_asset_new(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "add_to_scene":
+                self._load_menu_asset_id = None
+                self._dirty_model("assets")
                 self.on_add_asset_to_scene(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "remove":
                 self.on_remove_asset(None, event, [asset_id])
             elif action == "menu":
+                self._load_menu_asset_id = None
                 self.on_toggle_asset_menu(None, event, [asset_id])
                 self._stop_event(event)
                 return
@@ -3239,6 +3411,9 @@ class AssetManagerPanel(Panel):
                     self._dirty_model("assets", "move_menu_projects")
                     if self._handle:
                         self._handle.update_record_list("move_menu_projects", [])
+                if self._load_menu_asset_id:
+                    self._load_menu_asset_id = None
+                    self._dirty_model("assets")
                 self._select_asset_id(
                     asset_id,
                     toggle=False,
@@ -3302,10 +3477,51 @@ class AssetManagerPanel(Panel):
             if self._handle:
                 self._handle.update_record_list("move_menu_projects", [])
 
+        if self._load_menu_asset_id:
+            self._load_menu_asset_id = None
+            self._dirty_model("assets")
+
         # Close open project menu when clicking elsewhere
         if self._open_menu_project_id:
             self._open_menu_project_id = None
             self._dirty_model("projects")
+
+    def _on_asset_manager_mousedown(self, event) -> None:
+        if self._input_capture_active():
+            return
+
+        try:
+            button = int(event.get_parameter("button", "0"))
+        except (AttributeError, TypeError, ValueError):
+            return
+        if button != 1:
+            return
+
+        container = event.current_target()
+        target = event.target()
+        if target is None:
+            return
+
+        action_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-asset-action", container
+        )
+        if action_el is None:
+            return
+
+        action = action_el.get_attribute("data-asset-action", "")
+        if action not in ("select", "scene_asset"):
+            return
+
+        asset_id = action_el.get_attribute("data-asset-id", "")
+        if not asset_id:
+            return
+
+        if self._select_asset_id(asset_id):
+            self._load_menu_asset_id = asset_id
+            self._open_menu_asset_id = None
+            self._open_menu_project_id = None
+            self._dirty_model("assets", "projects")
+        self._stop_event(event)
 
     def _on_asset_manager_double_click(self, event) -> None:
         if self._input_capture_active():
@@ -3330,6 +3546,7 @@ class AssetManagerPanel(Panel):
         if not asset_id:
             return
 
+        self._load_menu_asset_id = None
         self.on_load_asset(None, event, [asset_id])
         self._stop_event(event)
 

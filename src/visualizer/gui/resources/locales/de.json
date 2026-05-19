@@ -124,7 +124,7 @@
     "filter.datasets": "Datasets",
     "filter.favorites": "Favoriten",
     "filter.missing_files": "Fehlende Dateien",
-    "filter.pcl": "PCL",
+    "filter.pcl": "PointCloud",
     "filter.splat": "Splat",
     "filter.trained_outputs": "Trainierte Outputs",
     "filter.videos": "Videos",

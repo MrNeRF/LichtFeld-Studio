@@ -1104,7 +1104,7 @@
     "filter.datasets": "数据集",
     "filter.favorites": "收藏",
     "filter.missing_files": "缺失文件",
-    "filter.pcl": "PCL",
+    "filter.pcl": "PointCloud",
     "filter.splat": "Splat",
     "filter.trained_outputs": "训练输出",
     "filter.videos": "视频",

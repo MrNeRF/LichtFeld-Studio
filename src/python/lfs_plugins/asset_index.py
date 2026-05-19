@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -20,8 +21,132 @@ DEFAULT_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
 LEGACY_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
 
 
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    seen: set[str] = set()
+    result: List[Path] = []
+    for path in paths:
+        try:
+            expanded = path.expanduser()
+            key = str(expanded.resolve())
+        except Exception:
+            expanded = path.expanduser()
+            key = str(expanded)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(expanded)
+    return result
+
+
+def _storage_candidates() -> List[Path]:
+    candidates: List[Path] = []
+
+    for env_name in ("LICHTFELD_ASSET_MANAGER_DIR", "LFS_ASSET_MANAGER_DIR"):
+        env_value = os.environ.get(env_name, "").strip()
+        if env_value:
+            candidates.append(Path(env_value))
+
+    candidates.append(LEGACY_STORAGE_PATH)
+
+    xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    if xdg_data_home:
+        candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
+
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
+
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
+
+    candidates.append(
+        Path.home() / ".local" / "share" / "LichtFeldStudio" / "asset_manager"
+    )
+    candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
+    return _dedupe_paths(candidates)
+
+
+def _path_accepts_writes(path: Path) -> bool:
+    probe_path: Optional[Path] = None
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=".lfs-write-test-",
+            dir=path,
+            delete=False,
+        ) as probe:
+            probe.write(b"ok")
+            probe_path = Path(probe.name)
+        probe_path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        _log.debug("Asset Manager storage path is not writable: %s (%s)", path, exc)
+        if probe_path is not None:
+            try:
+                probe_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return False
+    except Exception as exc:
+        _log.debug("Asset Manager storage path probe failed: %s (%s)", path, exc)
+        return False
+
+
+def _copy_existing_storage(source_dir: Path, target_dir: Path) -> None:
+    if source_dir == target_dir:
+        return
+
+    source_library = source_dir / "library.json"
+    target_library = target_dir / "library.json"
+    try:
+        if source_library.exists() and not target_library.exists():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_library, target_library)
+            _log.info(
+                "Copied Asset Manager catalog from %s to writable storage %s",
+                source_library,
+                target_library,
+            )
+    except Exception as exc:
+        _log.warning(
+            "Failed to copy Asset Manager catalog from %s to %s: %s",
+            source_library,
+            target_library,
+            exc,
+        )
+
+    source_thumbnails = source_dir / "thumbnails"
+    target_thumbnails = target_dir / "thumbnails"
+    try:
+        if source_thumbnails.exists() and not target_thumbnails.exists():
+            shutil.copytree(source_thumbnails, target_thumbnails)
+    except Exception as exc:
+        _log.debug(
+            "Failed to copy Asset Manager thumbnails from %s to %s: %s",
+            source_thumbnails,
+            target_thumbnails,
+            exc,
+        )
+
+
 def resolve_asset_manager_storage_path() -> Path:
+    for candidate in _storage_candidates():
+        if _path_accepts_writes(candidate):
+            if candidate != LEGACY_STORAGE_PATH:
+                _copy_existing_storage(LEGACY_STORAGE_PATH, candidate)
+                _log.warning(
+                    "Asset Manager catalog path %s is not writable; using %s",
+                    LEGACY_STORAGE_PATH,
+                    candidate,
+                )
+            return candidate
+
     return LEGACY_STORAGE_PATH
+
+
+def resolve_asset_manager_library_path() -> Path:
+    return resolve_asset_manager_storage_path() / "library.json"
 
 
 @dataclass
@@ -155,7 +280,7 @@ class AssetIndex:
         Args:
             library_path: Path to library.json. Defaults to ~/.lichtfeld/asset_manager/library.json
         """
-        self._library_path = library_path or DEFAULT_LIBRARY_PATH
+        self._library_path = library_path or resolve_asset_manager_library_path()
         self._library_path.parent.mkdir(parents=True, exist_ok=True)
 
         # In-memory catalog storage

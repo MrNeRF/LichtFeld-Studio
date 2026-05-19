@@ -34,13 +34,13 @@ _EXTENSION_TYPE_MAP = {
     ".dae": "mesh",
     ".3ds": "mesh",
     ".ckpt": "checkpoint",
+    ".resume": "checkpoint",
     ".mp4": "video",
     ".mov": "video",
     ".usd": "usd",
     ".usda": "usd",
     ".usdc": "usd",
     ".usdz": "usd",
-    ".html": "html",
 }
 
 # Header signatures for file type detection (first few bytes)
@@ -144,7 +144,7 @@ class AssetScanner:
 
         Returns:
             One of: "ply", "rad", "sog", "spz", "checkpoint", "dataset",
-            "video", "usd", "html", or None if type cannot be determined.
+            "video", "usd", or None if type cannot be determined.
 
         Example:
             >>> scanner.detect_type("model.ply")

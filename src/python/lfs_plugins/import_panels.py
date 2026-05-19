@@ -13,6 +13,33 @@ import lichtfeld as lf
 
 _logger = logging.getLogger(__name__)
 
+
+def _watch_log(level: str, message: str, *args, exc_info: bool = False) -> None:
+    if args:
+        try:
+            message = message % args
+        except Exception:
+            pass
+
+    prefixed = f"[AssetManagerWatch] {message}"
+    logger_fn = {
+        "debug": _logger.debug,
+        "info": _logger.info,
+        "warn": _logger.warning,
+        "error": _logger.error,
+    }.get(level, _logger.info)
+    logger_fn(prefixed, exc_info=exc_info)
+
+    try:
+        lf_log = getattr(lf, "log", None)
+        lf_level = "warn" if level == "warn" else level
+        lf_fn = getattr(lf_log, lf_level, None) if lf_log is not None else None
+        if callable(lf_fn):
+            lf_fn(prefixed)
+    except Exception:
+        pass
+
+
 from . import rml_widgets as w
 from .asset_manager_integration import (
     get_asset_manager_panel,
@@ -88,6 +115,13 @@ def open_watch_dirs_dialog(project_id: str) -> bool:
             pass
         _watch_dirs_dialog_panel = WatchDirsDialogPanel()
     try:
+        _watch_log(
+            "info",
+            "open dialog requested project_id=%s panel_object_id=%s",
+            project_id,
+            id(_watch_dirs_dialog_panel),
+        )
+        _watch_dirs_dialog_panel._project_id = project_id
         return _watch_dirs_dialog_panel.show(project_id)
     except Exception as e:
         _logger.error("Failed to open watch dirs dialog: %s", e, exc_info=True)
@@ -98,13 +132,43 @@ def _tr(key: str) -> str:
     return lf.ui.tr(key)
 
 
+def _index_library_path(index) -> str:
+    return str(getattr(index, "library_path", "<unknown library path>"))
+
+
+def _safe_count(mapping) -> int:
+    try:
+        return len(mapping)
+    except Exception:
+        return -1
+
+
+def _library_mtime(index) -> str:
+    try:
+        path = getattr(index, "library_path", None)
+        if path is not None and path.exists():
+            return str(path.stat().st_mtime)
+    except Exception:
+        pass
+    return "missing"
+
+
 def _discover_asset_metadata(scanner, path: str) -> list[dict[str, Any]]:
     """Discover assets under a path using the shared scanner contract."""
+    _watch_log("info", "discover start path=%s exists=%s", path, os.path.exists(path))
     if scanner is None:
+        _watch_log("error", "discover skipped because scanner is None")
         return []
 
     if hasattr(scanner, "scan_directory_deep"):
-        return scanner.scan_directory_deep(path)
+        metadata_list = scanner.scan_directory_deep(path)
+        _watch_log(
+            "info",
+            "discover complete path=%s method=scan_directory_deep count=%d",
+            path,
+            len(metadata_list),
+        )
+        return metadata_list
 
     metadata_list: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
@@ -123,6 +187,12 @@ def _discover_asset_metadata(scanner, path: str) -> list[dict[str, Any]]:
         metadata_list.append(metadata)
         seen_paths.add(metadata_path)
 
+    _watch_log(
+        "info",
+        "discover complete path=%s method=scan_directory count=%d",
+        path,
+        len(metadata_list),
+    )
     return metadata_list
 
 
@@ -138,13 +208,34 @@ def _register_discovered_assets(
     """Create catalog assets from discovered metadata using shared logic."""
     created_assets = []
     single_asset_override = name_override if len(metadata_list) == 1 else None
+    _watch_log(
+        "info",
+        "register start library=%s project_id=%s scene_id=%s metadata_count=%d",
+        _index_library_path(index),
+        project_id,
+        scene_id,
+        len(metadata_list),
+    )
 
     for metadata in metadata_list:
         file_path = metadata.get("path")
         if not file_path or not os.path.exists(file_path):
+            _watch_log(
+                "warn",
+                "register skipped missing path metadata_path=%s name=%s type=%s",
+                file_path,
+                metadata.get("name"),
+                metadata.get("type"),
+            )
             continue
         existing = index.find_asset_by_path(file_path)
         if existing is not None:
+            _watch_log(
+                "info",
+                "register skipped existing asset path=%s asset_id=%s",
+                file_path,
+                getattr(existing, "id", "<unknown>"),
+            )
             continue
 
         asset_name = (
@@ -163,15 +254,38 @@ def _register_discovered_assets(
             **metadata_to_asset_kwargs(metadata),
         )
         if asset is None:
+            _watch_log(
+                "error",
+                "register create_asset returned None path=%s type=%s role=%s library=%s",
+                file_path,
+                metadata.get("type"),
+                metadata.get("role"),
+                _index_library_path(index),
+            )
             continue
         created_assets.append(asset)
+        _watch_log(
+            "info",
+            "register created asset_id=%s name=%s type=%s path=%s",
+            asset.id,
+            asset.name,
+            asset.type,
+            file_path,
+        )
         if thumbnails is not None:
             try:
                 thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
                 index.update_asset(asset.id, thumbnail_path=str(thumb_path))
             except Exception:
-                pass
+                _watch_log(
+                    "warn",
+                    "thumbnail generation failed asset_id=%s path=%s",
+                    asset.id,
+                    file_path,
+                    exc_info=True,
+                )
 
+    _watch_log("info", "register complete created_count=%d", len(created_assets))
     return created_assets
 
 
@@ -1210,35 +1324,136 @@ class WatchDirsDialogPanel(Panel):
     def _catalog_index(self):
         panel = get_asset_manager_panel()
         shared_index = getattr(panel, "_asset_index", None) if panel is not None else None
-        index = shared_index if shared_index is not None else load_asset_index()
-        if index is not None:
-            try:
-                index.load()
-            except Exception:
-                _logger.debug(
-                    "Failed to reload asset index from library.json for watch dirs dialog",
-                    exc_info=True,
-                )
+        if shared_index is not None:
+            _watch_log(
+                "info",
+                "using active panel AssetIndex object_id=%s library=%s projects=%d assets=%d",
+                id(shared_index),
+                _index_library_path(shared_index),
+                _safe_count(getattr(shared_index, "projects", {})),
+                _safe_count(getattr(shared_index, "assets", {})),
+            )
+            return shared_index
+
+        index = load_asset_index()
+        if index is None:
+            _watch_log("error", "no active panel AssetIndex and fallback load failed")
+            return None
+
+        _watch_log(
+            "warn",
+            "using fallback AssetIndex object_id=%s library=%s projects=%d assets=%d",
+            id(index),
+            _index_library_path(index),
+            _safe_count(getattr(index, "projects", {})),
+            _safe_count(getattr(index, "assets", {})),
+        )
         return index
+
+    def _scanner(self):
+        panel = get_asset_manager_panel()
+        scanner = getattr(panel, "_asset_scanner", None) if panel is not None else None
+        if scanner is not None:
+            _watch_log("info", "using active panel scanner object_id=%s", id(scanner))
+            return scanner
+        scanner = load_scanner()
+        _watch_log(
+            "warn" if scanner is not None else "error",
+            "using fallback scanner object_id=%s",
+            id(scanner) if scanner is not None else "None",
+        )
+        return scanner
+
+    def _thumbnails(self):
+        panel = get_asset_manager_panel()
+        thumbnails = (
+            getattr(panel, "_asset_thumbnails", None) if panel is not None else None
+        )
+        if thumbnails is not None:
+            _watch_log("info", "using active panel thumbnails object_id=%s", id(thumbnails))
+            return thumbnails
+        thumbnails = load_thumbnails()
+        _watch_log(
+            "warn" if thumbnails is not None else "error",
+            "using fallback thumbnails object_id=%s",
+            id(thumbnails) if thumbnails is not None else "None",
+        )
+        return thumbnails
 
     def show(self, project_id: str) -> bool:
         try:
+            _watch_log("info", "show requested project_id=%s", project_id)
             index = self._catalog_index()
             if index is None:
+                _watch_log("error", "show aborted: no AssetIndex")
                 return False
 
+            panel = get_asset_manager_panel()
+            requested_name = None
+            if panel is not None:
+                try:
+                    requested = getattr(panel, "_asset_index", None)
+                    requested_project = (
+                        requested.projects.get(project_id)
+                        if requested is not None and hasattr(requested, "projects")
+                        else None
+                    )
+                    if requested_project is not None:
+                        requested_name = requested_project.get("name")
+                except Exception:
+                    requested_name = None
+
             project = index.get_project(project_id)
+            if project is None and requested_name:
+                _watch_log(
+                    "warn",
+                    "project id not found in watch index, trying name match project_id=%s name=%s",
+                    project_id,
+                    requested_name,
+                )
+                for candidate in index.list_projects():
+                    if getattr(candidate, "name", None) == requested_name:
+                        project = candidate
+                        project_id = candidate.id
+                        break
             if project is None:
+                _watch_log(
+                    "error",
+                    "show aborted: project not found project_id=%s available=%s",
+                    project_id,
+                    list(getattr(index, "projects", {}).keys()),
+                )
                 return False
 
             self._project_id = project_id
             self._project_name = getattr(project, "name", "Unnamed Project")
             self._watch_dirs = index.get_watch_dirs(project_id)
+            _watch_log(
+                "info",
+                "show loaded project_id=%s project_name=%s watch_dirs=%s library=%s",
+                self._project_id,
+                self._project_name,
+                self._watch_dirs,
+                _index_library_path(index),
+            )
+            if panel is not None and getattr(panel, "_selected_project_id", None) != project_id:
+                try:
+                    if hasattr(panel, "_select_project_id"):
+                        panel._select_project_id(project_id)
+                    else:
+                        panel._selected_project_id = project_id
+                        panel._dirty_model("projects")
+                except Exception:
+                    _watch_log(
+                        "warn",
+                        "failed to reconcile selected project id for watch dirs dialog",
+                        exc_info=True,
+                    )
             self._dirty_model()
             lf.ui.set_panel_enabled(self.id, True)
             return True
         except Exception as e:
-            _logger.error("Failed to show watch dirs dialog: %s", e, exc_info=True)
+            _watch_log("error", "failed to show watch dirs dialog: %s", e, exc_info=True)
             return False
 
     def _panel_label(self) -> str:
@@ -1263,9 +1478,12 @@ class WatchDirsDialogPanel(Panel):
     def _on_browse_add(self, _handle=None, _ev=None, _args=None):
         path = lf.ui.open_dataset_folder_dialog()
         if not path:
+            _watch_log("info", "browse add cancelled")
             return
         if path in self._watch_dirs:
+            _watch_log("info", "browse add ignored duplicate path=%s", path)
             return
+        _watch_log("info", "browse add path=%s exists=%s", path, os.path.exists(path))
         self._watch_dirs.append(path)
         self._dirty_model("watch_dirs_list", "no_watch_dirs")
 
@@ -1284,44 +1502,130 @@ class WatchDirsDialogPanel(Panel):
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_save(self, _handle=None, _ev=None, _args=None):
+        _watch_log(
+            "info",
+            "save clicked project_id=%s watch_dirs=%s",
+            self._project_id,
+            self._watch_dirs,
+        )
         index = self._catalog_index()
+        if self._project_id is None:
+            panel = get_asset_manager_panel()
+            fallback_project_id = (
+                getattr(panel, "_selected_project_id", None) if panel is not None else None
+            )
+            _watch_log(
+                "warn",
+                "save missing dialog project_id; active panel selected_project_id=%s",
+                fallback_project_id,
+            )
+            self._project_id = fallback_project_id
+
         if index is None or self._project_id is None:
+            _watch_log(
+                "error",
+                "save aborted index_is_none=%s project_id=%s",
+                index is None,
+                self._project_id,
+            )
             lf.ui.set_panel_enabled(self.id, False)
             return
 
-        # Persist watch directories
-        if not index.set_watch_dirs(self._project_id, self._watch_dirs):
-            _logger.error(
-                "Failed to persist watched directories for project %s",
+        project = index.get_project(self._project_id)
+        if project is None:
+            _watch_log(
+                "error",
+                "save aborted: project missing project_id=%s available=%s library=%s",
                 self._project_id,
+                list(getattr(index, "projects", {}).keys()),
+                _index_library_path(index),
             )
             return
 
+        _watch_log(
+            "info",
+            "persist start object_id=%s library=%s mtime=%s project_id=%s dirs=%s",
+            id(index),
+            _index_library_path(index),
+            _library_mtime(index),
+            self._project_id,
+            self._watch_dirs,
+        )
+
+        # Persist watch directories
+        if not index.set_watch_dirs(self._project_id, self._watch_dirs):
+            _watch_log(
+                "error",
+                "persist failed project_id=%s library=%s mtime=%s",
+                self._project_id,
+                _index_library_path(index),
+                _library_mtime(index),
+            )
+            return
+
+        _watch_log(
+            "info",
+            "persist complete object_id=%s library=%s mtime=%s dirs=%s",
+            id(index),
+            _index_library_path(index),
+            _library_mtime(index),
+            index.get_watch_dirs(self._project_id),
+        )
         refresh_active_panel()
+        _watch_log("info", "active panel refresh requested after watch-dir save")
 
         # Close dialog immediately and run scan in background thread
         lf.ui.set_panel_enabled(self.id, False)
 
+        scanner = self._scanner()
+        thumbnails = self._thumbnails()
         thread = threading.Thread(
             target=self._scan_worker,
-            args=(None, self._project_id, list(self._watch_dirs)),
+            args=(index, scanner, thumbnails, self._project_id, list(self._watch_dirs)),
             daemon=True,
+            name="AssetManagerWatchScan",
         )
         thread.start()
+        _watch_log(
+            "info",
+            "scan thread started name=%s ident=%s index_object_id=%s",
+            thread.name,
+            thread.ident,
+            id(index),
+        )
 
-    def _scan_worker(self, index, project_id: str, watch_dirs: list[str]):
+    def _scan_worker(self, index, scanner, thumbnails, project_id: str, watch_dirs: list[str]):
         """Background thread: scan watched directories and import new assets."""
+        _watch_log(
+            "info",
+            "scan worker start index_object_id=%s library=%s scanner=%s thumbnails=%s project_id=%s dirs=%s",
+            id(index) if index is not None else "None",
+            _index_library_path(index) if index is not None else "<none>",
+            id(scanner) if scanner is not None else "None",
+            id(thumbnails) if thumbnails is not None else "None",
+            project_id,
+            watch_dirs,
+        )
         if index is None:
             index = load_asset_index()
-        scanner = load_scanner()
-        thumbnails = load_thumbnails()
         if index is None or scanner is None:
+            _watch_log(
+                "error",
+                "scan worker aborted index_is_none=%s scanner_is_none=%s",
+                index is None,
+                scanner is None,
+            )
             return
 
         added = 0
+        discovered = 0
         for path in watch_dirs:
             try:
                 metadata_list = _discover_asset_metadata(scanner, path)
+                discovered += len(metadata_list)
+                if not metadata_list:
+                    _watch_log("info", "no importable assets found path=%s", path)
+                    continue
                 created_assets = _register_discovered_assets(
                     index,
                     thumbnails,
@@ -1330,12 +1634,43 @@ class WatchDirsDialogPanel(Panel):
                 )
                 added += len(created_assets)
             except Exception as e:
-                _logger.warning("Failed to scan watched directory %s: %s", path, e, exc_info=True)
+                _watch_log(
+                    "warn",
+                    "failed to scan watched directory path=%s error=%s",
+                    path,
+                    e,
+                    exc_info=True,
+                )
 
         try:
             if added > 0:
-                index.save()
-                _logger.info("Auto-imported %d new asset(s) from watched directories", added)
+                if index.save():
+                    _watch_log(
+                        "info",
+                        "scan save complete discovered=%d added=%d library=%s mtime=%s",
+                        discovered,
+                        added,
+                        _index_library_path(index),
+                        _library_mtime(index),
+                    )
+                else:
+                    _watch_log(
+                        "error",
+                        "scan save failed discovered=%d added=%d library=%s mtime=%s",
+                        discovered,
+                        added,
+                        _index_library_path(index),
+                        _library_mtime(index),
+                    )
+            else:
+                _watch_log(
+                    "info",
+                    "scan complete with no new assets discovered=%d added=%d library=%s",
+                    discovered,
+                    added,
+                    _index_library_path(index),
+                )
             refresh_active_panel()
+            _watch_log("info", "active panel refresh requested after scan")
         except Exception as e:
-            _logger.error("Failed to finalize watch-dir scan: %s", e, exc_info=True)
+            _watch_log("error", "failed to finalize watch-dir scan: %s", e, exc_info=True)

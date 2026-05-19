@@ -430,3 +430,31 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     assert scene.id not in data["scenes"]
     assert project.id not in data["projects"]
     assert panel.get_selected_count() == 0
+
+
+def test_edit_watch_dirs_selects_requested_project(asset_manager_panel_module, monkeypatch):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={},
+        projects={
+            "default": {"id": "default", "name": "Default", "scene_ids": []},
+            "target": {"id": "target", "name": "Target", "scene_ids": []},
+        },
+        scenes={},
+        tags={},
+        collections={},
+    )
+    panel._selected_project_id = "default"
+    opened = []
+
+    monkeypatch.setattr(
+        asset_manager_panel_module,
+        "open_watch_dirs_dialog",
+        lambda project_id: opened.append(project_id) or True,
+    )
+
+    panel.on_edit_watch_dirs(None, None, ["target"])
+
+    assert panel._selected_project_id == "target"
+    assert opened == ["target"]

@@ -113,7 +113,7 @@
     "filter.missing_files": "Missing Files",
     "filter.favorites": "Favorites",
     "filter.splat": "Splat",
-    "filter.pcl": "PCL",
+    "filter.pcl": "PointCloud",
     "filter.checkpoint": "Checkpoint",
     "filter.dataset": "Dataset",
     "info_panel.info": "Info",
