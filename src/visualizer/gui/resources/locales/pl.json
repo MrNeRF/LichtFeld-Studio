@@ -240,7 +240,8 @@
     "status_extracting": "Rozpakowywanie...",
     "status_complete": "Ukończono!",
     "tooltip.refresh": "Ponownie przeskanuj wszystkie katalogi zasobów i zaktualizuj metadane katalogu",
-    "tooltip.clean_missing": "Usuń wpisy katalogu, których pliki nie istnieją już na dysku"
+    "tooltip.clean_missing": "Usuń wpisy katalogu, których pliki nie istnieją już na dysku",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "Zbiór Danych",

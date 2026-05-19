@@ -240,7 +240,8 @@
     "status_extracting": "Extrahieren...",
     "status_complete": "Abgeschlossen!",
     "tooltip.refresh": "Alle Asset-Verzeichnisse neu scannen und Katalog-Metadaten aktualisieren",
-    "tooltip.clean_missing": "Katalogeinträge entfernen, deren Dateien nicht mehr auf der Festplatte existieren"
+    "tooltip.clean_missing": "Katalogeinträge entfernen, deren Dateien nicht mehr auf der Festplatte existieren",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "Datensatz",

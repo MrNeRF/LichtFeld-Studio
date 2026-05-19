@@ -1123,6 +1123,55 @@ class AssetScanner:
 
         return results
 
+    def scan_directory_deep(self, path: str) -> list[dict]:
+        """Scan a directory tree for assets without pruning dataset subtrees.
+
+        This is intended for watch-directory ingestion, where a parent folder may
+        contain both dataset roots and nested geometry/checkpoint assets under
+        those same directories.
+
+        Args:
+            path: Root directory to scan.
+
+        Returns:
+            List of metadata dictionaries for all detected assets in the tree.
+        """
+        path_obj = Path(path)
+        results = []
+        seen_paths: set[str] = set()
+
+        if not path_obj.exists():
+            return results
+
+        def _append_metadata(candidate_path: str) -> None:
+            metadata = self.scan_file(candidate_path)
+            detected_type = metadata.get("type")
+            metadata_path = metadata.get("path")
+            if detected_type is None or not metadata_path or metadata_path in seen_paths:
+                return
+            results.append(metadata)
+            seen_paths.add(metadata_path)
+
+        try:
+            if path_obj.is_file():
+                _append_metadata(str(path_obj))
+                return results
+
+            for current_root, dirnames, filenames in os.walk(path_obj):
+                current_root_path = Path(current_root)
+                _append_metadata(str(current_root_path))
+
+                for filename in filenames:
+                    file_path = current_root_path / filename
+                    ext = file_path.suffix.lower()
+                    if ext not in _EXTENSION_TYPE_MAP and ext not in _IMAGE_EXTENSIONS:
+                        continue
+                    _append_metadata(str(file_path))
+        except (OSError, PermissionError) as e:
+            _logger.warning(f"Error deep-scanning directory {path}: {e}")
+
+        return results
+
 
 # ═══════════════════════════════════════════════════════════════════════════════════
 # Module-level convenience functions

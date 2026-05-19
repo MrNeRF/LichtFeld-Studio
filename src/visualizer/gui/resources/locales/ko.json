@@ -240,7 +240,8 @@
     "status_extracting": "추출 중...",
     "status_complete": "완료!",
     "tooltip.refresh": "모든 에셋 디렉토리를 다시 스캔하고 카탈로그 메타데이터 업데이트",
-    "tooltip.clean_missing": "디스크에 더 이상 존재하지 않는 파일의 카탈로그 항목 제거"
+    "tooltip.clean_missing": "디스크에 더 이상 존재하지 않는 파일의 카탈로그 항목 제거",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "데이터셋",

@@ -240,7 +240,8 @@
     "status_extracting": "Uitpakken...",
     "status_complete": "Voltooid!",
     "tooltip.refresh": "Alle asset-mappen opnieuw scannen en catalogusmetadata bijwerken",
-    "tooltip.clean_missing": "Catalogusitems verwijderen waarvan de bestanden niet meer op de schijf bestaan"
+    "tooltip.clean_missing": "Catalogusitems verwijderen waarvan de bestanden niet meer op de schijf bestaan",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "Dataset",

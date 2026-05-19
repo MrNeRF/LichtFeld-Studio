@@ -95,24 +95,84 @@ def open_watch_dirs_dialog(project_id: str) -> bool:
 
 
 def _tr(key: str) -> str:
-    fallbacks = {
-        "asset_manager.import_from_url": "Import from URL",
-        "asset_manager.import_button": "Import",
-        "asset_manager.import_button_downloading": "Downloading...",
-        "asset_manager.status_connecting": "Connecting...",
-        "asset_manager.status_extracting": "Extracting...",
-        "asset_manager.status_complete": "Complete!",
-        "asset_manager.status_cancelling": "Cancelling...",
-        "asset_manager.error_empty_url": "Please enter a URL",
-        "asset_manager.error_unsupported_url": "Unsupported URL format",
-        "asset_manager.error_download_failed": "Download failed",
-        "asset_manager.error_extract_failed": "Extraction failed",
-        "asset_manager.error_unknown": "An error occurred",
-    }
-    result = lf.ui.tr(key)
-    if not result or result == key:
-        return fallbacks.get(key, key)
-    return result
+    return lf.ui.tr(key)
+
+
+def _discover_asset_metadata(scanner, path: str) -> list[dict[str, Any]]:
+    """Discover assets under a path using the shared scanner contract."""
+    if scanner is None:
+        return []
+
+    if hasattr(scanner, "scan_directory_deep"):
+        return scanner.scan_directory_deep(path)
+
+    metadata_list: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    root_metadata = scanner.scan_file(path)
+    root_type = root_metadata.get("type")
+    root_path = root_metadata.get("path")
+    if root_type is not None and root_path:
+        metadata_list.append(root_metadata)
+        seen_paths.add(root_path)
+
+    for metadata in scanner.scan_directory(path, recursive=True):
+        metadata_path = metadata.get("path")
+        if not metadata_path or metadata_path in seen_paths:
+            continue
+        metadata_list.append(metadata)
+        seen_paths.add(metadata_path)
+
+    return metadata_list
+
+
+def _register_discovered_assets(
+    index,
+    thumbnails,
+    metadata_list: list[dict[str, Any]],
+    *,
+    project_id: Optional[str],
+    scene_id: Optional[str] = None,
+    name_override: Optional[str] = None,
+) -> list[Any]:
+    """Create catalog assets from discovered metadata using shared logic."""
+    created_assets = []
+    single_asset_override = name_override if len(metadata_list) == 1 else None
+
+    for metadata in metadata_list:
+        file_path = metadata.get("path")
+        if not file_path or not os.path.exists(file_path):
+            continue
+        existing = index.find_asset_by_path(file_path)
+        if existing is not None:
+            continue
+
+        asset_name = (
+            single_asset_override
+            or metadata.get("name")
+            or Path(file_path).name
+        )
+        asset = index.create_asset(
+            project_id=project_id,
+            name=asset_name,
+            type=metadata.get("type", "unknown"),
+            path=file_path,
+            absolute_path=file_path,
+            scene_id=scene_id,
+            role=metadata.get("role", "reference"),
+            **metadata_to_asset_kwargs(metadata),
+        )
+        if asset is None:
+            continue
+        created_assets.append(asset)
+        if thumbnails is not None:
+            try:
+                thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
+                index.update_asset(asset.id, thumbnail_path=str(thumb_path))
+            except Exception:
+                pass
+
+    return created_assets
 
 
 class _ImportDialogPanel(Panel):
@@ -862,30 +922,13 @@ class URLImportPanel(_ImportDialogPanel):
 
         return project_id, scene_id
 
-    def _generate_thumbnail(self, index, asset, thumbnails) -> None:
-        if thumbnails is None or asset is None:
-            return
-        try:
-            thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
-            index.update_asset(asset.id, thumbnail_path=str(thumb_path))
-        except Exception:
-            pass
-
     def _strip_archive_suffix(self, name: str) -> str:
         for suffix in (".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".tar"):
             if name.lower().endswith(suffix):
                 return name[:-len(suffix)]
         return name
 
-    def _scan_and_register_asset(
-        self,
-        path: str,
-        *,
-        fallback_role: str,
-        override_type: Optional[str],
-        override_role: Optional[str],
-        name: Optional[str] = None,
-    ):
+    def _scan_and_register_asset(self, path: str, *, name: Optional[str] = None):
         index = load_asset_index()
         if index is None:
             raise RuntimeError("Asset Manager backend is unavailable")
@@ -893,81 +936,28 @@ class URLImportPanel(_ImportDialogPanel):
         scanner = load_scanner()
         thumbnails = load_thumbnails()
         project_id, scene_id = self._resolve_catalog_context(index)
-
-        metadata = scanner.scan_file(path) if scanner is not None else {}
-        asset_kwargs = metadata_to_asset_kwargs(metadata)
-        asset_type = (
-            override_type
-            or metadata.get("type")
-            or Path(path).suffix.lstrip(".").lower()
-            or "unknown"
-        )
-        role = override_role or metadata.get("role") or fallback_role
-
-        asset_name = self._strip_archive_suffix(name) if name else Path(path).name
-
-        asset = index.create_asset(
+        metadata_list = _discover_asset_metadata(scanner, path)
+        created_assets = _register_discovered_assets(
+            index,
+            thumbnails,
+            metadata_list,
             project_id=project_id,
-            name=asset_name,
-            type=asset_type,
-            path=path,
-            absolute_path=path,
             scene_id=scene_id,
-            role=role,
-            **asset_kwargs,
+            name_override=self._strip_archive_suffix(name) if name else None,
         )
-        if asset is not None:
-            self._generate_thumbnail(index, asset, thumbnails)
+        if created_assets:
+            first_asset = created_assets[0]
             panel = get_asset_manager_panel()
             if panel is not None:
                 select_asset_in_active_panel(
-                    asset.id,
-                    project_id=asset.project_id,
-                    scene_id=asset.scene_id,
+                    first_asset.id,
+                    project_id=first_asset.project_id,
+                    scene_id=first_asset.scene_id,
                 )
             else:
                 refresh_active_panel()
-        return asset
-
-    def _register_extracted_asset(self, extract_dir: Path, name: Optional[str] = None):
-        for ext in (".ply", ".sog", ".spz", ".rad"):
-            files = list(extract_dir.rglob(f"*{ext}"))
-            if files:
-                return self._scan_and_register_asset(
-                    str(files[0]),
-                    fallback_role="source_dataset",
-                    override_type="dataset",
-                    override_role=None,
-                    name=name,
-                )
-
-        cameras_bin = list(extract_dir.rglob("cameras.bin"))
-        if cameras_bin:
-            dataset_dir = cameras_bin[0].parent.parent
-            return self._scan_and_register_asset(
-                str(dataset_dir),
-                fallback_role="source_dataset",
-                override_type="dataset",
-                override_role=None,
-                name=name,
-            )
-
-        return self._scan_and_register_asset(
-            str(extract_dir),
-            fallback_role="source_dataset",
-            override_type="dataset",
-            override_role=None,
-            name=name,
-        )
-
-    def _register_downloaded_file(self, file_path: Path, name: Optional[str] = None):
-        return self._scan_and_register_asset(
-            str(file_path),
-            fallback_role="source_dataset",
-            override_type="dataset",
-            override_role=None,
-            name=name,
-        )
+            return first_asset
+        return None
 
     def _handle_download_error(self, title: str, message: str, session_id: int) -> None:
         if session_id != self._url_import_session_id:
@@ -1048,7 +1038,7 @@ class URLImportPanel(_ImportDialogPanel):
                     should_cancel=lambda: self._should_cancel(session_id),
                 )
                 temp_file.unlink(missing_ok=True)
-                self._register_extracted_asset(dest_dir, name=asset_name)
+                self._scan_and_register_asset(str(dest_dir), name=asset_name)
             else:
                 dest_file = dest_dir / asset_name
                 download_url(
@@ -1062,7 +1052,7 @@ class URLImportPanel(_ImportDialogPanel):
                 if self._should_cancel(session_id):
                     raise InterruptedError("Download cancelled")
 
-                self._register_downloaded_file(dest_file, name=asset_name)
+                self._scan_and_register_asset(str(dest_file), name=asset_name)
 
             if session_id != self._url_import_session_id:
                 return
@@ -1253,6 +1243,9 @@ class WatchDirsDialogPanel(Panel):
             return
         if not fields:
             self._handle.dirty_all()
+            self._handle.update_record_list(
+                "watch_dirs_list", [{"path": p} for p in self._watch_dirs]
+            )
             return
         for field in fields:
             self._handle.dirty(field)
@@ -1291,7 +1284,14 @@ class WatchDirsDialogPanel(Panel):
             return
 
         # Persist watch directories
-        index.set_watch_dirs(self._project_id, self._watch_dirs)
+        if not index.set_watch_dirs(self._project_id, self._watch_dirs):
+            _logger.error(
+                "Failed to persist watched directories for project %s",
+                self._project_id,
+            )
+            return
+
+        refresh_active_panel()
 
         # Close dialog immediately and run scan in background thread
         lf.ui.set_panel_enabled(self.id, False)
@@ -1315,54 +1315,21 @@ class WatchDirsDialogPanel(Panel):
         added = 0
         for path in watch_dirs:
             try:
-                metadata_list = scanner.scan_directory(path, recursive=True)
-                for metadata in metadata_list:
-                    file_path = metadata.get("path")
-                    if not file_path or not os.path.exists(file_path):
-                        continue
-                    existing = index.find_asset_by_path(file_path)
-                    if existing is not None:
-                        continue
-
-                    # scan_file returns format_specific; route it to the right field
-                    fmt = metadata.get("format_specific", {})
-                    asset_type = metadata.get("type", "unknown")
-                    kwargs = {}
-                    if asset_type in ("ply", "ply_3dgs", "ply_pcl", "rad", "sog", "spz"):
-                        kwargs["geometry_metadata"] = fmt
-                    elif asset_type == "dataset":
-                        kwargs["dataset_metadata"] = fmt
-                    elif asset_type == "checkpoint":
-                        # checkpoint metadata is also in format_specific
-                        pass
-
-                    asset = index.create_asset(
-                        project_id=project_id,
-                        name=metadata.get("name", Path(file_path).name),
-                        type=asset_type,
-                        path=file_path,
-                        absolute_path=file_path,
-                        role=metadata.get("role", "source"),
-                        file_size_bytes=metadata.get("size_bytes", 0),
-                        **kwargs,
-                    )
-                    if asset is not None and thumbnails is not None:
-                        try:
-                            thumb_path = thumbnails.generate_placeholder(
-                                asset.type, asset.id
-                            )
-                            index.update_asset(asset.id, thumbnail_path=str(thumb_path))
-                        except Exception:
-                            pass
-                    if asset is not None:
-                        added += 1
+                metadata_list = _discover_asset_metadata(scanner, path)
+                created_assets = _register_discovered_assets(
+                    index,
+                    thumbnails,
+                    metadata_list,
+                    project_id=project_id,
+                )
+                added += len(created_assets)
             except Exception as e:
                 _logger.warning("Failed to scan watched directory %s: %s", path, e, exc_info=True)
 
-        if added > 0:
-            try:
+        try:
+            if added > 0:
                 index.save()
-                refresh_active_panel()
                 _logger.info("Auto-imported %d new asset(s) from watched directories", added)
-            except Exception as e:
-                _logger.error("Failed to save after watch-dir scan: %s", e, exc_info=True)
+            refresh_active_panel()
+        except Exception as e:
+            _logger.error("Failed to finalize watch-dir scan: %s", e, exc_info=True)

@@ -36,25 +36,12 @@ except ImportError:
     AssetScanner = None
     AssetThumbnails = None
 
-_TR_FALLBACKS = {
-    "asset_manager.title": "Asset Manager",
-    "asset_manager.action.load_new": "New",
-    "asset_manager.action.add_to_scene": "Add to Scene",
-    "asset_manager.action.edit_watch_dirs": "Edit Watched Directories",
-}
-
-
 def tr(key, **kwargs):
     tr_func = getattr(getattr(lf, "ui", None), "tr", None)
     try:
         result = tr_func(key) if callable(tr_func) else key
     except Exception:
         result = key
-    if result == key:
-        # Strip prefix for fallback
-        result = _TR_FALLBACKS.get(key, result)
-        if result == key and key.startswith("asset_manager."):
-            result = key.split(".")[-1].replace("_", " ").title()
     if kwargs:
         try:
             return result.format(**kwargs)

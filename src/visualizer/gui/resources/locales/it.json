@@ -240,7 +240,8 @@
     "status_extracting": "Estrazione...",
     "status_complete": "Completato!",
     "tooltip.refresh": "Riscansiona tutte le directory degli asset e aggiorna i metadati del catalogo",
-    "tooltip.clean_missing": "Rimuovi le voci del catalogo i cui file non esistono più sul disco"
+    "tooltip.clean_missing": "Rimuovi le voci del catalogo i cui file non esistono più sul disco",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "Dataset",

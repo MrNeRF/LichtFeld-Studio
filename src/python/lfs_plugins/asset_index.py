@@ -418,9 +418,14 @@ class AssetIndex:
         if project_id not in self._projects:
             return False
         project = self._projects[project_id]
+        previous_paths = list(project.watch_directories)
+        previous_modified_at = project.modified_at
         project.watch_directories = list(paths)
         project.modified_at = datetime.now().isoformat()
-        self.save()
+        if not self.save():
+            project.watch_directories = previous_paths
+            project.modified_at = previous_modified_at
+            return False
         return True
 
     def list_projects(self) -> List[Project]:

@@ -240,7 +240,8 @@
     "status_extracting": "Extracting...",
     "status_complete": "Complete!",
     "tooltip.refresh": "Rescan all asset directories and update catalog metadata",
-    "tooltip.clean_missing": "Remove catalog entries whose files no longer exist on disk"
+    "tooltip.clean_missing": "Remove catalog entries whose files no longer exist on disk",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "Dataset",

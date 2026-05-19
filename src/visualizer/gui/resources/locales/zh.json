@@ -1207,6 +1207,7 @@
     "status_extracting": "解压中...",
     "status_complete": "完成！",
     "tooltip.refresh": "重新扫描所有资源目录并更新目录元数据",
-    "tooltip.clean_missing": "删除磁盘上不再存在的文件的目录条目"
+    "tooltip.clean_missing": "删除磁盘上不再存在的文件的目录条目",
+    "project.watch_dirs_badge": "Watched"
   }
 }

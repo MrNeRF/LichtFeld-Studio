@@ -240,7 +240,8 @@
     "status_extracting": "展開中...",
     "status_complete": "完了！",
     "tooltip.refresh": "すべてのアセットディレクトリを再スキャンし、カタログメタデータを更新",
-    "tooltip.clean_missing": "ディスク上に存在しないファイルのカタログエントリを削除"
+    "tooltip.clean_missing": "ディスク上に存在しないファイルのカタログエントリを削除",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "データセット",

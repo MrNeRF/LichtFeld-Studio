@@ -240,7 +240,8 @@
     "status_extracting": "Extraction...",
     "status_complete": "Terminé !",
     "tooltip.refresh": "Rescanner tous les répertoires d'actifs et mettre à jour les métadonnées du catalogue",
-    "tooltip.clean_missing": "Supprimer les entrées du catalogue dont les fichiers n'existent plus sur le disque"
+    "tooltip.clean_missing": "Supprimer les entrées du catalogue dont les fichiers n'existent plus sur le disque",
+    "project.watch_dirs_badge": "Watched"
   },
   "training": {
     "section.dataset": "Dataset",
