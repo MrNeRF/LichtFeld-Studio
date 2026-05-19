@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/mesh2splat.hpp"
 
 #include <algorithm>
 #include <array>
@@ -257,6 +258,9 @@ namespace lfs::core {
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
 
+            // Optional trained splats to append to the training model before optimizer initialization
+            std::vector<std::filesystem::path> add_splat_paths;
+
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
 
@@ -285,6 +289,18 @@ namespace lfs::core {
             int sog_iterations = 10;
             bool overwrite = false;            // Skip overwrite prompts
             std::vector<float> rad_lod_levels; // LOD levels for RAD format (as ratios, e.g., 0.5f = 50%)
+        };
+
+        // Parameters for the mesh2splat command
+        struct LFS_CORE_API Mesh2SplatParameters {
+            std::filesystem::path input_path;
+            std::filesystem::path output_path; // Empty = derive from input
+            OutputFormat format = OutputFormat::PLY;
+            std::vector<OutputFormat> formats{OutputFormat::PLY};
+            Mesh2SplatOptions options;
+            int sog_iterations = 10;
+            bool overwrite = false;
+            std::vector<float> rad_lod_levels;
         };
 
         // Modern C++23 functions returning expected values

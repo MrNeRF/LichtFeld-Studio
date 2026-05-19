@@ -201,6 +201,20 @@ namespace lfs::core {
             if (auto error = optimization.validate(); !error.empty()) {
                 return error;
             }
+            if (!add_splat_paths.empty()) {
+                if (resume_checkpoint.has_value()) {
+                    return "--add-splat cannot be used together with --resume";
+                }
+                for (const auto& path : add_splat_paths) {
+                    if (path.empty()) {
+                        return "--add-splat path cannot be empty";
+                    }
+                    if (!std::filesystem::exists(path)) {
+                        return std::format("Added splat does not exist: '{}'",
+                                           lfs::core::path_to_utf8(path));
+                    }
+                }
+            }
             if (optimization.ppisp_freeze_from_sidecar && !resume_checkpoint.has_value()) {
                 if (optimization.ppisp_sidecar_path.empty()) {
                     return "PPISP sidecar freeze requires a sidecar path";

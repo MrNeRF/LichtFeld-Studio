@@ -14,6 +14,8 @@
 #include "dataset.hpp"
 #include "io/loader.hpp"
 #include <format>
+#include <memory>
+#include <variant>
 
 namespace lfs::training {
 
@@ -38,6 +40,99 @@ namespace lfs::training {
             if (splat.set_sh_degree(target_degree)) {
                 LOG_INFO("Adjusted training model SH degree: {} -> {}", before, splat.get_max_sh_degree());
             }
+        }
+
+        std::expected<std::unique_ptr<lfs::core::SplatData>, std::string> loadAddedSplat(
+            const std::filesystem::path& path,
+            const int target_degree) {
+            auto loader = lfs::io::Loader::create();
+            auto load_result = loader->load(path);
+            if (!load_result) {
+                return std::unexpected(std::format("Failed to load added splat '{}': {}",
+                                                   lfs::core::path_to_utf8(path),
+                                                   load_result.error().format()));
+            }
+
+            auto* splat_ptr = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
+            if (!splat_ptr || !*splat_ptr) {
+                return std::unexpected(std::format("'{}' is not a supported splat file",
+                                                   lfs::core::path_to_utf8(path)));
+            }
+
+            auto model = std::make_unique<lfs::core::SplatData>(std::move(**splat_ptr));
+            applyTrainingSHDegree(*model, target_degree);
+            LOG_INFO("Loaded added splat {}: {} Gaussians (sh={})",
+                     lfs::core::path_to_utf8(path.filename()),
+                     model->size(),
+                     model->get_max_sh_degree());
+            return std::move(model);
+        }
+
+        std::expected<void, std::string> appendAddedSplats(
+            const lfs::core::param::TrainingParameters& params,
+            lfs::core::SplatData& model) {
+            if (params.add_splat_paths.empty()) {
+                return {};
+            }
+
+            applyTrainingSHDegree(model, params.optimization.sh_degree);
+
+            const size_t base_count = static_cast<size_t>(model.size());
+            size_t added_count = 0;
+            std::vector<std::unique_ptr<lfs::core::SplatData>> owned_added_splats;
+            owned_added_splats.reserve(params.add_splat_paths.size());
+
+            std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
+            splats.reserve(params.add_splat_paths.size() + 1);
+            splats.emplace_back(&model, glm::mat4{1.0f});
+
+            for (const auto& path : params.add_splat_paths) {
+                auto added = loadAddedSplat(path, params.optimization.sh_degree);
+                if (!added) {
+                    return std::unexpected(added.error());
+                }
+
+                added_count += static_cast<size_t>((*added)->size());
+                splats.emplace_back(added->get(), glm::mat4{1.0f});
+                owned_added_splats.push_back(std::move(*added));
+            }
+
+            const size_t merged_count = base_count + added_count;
+            const int max_cap = params.optimization.max_cap;
+            if (max_cap > 0 && merged_count > static_cast<size_t>(max_cap)) {
+                return std::unexpected(std::format(
+                    "Added splats contain {} Gaussians for a total of {}, exceeding --max-cap {}. "
+                    "Increase --max-cap or add fewer splats.",
+                    added_count, merged_count, max_cap));
+            }
+
+            auto merged = lfs::core::Scene::mergeSplatsWithTransforms(splats);
+            if (!merged) {
+                return std::unexpected("Failed to merge added splats into training model");
+            }
+
+            // Keep the base model scene scale so means LR remains tied to the dataset scale.
+            const float scene_scale = model.get_scene_scale();
+            lfs::core::SplatData merged_with_base_scale(
+                merged->get_max_sh_degree(),
+                std::move(merged->means_raw()),
+                std::move(merged->sh0_raw()),
+                std::move(merged->shN_raw()),
+                std::move(merged->scaling_raw()),
+                std::move(merged->rotation_raw()),
+                std::move(merged->opacity_raw()),
+                scene_scale);
+            merged_with_base_scale.set_active_sh_degree(merged->get_active_sh_degree());
+            applyTrainingSHDegree(merged_with_base_scale, params.optimization.sh_degree);
+            model = std::move(merged_with_base_scale);
+
+            LOG_INFO("Added {} splat file{} to training model: {} + {} -> {} Gaussians",
+                     params.add_splat_paths.size(),
+                     params.add_splat_paths.size() == 1 ? "" : "s",
+                     base_count,
+                     added_count,
+                     model.size());
+            return {};
         }
     } // namespace
 
@@ -230,6 +325,9 @@ namespace lfs::training {
 
         if (auto* model = scene.getTrainingModel()) {
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
+            if (auto result = appendAddedSplats(params, *model); !result) {
+                return result;
+            }
             scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
             return {};
         }
@@ -362,6 +460,9 @@ namespace lfs::training {
         }
 
         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
+        if (auto result = appendAddedSplats(params, *model); !result) {
+            return result;
+        }
         LOG_INFO("Created training model with {} gaussians", model->size());
         scene.addSplat("Model", std::move(model), parent_id);
         if (node_transform != glm::mat4{1.0f}) {
