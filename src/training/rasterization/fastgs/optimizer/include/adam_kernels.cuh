@@ -5,9 +5,36 @@
 #pragma once
 
 #include <cooperative_groups.h>
+#include <cstdint>
 namespace cg = cooperative_groups;
 
 namespace fast_lfs::optimizer::kernels::adam {
+
+    constexpr uint8_t kSignedMomentZeroPoint = 128;
+
+    __device__ inline float dequant_signed_moment(const uint8_t q, const float scale) {
+        return scale == 0.0f ? 0.0f : (static_cast<int>(q) - static_cast<int>(kSignedMomentZeroPoint)) * scale;
+    }
+
+    __device__ inline float dequant_unsigned_moment(const uint8_t q, const float scale) {
+        return scale == 0.0f ? 0.0f : static_cast<float>(q) * scale;
+    }
+
+    __device__ inline uint8_t quantize_signed_moment(const float value, const float scale) {
+        if (scale == 0.0f)
+            return kSignedMomentZeroPoint;
+        const int q = static_cast<int>(roundf(value / scale)) + static_cast<int>(kSignedMomentZeroPoint);
+        return static_cast<uint8_t>(min(255, max(0, q)));
+    }
+
+    __device__ inline uint8_t quantize_unsigned_moment(const float value, const float scale) {
+        if (scale == 0.0f)
+            return 0;
+        const int q = static_cast<int>(roundf(fmaxf(value, 0.0f) / scale));
+        if (value > 0.0f && q == 0)
+            return 1;
+        return static_cast<uint8_t>(min(255, max(0, q)));
+    }
 
     // Vectorized Adam kernel using float4 for better memory throughput
     __global__ void adam_step_vectorized_cu(
@@ -105,6 +132,94 @@ namespace fast_lfs::optimizer::kernels::adam {
         exp_avg_sq[idx] = moment2;
     }
 
+    __global__ void adam_step_quantized_cu(
+        float* param,
+        uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const float* param_grad,
+        const int n_rows,
+        const int row_size,
+        const float lr,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        const float bias_correction1_rcp,
+        const float bias_correction2_sqrt_rcp) {
+        const int row = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row >= n_rows || row_size <= 0)
+            return;
+
+        const int base = row * row_size;
+        const float old_m_scale = exp_avg_scale[row];
+        const float old_v_scale = exp_avg_sq_scale[row];
+        float max_abs_m = 0.0f;
+        float max_v = 0.0f;
+
+        for (int i = 0; i < row_size; ++i) {
+            const int idx = base + i;
+            const float grad = param_grad[idx];
+            const float old_m = dequant_signed_moment(exp_avg_q[idx], old_m_scale);
+            const float old_v = dequant_unsigned_moment(exp_avg_sq_q[idx], old_v_scale);
+            const float m = beta1 * old_m + (1.0f - beta1) * grad;
+            const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
+            max_abs_m = fmaxf(max_abs_m, fabsf(m));
+            max_v = fmaxf(max_v, v);
+        }
+
+        const float new_m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
+        const float new_v_scale = max_v > 0.0f ? max_v / 255.0f : 0.0f;
+        const float step_size = lr * bias_correction1_rcp;
+
+        for (int i = 0; i < row_size; ++i) {
+            const int idx = base + i;
+            const float grad = param_grad[idx];
+            const float old_m = dequant_signed_moment(exp_avg_q[idx], old_m_scale);
+            const float old_v = dequant_unsigned_moment(exp_avg_sq_q[idx], old_v_scale);
+            const float m = beta1 * old_m + (1.0f - beta1) * grad;
+            const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
+            const float denom = sqrtf(v) * bias_correction2_sqrt_rcp + eps;
+            param[idx] -= step_size * m / denom;
+            exp_avg_q[idx] = quantize_signed_moment(m, new_m_scale);
+            exp_avg_sq_q[idx] = quantize_unsigned_moment(v, new_v_scale);
+        }
+
+        exp_avg_scale[row] = new_m_scale;
+        exp_avg_sq_scale[row] = new_v_scale;
+    }
+
+    __global__ void quantize_adam_moments_cu(
+        const float* exp_avg,
+        const float* exp_avg_sq,
+        uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const int n_rows,
+        const int row_size) {
+        const int row = blockIdx.x * blockDim.x + threadIdx.x;
+        if (row >= n_rows || row_size <= 0)
+            return;
+
+        const int base = row * row_size;
+        float max_abs_m = 0.0f;
+        float max_v = 0.0f;
+        for (int i = 0; i < row_size; ++i) {
+            max_abs_m = fmaxf(max_abs_m, fabsf(exp_avg[base + i]));
+            max_v = fmaxf(max_v, fmaxf(exp_avg_sq[base + i], 0.0f));
+        }
+
+        const float m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
+        const float v_scale = max_v > 0.0f ? max_v / 255.0f : 0.0f;
+        for (int i = 0; i < row_size; ++i) {
+            exp_avg_q[base + i] = quantize_signed_moment(exp_avg[base + i], m_scale);
+            exp_avg_sq_q[base + i] = quantize_unsigned_moment(exp_avg_sq[base + i], v_scale);
+        }
+        exp_avg_scale[row] = m_scale;
+        exp_avg_sq_scale[row] = v_scale;
+    }
+
     // Batched kernel to zero out specific rows (for MCMC relocation)
     // Much faster than element-by-element indexing on CPU
     __global__ void zero_rows_cu(
@@ -125,6 +240,25 @@ namespace fast_lfs::optimizer::kernels::adam {
         for (int i = 0; i < row_size; i++) {
             tensor[row_start + i] = 0.0f;
         }
+    }
+
+    __global__ void zero_quantized_rows_cu(
+        uint8_t* tensor_q,
+        float* scales,
+        const int64_t* indices,
+        const int n_indices,
+        const int row_size,
+        const uint8_t zero_point) {
+        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= n_indices)
+            return;
+
+        const int64_t row_idx = indices[idx];
+        const int64_t row_start = row_idx * static_cast<int64_t>(row_size);
+        for (int i = 0; i < row_size; i++) {
+            tensor_q[row_start + i] = zero_point;
+        }
+        scales[row_idx] = 0.0f;
     }
 
 } // namespace fast_lfs::optimizer::kernels::adam

@@ -174,14 +174,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
         const float opacity_grad = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
                                    opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
-        adam_step_helper(
-            opacity_grad,
-            fused_adam.opacity,
-            primitive_idx,
-            0,
-            fused_adam.beta1,
-            fused_adam.beta2,
-            fused_adam.eps);
+        const float opacity_grads[1] = {opacity_grad};
+        adam_step_row_dynamic(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // 3d covariance gradient
         const mat3x3_triu dL_dcov3d = {
@@ -248,9 +242,8 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
         const float3 clamped_mean = clamp_grad3(dL_dmean3d);
-        adam_step_helper(clamped_mean.x, fused_adam.means, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_mean.y, fused_adam.means, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_mean.z, fused_adam.means, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float mean_grads[3] = {clamped_mean.x, clamped_mean.y, clamped_mean.z};
+        adam_step_row_dynamic(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // raw scale gradient (zero gradient for clamped scales)
         const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
@@ -265,9 +258,11 @@ namespace fast_lfs::rasterization::kernels::backward {
             (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
         const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
         const uint scale_base = primitive_idx * 3;
-        adam_step_helper(clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base), fused_adam.scaling, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1), fused_adam.scaling, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2), fused_adam.scaling, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float scale_grads[3] = {
+            clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
+            clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
+            clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
+        adam_step_row_dynamic(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // raw rotation gradient
         const mat3x3 dL_drotation = {
@@ -292,10 +287,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
         const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
         const float4 clamped_rotation = clamp_grad4(dL_draw_rotation);
-        adam_step_helper(clamped_rotation.x, fused_adam.rotation, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.y, fused_adam.rotation, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.z, fused_adam.rotation, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.w, fused_adam.rotation, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float rotation_grads[4] = {clamped_rotation.x, clamped_rotation.y, clamped_rotation.z, clamped_rotation.w};
+        adam_step_row_dynamic(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // TODO: only needed for adaptive density control from the original 3dgs
         if (densification_info != nullptr) {
@@ -312,27 +305,25 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float beta1,
         const float beta2,
         const float eps) {
-        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (!param.enabled || idx >= param.n_elements || param.n_attributes <= 0)
+        const int primitive_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (!param.enabled || param.n_attributes <= 0)
             return;
 
-        const uint primitive_idx = static_cast<uint>(idx / param.n_attributes);
-        if (primitive_n_touched_tiles[primitive_idx] != 0)
+        const int base = primitive_idx * param.n_attributes;
+        if (base >= param.n_elements || primitive_n_touched_tiles[primitive_idx] != 0)
             return;
 
-        float grad = 0.0f;
-        if (extra_grad_kind == 1) {
-            grad = scale_regularization_grad(fused_adam, param, static_cast<uint>(idx));
-        } else if (extra_grad_kind == 2) {
-            grad = opacity_extra_grad(fused_adam, param, static_cast<uint>(idx));
+        float grads[MAX_FUSED_ADAM_ATTRIBUTES] = {};
+        const int row_elements = min(param.n_attributes, param.n_elements - base);
+        for (int i = 0; i < row_elements && i < MAX_FUSED_ADAM_ATTRIBUTES; ++i) {
+            const uint idx = static_cast<uint>(base + i);
+            if (extra_grad_kind == 1) {
+                grads[i] = scale_regularization_grad(fused_adam, param, idx);
+            } else if (extra_grad_kind == 2) {
+                grads[i] = opacity_extra_grad(fused_adam, param, idx);
+            }
         }
-
-        const float moment1 = fmaf(beta1, param.exp_avg[idx] - grad, grad);
-        const float moment2 = fmaf(beta2, param.exp_avg_sq[idx] - grad * grad, grad * grad);
-        const float denom = sqrtf(moment2) * param.bias_correction2_sqrt_rcp + eps;
-        param.param[idx] -= param.step_size * moment1 / denom;
-        param.exp_avg[idx] = moment1;
-        param.exp_avg_sq[idx] = moment2;
+        adam_step_row_dynamic(grads, param, static_cast<uint>(primitive_idx), static_cast<uint>(row_elements), beta1, beta2, eps);
     }
 
     struct BlendBackwardAccum {

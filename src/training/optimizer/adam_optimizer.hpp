@@ -42,8 +42,10 @@ namespace lfs::training {
 
     struct AdamParamState {
         lfs::core::Tensor grad;       // Gradient (transient)
-        lfs::core::Tensor exp_avg;    // First moment (m)
-        lfs::core::Tensor exp_avg_sq; // Second moment (v)
+        lfs::core::Tensor exp_avg;    // Quantized first moment (m), uint8
+        lfs::core::Tensor exp_avg_sq; // Quantized second moment (v), uint8
+        lfs::core::Tensor exp_avg_scale;
+        lfs::core::Tensor exp_avg_sq_scale;
         int64_t step_count = 0;
         size_t capacity = 0; // Allocated capacity
         size_t size = 0;     // Used size
@@ -62,11 +64,16 @@ namespace lfs::training {
         float* param = nullptr;
         float* exp_avg = nullptr;
         float* exp_avg_sq = nullptr;
+        uint8_t* exp_avg_q = nullptr;
+        uint8_t* exp_avg_sq_q = nullptr;
+        float* exp_avg_scale = nullptr;
+        float* exp_avg_sq_scale = nullptr;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
         bool enabled = false;
+        bool quantized = false;
     };
 
     struct FastGSFusedAdamState {
@@ -160,6 +167,9 @@ namespace lfs::training {
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
+        void init_quantized_moments(AdamParamState& state, const lfs::core::Tensor& param, size_t capacity);
+        void append_zero_quantized_rows(AdamParamState& state, const lfs::core::Tensor& param, size_t n_new);
+        void quantize_float_moments(AdamParamState& state, lfs::core::Tensor&& exp_avg, lfs::core::Tensor&& exp_avg_sq);
         void step_param(ParamType type, int iteration);
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
     };

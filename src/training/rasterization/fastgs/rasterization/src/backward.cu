@@ -137,7 +137,8 @@ void fast_lfs::rasterization::backward(
     auto launch_invisible = [&](const FusedAdamParam& param, const char* name, const int extra_grad_kind = 0) {
         if (!param.enabled || param.n_elements <= 0 || param.n_attributes <= 0)
             return;
-        kernels::backward::adam_step_invisible<<<div_round_up(param.n_elements, config::block_size_adam_step_invisible), config::block_size_adam_step_invisible>>>(
+        const int n_rows = div_round_up(param.n_elements, param.n_attributes);
+        kernels::backward::adam_step_invisible<<<div_round_up(n_rows, config::block_size_adam_step_invisible), config::block_size_adam_step_invisible>>>(
             per_primitive_buffers.n_touched_tiles,
             param,
             fused_adam,

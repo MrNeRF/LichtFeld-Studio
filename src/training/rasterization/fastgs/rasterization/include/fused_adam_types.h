@@ -4,17 +4,24 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace fast_lfs::rasterization {
 
     struct FusedAdamParam {
         float* param = nullptr;
         float* exp_avg = nullptr;
         float* exp_avg_sq = nullptr;
+        std::uint8_t* exp_avg_q = nullptr;
+        std::uint8_t* exp_avg_sq_q = nullptr;
+        float* exp_avg_scale = nullptr;
+        float* exp_avg_sq_scale = nullptr;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;
         float bias_correction2_sqrt_rcp = 1.0f;
         bool enabled = false;
+        bool quantized = false;
     };
 
     struct FusedAdamSettings {

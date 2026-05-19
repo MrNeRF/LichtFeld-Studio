@@ -20,6 +20,22 @@ namespace fast_lfs::optimizer::kernels::adam {
         const float eps,
         const float bias_correction1_rcp,
         const float bias_correction2_sqrt_rcp);
+
+    __global__ void adam_step_quantized_cu(
+        float* param,
+        uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const float* param_grad,
+        const int n_rows,
+        const int row_size,
+        const float lr,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        const float bias_correction1_rcp,
+        const float bias_correction2_sqrt_rcp);
 }
 
 void fast_lfs::optimizer::adam_step(
@@ -58,4 +74,44 @@ void fast_lfs::optimizer::adam_step(
     }
 
     CHECK_CUDA(config::debug, "adam step");
+}
+
+void fast_lfs::optimizer::adam_step_quantized(
+    float* param,
+    uint8_t* exp_avg_q,
+    float* exp_avg_scale,
+    uint8_t* exp_avg_sq_q,
+    float* exp_avg_sq_scale,
+    const float* param_grad,
+    const int n_rows,
+    const int row_size,
+    const float lr,
+    const float beta1,
+    const float beta2,
+    const float eps,
+    const float bias_correction1_rcp,
+    const float bias_correction2_sqrt_rcp) {
+
+    kernels::adam::adam_step_quantized_cu<<<div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step>>>(
+        param,
+        exp_avg_q,
+        exp_avg_scale,
+        exp_avg_sq_q,
+        exp_avg_sq_scale,
+        param_grad,
+        n_rows,
+        row_size,
+        lr,
+        beta1,
+        beta2,
+        eps,
+        bias_correction1_rcp,
+        bias_correction2_sqrt_rcp);
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        throw std::runtime_error(std::string("adam_step_quantized_cu kernel launch failed: ") + cudaGetErrorString(err));
+    }
+
+    CHECK_CUDA(config::debug, "quantized adam step");
 }

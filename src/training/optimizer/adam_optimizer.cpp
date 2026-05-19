@@ -26,6 +26,14 @@ namespace lfs::training {
     namespace {
         constexpr int SH_WARMUP_ITERATIONS = 1000;
         constexpr float DEFAULT_GROWTH_MULTIPLIER = 1.5f;
+        constexpr uint8_t SIGNED_MOMENT_ZERO_POINT = 128;
+
+        size_t row_size_for(const lfs::core::Tensor& tensor) {
+            if (!tensor.is_valid() || tensor.ndim() == 0 || tensor.shape()[0] == 0) {
+                return 0;
+            }
+            return tensor.numel() / tensor.shape()[0];
+        }
     } // namespace
 
     AdamOptimizer::AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config)
@@ -61,16 +69,9 @@ namespace lfs::training {
             const size_t param_size = param.shape()[0];
             const size_t alloc_cap = (capacity > param_size) ? capacity : param_size;
 
-            // Handle zero-size tensors (e.g., shN with sh-degree 0 has shape [N, 0, 3]).
             // Moment tensors are persistent Adam state. Gradients are transient and allocated
             // lazily by get_grad(); fused fastgs backward never needs the full gradient buffers.
-            if (alloc_cap > param_size) {
-                state.exp_avg = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
-                state.exp_avg_sq = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
-            } else {
-                state.exp_avg = lfs::core::Tensor::zeros(param.shape(), param.device());
-                state.exp_avg_sq = lfs::core::Tensor::zeros(param.shape(), param.device());
-            }
+            init_quantized_moments(state, param, alloc_cap);
             state.grad = {};
             state.capacity = alloc_cap;
             state.size = param_size;
@@ -157,15 +158,7 @@ namespace lfs::training {
                              : lfs::core::Tensor::zeros(param.shape(), param.device());
         }
 
-        if (initial_cap > param_size) {
-            state.exp_avg = lfs::core::Tensor::zeros_direct(param.shape(), initial_cap);
-            state.exp_avg_sq = lfs::core::Tensor::zeros_direct(param.shape(), initial_cap);
-            state.capacity = initial_cap;
-        } else {
-            state.exp_avg = lfs::core::Tensor::zeros(param.shape(), param.device());
-            state.exp_avg_sq = lfs::core::Tensor::zeros(param.shape(), param.device());
-            state.capacity = param_size;
-        }
+        init_quantized_moments(state, param, initial_cap);
         state.size = param_size;
         state.step_count = 0;
         LOG_DEBUG("Initialized optimizer state for {}: size={}, capacity={}", name, param_size, state.capacity);
@@ -193,6 +186,88 @@ namespace lfs::training {
                          : lfs::core::Tensor::zeros(param.shape(), param.device());
         state.size = param_size;
         state.capacity = std::max(state.capacity, alloc_cap);
+    }
+
+    void AdamOptimizer::init_quantized_moments(AdamParamState& state, const lfs::core::Tensor& param, const size_t capacity) {
+        const size_t param_size = param.shape()[0];
+        const size_t alloc_cap = std::max(capacity, param_size);
+        const size_t row_size = row_size_for(param);
+
+        state.exp_avg = lfs::core::Tensor::empty(param.shape(), param.device(), lfs::core::DataType::UInt8);
+        state.exp_avg_sq = lfs::core::Tensor::zeros(param.shape(), param.device(), lfs::core::DataType::UInt8);
+        state.exp_avg_scale = lfs::core::Tensor::zeros({param_size}, param.device());
+        state.exp_avg_sq_scale = lfs::core::Tensor::zeros({param_size}, param.device());
+
+        if (alloc_cap > param_size) {
+            state.exp_avg.reserve(alloc_cap);
+            state.exp_avg_sq.reserve(alloc_cap);
+            state.exp_avg_scale.reserve(alloc_cap);
+            state.exp_avg_sq_scale.reserve(alloc_cap);
+        }
+
+        if (row_size > 0 && alloc_cap > 0) {
+            CHECK_CUDA(cudaMemsetAsync(
+                state.exp_avg.ptr<uint8_t>(),
+                SIGNED_MOMENT_ZERO_POINT,
+                alloc_cap * row_size * sizeof(uint8_t),
+                nullptr));
+            CHECK_CUDA(cudaMemsetAsync(
+                state.exp_avg_sq.ptr<uint8_t>(),
+                0,
+                alloc_cap * row_size * sizeof(uint8_t),
+                nullptr));
+            CHECK_CUDA(cudaMemsetAsync(state.exp_avg_scale.ptr<float>(), 0, alloc_cap * sizeof(float), nullptr));
+            CHECK_CUDA(cudaMemsetAsync(state.exp_avg_sq_scale.ptr<float>(), 0, alloc_cap * sizeof(float), nullptr));
+        }
+
+        state.capacity = alloc_cap;
+        state.size = param_size;
+    }
+
+    void AdamOptimizer::append_zero_quantized_rows(AdamParamState& state, const lfs::core::Tensor& param, const size_t n_new) {
+        if (n_new == 0)
+            return;
+        const size_t old_size = state.size;
+        const size_t row_size = row_size_for(param);
+        state.exp_avg.append_zeros(n_new);
+        state.exp_avg_sq.append_zeros(n_new);
+        state.exp_avg_scale.append_zeros(n_new);
+        state.exp_avg_sq_scale.append_zeros(n_new);
+        if (row_size > 0) {
+            CHECK_CUDA(cudaMemsetAsync(
+                state.exp_avg.ptr<uint8_t>() + old_size * row_size,
+                SIGNED_MOMENT_ZERO_POINT,
+                n_new * row_size * sizeof(uint8_t),
+                nullptr));
+        }
+    }
+
+    void AdamOptimizer::quantize_float_moments(AdamParamState& state, lfs::core::Tensor&& exp_avg, lfs::core::Tensor&& exp_avg_sq) {
+        if (!exp_avg.is_valid() || !exp_avg_sq.is_valid() || exp_avg.ndim() == 0 || exp_avg.shape()[0] == 0 || exp_avg.numel() == 0) {
+            state.exp_avg = {};
+            state.exp_avg_sq = {};
+            state.exp_avg_scale = {};
+            state.exp_avg_sq_scale = {};
+            return;
+        }
+
+        exp_avg = exp_avg.cuda();
+        exp_avg_sq = exp_avg_sq.cuda();
+        const size_t n_rows = exp_avg.shape()[0];
+        const size_t row_size = row_size_for(exp_avg);
+        state.exp_avg = lfs::core::Tensor::empty(exp_avg.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        state.exp_avg_sq = lfs::core::Tensor::empty(exp_avg_sq.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        state.exp_avg_scale = lfs::core::Tensor::empty({n_rows}, lfs::core::Device::CUDA);
+        state.exp_avg_sq_scale = lfs::core::Tensor::empty({n_rows}, lfs::core::Device::CUDA);
+        fast_lfs::optimizer::quantize_adam_moments_raw(
+            exp_avg.ptr<float>(),
+            exp_avg_sq.ptr<float>(),
+            state.exp_avg.ptr<uint8_t>(),
+            state.exp_avg_scale.ptr<float>(),
+            state.exp_avg_sq.ptr<uint8_t>(),
+            state.exp_avg_sq_scale.ptr<float>(),
+            static_cast<int>(n_rows),
+            static_cast<int>(row_size));
     }
 
     void AdamOptimizer::step_param(ParamType type, const int iteration) {
@@ -229,14 +304,16 @@ namespace lfs::training {
         }
 
         const size_t feature_dim = param.numel() / param_size;
-        const size_t num_elements = state.size * feature_dim;
 
-        fast_lfs::optimizer::adam_step_raw(
+        fast_lfs::optimizer::adam_step_quantized_raw(
             param.ptr<float>(),
-            state.exp_avg.ptr<float>(),
-            state.exp_avg_sq.ptr<float>(),
+            state.exp_avg.ptr<uint8_t>(),
+            state.exp_avg_scale.ptr<float>(),
+            state.exp_avg_sq.ptr<uint8_t>(),
+            state.exp_avg_sq_scale.ptr<float>(),
             state.grad.ptr<float>(),
-            static_cast<int>(num_elements),
+            static_cast<int>(state.size),
+            static_cast<int>(feature_dim),
             param_lr,
             config_.beta1,
             config_.beta2,
@@ -264,7 +341,8 @@ namespace lfs::training {
                 init_state(type, false);
             }
             auto& state = states_[name];
-            if (!state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid()) {
+            if (!state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid() ||
+                !state.exp_avg_scale.is_valid() || !state.exp_avg_sq_scale.is_valid()) {
                 init_state(type, false);
             }
 
@@ -281,13 +359,16 @@ namespace lfs::training {
             const double bias_correction2_sqrt_rcp = 1.0 / std::sqrt(1.0 - std::pow(config_.beta2, next_step));
 
             out.param = param.ptr<float>();
-            out.exp_avg = state.exp_avg.ptr<float>();
-            out.exp_avg_sq = state.exp_avg_sq.ptr<float>();
+            out.exp_avg_q = state.exp_avg.ptr<uint8_t>();
+            out.exp_avg_sq_q = state.exp_avg_sq.ptr<uint8_t>();
+            out.exp_avg_scale = state.exp_avg_scale.ptr<float>();
+            out.exp_avg_sq_scale = state.exp_avg_sq_scale.ptr<float>();
             out.n_elements = static_cast<int>(param.numel());
             out.n_attributes = n_attributes;
             out.step_size = static_cast<float>(get_param_lr(type) * bias_correction1_rcp);
             out.bias_correction2_sqrt_rcp = static_cast<float>(bias_correction2_sqrt_rcp);
             out.enabled = true;
+            out.quantized = true;
             return out;
         };
 
@@ -344,11 +425,11 @@ namespace lfs::training {
         auto& state = states_[name];
 
         // Validate tensors before accessing
-        if (!state.exp_avg.is_valid() || state.exp_avg.ptr<float>() == nullptr) {
+        if (!state.exp_avg.is_valid() || state.exp_avg.ptr<uint8_t>() == nullptr || !state.exp_avg_scale.is_valid()) {
             LOG_WARN("reset_state_at_indices: {} exp_avg tensor is invalid or null", name);
             return;
         }
-        if (!state.exp_avg_sq.is_valid() || state.exp_avg_sq.ptr<float>() == nullptr) {
+        if (!state.exp_avg_sq.is_valid() || state.exp_avg_sq.ptr<uint8_t>() == nullptr || !state.exp_avg_sq_scale.is_valid()) {
             LOG_WARN("reset_state_at_indices: {} exp_avg_sq tensor is invalid or null", name);
             return;
         }
@@ -363,8 +444,10 @@ namespace lfs::training {
         CHECK_CUDA(cudaMalloc(&d_indices, indices.size() * sizeof(int64_t)));
         CHECK_CUDA(cudaMemcpy(d_indices, indices.data(), indices.size() * sizeof(int64_t), cudaMemcpyHostToDevice));
 
-        fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg.ptr<float>(), d_indices, indices.size(), row_size);
-        fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq.ptr<float>(), d_indices, indices.size(), row_size);
+        fast_lfs::optimizer::zero_quantized_rows_at_indices(
+            state.exp_avg.ptr<uint8_t>(), state.exp_avg_scale.ptr<float>(), d_indices, indices.size(), row_size, SIGNED_MOMENT_ZERO_POINT);
+        fast_lfs::optimizer::zero_quantized_rows_at_indices(
+            state.exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq_scale.ptr<float>(), d_indices, indices.size(), row_size, 0);
 
         CHECK_CUDA(cudaFree(d_indices));
     }
@@ -395,15 +478,21 @@ namespace lfs::training {
         const bool grad_has_capacity = !state.grad.is_valid() || state.grad.capacity() > 0;
         const bool all_have_capacity = grad_has_capacity &&
                                        state.exp_avg.capacity() > 0 &&
-                                       state.exp_avg_sq.capacity() > 0;
+                                       state.exp_avg_sq.capacity() > 0 &&
+                                       state.exp_avg_scale.capacity() > 0 &&
+                                       state.exp_avg_sq_scale.capacity() > 0;
         const bool grad_fits = !state.grad.is_valid() || new_size <= state.grad.capacity();
         const bool fits_in_capacity = grad_fits &&
                                       new_size <= state.exp_avg.capacity() &&
-                                      new_size <= state.exp_avg_sq.capacity();
+                                      new_size <= state.exp_avg_sq.capacity() &&
+                                      new_size <= state.exp_avg_scale.capacity() &&
+                                      new_size <= state.exp_avg_sq_scale.capacity();
         if (all_have_capacity && fits_in_capacity) {
             // exp_avg and exp_avg_sq: gather from existing (copy optimizer momentum for duplicated Gaussians)
             state.exp_avg.append_gather(indices);
             state.exp_avg_sq.append_gather(indices);
+            state.exp_avg_scale.append_gather(indices);
+            state.exp_avg_sq_scale.append_gather(indices);
             // grad: append zeros (new Gaussians have no gradients yet)
             if (state.grad.is_valid())
                 state.grad.append_zeros(n_new);
@@ -426,33 +515,10 @@ namespace lfs::training {
         if (state.grad.is_valid())
             state.grad = lfs::core::Tensor::zeros(tensor_shape, param.device());
 
-        auto new_exp_avg = lfs::core::Tensor::empty(tensor_shape, param.device());
-        auto new_exp_avg_sq = lfs::core::Tensor::empty(tensor_shape, param.device());
-
-        // Copy old data
-        const size_t row_size = param.numel() / shape[0];
-        if (state.size > 0 && state.exp_avg.numel() > 0) {
-            const size_t old_bytes = state.size * row_size * sizeof(float);
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<float>(), state.exp_avg.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
-        }
-
-        // Gather new rows using GPU-native index_select (single GPU operation)
-        const auto gathered_avg = state.exp_avg.index_select(0, indices);
-        const auto gathered_sq = state.exp_avg_sq.index_select(0, indices);
-
-        // Copy gathered rows to destination (GPU→GPU bulk copy)
-        const size_t gathered_bytes = n_new * row_size * sizeof(float);
-        const size_t dst_offset = state.size * row_size * sizeof(float);
-        CHECK_CUDA(cudaMemcpyAsync(
-            reinterpret_cast<char*>(new_exp_avg.ptr<float>()) + dst_offset,
-            gathered_avg.ptr<float>(), gathered_bytes, cudaMemcpyDeviceToDevice, nullptr));
-        CHECK_CUDA(cudaMemcpyAsync(
-            reinterpret_cast<char*>(new_exp_avg_sq.ptr<float>()) + dst_offset,
-            gathered_sq.ptr<float>(), gathered_bytes, cudaMemcpyDeviceToDevice, nullptr));
-
-        state.exp_avg = std::move(new_exp_avg);
-        state.exp_avg_sq = std::move(new_exp_avg_sq);
+        state.exp_avg = lfs::core::Tensor::cat({state.exp_avg, state.exp_avg.index_select(0, indices)}, 0);
+        state.exp_avg_sq = lfs::core::Tensor::cat({state.exp_avg_sq, state.exp_avg_sq.index_select(0, indices)}, 0);
+        state.exp_avg_scale = lfs::core::Tensor::cat({state.exp_avg_scale, state.exp_avg_scale.index_select(0, indices)}, 0);
+        state.exp_avg_sq_scale = lfs::core::Tensor::cat({state.exp_avg_sq_scale, state.exp_avg_sq_scale.index_select(0, indices)}, 0);
         state.size = new_size;
         state.capacity = 0;
         LOG_DEBUG("extend_state_by_gather: {} slow path, new size = {}", name, new_size);
@@ -488,16 +554,19 @@ namespace lfs::training {
         const bool grad_has_capacity = !state.grad.is_valid() || state.grad.capacity() > 0;
         const bool all_have_capacity = grad_has_capacity &&
                                        state.exp_avg.capacity() > 0 &&
-                                       state.exp_avg_sq.capacity() > 0;
+                                       state.exp_avg_sq.capacity() > 0 &&
+                                       state.exp_avg_scale.capacity() > 0 &&
+                                       state.exp_avg_sq_scale.capacity() > 0;
         const bool grad_fits = !state.grad.is_valid() || new_size <= state.grad.capacity();
         const bool fits_in_capacity = grad_fits &&
                                       new_size <= state.exp_avg.capacity() &&
-                                      new_size <= state.exp_avg_sq.capacity();
+                                      new_size <= state.exp_avg_sq.capacity() &&
+                                      new_size <= state.exp_avg_scale.capacity() &&
+                                      new_size <= state.exp_avg_sq_scale.capacity();
         if (all_have_capacity && fits_in_capacity) {
             if (state.grad.is_valid())
                 state.grad.append_zeros(n_new);
-            state.exp_avg.append_zeros(n_new);
-            state.exp_avg_sq.append_zeros(n_new);
+            append_zero_quantized_rows(state, param, n_new);
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
             LOG_DEBUG("extend_state_for_new_params({}): fast path done, new size = {}", name, new_size);
@@ -516,23 +585,31 @@ namespace lfs::training {
         const auto tensor_shape = lfs::core::TensorShape(new_dims);
         if (state.grad.is_valid())
             state.grad = lfs::core::Tensor::zeros(tensor_shape, param.device());
-        auto new_exp_avg = lfs::core::Tensor::empty(tensor_shape, param.device());
-        auto new_exp_avg_sq = lfs::core::Tensor::empty(tensor_shape, param.device());
+        auto new_exp_avg = lfs::core::Tensor::empty(tensor_shape, param.device(), lfs::core::DataType::UInt8);
+        auto new_exp_avg_sq = lfs::core::Tensor::empty(tensor_shape, param.device(), lfs::core::DataType::UInt8);
+        auto new_exp_avg_scale = lfs::core::Tensor::empty({new_size}, param.device());
+        auto new_exp_avg_sq_scale = lfs::core::Tensor::empty({new_size}, param.device());
 
         if (state.size > 0 && state.exp_avg.numel() > 0) {
-            const size_t old_bytes = state.exp_avg.numel() * sizeof(float);
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<float>(), state.exp_avg.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            const size_t old_bytes = state.exp_avg.numel() * sizeof(uint8_t);
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<uint8_t>(), state.exp_avg.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_scale.ptr<float>(), state.exp_avg_scale.ptr<float>(), state.size * sizeof(float), cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq_scale.ptr<float>(), state.exp_avg_sq_scale.ptr<float>(), state.size * sizeof(float), cudaMemcpyDeviceToDevice, nullptr));
         }
 
         const size_t row_size = param.numel() / shape[0];
-        const size_t offset = state.exp_avg.numel() * sizeof(float);
-        const size_t new_bytes = n_new * row_size * sizeof(float);
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<float>()) + offset, 0, new_bytes, nullptr));
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<float>()) + offset, 0, new_bytes, nullptr));
+        const size_t offset = state.exp_avg.numel() * sizeof(uint8_t);
+        const size_t new_bytes = n_new * row_size * sizeof(uint8_t);
+        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<uint8_t>()) + offset, SIGNED_MOMENT_ZERO_POINT, new_bytes, nullptr));
+        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<uint8_t>()) + offset, 0, new_bytes, nullptr));
+        CHECK_CUDA(cudaMemsetAsync(new_exp_avg_scale.ptr<float>() + state.size, 0, n_new * sizeof(float), nullptr));
+        CHECK_CUDA(cudaMemsetAsync(new_exp_avg_sq_scale.ptr<float>() + state.size, 0, n_new * sizeof(float), nullptr));
 
         state.exp_avg = std::move(new_exp_avg);
         state.exp_avg_sq = std::move(new_exp_avg_sq);
+        state.exp_avg_scale = std::move(new_exp_avg_scale);
+        state.exp_avg_sq_scale = std::move(new_exp_avg_sq_scale);
         state.size = new_size;
         state.capacity = 0;
     }
@@ -567,6 +644,14 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::set_state(ParamType type, const AdamParamState& state) {
+        if (state.exp_avg.is_valid() && state.exp_avg.dtype() == lfs::core::DataType::Float32) {
+            AdamParamState converted = state;
+            quantize_float_moments(converted, state.exp_avg.clone(), state.exp_avg_sq.clone());
+            converted.size = state.size;
+            converted.capacity = state.size;
+            states_[param_name(type)] = std::move(converted);
+            return;
+        }
         states_[param_name(type)] = state;
     }
 
@@ -685,11 +770,11 @@ namespace lfs::training {
         auto& state = states_[name];
 
         // Validate tensors before accessing
-        if (!state.exp_avg.is_valid() || state.exp_avg.ptr<float>() == nullptr) {
+        if (!state.exp_avg.is_valid() || state.exp_avg.ptr<uint8_t>() == nullptr || !state.exp_avg_scale.is_valid()) {
             LOG_WARN("relocate_params_at_indices_gpu: {} exp_avg tensor is invalid or null", name);
             return;
         }
-        if (!state.exp_avg_sq.is_valid() || state.exp_avg_sq.ptr<float>() == nullptr) {
+        if (!state.exp_avg_sq.is_valid() || state.exp_avg_sq.ptr<uint8_t>() == nullptr || !state.exp_avg_sq_scale.is_valid()) {
             LOG_WARN("relocate_params_at_indices_gpu: {} exp_avg_sq tensor is invalid or null", name);
             return;
         }
@@ -701,13 +786,15 @@ namespace lfs::training {
         }
 
         // Zero optimizer state (m, v) at relocated indices
-        fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg.ptr<float>(), indices_device, n_indices, row_size);
-        fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq.ptr<float>(), indices_device, n_indices, row_size);
+        fast_lfs::optimizer::zero_quantized_rows_at_indices(
+            state.exp_avg.ptr<uint8_t>(), state.exp_avg_scale.ptr<float>(), indices_device, n_indices, row_size, SIGNED_MOMENT_ZERO_POINT);
+        fast_lfs::optimizer::zero_quantized_rows_at_indices(
+            state.exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq_scale.ptr<float>(), indices_device, n_indices, row_size, 0);
     }
 
     namespace {
         constexpr uint32_t ADAM_STATE_MAGIC = 0x4C464144; // "LFAD"
-        constexpr uint32_t ADAM_STATE_VERSION = 1;
+        constexpr uint32_t ADAM_STATE_VERSION = 2;
     } // namespace
 
     void AdamOptimizer::serialize(std::ostream& os) const {
@@ -732,13 +819,15 @@ namespace lfs::training {
 
         uint32_t num_states = 0;
         for (const auto& [_, state] : states_) {
-            if (state.exp_avg.is_valid() && state.exp_avg_sq.is_valid())
+            if (state.exp_avg.is_valid() && state.exp_avg_sq.is_valid() &&
+                state.exp_avg_scale.is_valid() && state.exp_avg_sq_scale.is_valid())
                 ++num_states;
         }
         os.write(reinterpret_cast<const char*>(&num_states), sizeof(num_states));
 
         for (const auto& [name, state] : states_) {
-            if (!state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid())
+            if (!state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid() ||
+                !state.exp_avg_scale.is_valid() || !state.exp_avg_sq_scale.is_valid())
                 continue;
 
             const auto name_len = static_cast<uint32_t>(name.size());
@@ -747,7 +836,8 @@ namespace lfs::training {
             os.write(reinterpret_cast<const char*>(&state.step_count), sizeof(state.step_count));
             os.write(reinterpret_cast<const char*>(&state.capacity), sizeof(state.capacity));
             os.write(reinterpret_cast<const char*>(&state.size), sizeof(state.size));
-            os << state.exp_avg << state.exp_avg_sq;
+            os << state.exp_avg << state.exp_avg_sq
+               << state.exp_avg_scale << state.exp_avg_sq_scale;
         }
         LOG_DEBUG("Serialized AdamOptimizer: {} states", num_states);
     }
@@ -760,7 +850,7 @@ namespace lfs::training {
         if (magic != ADAM_STATE_MAGIC) {
             throw std::runtime_error("Invalid AdamOptimizer checkpoint");
         }
-        if (version != ADAM_STATE_VERSION) {
+        if (version < 1 || version > ADAM_STATE_VERSION) {
             throw std::runtime_error("Unsupported checkpoint version");
         }
 
@@ -799,14 +889,26 @@ namespace lfs::training {
             is.read(reinterpret_cast<char*>(&state.capacity), sizeof(state.capacity));
             is.read(reinterpret_cast<char*>(&state.size), sizeof(state.size));
 
-            is >> state.exp_avg >> state.exp_avg_sq;
-            state.exp_avg = state.exp_avg.cuda();
-            state.exp_avg_sq = state.exp_avg_sq.cuda();
+            if (version == 1) {
+                lfs::core::Tensor exp_avg;
+                lfs::core::Tensor exp_avg_sq;
+                is >> exp_avg >> exp_avg_sq;
+                quantize_float_moments(state, std::move(exp_avg), std::move(exp_avg_sq));
+            } else {
+                is >> state.exp_avg >> state.exp_avg_sq
+                   >> state.exp_avg_scale >> state.exp_avg_sq_scale;
+                state.exp_avg = state.exp_avg.cuda();
+                state.exp_avg_sq = state.exp_avg_sq.cuda();
+                state.exp_avg_scale = state.exp_avg_scale.cuda();
+                state.exp_avg_sq_scale = state.exp_avg_sq_scale.cuda();
+            }
 
             const size_t target_cap = std::max(state.capacity, compute_new_capacity(state.size, state.size));
             if (target_cap > state.size) {
                 state.exp_avg.reserve(target_cap);
                 state.exp_avg_sq.reserve(target_cap);
+                state.exp_avg_scale.reserve(target_cap);
+                state.exp_avg_sq_scale.reserve(target_cap);
                 state.capacity = target_cap;
             }
             states_[name] = std::move(state);
@@ -825,6 +927,10 @@ namespace lfs::training {
                     state.exp_avg.reserve(capacity);
                 if (state.exp_avg_sq.is_valid())
                     state.exp_avg_sq.reserve(capacity);
+                if (state.exp_avg_scale.is_valid())
+                    state.exp_avg_scale.reserve(capacity);
+                if (state.exp_avg_sq_scale.is_valid())
+                    state.exp_avg_sq_scale.reserve(capacity);
                 state.capacity = capacity;
             }
         }
@@ -836,8 +942,13 @@ namespace lfs::training {
             return;
         }
 
-        state->exp_avg.zero_();
-        state->exp_avg_sq.zero_();
+        const size_t row_size = row_size_for(state->exp_avg);
+        if (row_size > 0 && state->capacity > 0) {
+            CHECK_CUDA(cudaMemsetAsync(state->exp_avg.ptr<uint8_t>(), SIGNED_MOMENT_ZERO_POINT, state->capacity * row_size, nullptr));
+            CHECK_CUDA(cudaMemsetAsync(state->exp_avg_sq.ptr<uint8_t>(), 0, state->capacity * row_size, nullptr));
+            CHECK_CUDA(cudaMemsetAsync(state->exp_avg_scale.ptr<float>(), 0, state->capacity * sizeof(float), nullptr));
+            CHECK_CUDA(cudaMemsetAsync(state->exp_avg_sq_scale.ptr<float>(), 0, state->capacity * sizeof(float), nullptr));
+        }
         state->step_count = 0;
     }
 
@@ -850,6 +961,8 @@ namespace lfs::training {
 
         it->second.exp_avg = {};
         it->second.exp_avg_sq = {};
+        it->second.exp_avg_scale = {};
+        it->second.exp_avg_sq_scale = {};
         it->second.grad = {};
         it->second.size = 0;
         it->second.capacity = 0;

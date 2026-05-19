@@ -1951,11 +1951,8 @@ namespace lfs::core {
 
         // Launch kernel to append gathered rows directly to the end
         if (device_ == Device::CUDA) {
-            // Calculate output pointer (write starts at current_size rows)
-            float* output_ptr = ptr<float>() + write_offset_elements;
-
             LOG_DEBUG("  Launching index_select kernel: write_offset_elements={}, output_ptr_offset={}, n_gather={}",
-                      write_offset_elements, write_offset_elements * sizeof(float), n_gather);
+                      write_offset_elements, write_offset_elements * dtype_size(dtype_), n_gather);
 
             // IMPORTANT: Pass the INPUT shape to the kernel, not the output shape!
             // The kernel needs to know the source tensor dimensions to validate indices
@@ -1963,6 +1960,7 @@ namespace lfs::core {
 
             // Use index_select kernel to gather into the output location
             if (dtype_ == DataType::Float32) {
+                float* output_ptr = ptr<float>() + write_offset_elements;
                 LOG_DEBUG("  Calling index_select: src_shape[0]={}, n_gather={}, row_size={}",
                           shape_[0], n_gather, row_size);
 
@@ -1974,8 +1972,15 @@ namespace lfs::core {
                 // IMPORTANT: Synchronize to ensure kernel completes
                 CHECK_CUDA(cudaStreamSynchronize(stream()));
                 LOG_DEBUG("  index_select kernel completed");
+            } else if (dtype_ == DataType::UInt8 || dtype_ == DataType::Bool) {
+                uint8_t* output_ptr = ptr<uint8_t>() + write_offset_elements;
+                tensor_ops::launch_index_select(ptr<uint8_t>(), idx_ptr,
+                                                output_ptr, input_shape,
+                                                shape_.rank(), 0, n_gather,
+                                                0 /*BoundaryMode::Assert*/, stream());
+                CHECK_CUDA(cudaStreamSynchronize(stream()));
             } else {
-                LOG_ERROR("append_gather: only Float32 dtype supported for now");
+                LOG_ERROR("append_gather: dtype {} unsupported for now", dtype_name(dtype_));
                 return *this;
             }
         } else {

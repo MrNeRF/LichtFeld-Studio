@@ -11,6 +11,33 @@
 
 namespace fast_lfs::rasterization::kernels {
 
+    constexpr int FUSED_ADAM_SIGNED_ZERO_POINT = 128;
+    constexpr int MAX_FUSED_ADAM_ATTRIBUTES = 64;
+
+    __device__ inline float dequant_signed_moment(const std::uint8_t q, const float scale) {
+        return scale == 0.0f ? 0.0f : (static_cast<int>(q) - FUSED_ADAM_SIGNED_ZERO_POINT) * scale;
+    }
+
+    __device__ inline float dequant_unsigned_moment(const std::uint8_t q, const float scale) {
+        return scale == 0.0f ? 0.0f : static_cast<float>(q) * scale;
+    }
+
+    __device__ inline std::uint8_t quantize_signed_moment(const float value, const float scale) {
+        if (scale == 0.0f)
+            return static_cast<std::uint8_t>(FUSED_ADAM_SIGNED_ZERO_POINT);
+        const int q = static_cast<int>(roundf(value / scale)) + FUSED_ADAM_SIGNED_ZERO_POINT;
+        return static_cast<std::uint8_t>(min(255, max(0, q)));
+    }
+
+    __device__ inline std::uint8_t quantize_unsigned_moment(const float value, const float scale) {
+        if (scale == 0.0f)
+            return 0;
+        const int q = static_cast<int>(roundf(fmaxf(value, 0.0f) / scale));
+        if (value > 0.0f && q == 0)
+            return 1;
+        return static_cast<std::uint8_t>(min(255, max(0, q)));
+    }
+
     // Safe normalize: returns (0,0,1) for degenerate vectors to prevent NaN
     __device__ inline float3 safe_normalize(const float3 v) {
         constexpr float NORM_SQ_MIN = 1e-12f;
@@ -70,6 +97,74 @@ namespace fast_lfs::rasterization::kernels {
         param.exp_avg_sq[element_idx] = moment2;
     }
 
+    __device__ inline void adam_step_row_dynamic(
+        const float* grads,
+        const FusedAdamParam& param,
+        const uint primitive_idx,
+        const uint update_count,
+        const float beta1,
+        const float beta2,
+        const float eps) {
+        if (!param.enabled || param.n_attributes <= 0)
+            return;
+
+        const uint n_attributes = static_cast<uint>(param.n_attributes);
+        const uint base = primitive_idx * n_attributes;
+        if (base >= static_cast<uint>(param.n_elements))
+            return;
+
+        const uint row_elements = min(n_attributes, static_cast<uint>(param.n_elements) - base);
+        const uint active = min(update_count, row_elements);
+
+        if (!param.quantized) {
+            for (uint i = 0; i < active; ++i) {
+                adam_step_helper(grads[i], param, primitive_idx, i, beta1, beta2, eps);
+            }
+            return;
+        }
+
+        const float old_m_scale = param.exp_avg_scale[primitive_idx];
+        const float old_v_scale = param.exp_avg_sq_scale[primitive_idx];
+        float max_abs_m = 0.0f;
+        float max_v = 0.0f;
+
+        for (uint i = 0; i < row_elements; ++i) {
+            const uint idx = base + i;
+            const float old_m = dequant_signed_moment(param.exp_avg_q[idx], old_m_scale);
+            const float old_v = dequant_unsigned_moment(param.exp_avg_sq_q[idx], old_v_scale);
+            const bool should_update = i < active;
+            const float grad = should_update ? grads[i] : 0.0f;
+            const float grad_sq = grad * grad;
+            const float moment1 = should_update ? fmaf(beta1, old_m - grad, grad) : old_m;
+            const float moment2 = should_update ? fmaf(beta2, old_v - grad_sq, grad_sq) : old_v;
+            max_abs_m = fmaxf(max_abs_m, fabsf(moment1));
+            max_v = fmaxf(max_v, moment2);
+        }
+
+        const float new_m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
+        const float new_v_scale = max_v > 0.0f ? max_v / 255.0f : 0.0f;
+
+        for (uint i = 0; i < row_elements; ++i) {
+            const uint idx = base + i;
+            const float old_m = dequant_signed_moment(param.exp_avg_q[idx], old_m_scale);
+            const float old_v = dequant_unsigned_moment(param.exp_avg_sq_q[idx], old_v_scale);
+            const bool should_update = i < active;
+            const float grad = should_update ? grads[i] : 0.0f;
+            const float grad_sq = grad * grad;
+            const float moment1 = should_update ? fmaf(beta1, old_m - grad, grad) : old_m;
+            const float moment2 = should_update ? fmaf(beta2, old_v - grad_sq, grad_sq) : old_v;
+            if (should_update) {
+                const float denom = sqrtf(moment2) * param.bias_correction2_sqrt_rcp + eps;
+                param.param[idx] -= param.step_size * moment1 / denom;
+            }
+            param.exp_avg_q[idx] = quantize_signed_moment(moment1, new_m_scale);
+            param.exp_avg_sq_q[idx] = quantize_unsigned_moment(moment2, new_v_scale);
+        }
+
+        param.exp_avg_scale[primitive_idx] = new_m_scale;
+        param.exp_avg_sq_scale[primitive_idx] = new_v_scale;
+    }
+
     __device__ inline float sigmoid(const float x) {
         return 1.0f / (1.0f + expf(-x));
     }
@@ -118,6 +213,13 @@ namespace fast_lfs::rasterization::kernels {
         adam_step_helper(grad.z, fused_adam.shN, primitive_idx, base_offset + 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
     }
 
+    __device__ inline void accumulate_shN_grad(float* shn_grads, const uint basis_idx, const float3 grad) {
+        const uint base_offset = basis_idx * 3;
+        shn_grads[base_offset] = grad.x;
+        shn_grads[base_offset + 1] = grad.y;
+        shn_grads[base_offset + 2] = grad.z;
+    }
+
     template <int ACTIVE_SH_BASES>
     __device__ inline float3 convert_sh_to_color_backward(
         const float3* sh_coefficients_rest,
@@ -130,45 +232,54 @@ namespace fast_lfs::rasterization::kernels {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
-        adam_step_helper(dL_dsh0.x, fused_adam.sh0, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(dL_dsh0.y, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(dL_dsh0.z, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float sh0_grads[3] = {dL_dsh0.x, dL_dsh0.y, dL_dsh0.z};
+        adam_step_row_dynamic(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        float shn_grads[MAX_FUSED_ADAM_ATTRIBUTES] = {};
         float3 dcolor_dposition = make_float3(0.0f);
         if constexpr (ACTIVE_SH_BASES > 1) {
             const int coefficients_base_idx = primitive_idx * total_bases_sh_rest;
             const float3* coefficients_ptr = sh_coefficients_rest + coefficients_base_idx;
             auto [x_raw, y_raw, z_raw] = position - cam_position;
             auto [x, y, z] = safe_normalize(make_float3(x_raw, y_raw, z_raw));
-            apply_shN_grad(0, (-0.48860251190291987f * y) * grad_color, fused_adam, primitive_idx);
-            apply_shN_grad(1, (0.48860251190291987f * z) * grad_color, fused_adam, primitive_idx);
-            apply_shN_grad(2, (-0.48860251190291987f * x) * grad_color, fused_adam, primitive_idx);
+            accumulate_shN_grad(shn_grads, 0, (-0.48860251190291987f * y) * grad_color);
+            accumulate_shN_grad(shn_grads, 1, (0.48860251190291987f * z) * grad_color);
+            accumulate_shN_grad(shn_grads, 2, (-0.48860251190291987f * x) * grad_color);
             float3 grad_direction_x = -0.48860251190291987f * coefficients_ptr[2];
             float3 grad_direction_y = -0.48860251190291987f * coefficients_ptr[0];
             float3 grad_direction_z = 0.48860251190291987f * coefficients_ptr[1];
             if constexpr (ACTIVE_SH_BASES > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
                 const float xy = x * y, xz = x * z, yz = y * z;
-                apply_shN_grad(3, (1.0925484305920792f * xy) * grad_color, fused_adam, primitive_idx);
-                apply_shN_grad(4, (-1.0925484305920792f * yz) * grad_color, fused_adam, primitive_idx);
-                apply_shN_grad(5, (0.94617469575755997f * zz - 0.31539156525251999f) * grad_color, fused_adam, primitive_idx);
-                apply_shN_grad(6, (-1.0925484305920792f * xz) * grad_color, fused_adam, primitive_idx);
-                apply_shN_grad(7, (0.54627421529603959f * xx - 0.54627421529603959f * yy) * grad_color, fused_adam, primitive_idx);
+                accumulate_shN_grad(shn_grads, 3, (1.0925484305920792f * xy) * grad_color);
+                accumulate_shN_grad(shn_grads, 4, (-1.0925484305920792f * yz) * grad_color);
+                accumulate_shN_grad(shn_grads, 5, (0.94617469575755997f * zz - 0.31539156525251999f) * grad_color);
+                accumulate_shN_grad(shn_grads, 6, (-1.0925484305920792f * xz) * grad_color);
+                accumulate_shN_grad(shn_grads, 7, (0.54627421529603959f * xx - 0.54627421529603959f * yy) * grad_color);
                 grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[6] + (1.0925484305920792f * x) * coefficients_ptr[7];
                 grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[4] + (-1.0925484305920792f * y) * coefficients_ptr[7];
                 grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * coefficients_ptr[4] + (1.8923493915151202f * z) * coefficients_ptr[5] + (-1.0925484305920792f * x) * coefficients_ptr[6];
                 if constexpr (ACTIVE_SH_BASES > 9) {
-                    apply_shN_grad(8, (0.59004358992664352f * y * (-3.0f * xx + yy)) * grad_color, fused_adam, primitive_idx);
-                    apply_shN_grad(9, (2.8906114426405538f * xy * z) * grad_color, fused_adam, primitive_idx);
-                    apply_shN_grad(10, (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * grad_color, fused_adam, primitive_idx);
-                    apply_shN_grad(11, (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * grad_color, fused_adam, primitive_idx);
-                    apply_shN_grad(12, (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * grad_color, fused_adam, primitive_idx);
-                    apply_shN_grad(13, (1.4453057213202769f * z * (xx - yy)) * grad_color, fused_adam, primitive_idx);
-                    apply_shN_grad(14, (0.59004358992664352f * x * (-xx + 3.0f * yy)) * grad_color, fused_adam, primitive_idx);
+                    accumulate_shN_grad(shn_grads, 8, (0.59004358992664352f * y * (-3.0f * xx + yy)) * grad_color);
+                    accumulate_shN_grad(shn_grads, 9, (2.8906114426405538f * xy * z) * grad_color);
+                    accumulate_shN_grad(shn_grads, 10, (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * grad_color);
+                    accumulate_shN_grad(shn_grads, 11, (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * grad_color);
+                    accumulate_shN_grad(shn_grads, 12, (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * grad_color);
+                    accumulate_shN_grad(shn_grads, 13, (1.4453057213202769f * z * (xx - yy)) * grad_color);
+                    accumulate_shN_grad(shn_grads, 14, (0.59004358992664352f * x * (-xx + 3.0f * yy)) * grad_color);
                     grad_direction_x = grad_direction_x + (-3.5402615395598609f * xy) * coefficients_ptr[8] + (2.8906114426405538f * yz) * coefficients_ptr[9] + (0.45704579946446572f - 2.2852289973223288f * zz) * coefficients_ptr[12] + (2.8906114426405538f * xz) * coefficients_ptr[13] + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * coefficients_ptr[14];
                     grad_direction_y = grad_direction_y + (-1.7701307697799304f * xx + 1.7701307697799304f * yy) * coefficients_ptr[8] + (2.8906114426405538f * xz) * coefficients_ptr[9] + (0.45704579946446572f - 2.2852289973223288f * zz) * coefficients_ptr[10] + (-2.8906114426405538f * yz) * coefficients_ptr[13] + (3.5402615395598609f * xy) * coefficients_ptr[14];
                     grad_direction_z = grad_direction_z + (2.8906114426405538f * xy) * coefficients_ptr[9] + (-4.5704579946446566f * yz) * coefficients_ptr[10] + (5.597644988851731f * zz - 1.1195289977703462f) * coefficients_ptr[11] + (-4.5704579946446566f * xz) * coefficients_ptr[12] + (1.4453057213202769f * xx - 1.4453057213202769f * yy) * coefficients_ptr[13];
                 }
             }
+
+            adam_step_row_dynamic(
+                shn_grads,
+                fused_adam.shN,
+                primitive_idx,
+                static_cast<uint>((ACTIVE_SH_BASES - 1) * 3),
+                fused_adam.beta1,
+                fused_adam.beta2,
+                fused_adam.eps);
 
             const float3 grad_direction = make_float3(
                 dot(grad_direction_x, grad_color),
