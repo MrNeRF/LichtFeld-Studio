@@ -145,10 +145,6 @@ namespace lfs::training {
             return false;
         }
 
-        [[nodiscard]] bool has_shN_coefficients(const lfs::core::Tensor& shN) {
-            return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
-        }
-
         void reset_optimizer_state_at_indices(
             AdamOptimizer& optimizer,
             const ParamType param_type,

@@ -114,12 +114,16 @@ namespace lfs::training {
         const lfs::core::Tensor& dead_indices,
         ParamType param_type) {
 
-        // Reset optimizer state (exp_avg and exp_avg_sq) for relocated Gaussians
-        // Use GPU version for efficiency (indices already on GPU)
+        // Reset optimizer state (exp_avg and exp_avg_sq) for rows whose params changed.
+        // Source rows get adjusted opacity/scaling; destination rows receive fresh params.
         _optimizer->relocate_params_at_indices_gpu(
             param_type,
             sampled_indices.ptr<int64_t>(),
             sampled_indices.numel());
+        _optimizer->relocate_params_at_indices_gpu(
+            param_type,
+            dead_indices.ptr<int64_t>(),
+            dead_indices.numel());
     }
 
     void MCMC::ensure_densification_info_shape() {
@@ -288,9 +292,8 @@ namespace lfs::training {
                 opacity_dim,
                 N);
 
-            // Copy sampled params to dead slots. shN is stored swizzled — the legacy
-            // kernel can't index it; we skip it here (sh_coeffs=0) and do the swizzled
-            // copy via shN_swizzled_gather_self below.
+            // Copy sampled params to dead slots. shN is stored swizzled, so the legacy
+            // kernel skips it and the selected rows are copied below.
             mcmc::launch_copy_gaussian_params(
                 sampled_idxs.ptr<int64_t>(),
                 dead_indices.ptr<int64_t>(),
@@ -313,10 +316,14 @@ namespace lfs::training {
                 using namespace lfs::core;
                 const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
                 const size_t n_pairs = dead_indices.numel();
-                // Stage source rows into a contiguous canonical [n_pairs, K, 3] buffer
-                // via deswizzle + index_select, then scatter into _shN at dead_indices.
-                Tensor shN_canon = _splat_data->shN_canonical();
-                Tensor staged = shN_canon.index_select(0, sampled_idxs).contiguous();
+                Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(active_rest), 3},
+                                              _splat_data->shN().device());
+                shN_swizzled_gather_to_linear_i64(
+                    _splat_data->shN().ptr<float>(),
+                    sampled_idxs.ptr<int64_t>(),
+                    staged.ptr<float>(),
+                    n_pairs,
+                    active_rest);
                 auto dead_i32 = dead_indices.dtype() == DataType::Int32
                                     ? dead_indices
                                     : dead_indices.to(DataType::Int32);

@@ -42,11 +42,6 @@ namespace lfs::training {
             return false;
         }
 
-        // Returns true if shN tensor has non-zero coefficients
-        [[nodiscard]] inline bool has_shN_coefficients(const lfs::core::Tensor& shN) {
-            return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
-        }
-
         const float get_percentil_value(const float q_percent, const lfs::core::Tensor tensor) {
             auto [sorted_val, sorted_idx] = tensor.sort();
 
@@ -410,21 +405,11 @@ namespace lfs::training {
             _pending_failure_snapshot.sampled_scale_exp_max = sampled_scale_summary.exp_max;
         }
 
-        // shN is stored swizzled — materialise canonical [N, K, 3] working view. All
-        // densification operations below mutate shN_canon; we reswizzle back at the end.
-        const bool has_shN = _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0;
         const size_t active_rest = _splat_data->active_sh_coeffs_rest();
-        int shN_dim = 0;
-        lfs::core::Tensor shN_canon;
-        if (has_shN && active_rest > 0) {
-            // Reserve capacity for the inline append at the end (avoid mid-densify realloc).
-            const size_t cap_rows = std::max<size_t>(_splat_data->means().capacity(),
-                                                     static_cast<size_t>(_splat_data->size()) +
-                                                         static_cast<size_t>(budget_for_alloc));
-            shN_canon = _splat_data->shN_canonical();
-            shN_canon.reserve(cap_rows);
-            shN_dim = static_cast<int>(active_rest * 3);
-        }
+        const auto active_rest_u32 = static_cast<uint32_t>(active_rest);
+        const bool use_shN = active_rest > 0 &&
+                             _splat_data->shN().is_valid() &&
+                             _splat_data->shN().numel() > 0;
 
         const lfs::core::Device device = _splat_data->means().device();
 
@@ -434,32 +419,40 @@ namespace lfs::training {
         auto second_scales = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
         auto second_sh0 = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
         lfs::core::Tensor second_shN;
-        if (shN_dim > 0) {
-            second_shN = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), static_cast<size_t>(shN_dim)}, device);
+        if (use_shN) {
+            second_shN = lfs::core::Tensor::empty(
+                {static_cast<size_t>(budget_for_alloc), active_rest, 3}, device);
         }
         auto second_opacities = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc)}, device);
 
-        // Skip shN pointer when shN_dim = 0 (sh-degree 0)
-        const bool use_shN = shN_dim > 0;
-
-        // Kernel launch: First result modifies shN_canon in-place; seconds go to temporaries.
+        // SH is unchanged by LAS. Keep resident shN swizzled, run the split kernel without
+        // SH, then gather selected child SH rows below.
         kernels::launch_long_axis_split_gaussians_inplace(
             _splat_data->means().ptr<float>(),
             _splat_data->rotation_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
             _splat_data->sh0().ptr<float>(),
-            use_shN ? shN_canon.ptr<float>() : nullptr,
+            nullptr,
             _splat_data->opacity_raw().ptr<float>(),
             second_positions.ptr<float>(),
             second_rotations.ptr<float>(),
             second_scales.ptr<float>(),
             second_sh0.ptr<float>(),
-            use_shN ? second_shN.ptr<float>() : nullptr,
+            nullptr,
             second_opacities.ptr<float>(),
             sampled_idxs.ptr<int64_t>(),
             static_cast<int>(budget_for_alloc),
-            shN_dim,
+            0,
             nullptr);
+
+        if (use_shN) {
+            lfs::core::shN_swizzled_gather_to_linear_i64(
+                _splat_data->shN().ptr<float>(),
+                sampled_idxs.ptr<int64_t>(),
+                second_shN.ptr<float>(),
+                static_cast<size_t>(budget_for_alloc),
+                active_rest_u32);
+        }
 
         // Reset optimizer states for long-axis-split indices
         auto reset_optimizer_state_at_indices = [&](ParamType param_type) {
@@ -512,7 +505,7 @@ namespace lfs::training {
         // Now place second split results: fill free slots first, then append
         auto [filled_indices, remaining] = fill_free_slots_with_data(
             second_positions, second_rotations, second_scales,
-            second_sh0, second_shN, second_opacities, shN_canon, budget_for_alloc);
+            second_sh0, second_shN, second_opacities, budget_for_alloc);
 
         const int64_t num_filled = budget_for_alloc - remaining;
         if (_pending_failure_snapshot.valid) {
@@ -561,11 +554,17 @@ namespace lfs::training {
 
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
-                // shN_canon shape is [N, K, 3]; second_shN is flat [budget, K*3].
-                append_shN = append_shN.reshape(
-                    lfs::core::TensorShape({n_remaining, static_cast<size_t>(active_rest), 3}));
-                shN_canon.append_zeros(n_remaining);
-                shN_canon.index_put_(new_indices, append_shN);
+                const size_t new_size = old_size + n_remaining;
+                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size);
+                if (_splat_data->shN().numel() < needed_floats) {
+                    _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
+                }
+                lfs::core::shN_swizzled_gather_from_linear(
+                    _splat_data->shN().ptr<float>(),
+                    old_size,
+                    append_shN.ptr<float>(),
+                    n_remaining,
+                    active_rest_u32);
             }
 
             // Update optimizer states
@@ -575,11 +574,6 @@ namespace lfs::training {
             _optimizer->extend_state_for_new_params(ParamType::Sh0, n_remaining);
             _optimizer->extend_state_for_new_params(ParamType::ShN, n_remaining);
             _optimizer->extend_state_for_new_params(ParamType::Opacity, n_remaining);
-        }
-
-        // Reswizzle the canonical working buffer back into splat_data._shN.
-        if (use_shN && shN_canon.is_valid() && shN_canon.numel() > 0) {
-            _splat_data->shN_set_from_canonical(shN_canon, _splat_data->means().capacity());
         }
     }
 
@@ -925,7 +919,6 @@ namespace lfs::training {
         const lfs::core::Tensor& sh0,
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
-        lfs::core::Tensor& shN_canon_inout,
         int64_t count) {
 
         if (!_free_mask.is_valid() || count == 0) {
@@ -957,12 +950,19 @@ namespace lfs::training {
 
         _splat_data->opacity_raw().index_put_(target_indices, opacities.slice(0, 0, slots_to_fill));
 
-        if (shN.is_valid() && shN_canon_inout.is_valid() && shN_canon_inout.numel() > 0) {
-            // shN_canon_inout is the canonical [N, K, 3] working view.
-            const auto& canon_shape = shN_canon_inout.shape();
-            const auto n = static_cast<int>(slots_to_fill);
-            const auto shN_slice = shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(canon_shape[1]), static_cast<int>(canon_shape[2])});
-            shN_canon_inout.index_put_(target_indices, shN_slice);
+        const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+        if (active_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
+            _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            auto target_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                  ? target_indices
+                                  : target_indices.to(lfs::core::DataType::Int32);
+            auto shN_slice = shN.slice(0, 0, slots_to_fill);
+            lfs::core::shN_swizzled_scatter_linear(
+                _splat_data->shN().ptr<float>(),
+                target_i32.ptr<int>(),
+                shN_slice.ptr<float>(),
+                static_cast<size_t>(slots_to_fill),
+                active_rest);
         }
 
         // Reset optimizer states for filled slots

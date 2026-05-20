@@ -4,6 +4,7 @@
 
 #include "scene/scene_manager.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/editor_context.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -3576,13 +3577,17 @@ namespace lfs::vis {
             indices_vec, {indices_vec.size()}, lfs::core::Device::CUDA);
 
         const auto& src = *combined;
-        // shN is stored swizzled — deswizzle to [N, K, 3] before index_select, SplatData ctor reswizzles.
         lfs::core::Tensor shN_selected;
-        if (src.shN_raw().is_valid() && src.shN_raw().numel() > 0) {
-            const lfs::core::Tensor shN_canon = src.shN_canonical();
-            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
-                shN_selected = shN_canon.index_select(0, indices).contiguous();
-            }
+        const size_t active_rest = src.active_sh_coeffs_rest();
+        if (src.shN_raw().is_valid() && src.shN_raw().numel() > 0 && active_rest > 0) {
+            shN_selected = lfs::core::Tensor::empty(
+                {indices_vec.size(), active_rest, 3}, src.shN_raw().device());
+            lfs::core::shN_swizzled_gather_to_linear(
+                src.shN_raw().ptr<float>(),
+                indices.ptr<int>(),
+                shN_selected.ptr<float>(),
+                indices_vec.size(),
+                static_cast<uint32_t>(active_rest));
         }
 
         gaussian_clipboard_ = std::make_unique<lfs::core::SplatData>(

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_transform.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -420,13 +421,28 @@ namespace lfs::core {
 
         auto cropped_means = splat_data._means.index_select(0, indices).contiguous();
         auto cropped_sh0 = splat_data._sh0.index_select(0, indices).contiguous();
-        // shN is swizzled — deswizzle to [N, K, 3] then index_select, hand to SplatData
-        // constructor which reswizzles.
         Tensor cropped_shN;
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0) {
-            const Tensor shN_canon = splat_data.shN_canonical();
-            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
-                cropped_shN = shN_canon.index_select(0, indices).contiguous();
+        const size_t active_rest = splat_data.active_sh_coeffs_rest();
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && active_rest > 0) {
+            cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), active_rest, 3},
+                                        splat_data._shN.device());
+            if (indices.dtype() == DataType::Int64) {
+                shN_swizzled_gather_to_linear_i64(
+                    splat_data._shN.ptr<float>(),
+                    indices.ptr<int64_t>(),
+                    cropped_shN.ptr<float>(),
+                    static_cast<size_t>(points_selected),
+                    static_cast<uint32_t>(active_rest));
+            } else {
+                auto indices_i32 = indices.dtype() == DataType::Int32
+                                       ? indices
+                                       : indices.to(DataType::Int32);
+                shN_swizzled_gather_to_linear(
+                    splat_data._shN.ptr<float>(),
+                    indices_i32.ptr<int>(),
+                    cropped_shN.ptr<float>(),
+                    static_cast<size_t>(points_selected),
+                    static_cast<uint32_t>(active_rest));
             }
         }
         auto cropped_scaling = splat_data._scaling.index_select(0, indices).contiguous();
@@ -565,23 +581,27 @@ namespace lfs::core {
             TensorShape({static_cast<size_t>(num_required_splat)}),
             splat_data._means.device());
 
-        // shN is swizzled and shN_canonical() reads splat_data.size(). Deswizzle BEFORE
-        // mutating _means so size() still reflects the original N. Keep the selected
-        // canonical rows in a local; we reswizzle after _means has been reduced.
-        Tensor shN_selected_canon;
+        Tensor shN_selected_swizzled;
         if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
             splat_data.active_sh_coeffs_rest() > 0) {
-            Tensor shN_canon = splat_data.shN_canonical();
-            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
-                shN_selected_canon = shN_canon.index_select(0, indices_tensor).contiguous();
-            }
+            shN_selected_swizzled = Tensor::zeros_direct(
+                {sh_swizzled_float_count(static_cast<size_t>(num_required_splat))},
+                sh_swizzled_float_count(static_cast<size_t>(num_required_splat)),
+                splat_data._shN.device());
+            auto indices_i32 = indices_tensor.dtype() == DataType::Int32
+                                   ? indices_tensor
+                                   : indices_tensor.to(DataType::Int32);
+            shN_swizzled_gather_self(
+                splat_data._shN.ptr<float>(),
+                shN_selected_swizzled.ptr<float>(),
+                indices_i32.ptr<int>(),
+                static_cast<size_t>(num_required_splat));
         }
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
         splat_data._sh0 = splat_data._sh0.index_select(0, indices_tensor).contiguous();
-        // Now reswizzle the pre-selected canonical rows into _shN at the new (smaller) N.
-        if (shN_selected_canon.is_valid() && shN_selected_canon.numel() > 0) {
-            splat_data.shN_set_from_canonical(shN_selected_canon, splat_data._means.capacity());
+        if (shN_selected_swizzled.is_valid() && shN_selected_swizzled.numel() > 0) {
+            splat_data._shN = std::move(shN_selected_swizzled);
         }
         splat_data._scaling = splat_data._scaling.index_select(0, indices_tensor).contiguous();
         splat_data._rotation = splat_data._rotation.index_select(0, indices_tensor).contiguous();
@@ -700,12 +720,28 @@ namespace lfs::core {
             indices = indices.squeeze(1);
         }
 
-        // shN is swizzled — deswizzle then index_select. SplatData constructor reswizzles.
         Tensor shN_selected;
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0) {
-            const Tensor shN_canon = splat_data.shN_canonical();
-            if (shN_canon.is_valid() && shN_canon.numel() > 0) {
-                shN_selected = shN_canon.index_select(0, indices).contiguous();
+        const size_t active_rest = splat_data.active_sh_coeffs_rest();
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && active_rest > 0) {
+            shN_selected = Tensor::empty({static_cast<size_t>(count), active_rest, 3},
+                                         splat_data._shN.device());
+            if (indices.dtype() == DataType::Int64) {
+                shN_swizzled_gather_to_linear_i64(
+                    splat_data._shN.ptr<float>(),
+                    indices.ptr<int64_t>(),
+                    shN_selected.ptr<float>(),
+                    static_cast<size_t>(count),
+                    static_cast<uint32_t>(active_rest));
+            } else {
+                auto indices_i32 = indices.dtype() == DataType::Int32
+                                       ? indices
+                                       : indices.to(DataType::Int32);
+                shN_swizzled_gather_to_linear(
+                    splat_data._shN.ptr<float>(),
+                    indices_i32.ptr<int>(),
+                    shN_selected.ptr<float>(),
+                    static_cast<size_t>(count),
+                    static_cast<uint32_t>(active_rest));
             }
         }
 

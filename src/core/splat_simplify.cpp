@@ -5,6 +5,7 @@
 #include "core/splat_simplify.hpp"
 #include "core/splat_simplify_history.hpp"
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include "nanoflann.hpp"
@@ -133,12 +134,39 @@ namespace lfs::core {
 
             const auto means = select_or_clone(input.means_raw()).to(device).contiguous();
             const auto sh0 = select_or_clone(input.sh0_raw()).to(device).contiguous();
-            // shN is stored swizzled — materialise the canonical [N, K, 3] view, then apply
-            // the optional keep_mask in canonical space.
-            const Tensor shN_canon_full = input.shN_canonical();
-            const auto shN = (shN_canon_full.is_valid() && shN_canon_full.numel() > 0)
-                                 ? select_or_clone(shN_canon_full).to(device).contiguous()
-                                 : Tensor{};
+            Tensor shN;
+            if (input.shN_raw().is_valid() && input.shN_raw().numel() > 0 &&
+                input.active_sh_coeffs_rest() > 0) {
+                if (has_deleted) {
+                    auto keep_indices = keep_mask.nonzero();
+                    if (keep_indices.ndim() == 2)
+                        keep_indices = keep_indices.squeeze(1);
+                    const size_t keep_count = static_cast<size_t>(keep_indices.numel());
+                    const size_t active_rest = input.active_sh_coeffs_rest();
+                    shN = Tensor::empty({keep_count, active_rest, 3}, input.shN_raw().device());
+                    if (keep_indices.dtype() == DataType::Int64) {
+                        shN_swizzled_gather_to_linear_i64(
+                            input.shN_raw().ptr<float>(),
+                            keep_indices.ptr<int64_t>(),
+                            shN.ptr<float>(),
+                            keep_count,
+                            static_cast<uint32_t>(active_rest));
+                    } else {
+                        auto keep_i32 = keep_indices.dtype() == DataType::Int32
+                                            ? keep_indices
+                                            : keep_indices.to(DataType::Int32);
+                        shN_swizzled_gather_to_linear(
+                            input.shN_raw().ptr<float>(),
+                            keep_i32.ptr<int>(),
+                            shN.ptr<float>(),
+                            keep_count,
+                            static_cast<uint32_t>(active_rest));
+                    }
+                    shN = shN.to(device).contiguous();
+                } else {
+                    shN = input.shN_canonical().to(device).contiguous();
+                }
+            }
             const auto scaling = select_or_clone(input.scaling_raw()).to(device).contiguous();
             const auto rotation = select_or_clone(input.rotation_raw()).to(device).contiguous();
             const auto opacity = select_or_clone(input.opacity_raw()).to(device).contiguous();
