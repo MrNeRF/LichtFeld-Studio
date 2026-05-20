@@ -218,8 +218,9 @@ namespace lfs::vis {
     int RenderingManager::pickCameraFrustum(const glm::vec2& mouse_pos) {
         const int previous_hovered_camera = camera_interaction_service_.hoveredCameraId();
         bool hover_changed = false;
+        auto* const engine = getRenderingEngine();
         const int hovered_camera = camera_interaction_service_.pickCameraFrustum(
-            engine_.get(),
+            engine,
             viewport_interaction_context_.scene_manager,
             viewport_interaction_context_,
             settings_,
@@ -240,7 +241,11 @@ namespace lfs::vis {
                                                                             const float focal_length_mm,
                                                                             const int width,
                                                                             const int height) {
-        if (!initialized_ || !engine_ || width <= 0 || height <= 0) {
+        if (width <= 0 || height <= 0) {
+            return {};
+        }
+        auto* const engine = getRenderingEngine();
+        if (!engine) {
             return {};
         }
 
@@ -280,7 +285,7 @@ namespace lfs::vis {
             .filters = {},
             .overlay = {}};
 
-        auto result = engine_->renderGaussiansImage(*model, request);
+        auto result = engine->renderGaussiansImage(*model, request);
         render_lock.reset();
         return result ? result->image : nullptr;
     }
@@ -301,13 +306,16 @@ namespace lfs::vis {
                                                           const int x,
                                                           const int y,
                                                           const std::vector<bool>& node_visibility_mask) {
-        if (!initialized_ || !engine_ || !scene_manager ||
-            render_size.x <= 0 || render_size.y <= 0 ||
+        if (!scene_manager || render_size.x <= 0 || render_size.y <= 0 ||
             x < 0 || x >= render_size.x || y < 0 || y >= render_size.y ||
             node_visibility_mask.empty() ||
             !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) {
                 return enabled;
             })) {
+            return -1.0f;
+        }
+        auto* const engine = getRenderingEngine();
+        if (!engine) {
             return -1.0f;
         }
 
@@ -338,7 +346,7 @@ namespace lfs::vis {
                 render_size,
                 frame_ctx.scene_state.model_transforms);
             request.scene.node_visibility_mask = node_visibility_mask;
-            auto result = engine_->renderPointCloudImage(*model, request);
+            auto result = engine->renderPointCloudImage(*model, request);
             if (!result) {
                 LOG_DEBUG("Masked point-cloud depth render failed: {}", result.error());
                 return -1.0f;
@@ -348,7 +356,7 @@ namespace lfs::vis {
             auto request = buildViewportRenderRequest(frame_ctx, render_size, &viewport, std::nullopt);
             request.scene.node_visibility_mask = node_visibility_mask;
             request.overlay = {};
-            auto result = engine_->renderGaussiansImage(*model, request);
+            auto result = engine->renderGaussiansImage(*model, request);
             if (!result) {
                 LOG_DEBUG("Masked Gaussian depth render failed: {}", result.error());
                 return -1.0f;
@@ -359,7 +367,7 @@ namespace lfs::vis {
 
         ViewportArtifactService artifacts;
         artifacts.updateFromImageOutput({}, metadata, render_size, true);
-        return artifacts.sampleLinearDepthAt(x, y, render_size, engine_.get(), std::nullopt);
+        return artifacts.sampleLinearDepthAt(x, y, render_size, engine, std::nullopt);
     }
 
 } // namespace lfs::vis

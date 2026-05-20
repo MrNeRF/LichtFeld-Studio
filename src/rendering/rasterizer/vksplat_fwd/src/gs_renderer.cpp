@@ -204,7 +204,7 @@ void VulkanGSRenderer::executeGenerateKeys(
     // capacity-bounded buffers with correct sort output regardless of overestimate.
     bufferMemoryBarrier({{unsorted_keys, COMPUTE_SHADER_READ_WRITE}},
                         TRANSFER_COMPUTE_SHADER_WRITE);
-    vkCmdFillBuffer(command_buffer, unsorted_keys.buffer, 0, unsorted_keys.size,
+    vkCmdFillBuffer(command_buffer, unsorted_keys.buffer, unsorted_keys.offset, unsorted_keys.size,
                     0xFFFFFFFFu);
     bufferMemoryBarrier({{unsorted_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
                         COMPUTE_SHADER_READ_WRITE);
@@ -579,7 +579,8 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
     // frame's poll. No queue wait — the value is consumed one frame later.
     {
         VkBufferCopy copy{};
-        copy.srcOffset = (num_elements - 1) * sizeof(int32_t);
+        copy.srcOffset = buffers.index_buffer_offset.deviceBuffer.offset +
+                         (num_elements - 1) * sizeof(int32_t);
         copy.dstOffset = 0;
         copy.size = sizeof(int32_t);
         vkCmdCopyBuffer(command_buffer,

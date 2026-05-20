@@ -28,6 +28,13 @@ namespace lfs::rendering {
                backend == GaussianRasterBackend::VkSplatGut;
     }
 
+    inline GaussianRasterBackend normalizeViewerRasterBackend(const GaussianRasterBackend backend,
+                                                              const bool gut = false) {
+        return (gut || isGutBackend(backend))
+                   ? GaussianRasterBackend::VkSplatGut
+                   : GaussianRasterBackend::VkSplat;
+    }
+
     constexpr float DEFAULT_NEAR_PLANE = 0.1f;
     constexpr float DEFAULT_FAR_PLANE = 100000.0f;
     constexpr int MAX_VIEWPORT_SIZE = 16384;

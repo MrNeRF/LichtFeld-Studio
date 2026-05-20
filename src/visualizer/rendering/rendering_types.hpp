@@ -221,7 +221,7 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
-        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::FastGs;
+        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::VkSplat;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;

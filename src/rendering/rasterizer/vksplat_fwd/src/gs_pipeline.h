@@ -2,6 +2,7 @@
 
 #include <algorithm> // std::sort
 #include <array>
+#include <cstdint>
 #include <cstring> // memcpy
 #include <functional>
 #include <map>
@@ -48,6 +49,7 @@ public:
 
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true);
+    void addTimelineWait(VkSemaphore semaphore, std::uint64_t value, VkPipelineStageFlags stage_mask);
     bool isCommandBatchInProgress() const {
         return commandBatchInProgress;
     }
@@ -85,6 +87,13 @@ protected:
 
     size_t current_vram = 0;
     size_t peak_vram = 0;
+
+    struct PendingTimelineWait {
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        std::uint64_t value = 0;
+        VkPipelineStageFlags stage_mask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    };
+    std::vector<PendingTimelineWait> pending_timeline_waits_;
 
     // Vulkan objects
     VkInstance instance;

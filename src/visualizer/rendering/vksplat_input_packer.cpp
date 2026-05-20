@@ -4,13 +4,16 @@
 
 #include "vksplat_input_packer.hpp"
 
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rasterizer/vksplat_fwd/src/config.h"
+#include "vksplat_input_packer_cuda.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <cuda_runtime.h>
 #include <format>
 #include <string_view>
 #include <vector>
@@ -247,7 +250,222 @@ namespace lfs::vis::vksplat {
             return packed;
         }
 
+        [[nodiscard]] bool validOpacityShape(const Tensor& opacity, const std::size_t n) {
+            return opacity.ndim() != 0 &&
+                   ((opacity.ndim() == 1 && opacity.size(0) == n) ||
+                    (opacity.ndim() == 2 && opacity.size(0) == n && opacity.size(1) == 1));
+        }
+
+        [[nodiscard]] bool validSh0Shape(const Tensor& sh0, const std::size_t n) {
+            if (!sh0.is_valid() || sh0.numel() == 0) {
+                return false;
+            }
+            const std::size_t dims = sh0.ndim();
+            if (dims != 2 && dims != 3) {
+                return false;
+            }
+            return sh0.size(0) == n &&
+                   sh0.size(dims - 1) == 3 &&
+                   (dims == 2 || sh0.size(1) == 1);
+        }
+
+        [[nodiscard]] std::expected<void, std::string> requireCudaFloat32Contiguous(
+            const Tensor& tensor,
+            const std::string_view label) {
+            if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+                return std::unexpected(std::format("VkSplat {} tensor is invalid", label));
+            }
+            if (tensor.dtype() != DataType::Float32) {
+                return std::unexpected(std::format("VkSplat {} tensor must be Float32", label));
+            }
+            if (tensor.device() != Device::CUDA) {
+                return std::unexpected(std::format("VkSplat {} tensor must be CUDA-resident", label));
+            }
+            if (!tensor.is_contiguous()) {
+                return std::unexpected(std::format("VkSplat {} tensor must be contiguous", label));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::expected<void, std::string> waitForInputStream(
+            const cudaStream_t stream,
+            const Tensor& tensor,
+            const std::string_view label) {
+            try {
+                lfs::core::waitForCUDAStream(stream, tensor.stream());
+                return {};
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format(
+                    "VkSplat failed to order {} stream before direct input pack: {}",
+                    label,
+                    e.what()));
+            }
+        }
+
+        [[nodiscard]] std::string cudaErrorMessage(
+            const char* const operation,
+            const cudaError_t status) {
+            return std::format("{} failed: {} ({})",
+                               operation,
+                               cudaGetErrorName(status),
+                               cudaGetErrorString(status));
+        }
+
     } // namespace
+
+    std::expected<DeviceInputLayout, std::string> deviceInputLayout(
+        const lfs::core::SplatData& splat_data) {
+        const std::size_t n = static_cast<std::size_t>(splat_data.size());
+        if (n == 0) {
+            return std::unexpected("VkSplat cannot render an empty model");
+        }
+
+        const Tensor& means_raw = splat_data.means_raw();
+        const Tensor& rotation_raw = splat_data.rotation_raw();
+        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const Tensor& opacity_raw = splat_data.opacity_raw();
+        if (means_raw.ndim() != 2 || means_raw.size(0) != n || means_raw.size(1) != 3 ||
+            rotation_raw.ndim() != 2 || rotation_raw.size(0) != n || rotation_raw.size(1) != 4 ||
+            scaling_raw.ndim() != 2 || scaling_raw.size(0) != n || scaling_raw.size(1) != 3) {
+            return std::unexpected("VkSplat input tensor shapes do not match [N,3]/[N,4]/[N,3]");
+        }
+        if (!validOpacityShape(opacity_raw, n)) {
+            return std::unexpected("VkSplat opacity tensor must be [N] or [N, 1]");
+        }
+        if (!validSh0Shape(splat_data.sh0(), n)) {
+            return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
+        }
+        const Tensor& shN = splat_data.shN();
+        if (splat_data.active_sh_coeffs_rest() > 0 && (!shN.is_valid() || shN.numel() == 0)) {
+            return std::unexpected("VkSplat expected swizzled SH rest coefficients for active SH degree");
+        }
+        if (shN.is_valid() && shN.numel() > 0 && shN.ndim() != 1) {
+            return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
+        }
+
+        const std::size_t sh_padded_floats = lfs::core::sh_swizzled_float_count(n);
+        if (shN.is_valid() && shN.numel() > 0 &&
+            static_cast<std::size_t>(shN.numel()) < sh_padded_floats) {
+            return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
+        }
+
+        return DeviceInputLayout{
+            .num_splats = n,
+            .xyz_bytes = n * 3 * sizeof(float),
+            .rotations_bytes = n * 4 * sizeof(float),
+            .scales_opacs_bytes = n * 4 * sizeof(float),
+            .sh_coeffs_bytes = sh_padded_floats * sizeof(float),
+            .sh_padded_floats = sh_padded_floats,
+        };
+    }
+
+    std::expected<void, std::string> packDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* const xyz_dst,
+        void* const rotations_dst,
+        void* const scales_opacs_dst,
+        void* const sh_coeffs_dst,
+        const cudaStream_t stream) {
+        auto layout = deviceInputLayout(splat_data);
+        if (!layout) {
+            return std::unexpected(layout.error());
+        }
+        if (xyz_dst == nullptr || rotations_dst == nullptr || scales_opacs_dst == nullptr || sh_coeffs_dst == nullptr) {
+            return std::unexpected("VkSplat direct input pack received a null destination region");
+        }
+
+        const Tensor& means_raw = splat_data.means_raw();
+        const Tensor& rotation_raw = splat_data.rotation_raw();
+        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const Tensor& opacity_raw = splat_data.opacity_raw();
+        const Tensor& sh0_raw = splat_data.sh0();
+        const Tensor& shN_raw = splat_data.shN();
+
+        if (auto ok = requireCudaFloat32Contiguous(means_raw, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(rotation_raw, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(scaling_raw, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(opacity_raw, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(sh0_raw, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        const bool has_shN = shN_raw.is_valid() && shN_raw.numel() > 0;
+        if (has_shN) {
+            if (auto ok = requireCudaFloat32Contiguous(shN_raw, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        if (auto ok = waitForInputStream(stream, means_raw, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, rotation_raw, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, scaling_raw, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, opacity_raw, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, sh0_raw, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (has_shN) {
+            if (auto ok = waitForInputStream(stream, shN_raw, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        cudaError_t status = cudaMemcpyAsync(
+            xyz_dst,
+            means_raw.data_ptr(),
+            layout->xyz_bytes,
+            cudaMemcpyDeviceToDevice,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("cudaMemcpyAsync(VkSplat means -> Vulkan input)", status));
+        }
+
+        status = detail::launchPackActivatedRotations(
+            rotation_raw.ptr<float>(),
+            static_cast<float*>(rotations_dst),
+            layout->num_splats,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("VkSplat rotation direct pack", status));
+        }
+
+        status = detail::launchPackScalesOpacs(
+            scaling_raw.ptr<float>(),
+            opacity_raw.ptr<float>(),
+            static_cast<float*>(scales_opacs_dst),
+            layout->num_splats,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("VkSplat scale/opacity direct pack", status));
+        }
+
+        lfs::core::sh_swizzled_pack_full_from_split(
+            sh0_raw.ptr<float>(),
+            has_shN ? shN_raw.ptr<float>() : nullptr,
+            static_cast<float*>(sh_coeffs_dst),
+            layout->num_splats,
+            stream);
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("VkSplat SH direct pack", status));
+        }
+
+        return {};
+    }
 
     std::expected<DevicePackedInputs, std::string> packDeviceInputs(
         const lfs::core::SplatData& splat_data) {
@@ -293,11 +511,9 @@ namespace lfs::vis::vksplat {
 
             const Tensor scaling_in = to_cuda_f32(scaling_raw);
             const Tensor scales_exp = scaling_in.exp().contiguous();
-            Tensor opacity_in = to_cuda_f32(opacity_raw);
-            if (opacity_in.ndim() == 1) {
-                opacity_in = opacity_in.unsqueeze(1);
-            }
-            const Tensor opacity_sig = opacity_in.sigmoid().contiguous();
+            const Tensor opacity_in = to_cuda_f32(opacity_raw);
+            const Tensor opacity_2d = opacity_in.ndim() == 1 ? opacity_in.unsqueeze(1) : opacity_in;
+            const Tensor opacity_sig = opacity_2d.sigmoid().contiguous();
             // Cat through a 3D shape so the tensor library's last-dim path
             // (which hardcodes alpha=1.0f for [N,3]+[N,1] floats) is bypassed.
             const Tensor scales_3d = scales_exp.unsqueeze(2);

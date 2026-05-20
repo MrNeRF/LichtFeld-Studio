@@ -88,8 +88,8 @@ namespace lfs::vis {
         initial_settings.antialiasing = options.antialiasing;
         initial_settings.gut = options.gut;
         initial_settings.raster_backend = options.gut
-                                              ? lfs::rendering::GaussianRasterBackend::Gut
-                                              : lfs::rendering::GaussianRasterBackend::FastGs;
+                                              ? lfs::rendering::GaussianRasterBackend::VkSplatGut
+                                              : lfs::rendering::GaussianRasterBackend::VkSplat;
         rendering_manager_->updateSettings(initial_settings);
 
         // Create data loading service

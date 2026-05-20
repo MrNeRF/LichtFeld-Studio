@@ -339,13 +339,11 @@ class RenderingPanel(Panel):
         model.bind_func("environment_enabled",
                         lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
 
-        # vksplat is editing/viewing-only — hide the option from the raster
-        # backend dropdown as soon as a trainer is attached, regardless of
-        # training state (ready, paused, running). Its persistent Vulkan-side
-        # sort buffers grow unbounded under densification, which is intolerable
-        # when a dataset is in the loop.
+        # The viewer normalizes legacy FastGS/3DGUT values to VkSplat variants,
+        # including live training sessions. Keep the dropdown shape stable for
+        # plugins and existing user settings.
         model.bind_func("vksplat_available",
-                        lambda: not lf.has_trainer())
+                        lambda: True)
 
         all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + [
             "environment_mode", "environment_map_path", "ppisp_mode"

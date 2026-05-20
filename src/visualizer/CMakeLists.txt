@@ -250,6 +250,7 @@ if(ENABLE_VULKAN_VIEWER)
             PRIVATE
             gui/rmlui/rmlui_vk_backend.cpp
             rendering/vksplat_input_packer.cpp
+            rendering/vksplat_input_packer_cuda.cu
             rendering/vksplat_viewport_renderer.cpp
             rendering/point_cloud_vulkan_renderer.cpp)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
@@ -352,6 +353,8 @@ endif()
 target_compile_features(lfs_visualizer PUBLIC cxx_std_23)
 
 set_target_properties(lfs_visualizer PROPERTIES
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )

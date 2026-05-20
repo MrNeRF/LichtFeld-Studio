@@ -38,6 +38,7 @@ void VulkanGSPipeline::allocStagingBuffer(size_t size) {
 void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     buffer.allocSize = size;
     buffer.size = size;
+    buffer.offset = 0;
 
     VkBufferCreateInfo buffer_info = {};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -65,12 +66,15 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
         _THROW_ERROR("destroyBuffer called when command batch in progress");
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
-        buffer.buffer = VK_NULL_HANDLE;
-        buffer.allocation = VK_NULL_HANDLE;
         if (current_vram < buffer.allocSize)
             _THROW_ERROR("Negative VRAM");
         current_vram -= buffer.allocSize;
     }
+    buffer.buffer = VK_NULL_HANDLE;
+    buffer.allocation = VK_NULL_HANDLE;
+    buffer.allocSize = 0;
+    buffer.size = 0;
+    buffer.offset = 0;
 }
 
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {
@@ -104,7 +108,7 @@ _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new
 
     {
         DEVICE_GUARD;
-        vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, 0, deviceBuffer.size, 0);
+        vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset, deviceBuffer.size, 0);
     }
 
     return deviceBuffer;
@@ -133,7 +137,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 offset = alignedOffset;
                 size -= prefix;
                 DEVICE_GUARD;
-                vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, offset, size, 0u);
+                vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
                 HOST_GUARD; // will apply fence
             }
         }
@@ -154,7 +158,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
 
         if (deviceBuffer.buffer != VK_NULL_HANDLE && old_byte_size > 0) {
             VkBufferCopy copyRegion{};
-            copyRegion.srcOffset = 0;
+            copyRegion.srcOffset = deviceBuffer.offset;
             copyRegion.dstOffset = 0;
             copyRegion.size = old_byte_size;
 
@@ -179,7 +183,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 vkCmdFillBuffer(
                     command_buffer,
                     newBuffer.buffer,
-                    offset,
+                    newBuffer.offset + offset,
                     size,
                     0u);
             }
@@ -216,7 +220,7 @@ T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
 
             // Copy only the specific element from device buffer to staging buffer.
             VkBufferCopy copyRegion = {};
-            copyRegion.srcOffset = offset;
+            copyRegion.srcOffset = buffer.offset + offset;
             copyRegion.dstOffset = 0;
             copyRegion.size = elementSize;
 

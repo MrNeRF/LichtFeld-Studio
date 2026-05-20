@@ -2,6 +2,7 @@
 #include "perf_timer.h"
 
 #include <fstream>
+#include <vector>
 
 #ifdef max
 #undef max
@@ -184,6 +185,7 @@ void VulkanGSPipeline::cleanup() {
     physical_device = VK_NULL_HANDLE;
     command_queue = VK_NULL_HANDLE;
     queue_family_index = UINT32_MAX;
+    pending_timeline_waits_.clear();
 }
 
 void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_device) {
@@ -274,6 +276,20 @@ void VulkanGSPipeline::beginCommandBatch() {
     PerfTimer::popMarkers(this);
 }
 
+void VulkanGSPipeline::addTimelineWait(
+    const VkSemaphore semaphore,
+    const std::uint64_t value,
+    const VkPipelineStageFlags stage_mask) {
+    if (semaphore == VK_NULL_HANDLE || value == 0) {
+        return;
+    }
+    pending_timeline_waits_.push_back(PendingTimelineWait{
+        .semaphore = semaphore,
+        .value = value,
+        .stage_mask = stage_mask,
+    });
+}
+
 void VulkanGSPipeline::endCommandBatch(bool use_fence) {
     if (!commandBatchInProgress)
         _THROW_ERROR("No command batch in progress");
@@ -292,10 +308,33 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence) {
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &command_buffer;
 
+    std::vector<VkSemaphore> wait_semaphores;
+    std::vector<VkPipelineStageFlags> wait_stages;
+    std::vector<std::uint64_t> wait_values;
+    VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
+    if (!pending_timeline_waits_.empty()) {
+        wait_semaphores.reserve(pending_timeline_waits_.size());
+        wait_stages.reserve(pending_timeline_waits_.size());
+        wait_values.reserve(pending_timeline_waits_.size());
+        for (const PendingTimelineWait& wait : pending_timeline_waits_) {
+            wait_semaphores.push_back(wait.semaphore);
+            wait_stages.push_back(wait.stage_mask);
+            wait_values.push_back(wait.value);
+        }
+        timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+        timeline_submit_info.waitSemaphoreValueCount = static_cast<uint32_t>(wait_values.size());
+        timeline_submit_info.pWaitSemaphoreValues = wait_values.data();
+        submit_info.pNext = &timeline_submit_info;
+        submit_info.waitSemaphoreCount = static_cast<uint32_t>(wait_semaphores.size());
+        submit_info.pWaitSemaphores = wait_semaphores.data();
+        submit_info.pWaitDstStageMask = wait_stages.data();
+    }
+
     if (vkQueueSubmit(command_queue, 1, &submit_info,
                       use_fence ? fence : VK_NULL_HANDLE) != VK_SUCCESS) {
         _THROW_ERROR("Failed to submit batch");
     }
+    pending_timeline_waits_.clear();
 
     commandBatchInProgress = false;
 
@@ -458,7 +497,7 @@ void VulkanGSPipeline::bufferMemoryBarrier(
         barrier.srcQueueFamilyIndex = queue_family_index;
         barrier.dstQueueFamilyIndex = queue_family_index;
         barrier.buffer = buffer.buffer;
-        barrier.offset = 0;
+        barrier.offset = buffer.offset;
         barrier.size = buffer.size;
         barriers.push_back(barrier);
         srcStageFlags |= toStageMask(srcMask);

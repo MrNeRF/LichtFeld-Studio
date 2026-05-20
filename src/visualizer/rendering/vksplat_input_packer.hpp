@@ -8,6 +8,7 @@
 #include "core/splat_data.hpp"
 
 #include <cstddef>
+#include <cuda_runtime_api.h>
 #include <expected>
 #include <map>
 #include <string>
@@ -65,5 +66,28 @@ namespace lfs::vis::vksplat {
     // raw byte layout matches packHostInputs's host buffers exactly.
     LFS_VIS_API [[nodiscard]] std::expected<DevicePackedInputs, std::string> packDeviceInputs(
         const lfs::core::SplatData& splat_data);
+
+    struct LFS_VIS_API DeviceInputLayout {
+        std::size_t num_splats = 0;
+        std::size_t xyz_bytes = 0;
+        std::size_t rotations_bytes = 0;
+        std::size_t scales_opacs_bytes = 0;
+        std::size_t sh_coeffs_bytes = 0;
+        std::size_t sh_padded_floats = 0;
+    };
+
+    // Zero-intermediate GPU packer for the live Vulkan viewer path. The caller
+    // supplies CUDA pointers to a Vulkan-imported buffer; this copies means and
+    // writes activated rotation/scale/opacity/SH directly into those regions.
+    LFS_VIS_API [[nodiscard]] std::expected<DeviceInputLayout, std::string> deviceInputLayout(
+        const lfs::core::SplatData& splat_data);
+
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> packDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* xyz_dst,
+        void* rotations_dst,
+        void* scales_opacs_dst,
+        void* sh_coeffs_dst,
+        cudaStream_t stream);
 
 } // namespace lfs::vis::vksplat

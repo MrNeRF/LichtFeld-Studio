@@ -88,7 +88,8 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
-            OutputSlot output_slot = OutputSlot::Main);
+            OutputSlot output_slot = OutputSlot::Main,
+            bool synchronize_input_upload = false);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
@@ -181,6 +182,8 @@ namespace lfs::vis {
 
         void detachManagedBuffers();
         void plugRingInputs(std::size_t ring_slot, std::size_t num_splats);
+        void aliasSortScratchToInputSlot(std::size_t ring_slot);
+        void releaseInputSlot(VulkanContext& context, std::size_t ring_slot);
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -198,13 +201,12 @@ namespace lfs::vis {
         static constexpr std::size_t kOutputSlotCount = 3;
         std::array<OutputImageSlot, kOutputSlotCount> output_slots_{};
 
-        // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs),
-        // ring-buffered per frame-in-flight. Each ring slot owns its own set of
-        // CUDA-imported VkBuffers so frame N's CUDA upload cannot race frame
-        // N-1's Vulkan compute reads. Ring index = currentFrameSlot %
-        // framesInFlight; size matches VulkanContext::framesInFlight() (asserted
-        // at runtime).
-        static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
+        // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs).
+        // VkSplat submits the projection/sort/raster/compose batch with a fence
+        // wait before render() returns, so these imported buffers are no longer
+        // read by Vulkan when the next CUDA upload starts. Keeping one resident
+        // slot avoids a second full packed model copy at bicycle/max-cap scale.
+        static constexpr std::size_t kInputRingSize = 1;
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};

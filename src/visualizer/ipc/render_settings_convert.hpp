@@ -128,11 +128,7 @@ namespace lfs::vis {
         s.split_view_mode = static_cast<SplitViewMode>(p.split_view_mode);
         s.split_position = p.split_position;
         s.raster_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
-        if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
-            s.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
-        } else if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
-            s.raster_backend = lfs::rendering::GaussianRasterBackend::VkSplatGut;
-        }
+        s.raster_backend = lfs::rendering::normalizeViewerRasterBackend(s.raster_backend, p.gut);
         s.gut = lfs::rendering::isGutBackend(s.raster_backend);
         s.equirectangular = p.equirectangular;
         s.orthographic = p.orthographic;
