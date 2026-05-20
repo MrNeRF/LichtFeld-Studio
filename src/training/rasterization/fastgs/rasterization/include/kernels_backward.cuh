@@ -423,7 +423,8 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     template <DensificationType DENSIFICATION_TYPE>
-    __global__ void __launch_bounds__(config::block_size_blend_backward) blend_backward_cu(
+    // The (128, 8) occupancy hint was tuned on sm_89 (-4.3%, all variants spill-free).
+    __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const float2* __restrict__ primitive_mean2d,
