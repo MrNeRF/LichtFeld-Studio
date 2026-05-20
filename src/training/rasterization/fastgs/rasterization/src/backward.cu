@@ -20,7 +20,7 @@ void fast_lfs::rasterization::backward(
     const float3* scales_raw,
     const float4* rotations_raw,
     const float* raw_opacities,
-    const float3* sh_coefficients_rest,
+    const float4* sh_coefficients_rest,
     const float4* w2c,
     const float3* cam_position,
     char* per_primitive_buffers_blob,

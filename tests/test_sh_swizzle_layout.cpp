@@ -28,6 +28,8 @@ namespace {
     }
 
     // Round-trip the shN buffer: canonical -> swizzled -> canonical and verify equality.
+    // Layout bijects the 45 active floats per primitive onto 12 float4 slots (48 floats
+    // with 3 of tail padding); the active range round-trips bitwise.
     TEST(ShSwizzleLayout, CanonicalRoundTrip_RealData) {
         using namespace lfs::core;
 
@@ -40,8 +42,6 @@ namespace {
         ASSERT_TRUE(loaded.has_value()) << "Failed to load PLY at " << ply_path;
 
         SplatData splat = std::move(*loaded);
-        // PLY load -> SplatData ctor reorders into swizzled storage. Now deswizzle and
-        // round-trip through swizzle/deswizzle directly to validate the kernels.
         if (splat.get_active_sh_degree() == 0) {
             GTEST_SKIP() << "PLY has SH degree 0, no shN to round-trip";
         }
@@ -86,12 +86,16 @@ namespace {
         EXPECT_EQ(mismatches, 0u) << "max_abs_diff=" << max_abs_diff;
     }
 
-    // Verify swizzled index math against the on-device kernel layout by checking a few
-    // explicit positions are written where shAt() says they should be.
+    // Verify the float4 shuffle: the swizzled buffer's float4 at sh_swizzled_index(p, k)
+    // holds 4 consecutive floats of the linear canonical row for primitive p (with the last
+    // slot's tail floats zero-padded). Equivalent to vksplat's tight pack of 45 floats into
+    // 12 float4 = 48 floats with 3 of tail padding.
     TEST(ShSwizzleLayout, IndexFormulaMatchesKernel) {
         using namespace lfs::core;
         constexpr std::uint32_t N = 96; // 3 full blocks of 32
         constexpr std::uint32_t K = 15;
+        constexpr std::uint32_t FLOATS_PER_PRIM = K * 3u; // 45
+        constexpr std::uint32_t SLOTS_PER_PRIM = 12u;     // SH_REST_FLOAT4_PER_PRIMITIVE
 
         // Build a canonical buffer where each (p, k, c) holds the value p*1000 + k*10 + c.
         std::vector<float> host_canonical(N * K * 3);
@@ -112,26 +116,32 @@ namespace {
         auto host = swizzled.to(Device::CPU);
         const float* sw = host.ptr<float>();
 
-        // For each (p, k, c) the value should live at shAt(p, k) * 3 + c.
+        // For each primitive's float4 slot k, the 4 components map to the canonical row at
+        // offsets [k*4 .. k*4+3]; out-of-range offsets are zero.
         for (std::uint32_t p : {0u, 1u, 31u, 32u, 64u, 95u}) {
-            for (std::uint32_t k : {0u, 7u, 14u}) {
-                for (std::uint32_t c : {0u, 1u, 2u}) {
-                    const std::uint32_t idx = sh_swizzled_index(p, k) * 3 + c;
-                    const float expected = static_cast<float>(p * 1000 + k * 10 + c);
-                    EXPECT_EQ(sw[idx], expected)
-                        << "p=" << p << " k=" << k << " c=" << c << " idx=" << idx;
+            for (std::uint32_t k = 0; k < SLOTS_PER_PRIM; ++k) {
+                const std::uint32_t base_float = sh_swizzled_index(p, k) * 4u;
+                for (std::uint32_t i = 0; i < 4; ++i) {
+                    const std::uint32_t canonical_off = k * 4u + i;
+                    const float expected = canonical_off < FLOATS_PER_PRIM
+                                               ? host_canonical[p * FLOATS_PER_PRIM + canonical_off]
+                                               : 0.0f;
+                    EXPECT_EQ(sw[base_float + i], expected)
+                        << "p=" << p << " k=" << k << " i=" << i;
                 }
             }
         }
     }
 
-    // Lane padding (primitives in the trailing block beyond N) should be zero after reorder.
+    // Both lane padding (primitives in the trailing block beyond N) and the tail padding
+    // (slot 11's .y/.z/.w per primitive) must be zero after reorder.
     TEST(ShSwizzleLayout, PaddingLanesAreZero) {
         using namespace lfs::core;
-        constexpr std::uint32_t N = 70; // not a multiple of 32 — last block has 6 padding lanes
+        constexpr std::uint32_t N = 70; // last block has 6 padding lanes
         constexpr std::uint32_t K = 15;
+        constexpr std::uint32_t SLOTS_PER_PRIM = 12u;
 
-        std::vector<float> host_canonical(N * K * 3, 1.0f); // non-zero source so we know padding is from us
+        std::vector<float> host_canonical(N * K * 3, 1.0f); // non-zero source so padding is visibly distinct
         Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::CUDA);
         const size_t swizzled_floats = sh_swizzled_float_count(N);
         Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::CUDA);
@@ -141,16 +151,24 @@ namespace {
         auto host = swizzled.to(Device::CPU);
         const float* sw = host.ptr<float>();
 
-        // Padding lanes are at primitive indices [N, ceil(N/32)*32). For each, all K
-        // coeffs * 3 channels must be 0.
+        // (a) Lane padding: primitives in [N, ceil(N/32)*32) must be all-zero across all 12
+        // float4 slots.
         const std::uint32_t padded_n = static_cast<std::uint32_t>(sh_swizzled_padded_n(N));
         for (std::uint32_t p = N; p < padded_n; ++p) {
-            for (std::uint32_t k = 0; k < K; ++k) {
-                for (std::uint32_t c = 0; c < 3; ++c) {
-                    const std::uint32_t idx = sh_swizzled_index(p, k) * 3 + c;
-                    EXPECT_EQ(sw[idx], 0.0f) << "padding lane p=" << p << " k=" << k << " c=" << c;
+            for (std::uint32_t k = 0; k < SLOTS_PER_PRIM; ++k) {
+                const std::uint32_t base = sh_swizzled_index(p, k) * 4u;
+                for (std::uint32_t i = 0; i < 4u; ++i) {
+                    EXPECT_EQ(sw[base + i], 0.0f) << "lane padding p=" << p << " k=" << k << " i=" << i;
                 }
             }
+        }
+
+        // (b) Tail padding: slot 11's .y/.z/.w (offsets 1..3) of every valid primitive must be 0.
+        for (std::uint32_t p = 0; p < N; ++p) {
+            const std::uint32_t base = sh_swizzled_index(p, 11u) * 4u;
+            EXPECT_EQ(sw[base + 1u], 0.0f) << "tail .y p=" << p;
+            EXPECT_EQ(sw[base + 2u], 0.0f) << "tail .z p=" << p;
+            EXPECT_EQ(sw[base + 3u], 0.0f) << "tail .w p=" << p;
         }
     }
 

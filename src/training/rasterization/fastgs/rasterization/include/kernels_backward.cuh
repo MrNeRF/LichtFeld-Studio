@@ -35,7 +35,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
         const float4* __restrict__ raw_rotations,
-        const float3* __restrict__ sh_coefficients_rest,
+        const float4* __restrict__ sh_coefficients_rest, // float4-packed swizzled layout (12 slots/primitive)
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         const float* __restrict__ raw_opacities,
@@ -92,13 +92,15 @@ namespace fast_lfs::rasterization::kernels::backward {
             adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
             adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
-            // shN: grad = 0, all 15 coefficients via swizzle-aware indexing
+            // shN: grad = 0, all 12 float4 slots via swizzle-aware indexing (matches the
+            // packed-grad path used in the visible branch).
             if constexpr (ACTIVE_SH_BASES > 1) {
-                constexpr uint K = 15u;
-                for (uint k = 0; k < K; ++k) {
-                    adam_step_helper_shN(0.0f, fused_adam.shN, primitive_idx, k, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-                    adam_step_helper_shN(0.0f, fused_adam.shN, primitive_idx, k, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-                    adam_step_helper_shN(0.0f, fused_adam.shN, primitive_idx, k, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+                const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                             : 3u;
+                for (uint k = 0; k < N_SLOTS; ++k) {
+                    adam_step_f4(zero, fused_adam.shN, shAt(primitive_idx, k),
+                                 fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
                 }
             }
             return;
@@ -381,9 +383,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     // Swizzle-aware Adam decay for shN's invisible primitives. One thread per primitive;
-    // if invisible, iterate over all 15 coefficient slots * 3 channels via shAt indexing.
-    // This is dispatched once per backward pass for shN. Phase 4 will fold the invisible
-    // handling directly into the fused-backward kernel to eliminate this launch entirely.
+    // if invisible, iterate over all 12 float4 slots via shAt indexing.
     __global__ void adam_step_invisible_shN(
         const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         FusedAdamParam param,
@@ -397,23 +397,10 @@ namespace fast_lfs::rasterization::kernels::backward {
         if (primitive_n_touched_tiles[primitive_idx] != 0)
             return;
 
-        constexpr uint K = 15u; // SH_MAX_COEFFS_REST
-        for (uint k = 0; k < K; ++k) {
-            const uint slot = shAt(primitive_idx, k);
-            for (uint c = 0; c < 3u; ++c) {
-                const uint element_idx = slot * 3u + c;
-                if (element_idx >= static_cast<uint>(param.n_elements))
-                    break;
-                const float m1_prev = param.exp_avg[element_idx];
-                const float m2_prev = param.exp_avg_sq[element_idx];
-                // grad = 0 for invisibles in the shN path
-                const float m1 = beta1 * m1_prev;
-                const float m2 = beta2 * m2_prev;
-                const float denom = sqrtf(m2) * param.bias_correction2_sqrt_rcp + eps;
-                param.param[element_idx] -= param.step_size * m1 / denom;
-                param.exp_avg[element_idx] = m1;
-                param.exp_avg_sq[element_idx] = m2;
-            }
+        const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+        for (uint k = 0; k < 12u; ++k) {
+            adam_step_f4(zero, param, shAt(primitive_idx, k), beta1, beta2, eps);
         }
     }
 

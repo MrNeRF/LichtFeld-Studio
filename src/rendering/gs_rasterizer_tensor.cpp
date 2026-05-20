@@ -337,13 +337,19 @@ namespace lfs::rendering {
                                                                    0.0f, 0.0f, 1.0f};
         const Tensor K = Tensor::from_vector(K_data, {3, 3}, lfs::core::Device::CPU).cuda();
 
+        // shN is resident in vksplat float4-swizzled layout; the gut backend kernel indexes it
+        // as canonical [N, K, 3] row-major (see src/rendering/rasterizer/rasterization/include/
+        // kernel_utils.cuh:32). Materialise the canonical view here — same pattern as the
+        // gsplat path at line 93.
+        const auto shN = model.shN_canonical();
+
         auto [image, alpha, depth] = forward_gut_tensor(
             model.means_raw(),
             model.scaling_raw(),
             model.rotation_raw(),
             model.opacity_raw(),
             model.sh0_raw(),
-            model.shN_raw(),
+            shN,
             w2c, K,
             sh_degree, width, height,
             camera_model,

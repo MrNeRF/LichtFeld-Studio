@@ -10,17 +10,53 @@ namespace lfs::core {
 
     namespace {
 
+        // Float4 slot index in the swizzled buffer for primitive p, float4 slot k.
         __device__ __forceinline__ std::uint32_t shAt_device(std::uint32_t p, std::uint32_t k) {
             const std::uint32_t block = p / SH_REORDER_SIZE;
             const std::uint32_t lane = p % SH_REORDER_SIZE;
-            return block * (SH_MAX_COEFFS_REST * SH_REORDER_SIZE) + k * SH_REORDER_SIZE + lane;
+            return block * (SH_REST_FLOAT4_PER_PRIMITIVE * SH_REORDER_SIZE) + k * SH_REORDER_SIZE + lane;
+        }
+
+        // Packing: read 4 consecutive floats from the 45-float canonical block (c0..c14, 15
+        // float3) at `float_start_offset`. Out-of-range slots (offsets 45..47) read as zero.
+        // For active_coeffs_rest < 15, also zero positions >= active_coeffs_rest * 3.
+        __device__ __forceinline__ float4 read_pack4(
+            const float* __restrict__ canonical_row,
+            std::uint32_t float_start_offset,
+            std::uint32_t active_floats) {
+            const auto get = [&](std::uint32_t offset) -> float {
+                return offset < active_floats ? canonical_row[offset] : 0.0f;
+            };
+            return make_float4(
+                get(float_start_offset + 0),
+                get(float_start_offset + 1),
+                get(float_start_offset + 2),
+                get(float_start_offset + 3));
+        }
+
+        // Unpacking: write up to 4 consecutive floats to the canonical row at `float_start_offset`.
+        // Stops when target offset >= active_floats (skips tail padding).
+        __device__ __forceinline__ void write_unpack4(
+            float* __restrict__ canonical_row,
+            std::uint32_t float_start_offset,
+            std::uint32_t active_floats,
+            float4 v) {
+            const float src[4] = {v.x, v.y, v.z, v.w};
+#pragma unroll
+            for (std::uint32_t i = 0; i < 4u; ++i) {
+                const std::uint32_t off = float_start_offset + i;
+                if (off < active_floats)
+                    canonical_row[off] = src[i];
+            }
         }
 
         constexpr int BLOCK = 256;
 
+        // One thread per primitive in the padded block range. Writes all 12 float4 slots,
+        // zero-filling padding lanes / coefficients beyond active_coeffs_rest.
         __global__ void reorder_sh_kernel(
             const float* __restrict__ src,
-            float* __restrict__ dst,
+            float4* __restrict__ dst,
             std::uint32_t n_primitives,
             std::uint32_t active_coeffs_rest,
             std::uint32_t padded_n) {
@@ -28,26 +64,22 @@ namespace lfs::core {
             if (p >= padded_n)
                 return;
 
-            // For each of the 16 (SH_MAX_COEFFS_REST) coefficient slots, write either source data
-            // or zero (for padding lanes or coefficient slots beyond the active SH degree).
-            for (std::uint32_t k = 0; k < SH_MAX_COEFFS_REST; ++k) {
-                const std::uint32_t dst_idx = shAt_device(p, k);
-                const bool valid = (p < n_primitives) && (k < active_coeffs_rest);
-                if (valid) {
-                    const std::uint32_t src_idx = p * active_coeffs_rest + k;
-                    dst[dst_idx * 3 + 0] = src[src_idx * 3 + 0];
-                    dst[dst_idx * 3 + 1] = src[src_idx * 3 + 1];
-                    dst[dst_idx * 3 + 2] = src[src_idx * 3 + 2];
-                } else {
-                    dst[dst_idx * 3 + 0] = 0.0f;
-                    dst[dst_idx * 3 + 1] = 0.0f;
-                    dst[dst_idx * 3 + 2] = 0.0f;
+            const bool valid_primitive = p < n_primitives;
+            const std::uint32_t active_floats = valid_primitive ? active_coeffs_rest * 3u : 0u;
+            const float* canonical_row = valid_primitive ? src + p * active_coeffs_rest * 3u : nullptr;
+
+#pragma unroll
+            for (std::uint32_t k = 0; k < SH_REST_FLOAT4_PER_PRIMITIVE; ++k) {
+                float4 v = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                if (valid_primitive) {
+                    v = read_pack4(canonical_row, k * 4u, active_floats);
                 }
+                dst[shAt_device(p, k)] = v;
             }
         }
 
         __global__ void undo_reorder_sh_kernel(
-            const float* __restrict__ src,
+            const float4* __restrict__ src,
             float* __restrict__ dst,
             std::uint32_t n_primitives,
             std::uint32_t active_coeffs_rest) {
@@ -55,36 +87,39 @@ namespace lfs::core {
             if (p >= n_primitives)
                 return;
 
-            for (std::uint32_t k = 0; k < active_coeffs_rest; ++k) {
-                const std::uint32_t src_idx = shAt_device(p, k);
-                const std::uint32_t dst_idx = p * active_coeffs_rest + k;
-                dst[dst_idx * 3 + 0] = src[src_idx * 3 + 0];
-                dst[dst_idx * 3 + 1] = src[src_idx * 3 + 1];
-                dst[dst_idx * 3 + 2] = src[src_idx * 3 + 2];
+            const std::uint32_t active_floats = active_coeffs_rest * 3u;
+            float* canonical_row = dst + p * active_floats;
+
+#pragma unroll
+            for (std::uint32_t k = 0; k < SH_REST_FLOAT4_PER_PRIMITIVE; ++k) {
+                const std::uint32_t start_off = k * 4u;
+                if (start_off >= active_floats)
+                    break;
+                const float4 v = src[shAt_device(p, k)];
+                write_unpack4(canonical_row, start_off, active_floats, v);
             }
         }
 
         template <typename IndexT>
         __global__ void zero_at_indices_kernel(
-            float* __restrict__ buffer,
+            float4* __restrict__ buffer,
             const IndexT* __restrict__ indices,
             std::uint32_t n_indices) {
             const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i >= n_indices)
                 return;
             const std::uint32_t p = static_cast<std::uint32_t>(indices[i]);
-            for (std::uint32_t k = 0; k < SH_MAX_COEFFS_REST; ++k) {
-                const std::uint32_t idx = shAt_device(p, k);
-                buffer[idx * 3 + 0] = 0.0f;
-                buffer[idx * 3 + 1] = 0.0f;
-                buffer[idx * 3 + 2] = 0.0f;
+            const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+#pragma unroll
+            for (std::uint32_t k = 0; k < SH_REST_FLOAT4_PER_PRIMITIVE; ++k) {
+                buffer[shAt_device(p, k)] = zero;
             }
         }
 
         template <typename IndexT>
         __global__ void gather_self_kernel(
-            const float* __restrict__ src,
-            float* __restrict__ dst,
+            const float4* __restrict__ src,
+            float4* __restrict__ dst,
             const IndexT* __restrict__ src_indices,
             std::uint32_t n_dst,
             std::uint32_t dst_offset) {
@@ -93,17 +128,14 @@ namespace lfs::core {
                 return;
             const std::uint32_t src_p = static_cast<std::uint32_t>(src_indices[i]);
             const std::uint32_t dst_p = dst_offset + i;
-            for (std::uint32_t k = 0; k < SH_MAX_COEFFS_REST; ++k) {
-                const std::uint32_t s = shAt_device(src_p, k);
-                const std::uint32_t d = shAt_device(dst_p, k);
-                dst[d * 3 + 0] = src[s * 3 + 0];
-                dst[d * 3 + 1] = src[s * 3 + 1];
-                dst[d * 3 + 2] = src[s * 3 + 2];
+#pragma unroll
+            for (std::uint32_t k = 0; k < SH_REST_FLOAT4_PER_PRIMITIVE; ++k) {
+                dst[shAt_device(dst_p, k)] = src[shAt_device(src_p, k)];
             }
         }
 
         __global__ void gather_from_linear_kernel(
-            float* __restrict__ dst,
+            float4* __restrict__ dst,
             std::uint32_t dst_offset,
             const float* __restrict__ src_linear,
             std::uint32_t n_src,
@@ -112,23 +144,16 @@ namespace lfs::core {
             if (i >= n_src)
                 return;
             const std::uint32_t dst_p = dst_offset + i;
-            for (std::uint32_t k = 0; k < SH_MAX_COEFFS_REST; ++k) {
-                const std::uint32_t d = shAt_device(dst_p, k);
-                if (k < active_coeffs_rest) {
-                    const std::uint32_t s = i * active_coeffs_rest + k;
-                    dst[d * 3 + 0] = src_linear[s * 3 + 0];
-                    dst[d * 3 + 1] = src_linear[s * 3 + 1];
-                    dst[d * 3 + 2] = src_linear[s * 3 + 2];
-                } else {
-                    dst[d * 3 + 0] = 0.0f;
-                    dst[d * 3 + 1] = 0.0f;
-                    dst[d * 3 + 2] = 0.0f;
-                }
+            const std::uint32_t active_floats = active_coeffs_rest * 3u;
+            const float* canonical_row = src_linear + i * active_floats;
+#pragma unroll
+            for (std::uint32_t k = 0; k < SH_REST_FLOAT4_PER_PRIMITIVE; ++k) {
+                dst[shAt_device(dst_p, k)] = read_pack4(canonical_row, k * 4u, active_floats);
             }
         }
 
         __global__ void scatter_linear_kernel(
-            float* __restrict__ dst,
+            float4* __restrict__ dst,
             const int* __restrict__ dst_indices,
             const float* __restrict__ src_linear,
             std::uint32_t n_src,
@@ -137,12 +162,11 @@ namespace lfs::core {
             if (i >= n_src)
                 return;
             const std::uint32_t dst_p = static_cast<std::uint32_t>(dst_indices[i]);
-            for (std::uint32_t k = 0; k < active_coeffs_rest; ++k) {
-                const std::uint32_t d = shAt_device(dst_p, k);
-                const std::uint32_t s = i * active_coeffs_rest + k;
-                dst[d * 3 + 0] = src_linear[s * 3 + 0];
-                dst[d * 3 + 1] = src_linear[s * 3 + 1];
-                dst[d * 3 + 2] = src_linear[s * 3 + 2];
+            const std::uint32_t active_floats = active_coeffs_rest * 3u;
+            const float* canonical_row = src_linear + i * active_floats;
+#pragma unroll
+            for (std::uint32_t k = 0; k < SH_REST_FLOAT4_PER_PRIMITIVE; ++k) {
+                dst[shAt_device(dst_p, k)] = read_pack4(canonical_row, k * 4u, active_floats);
             }
         }
 
@@ -167,7 +191,7 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((padded_n + BLOCK - 1) / BLOCK);
         reorder_sh_kernel<<<grid, BLOCK, 0, stream>>>(
-            src_canonical, dst_swizzled,
+            src_canonical, reinterpret_cast<float4*>(dst_swizzled),
             static_cast<std::uint32_t>(n_primitives), active_coeffs_rest, padded_n);
     }
 
@@ -181,7 +205,7 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_primitives + BLOCK - 1) / BLOCK);
         undo_reorder_sh_kernel<<<grid, BLOCK, 0, stream>>>(
-            src_swizzled, dst_canonical,
+            reinterpret_cast<const float4*>(src_swizzled), dst_canonical,
             static_cast<std::uint32_t>(n_primitives), active_coeffs_rest);
     }
 
@@ -194,7 +218,7 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_indices + BLOCK - 1) / BLOCK);
         zero_at_indices_kernel<int><<<grid, BLOCK, 0, stream>>>(
-            buffer_swizzled, indices, static_cast<std::uint32_t>(n_indices));
+            reinterpret_cast<float4*>(buffer_swizzled), indices, static_cast<std::uint32_t>(n_indices));
     }
 
     void shN_swizzled_zero_at_indices_i64(
@@ -206,7 +230,7 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_indices + BLOCK - 1) / BLOCK);
         zero_at_indices_kernel<std::int64_t><<<grid, BLOCK, 0, stream>>>(
-            buffer_swizzled, indices, static_cast<std::uint32_t>(n_indices));
+            reinterpret_cast<float4*>(buffer_swizzled), indices, static_cast<std::uint32_t>(n_indices));
     }
 
     void shN_swizzled_gather_self(
@@ -220,7 +244,8 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_dst + BLOCK - 1) / BLOCK);
         gather_self_kernel<int><<<grid, BLOCK, 0, stream>>>(
-            src_swizzled, dst_swizzled, src_indices,
+            reinterpret_cast<const float4*>(src_swizzled),
+            reinterpret_cast<float4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset));
     }
@@ -236,7 +261,8 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_dst + BLOCK - 1) / BLOCK);
         gather_self_kernel<std::int64_t><<<grid, BLOCK, 0, stream>>>(
-            src_swizzled, dst_swizzled, src_indices,
+            reinterpret_cast<const float4*>(src_swizzled),
+            reinterpret_cast<float4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset));
     }
@@ -252,7 +278,7 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
         gather_from_linear_kernel<<<grid, BLOCK, 0, stream>>>(
-            dst_swizzled, static_cast<std::uint32_t>(dst_offset),
+            reinterpret_cast<float4*>(dst_swizzled), static_cast<std::uint32_t>(dst_offset),
             src_linear, static_cast<std::uint32_t>(n_src), active_coeffs_rest);
     }
 
@@ -267,7 +293,7 @@ namespace lfs::core {
             return;
         const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
         scatter_linear_kernel<<<grid, BLOCK, 0, stream>>>(
-            dst_swizzled, dst_indices, src_linear,
+            reinterpret_cast<float4*>(dst_swizzled), dst_indices, src_linear,
             static_cast<std::uint32_t>(n_src), active_coeffs_rest);
     }
 

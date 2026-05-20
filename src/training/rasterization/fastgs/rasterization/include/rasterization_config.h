@@ -35,9 +35,10 @@ namespace fast_lfs::rasterization::config {
     DEF int block_size_blend = tile_width * tile_height;
     DEF int block_size_blend_backward = 128;
 
-    // SH coefficient swizzle (vksplat layout): 32 primitives per block, all 16 coeffs allocated.
+    // SH coefficient swizzle (vksplat float4 layout): 32 primitives per block, 12 float4 slots
+    // per primitive packing 15 float3 SH-rest coefficients with 3 floats of tail padding.
     DEF unsigned int sh_reorder_size = 32u;
-    DEF unsigned int sh_max_coeffs = 16u;
+    DEF unsigned int sh_rest_float4_per_primitive = 12u;
     DEF unsigned int sh_max_coeffs_rest = 15u;
 } // namespace fast_lfs::rasterization::config
 

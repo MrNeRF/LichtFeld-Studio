@@ -39,7 +39,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
         const float3* __restrict__ sh_coefficients_0,
-        const float3* __restrict__ sh_coefficients_rest,
+        const float4* __restrict__ sh_coefficients_rest, // float4-packed swizzled layout (12 slots/primitive)
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,

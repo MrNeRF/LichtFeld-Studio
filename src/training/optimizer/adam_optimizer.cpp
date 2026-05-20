@@ -316,11 +316,12 @@ namespace lfs::training {
 
         fused.means = prepare_param(ParamType::Means, 3, true);
         fused.sh0 = prepare_param(ParamType::Sh0, 3, true);
-        // shN is laid out in swizzled order (vksplat shAt). The fused-backward kernel
-        // indexes it via shAt(p, k)*3 + c, not via primitive_idx*n_attributes+offset, so
-        // n_attributes is informational only. We report the full 16-slot stride.
+        // shN is laid out in swizzled float4 order (vksplat shAt). The fused-backward kernel
+        // indexes it via shAt(p, k) float4-slot reads/writes, not via
+        // primitive_idx*n_attributes+offset, so n_attributes is informational only.
+        // We report 12 float4 * 4 floats = 48 floats per primitive.
         fused.shN = prepare_param(ParamType::ShN,
-                                  static_cast<int>(lfs::core::SH_MAX_COEFFS_REST * 3),
+                                  static_cast<int>(lfs::core::SH_REST_FLOAT4_PER_PRIMITIVE * 4u),
                                   iteration > SH_WARMUP_ITERATIONS);
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
