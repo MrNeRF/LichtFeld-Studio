@@ -209,9 +209,9 @@ namespace lfs::io {
 
             Tensor means = splat_data.means();
             Tensor sh0 = splat_data.sh0();
-            // shN is stored swizzled — materialise canonical [N, K, 3] for export.
+            // shN is stored swizzled; unpack on CPU to avoid a canonical CUDA copy.
             Tensor shN = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0)
-                             ? splat_data.shN_canonical()
+                             ? splat_data.shN_canonical_cpu()
                              : Tensor();
             Tensor scales = splat_data.scaling_raw();
             Tensor densities = splat_data.opacity_raw();
@@ -219,13 +219,14 @@ namespace lfs::io {
 
             if (splat_data.has_deleted_mask()) {
                 const auto keep_mask = splat_data.deleted().logical_not();
+                const auto keep_mask_cpu = keep_mask.cpu().contiguous();
                 means = means.index_select(0, keep_mask);
                 sh0 = sh0.index_select(0, keep_mask);
                 scales = scales.index_select(0, keep_mask);
                 densities = densities.index_select(0, keep_mask);
                 rotations = rotations.index_select(0, keep_mask);
                 if (shN.is_valid()) {
-                    shN = shN.index_select(0, keep_mask);
+                    shN = shN.index_select(0, keep_mask_cpu);
                 }
             }
 

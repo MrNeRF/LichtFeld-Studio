@@ -405,6 +405,40 @@ namespace lfs::core {
         return out;
     }
 
+    Tensor SplatData::shN_canonical_cpu() const {
+        const size_t n = static_cast<size_t>(size());
+        const size_t k = active_sh_coeffs_rest();
+        if (n == 0 || k == 0) {
+            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+        }
+
+        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        if (!_shN.is_valid() || _shN.numel() == 0) {
+            out.zero_();
+            return out;
+        }
+
+        const Tensor shN_cpu = _shN.cpu().contiguous();
+        const auto* const src = shN_cpu.ptr<float>();
+        auto* const dst = out.ptr<float>();
+        const size_t src_floats = shN_cpu.numel();
+        const size_t active_floats = k * SH_CHANNELS;
+
+        for (size_t p = 0; p < n; ++p) {
+            float* const dst_row = dst + p * active_floats;
+            for (size_t offset = 0; offset < active_floats; ++offset) {
+                const auto slot = static_cast<std::uint32_t>(offset / 4u);
+                const auto component = static_cast<std::uint32_t>(offset % 4u);
+                const size_t src_offset =
+                    static_cast<size_t>(sh_swizzled_index(static_cast<std::uint32_t>(p), slot)) * 4u +
+                    component;
+                dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
+            }
+        }
+
+        return out;
+    }
+
     void SplatData::shN_set_from_canonical(const Tensor& canonical, size_t capacity) {
         const size_t n = static_cast<size_t>(size());
         const size_t cap = std::max<size_t>(capacity, n);
@@ -672,7 +706,7 @@ namespace lfs::core {
             }
             // On-disk format is canonical [N, K, 3]; deswizzle before writing for
             // forward compatibility and to keep the format identical to pre-swizzle builds.
-            Tensor shN_canon = shN_canonical();
+            Tensor shN_canon = shN_canonical_cpu();
             os << shN_canon;
         }
 

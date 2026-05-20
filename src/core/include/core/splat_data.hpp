@@ -114,6 +114,10 @@ namespace lfs::core {
         // currently active SH degree. Always allocates a new tensor — not a view.
         Tensor shN_canonical() const;
 
+        // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
+        // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
+        Tensor shN_canonical_cpu() const;
+
         // Replace _shN with the swizzled form of a canonical-layout source tensor.
         // `canonical` may be [N, K, 3] or [N, K*3]; K may be 0 for SH degree 0. The
         // swizzled buffer is allocated/resized to fit N with optional `capacity`.

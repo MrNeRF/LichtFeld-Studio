@@ -112,17 +112,17 @@ namespace lfs::training {
             }
 
             // Keep the base model scene scale so means LR remains tied to the dataset scale.
-            // SplatData ctor expects CANONICAL [N, K, 3] shN — materialise from swizzled storage.
             const float scene_scale = model.get_scene_scale();
             lfs::core::SplatData merged_with_base_scale(
                 merged->get_max_sh_degree(),
                 std::move(merged->means_raw()),
                 std::move(merged->sh0_raw()),
-                merged->shN_canonical(),
+                std::move(merged->shN_raw()),
                 std::move(merged->scaling_raw()),
                 std::move(merged->rotation_raw()),
                 std::move(merged->opacity_raw()),
-                scene_scale);
+                scene_scale,
+                lfs::core::SplatData::ShNLayout::Swizzled);
             merged_with_base_scale.set_active_sh_degree(merged->get_active_sh_degree());
             applyTrainingSHDegree(merged_with_base_scale, params.optimization.sh_degree);
             model = std::move(merged_with_base_scale);

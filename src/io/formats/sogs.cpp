@@ -1273,20 +1273,23 @@ namespace lfs::io {
             int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
             palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
 
-            // shN is stored swizzled — materialise canonical [N, K, 3] for SOG export.
-            const auto shN_canon = splat_data.shN_canonical();
-            if (!shN_canon.is_valid() || shN_canon.ndim() != 3 ||
-                static_cast<int64_t>(shN_canon.size(0)) != num_rows ||
-                static_cast<int>(shN_canon.size(1)) != sh_coeffs ||
-                static_cast<int>(shN_canon.size(2)) != 3) {
+            const auto& shN_swizzled = splat_data.shN_raw();
+            if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 || shN_swizzled.numel() == 0) {
                 return make_error(ErrorCode::INVALID_DATASET,
-                                  std::format("Invalid SH tensor shape for SOG export: expected [{}, {}, 3]",
-                                              num_rows, sh_coeffs),
+                                  "Invalid swizzled SH tensor for SOG export",
                                   options.output_path);
             }
 
-            auto shN_tensor = shN_canon.reshape({static_cast<int>(num_rows), sh_dims});
-            auto [sh_centroids, sh_labels] = lfs::io::kmeans(shN_tensor, palette_size, options.kmeans_iterations);
+            // Run k-means directly on resident swizzled shN so SOG export does not allocate
+            // a full canonical [N, K, 3] CUDA tensor.
+            auto [sh_centroids, sh_labels] = lfs::io::kmeans_sh_swizzled(
+                shN_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                palette_size, options.kmeans_iterations);
+            if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
+                return make_error(ErrorCode::ENCODING_FAILED,
+                                  "Failed to cluster swizzled SH tensor for SOG export",
+                                  options.output_path);
+            }
 
             auto sh_centroids_cpu = sh_centroids.cpu();
             const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());

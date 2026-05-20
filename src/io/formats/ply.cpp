@@ -1261,20 +1261,21 @@ namespace lfs::io {
             // Filter out deleted splats if deletion mask exists
             Tensor means, sh0, shN, opacity, scaling, rotation;
 
-            // Always materialise shN as canonical [N, K, 3] before export — splat_data.shN()
-            // returns the swizzled flat buffer.
-            const auto shN_canonical = splat_data.shN_canonical();
+            // Export wants canonical [N, K, 3], but resident shN is swizzled. Unpack on
+            // the host so saving cannot allocate a full canonical SH tensor in VRAM.
+            const auto shN_canonical_cpu = splat_data.shN_canonical_cpu();
 
             if (splat_data.has_deleted_mask()) {
                 // Create keep mask (inverse of deleted mask)
                 const auto keep_mask = splat_data.deleted().logical_not();
+                const auto keep_mask_cpu = keep_mask.cpu().contiguous();
 
                 // Filter all tensors by keep mask
                 means = splat_data.means().index_select(0, keep_mask);
                 if (splat_data.sh0().is_valid())
                     sh0 = splat_data.sh0().index_select(0, keep_mask);
-                if (shN_canonical.is_valid() && shN_canonical.numel() > 0)
-                    shN = shN_canonical.index_select(0, keep_mask);
+                if (shN_canonical_cpu.is_valid() && shN_canonical_cpu.numel() > 0)
+                    shN = shN_canonical_cpu.index_select(0, keep_mask_cpu);
                 if (splat_data.opacity_raw().is_valid())
                     opacity = splat_data.opacity_raw().index_select(0, keep_mask);
                 if (splat_data.scaling_raw().is_valid())
@@ -1285,7 +1286,7 @@ namespace lfs::io {
                 // No deletion mask, use original tensors (canonical shN view)
                 means = splat_data.means();
                 sh0 = splat_data.sh0();
-                shN = shN_canonical;
+                shN = shN_canonical_cpu;
                 opacity = splat_data.opacity_raw();
                 scaling = splat_data.scaling_raw();
                 rotation = splat_data.rotation_raw();
