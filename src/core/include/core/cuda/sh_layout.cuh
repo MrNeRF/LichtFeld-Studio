@@ -133,6 +133,15 @@ namespace lfs::core {
         std::size_t dst_offset = 0,
         cudaStream_t stream = nullptr);
 
+    // Copy the first n_src primitives from one swizzled buffer into dst_offset in another
+    // swizzled buffer. Source and destination may have different padded block boundaries.
+    void shN_swizzled_copy_contiguous(
+        const float* src_swizzled,
+        float* dst_swizzled,
+        std::size_t n_src,
+        std::size_t dst_offset = 0,
+        cudaStream_t stream = nullptr);
+
     // Gather selected primitives from swizzled storage into contiguous linear rows laid out as
     // [n_src, active_coeffs_rest, 3]. This is the selected-row inverse of
     // reorder_sh_to_swizzled and is used by densification paths that only need child rows.

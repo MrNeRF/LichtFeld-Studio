@@ -47,7 +47,6 @@ namespace fast_lfs::rasterization::kernels::backward {
         float4* __restrict__ grad_w2c,
         float* __restrict__ densification_info,
         const uint n_primitives,
-        const uint total_bases_sh_rest,
         const float w,
         const float h,
         const float fx,
@@ -114,7 +113,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             sh_coefficients_rest, grad_color_helper,
             fused_adam,
             mean3d, cam_position[0],
-            primitive_idx, total_bases_sh_rest);
+            primitive_idx);
 
         const float4 w2c_r3 = w2c[2];
         const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;

@@ -283,7 +283,8 @@ namespace lfs::core {
                          Tensor scaling_,
                          Tensor rotation_,
                          Tensor opacity_,
-                         float scene_scale_)
+                         float scene_scale_,
+                         ShNLayout shN_layout)
         : _max_sh_degree(sh_degree),
           _active_sh_degree(sh_degree), // Set to max degree when loading; training will override this
           _scene_scale(scene_scale_),
@@ -292,9 +293,19 @@ namespace lfs::core {
           _scaling(std::move(scaling_)),
           _rotation(std::move(rotation_)),
           _opacity(std::move(opacity_)) {
-        // Convert the canonical-layout shN argument into swizzled storage.
         const size_t n = _means.is_valid() ? static_cast<size_t>(_means.shape()[0]) : 0;
         const size_t capacity = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
+        if (shN_layout == ShNLayout::Swizzled) {
+            _shN = std::move(shN_);
+            const size_t expected_floats = sh_swizzled_float_count(n);
+            if (!_shN.is_valid() || _shN.ndim() != 1 ||
+                static_cast<size_t>(_shN.shape()[0]) < expected_floats) {
+                _shN = allocate_swizzled_shN(n, capacity);
+            }
+            return;
+        }
+
+        // Convert the canonical-layout shN argument into swizzled storage.
         const uint32_t active_coeffs_rest =
             static_cast<uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
         _shN = allocate_swizzled_shN(n, capacity);

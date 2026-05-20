@@ -95,7 +95,7 @@ namespace lfs::training {
      *   - raw_rotations.tensor : float32 [N, 4] - Raw rotation quaternions (pre-normalization)
      *   - raw_opacities.tensor : float32 [N, 1] - Raw opacity values (pre-sigmoid)
      *   - sh0.tensor           : float32 [N, 3] - DC spherical harmonic coefficients
-     *   - shN.tensor           : float32 [N, K, 3] - Higher-order SH coefficients (K = total_bases_sh_rest)
+     *   - shN.tensor           : float32 [swizzled_floats] - vksplat swizzled higher-order SH
      *   - w2c.tensor           : float32 [1, 4, 4] - World-to-camera transformation matrix
      *   - cam_position.tensor  : float32 [3] - Camera position in world coordinates
      *   - params.json          : JSON file with scalar parameters and tensor shapes
@@ -114,12 +114,11 @@ namespace lfs::training {
      * @param raw_rotations Raw rotation quaternions [N, 4]
      * @param raw_opacities Raw opacity values [N, 1]
      * @param sh0 DC spherical harmonic coefficients [N, 3]
-     * @param shN Higher-order SH coefficients [N, K, 3]
+     * @param shN Higher-order SH coefficients in vksplat swizzled layout
      * @param w2c World-to-camera transform [1, 4, 4]
      * @param cam_position Camera position [3]
      * @param n_primitives Number of Gaussians
      * @param active_sh_bases Number of active SH bases: (sh_degree+1)^2
-     * @param total_bases_sh_rest Total higher-order SH bases (K dimension of shN)
      * @param width Render width in pixels
      * @param height Render height in pixels
      * @param fx Focal length x
@@ -141,7 +140,6 @@ namespace lfs::training {
         const core::Tensor& cam_position,
         int n_primitives,
         int active_sh_bases,
-        int total_bases_sh_rest,
         int width,
         int height,
         float fx,
@@ -187,7 +185,7 @@ namespace lfs::training {
             if (sh0.is_valid())
                 core::save_tensor(sh0, dump_dir + "/sh0.tensor"); // [N, 3]
             if (shN.is_valid())
-                core::save_tensor(shN, dump_dir + "/shN.tensor"); // [N, K, 3]
+                core::save_tensor(shN, dump_dir + "/shN.tensor"); // swizzled shN
             if (w2c.is_valid())
                 core::save_tensor(w2c, dump_dir + "/w2c.tensor"); // [1, 4, 4]
             if (cam_position.is_valid())
@@ -198,7 +196,7 @@ namespace lfs::training {
             // - error: The exception message
             // - n_primitives: Number of Gaussians (N)
             // - active_sh_bases: (sh_degree+1)^2, e.g., 1 for degree 0, 4 for degree 1
-            // - total_bases_sh_rest: K dimension of shN tensor
+            // - shN_layout: storage layout of the dumped higher-order SH tensor
             // - width, height: Render dimensions in pixels
             // - fx, fy, cx, cy: Camera intrinsics
             // - near_plane, far_plane: Clipping planes
@@ -209,7 +207,7 @@ namespace lfs::training {
                 params_file << "  \"error\": \"" << error_msg << "\",\n";
                 params_file << "  \"n_primitives\": " << n_primitives << ",\n";
                 params_file << "  \"active_sh_bases\": " << active_sh_bases << ",\n";
-                params_file << "  \"total_bases_sh_rest\": " << total_bases_sh_rest << ",\n";
+                params_file << "  \"shN_layout\": \"swizzled-sh-reorder-32\",\n";
                 params_file << "  \"width\": " << width << ",\n";
                 params_file << "  \"height\": " << height << ",\n";
                 params_file << "  \"fx\": " << fx << ",\n";
@@ -300,12 +298,6 @@ namespace lfs::training {
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
         const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
-        // shN is stored swizzled — the kernel indexes via shAt(p, k) and ignores stride.
-        // Pass the active SH-rest coefficient count for the kernel's loop bounds.
-        const int total_bases_sh_rest = sh_degree > 0
-                                            ? (sh_degree + 1) * (sh_degree + 1) - 1
-                                            : 0;
-
         if (n_primitives == 0) {
             return std::unexpected("n_primitives is 0 - model has no gaussians");
         }
@@ -341,7 +333,6 @@ namespace lfs::training {
                 alpha.ptr<float>(),
                 n_primitives,
                 active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 fx,
@@ -365,7 +356,6 @@ namespace lfs::training {
                 viewpoint_camera.cam_position(),
                 n_primitives,
                 active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 fx,
@@ -389,7 +379,6 @@ namespace lfs::training {
                 viewpoint_camera.cam_position(),
                 n_primitives,
                 active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 fx,
@@ -440,7 +429,6 @@ namespace lfs::training {
         ctx.cam_position_ptr = cam_position_ptr;
 
         ctx.active_sh_bases = active_sh_bases;
-        ctx.total_bases_sh_rest = total_bases_sh_rest;
         ctx.width = width;
         ctx.height = height;
         ctx.focal_x = fx;
@@ -606,7 +594,6 @@ namespace lfs::training {
             nullptr,
             n_primitives,
             ctx.active_sh_bases,
-            ctx.total_bases_sh_rest,
             ctx.width,
             ctx.height,
             ctx.focal_x,

@@ -17,94 +17,41 @@ namespace gsplat_lfs {
     constexpr float SH_C0 = 0.2820947917738781f;
     constexpr float SH_C1 = 0.48860251190292f;
     constexpr float SH_DC_OFFSET = 0.5f; // 3DGS stores colors as (color - 0.5) / C0
+    constexpr uint32_t kShReorderSize = 32u;
+    constexpr uint32_t kShRestFloat4PerPrimitive = 12u;
+    constexpr uint32_t kShMaxCoeffs = 16u;
 
-    template <typename scalar_t>
-    __device__ void sh_coeffs_to_color_fast(
-        const uint32_t degree,
-        const uint32_t c,
-        const vec3& dir,
-        const scalar_t* __restrict__ coeffs,
-        scalar_t* __restrict__ colors) {
-        float result = SH_C0 * coeffs[c];
-        if (degree >= 1) {
-            // Normally rsqrt is faster than sqrt, but --use_fast_math will optimize
-            // sqrt on single precision, so we use sqrt here.
-            float inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-            float x = dir.x * inorm;
-            float y = dir.y * inorm;
-            float z = dir.z * inorm;
+    __device__ __forceinline__ uint32_t shAt(const uint32_t primitive_idx, const uint32_t float4_slot) {
+        const uint32_t block = primitive_idx / kShReorderSize;
+        const uint32_t lane = primitive_idx % kShReorderSize;
+        return block * (kShRestFloat4PerPrimitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
+    }
 
-            result += SH_C1 * (-y * coeffs[1 * 3 + c] +
-                               z * coeffs[2 * 3 + c] - x * coeffs[3 * 3 + c]);
-            if (degree >= 2) {
-                float z2 = z * z;
-
-                float fTmp0B = -1.092548430592079f * z;
-                float fC1 = x * x - y * y;
-                float fS1 = 2.f * x * y;
-                float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
-                float pSH7 = fTmp0B * x;
-                float pSH5 = fTmp0B * y;
-                float pSH8 = 0.5462742152960395f * fC1;
-                float pSH4 = 0.5462742152960395f * fS1;
-
-                result += pSH4 * coeffs[4 * 3 + c] + pSH5 * coeffs[5 * 3 + c] +
-                          pSH6 * coeffs[6 * 3 + c] + pSH7 * coeffs[7 * 3 + c] +
-                          pSH8 * coeffs[8 * 3 + c];
-                if (degree >= 3) {
-                    float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
-                    float fTmp1B = 1.445305721320277f * z;
-                    float fC2 = x * fC1 - y * fS1;
-                    float fS2 = x * fS1 + y * fC1;
-                    float pSH12 =
-                        z * (1.865881662950577f * z2 - 1.119528997770346f);
-                    float pSH13 = fTmp0C * x;
-                    float pSH11 = fTmp0C * y;
-                    float pSH14 = fTmp1B * fC1;
-                    float pSH10 = fTmp1B * fS1;
-                    float pSH15 = -0.5900435899266435f * fC2;
-                    float pSH9 = -0.5900435899266435f * fS2;
-
-                    result +=
-                        pSH9 * coeffs[9 * 3 + c] + pSH10 * coeffs[10 * 3 + c] +
-                        pSH11 * coeffs[11 * 3 + c] + pSH12 * coeffs[12 * 3 + c] +
-                        pSH13 * coeffs[13 * 3 + c] + pSH14 * coeffs[14 * 3 + c] +
-                        pSH15 * coeffs[15 * 3 + c];
-
-                    if (degree >= 4) {
-                        float fTmp0D =
-                            z * (-4.683325804901025f * z2 + 2.007139630671868f);
-                        float fTmp1C = 3.31161143515146f * z2 - 0.47308734787878f;
-                        float fTmp2B = -1.770130769779931f * z;
-                        float fC3 = x * fC2 - y * fS2;
-                        float fS3 = x * fS2 + y * fC2;
-                        float pSH20 =
-                            (1.984313483298443f * z * pSH12 -
-                             1.006230589874905f * pSH6);
-                        float pSH21 = fTmp0D * x;
-                        float pSH19 = fTmp0D * y;
-                        float pSH22 = fTmp1C * fC1;
-                        float pSH18 = fTmp1C * fS1;
-                        float pSH23 = fTmp2B * fC2;
-                        float pSH17 = fTmp2B * fS2;
-                        float pSH24 = 0.6258357354491763f * fC3;
-                        float pSH16 = 0.6258357354491763f * fS3;
-
-                        result += pSH16 * coeffs[16 * 3 + c] +
-                                  pSH17 * coeffs[17 * 3 + c] +
-                                  pSH18 * coeffs[18 * 3 + c] +
-                                  pSH19 * coeffs[19 * 3 + c] +
-                                  pSH20 * coeffs[20 * 3 + c] +
-                                  pSH21 * coeffs[21 * 3 + c] +
-                                  pSH22 * coeffs[22 * 3 + c] +
-                                  pSH23 * coeffs[23 * 3 + c] +
-                                  pSH24 * coeffs[24 * 3 + c];
-                    }
-                }
-            }
+    __device__ __forceinline__ float float4_component(const float4 v, const uint32_t component) {
+        switch (component) {
+        case 0:
+            return v.x;
+        case 1:
+            return v.y;
+        case 2:
+            return v.z;
+        default:
+            return v.w;
         }
+    }
 
-        colors[c] = result + SH_DC_OFFSET;
+    __device__ __forceinline__ float swizzled_rest_coeff_channel(
+        const float4* __restrict__ sh_rest,
+        const uint32_t primitive_idx,
+        const uint32_t rest_coeff_idx,
+        const uint32_t channel) {
+        if (sh_rest == nullptr) {
+            return 0.0f;
+        }
+        const uint32_t offset = rest_coeff_idx * 3u + channel;
+        const uint32_t slot = offset / 4u;
+        const uint32_t component = offset % 4u;
+        return float4_component(sh_rest[shAt(primitive_idx, slot)], component);
     }
 
     template <typename scalar_t>
@@ -365,109 +312,169 @@ namespace gsplat_lfs {
     }
 
     template <typename scalar_t>
-    __global__ void spherical_harmonics_fwd_kernel(
+    __global__ void spherical_harmonics_swizzled_fwd_kernel(
         const uint32_t N,
-        const uint32_t K,
         const uint32_t degrees_to_use,
-        const vec3* __restrict__ dirs,       // [N, 3]
-        const scalar_t* __restrict__ coeffs, // [N, K, 3]
-        const bool* __restrict__ masks,      // [N]
-        scalar_t* __restrict__ colors        // [N, 3]
-    ) {
-        // parallelize over N * 3
-        uint32_t idx = cg::this_grid().thread_rank();
+        const vec3* __restrict__ dirs,
+        const scalar_t* __restrict__ sh0,
+        const float4* __restrict__ sh_rest,
+        const bool* __restrict__ masks,
+        scalar_t* __restrict__ colors) {
+        const uint32_t idx = cg::this_grid().thread_rank();
         if (idx >= N * 3) {
             return;
         }
-        uint32_t elem_id = idx / 3;
-        uint32_t c = idx % 3; // color channel
+        const uint32_t elem_id = idx / 3;
+        const uint32_t c = idx % 3;
         if (masks != nullptr && !masks[elem_id]) {
             return;
         }
-        // Guard against nullptr dirs - only read when degree > 0 and dirs is valid
-        // When dirs is nullptr, only SH0 (degree=0) can be evaluated
-        vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
-        sh_coeffs_to_color_fast(
-            dirs != nullptr ? degrees_to_use : 0u, // Only use higher SH degrees if dirs available
-            c,
-            dir,
-            coeffs + elem_id * K * 3,
-            colors + elem_id * 3);
+
+        const vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
+        const uint32_t effective_degree = dirs != nullptr ? degrees_to_use : 0u;
+
+        float result = SH_C0 * sh0[elem_id * 3u + c];
+        if (effective_degree >= 1) {
+            const float inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+            const float x = dir.x * inorm;
+            const float y = dir.y * inorm;
+            const float z = dir.z * inorm;
+
+            const auto coeff = [&](const uint32_t rest_idx) -> float {
+                return swizzled_rest_coeff_channel(sh_rest, elem_id, rest_idx, c);
+            };
+
+            result += SH_C1 * (-y * coeff(0) + z * coeff(1) - x * coeff(2));
+            if (effective_degree >= 2) {
+                const float z2 = z * z;
+                const float fTmp0B = -1.092548430592079f * z;
+                const float fC1 = x * x - y * y;
+                const float fS1 = 2.f * x * y;
+                const float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+                const float pSH7 = fTmp0B * x;
+                const float pSH5 = fTmp0B * y;
+                const float pSH8 = 0.5462742152960395f * fC1;
+                const float pSH4 = 0.5462742152960395f * fS1;
+
+                result += pSH4 * coeff(3) + pSH5 * coeff(4) +
+                          pSH6 * coeff(5) + pSH7 * coeff(6) +
+                          pSH8 * coeff(7);
+                if (effective_degree >= 3) {
+                    const float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+                    const float fTmp1B = 1.445305721320277f * z;
+                    const float fC2 = x * fC1 - y * fS1;
+                    const float fS2 = x * fS1 + y * fC1;
+                    const float pSH12 =
+                        z * (1.865881662950577f * z2 - 1.119528997770346f);
+                    const float pSH13 = fTmp0C * x;
+                    const float pSH11 = fTmp0C * y;
+                    const float pSH14 = fTmp1B * fC1;
+                    const float pSH10 = fTmp1B * fS1;
+                    const float pSH15 = -0.5900435899266435f * fC2;
+                    const float pSH9 = -0.5900435899266435f * fS2;
+
+                    result +=
+                        pSH9 * coeff(8) + pSH10 * coeff(9) +
+                        pSH11 * coeff(10) + pSH12 * coeff(11) +
+                        pSH13 * coeff(12) + pSH14 * coeff(13) +
+                        pSH15 * coeff(14);
+                }
+            }
+        }
+
+        colors[idx] = result + SH_DC_OFFSET;
     }
 
-    void launch_spherical_harmonics_fwd_kernel(
+    void launch_spherical_harmonics_swizzled_fwd_kernel(
         uint32_t degrees_to_use,
-        const float* dirs,      // [N, 3]
-        const float* coeffs,    // [N, K, 3]
-        const bool* masks,      // [N] optional (can be nullptr)
-        int64_t total_elements, // N
-        int32_t K,
-        float* colors, // [N, 3]
+        const float* dirs,
+        const float* sh0,
+        const float* sh_rest_swizzled,
+        const bool* masks,
+        int64_t total_elements,
+        float* colors,
         cudaStream_t stream) {
         const uint32_t N = static_cast<uint32_t>(total_elements);
-
-        // parallelize over N * 3
-        int64_t n_elements = N * 3;
-        dim3 threads(256);
-        dim3 grid((n_elements + threads.x - 1) / threads.x);
-        int64_t shmem_size = 0; // No shared memory used in this kernel
-
+        const int64_t n_elements = static_cast<int64_t>(N) * 3;
         if (n_elements == 0) {
-            // skip the kernel launch if there are no elements
             return;
         }
 
-        spherical_harmonics_fwd_kernel<float>
-            <<<grid, threads, shmem_size, stream>>>(
+        dim3 threads(256);
+        dim3 grid((n_elements + threads.x - 1) / threads.x);
+        spherical_harmonics_swizzled_fwd_kernel<float>
+            <<<grid, threads, 0, stream>>>(
                 N,
-                static_cast<uint32_t>(K),
                 degrees_to_use,
                 reinterpret_cast<const vec3*>(dirs),
-                coeffs,
+                sh0,
+                reinterpret_cast<const float4*>(sh_rest_swizzled),
                 masks,
                 colors);
     }
 
     template <typename scalar_t>
-    __global__ void spherical_harmonics_bwd_kernel(
+    __global__ void spherical_harmonics_swizzled_bwd_kernel(
         const uint32_t N,
         const uint32_t K,
         const uint32_t degrees_to_use,
-        const vec3* __restrict__ dirs,         // [N, 3]
-        const scalar_t* __restrict__ coeffs,   // [N, K, 3]
-        const bool* __restrict__ masks,        // [N]
-        const scalar_t* __restrict__ v_colors, // [N, 3
-        scalar_t* __restrict__ v_coeffs,       // [N, K, 3]
-        scalar_t* __restrict__ v_dirs          // [N, 3] optional
-    ) {
-        // parallelize over N * 3
-        uint32_t idx = cg::this_grid().thread_rank();
+        const vec3* __restrict__ dirs,
+        const scalar_t* __restrict__ sh0,
+        const float4* __restrict__ sh_rest,
+        const bool* __restrict__ masks,
+        const scalar_t* __restrict__ v_colors,
+        scalar_t* __restrict__ v_coeffs,
+        scalar_t* __restrict__ v_dirs) {
+        const uint32_t idx = cg::this_grid().thread_rank();
         if (idx >= N * 3) {
             return;
         }
-        uint32_t elem_id = idx / 3;
-        uint32_t c = idx % 3; // color channel
+        const uint32_t elem_id = idx / 3;
+        const uint32_t c = idx % 3;
         if (masks != nullptr && !masks[elem_id]) {
             return;
         }
 
-        // Guard against nullptr dirs - only read when degree > 0 and dirs is valid
-        // When dirs is nullptr, only SH0 (degree=0) gradients can be computed
-        vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
-        uint32_t effective_degree = dirs != nullptr ? degrees_to_use : 0u;
+        const vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
+        const uint32_t effective_degree = dirs != nullptr ? degrees_to_use : 0u;
+        const uint32_t coeff_count = K < kShMaxCoeffs ? K : kShMaxCoeffs;
+
+        scalar_t coeffs[kShMaxCoeffs * 3u];
+        scalar_t v_coeffs_local[kShMaxCoeffs * 3u];
+#pragma unroll
+        for (uint32_t i = 0; i < kShMaxCoeffs * 3u; ++i) {
+            coeffs[i] = 0.0f;
+            v_coeffs_local[i] = 0.0f;
+        }
+
+#pragma unroll
+        for (uint32_t channel = 0; channel < 3u; ++channel) {
+            coeffs[channel] = sh0[elem_id * 3u + channel];
+        }
+        for (uint32_t k = 1; k < coeff_count; ++k) {
+#pragma unroll
+            for (uint32_t channel = 0; channel < 3u; ++channel) {
+                coeffs[k * 3u + channel] =
+                    swizzled_rest_coeff_channel(sh_rest, elem_id, k - 1u, channel);
+            }
+        }
 
         float v_dir_x = 0.f, v_dir_y = 0.f, v_dir_z = 0.f;
-        bool compute_dir_grad = (v_dirs != nullptr && dirs != nullptr);
+        const bool compute_dir_grad = (v_dirs != nullptr && dirs != nullptr);
         sh_coeffs_to_color_fast_vjp(
             effective_degree,
             c,
             dir,
-            coeffs + elem_id * K * 3,
+            coeffs,
             v_colors + elem_id * 3,
-            v_coeffs + elem_id * K * 3,
+            v_coeffs_local,
             compute_dir_grad ? &v_dir_x : nullptr,
             compute_dir_grad ? &v_dir_y : nullptr,
             compute_dir_grad ? &v_dir_z : nullptr);
+
+        for (uint32_t k = 0; k < coeff_count; ++k) {
+            v_coeffs[elem_id * K * 3u + k * 3u + c] = v_coeffs_local[k * 3u + c];
+        }
         if (compute_dir_grad) {
             atomicAdd(v_dirs + elem_id * 3, v_dir_x);
             atomicAdd(v_dirs + elem_id * 3 + 1, v_dir_y);
@@ -475,38 +482,35 @@ namespace gsplat_lfs {
         }
     }
 
-    void launch_spherical_harmonics_bwd_kernel(
+    void launch_spherical_harmonics_swizzled_bwd_kernel(
         uint32_t degrees_to_use,
-        const float* dirs,      // [N, 3]
-        const float* coeffs,    // [N, K, 3]
-        const bool* masks,      // [N] optional (can be nullptr)
-        const float* v_colors,  // [N, 3]
-        int64_t total_elements, // N
+        const float* dirs,
+        const float* sh0,
+        const float* sh_rest_swizzled,
+        const bool* masks,
+        const float* v_colors,
+        int64_t total_elements,
         int32_t K,
         bool compute_v_dirs,
-        float* v_coeffs, // [N, K, 3]
-        float* v_dirs,   // [N, 3] optional (can be nullptr)
+        float* v_coeffs,
+        float* v_dirs,
         cudaStream_t stream) {
         const uint32_t N = static_cast<uint32_t>(total_elements);
-
-        // parallelize over N * 3
-        int64_t n_elements = N * 3;
-        dim3 threads(256);
-        dim3 grid((n_elements + threads.x - 1) / threads.x);
-        int64_t shmem_size = 0; // No shared memory used in this kernel
-
+        const int64_t n_elements = static_cast<int64_t>(N) * 3;
         if (n_elements == 0) {
-            // skip the kernel launch if there are no elements
             return;
         }
 
-        spherical_harmonics_bwd_kernel<float>
-            <<<grid, threads, shmem_size, stream>>>(
+        dim3 threads(256);
+        dim3 grid((n_elements + threads.x - 1) / threads.x);
+        spherical_harmonics_swizzled_bwd_kernel<float>
+            <<<grid, threads, 0, stream>>>(
                 N,
                 static_cast<uint32_t>(K),
                 degrees_to_use,
                 reinterpret_cast<const vec3*>(dirs),
-                coeffs,
+                sh0,
+                reinterpret_cast<const float4*>(sh_rest_swizzled),
                 masks,
                 v_colors,
                 v_coeffs,

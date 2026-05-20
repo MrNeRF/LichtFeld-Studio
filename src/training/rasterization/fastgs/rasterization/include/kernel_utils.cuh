@@ -97,8 +97,7 @@ namespace fast_lfs::rasterization::kernels {
         const float3& position,
         const float3& cam_position,
         const uint primitive_idx,
-        const uint active_sh_bases,
-        const uint /*total_bases_sh_rest*/) {
+        const uint active_sh_bases) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
@@ -270,8 +269,7 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamSettings& fused_adam,
         const float3& position,
         const float3& cam_position,
-        const uint primitive_idx,
-        const uint /*total_bases_sh_rest*/) {
+        const uint primitive_idx) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;

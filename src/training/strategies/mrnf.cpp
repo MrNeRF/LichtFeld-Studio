@@ -993,7 +993,14 @@ namespace lfs::training {
                 state->capacity = cap;
             }
             if (state->exp_avg.is_valid()) {
-                state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
+                if (pt == ParamType::ShN && state->capacity > state->size) {
+                    state->grad = Tensor::zeros_direct(
+                        state->exp_avg.shape(),
+                        state->capacity,
+                        state->exp_avg.device());
+                } else {
+                    state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
+                }
                 if (cap > 0 && pt != ParamType::ShN)
                     state->grad.reserve(cap);
             }

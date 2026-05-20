@@ -16,17 +16,6 @@ namespace gsplat_fwd {
     // Spherical Harmonics - Forward Only
     //=========================================================================
 
-    void spherical_harmonics_fwd(
-        uint32_t degrees_to_use,
-        const float* dirs,              // [M, 3] viewing directions
-        const float* coeffs,            // [N_total, K, 3] SH coefficients (N-sized when using visible_indices)
-        const bool* masks,              // [M] optional (can be nullptr)
-        const int32_t* visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
-        int64_t total_elements,         // M (visible gaussians)
-        int32_t K,                      // number of SH coefficients
-        float* colors,                  // [M, 3] output (pre-allocated)
-        cudaStream_t stream = nullptr);
-
     void spherical_harmonics_swizzled_fwd(
         uint32_t degrees_to_use,
         const float* dirs,              // [M, 3] viewing directions

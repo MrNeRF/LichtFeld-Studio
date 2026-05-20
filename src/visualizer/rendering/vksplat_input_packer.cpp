@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <string_view>
@@ -56,6 +57,57 @@ namespace lfs::vis::vksplat {
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("VkSplat failed to stage {}: {}", label, e.what()));
             }
+        }
+
+        [[nodiscard]] float readSwizzledRestCoeff(
+            const std::vector<float>& shN,
+            const std::size_t primitive_idx,
+            const std::size_t rest_coeff_idx,
+            const std::size_t channel) {
+            const std::size_t packed_offset = rest_coeff_idx * 3 + channel;
+            const std::size_t slot = packed_offset / 4;
+            const std::size_t component = packed_offset % 4;
+            const std::size_t float4_index =
+                lfs::core::sh_swizzled_index(
+                    static_cast<std::uint32_t>(primitive_idx),
+                    static_cast<std::uint32_t>(slot));
+            return shN[float4_index * 4 + component];
+        }
+
+        template <typename PackedSh>
+        [[nodiscard]] std::expected<void, std::string> copySwizzledRestToPaddedSh(
+            const lfs::core::SplatData& splat_data,
+            const std::size_t n,
+            PackedSh& packed_sh,
+            const std::string_view label) {
+            const std::size_t active_rest = splat_data.active_sh_coeffs_rest();
+            const Tensor& shN_tensor = splat_data.shN();
+            if (active_rest == 0 || !shN_tensor.is_valid() || shN_tensor.numel() == 0) {
+                return {};
+            }
+            if (shN_tensor.ndim() != 1) {
+                return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
+            }
+
+            auto shN = tensorToCpuVector(shN_tensor, label);
+            if (!shN) {
+                return std::unexpected(shN.error());
+            }
+            const std::size_t expected_floats = lfs::core::sh_swizzled_float_count(n);
+            if (shN->size() < expected_floats) {
+                return std::unexpected("VkSplat staged swizzled SH rest tensor is smaller than expected");
+            }
+
+            const std::size_t rest = std::min<std::size_t>(15, active_rest);
+            for (std::size_t i = 0; i < n; ++i) {
+                for (std::size_t k = 0; k < rest; ++k) {
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        packed_sh[((i * 16) + (k + 1)) * 3 + c] =
+                            readSwizzledRestCoeff(*shN, i, k, c);
+                    }
+                }
+            }
+            return {};
         }
     } // namespace
 
@@ -119,32 +171,9 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        // shN is stored swizzled — materialise canonical [N, K, 3] for the staging path.
-        const Tensor shn_canon = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 &&
-                                  splat_data.active_sh_coeffs_rest() > 0)
-                                     ? splat_data.shN_canonical()
-                                     : Tensor();
-        if (shn_canon.is_valid() && shn_canon.numel() > 0) {
-            if (shn_canon.ndim() != 3 || shn_canon.size(0) != n || shn_canon.size(2) != 3) {
-                return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
-            }
-            auto shn = tensorToCpuVector(shn_canon, "model.shN");
-            if (!shn) {
-                return std::unexpected(shn.error());
-            }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_canon.size(1));
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-            if (shn->size() < n * source_rest * 3) {
-                return std::unexpected("VkSplat staged SH rest tensor is smaller than [N, coeffs, 3]");
-            }
-            for (std::size_t i = 0; i < n; ++i) {
-                for (std::size_t k = 0; k < rest; ++k) {
-                    for (std::size_t c = 0; c < 3; ++c) {
-                        sh_coeffs[((i * 16) + (k + 1)) * 3 + c] =
-                            (*shn)[(i * source_rest + k) * 3 + c];
-                    }
-                }
-            }
+        auto shN_copy = copySwizzledRestToPaddedSh(splat_data, n, sh_coeffs, "model.shN");
+        if (!shN_copy) {
+            return std::unexpected(shN_copy.error());
         }
         VulkanGSPipelineBuffers::reorderSH(sh_coeffs);
         return {};
@@ -318,29 +347,9 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        // shN is stored swizzled — materialise canonical [N, K, 3] before flattening to CPU.
-        const Tensor shn_canon = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 &&
-                                  splat_data.active_sh_coeffs_rest() > 0)
-                                     ? splat_data.shN_canonical()
-                                     : Tensor();
-        if (shn_canon.is_valid() && shn_canon.numel() > 0) {
-            if (shn_canon.ndim() != 3 || shn_canon.size(0) != n || shn_canon.size(2) != 3) {
-                return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
-            }
-            auto shn = tensorToCpuVector(shn_canon, "model.shN");
-            if (!shn) {
-                return std::unexpected(shn.error());
-            }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_canon.size(1));
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-            for (std::size_t i = 0; i < n; ++i) {
-                for (std::size_t k = 0; k < rest; ++k) {
-                    for (std::size_t c = 0; c < 3; ++c) {
-                        sh[((i * 16) + (k + 1)) * 3 + c] =
-                            (*shn)[(i * source_rest + k) * 3 + c];
-                    }
-                }
-            }
+        auto shN_copy = copySwizzledRestToPaddedSh(splat_data, n, sh, "model.shN");
+        if (!shN_copy) {
+            return std::unexpected(shN_copy.error());
         }
         return sh;
     }

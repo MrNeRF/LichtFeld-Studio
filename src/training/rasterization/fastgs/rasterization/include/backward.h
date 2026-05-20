@@ -36,7 +36,6 @@ namespace fast_lfs::rasterization {
         const int n_primitives,
         const int n_instances,
         const int active_sh_bases,
-        const int total_bases_sh_rest,
         const int width,
         const int height,
         const float fx,

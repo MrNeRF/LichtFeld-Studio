@@ -134,6 +134,21 @@ namespace lfs::core {
             }
         }
 
+        __global__ void copy_contiguous_kernel(
+            const float4* __restrict__ src,
+            float4* __restrict__ dst,
+            std::uint32_t n_src,
+            std::uint32_t dst_offset) {
+            const std::uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+            if (i >= n_src)
+                return;
+            const std::uint32_t dst_p = dst_offset + i;
+#pragma unroll
+            for (std::uint32_t k = 0; k < kShRestFloat4PerPrimitive; ++k) {
+                dst[shAt_device(dst_p, k)] = src[shAt_device(i, k)];
+            }
+        }
+
         template <typename IndexT>
         __global__ void gather_to_linear_kernel(
             const float4* __restrict__ src,
@@ -342,6 +357,22 @@ namespace lfs::core {
             reinterpret_cast<const float4*>(src_swizzled),
             reinterpret_cast<float4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
+            static_cast<std::uint32_t>(dst_offset));
+    }
+
+    void shN_swizzled_copy_contiguous(
+        const float* src_swizzled,
+        float* dst_swizzled,
+        std::size_t n_src,
+        std::size_t dst_offset,
+        cudaStream_t stream) {
+        if (n_src == 0)
+            return;
+        const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
+        copy_contiguous_kernel<<<grid, BLOCK, 0, stream>>>(
+            reinterpret_cast<const float4*>(src_swizzled),
+            reinterpret_cast<float4*>(dst_swizzled),
+            static_cast<std::uint32_t>(n_src),
             static_cast<std::uint32_t>(dst_offset));
     }
 

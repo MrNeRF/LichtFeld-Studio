@@ -50,7 +50,6 @@ namespace fast_lfs::rasterization {
         float* alpha_ptr,
         int n_primitives,
         int active_sh_bases,
-        int total_bases_sh_rest,
         int width,
         int height,
         float focal_x,
@@ -67,7 +66,7 @@ namespace fast_lfs::rasterization {
         CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
         CHECK_CUDA_PTR(opacities_raw_ptr, "opacities_raw_ptr");
         CHECK_CUDA_PTR(sh_coefficients_0_ptr, "sh_coefficients_0_ptr");
-        if (total_bases_sh_rest > 0) {
+        if (active_sh_bases > 1) {
             CHECK_CUDA_PTR(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
         }
         CHECK_CUDA_PTR(w2c_ptr, "w2c_ptr");
@@ -151,7 +150,6 @@ namespace fast_lfs::rasterization {
                                                    alpha_ptr,
                                                    n_primitives,
                                                    active_sh_bases,
-                                                   total_bases_sh_rest,
                                                    width,
                                                    height,
                                                    focal_x,
@@ -226,7 +224,6 @@ namespace fast_lfs::rasterization {
         float* grad_w2c_ptr,
         int n_primitives,
         int active_sh_bases,
-        int total_bases_sh_rest,
         int width,
         int height,
         float focal_x,
@@ -261,7 +258,7 @@ namespace fast_lfs::rasterization {
             CHECK_CUDA_PTR(scales_raw_ptr, "scales_raw_ptr");
             CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
             CHECK_CUDA_PTR(raw_opacities_ptr, "raw_opacities_ptr");
-            if (total_bases_sh_rest > 0) {
+            if (active_sh_bases > 1) {
                 CHECK_CUDA_PTR(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
             }
             CHECK_CUDA_PTR(w2c_ptr, "w2c_ptr");
@@ -358,7 +355,6 @@ namespace fast_lfs::rasterization {
                 n_primitives,
                 forward_ctx.n_instances,
                 active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 focal_x,
@@ -433,7 +429,7 @@ namespace fast_lfs::rasterization {
         const auto ctx = forward_raw(
             means, scales, rotations, opacities, sh0, nullptr,
             w2c, cam_pos, image, alpha,
-            NUM_GAUSSIANS, 1, 0,
+            NUM_GAUSSIANS, 1,
             IMG_WIDTH, IMG_HEIGHT,
             FOCAL, FOCAL, CENTER_X, CENTER_Y,
             0.01f, 100.0f);
@@ -480,7 +476,7 @@ namespace fast_lfs::rasterization {
                 nullptr, nullptr, grad_image, grad_alpha, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
-                NUM_GAUSSIANS, 1, 0,
+                NUM_GAUSSIANS, 1,
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
                 DensificationType::None, &warmup_adam);
 

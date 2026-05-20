@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/sh_layout.cuh"
 #include "grad_alpha.hpp"
 #include <cstdint>
 
@@ -15,6 +16,20 @@ namespace lfs::training::kernels {
 
         [[nodiscard]] inline unsigned int num_blocks_1d(const int64_t total) {
             return static_cast<unsigned int>((total + kThreadsPerBlock - 1) / kThreadsPerBlock);
+        }
+
+        __device__ __forceinline__ int64_t sh_swizzled_float_offset(
+            const int64_t primitive_idx,
+            const int64_t packed_coeff_channel_offset) {
+            const int64_t slot = packed_coeff_channel_offset / 4;
+            const int64_t component = packed_coeff_channel_offset % 4;
+            const int64_t block = primitive_idx / lfs::core::kShReorderSize;
+            const int64_t lane = primitive_idx % lfs::core::kShReorderSize;
+            const int64_t float4_index =
+                block * (lfs::core::kShRestFloat4PerPrimitive * lfs::core::kShReorderSize) +
+                slot * lfs::core::kShReorderSize +
+                lane;
+            return float4_index * 4 + component;
         }
 
         template <bool kUseImage, bool kSubtract>
@@ -367,58 +382,47 @@ namespace lfs::training::kernels {
         launch_grad_accumulate(dst, src, N, stream);
     }
 
-    // ==================== SH Gradient Split and Accumulate ====================
-    // src [N, K_src, 3] -> dst_sh0 [N, 1, 3] (first coeff), dst_shN [N, K_dst, 3] (rest)
-    // K_src: number of active SH coefficients in source (from gsplat backward)
-    // K_dst: number of SH coefficients in destination buffer (max_sh_degree^2 - 1)
-    __global__ void grad_accumulate_sh_kernel(
-        float* __restrict__ dst_sh0,   // [N, 1, 3] = [N, 3] contiguous
-        float* __restrict__ dst_shN,   // [N, K_dst, 3] or nullptr
-        const float* __restrict__ src, // [N, K_src, 3]
+    __global__ void grad_accumulate_sh_swizzled_kernel(
+        float* __restrict__ dst_sh0,
+        float* __restrict__ dst_shN,
+        const float* __restrict__ src,
         int64_t N,
-        int64_t K_src, // Source SH coefficients (active)
-        int64_t K_dst  // Destination buffer width (may be larger)
-    ) {
-        int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+        int64_t K_src) {
+        const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         if (idx >= N)
             return;
 
-        // Source layout: [N, K_src, 3] -> index [n, k, c] = n * K_src * 3 + k * 3 + c
-        // sh0 is at k=0
-        int64_t src_sh0_base = idx * K_src * 3;
-        int64_t dst_sh0_base = idx * 3; // [N, 1, 3] = [N, 3]
+        const int64_t src_base = idx * K_src * 3;
+        const int64_t dst_sh0_base = idx * 3;
+        dst_sh0[dst_sh0_base + 0] += src[src_base + 0];
+        dst_sh0[dst_sh0_base + 1] += src[src_base + 1];
+        dst_sh0[dst_sh0_base + 2] += src[src_base + 2];
 
-        // Accumulate sh0 (3 values)
-        dst_sh0[dst_sh0_base + 0] += src[src_sh0_base + 0];
-        dst_sh0[dst_sh0_base + 1] += src[src_sh0_base + 1];
-        dst_sh0[dst_sh0_base + 2] += src[src_sh0_base + 2];
+        if (dst_shN == nullptr || K_src <= 1)
+            return;
 
-        // Accumulate shN if K_src > 1
-        if (dst_shN != nullptr && K_src > 1) {
-            // shN is at k=1..K_src-1 in source
-            // Destination has K_dst coefficients per Gaussian
-            for (int64_t k = 1; k < K_src; ++k) {
-                int64_t src_offset = src_sh0_base + k * 3;
-                // Use K_dst for destination stride, not K_src-1
-                int64_t dst_offset = idx * K_dst * 3 + (k - 1) * 3;
-                dst_shN[dst_offset + 0] += src[src_offset + 0];
-                dst_shN[dst_offset + 1] += src[src_offset + 1];
-                dst_shN[dst_offset + 2] += src[src_offset + 2];
-            }
+        const int64_t max_rest = K_src - 1 < lfs::core::kShMaxCoeffsRest
+                                     ? K_src - 1
+                                     : lfs::core::kShMaxCoeffsRest;
+        for (int64_t k = 0; k < max_rest; ++k) {
+            const int64_t src_coeff = src_base + (k + 1) * 3;
+            const int64_t packed_offset = k * 3;
+            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 0)] += src[src_coeff + 0];
+            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 1)] += src[src_coeff + 1];
+            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 2)] += src[src_coeff + 2];
         }
     }
 
-    void launch_grad_accumulate_sh(
+    void launch_grad_accumulate_sh_swizzled(
         float* dst_sh0,
         float* dst_shN,
         const float* src,
         int64_t N,
         int64_t K_src,
-        int64_t K_dst,
         cudaStream_t stream) {
         const unsigned int blocks = num_blocks_1d(N);
-        grad_accumulate_sh_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-            dst_sh0, dst_shN, src, N, K_src, K_dst);
+        grad_accumulate_sh_swizzled_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
+            dst_sh0, dst_shN, src, N, K_src);
     }
 
     // ==================== Gradient Norm Accumulate ====================

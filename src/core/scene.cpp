@@ -5,6 +5,7 @@
 #include "core/scene.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -710,14 +711,15 @@ namespace lfs::core {
 
         const lfs::core::Device device = visible_nodes[0]->model->means_raw().device();
         constexpr int SH0_COEFFS = 1;
-        const int shN_coeffs = (stats.max_sh_degree > 0)
-                                   ? ((stats.max_sh_degree + 1) * (stats.max_sh_degree + 1) - 1)
-                                   : 0;
+        const size_t shN_swizzled_floats = lfs::core::sh_swizzled_float_count(stats.total_gaussians);
 
         using lfs::core::Tensor;
         Tensor means = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
         Tensor sh0 = Tensor::empty({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(SH0_COEFFS), 3}, device);
-        Tensor shN = (shN_coeffs > 0) ? Tensor::zeros({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(shN_coeffs), 3}, device) : Tensor::empty({static_cast<size_t>(stats.total_gaussians), 0, 3}, device);
+        Tensor shN = Tensor::zeros_direct(
+            TensorShape({shN_swizzled_floats}),
+            shN_swizzled_floats,
+            lfs::core::Device::CUDA);
         Tensor opacity = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 1}, device);
         Tensor scaling = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
         Tensor rotation = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 4}, device);
@@ -746,17 +748,18 @@ namespace lfs::core {
             sh0.slice(0, offset, offset + size) = model->sh0_raw();
             opacity.slice(0, offset, offset + size) = model->opacity_raw();
 
-            if (shN_coeffs > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
+            if (stats.max_sh_degree > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
                 const int model_active_rest_local =
                     model->get_active_sh_degree() > 0
                         ? (model->get_active_sh_degree() + 1) * (model->get_active_sh_degree() + 1) - 1
                         : 0;
                 if (model_active_rest_local > 0) {
-                    // Deswizzle this model's shN to canonical [N, K, 3] for the merge copy.
-                    const Tensor model_shN_canon = model->shN_canonical();
-                    const int coeffs_to_copy = std::min(model_active_rest_local, shN_coeffs);
-                    shN.slice(0, offset, offset + size).slice(1, 0, coeffs_to_copy) =
-                        model_shN_canon.slice(1, 0, coeffs_to_copy);
+                    lfs::core::shN_swizzled_copy_contiguous(
+                        model->shN_raw().ptr<float>(),
+                        shN.ptr<float>(),
+                        size,
+                        offset,
+                        shN.stream());
                 }
             }
 
@@ -794,7 +797,8 @@ namespace lfs::core {
             std::move(scaling),
             std::move(rotation),
             std::move(opacity),
-            stats.total_scene_scale / visible_nodes.size());
+            stats.total_scene_scale / visible_nodes.size(),
+            lfs::core::SplatData::ShNLayout::Swizzled);
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);

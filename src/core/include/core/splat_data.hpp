@@ -38,6 +38,11 @@ namespace lfs::core {
      */
     class LFS_CORE_API SplatData {
     public:
+        enum class ShNLayout {
+            Canonical,
+            Swizzled
+        };
+
         SplatData() = default;
         ~SplatData();
 
@@ -57,7 +62,8 @@ namespace lfs::core {
                   Tensor scaling,
                   Tensor rotation,
                   Tensor opacity,
-                  float scene_scale);
+                  float scene_scale,
+                  ShNLayout shN_layout = ShNLayout::Canonical);
 
         // ========== Computed getters ==========
         Tensor get_means() const;

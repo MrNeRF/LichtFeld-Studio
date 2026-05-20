@@ -80,7 +80,8 @@ namespace lfs::training {
             auto opacities = ensure_contiguous(gaussian_model.get_opacity()); // [N] sigmoid applied
             auto scales = ensure_contiguous(gaussian_model.get_scaling());    // [N, 3] exp applied
             auto quats = ensure_contiguous(gaussian_model.get_rotation());    // [N, 4] normalized
-            auto sh_coeffs = ensure_contiguous(gaussian_model.get_shs());     // [N, K, 3]
+            auto sh0 = ensure_contiguous(gaussian_model.sh0());               // [N, 1, 3]
+            auto shN = ensure_contiguous(gaussian_model.shN());               // swizzled 1D SH-rest buffer
             const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
 
             // Squeeze opacities if needed
@@ -116,7 +117,8 @@ namespace lfs::training {
             const float* opacities_ptr = opacities.ptr<float>();
             const float* scales_ptr = scales.ptr<float>();
             const float* quats_ptr = quats.ptr<float>();
-            const float* sh_coeffs_ptr = sh_coeffs.ptr<float>();
+            const float* sh0_ptr = sh0.ptr<float>();
+            const float* shN_ptr = (sh_degree > 0 && shN.is_valid() && shN.numel() > 0) ? shN.ptr<float>() : nullptr;
 
             // Background color and image pointers
             // bg_color and bg_image are mutually exclusive - use one or the other
@@ -191,10 +193,8 @@ namespace lfs::training {
 
             // Calculate buffer dimensions
             const uint32_t N = static_cast<uint32_t>(means.shape()[0]);
-            const uint32_t C = 1; // Single camera
-            const uint32_t K = (sh_coeffs.is_valid() && sh_coeffs.ndim() >= 2)
-                                   ? static_cast<uint32_t>(sh_coeffs.shape()[1])
-                                   : 0; // SH coefficients
+            const uint32_t C = 1;                                   // Single camera
+            const uint32_t K = (sh_degree + 1u) * (sh_degree + 1u); // active SH coefficients including sh0
             const uint32_t H = image_height;
             const uint32_t W = image_width;
             const uint32_t num_tiles_y = (H + tile_size - 1) / tile_size;
@@ -288,7 +288,8 @@ namespace lfs::training {
                 quats_ptr,
                 scales_ptr,
                 opacities_ptr,
-                sh_coeffs_ptr,
+                sh0_ptr,
+                shN_ptr,
                 sh_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
@@ -438,6 +439,7 @@ namespace lfs::training {
             ctx.means2d_ptr = means2d_ptr_out;
             ctx.depths_ptr = depths_ptr_out;
             ctx.colors_ptr = colors_ptr_out;
+            ctx.dirs_ptr = dirs_ptr_out;
             ctx.tile_offsets_ptr = tile_offsets_ptr_out;
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
@@ -452,7 +454,8 @@ namespace lfs::training {
             ctx.quats = quats;
             ctx.scales = scales;
             ctx.opacities = opacities;
-            ctx.sh_coeffs = sh_coeffs;
+            ctx.sh0 = sh0;
+            ctx.shN = shN;
 
             // Store camera pointers
             ctx.viewmat_ptr = viewmat_ptr;
@@ -642,7 +645,8 @@ namespace lfs::training {
                 ctx.quats.ptr<float>(),
                 ctx.scales.ptr<float>(),
                 ctx.opacities.ptr<float>(),
-                ctx.sh_coeffs.ptr<float>(),
+                ctx.sh0.ptr<float>(),
+                (ctx.sh_degree > 0 && ctx.shN.is_valid() && ctx.shN.numel() > 0) ? ctx.shN.ptr<float>() : nullptr,
                 ctx.sh_degree,
                 bg_color_ptr,
                 bg_image_ptr, // per-pixel background image
@@ -675,6 +679,7 @@ namespace lfs::training {
                 ctx.flatten_ids_ptr,
                 ctx.n_isects,
                 ctx.colors_ptr,
+                ctx.dirs_ptr,
                 ctx.radii_ptr,
                 ctx.means2d_ptr,
                 ctx.depths_ptr,
@@ -745,25 +750,22 @@ namespace lfs::training {
                 N,
                 stream);
 
-            // SH coefficients: [N, K, 3] -> sh0 [N, 1, 3] + shN [N, K_dst, 3]
-            // K is active SH coeffs, K_dst is the full buffer width (max_sh_degree^2 - 1)
+            // SH coefficients: [N, K, 3] -> sh0 [N, 1, 3] + swizzled shN.
             float* dst_shN = nullptr;
-            int64_t K_dst = 0;
             if (K > 1) {
-                auto shN_grad = optimizer.get_grad(ParamType::ShN);
-                if (shN_grad.is_valid() && shN_grad.numel() > 0 && shN_grad.ndim() >= 2) {
+                auto& shN_grad = optimizer.get_grad(ParamType::ShN);
+                if (shN_grad.is_valid() && shN_grad.numel() > 0) {
                     dst_shN = shN_grad.ptr<float>();
-                    K_dst = static_cast<int64_t>(shN_grad.shape()[1]); // [N, K_dst, 3]
                 }
             }
 
-            kernels::launch_grad_accumulate_sh(
-                optimizer.get_grad(ParamType::Sh0).ptr<float>(),
+            auto& sh0_grad = optimizer.get_grad(ParamType::Sh0);
+            kernels::launch_grad_accumulate_sh_swizzled(
+                sh0_grad.ptr<float>(),
                 dst_shN,
                 v_sh_coeffs_ptr,
                 N,
-                K,     // K_src: active SH coefficients
-                K_dst, // K_dst: destination buffer width
+                K,
                 stream);
 
             // Accumulate gradient norms when pixel-error map is not provided

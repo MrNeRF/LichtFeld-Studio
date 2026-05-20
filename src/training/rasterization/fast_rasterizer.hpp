@@ -55,7 +55,6 @@ namespace lfs::training {
         fast_lfs::rasterization::ForwardContext forward_ctx = {};
 
         int active_sh_bases = 0;
-        int total_bases_sh_rest = 0;
         int width = 0;
         int height = 0;
         float focal_x = 0.0f;
@@ -111,7 +110,6 @@ namespace lfs::training {
             cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
             forward_ctx = std::exchange(other.forward_ctx, {});
             active_sh_bases = std::exchange(other.active_sh_bases, 0);
-            total_bases_sh_rest = std::exchange(other.total_bases_sh_rest, 0);
             width = std::exchange(other.width, 0);
             height = std::exchange(other.height, 0);
             focal_x = std::exchange(other.focal_x, 0.0f);

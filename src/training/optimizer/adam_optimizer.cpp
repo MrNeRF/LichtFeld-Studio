@@ -951,15 +951,17 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
-        for (auto& [_, state] : states_) {
-            if (capacity > state.capacity) {
+        for (auto& [name, state] : states_) {
+            const size_t target_capacity =
+                name == "shN" ? lfs::core::sh_swizzled_float_count(capacity) : capacity;
+            if (target_capacity > state.capacity) {
                 if (state.grad.is_valid())
-                    state.grad.reserve(capacity);
+                    state.grad.reserve(target_capacity);
                 if (state.exp_avg.is_valid())
-                    state.exp_avg.reserve(capacity);
+                    state.exp_avg.reserve(target_capacity);
                 if (state.exp_avg_sq.is_valid())
-                    state.exp_avg_sq.reserve(capacity);
-                state.capacity = capacity;
+                    state.exp_avg_sq.reserve(target_capacity);
+                state.capacity = target_capacity;
             }
         }
     }
