@@ -12,11 +12,11 @@ def _read(rel_path: str) -> str:
     return (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
 
 
-def test_viewer_equirectangular_rasterizer_uses_y_up_screen_mapping():
-    source = _read("src/rendering/rasterizer/gsplat_fwd/Cameras.cuh")
+def test_vksplat_viewer_rejects_equirectangular_until_native_support_exists():
+    source = _read("src/visualizer/rendering/vksplat_viewport_renderer.cpp")
 
-    assert "auto py = (elevation / PI + 0.5f) * parameters.resolution[1];" in source
-    assert "auto elevation = PI * (image_point.y / static_cast<float>(parameters.resolution[1]) - 0.5);" in source
+    assert "VkSplat forward path supports pinhole cameras, not equirectangular cameras" in source
+    assert "VkSplat selection query supports pinhole cameras, not equirectangular cameras" in source
 
 
 def test_viewer_equirectangular_software_projection_uses_rasterizer_mapping():

@@ -29,7 +29,6 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/gs_rasterizer_tensor.hpp"
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
@@ -108,35 +107,12 @@ namespace lfs::app {
             int camera_index = 0,
             int width = 0,
             int height = 0) {
-
-            auto* model = scene.getTrainingModel();
-            if (!model) {
-                const auto* node = find_first_visible_splat_node(scene);
-                if (node)
-                    model = node->model.get();
-            }
-            if (!model)
-                return std::unexpected("No model to render");
-
-            auto cameras = scene.getAllCameras();
-            if (cameras.empty())
-                return std::unexpected("No cameras available");
-
-            if (camera_index < 0 || camera_index >= static_cast<int>(cameras.size()))
-                camera_index = 0;
-
-            auto& camera = cameras[camera_index];
-            if (!camera)
-                return std::unexpected("Failed to get camera");
-
-            core::Tensor bg = core::Tensor::zeros({3}, core::Device::CUDA);
-
-            try {
-                auto [image, alpha] = rendering::rasterize_tensor(*camera, *model, bg);
-                return mcp::encode_render_tensor_to_base64(std::move(image), width, height);
-            } catch (const std::exception& e) {
-                return std::unexpected(std::string("Render failed: ") + e.what());
-            }
+            (void)scene;
+            (void)camera_index;
+            (void)width;
+            (void)height;
+            return std::unexpected(
+                "Camera-index CUDA scene rendering has been removed; use live Vulkan viewport capture");
         }
 
         template <typename F>

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
+#include "rendering/selection_ops.hpp"
 
 #include <algorithm>
 #include <array>

@@ -7,8 +7,8 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "operation/undo_history.hpp"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection/selection_service.hpp"
 

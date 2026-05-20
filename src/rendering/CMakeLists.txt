@@ -10,7 +10,7 @@ find_package(glslang CONFIG REQUIRED)
 set(RENDERING_TENSOR_SOURCES
         cuda_vulkan_interop.cpp
         cuda_vulkan_interop.cu
-        gs_rasterizer_tensor.cpp
+        selection_ops.cu
         raster_rendering_engine.cpp
         cuda_interaction_kernels.cu
         point_cloud_raster.cu
@@ -24,7 +24,6 @@ target_link_libraries(lfs_rendering_tensor
         PUBLIC
         lfs_core
         PRIVATE
-        lfs_rasterizer
         CUDA::cudart
         glm::glm
         Vulkan::Vulkan
