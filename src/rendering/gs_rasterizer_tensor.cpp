@@ -87,10 +87,7 @@ namespace lfs::rendering {
         const auto& rotations_raw = gaussian_model.rotation_raw();
         const auto& opacities_raw = gaussian_model.opacity_raw();
         const auto& sh0 = gaussian_model.sh0_raw();
-        // shN is stored in vksplat swizzled layout; the gsplat backend wants canonical
-        // [N, K, 3]. Materialise the canonical view (allocates per frame — gsplat is the
-        // alternate viewer path, not the fastgs hot path).
-        const auto shN = gaussian_model.shN_canonical();
+        const auto& shN = gaussian_model.shN_raw();
 
         if (lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug)) {
             constexpr int DEBUG_LOG_INTERVAL = 300;
@@ -215,8 +212,7 @@ namespace lfs::rendering {
         const auto& rotations_raw = gaussian_model.rotation_raw();
         const auto& opacities_raw = gaussian_model.opacity_raw();
         const auto& sh0 = gaussian_model.sh0_raw();
-        // Materialise canonical [N, K, 3] shN for the gsplat backend (swizzled storage).
-        const auto shN = gaussian_model.shN_canonical();
+        const auto& shN = gaussian_model.shN_raw();
 
         const Tensor* actual_deleted_mask = request.deleted_mask;
         if (!actual_deleted_mask && gaussian_model.has_deleted_mask()) {
@@ -337,11 +333,7 @@ namespace lfs::rendering {
                                                                    0.0f, 0.0f, 1.0f};
         const Tensor K = Tensor::from_vector(K_data, {3, 3}, lfs::core::Device::CPU).cuda();
 
-        // shN is resident in vksplat float4-swizzled layout; the gut backend kernel indexes it
-        // as canonical [N, K, 3] row-major (see src/rendering/rasterizer/rasterization/include/
-        // kernel_utils.cuh:32). Materialise the canonical view here — same pattern as the
-        // gsplat path at line 93.
-        const auto shN = model.shN_canonical();
+        const auto& shN = model.shN_raw();
 
         auto [image, alpha, depth] = forward_gut_tensor(
             model.means_raw(),

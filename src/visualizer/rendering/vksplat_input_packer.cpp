@@ -164,7 +164,7 @@ namespace lfs::vis::vksplat {
             return rotation_raw.div(norm);
         }
 
-        [[nodiscard]] std::expected<Tensor, std::string> buildPaddedShTensor(
+        [[nodiscard]] std::expected<Tensor, std::string> buildPackedShTensor(
             const lfs::core::SplatData& splat_data) {
             const std::size_t n = static_cast<std::size_t>(splat_data.size());
 
@@ -186,44 +186,36 @@ namespace lfs::vis::vksplat {
             if (sh0.size(1) != 1) {
                 return std::unexpected("VkSplat expected SH DC tensor with a single coefficient slot");
             }
+            sh0 = sh0.contiguous();
 
-            // shN is stored swizzled — materialise canonical [N, K, 3] for the packer.
-            const Tensor shN_canon = (splat_data.shN().is_valid() && splat_data.shN().numel() > 0)
-                                         ? splat_data.shN_canonical()
-                                         : Tensor();
-            const std::size_t source_rest =
-                (shN_canon.is_valid() && shN_canon.ndim() == 3) ? static_cast<std::size_t>(shN_canon.size(1)) : 0;
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-
-            std::vector<Tensor> parts;
-            parts.reserve(3);
-            parts.push_back(sh0.contiguous());
-
-            if (rest > 0) {
-                if (shN_canon.ndim() != 3 || shN_canon.size(0) != n || shN_canon.size(2) != 3) {
-                    return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
+            Tensor shN = splat_data.shN();
+            if (shN.is_valid() && shN.numel() > 0) {
+                if (shN.dtype() != DataType::Float32) {
+                    shN = shN.to(DataType::Float32);
                 }
-                Tensor shn = shN_canon;
-                if (shn.dtype() != DataType::Float32) {
-                    shn = shn.to(DataType::Float32);
+                if (shN.device() != Device::CUDA) {
+                    shN = shN.to(Device::CUDA);
                 }
-                if (shn.device() != Device::CUDA) {
-                    shn = shn.to(Device::CUDA);
+                if (!shN.is_contiguous()) {
+                    shN = shN.contiguous();
                 }
-                if (rest < source_rest) {
-                    shn = shn.slice(1, 0, rest);
-                }
-                parts.push_back(shn.contiguous());
             }
+            const float* shN_ptr = (shN.is_valid() && shN.numel() > 0) ? shN.ptr<float>() : nullptr;
 
-            const std::size_t pad_slots = static_cast<std::size_t>(kShCoeffsPerSplat) - 1 - rest;
-            if (pad_slots > 0) {
-                parts.push_back(Tensor::zeros({n, pad_slots, std::size_t{3}},
-                                              Device::CUDA,
-                                              DataType::Float32));
-            }
-
-            return Tensor::cat(parts, 1).contiguous(); // [N, 16, 3]
+            const std::size_t padded_n = lfs::core::sh_swizzled_padded_n(n);
+            const std::size_t n_groups = padded_n / static_cast<std::size_t>(SH_REORDER_SIZE);
+            Tensor packed = Tensor::empty({n_groups,
+                                           static_cast<std::size_t>(kShDim),
+                                           static_cast<std::size_t>(SH_REORDER_SIZE),
+                                           static_cast<std::size_t>(kShChunkFloats)},
+                                          Device::CUDA,
+                                          DataType::Float32);
+            lfs::core::sh_swizzled_pack_full_from_split(
+                sh0.ptr<float>(),
+                shN_ptr,
+                packed.ptr<float>(),
+                n);
+            return packed;
         }
 
     } // namespace
@@ -285,37 +277,17 @@ namespace lfs::vis::vksplat {
                                       .reshape(lfs::core::TensorShape{n, std::size_t{4}})
                                       .contiguous();
 
-            auto sh_padded = buildPaddedShTensor(splat_data);
-            if (!sh_padded) {
-                return std::unexpected(sh_padded.error());
+            auto sh_packed = buildPackedShTensor(splat_data);
+            if (!sh_packed) {
+                return std::unexpected(sh_packed.error());
             }
-
-            const std::size_t reorder = static_cast<std::size_t>(SH_REORDER_SIZE);
-            const std::size_t padded_n = ((n + reorder - 1) / reorder) * reorder;
-            Tensor sh_chunks = sh_padded->reshape(lfs::core::TensorShape{n,
-                                                                         static_cast<std::size_t>(kShDim),
-                                                                         static_cast<std::size_t>(kShChunkFloats)});
-            if (padded_n != n) {
-                Tensor pad = Tensor::zeros({padded_n - n,
-                                            static_cast<std::size_t>(kShDim),
-                                            static_cast<std::size_t>(kShChunkFloats)},
-                                           Device::CUDA,
-                                           DataType::Float32);
-                sh_chunks = Tensor::cat({sh_chunks, pad}, 0);
-            }
-            const std::size_t n_groups = padded_n / reorder;
-            Tensor sh_grouped = sh_chunks.reshape(lfs::core::TensorShape{n_groups,
-                                                                         reorder,
-                                                                         static_cast<std::size_t>(kShDim),
-                                                                         static_cast<std::size_t>(kShChunkFloats)});
-            result.sh_coeffs = sh_grouped.permute({0, 2, 1, 3}).contiguous();
+            result.sh_coeffs = std::move(*sh_packed);
             result.sh_padded_floats = static_cast<std::size_t>(result.sh_coeffs.numel());
 
             assert(static_cast<std::size_t>(result.xyz_ws.numel()) == n * 3);
             assert(static_cast<std::size_t>(result.rotations.numel()) == n * 4);
             assert(static_cast<std::size_t>(result.scales_opacs.numel()) == n * 4);
-            assert(result.sh_padded_floats == n_groups * reorder * static_cast<std::size_t>(kShDim) *
-                                                  static_cast<std::size_t>(kShChunkFloats));
+            assert(result.sh_padded_floats == lfs::core::sh_swizzled_float_count(n));
 
             return result;
         } catch (const std::exception& e) {

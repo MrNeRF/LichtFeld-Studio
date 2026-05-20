@@ -382,7 +382,13 @@ namespace lfs::training {
             LOG_INFO("MRNF: pre-allocating capacity for {} Gaussians (current: {}, utilization: {:.1f}%)",
                      capacity, current_size, 100.0f * current_size / capacity);
 
-            auto replace_with_direct = [capacity](Tensor& param) {
+            // When init_model_from_pointcloud was called with capacity = max_cap, every param
+            // is already direct-allocated at that capacity. Re-allocating would briefly hold
+            // both old and new buffers (≈2× peak) before the cuda caching allocator releases the
+            // freed chunk — so only replace if the param's capacity is actually below the target.
+            auto ensure_capacity_direct = [capacity](Tensor& param) {
+                if (param.capacity() >= capacity)
+                    return;
                 auto new_param = Tensor::zeros_direct(param.shape(), capacity);
                 cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                            param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -390,22 +396,24 @@ namespace lfs::training {
             };
 
             // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
-            auto replace_shN_with_direct = [capacity](Tensor& param) {
+            auto ensure_shN_capacity_direct = [capacity](Tensor& param) {
                 const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity);
+                if (param.capacity() >= cap_floats)
+                    return;
                 auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
                 cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                            param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
                 param = new_param;
             };
 
-            replace_with_direct(_splat_data->means());
-            replace_with_direct(_splat_data->sh0());
+            ensure_capacity_direct(_splat_data->means());
+            ensure_capacity_direct(_splat_data->sh0());
             if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-                replace_shN_with_direct(_splat_data->shN());
+                ensure_shN_capacity_direct(_splat_data->shN());
             }
-            replace_with_direct(_splat_data->scaling_raw());
-            replace_with_direct(_splat_data->rotation_raw());
-            replace_with_direct(_splat_data->opacity_raw());
+            ensure_capacity_direct(_splat_data->scaling_raw());
+            ensure_capacity_direct(_splat_data->rotation_raw());
+            ensure_capacity_direct(_splat_data->opacity_raw());
         }
 
         _optimizer = create_optimizer(*_splat_data, *_params);
@@ -806,18 +814,11 @@ namespace lfs::training {
                current_active + split_indices.numel() <= static_cast<size_t>(_params->max_cap));
 
         const size_t K = split_indices.numel();
-        // shN is stored swizzled — materialise canonical [N, K, 3] working view for the
-        // kernel + downstream operations; reswizzle at the end.
         const size_t sh_rest = _splat_data->active_sh_coeffs_rest();
-        const int shN_dim = static_cast<int>(sh_rest * 3);
-
-        Tensor shN_canon;
-        if (sh_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-            const size_t cap_rows = std::max<size_t>(_splat_data->means().capacity(),
-                                                     static_cast<size_t>(_splat_data->size()) + K);
-            shN_canon = _splat_data->shN_canonical();
-            shN_canon.reserve(cap_rows);
-        }
+        const auto active_rest = static_cast<uint32_t>(sh_rest);
+        const bool use_shN = active_rest > 0 &&
+                             _splat_data->shN().is_valid() &&
+                             _splat_data->shN().numel() > 0;
 
         auto child_means = Tensor::empty({K, 3}, Device::CUDA);
         auto child_log_scales = Tensor::empty({K, 3}, Device::CUDA);
@@ -825,28 +826,38 @@ namespace lfs::training {
         auto child_rotations = Tensor::empty({K, 4}, Device::CUDA);
         auto child_sh0 = Tensor::empty({K, 1, 3}, Device::CUDA);
         Tensor child_shN;
-        if (sh_rest > 0) {
+        if (use_shN) {
             child_shN = Tensor::empty({K, sh_rest, 3}, Device::CUDA);
-        } else {
-            child_shN = Tensor::empty({K, 0, 3}, Device::CUDA);
         }
 
+        // The LAS kernel only needs linear shN to copy child rows. shN itself is unchanged
+        // for the parent rows, so keep the resident swizzled buffer in place and gather the
+        // selected child rows below.
         kernels::launch_long_axis_split_gaussians_inplace(
             _splat_data->means().ptr<float>(),
             _splat_data->rotation_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
             _splat_data->sh0().ptr<float>(),
-            shN_dim > 0 && shN_canon.is_valid() ? shN_canon.ptr<float>() : nullptr,
+            nullptr,
             _splat_data->opacity_raw().ptr<float>(),
             child_means.ptr<float>(),
             child_rotations.ptr<float>(),
             child_log_scales.ptr<float>(),
             child_sh0.ptr<float>(),
-            shN_dim > 0 ? child_shN.ptr<float>() : nullptr,
+            nullptr,
             child_raw_opacities.ptr<float>(),
             split_indices.ptr<int64_t>(),
             static_cast<int>(K),
-            shN_dim);
+            0);
+
+        if (use_shN) {
+            shN_swizzled_gather_to_linear_i64(
+                _splat_data->shN().ptr<float>(),
+                split_indices.ptr<int64_t>(),
+                child_shN.ptr<float>(),
+                K,
+                active_rest);
+        }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);
@@ -864,13 +875,13 @@ namespace lfs::training {
                 child_sh0,
                 child_shN,
                 child_raw_opacities,
-                shN_canon,
                 static_cast<int64_t>(K));
             append_start = K - static_cast<size_t>(remaining_after_fill);
         }
 
         const size_t n_append = K - append_start;
         if (n_append > 0) {
+            const size_t old_size = static_cast<size_t>(_splat_data->size());
             append_live_deleted_rows(*_splat_data, _free_mask, n_append);
             if (_free_mask.is_valid() && _free_mask.numel() < _splat_data->size() + n_append) {
                 _free_mask.reserve(_splat_data->size() + n_append);
@@ -879,7 +890,10 @@ namespace lfs::training {
 
             auto append_means = child_means.slice(0, append_start, K);
             auto append_sh0 = child_sh0.slice(0, append_start, K);
-            auto append_shN = child_shN.slice(0, append_start, K);
+            Tensor append_shN;
+            if (use_shN) {
+                append_shN = child_shN.slice(0, append_start, K);
+            }
             auto append_scaling = child_log_scales.slice(0, append_start, K);
             auto append_rotation = child_rotations.slice(0, append_start, K);
             auto append_opacity = child_raw_opacities.slice(0, append_start, K);
@@ -889,38 +903,26 @@ namespace lfs::training {
 
             _optimizer->add_new_params(ParamType::Means, append_means, true);
             _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
-            // shN is swizzled; do the canonical append on shN_canon then reswizzle below,
-            // and extend the optimizer state separately.
-            if (shN_canon.is_valid() && shN_canon.numel() > 0 && append_shN.is_valid() &&
-                append_shN.numel() > 0) {
-                const size_t n_app = static_cast<size_t>(append_shN.shape()[0]);
-                std::vector<int> new_indices_vec(n_app);
-                const int base = static_cast<int>(shN_canon.shape()[0]);
-                for (size_t i = 0; i < n_app; ++i) {
-                    new_indices_vec[i] = base + static_cast<int>(i);
+
+            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
+                const size_t new_size = old_size + n_append;
+                const size_t needed_floats = sh_swizzled_float_count(new_size);
+                if (_splat_data->shN().numel() < needed_floats) {
+                    _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
                 }
-                const auto new_indices = lfs::core::Tensor::from_vector(
-                    new_indices_vec, {n_app}, shN_canon.device());
-                shN_canon.append_zeros(n_app);
-                shN_canon.index_put_(new_indices, append_shN);
-                _optimizer->extend_state_for_new_params(ParamType::ShN, n_app);
+                shN_swizzled_gather_from_linear(
+                    _splat_data->shN().ptr<float>(),
+                    old_size,
+                    append_shN.ptr<float>(),
+                    n_append,
+                    active_rest);
+                _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
             } else {
                 _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
             }
             _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
             _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
             _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
-        }
-
-        // Reswizzle the canonical working buffer back into splat_data._shN. We pass
-        // max_cap as the capacity hint so the freshly-allocated _shN retains headroom
-        // for further densification; otherwise subsequent append_zeros calls would
-        // realloc mid-iteration and lose the pre-reserved buffer.
-        if (shN_canon.is_valid() && shN_canon.numel() > 0) {
-            const size_t cap_primitives = _params->max_cap > 0
-                                              ? std::max<size_t>(_params->max_cap, _splat_data->size())
-                                              : _splat_data->means().capacity();
-            _splat_data->shN_set_from_canonical(shN_canon, cap_primitives);
         }
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
@@ -1152,7 +1154,6 @@ namespace lfs::training {
         const lfs::core::Tensor& sh0,
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& opacities,
-        lfs::core::Tensor& shN_canon_inout,
         int64_t count) {
 
         using namespace lfs::core;
@@ -1184,8 +1185,19 @@ namespace lfs::training {
         }
         _splat_data->opacity_raw().index_put_(target_indices, opacity_slice);
 
-        if (shN.is_valid() && shN_canon_inout.is_valid() && shN_canon_inout.numel() > 0) {
-            shN_canon_inout.index_put_(target_indices, shN.slice(0, 0, slots_to_fill));
+        const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+        if (active_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
+            _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            auto target_i32 = target_indices.dtype() == DataType::Int32
+                                  ? target_indices
+                                  : target_indices.to(DataType::Int32);
+            auto shN_slice = shN.slice(0, 0, slots_to_fill);
+            shN_swizzled_scatter_linear(
+                _splat_data->shN().ptr<float>(),
+                target_i32.ptr<int>(),
+                shN_slice.ptr<float>(),
+                static_cast<size_t>(slots_to_fill),
+                active_rest);
         }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, target_indices);

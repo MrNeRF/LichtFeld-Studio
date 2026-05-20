@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 
 #include <cstddef>

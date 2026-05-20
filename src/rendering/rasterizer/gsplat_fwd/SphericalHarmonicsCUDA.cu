@@ -18,6 +18,41 @@ namespace gsplat_fwd {
     constexpr float SH_C0 = 0.2820947917738781f;
     constexpr float SH_C1 = 0.48860251190292f;
     constexpr float SH_DC_OFFSET = 0.5f; // 3DGS stores colors as (color - 0.5) / C0
+    constexpr uint32_t kShReorderSize = 32u;
+    constexpr uint32_t kShRestFloat4PerPrimitive = 12u;
+
+    __device__ __forceinline__ uint32_t shAt(const uint32_t primitive_idx, const uint32_t float4_slot) {
+        const uint32_t block = primitive_idx / kShReorderSize;
+        const uint32_t lane = primitive_idx % kShReorderSize;
+        return block * (kShRestFloat4PerPrimitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
+    }
+
+    __device__ __forceinline__ float float4_component(const float4 v, const uint32_t component) {
+        switch (component) {
+        case 0:
+            return v.x;
+        case 1:
+            return v.y;
+        case 2:
+            return v.z;
+        default:
+            return v.w;
+        }
+    }
+
+    __device__ __forceinline__ float swizzled_rest_coeff_channel(
+        const float4* __restrict__ sh_rest,
+        const uint32_t primitive_idx,
+        const uint32_t rest_coeff_idx,
+        const uint32_t channel) {
+        if (sh_rest == nullptr) {
+            return 0.0f;
+        }
+        const uint32_t offset = rest_coeff_idx * 3u + channel;
+        const uint32_t slot = offset / 4u;
+        const uint32_t component = offset % 4u;
+        return float4_component(sh_rest[shAt(primitive_idx, slot)], component);
+    }
 
     template <typename scalar_t>
     __device__ void sh_coeffs_to_color_fast(
@@ -435,6 +470,114 @@ namespace gsplat_fwd {
                 degrees_to_use,
                 reinterpret_cast<const vec3*>(dirs),
                 coeffs,
+                masks,
+                visible_indices,
+                colors);
+    }
+
+    template <typename scalar_t>
+    __global__ void spherical_harmonics_swizzled_fwd_kernel(
+        const uint32_t M,
+        const uint32_t degrees_to_use,
+        const vec3* __restrict__ dirs,
+        const scalar_t* __restrict__ sh0,
+        const float4* __restrict__ sh_rest,
+        const bool* __restrict__ masks,
+        const int32_t* __restrict__ visible_indices,
+        scalar_t* __restrict__ colors) {
+        const uint32_t idx = cg::this_grid().thread_rank();
+        if (idx >= M * 3) {
+            return;
+        }
+        const uint32_t elem_id = idx / 3;
+        const uint32_t c = idx % 3;
+        if (masks != nullptr && !masks[elem_id]) {
+            return;
+        }
+
+        const uint32_t global_id = (visible_indices != nullptr)
+                                       ? static_cast<uint32_t>(visible_indices[elem_id])
+                                       : elem_id;
+        const vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
+        const uint32_t effective_degree = dirs != nullptr ? degrees_to_use : 0u;
+
+        float result = SH_C0 * sh0[global_id * 3u + c];
+        if (effective_degree >= 1) {
+            const float inorm = rsqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+            const float x = dir.x * inorm;
+            const float y = dir.y * inorm;
+            const float z = dir.z * inorm;
+
+            const auto coeff = [&](const uint32_t rest_idx) -> float {
+                return swizzled_rest_coeff_channel(sh_rest, global_id, rest_idx, c);
+            };
+
+            result += SH_C1 * (-y * coeff(0) + z * coeff(1) - x * coeff(2));
+            if (effective_degree >= 2) {
+                const float z2 = z * z;
+                const float fTmp0B = -1.092548430592079f * z;
+                const float fC1 = x * x - y * y;
+                const float fS1 = 2.f * x * y;
+                const float pSH6 = (0.9461746957575601f * z2 - 0.3153915652525201f);
+                const float pSH7 = fTmp0B * x;
+                const float pSH5 = fTmp0B * y;
+                const float pSH8 = 0.5462742152960395f * fC1;
+                const float pSH4 = 0.5462742152960395f * fS1;
+
+                result += pSH4 * coeff(3) + pSH5 * coeff(4) +
+                          pSH6 * coeff(5) + pSH7 * coeff(6) +
+                          pSH8 * coeff(7);
+                if (effective_degree >= 3) {
+                    const float fTmp0C = -2.285228997322329f * z2 + 0.4570457994644658f;
+                    const float fTmp1B = 1.445305721320277f * z;
+                    const float fC2 = x * fC1 - y * fS1;
+                    const float fS2 = x * fS1 + y * fC1;
+                    const float pSH12 =
+                        z * (1.865881662950577f * z2 - 1.119528997770346f);
+                    const float pSH13 = fTmp0C * x;
+                    const float pSH11 = fTmp0C * y;
+                    const float pSH14 = fTmp1B * fC1;
+                    const float pSH10 = fTmp1B * fS1;
+                    const float pSH15 = -0.5900435899266435f * fC2;
+                    const float pSH9 = -0.5900435899266435f * fS2;
+
+                    result +=
+                        pSH9 * coeff(8) + pSH10 * coeff(9) +
+                        pSH11 * coeff(10) + pSH12 * coeff(11) +
+                        pSH13 * coeff(12) + pSH14 * coeff(13) +
+                        pSH15 * coeff(14);
+                }
+            }
+        }
+
+        colors[idx] = result + SH_DC_OFFSET;
+    }
+
+    void launch_spherical_harmonics_swizzled_fwd_kernel(
+        uint32_t degrees_to_use,
+        const float* dirs,
+        const float* sh0,
+        const float* sh_rest_swizzled,
+        const bool* masks,
+        const int32_t* visible_indices,
+        int64_t total_elements,
+        float* colors,
+        cudaStream_t stream) {
+        const uint32_t M = static_cast<uint32_t>(total_elements);
+        const int64_t n_elements = M * 3;
+        if (n_elements == 0) {
+            return;
+        }
+
+        dim3 threads(256);
+        dim3 grid((n_elements + threads.x - 1) / threads.x);
+        spherical_harmonics_swizzled_fwd_kernel<float>
+            <<<grid, threads, 0, stream>>>(
+                M,
+                degrees_to_use,
+                reinterpret_cast<const vec3*>(dirs),
+                sh0,
+                reinterpret_cast<const float4*>(sh_rest_swizzled),
                 masks,
                 visible_indices,
                 colors);

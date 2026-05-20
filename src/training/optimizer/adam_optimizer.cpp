@@ -321,7 +321,7 @@ namespace lfs::training {
         // primitive_idx*n_attributes+offset, so n_attributes is informational only.
         // We report 12 float4 * 4 floats = 48 floats per primitive.
         fused.shN = prepare_param(ParamType::ShN,
-                                  static_cast<int>(lfs::core::SH_REST_FLOAT4_PER_PRIMITIVE * 4u),
+                                  static_cast<int>(lfs::core::kShRestFloat4PerPrimitive * 4u),
                                   iteration > SH_WARMUP_ITERATIONS);
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);

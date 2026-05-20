@@ -771,33 +771,39 @@ namespace lfs::training {
                 // ELIMINATE ALL POOL ALLOCATIONS: Replace pool-allocated parameters with direct cudaMalloc versions
                 LOG_DEBUG("  Replacing pool-allocated parameters with direct cudaMalloc versions:");
 
-                auto replace_with_direct = [capacity](Tensor& param) {
-                    // Create new tensor with direct cudaMalloc (ZERO pool usage!)
+                // When init_model_from_pointcloud was called with capacity = max_cap, every
+                // param is already direct-allocated at that capacity. Re-allocating would briefly
+                // hold both old and new buffers (≈2× peak) before the cuda caching allocator
+                // releases the freed chunk — so only replace if the param's capacity is actually
+                // below the target.
+                auto ensure_capacity_direct = [capacity](Tensor& param) {
+                    if (param.capacity() >= capacity)
+                        return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
-                    // Copy data from old pool-allocated tensor to new direct tensor
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
-                    // Replace (old pool-allocated tensor gets freed)
                     param = new_param;
                 };
 
                 // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
-                auto replace_shN_with_direct = [capacity](Tensor& param) {
+                auto ensure_shN_capacity_direct = [capacity](Tensor& param) {
                     const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity);
+                    if (param.capacity() >= cap_floats)
+                        return;
                     auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
                     param = new_param;
                 };
 
-                replace_with_direct(_splat_data->means());
-                replace_with_direct(_splat_data->sh0());
+                ensure_capacity_direct(_splat_data->means());
+                ensure_capacity_direct(_splat_data->sh0());
                 if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-                    replace_shN_with_direct(_splat_data->shN());
+                    ensure_shN_capacity_direct(_splat_data->shN());
                 }
-                replace_with_direct(_splat_data->scaling_raw());
-                replace_with_direct(_splat_data->rotation_raw());
-                replace_with_direct(_splat_data->opacity_raw());
+                ensure_capacity_direct(_splat_data->scaling_raw());
+                ensure_capacity_direct(_splat_data->rotation_raw());
+                ensure_capacity_direct(_splat_data->opacity_raw());
 
                 // Pre-allocate noise buffer [max_cap, 3]
                 _noise_buffer = Tensor::zeros_direct(TensorShape({capacity, 3}), capacity);

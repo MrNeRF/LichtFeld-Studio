@@ -133,6 +133,46 @@ namespace {
         }
     }
 
+    TEST(ShSwizzleLayout, GatherSelectedRowsToLinearMatchesCanonical) {
+        using namespace lfs::core;
+        constexpr std::uint32_t N = 70;
+        constexpr std::uint32_t K = 15;
+        constexpr std::uint32_t FLOATS_PER_PRIM = K * 3u;
+
+        std::vector<float> host_canonical(N * K * 3);
+        for (std::uint32_t p = 0; p < N; ++p) {
+            for (std::uint32_t k = 0; k < K; ++k) {
+                for (std::uint32_t c = 0; c < 3; ++c) {
+                    host_canonical[p * K * 3 + k * 3 + c] =
+                        static_cast<float>(p * 1000 + k * 10 + c);
+                }
+            }
+        }
+
+        Tensor canonical = Tensor::from_vector(host_canonical, {N, K, 3}, Device::CUDA);
+        Tensor swizzled = Tensor::zeros({sh_swizzled_float_count(N)}, Device::CUDA);
+        reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
+
+        const std::vector<int> selected = {0, 5, 31, 32, 69};
+        Tensor indices = Tensor::from_vector(selected, {selected.size()}, Device::CUDA).to(DataType::Int64);
+        Tensor gathered = Tensor::empty({selected.size(), K, 3}, Device::CUDA);
+        shN_swizzled_gather_to_linear_i64(
+            swizzled.ptr<float>(), indices.ptr<std::int64_t>(),
+            gathered.ptr<float>(), selected.size(), K);
+        cudaDeviceSynchronize();
+
+        auto gathered_cpu = gathered.to(Device::CPU);
+        const float* g = gathered_cpu.ptr<float>();
+        for (size_t row = 0; row < selected.size(); ++row) {
+            const auto p = static_cast<std::uint32_t>(selected[row]);
+            for (std::uint32_t off = 0; off < FLOATS_PER_PRIM; ++off) {
+                EXPECT_EQ(g[row * FLOATS_PER_PRIM + off],
+                          host_canonical[p * FLOATS_PER_PRIM + off])
+                    << "row=" << row << " primitive=" << p << " off=" << off;
+            }
+        }
+    }
+
     // Both lane padding (primitives in the trailing block beyond N) and the tail padding
     // (slot 11's .y/.z/.w per primitive) must be zero after reorder.
     TEST(ShSwizzleLayout, PaddingLanesAreZero) {

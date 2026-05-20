@@ -863,7 +863,11 @@ namespace lfs::core {
                           sh0_.is_valid(), static_cast<void*>(sh0_.ptr<float>()),
                           sh0_.shape().str(), sh0_.numel());
 
-                shN_ = Tensor::zeros_direct(TensorShape({num_points, static_cast<size_t>(feature_shape - 1), 3}), capacity);
+                // shN_ here is the CANONICAL [N, K, 3] tensor that SplatData ctor will reorder
+                // into the persistent swizzled buffer. It's discarded immediately after — no
+                // benefit in reserving max_cap capacity (would waste ≈max_cap × K × 12 bytes
+                // transiently). Allocate at num_points only via the pool.
+                shN_ = Tensor::zeros({num_points, static_cast<size_t>(feature_shape - 1), 3}, Device::CUDA);
                 shN_.set_name("SplatData.shN");
                 LOG_DEBUG("  shN_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           shN_.is_valid(), static_cast<void*>(shN_.ptr<float>()),

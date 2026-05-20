@@ -31,6 +31,27 @@ namespace gsplat_fwd {
             colors, stream);
     }
 
+    void spherical_harmonics_swizzled_fwd(
+        uint32_t degrees_to_use,
+        const float* dirs,
+        const float* sh0,
+        const float* sh_rest_swizzled,
+        const bool* masks,
+        const int32_t* visible_indices,
+        int64_t total_elements,
+        float* colors,
+        cudaStream_t stream) {
+        if (total_elements == 0) {
+            return;
+        }
+
+        launch_spherical_harmonics_swizzled_fwd_kernel(
+            degrees_to_use,
+            dirs, sh0, sh_rest_swizzled, masks, visible_indices,
+            total_elements,
+            colors, stream);
+    }
+
     void spherical_harmonics_bwd(
         uint32_t K,
         uint32_t degrees_to_use,
