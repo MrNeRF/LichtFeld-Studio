@@ -88,11 +88,15 @@ namespace lfs::core {
         inline Tensor& sh0_raw() { return _sh0; }
         inline const Tensor& sh0_raw() const { return _sh0; }
 
-        // shN is stored in vksplat-style swizzled layout: 1D float tensor of
-        // sh_swizzled_float_count(N) = ceil(N/32) * 15 * 32 * 3 floats.
-        // 15 = SH_MAX_COEFFS_REST, 32 = SH_REORDER_SIZE. All 15 coefficient slots are
-        // always allocated regardless of active SH degree; unused slots are zero.
-        // Indexing into the raw buffer: shAt(p, k) * 3 + c.
+        // shN is stored in vksplat-style float4-packed swizzled layout: 1D float tensor of
+        // sh_swizzled_float_count(N) = ceil(N / SH_REORDER_SIZE)
+        //                              * SH_REST_FLOAT4_PER_PRIMITIVE
+        //                              * SH_REORDER_SIZE * 4 floats
+        // (with SH_REORDER_SIZE = 32 and SH_REST_FLOAT4_PER_PRIMITIVE = 12 → 12 float4 slots
+        // per primitive, see core/cuda/sh_layout.cuh for the slot→coefficient shuffle).
+        // All 12 float4 slots are always allocated regardless of active SH degree; unused
+        // slots are zero. sh_swizzled_index(p, k) / shAt(p, k) returns a float4-slot index
+        // (multiply by 4 for the float offset).
         // shN() / shN_raw() return the swizzled tensor directly. Use shN_canonical() to
         // materialise a deswizzled [N, K, 3] view for I/O / transforms / scene merge.
         inline Tensor& shN() { return _shN; }

@@ -11,13 +11,14 @@
 
 namespace fast_lfs::rasterization::kernels {
 
-    // SH swizzle index: swizzled layout is [ceil(N/R), 12, R] of float4 where R = sh_reorder_size,
+    // SH swizzle index: swizzled layout is [ceil(N/R), K_F4, R] of float4 where
+    // R = config::sh_reorder_size and K_F4 = config::sh_rest_float4_per_primitive,
     // matching vksplat/vksplat/slang/spherical_harmonics.slang. Adjacent primitives in a warp hit
     // adjacent float4 slots -> a single 16B vector load per coefficient slot per lane.
     // Returns the float4 slot index (multiply by 4 to get the float offset).
     __device__ __host__ __forceinline__ unsigned int shAt(unsigned int primitive_idx, unsigned int float4_slot) {
-        constexpr unsigned int R = 32u;    // SH_REORDER_SIZE
-        constexpr unsigned int K_F4 = 12u; // SH_REST_FLOAT4_PER_PRIMITIVE
+        constexpr unsigned int R = config::sh_reorder_size;
+        constexpr unsigned int K_F4 = config::sh_rest_float4_per_primitive;
         const unsigned int block = primitive_idx / R;
         const unsigned int lane = primitive_idx % R;
         return block * (K_F4 * R) + float4_slot * R + lane;

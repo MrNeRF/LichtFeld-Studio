@@ -1816,9 +1816,10 @@ namespace lfs::core {
                 const auto* src_for_model = getNodeById(src_id);
                 if (src_for_model && src_for_model->model) {
                     const auto& model = *src_for_model->model;
+                    // SplatData ctor expects CANONICAL [N, K, 3] shN — materialise from swizzled storage.
                     auto cloned = std::make_unique<lfs::core::SplatData>(
                         model.get_max_sh_degree(),
-                        model.means_raw().clone(), model.sh0_raw().clone(), model.shN_raw().clone(),
+                        model.means_raw().clone(), model.sh0_raw().clone(), model.shN_canonical(),
                         model.scaling_raw().clone(), model.rotation_raw().clone(), model.opacity_raw().clone(),
                         model.get_scene_scale());
                     cloned->set_active_sh_degree(model.get_active_sh_degree());

@@ -226,8 +226,14 @@ namespace {
     }
 
     // Allocate a 1D swizzled-layout shN tensor sized for `n` primitives with `capacity`
-    // primitive slots reserved. Zero-initialised so dead lanes & inactive coefficient slots
-    // contribute nothing in Adam updates.
+    // primitive-row slots reserved. Zero-initialised so dead lanes & inactive coefficient
+    // slots contribute nothing in Adam updates.
+    //
+    // The swizzled layout is intrinsically CUDA-only: every reader / writer
+    // (reorder_sh_to_swizzled, undo_reorder_sh_from_swizzled, shN_swizzled_gather_self,
+    // the rasterizer's load_shN_coeffs, the fused Adam path) is a CUDA kernel. There is no
+    // CPU swizzle path, so this buffer always lives on Device::CUDA regardless of where
+    // the other SplatData tensors live.
     lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
@@ -377,10 +383,13 @@ namespace lfs::core {
     Tensor SplatData::shN_canonical() const {
         const size_t n = static_cast<size_t>(size());
         const size_t k = active_sh_coeffs_rest();
+        // The swizzled buffer is CUDA-only (see allocate_swizzled_shN); align the canonical
+        // output device with where the source data actually lives.
+        const Device dst_device = _shN.is_valid() ? _shN.device() : Device::CUDA;
         if (n == 0 || k == 0) {
-            return Tensor::zeros({n, k, SH_CHANNELS}, _means.is_valid() ? _means.device() : Device::CUDA);
+            return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
         }
-        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CUDA);
+        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
         undo_reorder_sh_from_swizzled(_shN.ptr<float>(), out.ptr<float>(), n, static_cast<uint32_t>(k));
         return out;
     }

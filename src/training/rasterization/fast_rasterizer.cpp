@@ -242,9 +242,10 @@ namespace lfs::training {
                 for (size_t i = 1; i < shN.ndim(); ++i)
                     params_file << ", " << shN.shape()[i];
                 params_file << "],\n";
-                // shN is stored in vksplat swizzled layout (ceil(N/32) * 15 * 32 * 3 floats,
-                // 1D flat). Crash-dump consumers should deswizzle via shAt(p, k) before
-                // interpreting as canonical [N, K, 3].
+                // shN is stored in vksplat float4-packed swizzled layout (ceil(N/32) * 12 * 32 * 4
+                // floats, 1D flat — see core/cuda/sh_layout.cuh). Crash-dump consumers should
+                // deswizzle via shAt(p, k) (returns a float4-slot index; multiply by 4 for the
+                // float offset) before interpreting as canonical [N, K, 3].
                 params_file << "  \"shN_layout\": \"swizzled-sh-reorder-32\"\n";
                 params_file << "}\n";
             }

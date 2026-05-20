@@ -603,8 +603,9 @@ namespace lfs::vis::cap {
 
         // Reswizzle the mutated canonical view back into model.shN_raw().
         if (is_shN) {
-            const size_t cap = node->model->shN_raw().capacity();
-            node->model->shN_set_from_canonical(shN_canon, cap);
+            const size_t cap_rows = std::max<size_t>(node->model->means().capacity(),
+                                                     node->model->size());
+            node->model->shN_set_from_canonical(shN_canon, cap_rows);
         }
 
         auto entry = std::make_unique<vis::op::TensorUndoEntry>(

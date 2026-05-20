@@ -397,7 +397,7 @@ namespace lfs::training {
                 return std::unexpected("shN is not active (sh-degree 0)");
             }
             shN_canon = model.shN_canonical();
-            prev_capacity = model.shN_raw().capacity();
+            prev_capacity = std::max<size_t>(model.means().capacity(), model.size());
             tensor = &shN_canon;
         } else {
             size_t row_dim = 0;
