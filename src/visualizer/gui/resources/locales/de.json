@@ -689,6 +689,7 @@
     "fov_info": "Sichtfeld",
     "sh_degree": "SH Grad",
     "equirectangular": "Equirektangular",
+    "raster_backend": "Raster-Backend",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
     "camera_metrics": "Kamerametriken",
@@ -825,6 +826,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "Gaussian-Rasterizer: VkSplat oder VkSplat 3DGUT",
     "gut_mode": "Für Fisheye/verzerrte/equirektangulare Kameras",
     "mip_filter": "Aliasing für Sub-Pixel-Gaussians reduzieren",
     "appearance_correction": "PPISP Correction",

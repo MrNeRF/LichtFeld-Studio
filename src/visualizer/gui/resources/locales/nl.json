@@ -689,6 +689,7 @@
     "fov_info": "Gezichtsveld",
     "sh_degree": "SH Degree",
     "equirectangular": "Equirectangulair",
+    "raster_backend": "Raster-backend",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
     "camera_metrics": "Camerametrieken",
@@ -825,6 +826,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "Gaussiaanse rasterizer: VkSplat of VkSplat 3DGUT",
     "gut_mode": "Voor fisheye/vervormde/equirectangulaire camera's",
     "mip_filter": "Verminder aliasing voor sub-pixel Gaussians",
     "appearance_correction": "PPISP Correction",

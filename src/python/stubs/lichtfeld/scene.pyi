@@ -21,7 +21,9 @@ class SplatData:
 
     @property
     def shN_raw(self) -> lichtfeld.Tensor:
-        """Raw SHN tensor [N, (degree+1)^2-1, 3] (view)"""
+        """
+        SHN tensor in canonical [N, (degree+1)^2-1, 3] layout (materialised from the internal swizzled storage — this allocates, not a view).
+        """
 
     @property
     def scaling_raw(self) -> lichtfeld.Tensor:

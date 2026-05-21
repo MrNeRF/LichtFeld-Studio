@@ -284,9 +284,7 @@ namespace lfs::python {
         add_bool(&Proxy::equirectangular, "equirectangular", "Equirectangular", "Equirectangular projection mode",
                  false);
         add_int_enum(&Proxy::raster_backend, "raster_backend", "Raster Backend", "Gaussian rasterization backend",
-                     {{"FastGS", "fast_gs", 0},
-                      {"3DGUT", "3dgut", 1},
-                      {"VkSplat", "vksplat", 2},
+                     {{"VkSplat", "vksplat", 2},
                       {"VkSplat 3DGUT", "vksplat_3dgut", 3}},
                      2);
         add_bool(&Proxy::gut, "gut", "GUT Mode", "Enable GUT rendering mode", false);

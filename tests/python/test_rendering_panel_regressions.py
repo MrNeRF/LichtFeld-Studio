@@ -174,14 +174,14 @@ def test_rendering_panel_raster_backend_updates_gut_mirror(rendering_panel_modul
 
     backend_getter, backend_setter = model.bindings["raster_backend"]
 
-    assert backend_getter() == "3dgut"
+    assert backend_getter() == "vksplat_3dgut"
 
     backend_setter("fast_gs")
-    assert settings.raster_backend == "fast_gs"
+    assert settings.raster_backend == "vksplat"
     assert settings.gut is False
 
     backend_setter("3dgut")
-    assert settings.raster_backend == "3dgut"
+    assert settings.raster_backend == "vksplat_3dgut"
     assert settings.gut is True
 
     backend_setter("vksplat")
@@ -254,3 +254,15 @@ def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     assert "{{label_simplify_output}}" in content
     assert "{{label_simplify_apply}}" in content
     assert "{{label_simplify_cancel}}" in content
+
+
+def test_rendering_rml_only_exposes_vksplat_backends():
+    project_root = Path(__file__).parent.parent.parent
+    rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "rendering.rml"
+    content = rendering_rml.read_text()
+
+    assert '<option value="vksplat">VkSplat</option>' in content
+    assert '<option value="vksplat_3dgut">VkSplat 3DGUT</option>' in content
+    assert 'value="fast_gs"' not in content
+    assert 'value="3dgut"' not in content
+    assert "vksplat_available" not in content

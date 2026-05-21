@@ -104,7 +104,11 @@ SCRUB_FIELD_DEFS = {
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
-GUT_RASTER_BACKENDS = {"3dgut", "vksplat_3dgut"}
+RASTER_BACKEND_ALIASES = {
+    "fast_gs": "vksplat",
+    "3dgut": "vksplat_3dgut",
+}
+GUT_RASTER_BACKENDS = {"vksplat_3dgut"}
 
 ENVIRONMENT_PRESET_PATHS = (
     "environments/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
@@ -204,6 +208,11 @@ def _entry_label(text: str) -> str:
     if not text:
         return ":"
     return text if text.endswith(":") else f"{text}:"
+
+
+def _normalize_raster_backend(value):
+    backend = str(value or "")
+    return RASTER_BACKEND_ALIASES.get(backend, backend or "vksplat")
 
 
 def _color_to_hex(c):
@@ -314,7 +323,7 @@ class RenderingPanel(Panel):
         for prop_id in SELECT_PROPS:
             if prop_id == "raster_backend":
                 model.bind(prop_id,
-                           lambda p=prop_id: str(getattr(s(), p, "")),
+                           lambda p=prop_id: _normalize_raster_backend(getattr(s(), p, "")),
                            lambda v: self._set_raster_backend(v))
             else:
                 model.bind(prop_id,
@@ -338,12 +347,6 @@ class RenderingPanel(Panel):
 
         model.bind_func("environment_enabled",
                         lambda: s() is not None and getattr(s(), "environment_mode", "") == "EQUIRECTANGULAR")
-
-        # The viewer normalizes legacy FastGS/3DGUT values to VkSplat variants,
-        # including live training sessions. Keep the dropdown shape stable for
-        # plugins and existing user settings.
-        model.bind_func("vksplat_available",
-                        lambda: True)
 
         all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + [
             "environment_mode", "environment_map_path", "ppisp_mode"
@@ -553,7 +556,7 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        backend = str(value)
+        backend = _normalize_raster_backend(value)
         settings.raster_backend = backend
         settings.gut = backend in GUT_RASTER_BACKENDS
 

@@ -689,6 +689,7 @@
     "fov_info": "시야각",
     "sh_degree": "SH Degree",
     "equirectangular": "정거원통도법",
+    "raster_backend": "래스터 백엔드",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "밉 필터",
     "camera_metrics": "카메라 지표",
@@ -825,6 +826,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "가우시안 래스터라이저: VkSplat 또는 VkSplat 3DGUT",
     "gut_mode": "어안/왜곡/정거원통 카메라용",
     "mip_filter": "서브픽셀 가우시안 앨리어싱 감소",
     "appearance_correction": "PPISP Correction",
