@@ -33,7 +33,7 @@ layout(binding=2) ByteAddressBuffer node_mask;
 layout(binding=3) StructuredBuffer<float4> primitives;
 layout(binding=4) StructuredBuffer<float4> model_transforms;
 layout(binding=5) StructuredBuffer<float4> rotations;
-layout(binding=6) StructuredBuffer<float4> scales_opacs;
+layout(binding=6) StructuredBuffer<float> scaling_raw;
 layout(binding=7) RWByteAddressBuffer selection_out;
 
 [ForceInline]
@@ -106,7 +106,7 @@ bool project_gut_splat(
     float weight_sigma = 1.0f / (2.0f * (float(D) + lambda));
 
     float3 source_mean = read_t3_float3(splat_idx, xyz_ws);
-    float3 scales = scales_opacs[splat_idx].xyz;
+    float3 scales = exp(read_t3_float3(splat_idx, scaling_raw));
     float3x3 rotation = quat_to_rotmat(normalize(rotations[splat_idx]));
 
     float2 mean2d = float2(0.0);

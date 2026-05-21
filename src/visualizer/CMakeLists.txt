@@ -252,6 +252,7 @@ if(ENABLE_VULKAN_VIEWER)
             rendering/vksplat_input_packer.cpp
             rendering/vksplat_input_packer_cuda.cu
             rendering/vksplat_viewport_renderer.cpp
+            rendering/vulkan_external_tensor.cpp
             rendering/point_cloud_vulkan_renderer.cpp)
     set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
         CACHE PATH "Path to vcpkg-installed glslang config" FORCE)

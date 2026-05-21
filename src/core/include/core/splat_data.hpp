@@ -10,8 +10,10 @@
 
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <glm/fwd.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::geometry {
@@ -183,6 +185,11 @@ namespace lfs::core {
         friend LFS_CORE_API void random_choose(SplatData&, int, int);
     };
 
+    using SplatTensorAllocator = std::function<Tensor(TensorShape shape,
+                                                      size_t capacity,
+                                                      DataType dtype,
+                                                      std::string_view name)>;
+
     // ========== Free function: Factory ==========
 
     /**
@@ -197,6 +204,7 @@ namespace lfs::core {
         const param::TrainingParameters& params,
         Tensor scene_center,
         const PointCloud& point_cloud,
-        int capacity = 0);
+        int capacity = 0,
+        SplatTensorAllocator tensor_allocator = {});
 
 } // namespace lfs::core

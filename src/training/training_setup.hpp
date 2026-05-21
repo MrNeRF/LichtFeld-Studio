@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/parameters.hpp"
+#include "core/splat_data.hpp"
 #include "io/loader.hpp"
 #include <expected>
 #include <string>
@@ -49,7 +50,8 @@ namespace lfs::training {
      */
     std::expected<void, std::string> initializeTrainingModel(
         const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene);
+        lfs::core::Scene& scene,
+        lfs::core::SplatTensorAllocator tensor_allocator = {});
 
     /**
      * @brief Validate dataset path without loading data

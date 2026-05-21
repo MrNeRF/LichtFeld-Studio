@@ -244,10 +244,8 @@ namespace lfs::core {
             LOG_WARN("CUDA memory pooling not available (requires CUDA >= 12.8)");
 #endif
 
-            slab_enabled_ = GPUSlabAllocator::instance().is_enabled();
-            if (slab_enabled_) {
-                LOG_DEBUG("Slab allocator enabled (≤256KB)");
-            }
+            slab_enabled_ = true;
+            LOG_DEBUG("Slab allocator enabled (lazy, ≤256KB)");
             LOG_DEBUG("Size-bucketed pool enabled (256KB-16GB, reduces fragmentation)");
         }
 

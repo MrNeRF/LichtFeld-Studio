@@ -822,6 +822,19 @@ namespace lfs::vis {
             LOG_INFO("Synced viewer mip filter with training: {}", training_mip_filter ? "enabled" : "disabled");
         };
 
+        const auto hide_dataset_camera_overlays_for_training = [this] {
+            if (!rendering_manager_)
+                return;
+
+            auto settings = rendering_manager_->getSettings();
+            if (!settings.show_camera_frustums)
+                return;
+
+            settings.show_camera_frustums = false;
+            rendering_manager_->updateSettings(settings);
+            LOG_INFO("Disabled dataset camera overlays for training viewport");
+        };
+
         // Trainer ready signal
         internal::TrainerReady::when([this, sync_viewer_mip_filter_with_training](const auto&) {
             sync_viewer_mip_filter_with_training();
@@ -829,8 +842,11 @@ namespace lfs::vis {
         });
 
         // Training started - switch to splat rendering without hijacking scene selection
-        state::TrainingStarted::when([this, sync_viewer_mip_filter_with_training](const auto&) {
+        state::TrainingStarted::when([this,
+                                      sync_viewer_mip_filter_with_training,
+                                      hide_dataset_camera_overlays_for_training](const auto&) {
             sync_viewer_mip_filter_with_training();
+            hide_dataset_camera_overlays_for_training();
 
             ui::PointCloudModeChanged{
                 .enabled = false,

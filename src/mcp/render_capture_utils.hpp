@@ -5,6 +5,7 @@
 
 #include "core/base64.hpp"
 #include "core/tensor.hpp"
+#include "rendering/image_layout.hpp"
 
 #include <stb_image_write.h>
 
@@ -119,7 +120,12 @@ namespace lfs::mcp {
         image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
         if (image.ndim() == 4)
             image = image.squeeze(0);
-        if (image.ndim() == 3 && image.shape()[0] <= 4)
+        if (image.ndim() != 3)
+            return std::unexpected("Render tensor must be 3D");
+        const auto layout = rendering::detectImageLayout(image);
+        if (layout == rendering::ImageLayout::Unknown)
+            return std::unexpected("Render tensor has an unsupported image layout");
+        if (layout == rendering::ImageLayout::CHW)
             image = image.permute({1, 2, 0});
         image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
 

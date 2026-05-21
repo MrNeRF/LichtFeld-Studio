@@ -33,8 +33,15 @@ namespace lfs::python {
                 return std::nullopt;
 
             auto image = clone_for_async ? render->image->clone() : *render->image;
-            image = rendering::flipImageVertical(image, rendering::ImageLayout::CHW);
-            image = image.permute({1, 2, 0});
+            const auto layout = rendering::detectImageLayout(image);
+            if (layout == rendering::ImageLayout::Unknown)
+                return std::nullopt;
+            image = rendering::flipImageVertical(image, layout);
+            if (layout == rendering::ImageLayout::CHW) {
+                image = image.permute({1, 2, 0});
+            } else {
+                image = image.contiguous();
+            }
 
             std::optional<PyTensor> screen_pos;
             if (render->screen_positions) {

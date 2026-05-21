@@ -87,9 +87,16 @@ struct VulkanGSPipelineBuffers {
 
     // projection inputs
     Buffer<float> xyz_ws;       // (N, 3)
-    Buffer<float> sh_coeffs;    // (N, 16, 3)
+    Buffer<float> sh_coeffs;    // legacy packed full SH: (N, 16, 3)
     Buffer<float> rotations;    // (N, 4)
-    Buffer<float> scales_opacs; // (N, 4)
+    Buffer<float> scales_opacs; // legacy activated [scale.xyz, opacity]
+
+    // Raw split SplatData projection inputs used by the Vulkan viewer. These can
+    // directly alias Vulkan-external tensor storage during training.
+    Buffer<float> sh0;         // (N, 1, 3) flattened
+    Buffer<float> shN;         // swizzled rest-only SH: [ceil(N/32), 12, 32] float4
+    Buffer<float> scaling_raw; // (N, 3), log-scale
+    Buffer<float> opacity_raw; // (N, 1), logits
 
     // projection outputs
     Buffer<int32_t> tiles_touched;    // (N,)
@@ -125,16 +132,9 @@ struct VulkanGSPipelineBuffers {
     Buffer<int32_t> _sorting_histogram;
     Buffer<int32_t> _sorting_histogram_cumsum;
 
-    // GPU-resident VkDispatchIndirectCommand for compute_tile_ranges. Filled by
-    // setup_dispatch_indirect; consumed by vkCmdDispatchIndirect. Stored as
-    // Buffer<int32_t> only because the rasterizer only instantiates the buffer
-    // helpers for {uint8_t, float, int32_t, int64_t}; the 12-byte layout (three
-    // 32-bit unsigned counts) is identical to a Buffer<uint32_t>.
-    Buffer<int32_t> dispatch_indirect_compute_tile_ranges;
-
     // Per-session high-water-mark for unsorted_keys / unsorted_gauss_idx capacity.
     // Driven by the deferred (1-frame-stale) num_indices readback so generate_keys
-    // never writes past allocated bytes.
+    // can size buffers without a synchronous cumsum readback.
     size_t num_indices_high_water = 0;
 
     template <typename T>

@@ -1,7 +1,10 @@
 #include "gs_renderer.h"
 
+#include <algorithm>
+#include <cmath>
 #include <csignal>
 #include <fstream>
+#include <limits>
 #include <memory>
 
 #ifdef max
@@ -29,6 +32,10 @@ void VulkanGSRenderer::cleanup() {
 
 void VulkanGSRenderer::resetNumIndicesEstimate() {
     num_indices_estimate_ = 0;
+    num_indices_estimate_grid_width_ = 0;
+    num_indices_estimate_grid_height_ = 0;
+    num_indices_readback_grid_width_ = 0;
+    num_indices_readback_grid_height_ = 0;
     num_indices_readback_pending_ = false;
 }
 
@@ -76,10 +83,12 @@ void VulkanGSRenderer::destroyNumIndicesReadback() {
     num_indices_readback_mapped_ = nullptr;
     num_indices_readback_initialized_ = false;
     num_indices_readback_pending_ = false;
+    num_indices_readback_grid_width_ = 0;
+    num_indices_readback_grid_height_ = 0;
 }
 
 size_t VulkanGSRenderer::pollDeferredNumIndices() {
-    // The previous frame's submit ended with endCommandBatch(true) → fence-wait
+    // The previous frame's submit ended with endCommandBatch(true), fence-wait
     // (gs_pipeline.cpp). So by the time the next frame enters this function,
     // any prior vkCmdCopyBuffer into num_indices_readback_buffer_ has retired
     // and the mapped value is observable.
@@ -114,8 +123,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         createComputePipeline(pipeline_rasterize_forward[i], spirv_paths.at("rasterize_forward"));
         createComputePipeline(pipeline_rasterize_forward_gut[i], spirv_paths.at("rasterize_forward_gut"));
     }
-    createComputePipeline(pipeline_setup_dispatch_indirect,
-                          spirv_paths.at("setup_dispatch_indirect"));
     createComputePipeline(pipeline_cumsum.single_pass, spirv_paths.at("cumsum_single_pass"));
     createComputePipeline(pipeline_cumsum.block_scan, spirv_paths.at("cumsum_block_scan"));
     createComputePipeline(pipeline_cumsum.scan_block_sums, spirv_paths.at("cumsum_scan_block_sums"));
@@ -144,9 +151,11 @@ void VulkanGSRenderer::executeProjectionForward(
 
     bufferMemoryBarrier({
                             {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.sh_coeffs.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.sh0.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.shN.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scales_opacs.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
                             {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
@@ -159,15 +168,17 @@ void VulkanGSRenderer::executeProjectionForward(
         {{num_splats, SUBGROUP_SIZE}},
         &uniforms, sizeof(uniforms),
         use_gut_projection ? pipeline_projection_forward_gut : pipeline_projection_forward,
-        {
-            // inputs
-            buffers.xyz_ws.deviceBuffer,
-            buffers.sh_coeffs.deviceBuffer,
-            buffers.rotations.deviceBuffer,
-            buffers.scales_opacs.deviceBuffer,
-            // outputs
-            resizeDeviceBuffer(buffers.tiles_touched, alloc_size),
-            resizeDeviceBuffer(buffers.rect_tile_space, alloc_size),
+            {
+                // inputs
+                buffers.xyz_ws.deviceBuffer,
+                buffers.sh0.deviceBuffer,
+                buffers.shN.deviceBuffer,
+                buffers.rotations.deviceBuffer,
+                buffers.scaling_raw.deviceBuffer,
+                buffers.opacity_raw.deviceBuffer,
+                // outputs
+                resizeDeviceBuffer(buffers.tiles_touched, alloc_size),
+                resizeDeviceBuffer(buffers.rect_tile_space, alloc_size),
             resizeDeviceBuffer(buffers.radii, alloc_size),
             resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size),
             resizeDeviceBuffer(buffers.depths, alloc_size),
@@ -189,9 +200,9 @@ void VulkanGSRenderer::executeGenerateKeys(
 
     const size_t num_elements = buffers.num_splats;
     // num_indices here is the deferred-readback high-water-mark estimate, not the
-    // exact GPU value. unsorted_keys/unsorted_gauss_idx are sized to it (grow-only
-    // via no_shrink default). The shader's actual writes are still bounded by
-    // index_buffer_offset[i] on the GPU — never past the true num_indices.
+    // exact GPU value. The shader clamps writes to uniforms.sort_capacity, so a
+    // stale estimate can drop a frame's excess intersections but cannot overrun
+    // the sort buffers.
     const size_t capacity = buffers.num_indices;
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
@@ -239,12 +250,11 @@ void VulkanGSRenderer::executeComputeTileRanges(
                         },
                         COMPUTE_SHADER_READ);
 
-    // Indirect dispatch — group count is filled on GPU by setup_dispatch_indirect.
-    // The shader reads num_isects from index_buffer_offset[num_splats-1] directly,
-    // so no CPU readback is needed here.
-    executeComputeIndirect(
-        buffers.dispatch_indirect_compute_tile_ranges.deviceBuffer,
-        0,
+    // Dispatch over the CPU-known sort capacity. The shader clamps the actual
+    // cumsum tail to uniforms.sort_capacity, avoiding stale-estimate OOB reads
+    // without a synchronous cumsum readback.
+    executeCompute(
+        {{buffers.num_indices + 1, 256}},
         &uniforms, sizeof(uniforms),
         pipeline_compute_tile_ranges[buffers.is_unsorted_1],
         {
@@ -278,6 +288,10 @@ void VulkanGSRenderer::executeRasterizeForward(
                             {buffers.tile_ranges.deviceBuffer, COMPUTE_SHADER_WRITE},
                             {buffers.rgb.deviceBuffer, COMPUTE_SHADER_WRITE},
                             {buffers.depths.deviceBuffer, COMPUTE_SHADER_WRITE},
+                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {selection_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {preview_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE},
@@ -303,7 +317,8 @@ void VulkanGSRenderer::executeRasterizeForward(
                 buffers.depths.deviceBuffer,
                 buffers.xyz_ws.deviceBuffer,
                 buffers.rotations.deviceBuffer,
-                buffers.scales_opacs.deviceBuffer,
+                buffers.scaling_raw.deviceBuffer,
+                buffers.opacity_raw.deviceBuffer,
                 // outputs
                 resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels),
                 resizeDeviceBuffer(buffers.pixel_depth, num_pixels),
@@ -357,7 +372,7 @@ void VulkanGSRenderer::executeSelectionMask(
     bufferMemoryBarrier({
                             {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
-                            {buffers.scales_opacs.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
                             {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {primitives, TRANSFER_COMPUTE_SHADER_WRITE},
@@ -378,7 +393,7 @@ void VulkanGSRenderer::executeSelectionMask(
             primitives,
             model_transforms,
             buffers.rotations.deviceBuffer,
-            buffers.scales_opacs.deviceBuffer,
+            buffers.scaling_raw.deviceBuffer,
             selection_out,
         });
 
@@ -545,6 +560,7 @@ void VulkanGSRenderer::executeCumsum(
 }
 
 void VulkanGSRenderer::executeCalculateIndexBufferOffset(
+    const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers) {
     PerfTimer::Timer<PerfTimer::CalculateIndexBufferOffset> timer(this);
 
@@ -556,11 +572,17 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
 
     ensureNumIndicesReadback();
 
-    // Read the previous frame's deferred num_indices (now safe — last frame ended
-    // with endCommandBatch(true) → fence-wait, so the host copy is observable).
+    // Read the previous frame's deferred num_indices (now safe; last frame ended
+    // with endCommandBatch(true), fence-wait, so the host copy is observable).
     const size_t observed = pollDeferredNumIndices();
-    if (observed > 0)
-        num_indices_estimate_ = std::max(num_indices_estimate_, observed);
+    if (observed > num_indices_estimate_) {
+        num_indices_estimate_ = observed;
+        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
+        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
+    } else if (observed > 0 && num_indices_estimate_grid_width_ == 0) {
+        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
+        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
+    }
 
     // Cumsum populates index_buffer_offset on GPU.
     executeCumsum(
@@ -576,7 +598,7 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
                         TRANSFER_COMPUTE_SHADER_READ);
 
     // Async copy of the cumsum tail into the host-visible buffer for the NEXT
-    // frame's poll. No queue wait — the value is consumed one frame later.
+    // frame's poll. No queue wait; the value is consumed one frame later.
     {
         VkBufferCopy copy{};
         copy.srcOffset = buffers.index_buffer_offset.deviceBuffer.offset +
@@ -587,38 +609,46 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
                         buffers.index_buffer_offset.deviceBuffer.buffer,
                         num_indices_readback_buffer_.buffer, 1, &copy);
         num_indices_readback_pending_ = true;
+        num_indices_readback_grid_width_ = uniforms.grid_width;
+        num_indices_readback_grid_height_ = uniforms.grid_height;
     }
 
-    // GPU-resident VkDispatchIndirectCommand for compute_tile_ranges. setup_dispatch_indirect
-    // reads index_buffer_offset[num_splats-1] and computes ceil((n+1)/256) groups.
-    auto& indirect_buf =
-        resizeDeviceBuffer(buffers.dispatch_indirect_compute_tile_ranges, 3);
-    bufferMemoryBarrier({{indirect_buf, COMPUTE_SHADER_READ_WRITE}}, COMPUTE_SHADER_WRITE);
-
-    struct {
-        uint32_t num_splats;
-    } setup_uniforms{static_cast<uint32_t>(num_elements)};
-    executeCompute(
-        {{1, 1}},
-        &setup_uniforms, sizeof(setup_uniforms),
-        pipeline_setup_dispatch_indirect,
-        {
-            buffers.index_buffer_offset.deviceBuffer,
-            indirect_buf,
-        });
-
-    bufferMemoryBarrier({{indirect_buf, COMPUTE_SHADER_WRITE}}, INDIRECT_DISPATCH_READ);
-
     // CPU-side high-water-mark estimate for sort-buffer sizing this frame.
-    // Apply a 2x safety factor so a frame whose actual num_indices grows up to
-    // 2x the prior peak does not overflow generate_keys' writes.
+    // It is scaled by tile-grid growth so double-click maximize/restore does not
+    // keep using a small-window estimate for a large-window frame.
     constexpr size_t kSafetyFactor = 2;
     constexpr size_t kInitialIndicesPerSplat = 8; // first-frame heuristic
-    size_t estimate = num_indices_estimate_ * kSafetyFactor;
+    constexpr size_t kMaxSortCapacity =
+        static_cast<size_t>(std::numeric_limits<int32_t>::max());
+    const size_t current_tiles =
+        std::max<size_t>(1, static_cast<size_t>(uniforms.grid_width) * uniforms.grid_height);
+    const size_t estimate_tiles =
+        std::max<size_t>(1,
+                         static_cast<size_t>(num_indices_estimate_grid_width_) *
+                             num_indices_estimate_grid_height_);
+    const auto scale_ceil = [kMaxSortCapacity](const size_t value, const size_t numerator, const size_t denominator) {
+        if (value == 0)
+            return size_t{0};
+        const long double scaled =
+            static_cast<long double>(value) * static_cast<long double>(numerator) /
+            static_cast<long double>(std::max<size_t>(1, denominator));
+        const long double capped =
+            std::min<long double>(scaled, static_cast<long double>(kMaxSortCapacity));
+        return static_cast<size_t>(std::ceil(capped));
+    };
+    const auto multiply_cap = [kMaxSortCapacity](const size_t value, const size_t factor) {
+        if (factor != 0 && value > kMaxSortCapacity / factor)
+            return kMaxSortCapacity;
+        return std::min(kMaxSortCapacity, value * factor);
+    };
+
+    size_t estimate = scale_ceil(num_indices_estimate_, current_tiles, estimate_tiles);
+    estimate = multiply_cap(estimate, kSafetyFactor);
     if (estimate == 0)
-        estimate = num_elements * kInitialIndicesPerSplat;
+        estimate = multiply_cap(num_elements, kInitialIndicesPerSplat);
     if (estimate < num_elements)
         estimate = num_elements;
+    estimate = std::min(estimate, kMaxSortCapacity);
     buffers.num_indices = estimate;
     buffers.num_indices_high_water = std::max(buffers.num_indices_high_water, estimate);
 }

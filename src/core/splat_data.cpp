@@ -234,6 +234,18 @@ namespace {
     // the rasterizer's load_shN_coeffs, the fused Adam path) is a CUDA kernel. There is no
     // CPU swizzle path, so this buffer always lives on Device::CUDA regardless of where
     // the other SplatData tensors live.
+    lfs::core::Tensor allocate_param_tensor(const lfs::core::TensorShape& shape,
+                                            size_t capacity,
+                                            const lfs::core::SplatTensorAllocator& allocator,
+                                            std::string_view name) {
+        using namespace lfs::core;
+        Tensor tensor = allocator
+                            ? allocator(shape, capacity, DataType::Float32, name)
+                            : Tensor::zeros_direct(shape, capacity, Device::CUDA);
+        tensor.set_name(std::string{name});
+        return tensor;
+    }
+
     lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
@@ -246,6 +258,32 @@ namespace {
             return Tensor::zeros({0}, Device::CUDA);
         }
         return Tensor::zeros_direct(TensorShape({logical_floats}), capacity_floats, Device::CUDA);
+    }
+
+    lfs::core::Tensor allocate_swizzled_shN(size_t n,
+                                            size_t capacity,
+                                            const lfs::core::SplatTensorAllocator& allocator,
+                                            std::string_view name) {
+        using namespace lfs::core;
+        const size_t cap = std::max(capacity, n);
+        const size_t logical_floats = sh_swizzled_float_count(n);
+        const size_t capacity_floats = sh_swizzled_float_count(cap);
+        if (capacity_floats == 0) {
+            Tensor tensor = Tensor::zeros({0}, Device::CUDA);
+            tensor.set_name(std::string{name});
+            return tensor;
+        }
+        if (allocator) {
+            return allocate_param_tensor(TensorShape({logical_floats}),
+                                         capacity_floats,
+                                         allocator,
+                                         name);
+        }
+        Tensor tensor = Tensor::zeros_direct(TensorShape({logical_floats}),
+                                             capacity_floats,
+                                             Device::CUDA);
+        tensor.set_name(std::string{name});
+        return tensor;
     }
 
     // Reorder a canonical-layout shN tensor into the swizzled `dst` buffer.
@@ -263,7 +301,22 @@ namespace {
             cudaMemset(dst_swizzled, 0, sh_swizzled_byte_count(n_primitives));
             return;
         }
-        Tensor src_cuda = canonical.device() == Device::CUDA ? canonical : canonical.cuda();
+        Tensor src = canonical;
+        Tensor truncated;
+        if (canonical.ndim() == 3 &&
+            canonical.size(1) > active_coeffs_rest) {
+            truncated = canonical.slice(1, 0, static_cast<int>(active_coeffs_rest)).contiguous();
+            src = truncated;
+        } else if (canonical.ndim() == 2 &&
+                   canonical.size(1) > static_cast<size_t>(active_coeffs_rest) * SH_CHANNELS) {
+            truncated = canonical.slice(
+                                      1,
+                                      0,
+                                      static_cast<int>(active_coeffs_rest * SH_CHANNELS))
+                            .contiguous();
+            src = truncated;
+        }
+        Tensor src_cuda = src.device() == Device::CUDA ? src : src.cuda();
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
         }
@@ -790,7 +843,8 @@ namespace lfs::core {
         const param::TrainingParameters& params,
         Tensor scene_center,
         const PointCloud& pcd,
-        int capacity) {
+        int capacity,
+        SplatTensorAllocator tensor_allocator) {
 
         try {
             LOG_DEBUG("=== init_model_from_pointcloud starting ===");
@@ -876,44 +930,56 @@ namespace lfs::core {
             }
 
             if (capacity > 0) {
-                LOG_DEBUG("Creating direct tensors with capacity={}", capacity);
+                LOG_DEBUG("Creating resident tensors with capacity={}", capacity);
 
-                means_ = Tensor::zeros_direct(TensorShape({num_points, 3}), capacity);
-                means_.set_name("SplatData.means");
+                means_ = allocate_param_tensor(TensorShape({num_points, 3}),
+                                               static_cast<size_t>(capacity),
+                                               tensor_allocator,
+                                               "SplatData.means");
                 LOG_DEBUG("  means_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           means_.is_valid(), static_cast<void*>(means_.ptr<float>()),
                           means_.shape().str(), means_.numel());
 
-                scaling_ = Tensor::zeros_direct(TensorShape({num_points, 3}), capacity);
-                scaling_.set_name("SplatData.scaling");
+                scaling_ = allocate_param_tensor(TensorShape({num_points, 3}),
+                                                 static_cast<size_t>(capacity),
+                                                 tensor_allocator,
+                                                 "SplatData.scaling");
                 LOG_DEBUG("  scaling_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           scaling_.is_valid(), static_cast<void*>(scaling_.ptr<float>()),
                           scaling_.shape().str(), scaling_.numel());
 
-                rotation_ = Tensor::zeros_direct(TensorShape({num_points, 4}), capacity);
-                rotation_.set_name("SplatData.rotation");
+                rotation_ = allocate_param_tensor(TensorShape({num_points, 4}),
+                                                 static_cast<size_t>(capacity),
+                                                 tensor_allocator,
+                                                 "SplatData.rotation");
                 LOG_DEBUG("  rotation_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           rotation_.is_valid(), static_cast<void*>(rotation_.ptr<float>()),
                           rotation_.shape().str(), rotation_.numel());
 
-                opacity_ = Tensor::zeros_direct(TensorShape({num_points, 1}), capacity);
-                opacity_.set_name("SplatData.opacity");
+                opacity_ = allocate_param_tensor(TensorShape({num_points, 1}),
+                                                static_cast<size_t>(capacity),
+                                                tensor_allocator,
+                                                "SplatData.opacity");
                 LOG_DEBUG("  opacity_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           opacity_.is_valid(), static_cast<void*>(opacity_.ptr<float>()),
                           opacity_.shape().str(), opacity_.numel());
 
-                sh0_ = Tensor::zeros_direct(TensorShape({num_points, 1, 3}), capacity);
-                sh0_.set_name("SplatData.sh0");
+                sh0_ = allocate_param_tensor(TensorShape({num_points, 1, 3}),
+                                             static_cast<size_t>(capacity),
+                                             tensor_allocator,
+                                             "SplatData.sh0");
                 LOG_DEBUG("  sh0_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           sh0_.is_valid(), static_cast<void*>(sh0_.ptr<float>()),
                           sh0_.shape().str(), sh0_.numel());
 
-                // shN_ here is the CANONICAL [N, K, 3] tensor that SplatData ctor will reorder
-                // into the persistent swizzled buffer. It's discarded immediately after — no
-                // benefit in reserving max_cap capacity (would waste ≈max_cap × K × 12 bytes
-                // transiently). Allocate at num_points only via the pool.
-                shN_ = Tensor::zeros({num_points, static_cast<size_t>(feature_shape - 1), 3}, Device::CUDA);
-                shN_.set_name("SplatData.shN");
+                // Build SH-rest directly in the resident vksplat-swizzled layout.
+                // The old path allocated a canonical CUDA tensor and then the final
+                // swizzled tensor, briefly holding both. At SH3/max-cap that transient
+                // is large enough to show up in the VRAM profile.
+                shN_ = allocate_swizzled_shN(num_points,
+                                             static_cast<size_t>(capacity),
+                                             tensor_allocator,
+                                             "SplatData.shN");
                 LOG_DEBUG("  shN_ allocated: is_valid={}, ptr={}, shape={}, numel={}",
                           shN_.is_valid(), static_cast<void*>(shN_.ptr<float>()),
                           shN_.shape().str(), shN_.numel());
@@ -1123,22 +1189,26 @@ namespace lfs::core {
                 }
                 LOG_DEBUG("  SH0 copy successful");
 
-                // SHN copy
-                LOG_DEBUG("  Copying shN: src_ptr={}, dst_ptr={}, bytes={}",
+                // SHN swizzle
+                LOG_DEBUG("  Swizzling shN: src_ptr={}, dst_ptr={}, src_bytes={}",
                           static_cast<const void*>(shN_cpu.ptr<float>()),
                           static_cast<void*>(shN_.ptr<float>()),
                           shN_cpu.numel() * sizeof(float));
-                err = cudaMemcpy(shN_.ptr<float>(), shN_cpu.ptr<float>(),
-                                 shN_cpu.numel() * sizeof(float), cudaMemcpyHostToDevice);
+                reorder_canonical_into_swizzled(
+                    shN_cpu,
+                    shN_.ptr<float>(),
+                    num_points,
+                    static_cast<uint32_t>(feature_shape - 1));
+                err = cudaGetLastError();
                 if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMemcpy failed for shN:");
+                    LOG_ERROR("SH swizzle failed for shN:");
                     LOG_ERROR("  src (CPU): is_valid={}, ptr={}, numel={}",
                               shN_cpu.is_valid(), static_cast<const void*>(shN_cpu.ptr<float>()), shN_cpu.numel());
                     LOG_ERROR("  dst (CUDA): is_valid={}, ptr={}, numel={}",
                               shN_.is_valid(), static_cast<void*>(shN_.ptr<float>()), shN_.numel());
-                    throw TensorError("cudaMemcpy failed for shN: " + std::string(cudaGetErrorString(err)));
+                    throw TensorError("SH swizzle failed for shN: " + std::string(cudaGetErrorString(err)));
                 }
-                LOG_DEBUG("  SHN copy successful");
+                LOG_DEBUG("  SHN swizzle successful");
 
                 LOG_DEBUG("All CPU to CUDA copies completed successfully");
             } else {
@@ -1216,7 +1286,9 @@ namespace lfs::core {
                 std::move(scaling_),
                 std::move(rotation_),
                 std::move(opacity_),
-                scene_scale);
+                scene_scale,
+                capacity > 0 ? SplatData::ShNLayout::Swizzled
+                             : SplatData::ShNLayout::Canonical);
 
             return result;
 

@@ -72,6 +72,13 @@ namespace lfs::training {
             }
 
             const size_t param_size = param.shape()[0];
+            if (type == ParamType::ShN && splat_data_.active_sh_coeffs_rest() == 0) {
+                state = AdamParamState{};
+                state.size = param_size;
+                LOG_INFO("AdamOptimizer: deferring SH-rest optimizer state until SH warmup activates");
+                continue;
+            }
+
             // shN is stored in vksplat swizzled layout as a 1D float tensor; capacity
             // along dim 0 must be expressed in floats, not primitive rows.
             const size_t effective_capacity = (type == ParamType::ShN)
@@ -172,7 +179,9 @@ namespace lfs::training {
 
         auto& state = states_[name];
         const size_t param_size = param.shape()[0];
-        const size_t initial_cap = compute_new_capacity(0, param_size);
+        const size_t initial_cap = (type == ParamType::ShN && config_.initial_capacity > 0)
+                                       ? std::max(lfs::core::sh_swizzled_float_count(config_.initial_capacity), param_size)
+                                       : compute_new_capacity(0, param_size);
 
         if (allocate_grad && (!state.grad.is_valid() || state.grad.numel() == 0)) {
             state.grad = (initial_cap > param_size)
@@ -191,6 +200,11 @@ namespace lfs::training {
         }
         state.size = param_size;
         state.step_count = 0;
+        if (type == ParamType::ShN) {
+            const double mib = (2.0 * static_cast<double>(state.capacity) * sizeof(float)) / (1024.0 * 1024.0);
+            LOG_INFO("AdamOptimizer: allocated SH-rest optimizer state at active SH degree {} ({:.2f} MiB)",
+                     splat_data_.get_active_sh_degree(), mib);
+        }
         LOG_DEBUG("Initialized optimizer state for {}: size={}, capacity={}", name, param_size, state.capacity);
     }
 
@@ -221,6 +235,10 @@ namespace lfs::training {
     void AdamOptimizer::step_param(ParamType type, const int iteration) {
         auto& param = get_param(type);
         if (!param.is_valid() || param.numel() == 0) {
+            return;
+        }
+        if (type == ParamType::ShN &&
+            (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0)) {
             return;
         }
 
@@ -281,6 +299,9 @@ namespace lfs::training {
             if (!param.is_valid() || param.numel() == 0 || n_attributes <= 0) {
                 return out;
             }
+            if (!update_enabled) {
+                return out;
+            }
 
             const auto name = param_name(type);
             if (!states_.contains(name)) {
@@ -294,9 +315,6 @@ namespace lfs::training {
             const size_t param_size = param.shape()[0];
             if (param_size != state.size) {
                 throw std::runtime_error("Optimizer state desync before fused Adam: " + name);
-            }
-            if (!update_enabled) {
-                return out;
             }
 
             const auto next_step = state.step_count + 1;
@@ -322,7 +340,8 @@ namespace lfs::training {
         // We report 12 float4 * 4 floats = 48 floats per primitive.
         fused.shN = prepare_param(ParamType::ShN,
                                   static_cast<int>(lfs::core::kShRestFloat4PerPrimitive * 4u),
-                                  iteration > SH_WARMUP_ITERATIONS);
+                                  iteration > SH_WARMUP_ITERATIONS &&
+                                      splat_data_.active_sh_coeffs_rest() > 0);
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
@@ -406,6 +425,12 @@ namespace lfs::training {
         auto& param = get_param(type);
         auto& state = states_[name];
         const size_t new_size = state.size + n_new;
+
+        if (type == ParamType::ShN &&
+            (splat_data_.active_sh_coeffs_rest() == 0 ||
+             !state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid())) {
+            return;
+        }
 
         if (!param.is_valid() || param.shape().rank() == 0) {
             LOG_WARN("extend_state_by_gather: {} param invalid", name);
@@ -501,6 +526,12 @@ namespace lfs::training {
 
         auto& param = get_param(type);
         auto& state = states_[name];
+        if (type == ParamType::ShN &&
+            (splat_data_.active_sh_coeffs_rest() == 0 ||
+             !state.exp_avg.is_valid() || !state.exp_avg_sq.is_valid())) {
+            return;
+        }
+
         // For swizzled shN, growth is measured in floats: (swizzled_floats(N+n_new) -
         // swizzled_floats(N)). For everything else, growth is measured in primitive rows.
         const size_t growth = compute_state_growth(type, n_new);

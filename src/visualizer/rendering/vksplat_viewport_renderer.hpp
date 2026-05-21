@@ -103,12 +103,16 @@ namespace lfs::vis {
 
     private:
         struct ComposePipeline;
+        struct InputBindingResult {
+            bool uses_temporary_upload_slot = false;
+        };
 
         [[nodiscard]] std::expected<void, std::string> ensureInitialized(VulkanContext& context);
-        [[nodiscard]] std::expected<void, std::string> uploadInputs(
+        [[nodiscard]] std::expected<InputBindingResult, std::string> prepareInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             std::size_t ring_slot,
+            bool force_upload,
             bool synchronize_upload = false);
         struct OverlayBindingViews {
             _VulkanBuffer selection_mask{};
@@ -139,13 +143,10 @@ namespace lfs::vis {
             OutputSlot output_slot,
             bool transparent_background);
 
-        // One coalesced CUDA-imported VkBuffer per ring slot, holding all four
-        // input regions (xyz | rotations | scales+opacs | sh) packed back-to-back
-        // with 256-byte alignment. Replaces the prior 4-buffers-per-ring scheme,
-        // collapsing 4× cudaImportExternalMemory + 4× cudaExternalMemoryGetMappedBuffer
-        // setup costs into 1×, and surfacing the regions to the rasterizer through
-        // _VulkanBuffer offset views (no descriptor-side cost).
-        static constexpr std::size_t kInputRegionCount = 4;
+        // Fallback coalesced CUDA-imported VkBuffer per ring slot, holding raw
+        // SplatData input regions back-to-back. Training tensors created as
+        // Vulkan-external buffers bypass this allocation and are bound directly.
+        static constexpr std::size_t kInputRegionCount = 6;
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 5;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
@@ -201,11 +202,9 @@ namespace lfs::vis {
         static constexpr std::size_t kOutputSlotCount = 3;
         std::array<OutputImageSlot, kOutputSlotCount> output_slots_{};
 
-        // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs).
-        // VkSplat submits the projection/sort/raster/compose batch with a fence
-        // wait before render() returns, so these imported buffers are no longer
-        // read by Vulkan when the next CUDA upload starts. Keeping one resident
-        // slot avoids a second full packed model copy at bicycle/max-cap scale.
+        // Fallback CUDA-backed input buffers for models that are not already
+        // backed by Vulkan-external tensor storage. Direct Vulkan-external
+        // training tensors bypass this ring and bind their VkBuffers directly.
         static constexpr std::size_t kInputRingSize = 1;
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
@@ -213,7 +212,7 @@ namespace lfs::vis {
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
-        // CUDA upload completing — eliminates the per-frame
+        // CUDA upload completing; eliminates the per-frame
         // cudaStreamSynchronize that previously blocked the CPU after every
         // upload (P15). Values are monotonic; on each upload we bump the slot's
         // counter, signal CUDA-side, and queue a Vulkan-side wait.

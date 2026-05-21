@@ -900,12 +900,15 @@ namespace lfs::training {
             _optimizer->add_new_params(ParamType::Means, append_means, true);
             _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
 
-            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
-                const size_t new_size = old_size + n_append;
+            const size_t new_size = old_size + n_append;
+            if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
                 const size_t needed_floats = sh_swizzled_float_count(new_size);
                 if (_splat_data->shN().numel() < needed_floats) {
                     _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
                 }
+            }
+
+            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
                 shN_swizzled_gather_from_linear(
                     _splat_data->shN().ptr<float>(),
                     old_size,

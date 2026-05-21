@@ -132,11 +132,6 @@ _vks_add_slang_shader(cumsum_single_pass        cumsum.slang CUMSUM_PHASE=0)
 _vks_add_slang_shader(generate_keys             tile_shader.slang EXPORT_MODE=0 ENTRY=1)
 _vks_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE=0 ENTRY=2)
 
-# Tiny indirect-dispatch setup pass — reads cumsum tail from GPU and writes a
-# VkDispatchIndirectCommand for compute_tile_ranges. Eliminates the per-frame
-# CPU readback stall.
-_vks_add_slang_shader(setup_dispatch_indirect   setup_dispatch_indirect.slang)
-
 # vertex_shader.slang → projection_forward variants
 _vks_add_slang_shader(projection_forward        vertex_shader.slang EXPORT_MODE=0)
 _vks_add_slang_shader(projection_forward_gut    vertex_shader.slang EXPORT_MODE=0 VKSPLAT_GUT_PROJECTION=1)

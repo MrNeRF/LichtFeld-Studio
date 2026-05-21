@@ -10,14 +10,61 @@
 #include "core/services.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/visualizer_impl.hpp"
+#include "window/window_manager.hpp"
 #include "training/training_setup.hpp"
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+#include "rendering/vulkan_external_tensor.hpp"
+#include "window/vulkan_context.hpp"
+#endif
 #include <cstring>
 #include <cuda_runtime.h>
+#include <format>
 #include <stdexcept>
+#include <utility>
 
 namespace lfs::vis {
 
     using namespace lfs::core::events;
+
+    namespace {
+#ifdef LFS_VULKAN_VIEWER_ENABLED
+        [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
+            if (!viewer || !viewer->getWindowManager()) {
+                return {};
+            }
+            auto* const context = viewer->getWindowManager()->getVulkanContext();
+            if (!context || !context->externalMemoryInteropEnabled()) {
+                return {};
+            }
+
+            return [context](lfs::core::TensorShape shape,
+                             const size_t capacity,
+                             const lfs::core::DataType dtype,
+                             const std::string_view name) -> lfs::core::Tensor {
+                const std::string debug_name{name};
+                auto tensor = makeVulkanExternalTensor(
+                    *context,
+                    std::move(shape),
+                    dtype,
+                    capacity,
+                    debug_name.c_str());
+                if (!tensor) {
+                    throw lfs::core::TensorError(std::format(
+                        "Vulkan-external training tensor allocation failed for '{}': {}",
+                        debug_name,
+                        tensor.error()));
+                }
+                tensor->set_name(debug_name);
+                return std::move(*tensor);
+            };
+        }
+#else
+        [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl*) {
+            return {};
+        }
+#endif
+    } // namespace
 
     TrainerManager::TrainerManager() {
         setupEventHandlers();
@@ -217,7 +264,13 @@ namespace lfs::vis {
             const auto& params = trainer_->getParams();
 
             if (scene_) {
-                if (auto result = lfs::training::initializeTrainingModel(params, *scene_); !result) {
+                auto tensor_allocator = makeVulkanTrainingTensorAllocator(viewer_);
+                if (tensor_allocator) {
+                    LOG_INFO("Training model tensors will use Vulkan-external CUDA storage");
+                }
+                if (auto result = lfs::training::initializeTrainingModel(
+                        params, *scene_, std::move(tensor_allocator));
+                    !result) {
                     LOG_ERROR("Failed to initialize model: {}", result.error());
                     last_error_ = result.error();
 
@@ -239,6 +292,7 @@ namespace lfs::vis {
                     }
                     return false;
                 }
+                lfs::core::Tensor::log_storage_memory("After training model initialization");
             }
 
             if (auto result = trainer_->initialize(params); !result) {
@@ -263,6 +317,7 @@ namespace lfs::vis {
                 }
                 return false;
             }
+            lfs::core::Tensor::log_storage_memory("After trainer initialization");
 
             // Match headless mode: release init-time cached pool allocations before the
             // first training batch spins up image decoders and render workspaces.

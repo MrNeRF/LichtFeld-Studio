@@ -50,6 +50,11 @@ namespace lfs::vis {
                 update_callback_();
             }
 
+            if (should_close_callback_ && should_close_callback_()) {
+                LOG_DEBUG("Should close callback requested exit after update");
+                break;
+            }
+
             if (render_callback_) {
                 render_callback_();
             }

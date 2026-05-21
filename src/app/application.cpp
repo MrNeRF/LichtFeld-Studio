@@ -271,7 +271,11 @@ namespace lfs::app {
                 params->optimization.no_splash;
 #endif
 
-            warmupCudaAsync();
+            if (params->import_cameras_path || params->resume_checkpoint) {
+                warmupCudaAsync();
+            } else {
+                checkCudaDriverVersion();
+            }
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 

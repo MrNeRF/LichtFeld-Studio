@@ -14,6 +14,7 @@
 #include <stb_image.h>
 
 #include <algorithm>
+#include <exception>
 #include <fstream>
 #include <random>
 
@@ -197,6 +198,16 @@ namespace lfs::io {
             }
             const bool regular = std::filesystem::is_regular_file(path, ec);
             return !ec && regular;
+        }
+
+        [[nodiscard]] std::string describe_current_exception(const char* fallback) {
+            try {
+                throw;
+            } catch (const std::exception& e) {
+                return e.what();
+            } catch (...) {
+                return fallback;
+            }
         }
 
         [[nodiscard]] lfs::core::Tensor decode_cached_rgb_tensor(
@@ -427,9 +438,10 @@ namespace lfs::io {
                     auto tensor = decode_cached_rgb_tensor(nvcodec, data, params, true);
                     if (tensor.is_valid() && tensor.numel() > 0)
                         return tensor;
-                } catch (const std::exception& e) {
+                } catch (...) {
                     LOG_DEBUG("[PipelinedImageLoader] Immediate JPEG decode fallback for {}: {}",
-                              lfs::core::path_to_utf8(path), e.what());
+                              lfs::core::path_to_utf8(path),
+                              describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
         } else {
@@ -493,9 +505,10 @@ namespace lfs::io {
                         if (tensor.is_valid() && tensor.numel() > 0)
                             return tensor;
                     }
-                } catch (const std::exception& e) {
+                } catch (...) {
                     LOG_DEBUG("[PipelinedImageLoader] Immediate cache write skipped for {}: {}",
-                              lfs::core::path_to_utf8(path), e.what());
+                              lfs::core::path_to_utf8(path),
+                              describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
         }
@@ -1022,15 +1035,16 @@ namespace lfs::io {
                                     put_in_jpeg_cache(
                                         batch[i].cache_key,
                                         std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
-                                } catch (const std::exception& e) {
+                                } catch (...) {
                                     LOG_DEBUG("[PipelinedImageLoader] Derived cache write skipped for {}: {}",
-                                              lfs::core::path_to_utf8(batch[i].path), e.what());
+                                              lfs::core::path_to_utf8(batch[i].path),
+                                              describe_current_exception("non-standard nvImageCodec exception"));
                                 }
                             }
 
                             try_complete_pair(batch[i].sequence_id, std::move(tensor), std::nullopt, nullptr);
                         }
-                    } catch (const std::exception&) {
+                    } catch (...) {
                         auto& item = batch[i];
                         item.is_cache_hit = false;
                         item.needs_processing = true;
@@ -1064,8 +1078,9 @@ namespace lfs::io {
                 ++stats_.gpu_batch_decodes;
                 stats_.total_decode_calls += batch.size();
 
-            } catch (const std::exception& e) {
-                LOG_ERROR("[PipelinedImageLoader] Batch decode error: {}", e.what());
+            } catch (...) {
+                LOG_ERROR("[PipelinedImageLoader] Batch decode error: {}",
+                          describe_current_exception("non-standard nvImageCodec exception"));
                 for (auto& item : batch) {
                     item.is_cache_hit = false;
                     item.needs_processing = true;
@@ -1188,7 +1203,7 @@ namespace lfs::io {
                             save_to_fs_cache(alpha_key, alpha_jpeg);
                             put_in_jpeg_cache(alpha_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
@@ -1209,7 +1224,7 @@ namespace lfs::io {
                                 item.path, item.params.resize_factor, item.params.max_width,
                                 nullptr, DecodeFormat::Grayscale);
                             used_gpu = true;
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
@@ -1277,7 +1292,7 @@ namespace lfs::io {
                             save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
@@ -1298,7 +1313,7 @@ namespace lfs::io {
                                 item.path, item.params.resize_factor, item.params.max_width,
                                 nullptr, DecodeFormat::RGB, item.params.output_uint8);
                             used_gpu = true;
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
@@ -1371,17 +1386,18 @@ namespace lfs::io {
                             save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
                     try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
                 }
 
-            } catch (const std::exception& e) {
+            } catch (...) {
+                const auto message = describe_current_exception("non-standard image loader exception");
                 if (item.alpha_as_mask) {
                     LOG_WARN("[PipelinedImageLoader] Alpha-as-mask failed {}: {} - loading as RGB",
-                             lfs::core::path_to_utf8(item.path), e.what());
+                             lfs::core::path_to_utf8(item.path), message);
                     try {
                         auto [img_data, width, height, channels] = lfs::core::load_image(
                             item.path, item.params.resize_factor, item.params.max_width);
@@ -1421,16 +1437,17 @@ namespace lfs::io {
                             }
                         }
                         try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
-                    } catch (const std::exception& e2) {
+                    } catch (...) {
                         LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
-                                  lfs::core::path_to_utf8(item.path), e2.what());
+                                  lfs::core::path_to_utf8(item.path),
+                                  describe_current_exception("non-standard RGB fallback exception"));
                         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                         pending_pairs_.erase(item.sequence_id);
                         in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                     }
                 } else if (item.is_mask) {
                     LOG_WARN("[PipelinedImageLoader] Cold process mask error {}: {} - continuing without mask",
-                             lfs::core::path_to_utf8(item.path), e.what());
+                             lfs::core::path_to_utf8(item.path), message);
                     // Mark mask as no longer expected so image can still be delivered
                     std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                     if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
@@ -1446,7 +1463,7 @@ namespace lfs::io {
                     }
                 } else {
                     LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}",
-                              lfs::core::path_to_utf8(item.path), e.what());
+                              lfs::core::path_to_utf8(item.path), message);
                     // Clean up pending_pairs_ to prevent memory leak
                     {
                         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);

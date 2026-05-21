@@ -150,6 +150,71 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs(uint32_t g_idx, IArray<float4> s
 
 #endif  // USE_FLOAT4_BATCH_READ
 
+SpherHarmCoeffs read_spherical_harmonics_coeffs_split(
+    uint32_t g_idx,
+    IArray<float> sh0,
+    IArray<float4> shN,
+    uint32_t active_sh)
+{
+    float3 z = float3(0.0);
+    SpherHarmCoeffs g_sh_coeffs = { z, z,z,z, z,z,z,z,z, z,z,z,z,z,z,z };
+
+    g_sh_coeffs.coeff0 = float3(sh0[3*g_idx+0], sh0[3*g_idx+1], sh0[3*g_idx+2]);
+
+    if (active_sh == 0)
+        return g_sh_coeffs;
+
+  #if SH_REORDER_SIZE <= 1
+    uint32_t base = 12*g_idx;
+    #define _SHN_COEFF(idx) float4(shN[base+idx])
+  #else
+    uint32_t base = (g_idx/SH_REORDER_SIZE) * (12*SH_REORDER_SIZE);
+    uint32_t offset = g_idx%SH_REORDER_SIZE;
+    #define _SHN_COEFF(idx) float4(shN[base+SH_REORDER_SIZE*idx+offset])
+  #endif
+
+    float4 temp0, temp1;
+
+    temp0 = _SHN_COEFF(0);
+    g_sh_coeffs.coeff1 = temp0.xyz;
+    temp1 = _SHN_COEFF(1);
+    g_sh_coeffs.coeff2 = float3(temp0.w, temp1.xy);
+    temp0 = _SHN_COEFF(2);
+    g_sh_coeffs.coeff3 = float3(temp1.zw, temp0.x);
+    g_sh_coeffs.coeff4 = temp0.yzw;
+
+    if (active_sh > 1) {
+        temp0 = _SHN_COEFF(3);
+        g_sh_coeffs.coeff5 = temp0.xyz;
+        temp1 = _SHN_COEFF(4);
+        g_sh_coeffs.coeff6 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_COEFF(5);
+        g_sh_coeffs.coeff7 = float3(temp1.zw, temp0.x);
+        g_sh_coeffs.coeff8 = temp0.yzw;
+    }
+
+    if (active_sh > 2) {
+        temp0 = _SHN_COEFF(6);
+        g_sh_coeffs.coeff9 = temp0.xyz;
+        temp1 = _SHN_COEFF(7);
+        g_sh_coeffs.coeff10 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_COEFF(8);
+        g_sh_coeffs.coeff11 = float3(temp1.zw, temp0.x);
+        g_sh_coeffs.coeff12 = temp0.yzw;
+
+        temp0 = _SHN_COEFF(9);
+        g_sh_coeffs.coeff13 = temp0.xyz;
+        temp1 = _SHN_COEFF(10);
+        g_sh_coeffs.coeff14 = float3(temp0.w, temp1.xy);
+        temp0 = _SHN_COEFF(11);
+        g_sh_coeffs.coeff15 = float3(temp1.zw, temp0.x);
+    }
+
+    #undef _SHN_COEFF
+
+    return g_sh_coeffs;
+}
+
 
 [ForceInline]
 uint get_num_sh(uint active_sh) {
@@ -267,7 +332,7 @@ float3 compute_color_from_sh_coeffs(SpherHarmCoeffs sh, float3 dir, uint32_t act
     float basis[16];
     compute_sh_basis_16(dir, active_sh, basis);
 
-    // Stack coefficients into a 3-row × 16-col matrix (one row per RGB channel).
+    // Stack coefficients into a 3-row x 16-col matrix (one row per RGB channel).
     // Per-channel result is the dot product of basis with that row.
     float3 rgb = float3(0.0);
     rgb += basis[0]  * sh.coeff0;
@@ -301,6 +366,6 @@ float3 compute_color_from_sh_coeffs(SpherHarmCoeffs sh, float3 dir, uint32_t act
 // (Load/Store take uint4 strides + ShMemPool), the wiring cost outweighs the
 // throughput win on Ampere+. A real coop-matrix win here needs the
 // projection pass restructured to dispatch per-tile (where many gaussians
-// share approximate directions) — algorithm change, not a shader edit.
+// share approximate directions), algorithm change, not a shader edit.
 // The basis split above (compute_sh_basis_16) is the precondition for that
 // future rewrite.

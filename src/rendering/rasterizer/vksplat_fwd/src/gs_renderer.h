@@ -13,6 +13,10 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t active_sh;
     uint32_t step;
     uint32_t camera_model;
+    uint32_t sort_capacity;
+    uint32_t pad0;
+    uint32_t pad1;
+    uint32_t pad2;
     float fx;
     float fy;
     float cx;
@@ -90,7 +94,8 @@ public:
                               const _VulkanBuffer& model_transforms,
                               const _VulkanBuffer& selection_out);
 
-    void executeCalculateIndexBufferOffset(VulkanGSPipelineBuffers& buffers);
+    void executeCalculateIndexBufferOffset(const VulkanGSRendererUniforms& uniforms,
+                                           VulkanGSPipelineBuffers& buffers);
     void executeSort(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers, int num_bits);
 
 protected:
@@ -99,18 +104,16 @@ protected:
         Buffer<int32_t>& input_buffer,
         Buffer<int32_t>& output_buffer);
 
-    _ComputePipeline pipeline_projection_forward = _ComputePipeline(16);
-    _ComputePipeline pipeline_projection_forward_gut = _ComputePipeline(16);
+    _ComputePipeline pipeline_projection_forward = _ComputePipeline(18);
+    _ComputePipeline pipeline_projection_forward_gut = _ComputePipeline(18);
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(8);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     // 3 bindings: sorted_keys, out_tile_ranges, index_buffer_offset (for num_isects).
     _ComputePipeline pipeline_compute_tile_ranges[2] = {
         _ComputePipeline(3),
         _ComputePipeline(3)};
-    // Indirect-dispatch setup: reads cumsum tail, writes VkDispatchIndirectCommand.
-    _ComputePipeline pipeline_setup_dispatch_indirect = _ComputePipeline(2);
     _ComputePipelinePair pipeline_rasterize_forward = _ComputePipelinePair(14);
-    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(19);
+    _ComputePipelinePair pipeline_rasterize_forward_gut = _ComputePipelinePair(20);
     struct _CumsumComputePipeline {
         _ComputePipeline single_pass = _ComputePipeline(2);
         _ComputePipeline block_scan = _ComputePipeline(3);
@@ -125,9 +128,7 @@ protected:
     _ComputePipeline pipeline_null = _ComputePipeline(0);
 
     // Deferred (1-frame-stale) num_indices readback, replacing the synchronous
-    // mid-frame readElement that used to drain the queue every frame. The shader
-    // setup_dispatch_indirect writes the indirect command directly on GPU, so
-    // compute_tile_ranges no longer needs the CPU-side value at all. The mapped
+    // mid-frame readElement that used to drain the queue every frame. The mapped
     // pointer is read at the start of the next frame's executeCalculateIndexBufferOffset
     // (after the prior frame's submit fence has signaled, guaranteeing the host
     // copy is observable).
@@ -136,6 +137,10 @@ protected:
     bool num_indices_readback_initialized_ = false;
     bool num_indices_readback_pending_ = false;
     size_t num_indices_estimate_ = 0;
+    uint32_t num_indices_estimate_grid_width_ = 0;
+    uint32_t num_indices_estimate_grid_height_ = 0;
+    uint32_t num_indices_readback_grid_width_ = 0;
+    uint32_t num_indices_readback_grid_height_ = 0;
 
     void ensureNumIndicesReadback();
     void destroyNumIndicesReadback();

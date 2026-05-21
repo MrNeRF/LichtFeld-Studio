@@ -87,11 +87,17 @@ void main(
 
     int offset = globalIdx == 0 ? 0 : index_buffer_offset[globalIdx-1];
     int offset_max = index_buffer_offset[globalIdx];
+    const int sort_capacity = int(uniforms.sort_capacity);
+    if (sort_capacity <= 0 || offset >= sort_capacity)
+        return;
+    offset_max = min(offset_max, sort_capacity);
 
 #if TILE_CULLING_MODE == 0 || TILE_CULLING_MODE == 1
 
     for (uint16_t y = rect.min_y; y < rect.max_y; y++) {
         for (uint16_t x = rect.min_x; x < rect.max_x; x++) {
+            if (offset >= offset_max)
+                return;
             uint32_t key = uint32_t(y) * grid_width + uint32_t(x);
             out_unsorted_keys[offset] = sortingKey_t((key << DEPTH_BITS) | z);
             out_unsorted_gauss_idx[offset] = globalIdx;
@@ -174,27 +180,30 @@ void main(
     uint3 dispatchThreadID : SV_DispatchThreadID,
     uniform Uniforms uniforms
 ) {
-    int32_t globalIdx = dispatchThreadID.x;
+    uint32_t globalIdx = dispatchThreadID.x;
 
     const uint grid_height = uniforms.grid_height;
     const uint grid_width = uniforms.grid_width;
+    const uint32_t num_tiles = grid_height*grid_width;
     uint32_t DEPTH_BITS = min(uint32_t(31.99-log2(grid_height*grid_width)), FLOAT32_FRACTION_BITS);
 
     // num_isects (= num_indices) is read directly from the GPU-resident cumsum
-    // tail to keep this dispatch CPU-readback-free.
+    // tail, then clamped to the CPU-chosen sort capacity so stale estimates from
+    // resize/camera jumps cannot read past the sorted buffers.
     uint32_t num_isects =
         uniforms.num_splats == 0u
             ? 0u
             : (uint32_t)index_buffer_offset_in[uniforms.num_splats - 1u];
+    num_isects = min(num_isects, uniforms.sort_capacity);
     if (globalIdx > num_isects)
         return;
 
     // Read tile ID from key. Update start/end of tile range if at limit.
     sortingKey_t key = sorted_keys[globalIdx];
     uint32_t currtile = globalIdx == num_isects ?
-        grid_height*grid_width : (uint32_t)(key) >> DEPTH_BITS;
+        num_tiles : min((uint32_t)(key) >> DEPTH_BITS, num_tiles);
     uint32_t prevtile = globalIdx == 0 ? (uint32_t)-1 :
-        (uint32_t)sorted_keys[globalIdx-1] >> DEPTH_BITS;
+        min((uint32_t)sorted_keys[globalIdx-1] >> DEPTH_BITS, num_tiles);
     for (uint32_t i = prevtile+1; i <= currtile; ++i) {
         out_tile_ranges[i] = globalIdx;
     }

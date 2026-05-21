@@ -285,24 +285,25 @@ layout(binding=5) StructuredBuffer<float> depths;
 #if VKSPLAT_GUT_RASTERIZE
 layout(binding=6) StructuredBuffer<float> xyz_ws;
 layout(binding=7) StructuredBuffer<float4> rotations;
-layout(binding=8) StructuredBuffer<float4> scales_opacs;
+layout(binding=8) StructuredBuffer<float> scaling_raw;
+layout(binding=9) StructuredBuffer<float> opacity_raw;
 
-layout(binding=9) RWStructuredBuffer<float4> final_pixel_state;
-layout(binding=10) RWStructuredBuffer<float> final_pixel_depth;
-layout(binding=11) RWStructuredBuffer<int32_t> n_contributors;
+layout(binding=10) RWStructuredBuffer<float4> final_pixel_state;
+layout(binding=11) RWStructuredBuffer<float> final_pixel_depth;
+layout(binding=12) RWStructuredBuffer<int32_t> n_contributors;
 #else
 layout(binding=6) RWStructuredBuffer<float4> final_pixel_state;
 layout(binding=7) RWStructuredBuffer<float> final_pixel_depth;
 layout(binding=8) RWStructuredBuffer<int32_t> n_contributors;
 #endif
 #if VKSPLAT_GUT_RASTERIZE
-layout(binding=12) ByteAddressBuffer selection_mask;
-layout(binding=13) ByteAddressBuffer preview_mask;
-layout(binding=14) StructuredBuffer<float4> selection_colors;
-layout(binding=15) StructuredBuffer<uint> gaussian_overlay_flags;
-layout(binding=16) StructuredBuffer<float4> overlay_params;
-layout(binding=17) ByteAddressBuffer transform_indices;
-layout(binding=18) StructuredBuffer<float4> model_transforms;
+layout(binding=13) ByteAddressBuffer selection_mask;
+layout(binding=14) ByteAddressBuffer preview_mask;
+layout(binding=15) StructuredBuffer<float4> selection_colors;
+layout(binding=16) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=17) StructuredBuffer<float4> overlay_params;
+layout(binding=18) ByteAddressBuffer transform_indices;
+layout(binding=19) StructuredBuffer<float4> model_transforms;
 #else
 layout(binding=9) ByteAddressBuffer selection_mask;
 layout(binding=10) ByteAddressBuffer preview_mask;
@@ -342,7 +343,7 @@ Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
     Uniforms uniforms)
 {
     Splat_3D_GUT_AlphaBlend g =
-        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scales_opacs, rgb);
+        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scaling_raw, opacity_raw, rgb);
 
     if (uniforms.step == 0u)
         return g;

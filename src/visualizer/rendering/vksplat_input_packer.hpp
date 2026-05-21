@@ -90,4 +90,31 @@ namespace lfs::vis::vksplat {
         void* sh_coeffs_dst,
         cudaStream_t stream);
 
+    struct LFS_VIS_API RawDeviceInputLayout {
+        std::size_t num_splats = 0;
+        std::size_t xyz_bytes = 0;
+        std::size_t sh0_bytes = 0;
+        std::size_t shN_bytes = 0;
+        std::size_t rotations_bytes = 0;
+        std::size_t scaling_bytes = 0;
+        std::size_t opacity_bytes = 0;
+    };
+
+    // Raw split SplatData layout for the live Vulkan viewer. Unlike the packed
+    // path above, this keeps log-scale/logit opacity and split SH untouched so
+    // shaders can consume the training tensors directly when they are Vulkan
+    // external buffers.
+    LFS_VIS_API [[nodiscard]] std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
+        const lfs::core::SplatData& splat_data);
+
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> copyRawDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* xyz_dst,
+        void* sh0_dst,
+        void* shN_dst,
+        void* rotations_dst,
+        void* scaling_dst,
+        void* opacity_dst,
+        cudaStream_t stream);
+
 } // namespace lfs::vis::vksplat

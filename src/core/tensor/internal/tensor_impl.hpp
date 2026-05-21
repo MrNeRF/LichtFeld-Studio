@@ -20,6 +20,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -270,6 +271,8 @@ namespace lfs::core {
 
     struct StorageMeta {
         std::atomic<uint64_t> generation{0};
+        std::string external_kind;
+        std::shared_ptr<void> external_owner;
     };
 
 } // namespace lfs::core
@@ -314,6 +317,11 @@ namespace lfs::core {
         Device device_ = Device::CPU;
         DataType dtype_ = DataType::Float32;
         bool is_view_ = false;
+
+        enum class StorageAccountingKind : uint8_t {
+            CudaDirect,
+            VulkanExternal,
+        };
 
         std::shared_ptr<StorageMeta> storage_meta_;
         uint64_t view_generation_snapshot_ = 0;
@@ -360,6 +368,16 @@ namespace lfs::core {
                 storage_meta_->generation.fetch_add(1, std::memory_order_relaxed);
             }
         }
+
+        bool has_external_storage() const {
+            return storage_meta_ && !storage_meta_->external_kind.empty();
+        }
+
+        static size_t storage_allocation_bytes(const TensorShape& shape,
+                                               size_t capacity,
+                                               DataType dtype);
+        static void record_storage_allocation(StorageAccountingKind kind, size_t bytes);
+        static void record_storage_deallocation(StorageAccountingKind kind, size_t bytes);
 
         void assert_view_not_stale() const {
             if (is_view_ && storage_meta_ &&
@@ -862,6 +880,14 @@ namespace lfs::core {
         static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype) {
             return Tensor(data, shape, device, dtype);
         }
+        static Tensor from_external_owner(void* data,
+                                          TensorShape shape,
+                                          Device device,
+                                          DataType dtype,
+                                          std::shared_ptr<void> owner,
+                                          size_t capacity = 0,
+                                          cudaStream_t stream = nullptr,
+                                          std::string external_kind = {});
 
         static Tensor from_vector(const std::vector<float>& data, TensorShape shape,
                                   Device device = Device::CUDA);
@@ -1014,6 +1040,7 @@ namespace lfs::core {
         DataType dtype() const { return dtype_; }
         bool owns_memory() const { return static_cast<bool>(data_owner_) && !is_view_; }
         bool is_view() const { return is_view_; }
+        bool is_external_storage() const { return has_external_storage(); }
         bool is_empty() const { return !is_valid() || numel() == 0; }
         bool has_lazy_expr() const {
             return (state_ && state_->has_deferred_expr) || internal::tensor_has_lazy_expr(*this);
@@ -1088,6 +1115,14 @@ namespace lfs::core {
         // logical_size() returns the logical size along dimension 0 (same as shape()[0])
         size_t capacity() const { return state_->capacity; }
         size_t logical_size() const { return state_->logical_size; }
+        std::string external_storage_kind() const {
+            return storage_meta_ ? storage_meta_->external_kind : std::string{};
+        }
+        std::shared_ptr<void> external_storage_owner() const {
+            return storage_meta_ ? storage_meta_->external_owner : nullptr;
+        }
+        static std::string storage_memory_summary();
+        static void log_storage_memory(std::string_view label = {});
 
         // reserve() pre-allocates memory for future growth along dimension 0
         // Supports multi-dimensional tensors: [N, D1, D2, ...] reserves N "rows"

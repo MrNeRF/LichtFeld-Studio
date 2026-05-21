@@ -34,6 +34,12 @@ static const uint PROJECTION_MODE_SHIFT = 8u;
 static const uint PROJECTION_MODE_GUT = 1u;
 
 [ForceInline]
+[Differentiable]
+float sigmoid_activation(float x) {
+    return 1.0f / (1.0f + exp(-x));
+}
+
+[ForceInline]
 uint base_camera_model(uint packed_camera_model) {
     return packed_camera_model & CAMERA_MODEL_MASK;
 }
@@ -555,22 +561,24 @@ Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
     int32_t g_idx,
     StructuredBuffer<float> xyz_ws,
     StructuredBuffer<float4> rotations,
-    StructuredBuffer<float4> scales_opacs,
+    StructuredBuffer<float> scaling_raw,
+    StructuredBuffer<float> opacity_raw,
     StructuredBuffer<float> rgb
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
     float4 g_rotation = rotations[g_idx];
-    float4 g_scale_opac = scales_opacs[g_idx];
+    float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
+    float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
     float3 g_rgb = read_t3_float3(g_idx, rgb);
     float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
-    float3 safe_scale = max(g_scale_opac.xyz, float3(1e-8f));
+    float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
         1.0f / safe_scale.x, 0.0f, 0.0f,
         0.0f, 1.0f / safe_scale.y, 0.0f,
         0.0f, 0.0f, 1.0f / safe_scale.z
     );
     float3x3 iscl_rot = mul(inv_scale, transpose(rotation));
-    return { g_xyz_ws, iscl_rot, g_scale_opac.w, g_rgb };
+    return { g_xyz_ws, iscl_rot, g_opacity, g_rgb };
 }
 
 [ForceInline]
@@ -862,6 +870,10 @@ struct Uniforms {
     uint active_sh;
     uint step;
     uint camera_model;
+    uint sort_capacity;
+    uint pad0;
+    uint pad1;
+    uint pad2;
     float fx;
     float fy;
     float cx;

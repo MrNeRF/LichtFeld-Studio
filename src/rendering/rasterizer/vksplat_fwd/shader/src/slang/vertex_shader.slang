@@ -37,6 +37,25 @@ Gaussian_3D load_gaussian(
     return { g_xyz_ws, g_sh_coeffs, g_rotations, g_scales, g_opacities };
 }
 
+Gaussian_3D load_gaussian_split(
+    int32_t g_idx,
+    StructuredBuffer<float> xyz_ws,
+    StructuredBuffer<float> sh0,
+    StructuredBuffer<float4> shN,
+    StructuredBuffer<float4> rotations,
+    StructuredBuffer<float> scaling_raw,
+    StructuredBuffer<float> opacity_raw,
+    uint active_sh
+) {
+    float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(g_idx, sh0, shN, active_sh);
+    float4 g_rotations = rotations[g_idx];
+    float3 g_scales = exp(read_t3_float3(g_idx, scaling_raw));
+    float g_opacities = sigmoid_activation(opacity_raw[g_idx]);
+
+    return { g_xyz_ws, g_sh_coeffs, g_rotations, g_scales, g_opacities };
+}
+
 [ForceInline]
 Gaussian_3D load_zero_gaussian() {
     float3 g_xyz_ws = float3(0);
@@ -241,27 +260,29 @@ rectangle get_rectangle_tile_space(
 
 // Input buffers
 layout(binding=0) StructuredBuffer<float> xyz_ws;  // 3
-layout(binding=1) StructuredBuffer<float4> sh_coeffs;  // 16*3
-layout(binding=2) StructuredBuffer<float4> rotations;  // 4
-layout(binding=3) StructuredBuffer<float4> scales_opacs;  // 4
+layout(binding=1) StructuredBuffer<float> sh0;  // 1*3
+layout(binding=2) StructuredBuffer<float4> shN;  // rest-only 15*3
+layout(binding=3) StructuredBuffer<float4> rotations;  // 4
+layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
+layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 
 // Output buffers
-layout(binding=4) RWStructuredBuffer<int> out_tiles_touched;
+layout(binding=6) RWStructuredBuffer<int> out_tiles_touched;
 #if USE_EMULATED_INT64
-layout(binding=5) RWStructuredBuffer<int32_t> out_rect_tile_space;
+layout(binding=7) RWStructuredBuffer<int32_t> out_rect_tile_space;
 #else
-layout(binding=5) RWStructuredBuffer<int64_t> out_rect_tile_space;
+layout(binding=7) RWStructuredBuffer<int64_t> out_rect_tile_space;
 #endif
-layout(binding=6) RWStructuredBuffer<int> out_radii;
-layout(binding=7) RWStructuredBuffer<float2> out_xy_vs;
-layout(binding=8) RWStructuredBuffer<float> out_depths;
-layout(binding=9) RWStructuredBuffer<float4> out_inv_cov_vs;
-layout(binding=10) RWStructuredBuffer<float> out_rgb;
-layout(binding=11) RWStructuredBuffer<uint> out_overlay_flags;
-layout(binding=12) ByteAddressBuffer transform_indices;
-layout(binding=13) ByteAddressBuffer node_mask;
-layout(binding=14) StructuredBuffer<float4> overlay_params;
-layout(binding=15) StructuredBuffer<float4> model_transforms;
+layout(binding=8) RWStructuredBuffer<int> out_radii;
+layout(binding=9) RWStructuredBuffer<float2> out_xy_vs;
+layout(binding=10) RWStructuredBuffer<float> out_depths;
+layout(binding=11) RWStructuredBuffer<float4> out_inv_cov_vs;
+layout(binding=12) RWStructuredBuffer<float> out_rgb;
+layout(binding=13) RWStructuredBuffer<uint> out_overlay_flags;
+layout(binding=14) ByteAddressBuffer transform_indices;
+layout(binding=15) ByteAddressBuffer node_mask;
+layout(binding=16) StructuredBuffer<float4> overlay_params;
+layout(binding=17) StructuredBuffer<float4> model_transforms;
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
 
@@ -341,16 +362,24 @@ void main(
         uniforms.fx, uniforms.fy, uniforms.cx, uniforms.cy,
         camera_model, uniforms.dist_coeffs,
         image_height, image_width);
-  #if EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD && !EARLY_RETURN_ON_ZERO_GRAD
+  #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    Gaussian_3D gauss = load_gaussian_split(
+        g_idx, xyz_ws, sh0, shN, rotations,
+        scaling_raw, opacity_raw,
+        active_sh
+      );
+  #else
+    #if EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD && !EARLY_RETURN_ON_ZERO_GRAD
     Gaussian_3D gauss = load_zero_gaussian();
     if (!is_zero_grad) gauss = load_gaussian(
-  #else
+    #else
     Gaussian_3D gauss = load_gaussian(
-  #endif
+    #endif
         g_idx, xyz_ws, sh_coeffs, rotations,
         scales_opacs,
         active_sh
       );
+  #endif
 
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
     uint overlay_flags = 0;

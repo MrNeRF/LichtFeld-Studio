@@ -5,10 +5,12 @@
 #include "vksplat_viewport_renderer.hpp"
 
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
+#include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
 
 #include <algorithm>
@@ -70,7 +72,6 @@ namespace lfs::vis {
                 {"selection_mask", (root / "generated/selection_mask.spv").string()},
                 {"generate_keys", (root / "generated/generate_keys.spv").string()},
                 {"compute_tile_ranges", (root / "generated/compute_tile_ranges.spv").string()},
-                {"setup_dispatch_indirect", (root / "generated/setup_dispatch_indirect.spv").string()},
                 {"rasterize_forward", (root / "generated/rasterize_forward.spv").string()},
                 {"rasterize_forward_gut", (root / "generated/rasterize_forward_gut.spv").string()},
                 {"cumsum_single_pass", (root / "generated/cumsum_single_pass.spv").string()},
@@ -160,6 +161,19 @@ namespace lfs::vis {
             return view;
         }
 
+        [[nodiscard]] _VulkanBuffer makeBorrowedBufferView(const VkBuffer buffer,
+                                                           const std::size_t allocation_size,
+                                                           const std::size_t bytes,
+                                                           const VkDeviceSize offset = 0) {
+            _VulkanBuffer view{};
+            view.buffer = buffer;
+            view.allocation = VK_NULL_HANDLE;
+            view.allocSize = allocation_size;
+            view.offset = offset;
+            view.size = bytes;
+            return view;
+        }
+
         [[nodiscard]] _VulkanBuffer makeResizableRegionView(const VulkanContext::ExternalBuffer& buffer,
                                                             const std::size_t offset,
                                                             const std::size_t capacity_bytes) {
@@ -226,9 +240,11 @@ namespace lfs::vis {
 
         enum InputRegion : std::size_t {
             InputXyzWs = 0,
-            InputRotations = 1,
-            InputScalesOpacs = 2,
-            InputShCoeffs = 3,
+            InputSh0 = 1,
+            InputShN = 2,
+            InputRotations = 3,
+            InputScalingRaw = 4,
+            InputOpacityRaw = 5,
         };
 
         enum OverlayRegion : std::size_t {
@@ -578,6 +594,60 @@ namespace lfs::vis {
             };
         }
 
+        [[nodiscard]] std::shared_ptr<VulkanExternalTensorStorage> vulkanExternalStorage(
+            const Tensor& tensor) {
+            if (!tensor.is_valid() || !tensor.is_external_storage() ||
+                tensor.external_storage_kind() != "vulkan_external_buffer") {
+                return nullptr;
+            }
+            auto owner = tensor.external_storage_owner();
+            if (!owner) {
+                return nullptr;
+            }
+            return std::static_pointer_cast<VulkanExternalTensorStorage>(std::move(owner));
+        }
+
+        [[nodiscard]] std::expected<void, std::string> waitForInputTensorStream(
+            const cudaStream_t stream,
+            const Tensor& tensor,
+            const std::string_view label) {
+            try {
+                lfs::core::waitForCUDAStream(stream, tensor.stream());
+                return {};
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format(
+                    "VkSplat failed to order {} stream before Vulkan read: {}",
+                    label,
+                    e.what()));
+            }
+        }
+
+        [[nodiscard]] std::expected<void, std::string> waitForSplatInputStreams(
+            const cudaStream_t stream,
+            const lfs::core::SplatData& splat_data) {
+            if (auto ok = waitForInputTensorStream(stream, splat_data.means_raw(), "means"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = waitForInputTensorStream(stream, splat_data.sh0_raw(), "sh0"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (splat_data.shN_raw().is_valid() && splat_data.shN_raw().numel() > 0) {
+                if (auto ok = waitForInputTensorStream(stream, splat_data.shN_raw(), "shN"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+            }
+            if (auto ok = waitForInputTensorStream(stream, splat_data.rotation_raw(), "rotation"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = waitForInputTensorStream(stream, splat_data.scaling_raw(), "scaling"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = waitForInputTensorStream(stream, splat_data.opacity_raw(), "opacity"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            return {};
+        }
+
         void populateVksplatCameraUniforms(
             VulkanGSRendererUniforms& uniforms,
             const lfs::rendering::FrameView& frame_view,
@@ -758,30 +828,42 @@ namespace lfs::vis {
         detach(buffers_.rotations.deviceBuffer);
         detach(buffers_.scales_opacs.deviceBuffer);
         detach(buffers_.sh_coeffs.deviceBuffer);
+        detach(buffers_.sh0.deviceBuffer);
+        detach(buffers_.shN.deviceBuffer);
+        detach(buffers_.scaling_raw.deviceBuffer);
+        detach(buffers_.opacity_raw.deviceBuffer);
     }
 
     void VksplatViewportRenderer::plugRingInputs(const std::size_t ring_slot, const std::size_t num_splats) {
         assert(ring_slot < cuda_inputs_.size());
         auto& slot = cuda_inputs_[ring_slot];
-        // All four region views share one VkBuffer / one device allocation; only
+        // All raw input region views share one VkBuffer / one device allocation; only
         // (offset, size) differs per binding. allocation is left null because the
         // CudaInputSlot owns it.
         const auto plug = [&](_VulkanBuffer& dev, std::size_t region) {
             dev = makeRegionView(slot.buffer, slot.region_offset[region], slot.region_bytes[region]);
         };
         plug(buffers_.xyz_ws.deviceBuffer, InputXyzWs);
+        plug(buffers_.sh0.deviceBuffer, InputSh0);
+        plug(buffers_.shN.deviceBuffer, InputShN);
         plug(buffers_.rotations.deviceBuffer, InputRotations);
-        plug(buffers_.scales_opacs.deviceBuffer, InputScalesOpacs);
-        plug(buffers_.sh_coeffs.deviceBuffer, InputShCoeffs);
+        plug(buffers_.scaling_raw.deviceBuffer, InputScalingRaw);
+        plug(buffers_.opacity_raw.deviceBuffer, InputOpacityRaw);
+        buffers_.scales_opacs.deviceBuffer = {};
+        buffers_.sh_coeffs.deviceBuffer = {};
 
         // Resize host-shadow vectors so the rasterizer's bookkeeping (which
         // calls byteLength()) keeps matching the device-side payload. The host
         // vectors are not read by the rasterizer; only their size() matters
         // when the renderer cross-checks element counts.
         buffers_.xyz_ws.resize(slot.region_bytes[InputXyzWs] / sizeof(float));
+        buffers_.sh0.resize(slot.region_bytes[InputSh0] / sizeof(float));
+        buffers_.shN.resize(slot.region_bytes[InputShN] / sizeof(float));
         buffers_.rotations.resize(slot.region_bytes[InputRotations] / sizeof(float));
-        buffers_.scales_opacs.resize(slot.region_bytes[InputScalesOpacs] / sizeof(float));
-        buffers_.sh_coeffs.resize(slot.region_bytes[InputShCoeffs] / sizeof(float));
+        buffers_.scaling_raw.resize(slot.region_bytes[InputScalingRaw] / sizeof(float));
+        buffers_.opacity_raw.resize(slot.region_bytes[InputOpacityRaw] / sizeof(float));
+        buffers_.scales_opacs.clear();
+        buffers_.sh_coeffs.clear();
 
         buffers_.num_splats = num_splats;
         buffers_.num_indices = 0;
@@ -795,11 +877,11 @@ namespace lfs::vis {
             return;
         }
 
-        // Projection is the only pass that reads the packed input regions. Once it
-        // has written projected splat state, key generation and radix sort no
-        // longer need those bytes. Reuse the same imported allocation for the four
-        // equally-sized sort arrays; resizeDeviceBuffer() will fall back to an
-        // owned Vulkan allocation if an unusually large frame exceeds the alias.
+        // Regular 2D splat rasterization no longer reads the packed input regions
+        // after projection has written projected splat state. Reuse the same
+        // imported allocation for the four equally-sized sort arrays in that path;
+        // callers must not use this alias for 3DGUT, whose raster pass reloads raw
+        // means/rotations/scales/opacities analytically per pixel.
         const std::size_t array_capacity =
             (static_cast<std::size_t>(slot.buffer.allocation_size) / 4u) & ~std::size_t{3u};
         if (array_capacity == 0) {
@@ -829,7 +911,11 @@ namespace lfs::vis {
                 }
             };
             detach_view(buffers_.xyz_ws.deviceBuffer);
+            detach_view(buffers_.sh0.deviceBuffer);
+            detach_view(buffers_.shN.deviceBuffer);
             detach_view(buffers_.rotations.deviceBuffer);
+            detach_view(buffers_.scaling_raw.deviceBuffer);
+            detach_view(buffers_.opacity_raw.deviceBuffer);
             detach_view(buffers_.scales_opacs.deviceBuffer);
             detach_view(buffers_.sh_coeffs.deviceBuffer);
             detach_view(buffers_.sorting_keys_1.deviceBuffer);
@@ -1068,7 +1154,7 @@ namespace lfs::vis {
 
         // Per-ring-slot upload timeline: a Vulkan-exportable timeline semaphore
         // imported into CUDA so we can signal CUDA-side after the upload's
-        // cudaMemcpyAsync and have Vulkan compute wait on it — replacing the
+        // cudaMemcpyAsync and have Vulkan compute wait on it, replacing the
         // per-frame cudaStreamSynchronize that previously blocked the CPU.
         for (auto& timeline : upload_timelines_) {
             if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
@@ -1127,10 +1213,11 @@ namespace lfs::vis {
         return ring_uploaded_[ring_slot].valid() && ring_uploaded_[ring_slot] == current;
     }
 
-    std::expected<void, std::string> VksplatViewportRenderer::uploadInputs(
+    std::expected<VksplatViewportRenderer::InputBindingResult, std::string> VksplatViewportRenderer::prepareInputs(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
         const std::size_t ring_slot,
+        const bool force_upload,
         const bool synchronize_upload) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
@@ -1138,29 +1225,136 @@ namespace lfs::vis {
         }
 
         if (!context.externalMemoryInteropEnabled()) {
-            return std::unexpected("VkSplat input upload requires CUDA/Vulkan external-memory interop");
+            return std::unexpected("VkSplat input binding requires CUDA/Vulkan external-memory interop");
         }
         assert(ring_slot < cuda_inputs_.size());
         auto& slot = cuda_inputs_[ring_slot];
 
-        auto layout = vksplat::deviceInputLayout(splat_data);
+        auto layout = vksplat::rawDeviceInputLayout(splat_data);
         if (!layout) {
             return std::unexpected(layout.error());
         }
 
+        auto means_storage = vulkanExternalStorage(splat_data.means_raw());
+        auto sh0_storage = vulkanExternalStorage(splat_data.sh0_raw());
+        auto shN_storage = vulkanExternalStorage(splat_data.shN_raw());
+        auto rotations_storage = vulkanExternalStorage(splat_data.rotation_raw());
+        auto scaling_storage = vulkanExternalStorage(splat_data.scaling_raw());
+        auto opacity_storage = vulkanExternalStorage(splat_data.opacity_raw());
+        const bool can_bind_external =
+            means_storage && sh0_storage && shN_storage && rotations_storage &&
+            scaling_storage && opacity_storage;
+
+        const auto resize_host_shadows = [&] {
+            buffers_.xyz_ws.resize(layout->xyz_bytes / sizeof(float));
+            buffers_.sh0.resize(layout->sh0_bytes / sizeof(float));
+            buffers_.shN.resize(layout->shN_bytes / sizeof(float));
+            buffers_.rotations.resize(layout->rotations_bytes / sizeof(float));
+            buffers_.scaling_raw.resize(layout->scaling_bytes / sizeof(float));
+            buffers_.opacity_raw.resize(layout->opacity_bytes / sizeof(float));
+            buffers_.scales_opacs.clear();
+            buffers_.sh_coeffs.clear();
+            buffers_.num_splats = n;
+            buffers_.num_indices = 0;
+            buffers_.is_unsorted_1 = true;
+        };
+
+        if (can_bind_external) {
+            const auto require_capacity =
+                [](const std::shared_ptr<VulkanExternalTensorStorage>& storage,
+                   const std::size_t bytes,
+                   const char* const label) -> std::expected<void, std::string> {
+                if (!storage) {
+                    return std::unexpected(std::format(
+                        "VkSplat Vulkan-external {} storage is missing",
+                        label));
+                }
+                if (storage->vkBuffer() == VK_NULL_HANDLE || storage->bytes() < bytes) {
+                    return std::unexpected(std::format(
+                        "VkSplat Vulkan-external {} storage is too small: have {} bytes, need {}",
+                        label,
+                        storage->bytes(),
+                        bytes));
+                }
+                return {};
+            };
+            if (auto ok = require_capacity(means_storage, layout->xyz_bytes, "means"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = require_capacity(sh0_storage, layout->sh0_bytes, "sh0"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = require_capacity(shN_storage, layout->shN_bytes, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = require_capacity(rotations_storage, layout->rotations_bytes, "rotation"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = require_capacity(scaling_storage, layout->scaling_bytes, "scaling"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = require_capacity(opacity_storage, layout->opacity_bytes, "opacity"); !ok) {
+                return std::unexpected(ok.error());
+            }
+
+            buffers_.xyz_ws.deviceBuffer = makeBorrowedBufferView(
+                means_storage->vkBuffer(), means_storage->bytes(), layout->xyz_bytes, means_storage->vkOffset());
+            buffers_.sh0.deviceBuffer = makeBorrowedBufferView(
+                sh0_storage->vkBuffer(), sh0_storage->bytes(), layout->sh0_bytes, sh0_storage->vkOffset());
+            buffers_.shN.deviceBuffer = makeBorrowedBufferView(
+                shN_storage->vkBuffer(), shN_storage->bytes(), layout->shN_bytes, shN_storage->vkOffset());
+            buffers_.rotations.deviceBuffer = makeBorrowedBufferView(
+                rotations_storage->vkBuffer(), rotations_storage->bytes(), layout->rotations_bytes, rotations_storage->vkOffset());
+            buffers_.scaling_raw.deviceBuffer = makeBorrowedBufferView(
+                scaling_storage->vkBuffer(), scaling_storage->bytes(), layout->scaling_bytes, scaling_storage->vkOffset());
+            buffers_.opacity_raw.deviceBuffer = makeBorrowedBufferView(
+                opacity_storage->vkBuffer(), opacity_storage->bytes(), layout->opacity_bytes, opacity_storage->vkOffset());
+            buffers_.scales_opacs.deviceBuffer = {};
+            buffers_.sh_coeffs.deviceBuffer = {};
+            resize_host_shadows();
+
+            const cudaStream_t stream = splat_data.means_raw().stream();
+            if (auto ok = waitForSplatInputStreams(stream, splat_data); !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (synchronize_upload) {
+                if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
+                    return std::unexpected(std::format("VkSplat CUDA input stream sync failed: {} ({})",
+                                                       cudaGetErrorName(status),
+                                                       cudaGetErrorString(status)));
+                }
+            }
+
+            auto& timeline = upload_timelines_[ring_slot];
+            const std::uint64_t signal_value = ++timeline.value;
+            if (!timeline.cuda_semaphore.cudaSignal(signal_value, stream)) {
+                return std::unexpected(std::format("VkSplat CUDA input-ready signal failed: {}",
+                                                   timeline.cuda_semaphore.lastError()));
+            }
+            renderer_.addTimelineWait(timeline.vk_semaphore.semaphore,
+                                      signal_value,
+                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+            ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
+            return InputBindingResult{.uses_temporary_upload_slot = false};
+        }
+
         std::array<std::size_t, kInputRegionCount> region_bytes{};
         region_bytes[InputXyzWs] = layout->xyz_bytes;
+        region_bytes[InputSh0] = layout->sh0_bytes;
+        region_bytes[InputShN] = layout->shN_bytes;
         region_bytes[InputRotations] = layout->rotations_bytes;
-        region_bytes[InputScalesOpacs] = layout->scales_opacs_bytes;
-        region_bytes[InputShCoeffs] = layout->sh_coeffs_bytes;
+        region_bytes[InputScalingRaw] = layout->scaling_bytes;
+        region_bytes[InputOpacityRaw] = layout->opacity_bytes;
 
-        // Lay out the four regions back-to-back, padding each to kRegionAlignment
+        // Lay out the raw regions back-to-back, padding each to kRegionAlignment
         // so the resulting offsets are valid for VK_DESCRIPTOR_TYPE_STORAGE_BUFFER
         // bindings on every conformant device. Driver-required alignment is at
-        // most 256 bytes (often less) — overshooting here costs ≤ 1 KiB per ring.
+        // most 256 bytes (often less); overshooting here costs <= 1 KiB per ring.
         std::array<std::size_t, kInputRegionCount> region_offset{};
         const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
 
+        const bool slot_had_buffer = slot.buffer.buffer != VK_NULL_HANDLE;
         if (auto ok = ensureCudaInteropBuffer(context,
                                               slot.buffer,
                                               slot.interop,
@@ -1174,20 +1368,29 @@ namespace lfs::vis {
         slot.region_offset = region_offset;
         slot.region_bytes = region_bytes;
 
-        // Single CUDA-imported VkBuffer. Pack directly into its four regions so
-        // the live viewer does not materialize duplicate packed tensors in the
-        // tensor memory arena.
+        const bool upload_needed =
+            force_upload || !inputsResident(splat_data, ring_slot) || !slot_had_buffer;
+
+        if (!upload_needed) {
+            plugRingInputs(ring_slot, n);
+            return InputBindingResult{.uses_temporary_upload_slot = true};
+        }
+
+        // Single CUDA-imported VkBuffer. Copy raw SplatData into its regions only
+        // when model storage cannot be bound directly as Vulkan buffers.
         auto* const base = static_cast<std::uint8_t*>(slot.interop.devicePointer());
         if (base == nullptr) {
             return std::unexpected("VkSplat CUDA/Vulkan input buffer is not mapped");
         }
         const cudaStream_t stream = splat_data.means_raw().stream();
-        if (auto ok = vksplat::packDeviceInputsToBuffer(
+        if (auto ok = vksplat::copyRawDeviceInputsToBuffer(
                 splat_data,
                 base + region_offset[InputXyzWs],
+                base + region_offset[InputSh0],
+                base + region_offset[InputShN],
                 base + region_offset[InputRotations],
-                base + region_offset[InputScalesOpacs],
-                base + region_offset[InputShCoeffs],
+                base + region_offset[InputScalingRaw],
+                base + region_offset[InputOpacityRaw],
                 stream);
             !ok) {
             return std::unexpected(ok.error());
@@ -1214,7 +1417,8 @@ namespace lfs::vis {
                                   VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 
         ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
-        return {};
+        plugRingInputs(ring_slot, n);
+        return InputBindingResult{.uses_temporary_upload_slot = true};
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::ensureOutputImages(
@@ -1646,17 +1850,18 @@ namespace lfs::vis {
         const int height = output.size.y;
         const std::size_t pixel_count =
             static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-        std::vector<float> chw(pixel_count * 3u);
+        std::vector<float> hwc(pixel_count * 3u);
         for (std::size_t i = 0; i < pixel_count; ++i) {
             const std::size_t src = i * 4u;
-            chw[i] = static_cast<float>(rgba[src]) / 255.0f;
-            chw[pixel_count + i] = static_cast<float>(rgba[src + 1u]) / 255.0f;
-            chw[pixel_count * 2u + i] = static_cast<float>(rgba[src + 2u]) / 255.0f;
+            const std::size_t dst = i * 3u;
+            hwc[dst] = static_cast<float>(rgba[src]) / 255.0f;
+            hwc[dst + 1u] = static_cast<float>(rgba[src + 1u]) / 255.0f;
+            hwc[dst + 2u] = static_cast<float>(rgba[src + 2u]) / 255.0f;
         }
 
         auto tensor = lfs::core::Tensor::from_vector(
-            chw,
-            {3u, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+            hwc,
+            {static_cast<std::size_t>(height), static_cast<std::size_t>(width), std::size_t{3}},
             lfs::core::Device::CPU);
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
@@ -1697,15 +1902,19 @@ namespace lfs::vis {
 
         constexpr std::size_t ring_slot = 0;
 
-        if (force_input_upload || !inputsResident(splat_data, ring_slot)) {
-            if (auto ok = uploadInputs(context, splat_data, ring_slot, true); !ok) {
-                return std::unexpected(ok.error());
-            }
+        const bool model_inputs_changed = force_input_upload || !inputsResident(splat_data, ring_slot);
+        auto input_binding = prepareInputs(context, splat_data, ring_slot, force_input_upload, true);
+        if (!input_binding) {
+            return std::unexpected(input_binding.error());
+        }
+        if (model_inputs_changed) {
             renderer_.resetNumIndicesEstimate();
         }
-        plugRingInputs(ring_slot, num_splats);
+        const bool release_temporary_inputs = input_binding->uses_temporary_upload_slot;
         const ScopeExit release_input_slot([&] {
-            releaseInputSlot(context, ring_slot);
+            if (release_temporary_inputs) {
+                releaseInputSlot(context, ring_slot);
+            }
         });
 
         auto& slot = cuda_selection_query_;
@@ -1902,19 +2111,27 @@ namespace lfs::vis {
 
         constexpr std::size_t ring_slot = 0;
 
-        if (force_input_upload || !inputsResident(splat_data, ring_slot)) {
-            if (auto ok = uploadInputs(context, splat_data, ring_slot, synchronize_input_upload); !ok) {
-                return std::unexpected(ok.error());
-            }
+        const bool model_inputs_changed = force_input_upload || !inputsResident(splat_data, ring_slot);
+        auto input_binding = prepareInputs(context,
+                                           splat_data,
+                                           ring_slot,
+                                           force_input_upload,
+                                           synchronize_input_upload);
+        if (!input_binding) {
+            return std::unexpected(input_binding.error());
+        }
+        if (model_inputs_changed) {
             // Drop the deferred-readback high-water-mark whenever the model identity
-            // changes — a fresh model can have a wildly different num_indices range,
+            // changes; a fresh model can have a wildly different num_indices range,
             // and stale estimates risk under-sizing the sort buffers (or wasting VRAM
             // if oversized). The next frame re-seeds via heuristic and grows from there.
             renderer_.resetNumIndicesEstimate();
         }
-        plugRingInputs(ring_slot, static_cast<std::size_t>(splat_data.size()));
+        const bool release_temporary_inputs = input_binding->uses_temporary_upload_slot;
         const ScopeExit release_input_slot([&] {
-            releaseInputSlot(context, ring_slot);
+            if (release_temporary_inputs) {
+                releaseInputSlot(context, ring_slot);
+            }
         });
 
         auto overlay_bindings = uploadSelectionOverlay(
@@ -1975,7 +2192,9 @@ namespace lfs::vis {
             }
         }
 
-        aliasSortScratchToInputSlot(ring_slot);
+        if (input_binding->uses_temporary_upload_slot && !request.gut) {
+            aliasSortScratchToInputSlot(ring_slot);
+        }
 
         std::expected<void, std::string> compose_status;
         try {
@@ -1988,7 +2207,10 @@ namespace lfs::vis {
                                                overlay_bindings->model_transforms,
                                                0,
                                                request.gut);
-            renderer_.executeCalculateIndexBufferOffset(buffers_);
+            renderer_.executeCalculateIndexBufferOffset(uniforms, buffers_);
+            uniforms.sort_capacity = static_cast<uint32_t>(
+                std::min<std::size_t>(buffers_.num_indices,
+                                      static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
             if (buffers_.num_indices > 0) {
                 renderer_.executeGenerateKeys(uniforms, buffers_);
                 renderer_.executeSort(uniforms, buffers_, -1);
