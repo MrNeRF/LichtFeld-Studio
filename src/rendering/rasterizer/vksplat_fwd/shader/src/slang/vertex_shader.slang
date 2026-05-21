@@ -106,9 +106,7 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     }
     xyz_vs.xy -= 0.5;  // pixel offset
 
-    float4x3 mat = transpose(cam.world_view_transform);
-    float3 cam_pos = -mul(float3x3(mat), mat[3]);
-    float3 dir = float3(normalize(mean_ws - cam_pos));
+    float3 dir = view_direction_to_point(mean_ws, cam);
     if (model_transform_enabled) {
         float3 r0, r1, r2;
         if (extract_rotation_rows(model_transform_rows, model_transform_base, r0, r1, r2)) {
@@ -215,9 +213,7 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
     }
 
-    float4x3 mat = transpose(cam.world_view_transform);
-    float3 cam_pos = -mul(float3x3(mat), mat[3]);
-    float3 dir = float3(normalize(mean_ws - cam_pos));
+    float3 dir = view_direction_to_point(mean_ws, cam);
     if (model_transform_enabled) {
         float3 r0, r1, r2;
         if (extract_rotation_rows(model_transform_rows, model_transform_base, r0, r1, r2)) {

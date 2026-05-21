@@ -830,7 +830,6 @@ namespace lfs::vis {
                 vksplat_output_slot.has_value() &&
                 context.vulkan_context != nullptr &&
                 lfs::rendering::isVkSplatBackend(request.raster_backend) &&
-                !request.frame_view.orthographic &&
                 !request.equirectangular;
             if (vksplat_panel_supported) {
                 if (!vksplat_viewport_renderer_) {
@@ -864,9 +863,6 @@ namespace lfs::vis {
 
             if (!context.vulkan_context) {
                 return std::unexpected("VkSplat split-view panel requires an active Vulkan context");
-            }
-            if (request.frame_view.orthographic) {
-                return std::unexpected("VkSplat split-view panel supports pinhole cameras, not orthographic cameras");
             }
             if (request.equirectangular) {
                 return std::unexpected("VkSplat split-view panel supports pinhole cameras, not equirectangular cameras");

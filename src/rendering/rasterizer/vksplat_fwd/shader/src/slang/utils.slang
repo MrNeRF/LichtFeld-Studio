@@ -25,8 +25,9 @@ struct rectangle {
 
 enum CameraModel {
     PINHOLE = 0,
-    OPENCV = 1,
+    ORTHO = 1,
     FISHEYE = 2,
+    OPENCV = 5,
 };
 
 static const uint CAMERA_MODEL_MASK = 0xffu;
@@ -164,6 +165,16 @@ float3 project_point_pinhole(float3 point, Camera cam) {
 }
 
 [Differentiable]
+float3 project_point_ortho(float3 point, Camera cam) {
+    float3 view_point = geom_transform_points(point, cam.world_view_transform);
+    return {
+        cam.fx * view_point.x + cam.cx,
+        cam.fy * view_point.y + cam.cy,
+        view_point.z
+    };
+}
+
+[Differentiable]
 float3x3 compute_jacobian_pinhole(float3 xyz_ws, Camera cam) {
     float tan_fovx = 0.5f * cam.W / cam.fx;
     float tan_fovy = 0.5f * cam.H / cam.fy;
@@ -184,6 +195,13 @@ float3x3 compute_jacobian_pinhole(float3 xyz_ws, Camera cam) {
                           0.0, 0.0, 0.0);
 
     return J;
+}
+
+[Differentiable]
+float3x3 compute_jacobian_ortho(float3 xyz_ws, Camera cam) {
+    return float3x3(cam.fx, 0.0, 0.0,
+                    0.0, cam.fy, 0.0,
+                    0.0, 0.0, 0.0);
 }
 
 [ForceInline]
@@ -395,6 +413,8 @@ float3 project_point(float3 point, Camera cam) {
         return project_point_fisheye(point, cam);
     else if (cam.model == int(CameraModel::OPENCV))
         return project_point_opencv(point, cam);
+    else if (cam.model == int(CameraModel::ORTHO))
+        return project_point_ortho(point, cam);
     else
         return project_point_pinhole(point, cam);
 }
@@ -406,6 +426,8 @@ float3x3 compute_jacobian(float3 xyz_ws, Camera cam) {
     else if (cam.model == int(CameraModel::OPENCV))
         // return compute_jacobian_opencv(xyz_ws, cam);
         return compute_jacobian_pinhole(xyz_ws, cam);  // TODO
+    else if (cam.model == int(CameraModel::ORTHO))
+        return compute_jacobian_ortho(xyz_ws, cam);
     else
         return compute_jacobian_pinhole(xyz_ws, cam);
 }
@@ -440,12 +462,28 @@ WorldRay pixel_to_world_ray(float2 pixel, Camera cam) {
         uv = undistort_point_kkpp(uv, cam.dist_coeffs);
     }
 
-    float3 ray_camera = safe_normalize(float3(uv, 1.0f));
     float4x3 world_view_t = transpose(cam.world_view_transform);
     float3x3 view_to_world_rotation = float3x3(world_view_t);
-    float3 origin = -mul(view_to_world_rotation, world_view_t[3]);
+    float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
+    float3 ray_camera = cam.model == int(CameraModel::ORTHO)
+                            ? float3(0.0f, 0.0f, 1.0f)
+                            : safe_normalize(float3(uv, 1.0f));
+    float3 origin = cam.model == int(CameraModel::ORTHO)
+                        ? camera_origin + mul(view_to_world_rotation, float3(uv, 0.0f))
+                        : camera_origin;
     float3 direction = safe_normalize(mul(view_to_world_rotation, ray_camera));
     return { origin, direction, isfinite(dot(origin, origin)) && isfinite(dot(direction, direction)) };
+}
+
+[ForceInline]
+float3 view_direction_to_point(float3 world_point, Camera cam) {
+    float4x3 world_view_t = transpose(cam.world_view_transform);
+    float3x3 view_to_world_rotation = float3x3(world_view_t);
+    if (cam.model == int(CameraModel::ORTHO)) {
+        return safe_normalize(mul(view_to_world_rotation, float3(0.0f, 0.0f, 1.0f)));
+    }
+    float3 camera_origin = -mul(view_to_world_rotation, world_view_t[3]);
+    return safe_normalize(world_point - camera_origin);
 }
 
 [ForceInline]

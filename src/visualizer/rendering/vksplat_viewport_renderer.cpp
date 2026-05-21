@@ -35,6 +35,8 @@ namespace lfs::vis {
         using lfs::core::Device;
         using lfs::core::Tensor;
 
+        constexpr std::uint32_t kVkSplatCameraModelPinhole = 0u;
+        constexpr std::uint32_t kVkSplatCameraModelOrthographic = 1u;
         constexpr std::uint32_t kVkSplatProjectionModeShift = 8u;
         constexpr std::uint32_t kVkSplatProjectionModeGut = 1u;
 
@@ -62,6 +64,18 @@ namespace lfs::vis {
 
         [[nodiscard]] std::string vkError(const char* const operation, const VkResult result) {
             return std::format("{} failed: {}", operation, vkResultToString(result));
+        }
+
+        [[nodiscard]] std::uint32_t vksplatBaseCameraModel(const lfs::rendering::FrameView& frame_view) {
+            return frame_view.orthographic ? kVkSplatCameraModelOrthographic
+                                           : kVkSplatCameraModelPinhole;
+        }
+
+        [[nodiscard]] std::uint32_t packedVksplatCameraModel(
+            const lfs::rendering::FrameView& frame_view,
+            const bool gut) {
+            return vksplatBaseCameraModel(frame_view) |
+                   (gut ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift) : 0u);
         }
 
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
@@ -653,7 +667,8 @@ namespace lfs::vis {
             const lfs::rendering::FrameView& frame_view,
             const lfs::rendering::GaussianSceneState& scene,
             const int active_sh_degree,
-            const std::size_t num_splats) {
+            const std::size_t num_splats,
+            const bool gut) {
             (void)scene;
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
@@ -662,9 +677,18 @@ namespace lfs::vis {
             uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
             uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
             uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
-            uniforms.camera_model = 0;
+            uniforms.camera_model = packedVksplatCameraModel(frame_view, gut);
 
-            if (frame_view.intrinsics_override) {
+            if (frame_view.orthographic) {
+                const float ortho_scale =
+                    std::isfinite(frame_view.ortho_scale) && frame_view.ortho_scale > 1.0e-5f
+                        ? frame_view.ortho_scale
+                        : lfs::rendering::DEFAULT_ORTHO_SCALE;
+                uniforms.fx = ortho_scale;
+                uniforms.fy = ortho_scale;
+                uniforms.cx = static_cast<float>(frame_view.size.x) * 0.5f;
+                uniforms.cy = static_cast<float>(frame_view.size.y) * 0.5f;
+            } else if (frame_view.intrinsics_override) {
                 const auto& intrinsics = *frame_view.intrinsics_override;
                 uniforms.fx = intrinsics.focal_x;
                 uniforms.fy = intrinsics.focal_y;
@@ -1884,9 +1908,6 @@ namespace lfs::vis {
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat selection query received an invalid viewport size");
         }
-        if (request.frame_view.orthographic) {
-            return std::unexpected("VkSplat selection query supports pinhole cameras, not orthographic cameras");
-        }
         if (request.equirectangular) {
             return std::unexpected("VkSplat selection query supports pinhole cameras, not equirectangular cameras");
         }
@@ -2034,7 +2055,8 @@ namespace lfs::vis {
                                       request.frame_view,
                                       request.scene,
                                       0,
-                                      num_splats);
+                                      num_splats,
+                                      request.gut);
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -2047,9 +2069,7 @@ namespace lfs::vis {
             static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
         selection_uniforms.image_height = camera_uniforms.image_height;
         selection_uniforms.image_width = camera_uniforms.image_width;
-        selection_uniforms.camera_model = request.gut
-                                              ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift)
-                                              : 0u;
+        selection_uniforms.camera_model = camera_uniforms.camera_model;
         selection_uniforms.fx = camera_uniforms.fx;
         selection_uniforms.fy = camera_uniforms.fy;
         selection_uniforms.cx = camera_uniforms.cx;
@@ -2103,9 +2123,6 @@ namespace lfs::vis {
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat received an invalid viewport size");
         }
-        if (request.frame_view.orthographic) {
-            return std::unexpected("VkSplat forward path supports pinhole cameras, not orthographic cameras");
-        }
         if (request.equirectangular) {
             return std::unexpected("VkSplat forward path supports pinhole cameras, not equirectangular cameras");
         }
@@ -2153,53 +2170,13 @@ namespace lfs::vis {
         }
 
         VulkanGSRendererUniforms uniforms{};
-        uniforms.image_width = static_cast<std::uint32_t>(size.x);
-        uniforms.image_height = static_cast<std::uint32_t>(size.y);
-        uniforms.grid_width = _CEIL_DIV(uniforms.image_width, TILE_WIDTH);
-        uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
-        uniforms.num_splats = static_cast<std::uint32_t>(buffers_.num_splats);
-        uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
+        populateVksplatCameraUniforms(uniforms,
+                                      request.frame_view,
+                                      request.scene,
+                                      active_sh_degree,
+                                      buffers_.num_splats,
+                                      request.gut);
         uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
-        uniforms.camera_model = request.gut
-                                    ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift)
-                                    : 0u;
-
-        if (request.frame_view.intrinsics_override) {
-            const auto& intrinsics = *request.frame_view.intrinsics_override;
-            uniforms.fx = intrinsics.focal_x;
-            uniforms.fy = intrinsics.focal_y;
-            uniforms.cx = intrinsics.center_x;
-            uniforms.cy = intrinsics.center_y;
-        } else {
-            const auto [fx, fy] = lfs::rendering::computePixelFocalLengths(
-                size, request.frame_view.focal_length_mm);
-            uniforms.fx = fx;
-            uniforms.fy = fy;
-            uniforms.cx = static_cast<float>(size.x) * 0.5f;
-            uniforms.cy = static_cast<float>(size.y) * 0.5f;
-        }
-
-        const glm::mat3 camera_to_world =
-            lfs::rendering::dataCameraToWorldFromVisualizerRotation(request.frame_view.rotation);
-        const glm::mat3 world_to_camera = glm::transpose(camera_to_world);
-        const glm::vec3 translation = -world_to_camera * request.frame_view.translation;
-
-        std::array<float, 16> row_major_view{};
-        row_major_view[15] = 1.0f;
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-                row_major_view[static_cast<std::size_t>(row * 4 + col)] = world_to_camera[col][row];
-            }
-        }
-        row_major_view[3] = translation.x;
-        row_major_view[7] = translation.y;
-        row_major_view[11] = translation.z;
-        for (int row = 0; row < 4; ++row) {
-            for (int col = 0; col < 4; ++col) {
-                uniforms.world_view_transform[4 * row + col] =
-                    row_major_view[static_cast<std::size_t>(4 * col + row)];
-            }
-        }
 
         if (input_binding->uses_temporary_upload_slot && !request.gut) {
             aliasSortScratchToInputSlot(ring_slot);
