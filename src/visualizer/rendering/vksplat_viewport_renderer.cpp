@@ -1430,6 +1430,15 @@ namespace lfs::vis {
             slot.size == size) {
             return {};
         }
+        const bool replacing_existing_output =
+            slot.image.image != VK_NULL_HANDLE ||
+            slot.depth_image.image != VK_NULL_HANDLE;
+        // The previous GUI submit may still be sampling this slot. Drain submitted
+        // frames before destroying images during viewport-size changes.
+        if (replacing_existing_output && !context.waitForSubmittedFrames()) {
+            return std::unexpected(std::format("VkSplat output resize wait failed: {}",
+                                               context.lastError()));
+        }
         if (slot.image.image != VK_NULL_HANDLE) {
             context.imageBarriers().forgetImage(slot.image.image);
         }
