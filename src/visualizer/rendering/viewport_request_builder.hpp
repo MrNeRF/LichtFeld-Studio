@@ -17,10 +17,6 @@ namespace lfs::vis {
         const Viewport* source_viewport = nullptr,
         std::optional<SplitViewPanelId> render_panel = std::nullopt);
 
-    [[nodiscard]] LFS_VIS_API lfs::rendering::HoveredGaussianQueryRequest buildHoveredGaussianQueryRequest(
-        const FrameContext& ctx, glm::ivec2 render_size,
-        const Viewport* source_viewport = nullptr);
-
     [[nodiscard]] LFS_VIS_API lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
         const FrameContext& ctx, glm::ivec2 render_size,
         const Viewport* source_viewport = nullptr,

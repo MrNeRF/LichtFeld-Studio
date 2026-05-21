@@ -177,34 +177,6 @@ namespace lfs::vis {
         return request;
     }
 
-    lfs::rendering::HoveredGaussianQueryRequest buildHoveredGaussianQueryRequest(
-        const FrameContext& ctx, const glm::ivec2 render_size, const Viewport* const source_viewport) {
-        const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
-        const auto frame_view = ctx.makeFrameView(viewport, render_size);
-
-        lfs::rendering::HoveredGaussianQueryRequest request{
-            .frame_view = frame_view,
-            .scaling_modifier = ctx.settings.scaling_modifier,
-            .mip_filter = ctx.settings.mip_filter,
-            .sh_degree = ctx.settings.sh_degree,
-            .raster_backend = ctx.settings.raster_backend,
-            .gut = ctx.settings.gut ||
-                   lfs::rendering::isGutBackend(ctx.settings.raster_backend),
-            .equirectangular = ctx.settings.equirectangular,
-            .scene =
-                {.model_transforms = &ctx.scene_state.model_transforms,
-                 .transform_indices = ctx.scene_state.transform_indices,
-                 .node_visibility_mask = ctx.scene_state.node_visibility_mask},
-            .filters = {},
-            .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
-        };
-
-        applyGaussianCropBox(request.filters, ctx);
-        applyGaussianEllipsoid(request.filters, ctx);
-        applyGaussianViewVolume(request.filters, ctx);
-        return request;
-    }
-
     lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
         const FrameContext& ctx, const glm::ivec2 render_size,
         const Viewport* const source_viewport,

@@ -282,8 +282,8 @@ TEST_F(MeshDataTest, RasterVideoCompositeUsesSubmeshMaterialsTexturesAndVertexCo
         0, 255, 0, 255, 0, 255, 0, 255};
     mesh.texture_images = {std::move(green_texture)};
 
-    auto engine = lfs::rendering::RenderingEngine::createRasterOnly();
-    auto init = engine->initializeRasterOnly();
+    auto engine = lfs::rendering::RenderingEngine::create();
+    auto init = engine->initialize();
     ASSERT_TRUE(init.has_value()) << init.error();
 
     const lfs::rendering::ViewportData viewport{

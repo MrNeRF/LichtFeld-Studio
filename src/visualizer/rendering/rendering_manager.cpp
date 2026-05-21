@@ -90,16 +90,15 @@ namespace lfs::vis {
 
         LOG_TIMER("RenderingEngine initialization");
 
-        engine_ = lfs::rendering::RenderingEngine::createRasterOnly();
-        auto init_result = engine_->initializeRasterOnly();
+        engine_ = lfs::rendering::RenderingEngine::create();
+        auto init_result = engine_->initialize();
         if (!init_result) {
             LOG_ERROR("Failed to initialize rendering engine: {}", init_result.error());
             throw std::runtime_error("Failed to initialize rendering engine: " + init_result.error());
         }
 
         initialized_ = true;
-        raster_initialized_ = true;
-        LOG_INFO("Raster rendering engine initialized successfully");
+        LOG_INFO("Auxiliary rendering engine initialized successfully");
     }
 
     void RenderingManager::markDirty() {

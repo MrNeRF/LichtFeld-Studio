@@ -12,6 +12,7 @@
 #include "theme/theme.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -43,18 +44,15 @@ namespace lfs::vis::tools {
 
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
-            if (!rm)
-                return nullptr;
-            auto* const engine = rm->getRenderingEngineIfInitialized();
-            if (!engine)
-                return nullptr;
-            return engine->getScreenOverlayRenderer();
+            return rm ? rm->getScreenOverlayRenderer() : nullptr;
         }
 
         struct PanelProjection {
             lfs::vis::RenderingManager::ViewerPanelInfo info{};
             Viewport viewport;
             float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
+            bool orthographic = false;
+            float ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE;
             float screen_scale_x = 1.0f;
             float screen_scale_y = 1.0f;
         };
@@ -81,10 +79,13 @@ namespace lfs::vis::tools {
 
             PanelProjection proj{};
             proj.info = *panel_info;
-            proj.focal_length_mm = rm->getFocalLengthMm();
+            const auto settings = rm->getSettings();
+            proj.focal_length_mm = settings.focal_length_mm;
             if (proj.focal_length_mm <= 0.0f) {
                 proj.focal_length_mm = fallback_focal_length_mm;
             }
+            proj.orthographic = settings.orthographic;
+            proj.ortho_scale = settings.ortho_scale;
 
             proj.viewport = *panel_info->viewport;
             proj.viewport.windowSize = {panel_info->render_width, panel_info->render_height};
@@ -113,7 +114,9 @@ namespace lfs::vis::tools {
                 proj.viewport.camera.t,
                 proj.viewport.windowSize,
                 world_pos,
-                proj.focal_length_mm);
+                proj.focal_length_mm,
+                proj.orthographic,
+                proj.ortho_scale);
             if (!projected) {
                 return {-1000.0f, -1000.0f};
             }
@@ -124,17 +127,23 @@ namespace lfs::vis::tools {
 
     static float calculateScreenRadius(const glm::vec3& world_pos,
                                        const float world_radius,
-                                       const Viewport& viewport,
-                                       const float focal_length_mm) {
-        const glm::mat4 view = viewport.getViewMatrix();
-        const glm::mat4 proj = viewport.getProjectionMatrix(focal_length_mm);
+                                       const PanelProjection& panel_proj) {
+        const glm::mat4 view = panel_proj.viewport.getViewMatrix();
         const glm::vec4 view_pos = view * glm::vec4(world_pos, 1.0f);
         const float depth = -view_pos.z;
 
         if (depth <= 0.0f)
             return 0.0f;
 
-        const float screen_radius = (world_radius * proj[1][1] * viewport.windowSize.y) / (2.0f * depth);
+        if (panel_proj.orthographic) {
+            if (!std::isfinite(panel_proj.ortho_scale) || panel_proj.ortho_scale <= 0.0f) {
+                return 0.0f;
+            }
+            return world_radius * panel_proj.ortho_scale;
+        }
+
+        const glm::mat4 proj = panel_proj.viewport.getProjectionMatrix(panel_proj.focal_length_mm);
+        const float screen_radius = (world_radius * proj[1][1] * panel_proj.viewport.windowSize.y) / (2.0f * depth);
         return screen_radius;
     }
 
@@ -182,6 +191,12 @@ namespace lfs::vis::tools {
         panel_proj_fallback.info.render_width = fallback_render_width;
         panel_proj_fallback.info.render_height = fallback_render_height;
         panel_proj_fallback.focal_length_mm = fallback_focal_length_mm;
+        if (rendering_manager) {
+            const auto settings = rendering_manager->getSettings();
+            panel_proj_fallback.focal_length_mm = settings.focal_length_mm;
+            panel_proj_fallback.orthographic = settings.orthographic;
+            panel_proj_fallback.ortho_scale = settings.ortho_scale;
+        }
         panel_proj_fallback.viewport = tool_context_->getViewport();
         panel_proj_fallback.viewport.windowSize = {fallback_render_width, fallback_render_height};
         panel_proj_fallback.screen_scale_x = bounds.width / static_cast<float>(fallback_render_width);
@@ -208,7 +223,7 @@ namespace lfs::vis::tools {
         for (size_t i = 0; i < picked_points.size(); ++i) {
             const glm::vec2 screen_pos = projectToScreen(panel_proj, picked_points[i]);
             const float radius_render = calculateScreenRadius(
-                picked_points[i], SPHERE_RADIUS, panel_proj.viewport, panel_proj.focal_length_mm);
+                picked_points[i], SPHERE_RADIUS, panel_proj);
             const float screen_radius =
                 glm::clamp(radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
 
@@ -234,11 +249,16 @@ namespace lfs::vis::tools {
 
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 preview_point = panel_proj.viewport.unprojectPixel(
-                    render_point.x, render_point.y, depth, panel_proj.focal_length_mm);
+                    render_point.x,
+                    render_point.y,
+                    depth,
+                    panel_proj.focal_length_mm,
+                    panel_proj.orthographic,
+                    panel_proj.ortho_scale);
                 if (Viewport::isValidWorldPosition(preview_point)) {
                     const glm::vec2 screen_pos = projectToScreen(panel_proj, preview_point);
                     const float radius_render = calculateScreenRadius(
-                        preview_point, SPHERE_RADIUS, panel_proj.viewport, panel_proj.focal_length_mm);
+                        preview_point, SPHERE_RADIUS, panel_proj);
                     const float screen_radius = glm::clamp(
                         radius_render * glm::min(panel_proj.screen_scale_x, panel_proj.screen_scale_y), 5.0f, 50.0f);
 
@@ -261,41 +281,50 @@ namespace lfs::vis::tools {
 
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 p2 = panel_proj.viewport.unprojectPixel(
-                    render_point.x, render_point.y, depth, panel_proj.focal_length_mm);
+                    render_point.x,
+                    render_point.y,
+                    depth,
+                    panel_proj.focal_length_mm,
+                    panel_proj.orthographic,
+                    panel_proj.ortho_scale);
                 if (Viewport::isValidWorldPosition(p2)) {
                     const glm::vec3& p0 = picked_points[0];
                     const glm::vec3& p1 = picked_points[1];
 
                     const glm::vec3 v01 = p1 - p0;
                     const glm::vec3 v02 = p2 - p0;
-                    glm::vec3 normal = glm::normalize(glm::cross(v01, v02));
-                    constexpr glm::vec3 kTargetUp(0.0f, 1.0f, 0.0f);
-                    if (glm::dot(normal, kTargetUp) < 0.0f)
-                        normal = -normal;
+                    const glm::vec3 cross_v = glm::cross(v01, v02);
+                    const float cross_len = glm::length(cross_v);
+                    if (cross_len > 1e-6f) {
+                        glm::vec3 normal = cross_v / cross_len;
+                        constexpr glm::vec3 kTargetUp(0.0f, 1.0f, 0.0f);
+                        if (glm::dot(normal, kTargetUp) < 0.0f)
+                            normal = -normal;
 
-                    const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
-                    const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
-                    const glm::vec3 normal_end = center + normal * line_length;
+                        const glm::vec3 center = (p0 + p1 + p2) / 3.0f;
+                        const float line_length = glm::max(glm::length(v01) * 0.5f, 0.1f);
+                        const glm::vec3 normal_end = center + normal * line_length;
 
-                    const glm::vec2 center_screen = projectToScreen(panel_proj, center);
-                    const glm::vec2 normal_screen = projectToScreen(panel_proj, normal_end);
+                        const glm::vec2 center_screen = projectToScreen(panel_proj, center);
+                        const glm::vec2 normal_screen = projectToScreen(panel_proj, normal_end);
 
-                    constexpr lfs::rendering::OverlayColor YELLOW{1.0f, 1.0f, 0.0f, 1.0f};
-                    constexpr lfs::rendering::OverlayColor TRI_RED{1.0f, 0.0f, 0.0f, 200.0f / 255.0f};
-                    constexpr lfs::rendering::OverlayColor TRI_GREEN{0.0f, 1.0f, 0.0f, 200.0f / 255.0f};
-                    constexpr lfs::rendering::OverlayColor TRI_BLUE{0.0f, 0.0f, 1.0f, 200.0f / 255.0f};
+                        constexpr lfs::rendering::OverlayColor YELLOW{1.0f, 1.0f, 0.0f, 1.0f};
+                        constexpr lfs::rendering::OverlayColor TRI_RED{1.0f, 0.0f, 0.0f, 200.0f / 255.0f};
+                        constexpr lfs::rendering::OverlayColor TRI_GREEN{0.0f, 1.0f, 0.0f, 200.0f / 255.0f};
+                        constexpr lfs::rendering::OverlayColor TRI_BLUE{0.0f, 0.0f, 1.0f, 200.0f / 255.0f};
 
-                    overlay->addLine(center_screen, normal_screen, YELLOW, 4.0f);
-                    overlay->addCircleFilled(normal_screen, 10.0f, YELLOW);
-                    overlay->addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f},
-                                     "UP", YELLOW, label_size);
+                        overlay->addLine(center_screen, normal_screen, YELLOW, 4.0f);
+                        overlay->addCircleFilled(normal_screen, 10.0f, YELLOW);
+                        overlay->addText({normal_screen.x + 12.0f, normal_screen.y - 8.0f},
+                                         "UP", YELLOW, label_size);
 
-                    const glm::vec2 p0_screen = projectToScreen(panel_proj, p0);
-                    const glm::vec2 p1_screen = projectToScreen(panel_proj, p1);
-                    const glm::vec2 p2_screen = projectToScreen(panel_proj, p2);
-                    overlay->addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
-                    overlay->addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
-                    overlay->addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
+                        const glm::vec2 p0_screen = projectToScreen(panel_proj, p0);
+                        const glm::vec2 p1_screen = projectToScreen(panel_proj, p1);
+                        const glm::vec2 p2_screen = projectToScreen(panel_proj, p2);
+                        overlay->addLine(p0_screen, p1_screen, TRI_RED, 2.0f);
+                        overlay->addLine(p1_screen, p2_screen, TRI_GREEN, 2.0f);
+                        overlay->addLine(p2_screen, p0_screen, TRI_BLUE, 2.0f);
+                    }
                 }
             }
         }

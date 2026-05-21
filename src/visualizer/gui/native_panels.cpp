@@ -197,9 +197,7 @@ namespace lfs::vis::gui::native_panels {
 
         lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
         if (rm) {
-            if (auto* const engine = rm->getRenderingEngineIfInitialized()) {
-                overlay = engine->getScreenOverlayRenderer();
-            }
+            overlay = rm->getScreenOverlayRenderer();
         }
 
         NativeOverlayDrawList draw_list;

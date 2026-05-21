@@ -1899,6 +1899,158 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
+    std::expected<float, std::string> VksplatViewportRenderer::sampleDepthAtPixel(
+        VulkanContext& context,
+        const int x,
+        const int y,
+        const OutputSlot output_slot) const {
+        if (!context_) {
+            return std::unexpected("VkSplat depth sample requested before renderer initialization");
+        }
+        if (&context != context_) {
+            return std::unexpected("VkSplat depth sample received a different Vulkan context");
+        }
+
+        const auto& output = output_slots_[outputSlotIndex(output_slot)];
+        if (output.depth_image.image == VK_NULL_HANDLE ||
+            output.size.x <= 0 ||
+            output.size.y <= 0) {
+            return std::unexpected("VkSplat depth sample requested for an empty output slot");
+        }
+        if (output.depth_image.format != VK_FORMAT_R32_SFLOAT) {
+            return std::unexpected("VkSplat depth sample only supports R32F depth images");
+        }
+        if (x < 0 || y < 0 || x >= output.size.x || y >= output.size.y) {
+            return -1.0f;
+        }
+
+        if (!context.waitForSubmittedFrames()) {
+            return std::unexpected(context.lastError());
+        }
+
+        const VkDevice device = context.device();
+        constexpr VkDeviceSize byte_count = sizeof(float);
+        ScopedStagingBuffer staging{.allocator = context.allocator()};
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = byte_count;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc_info{};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        alloc_info.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkResult result = vmaCreateBuffer(
+            staging.allocator,
+            &buffer_info,
+            &alloc_info,
+            &staging.buffer,
+            &staging.allocation,
+            &staging.allocation_info);
+        if (result != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
+            return std::unexpected(vkError("vmaCreateBuffer(VkSplat depth sample)", result));
+        }
+        if (staging.allocation_info.pMappedData == nullptr) {
+            return std::unexpected("VkSplat depth sample staging buffer is not host-mapped");
+        }
+
+        ScopedCommandPool command_pool{.device = device};
+        VkCommandPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        pool_info.queueFamilyIndex = context.graphicsQueueFamily();
+        result = vkCreateCommandPool(device, &pool_info, nullptr, &command_pool.pool);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkCreateCommandPool(VkSplat depth sample)", result));
+        }
+
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo command_info{};
+        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        command_info.commandPool = command_pool.pool;
+        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        command_info.commandBufferCount = 1;
+        result = vkAllocateCommandBuffers(device, &command_info, &command_buffer);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkAllocateCommandBuffers(VkSplat depth sample)", result));
+        }
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        result = vkBeginCommandBuffer(command_buffer, &begin_info);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat depth sample)", result));
+        }
+
+        const VkImageLayout restore_layout =
+            output.depth_layout != VK_IMAGE_LAYOUT_UNDEFINED
+                ? output.depth_layout
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        context.imageBarriers().transitionImage(
+            command_buffer,
+            output.depth_image.image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        VkBufferImageCopy copy_region{};
+        copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.imageSubresource.layerCount = 1;
+        copy_region.imageOffset = {x, y, 0};
+        copy_region.imageExtent = {1, 1, 1};
+        vkCmdCopyImageToBuffer(command_buffer,
+                               output.depth_image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               staging.buffer,
+                               1,
+                               &copy_region);
+
+        context.imageBarriers().transitionImage(
+            command_buffer,
+            output.depth_image.image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            restore_layout);
+
+        result = vkEndCommandBuffer(command_buffer);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth sample)", result));
+        }
+
+        ScopedFence fence{.device = device};
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        result = vkCreateFence(device, &fence_info, nullptr, &fence.fence);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkCreateFence(VkSplat depth sample)", result));
+        }
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, fence.fence);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkQueueSubmit(VkSplat depth sample)", result));
+        }
+        result = vkWaitForFences(device, 1, &fence.fence, VK_TRUE, UINT64_MAX);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkWaitForFences(VkSplat depth sample)", result));
+        }
+
+        result = vmaInvalidateAllocation(staging.allocator, staging.allocation, 0, byte_count);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat depth sample)", result));
+        }
+
+        float depth = -1.0f;
+        std::memcpy(&depth, staging.allocation_info.pMappedData, sizeof(depth));
+        if (!std::isfinite(depth) || depth <= 0.0f || depth >= 1.0e9f) {
+            return -1.0f;
+        }
+        return depth;
+    }
+
     std::expected<lfs::core::Tensor, std::string> VksplatViewportRenderer::buildSelectionMask(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,

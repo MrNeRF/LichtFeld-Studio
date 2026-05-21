@@ -171,25 +171,6 @@ namespace lfs::rendering {
         bool transparent_background = false;
     };
 
-    struct HoveredGaussianQueryRequest {
-        FrameView frame_view;
-        float scaling_modifier = 1.0f;
-        bool mip_filter = false;
-        int sh_degree = 3;
-        GaussianRasterBackend raster_backend = GaussianRasterBackend::VkSplat;
-        bool gut = false;
-        bool equirectangular = false;
-        GaussianSceneState scene;
-        GaussianFilterState filters;
-        glm::vec2 cursor{0.0f, 0.0f};
-    };
-
-    struct ScreenPositionRenderRequest {
-        FrameView frame_view;
-        bool equirectangular = false;
-        GaussianSceneState scene;
-    };
-
     struct PointCloudSceneState {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
@@ -244,18 +225,6 @@ namespace lfs::rendering {
             return depth_panels[0].depth;
         }
     };
-
-    struct GaussianGpuFrameResult {
-        GpuFrame frame;
-        FrameMetadata metadata;
-    };
-
-    struct GaussianImageResult {
-        std::shared_ptr<lfs::core::Tensor> image;
-        FrameMetadata metadata;
-    };
-
-    using DualGaussianImageResult = std::array<GaussianImageResult, 2>;
 
     struct PointCloudImageResult {
         std::shared_ptr<lfs::core::Tensor> image;
@@ -392,36 +361,13 @@ namespace lfs::rendering {
     class RenderingEngine {
     public:
         static std::unique_ptr<RenderingEngine> create();
-        static std::unique_ptr<RenderingEngine> createRasterOnly();
 
         virtual ~RenderingEngine() = default;
 
         // Lifecycle
         virtual Result<void> initialize() = 0;
-        virtual Result<void> initializeRasterOnly() = 0;
         virtual void shutdown() = 0;
         virtual bool isInitialized() const = 0;
-        virtual bool isRasterInitialized() const = 0;
-
-        virtual Result<GaussianGpuFrameResult> renderGaussiansGpuFrame(
-            const lfs::core::SplatData& splat_data,
-            const ViewportRenderRequest& request) = 0;
-
-        virtual Result<GaussianImageResult> renderGaussiansImage(
-            const lfs::core::SplatData& splat_data,
-            const ViewportRenderRequest& request) = 0;
-
-        virtual Result<DualGaussianImageResult> renderGaussiansImagePair(
-            const lfs::core::SplatData& splat_data,
-            const std::array<ViewportRenderRequest, 2>& requests) = 0;
-
-        virtual Result<std::optional<int>> queryHoveredGaussianId(
-            const lfs::core::SplatData& splat_data,
-            const HoveredGaussianQueryRequest& request) = 0;
-
-        virtual Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
-            const lfs::core::SplatData& splat_data,
-            const ScreenPositionRenderRequest& request) = 0;
 
         virtual Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::SplatData& splat_data,

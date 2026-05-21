@@ -258,6 +258,7 @@ namespace lfs::vis::op {
 
         Viewport projection_viewport = *panel_info->viewport;
         projection_viewport.windowSize = {panel_info->render_width, panel_info->render_height};
+        const auto render_settings = rm->getSettings();
 
         float depth = -1.0f;
         if (ctx.hasSelection()) {
@@ -273,6 +274,12 @@ namespace lfs::vis::op {
                 static_cast<int>(render_x),
                 static_cast<int>(render_y),
                 target_mask);
+            if (depth <= 0.0f) {
+                depth = rm->getDepthAtPixel(
+                    static_cast<int>(render_x),
+                    static_cast<int>(render_y),
+                    panel_info->panel);
+            }
         } else {
             depth = rm->getDepthAtPixel(
                 static_cast<int>(render_x),
@@ -287,7 +294,9 @@ namespace lfs::vis::op {
             render_x,
             render_y,
             depth,
-            rm->getFocalLengthMm());
+            render_settings.focal_length_mm,
+            render_settings.orthographic,
+            render_settings.ortho_scale);
     }
 
     void AlignPickPointOperator::applyAlignment(OperatorContext& ctx) {

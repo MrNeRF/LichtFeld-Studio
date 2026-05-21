@@ -9,6 +9,7 @@
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "vksplat_viewport_renderer.hpp"
 #include <algorithm>
 #include <shared_mutex>
 #include <utility>
@@ -244,11 +245,6 @@ namespace lfs::vis {
         if (width <= 0 || height <= 0) {
             return {};
         }
-        auto* const engine = getRenderingEngine();
-        if (!engine) {
-            return {};
-        }
-
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         const auto render_state = scene_manager ? scene_manager->buildRenderState() : SceneRenderState{};
         const auto* const model = render_state.combined_model;
@@ -256,48 +252,46 @@ namespace lfs::vis {
             return {};
         }
 
-        const auto& bg = settings_.background_color;
-        const lfs::rendering::FrameView frame_view{
-            .rotation = rotation,
-            .translation = position,
-            .size = {width, height},
-            .focal_length_mm = focal_length_mm,
-            .intrinsics_override = std::nullopt,
-            .background_color = bg};
-
-        if (settings_.point_cloud_mode) {
-            LOG_TRACE("Preview image point-cloud mode is served by the legacy renderer; using Gaussian raster preview");
-        }
-
-        const lfs::rendering::ViewportRenderRequest request{
-            .frame_view = frame_view,
-            .scaling_modifier = settings_.scaling_modifier,
-            .antialiasing = false,
-            .sh_degree = 0,
-            .raster_backend = settings_.raster_backend,
-            .gut = settings_.gut ||
-                   lfs::rendering::isGutBackend(settings_.raster_backend),
-            .equirectangular = settings_.equirectangular,
-            .scene =
-                {.model_transforms = &render_state.model_transforms,
-                 .transform_indices = render_state.transform_indices,
-                 .node_visibility_mask = render_state.node_visibility_mask},
-            .filters = {},
-            .overlay = {}};
-
-        auto result = engine->renderGaussiansImage(*model, request);
-        render_lock.reset();
-        return result ? result->image : nullptr;
+        (void)rotation;
+        (void)position;
+        (void)focal_length_mm;
+        LOG_TRACE("Gaussian preview image skipped: no Vulkan offscreen preview path is available");
+        return {};
     }
 
     float RenderingManager::getDepthAtPixel(const int x, const int y,
                                             const std::optional<SplitViewPanelId> panel) const {
-        return viewport_artifact_service_.sampleLinearDepthAt(
+        const float cached_depth = viewport_artifact_service_.sampleLinearDepthAt(
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
             engine_.get(),
             panel);
+        if (cached_depth > 0.0f) {
+            return cached_depth;
+        }
+
+        if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
+            return -1.0f;
+        }
+
+        VksplatViewportRenderer::OutputSlot output_slot = VksplatViewportRenderer::OutputSlot::Main;
+        if (panel && isIndependentSplitViewActive()) {
+            output_slot = *panel == SplitViewPanelId::Right
+                              ? VksplatViewportRenderer::OutputSlot::SplitRight
+                              : VksplatViewportRenderer::OutputSlot::SplitLeft;
+        }
+
+        const auto depth = vksplat_viewport_renderer_->sampleDepthAtPixel(
+            *last_vulkan_context_,
+            x,
+            y,
+            output_slot);
+        if (!depth) {
+            LOG_TRACE("VkSplat depth sample failed: {}", depth.error());
+            return -1.0f;
+        }
+        return *depth;
     }
 
     float RenderingManager::renderDepthAtPixelForNodeMask(const SceneManager* const scene_manager,
@@ -314,11 +308,6 @@ namespace lfs::vis {
             })) {
             return -1.0f;
         }
-        auto* const engine = getRenderingEngine();
-        if (!engine) {
-            return -1.0f;
-        }
-
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
         auto scene_state = scene_manager->buildRenderState();
         const auto* const model = scene_state.combined_model;
@@ -341,6 +330,10 @@ namespace lfs::vis {
 
         lfs::rendering::FrameMetadata metadata{};
         if (settings_.point_cloud_mode) {
+            auto* const engine = getRenderingEngine();
+            if (!engine) {
+                return -1.0f;
+            }
             auto request = buildPointCloudRenderRequest(
                 frame_ctx,
                 render_size,
@@ -353,21 +346,14 @@ namespace lfs::vis {
             }
             metadata = std::move(result->metadata);
         } else {
-            auto request = buildViewportRenderRequest(frame_ctx, render_size, &viewport, std::nullopt);
-            request.scene.node_visibility_mask = node_visibility_mask;
-            request.overlay = {};
-            auto result = engine->renderGaussiansImage(*model, request);
-            if (!result) {
-                LOG_DEBUG("Masked Gaussian depth render failed: {}", result.error());
-                return -1.0f;
-            }
-            metadata = std::move(result->metadata);
+            LOG_TRACE("Masked Gaussian depth render skipped: no Vulkan masked-depth path is available");
+            return -1.0f;
         }
         render_lock.reset();
 
         ViewportArtifactService artifacts;
         artifacts.updateFromImageOutput({}, metadata, render_size, true);
-        return artifacts.sampleLinearDepthAt(x, y, render_size, engine, std::nullopt);
+        return artifacts.sampleLinearDepthAt(x, y, render_size, engine_.get(), std::nullopt);
     }
 
 } // namespace lfs::vis

@@ -93,6 +93,11 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
+        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+            VulkanContext& context,
+            int x,
+            int y,
+            OutputSlot output_slot = OutputSlot::Main) const;
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,

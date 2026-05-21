@@ -479,16 +479,15 @@ namespace lfs::vis {
         }
         initialized_ = true;
 
-        const auto ensure_legacy_raster_engine =
+        const auto ensure_auxiliary_rendering_engine =
             [this]() -> std::expected<lfs::rendering::RenderingEngine*, std::string> {
             if (!engine_) {
-                engine_ = lfs::rendering::RenderingEngine::createRasterOnly();
+                engine_ = lfs::rendering::RenderingEngine::create();
             }
-            if (!raster_initialized_) {
-                if (auto init_result = engine_->initializeRasterOnly(); !init_result) {
+            if (!engine_->isInitialized()) {
+                if (auto init_result = engine_->initialize(); !init_result) {
                     return std::unexpected(init_result.error());
                 }
-                raster_initialized_ = true;
             }
             return engine_.get();
         };
@@ -756,11 +755,11 @@ namespace lfs::vis {
                          .node_visibility_mask = {}},
                     .filters = state.filters,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
-                auto legacy_engine = ensure_legacy_raster_engine();
-                if (!legacy_engine) {
-                    return std::unexpected(legacy_engine.error());
+                auto auxiliary_engine = ensure_auxiliary_rendering_engine();
+                if (!auxiliary_engine) {
+                    return std::unexpected(auxiliary_engine.error());
                 }
-                auto result = (*legacy_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, request);
+                auto result = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, request);
                 if (!result || !result->image) {
                     return std::unexpected(result ? "Raw point-cloud panel render returned no image"
                                                   : result.error());
@@ -794,11 +793,11 @@ namespace lfs::vis {
                     .scene = scene,
                     .filters = state.filters,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
-                auto legacy_engine = ensure_legacy_raster_engine();
-                if (!legacy_engine) {
-                    return std::unexpected(legacy_engine.error());
+                auto auxiliary_engine = ensure_auxiliary_rendering_engine();
+                if (!auxiliary_engine) {
+                    return std::unexpected(auxiliary_engine.error());
                 }
-                auto result = (*legacy_engine)->renderPointCloudImage(*panel_model, request);
+                auto result = (*auxiliary_engine)->renderPointCloudImage(*panel_model, request);
                 if (!result || !result->image) {
                     return std::unexpected(result ? "Point-cloud panel render returned no image"
                                                   : result.error());
@@ -941,8 +940,8 @@ namespace lfs::vis {
                                 auto point_request = buildPointCloudRenderRequest(
                                     frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
                                 point_request.frame_view = request.frame_view;
-                                if (auto legacy_engine = ensure_legacy_raster_engine(); legacy_engine) {
-                                    auto rendered = (*legacy_engine)->renderPointCloudImage(*model, point_request);
+                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
                                     if (rendered && rendered->image) {
                                         const bool flip_y = !rendered->metadata.flip_y;
                                         compare_panel = RenderedPanel{.image = std::move(rendered->image),
@@ -953,7 +952,7 @@ namespace lfs::vis {
                                                                  : rendered.error();
                                     }
                                 } else {
-                                    compare_error = legacy_engine.error();
+                                    compare_error = auxiliary_engine.error();
                                 }
                             } else if (use_point_cloud_compare && has_point_cloud) {
                                 const std::vector<glm::mat4> point_cloud_transforms = {
@@ -961,8 +960,8 @@ namespace lfs::vis {
                                 auto point_request = buildPointCloudRenderRequest(
                                     frame_ctx, gt_size, point_cloud_transforms);
                                 point_request.frame_view = request.frame_view;
-                                if (auto legacy_engine = ensure_legacy_raster_engine(); legacy_engine) {
-                                    auto rendered = (*legacy_engine)->renderPointCloudImage(
+                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(
                                         *frame_ctx.scene_state.point_cloud, point_request);
                                     if (rendered && rendered->image) {
                                         const bool flip_y = !rendered->metadata.flip_y;
@@ -974,7 +973,7 @@ namespace lfs::vis {
                                                                  : rendered.error();
                                     }
                                 } else {
-                                    compare_error = legacy_engine.error();
+                                    compare_error = auxiliary_engine.error();
                                 }
                             } else if (has_renderable_model) {
                                 auto rendered = render_panel_image(
@@ -1417,8 +1416,8 @@ namespace lfs::vis {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
-            // Splat depth → mesh-pass z-test source. Only meaningful when the splat
-            // produced a depth tensor (CUDA rasterizer path; vksplat doesn't yet).
+            // Splat depth -> mesh-pass z-test source. Only meaningful when the
+            // active render path produced a tensor-backed depth output.
             if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
                 rendered_metadata.depth_panels[0].depth &&
                 rendered_metadata.depth_panels[0].depth->is_valid()) {

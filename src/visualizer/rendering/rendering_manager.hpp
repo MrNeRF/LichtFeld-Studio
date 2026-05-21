@@ -16,6 +16,7 @@
 #include "passes/vulkan_split_view_pass.hpp"
 #include "render_animation_state.hpp"
 #include "rendering/rendering.hpp"
+#include "rendering/screen_overlay_renderer.hpp"
 #include "rendering_types.hpp"
 #include "split_view_service.hpp"
 #include "viewport_artifact_service.hpp"
@@ -257,10 +258,13 @@ namespace lfs::vis {
         float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
         float getAverageFPS() const { return framerate_controller_.getAverageFPS(); }
 
-        // Access to rendering engine (for initialization only)
+        // Access to the auxiliary rendering engine used by point-cloud, mesh, and readback paths.
         lfs::rendering::RenderingEngine* getRenderingEngine();
         [[nodiscard]] lfs::rendering::RenderingEngine* getRenderingEngineIfInitialized() const {
             return initialized_ ? engine_.get() : nullptr;
+        }
+        [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getScreenOverlayRenderer() {
+            return &screen_overlay_renderer_;
         }
 
         // Camera frustum picking
@@ -459,6 +463,7 @@ namespace lfs::vis {
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
+        lfs::rendering::ScreenOverlayRenderer screen_overlay_renderer_;
         mutable FramerateController framerate_controller_;
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
@@ -506,7 +511,6 @@ namespace lfs::vis {
         uint64_t camera_metrics_request_generation_ = 0;
         std::chrono::steady_clock::time_point last_camera_metrics_refresh_time_{};
         bool initialized_ = false;
-        bool raster_initialized_ = false;
 
         ViewportInteractionContext viewport_interaction_context_;
 

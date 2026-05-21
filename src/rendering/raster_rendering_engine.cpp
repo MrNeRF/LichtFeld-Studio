@@ -1651,76 +1651,23 @@ namespace lfs::rendering {
         }
     } // namespace
 
-    class RasterOnlyRenderingEngine final : public RenderingEngine {
+    class UtilityRenderingEngine final : public RenderingEngine {
     public:
-        ~RasterOnlyRenderingEngine() override {
+        ~UtilityRenderingEngine() override {
             shutdown();
         }
 
         Result<void> initialize() override {
-            return initializeRasterOnly();
-        }
-
-        Result<void> initializeRasterOnly() override {
-            raster_initialized_ = true;
+            initialized_ = true;
             return {};
         }
 
         void shutdown() override {
-            raster_initialized_ = false;
+            initialized_ = false;
         }
 
         bool isInitialized() const override {
-            return raster_initialized_;
-        }
-
-        bool isRasterInitialized() const override {
-            return raster_initialized_;
-        }
-
-        Result<GaussianGpuFrameResult> renderGaussiansGpuFrame(
-            const lfs::core::SplatData& splat_data,
-            const ViewportRenderRequest& request) override {
-            (void)splat_data;
-            (void)request;
-            return std::unexpected(
-                "CUDA Gaussian viewer rendering has been removed; use the Vulkan VkSplat viewer path");
-        }
-
-        Result<GaussianImageResult> renderGaussiansImage(
-            const lfs::core::SplatData& splat_data,
-            const ViewportRenderRequest& request) override {
-            (void)splat_data;
-            (void)request;
-            return std::unexpected(
-                "CUDA Gaussian viewer rendering has been removed; use the Vulkan VkSplat viewer path");
-        }
-
-        Result<DualGaussianImageResult> renderGaussiansImagePair(
-            const lfs::core::SplatData& splat_data,
-            const std::array<ViewportRenderRequest, 2>& requests) override {
-            (void)splat_data;
-            (void)requests;
-            return std::unexpected(
-                "CUDA Gaussian dual-view rendering has been removed; use the Vulkan VkSplat viewer path");
-        }
-
-        Result<std::optional<int>> queryHoveredGaussianId(
-            const lfs::core::SplatData& splat_data,
-            const HoveredGaussianQueryRequest& request) override {
-            (void)splat_data;
-            (void)request;
-            return std::unexpected(
-                "CUDA Gaussian hover queries have been removed; use the Vulkan VkSplat viewer path");
-        }
-
-        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
-            const lfs::core::SplatData& splat_data,
-            const ScreenPositionRenderRequest& request) override {
-            (void)splat_data;
-            (void)request;
-            return std::unexpected(
-                "CUDA Gaussian screen-position rendering has been removed; use the Vulkan VkSplat viewer path");
+            return initialized_;
         }
 
         Result<GpuFrame> renderPointCloudGpuFrame(
@@ -1941,7 +1888,7 @@ namespace lfs::rendering {
                 .orthographic = metadata.orthographic};
         }
 
-        bool raster_initialized_ = false;
+        bool initialized_ = false;
         unsigned int next_tensor_frame_id_ = 1;
         unsigned int cached_tensor_frame_id_ = 0;
         std::shared_ptr<lfs::core::Tensor> cached_tensor_frame_image_;
@@ -1950,13 +1897,8 @@ namespace lfs::rendering {
     };
 
     std::unique_ptr<RenderingEngine> RenderingEngine::create() {
-        LOG_DEBUG("Creating default raster-only RenderingEngine instance");
-        return createRasterOnly();
-    }
-
-    std::unique_ptr<RenderingEngine> RenderingEngine::createRasterOnly() {
-        LOG_DEBUG("Creating raster-only RenderingEngine instance");
-        return std::make_unique<RasterOnlyRenderingEngine>();
+        LOG_DEBUG("Creating utility RenderingEngine instance");
+        return std::make_unique<UtilityRenderingEngine>();
     }
 
 } // namespace lfs::rendering

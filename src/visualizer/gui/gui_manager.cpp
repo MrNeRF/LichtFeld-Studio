@@ -558,11 +558,7 @@ namespace lfs::vis::gui {
         }
 
         void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
-                                                lfs::rendering::RenderingEngine* engine) {
-            if (!engine) {
-                return;
-            }
-            auto* const overlay = engine->getScreenOverlayRenderer();
+                                                lfs::rendering::ScreenOverlayRenderer* overlay) {
             if (!overlay) {
                 return;
             }
@@ -4443,11 +4439,11 @@ namespace lfs::vis::gui {
         appendLineRendererCommandOverlays(params);
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
+            appendScreenOverlayCommandOverlays(params, rendering_manager->getScreenOverlayRenderer());
 
-            // Pull GPU mesh / environment frame populated by renderVulkanFrame. The
-            // vulkan_viewport_pass rasterizes these on the GPU instead of the legacy
-            // CPU rasterizer / env-sample paths.
+            // Pull GPU mesh / environment frame populated by renderVulkanFrame.
+            // vulkan_viewport_pass rasterizes these on the GPU instead of the
+            // auxiliary CPU mesh / environment paths.
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
@@ -4993,9 +4989,7 @@ namespace lfs::vis::gui {
 
         lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            if (auto* const engine = rendering->getRenderingEngineIfInitialized()) {
-                overlay_renderer = engine->getScreenOverlayRenderer();
-            }
+            overlay_renderer = rendering->getScreenOverlayRenderer();
         }
         if (overlay_renderer) {
             overlay_renderer->beginFrame();
@@ -5171,9 +5165,7 @@ namespace lfs::vis::gui {
             auto* rm = ctx.viewer->getRenderingManager();
             lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
             if (rm) {
-                if (auto* const engine = rm->getRenderingEngineIfInitialized()) {
-                    overlay = engine->getScreenOverlayRenderer();
-                }
+                overlay = rm->getScreenOverlayRenderer();
             }
             if (!overlay || !overlay->isFrameActive()) {
                 return;
